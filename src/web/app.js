@@ -526,6 +526,7 @@ globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
   controlUnavailableText,
   totalsOf, issuesOf, viewMatches, matchesQuery, buildClusters, tokenSummary,
+  issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
@@ -822,6 +823,43 @@ function renderHealthRail() {
 
 /* ---------- issues ---------- */
 
+const ISSUE_STATE_LABELS = {
+  open: "Open",
+  verifying: "Verifying",
+  resolved: "Resolved",
+  blocked: "Blocked",
+};
+
+function issueLifecycle(issue) {
+  return issue && issue.lifecycle && issue.lifecycle.state
+    ? issue.lifecycle
+    : { state: "open" };
+}
+
+function issueStateLabel(issue) {
+  return ISSUE_STATE_LABELS[issueLifecycle(issue).state] || "Open";
+}
+
+function issueTimestamp(iso) {
+  if (!iso || Number.isNaN(Date.parse(iso))) return "unknown time";
+  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function recentlyResolvedOf(snap) {
+  return snap && Array.isArray(snap.recentlyResolved) ? snap.recentlyResolved : [];
+}
+
+function issueLifecycleNote(issue) {
+  const lifecycle = issueLifecycle(issue);
+  if (lifecycle.state === "verifying") {
+    return `Verifying since ${issueTimestamp(lifecycle.verificationStartedAt)} · waiting for a fresh source snapshot to clear the finding.`;
+  }
+  if (lifecycle.state === "blocked") {
+    return `Blocked${lifecycle.result ? ` · ${lifecycle.result}` : " · external action is required."}`;
+  }
+  return "";
+}
+
 async function fetchTriageQueue() {
   try {
     const res = await fetch("/api/triage/queue", { headers: { accept: "application/json" } });
@@ -857,6 +895,10 @@ async function triageIssue(issueId, action) {
       const withoutIssue = state.queueItems.filter((item) => item.issueId !== issueId);
       state.queueItems = [body.item, ...withoutIssue];
       toast(action === "run" ? "Investigation launched" : "Investigation queued", "ok");
+    }
+    if (action === "queue" || action === "run") {
+      await fetchSnapshot();
+      await fetchTriageQueue();
     }
   } catch (err) {
     state.triageErrors.set(issueId, err && err.message ? err.message : "Triage request failed");
@@ -905,7 +947,7 @@ function renderTriage(issue) {
           "aria-busy": queueing ? "true" : null,
           onclick: () => triageIssue(issue.id, "queue"),
         }, queued
-          ? queueItem.state === "completed" ? "✓ Investigation complete"
+          ? queueItem.state === "completed" ? "✓ Investigation complete · verifying"
             : queueItem.state === "running" ? "● Investigation running"
             : queueItem.state === "blocked" ? "! Investigation blocked"
             : "✓ Investigation queued"
@@ -919,7 +961,7 @@ function renderTriage(issue) {
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
           ? queueItem.state === "running" ? "Investigation running · " + (queueItem.runModel || "native Luna")
-            : queueItem.state === "completed" ? "Investigation complete"
+            : queueItem.state === "completed" ? "Investigation complete · source confirmation pending"
             : queueItem.state === "blocked" ? "Investigation blocked · review result"
             : "Queued and ready for explicit launch"
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
@@ -946,8 +988,10 @@ function renderIssues() {
   const issues = showHere ? issuesOf(state.snap) : [];
   const interventions = issues.filter((i) => i.severity === "error");
   const advisories = issues.filter((i) => i.severity !== "error");
+  const recentlyResolved = state.view === "now" ? recentlyResolvedOf(state.snap) : [];
+  const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
   const queuedOnly = showHere
-    ? state.queueItems.filter((item) => !issues.some((issue) => issue.id === item.issueId))
+    ? state.queueItems.filter((item) => !issues.some((issue) => issue.id === item.issueId) && !resolvedIds.has(item.issueId))
     : [];
   const byId = new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
 
@@ -957,8 +1001,9 @@ function renderIssues() {
 
   wList.textContent = "";
   for (const issue of advisories) wList.append(renderAdvisory(issue, byId));
+  for (const issue of recentlyResolved) wList.append(renderRecentlyResolved(issue));
   for (const item of queuedOnly) wList.append(renderInvestigationItem(item));
-  wSection.hidden = advisories.length === 0 && queuedOnly.length === 0;
+  wSection.hidden = advisories.length === 0 && recentlyResolved.length === 0 && queuedOnly.length === 0;
 }
 
 /* Affected agents live behind one concise count disclosure so the band stays
@@ -983,6 +1028,8 @@ function affectedDisclosure(issue, byId) {
 function renderIntervention(issue, byId) {
   const triage = renderTriage(issue);
   const generated = state.triage.has(issue.id);
+  const lifecycle = issueLifecycle(issue);
+  const lifecycleNote = issueLifecycleNote(issue);
   const side = el("div", { class: "signal-side" },
     // Compact "Generate triage" sits inline top-right; once a plan exists it
     // moves to a full-width row below so the band stays short until acted on.
@@ -993,12 +1040,13 @@ function renderIntervention(issue, byId) {
           el("summary", { text: "Technical" }),
           el("ul", {}, issue.technicalDetails.map((d) => el("li", { class: "mono", text: d }))))
       : null);
-  const item = el("li", { class: "signal-intervention sev-" + issue.severity + (generated ? " has-triage" : "") },
+  const item = el("li", { class: "signal-intervention sev-" + issue.severity + " issue-state-" + lifecycle.state + (generated ? " has-triage" : "") },
     el("span", { class: "signal-badge" }, icon("intervention", { label: "Intervention" })),
     el("div", { class: "signal-copy" },
-      el("span", { class: "signal-kicker", text: "Intervention · act now" }),
+      el("span", { class: "signal-kicker", text: lifecycle.state === "open" ? "Open · act now" : issueStateLabel(issue) + " · source confirmation" }),
       el("h3", { class: "signal-title", text: issue.title }),
-      el("p", { class: "signal-consequence", text: issue.summary })),
+      el("p", { class: "signal-consequence", text: issue.summary }),
+      lifecycleNote ? el("p", { class: "issue-lifecycle-note", text: lifecycleNote }) : null),
     side);
   if (generated) item.append(triage);
   return item;
@@ -1006,6 +1054,8 @@ function renderIntervention(issue, byId) {
 
 function renderAdvisory(issue, byId) {
   const affected = issue.affectedAgentIds.map((id) => byId.get(id)).filter(Boolean);
+  const lifecycle = issueLifecycle(issue);
+  const lifecycleNote = issueLifecycleNote(issue);
   const titleNode = affected.length
     ? el("button", { type: "button", class: "advisory-title", dataset: { fkey: `issue:${issue.id}` }, onclick: () => selectAgent(affected[0].agent.id), text: issue.title })
     : el("span", { class: "advisory-title", text: issue.title });
@@ -1013,17 +1063,31 @@ function renderAdvisory(issue, byId) {
     icon("warning", { class: "warn-tri", label: "Advisory" }),
     el("div", { class: "advisory-body" },
       titleNode,
-      issue.summary ? el("div", { class: "advisory-summary", text: issue.summary }) : null),
-    el("span", { class: "advisory-impact", text: affected.length ? `${affected.length} affected` : "system" }));
+      issue.summary ? el("div", { class: "advisory-summary", text: issue.summary }) : null,
+      lifecycleNote ? el("div", { class: "advisory-lifecycle", text: lifecycleNote }) : null),
+    el("span", { class: "advisory-impact", text: `${issueStateLabel(issue)} · ${affected.length ? `${affected.length} affected` : "system"}` }));
+}
+
+function renderRecentlyResolved(issue) {
+  const lifecycle = issueLifecycle(issue);
+  const result = lifecycle.result || "Source confirmation cleared the finding.";
+  return el("li", { class: "signal-advisory issue-resolved" },
+    icon("check", { class: "warn-tri", label: "Resolved" }),
+    el("div", { class: "advisory-body" },
+      el("span", { class: "advisory-title", text: issue.title }),
+      el("div", { class: "advisory-summary", text: `Resolved ${issueTimestamp(lifecycle.resolvedAt)} · ${result}` })),
+    el("span", { class: "advisory-impact", text: "Resolved" }));
 }
 
 function renderInvestigationItem(item) {
-  const stateLabel = item.state === "running" ? "Running" : item.state === "completed" ? "Complete" : item.state === "blocked" ? "Blocked" : "Queued";
+  const stateLabel = item.state === "running" ? "Running" : item.state === "completed" ? "Verifying" : item.state === "blocked" ? "Blocked" : "Queued";
   const card = el("li", { class: "signal-advisory investigation-item" },
     icon("broadcast", { class: "warn-tri", label: "Investigation" }),
     el("div", { class: "advisory-body" },
       el("div", { class: "advisory-title", text: item.headline }),
-      el("div", { class: "advisory-summary", text: `Investigation ${stateLabel.toLowerCase()} · ${item.state === "running" ? (item.runModel || "native Luna") : item.rationale}` })),
+      el("div", { class: "advisory-summary", text: item.state === "completed"
+        ? "Investigation complete · source confirmation pending"
+        : `Investigation ${stateLabel.toLowerCase()} · ${item.state === "running" ? (item.runModel || "native Luna") : item.rationale}` })),
     el("span", { class: "advisory-impact", text: stateLabel }));
   if (item.result) card.append(el("details", { class: "triage-result" },
     el("summary", { text: item.state === "completed" ? "Investigation result" : "Blocked investigation result" }),

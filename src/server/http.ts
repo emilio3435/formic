@@ -6,7 +6,7 @@ export const MAX_INSTRUCTION_BYTES = 8_192;
 
 export interface ControlHttpDependencies extends ControlDependencies {
   getSnapshot(): HubSnapshot;
-  afterControl?(): void | Promise<void>;
+  afterControl?(agentIds?: readonly string[]): void | Promise<void>;
 }
 
 function json(value: unknown, status: number): Response {
@@ -89,6 +89,6 @@ export async function handleControlRequest(
   const agent = snapshot.programs.flatMap((program) => program.agents).find((candidate) => candidate.id === parsed.agentId);
   if (!agent) return requestError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
   const execution = await executeControl(parsed, agent, dependencies);
-  if (execution.response.ok) await dependencies.afterControl?.();
+  if (execution.response.ok) await dependencies.afterControl?.([agent.id]);
   return json(execution.response, execution.status);
 }

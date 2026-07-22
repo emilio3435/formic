@@ -4,7 +4,7 @@ import { MAX_CONTROL_BODY_BYTES, MAX_INSTRUCTION_BYTES } from "./http";
 
 export interface BroadcastDependencies extends ControlDependencies {
   getSnapshot(): HubSnapshot;
-  afterControl?(): void | Promise<void>;
+  afterControl?(agentIds?: readonly string[]): void | Promise<void>;
 }
 
 function response(value: unknown, status: number): Response {
@@ -73,7 +73,7 @@ export async function handleBroadcastRequest(request: Request, dependencies: Bro
   }
   const sent = results.filter((result) => result.ok).length;
   const failed = results.length - sent;
-  if (sent > 0) await dependencies.afterControl?.();
+  if (sent > 0) await dependencies.afterControl?.(results.filter((result) => result.ok).map((result) => result.agentId));
   const body: BroadcastResponse = { ok: failed === 0, partial: sent > 0 && failed > 0, sent, failed, results };
   return response(body, failed === 0 ? 200 : sent > 0 ? 207 : 409);
 }

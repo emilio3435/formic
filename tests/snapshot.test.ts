@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildSnapshot, snapshotFingerprint } from "../src/server/snapshot";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
+import type { IssueLifecycle } from "../src/shared/types";
 
 const archiveStore: ArchiveStore = {
   has: () => false,
@@ -448,5 +449,97 @@ describe("snapshot control safety and SSE deduplication", () => {
       nickname: "Fermat",
     });
     expect(program.rollup).toMatchObject({ total: 2, live: 2, working: 2, linked: 0 });
+  });
+
+  test("issues retain open and verification evidence until a fresh source clears them", () => {
+    const sourceErrors = ["cmux control is unavailable"];
+    const opened = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: sourceErrors,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:00.000Z"),
+    });
+    const issue = opened.issues?.[0]!;
+    expect(issue.lifecycle).toMatchObject({ state: "open", openedAt: "2026-07-21T23:00:00.000Z" });
+
+    const verifyingLifecycle: IssueLifecycle = {
+      state: "verifying",
+      openedAt: issue.lifecycle!.openedAt,
+      verificationStartedAt: "2026-07-21T23:01:00.000Z",
+      result: "Control action completed.",
+    };
+    const verifying = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: sourceErrors,
+      issueLifecycle: new Map([[issue.id, verifyingLifecycle]]),
+      previousIssues: opened.issues,
+      archiveStore,
+      now: new Date("2026-07-21T23:02:00.000Z"),
+    });
+    expect(verifying.issues?.[0]?.lifecycle).toEqual(verifyingLifecycle);
+    expect(verifying.recentlyResolved).toEqual([]);
+
+    const stillReported = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: sourceErrors,
+      issueLifecycle: new Map([[issue.id, verifying.issues?.[0]?.lifecycle!]]),
+      previousIssues: verifying.issues,
+      recentlyResolved: verifying.recentlyResolved,
+      archiveStore,
+      now: new Date("2026-07-21T23:03:00.000Z"),
+    });
+    expect(stillReported.issues?.[0]?.lifecycle?.state).toBe("verifying");
+    expect(stillReported.recentlyResolved).toEqual([]);
+
+    const cleared = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      issueLifecycle: new Map([[issue.id, stillReported.issues?.[0]?.lifecycle!]]),
+      previousIssues: stillReported.issues,
+      recentlyResolved: stillReported.recentlyResolved,
+      archiveStore,
+      now: new Date("2026-07-21T23:04:00.000Z"),
+    });
+    expect(cleared.issues).toEqual([]);
+    expect(cleared.recentlyResolved).toMatchObject([{
+      id: issue.id,
+      lifecycle: {
+        state: "resolved",
+        resolvedAt: "2026-07-21T23:04:00.000Z",
+        result: "Control action completed. Fresh source confirmation no longer reports this issue.",
+      },
+    }]);
+  });
+
+  test("blocked source findings remain visible with the investigation result", () => {
+    const opened = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: ["cmux control is unavailable"],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:00.000Z"),
+    });
+    const issue = opened.issues?.[0]!;
+    const blocked: IssueLifecycle = {
+      state: "blocked",
+      openedAt: issue.lifecycle!.openedAt,
+      verificationStartedAt: "2026-07-21T23:01:00.000Z",
+      result: "The external identity service is unavailable.",
+    };
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: ["cmux control is unavailable"],
+      issueLifecycle: new Map([[issue.id, blocked]]),
+      previousIssues: opened.issues,
+      archiveStore,
+      now: new Date("2026-07-21T23:02:00.000Z"),
+    });
+
+    expect(snapshot.issues).toMatchObject([{ id: issue.id, lifecycle: blocked }]);
+    expect(snapshot.recentlyResolved).toEqual([]);
   });
 });

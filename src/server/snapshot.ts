@@ -6,6 +6,7 @@ import type {
   AgentSnapshot,
   ControlCapability,
   HubSnapshot,
+  IssueLifecycle,
   ModelPolicy,
   OperatorControlState,
   OperatorIssue,
@@ -41,8 +42,14 @@ export interface SnapshotInput {
   cmuxReachable?: boolean;
   cmuxLastCheckedAt?: string;
   archiveStore: ArchiveStore;
+  issueLifecycle?: ReadonlyMap<string, IssueLifecycle>;
+  previousIssues?: readonly OperatorIssue[];
+  recentlyResolved?: readonly OperatorIssue[];
   now?: Date;
 }
+
+export const MAX_RECENTLY_RESOLVED = 12;
+const RECENTLY_RESOLVED_TTL_MS = 15 * 60 * 1_000;
 
 function hash(value: string): string {
   let result = 2_166_136_261;
@@ -309,6 +316,69 @@ function buildOperatorIssues(
   return issues;
 }
 
+function openLifecycle(now: string): IssueLifecycle {
+  return { state: "open", openedAt: now };
+}
+
+function lifecycleForIssue(
+  issue: OperatorIssue,
+  input: SnapshotInput,
+  now: string,
+): IssueLifecycle {
+  const existing = input.issueLifecycle?.get(issue.id) ?? issue.lifecycle;
+  if (!existing || existing.state === "resolved") return openLifecycle(now);
+  return {
+    ...existing,
+    openedAt: existing.openedAt || now,
+  };
+}
+
+function resolvedIssue(
+  issue: OperatorIssue,
+  now: string,
+): OperatorIssue {
+  const priorResult = issue.lifecycle?.result;
+  return {
+    ...issue,
+    lifecycle: {
+      ...(issue.lifecycle ?? openLifecycle(now)),
+      state: "resolved",
+      resolvedAt: now,
+      result: priorResult
+        ? `${priorResult} Fresh source confirmation no longer reports this issue.`
+        : "A fresh source snapshot no longer reports this issue.",
+    },
+  };
+}
+
+function lifecycleIssues(
+  sourceIssues: readonly OperatorIssue[],
+  input: SnapshotInput,
+  now: Date,
+): { issues: OperatorIssue[]; recentlyResolved: OperatorIssue[] } {
+  const nowIso = now.toISOString();
+  const issues = sourceIssues.map((issue) => ({
+    ...issue,
+    lifecycle: lifecycleForIssue(issue, input, nowIso),
+  }));
+  const currentIds = new Set(issues.map((issue) => issue.id));
+  const newlyResolved = (input.previousIssues ?? [])
+    .filter((issue) => !currentIds.has(issue.id))
+    .map((issue) => resolvedIssue(issue, nowIso));
+  const retained = (input.recentlyResolved ?? []).filter((issue) => {
+    const resolvedAt = issue.lifecycle?.resolvedAt ? Date.parse(issue.lifecycle.resolvedAt) : Number.NaN;
+    return !currentIds.has(issue.id) && Number.isFinite(resolvedAt) && now.getTime() - resolvedAt <= RECENTLY_RESOLVED_TTL_MS;
+  });
+  const byId = new Map<string, OperatorIssue>();
+  for (const issue of [...newlyResolved, ...retained]) {
+    if (!byId.has(issue.id)) byId.set(issue.id, issue);
+  }
+  const recentlyResolved = [...byId.values()]
+    .sort((left, right) => (right.lifecycle?.resolvedAt ?? "").localeCompare(left.lifecycle?.resolvedAt ?? ""))
+    .slice(0, MAX_RECENTLY_RESOLVED);
+  return { issues, recentlyResolved };
+}
+
 function configuredProgram(
   hints: readonly ProgramHint[],
   values: readonly (string | undefined)[],
@@ -465,7 +535,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const staleSources = (Object.entries(input.sourceErrors ?? {}) as [Provider, readonly string[]][])
     .filter(([, errors]) => errors.length > 0)
     .map(([provider]) => provider);
-  const issues = buildOperatorIssues(allAgents, input.sourceErrors, cmuxErrors);
+  const sourceIssues = buildOperatorIssues(allAgents, input.sourceErrors, cmuxErrors);
+  const { issues, recentlyResolved } = lifecycleIssues(sourceIssues, input, now);
   const degradedSources =
     ["codex", "claude", "cursor"].filter((provider) =>
       (input.sourceErrors?.[provider as Provider]?.length ?? 0) > 0,
@@ -509,6 +580,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       },
     },
     issues,
+    recentlyResolved,
     programs: orderedPrograms,
   };
 }

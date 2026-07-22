@@ -112,6 +112,16 @@ export interface ProgramSnapshot {
   rollup?: ProgramRollup;
 }
 
+export type IssueLifecycleState = "open" | "verifying" | "resolved" | "blocked";
+
+export interface IssueLifecycle {
+  state: IssueLifecycleState;
+  openedAt: string;
+  verificationStartedAt?: string;
+  resolvedAt?: string;
+  result?: string;
+}
+
 export interface OperatorIssue {
   id: string;
   kind: "system" | "agent";
@@ -120,6 +130,7 @@ export interface OperatorIssue {
   summary: string;
   affectedAgentIds: string[];
   technicalDetails?: string[];
+  lifecycle?: IssueLifecycle;
 }
 
 export type TriageMode = "direct" | "coordinated" | "investigation";
@@ -195,6 +206,7 @@ export interface HubSnapshot {
     sourceHealth?: SourceHealthSummary;
   };
   issues?: OperatorIssue[];
+  recentlyResolved?: OperatorIssue[];
   programs: ProgramSnapshot[];
 }
 

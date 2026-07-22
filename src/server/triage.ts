@@ -18,6 +18,7 @@ export interface TriageQueueStore {
   get(issueId: string): TriageQueueItem | undefined;
   add(recommendation: TriageRecommendation): Promise<TriageQueueItem>;
   start(issueId: string, runner: TriageInvestigationRunner): Promise<TriageQueueItem>;
+  subscribe?(listener: (item: TriageQueueItem) => void): () => void;
 }
 
 export interface InvestigationResult { ok: boolean; summary: string }
@@ -162,12 +163,22 @@ export function buildTriageRecommendation(
 export class MemoryTriageQueueStore implements TriageQueueStore {
   protected readonly items = new Map<string, TriageQueueItem>();
   private mutationQueue: Promise<void> = Promise.resolve();
+  private readonly listeners = new Set<(item: TriageQueueItem) => void>();
 
   list(): readonly TriageQueueItem[] {
     return [...this.items.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   get(issueId: string): TriageQueueItem | undefined { return this.items.get(issueId); }
+
+  subscribe(listener: (item: TriageQueueItem) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(item: TriageQueueItem): void {
+    for (const listener of this.listeners) listener(item);
+  }
 
   async add(recommendation: TriageRecommendation): Promise<TriageQueueItem> {
     const operation = this.mutationQueue.then(async () => {
@@ -181,6 +192,7 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
       };
       await this.persist([...this.items.values(), item]);
       this.items.set(recommendation.issueId, item);
+      this.notify(item);
       return item;
     });
     this.mutationQueue = operation.then(() => undefined, () => undefined);
@@ -203,6 +215,7 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
       };
       await this.persist([...this.items.values()].map((value) => value.issueId === issueId ? running : value));
       this.items.set(issueId, running);
+      this.notify(running);
       void launch.completion.then((result) => this.finish(issueId, result));
       return running;
     });
@@ -220,6 +233,7 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
       };
       await this.persist([...this.items.values()].map((value) => value.issueId === issueId ? finished : value));
       this.items.set(issueId, finished);
+      this.notify(finished);
     });
   }
 

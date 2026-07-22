@@ -192,8 +192,17 @@ describe("operator triage recommendations", () => {
       affectedAgentIds: agents.map((value) => value.id),
       technicalDetails: ["first conflict", "second conflict"],
     };
-    const current = snapshot(issue, agents);
+    const current = snapshot({
+      ...issue,
+      lifecycle: {
+        state: "verifying",
+        openedAt: "2026-07-22T06:00:00.000Z",
+        verificationStartedAt: "2026-07-22T06:01:00.000Z",
+      },
+    }, agents);
     const store = new MemoryTriageQueueStore();
+    const transitions: string[] = [];
+    const unsubscribe = store.subscribe?.((item) => transitions.push(item.state));
     await handleTriageRequest(post("/api/triage/queue", issue.id), current, store);
 
     let finish!: (value: InvestigationResult) => void;
@@ -218,5 +227,8 @@ describe("operator triage recommendations", () => {
     finish({ ok: true, summary: "Identity overlap traced and bounded." });
     await Bun.sleep(5);
     expect(store.get(issue.id)).toMatchObject({ state: "completed", result: "Identity overlap traced and bounded." });
+    expect(transitions).toEqual(["queued", "running", "completed"]);
+    expect(current.issues?.[0]?.lifecycle).toMatchObject({ state: "verifying" });
+    expect(unsubscribe).toBeFunction();
   });
 });

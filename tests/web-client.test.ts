@@ -322,6 +322,26 @@ describe("issues", () => {
     expect(issues.some((i: { kind: string }) => i.kind === "system")).toBe(true);
     expect(issues[0].technicalDetails).toEqual(["boom"]);
   });
+
+  test("issue lifecycle labels keep verification and source-confirmed resolution distinct", () => {
+    const verifying = {
+      id: "system:verification",
+      kind: "system",
+      severity: "error",
+      title: "Identity conflict",
+      summary: "Source still reports the conflict.",
+      affectedAgentIds: [],
+      lifecycle: { state: "verifying", openedAt: "2026-07-22T05:00:00.000Z", verificationStartedAt: "2026-07-22T05:01:00.000Z" },
+    };
+    const resolved = {
+      ...verifying,
+      lifecycle: { state: "resolved", openedAt: verifying.lifecycle.openedAt, resolvedAt: "2026-07-22T05:02:00.000Z", result: "Fresh source evidence is clear." },
+    };
+    expect(M.issueStateLabel(verifying)).toBe("Verifying");
+    expect(M.issueStateLabel(resolved)).toBe("Resolved");
+    expect(M.issuesOf({ programs: [], issues: [verifying] })[0].lifecycle.state).toBe("verifying");
+    expect(M.recentlyResolvedOf({ programs: [], recentlyResolved: [resolved] })).toEqual([resolved]);
+  });
 });
 
 describe("search", () => {
@@ -452,6 +472,10 @@ describe("source hygiene", () => {
     expect(source).toContain('"Launch read-only Luna"');
     expect(source).toContain("Launch remains a separate operator action.");
     expect(source).not.toMatch(/\/api\/triage\/(spawn|execute)/);
+    expect(source).toContain("source confirmation pending");
+    expect(source).toContain("waiting for a fresh source snapshot to clear the finding");
+    expect(source).toContain("await fetchSnapshot()");
+    expect(source).toContain("recentlyResolved");
   });
 });
 

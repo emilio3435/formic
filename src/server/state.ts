@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { HubSnapshot, Provider } from "../shared/types";
+import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider } from "../shared/types";
 import { collectCmux, collectCmuxNotifications } from "./cmux";
 import { collectSessions } from "./collectors";
 import { buildSnapshot, type ProgramHint } from "./snapshot";
@@ -31,6 +31,9 @@ export class HubState {
   #cmuxRequested = false;
   #refreshingCmux = false;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
+  #issueLifecycle = new Map<string, IssueLifecycle>();
+  #recentlyResolved: OperatorIssue[] = [];
+  #hasSourceSnapshot = false;
 
   constructor(
     private readonly runner: CommandRunner,
@@ -46,6 +49,8 @@ export class HubState {
       cmuxErrors: this.#cmuxErrors,
       cmuxReachable: this.#cmuxReachable,
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
+      issueLifecycle: this.#issueLifecycle,
+      recentlyResolved: this.#recentlyResolved,
     });
   }
 
@@ -56,6 +61,36 @@ export class HubState {
   subscribe(listener: (snapshot: HubSnapshot) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  markIssueVerifying(issueId: string, result?: string): void {
+    this.#markIssue(issueId, "verifying", result);
+  }
+
+  markIssueBlocked(issueId: string, result?: string): void {
+    this.#markIssue(issueId, "blocked", result);
+  }
+
+  #markIssue(issueId: string, state: IssueLifecycle["state"], result?: string): void {
+    const current = this.#issueLifecycle.get(issueId) ?? this.#snapshot.issues?.find((issue) => issue.id === issueId)?.lifecycle;
+    const now = new Date().toISOString();
+    const lifecycle: IssueLifecycle = {
+      state,
+      openedAt: current?.openedAt ?? now,
+      verificationStartedAt: state === "open"
+        ? undefined
+        : current?.state === "verifying" && current.verificationStartedAt
+          ? current.verificationStartedAt
+          : current?.verificationStartedAt ?? now,
+      result,
+    };
+    this.#issueLifecycle.set(issueId, lifecycle);
+    const issues = (this.#snapshot.issues ?? []).map((issue) =>
+      issue.id === issueId ? { ...issue, lifecycle } : issue,
+    );
+    if (issues.every((issue, index) => issue === this.#snapshot.issues?.[index])) return;
+    this.#snapshot = { ...this.#snapshot, issues };
+    for (const listener of this.#listeners) listener(this.#snapshot);
   }
 
   async refresh(options: { cmux?: boolean } = {}): Promise<HubSnapshot> {
@@ -114,7 +149,17 @@ export class HubState {
       cmuxReachable: this.#cmuxReachable,
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
       archiveStore: this.archiveStore,
+      issueLifecycle: this.#issueLifecycle,
+      previousIssues: this.#hasSourceSnapshot ? this.#snapshot.issues : undefined,
+      recentlyResolved: this.#recentlyResolved,
     });
+    this.#hasSourceSnapshot = true;
+    this.#recentlyResolved = [...(this.#snapshot.recentlyResolved ?? [])];
+    const nextLifecycle = new Map<string, IssueLifecycle>();
+    for (const issue of [...(this.#snapshot.issues ?? []), ...this.#recentlyResolved]) {
+      if (issue.lifecycle) nextLifecycle.set(issue.id, issue.lifecycle);
+    }
+    this.#issueLifecycle = nextLifecycle;
     for (const listener of this.#listeners) listener(this.#snapshot);
     return this.#snapshot;
   }

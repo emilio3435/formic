@@ -5,13 +5,15 @@ import { handleBroadcastRequest } from "./broadcast";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { snapshotFingerprint } from "./snapshot";
-import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
+import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueItem, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CommandRunner } from "./types";
 
 export interface MountainAppState {
   get(): HubSnapshot;
   subscribe(listener: (snapshot: HubSnapshot) => void): () => void;
   refresh(options?: { cmux?: boolean }): Promise<HubSnapshot>;
+  markIssueVerifying?(issueId: string, result?: string): void | Promise<void>;
+  markIssueBlocked?(issueId: string, result?: string): void | Promise<void>;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -56,6 +58,39 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (timer) clearInterval(timer);
     heartbeatTimers.delete(client);
   };
+  const markIssuesForAgents = async (agentIds: readonly string[]): Promise<void> => {
+    if (agentIds.length === 0) return;
+    const affected = new Set(agentIds);
+    for (const issue of dependencies.state.get().issues ?? []) {
+      if (issue.affectedAgentIds.some((agentId) => affected.has(agentId))) {
+        await dependencies.state.markIssueVerifying?.(issue.id);
+      }
+    }
+  };
+  const refreshForTriage = async (item: TriageQueueItem): Promise<void> => {
+    if (item.state === "blocked") {
+      await dependencies.state.markIssueBlocked?.(item.issueId, item.result);
+    } else {
+      await dependencies.state.markIssueVerifying?.(item.issueId, item.result);
+    }
+    await dependencies.state.refresh({ cmux: true });
+  };
+  const unsubscribeTriage = triageStore.subscribe?.((item) => {
+    if (item.state === "completed" || item.state === "blocked") void refreshForTriage(item);
+  });
+  const hydrateTriageLifecycle = async (): Promise<void> => {
+    const items = triageStore.list();
+    if (items.length === 0) return;
+    for (const item of items) {
+      if (item.state === "blocked") {
+        await dependencies.state.markIssueBlocked?.(item.issueId, item.result);
+      } else {
+        await dependencies.state.markIssueVerifying?.(item.issueId, item.result);
+      }
+    }
+    await dependencies.state.refresh({ cmux: true });
+  };
+  void hydrateTriageLifecycle();
   let fingerprint = snapshotFingerprint(dependencies.state.get());
   let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
@@ -116,8 +151,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
-        afterControl: async () => {
-          await dependencies.state.refresh();
+        afterControl: async (agentIds) => {
+          await markIssuesForAgents(agentIds ?? []);
+          await dependencies.state.refresh({ cmux: true });
         },
       });
     }
@@ -126,7 +162,10 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
-        afterControl: async () => { await dependencies.state.refresh(); },
+        afterControl: async (agentIds) => {
+          await markIssuesForAgents(agentIds ?? []);
+          await dependencies.state.refresh({ cmux: true });
+        },
       });
     }
     if (url.pathname === "/api/program-aliases") {
@@ -134,7 +173,21 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       return handleProgramAliasRequest(request, dependencies.state.get(), dependencies.programAliasStore);
     }
     if (["/api/triage/generate", "/api/triage/queue", "/api/triage/run"].includes(url.pathname)) {
-      return handleTriageRequest(request, dependencies.state.get(), triageStore, dependencies.triageRunner);
+      const triageBody = request.method === "POST" ? request.clone() : undefined;
+      const response = await handleTriageRequest(request, dependencies.state.get(), triageStore, dependencies.triageRunner);
+      if (request.method === "POST" && response.ok && (url.pathname === "/api/triage/queue" || url.pathname === "/api/triage/run")) {
+        let issueId: string | undefined;
+        try {
+          const body = await triageBody?.json() as { issueId?: unknown };
+          if (typeof body.issueId === "string") issueId = body.issueId;
+        } catch {
+          // The triage handler already returned the authoritative parse error.
+        }
+        const item = issueId ? triageStore.get(issueId) : undefined;
+        if (item) await refreshForTriage(item);
+        else await dependencies.state.refresh({ cmux: true });
+      }
+      return response;
     }
     if (url.pathname.startsWith("/api/")) {
       return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
@@ -149,6 +202,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (disposed) return;
     disposed = true;
     unsubscribe();
+    unsubscribeTriage?.();
     for (const client of [...clients]) {
       removeClient(client);
       try {
@@ -208,6 +262,7 @@ export function emptySnapshot(): HubSnapshot {
       sourceHealth: { healthy: 0, degraded: 4, total: 4 },
     },
     issues: [],
+    recentlyResolved: [],
     programs: [],
   };
 }
