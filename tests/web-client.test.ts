@@ -552,7 +552,7 @@ describe("calm program and agent list rendering", () => {
     expect(source).toContain("Select to open the full message and session details in the inspector.");
     expect(source).toContain('text: "Last human message"');
     expect(source).toContain('class: "last-human-message"');
-    expect(source).toContain('dtdd(grid, "effort", agent.effort)');
+    expect(source).toContain('dtdd(grid, "reasoning effort", agent.effort)');
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
   });

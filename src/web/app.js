@@ -139,6 +139,40 @@ const CONTROL_HINTS = {
   quarantined: "Conflicting identity evidence — controls are quarantined until the target is unambiguous.",
 };
 
+/* Plain-language glossary. dtdd() looks up a row's term here and, when found,
+   renders it with a dotted underline + explainer tooltip (hover or keyboard
+   focus). Definitions stay jargon-free — this is the human layer over the raw
+   Technical evidence, so a first-time operator can read the drawer unaided. */
+const TOKENS_HINT = "Token counts for the most recent model call. “measured” = reported by the provider; “estimated” = inferred.";
+const GLOSSARY = {
+  // Overview
+  "running for": "Wall-clock time since this agent started running.",
+  context: "How big the latest model call is against the model's context window.",
+  cost: "Estimated spend on this agent so far. “measured” = billed by the provider; “estimated” = inferred.",
+  // Technical
+  "session id": "The provider's own ID for this session, prefixed by the provider name.",
+  "working directory": "The folder on disk this agent is running in.",
+  status: "The raw run status reported by the provider, with its reason.",
+  model: "The model this agent is currently running on.",
+  "reasoning effort": "How hard the model is set to think per step — higher effort means more reasoning.",
+  "nesting level": "How deep this agent sits in the orchestrator → subagent tree. 0 is top-level.",
+  "orchestrator id": "ID of the agent that spawned this one, if any.",
+  subagents: "How many child agents this one has spawned.",
+  "session total": "Total tokens used across this whole session so far.",
+  "context window": "The model's maximum context size — how much it can hold at once.",
+  "model policy": "Whether the running model matches the model this lane is supposed to use.",
+  git: "The branch and commit the agent's working copy is on; flags uncommitted changes.",
+  tests: "The latest test-run result this agent reported.",
+  checks: "Named pre-ship gates this agent must pass — e.g. typecheck or lint.",
+  "control link": "Which cmux workspace/pane this session is wired to for Focus and Send, and how confidently it was matched.",
+  "available controls": "Which operator actions are turned on for this agent, and why any are off.",
+};
+
+/* Plain words for provider-native enums that used to render raw. */
+const PROVENANCE_LABELS = { observed: "measured", estimated: "estimated", unknown: "unknown" };
+const provenanceLabel = (p) => PROVENANCE_LABELS[p] || p || "unknown";
+const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by folder", ambiguous: "ambiguous", missing: "no link" };
+
 /* ---------- derivations (narrow fallbacks for the transitional schema) ----------
    The server now emits activity/outcome/controlState directly; when a snapshot
    predates those fields we derive them from the provider-native status only. */
@@ -1829,9 +1863,15 @@ function renderInspector() {
     inspectorTabButton("overview", "Overview"),
     inspectorTabButton("technical", "Technical")));
 
-  pane.append(state.inspectorTab === "technical"
-    ? renderTechnical(agent)
-    : renderOverview(agent, program));
+  // Both panels always render. In the narrow drawer CSS shows only the active
+  // tab; once the drawer is wide enough the tabs hide and both sit side-by-side
+  // (Option 2 — use the horizontal room instead of forcing a tab dance).
+  const overviewPanel = renderOverview(agent, program);
+  overviewPanel.dataset.tab = "overview";
+  const technicalPanel = renderTechnical(agent);
+  technicalPanel.dataset.tab = "technical";
+  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: state.inspectorTab } },
+    overviewPanel, technicalPanel));
 
   pane.append(renderDangerZone(agent));
 
@@ -2005,7 +2045,13 @@ function renderPresentationLabels(agent) {
 /* ---------- inspector: overview ---------- */
 
 function dtdd(grid, label, value, opts = {}) {
-  grid.append(el("dt", { text: label }));
+  const hint = opts.hint ?? GLOSSARY[label];
+  grid.append(hint
+    ? el("dt", {}, el("span", {
+        class: "term-hint", tabindex: "0",
+        title: hint, "aria-label": `${label}: ${hint}`, text: label,
+      }))
+    : el("dt", { text: label }));
   const dd = el("dd", {});
   if (value == null || value === "") {
     dd.append(el("span", { class: "absent", text: opts.absent || "not reported" }));
@@ -2041,7 +2087,7 @@ function renderOverview(agent, program) {
   dtdd(grid, "role", agent.role && agent.role !== "agent" ? agent.role : null, { absent: "general agent" });
 
   const tok = tokenSummary(agent.tokens);
-  dtdd(grid, tok.label, el("span", { title: tok.title, class: tok.known ? "mono" : "absent", text: tok.text }));
+  dtdd(grid, tok.label, el("span", { title: tok.title, class: tok.known ? "mono" : "absent", text: tok.text }), { hint: TOKENS_HINT });
   const ctx = contextUsage(agent.tokens);
   if (ctx) {
     dtdd(grid, "context", el("span", {
@@ -2051,7 +2097,7 @@ function renderOverview(agent, program) {
     }));
   }
   dtdd(grid, "cost", agent.cost
-    ? `${agent.cost.currency} ${Number(agent.cost.amount).toFixed(4)} · ${agent.cost.provenance}${agent.cost.note ? " · " + agent.cost.note : ""}`
+    ? `${agent.cost.currency} ${Number(agent.cost.amount).toFixed(4)} · ${provenanceLabel(agent.cost.provenance)}${agent.cost.note ? " · " + agent.cost.note : ""}`
     : null, { absent: "not reported" });
 
   panel.append(grid);
@@ -2095,18 +2141,20 @@ function renderSwarmSection(agent, program) {
 
 function renderTechnical(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  panel.append(el("p", { class: "inspector-note tech-caption",
+    text: "The raw evidence behind the Overview — hover any underlined term for what it means." }));
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
-  dtdd(grid, "source cwd", agent.cwd, { code: true });
-  dtdd(grid, "provider status", `${agent.status} — ${agent.statusReason}`);
+  dtdd(grid, "session id", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
+  dtdd(grid, "working directory", agent.cwd, { code: true });
+  dtdd(grid, "status", `${agent.status} — ${agent.statusReason}`);
   dtdd(grid, "model", agent.model);
-  dtdd(grid, "effort", agent.effort);
+  dtdd(grid, "reasoning effort", agent.effort);
   dtdd(grid, "started", agent.startedAt
     ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
     : null);
-  dtdd(grid, "thread depth", agent.threadDepth != null ? String(agent.threadDepth) : null);
-  dtdd(grid, "parent id", agent.parentAgentId, { code: true, absent: "none" });
+  dtdd(grid, "nesting level", agent.threadDepth != null ? String(agent.threadDepth) : null);
+  dtdd(grid, "orchestrator id", agent.parentAgentId, { code: true, absent: "none" });
   dtdd(grid, "subagents", agent.subagentCount != null ? String(agent.subagentCount) : null);
 
   const t = agent.tokens || { provenance: "unknown" };
@@ -2117,8 +2165,8 @@ function renderTechnical(agent) {
   if (t.total != null) tokParts.push("total " + fmtTok(t.total));
   const tokLabel = t.scope === "latest-turn" ? "latest call" : "tokens";
   dtdd(grid, tokLabel, tokParts.length
-    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: t.provenance }))
-    : el("span", { class: "absent", text: "none reported (provenance: " + t.provenance + ")" }));
+    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: provenanceLabel(t.provenance) }))
+    : el("span", { class: "absent", text: "none reported (" + provenanceLabel(t.provenance) + ")" }), { hint: TOKENS_HINT });
   dtdd(grid, "session total", t.sessionTotal != null
     ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
     : null);
@@ -2145,11 +2193,11 @@ function renderTechnical(agent) {
         agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : ""))
     : null);
 
-  dtdd(grid, "gates", agent.gates && agent.gates.length
+  dtdd(grid, "checks", agent.gates && agent.gates.length
     ? el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g })))
     : el("span", { class: "absent", text: "none" }));
 
-  dtdd(grid, "cmux target", renderTarget(agent.target));
+  dtdd(grid, "control link", renderTarget(agent.target));
 
   const routing = el("ul", { class: "routing-list" });
   for (const cap of agent.controls || []) {
@@ -2160,7 +2208,7 @@ function renderTechnical(agent) {
         ? el("span", { class: "ok", text: "enabled" })
         : el("span", { class: "absent", text: "disabled: " + (cap.reason || "no reason reported") })));
   }
-  dtdd(grid, "control routing", routing);
+  dtdd(grid, "available controls", routing);
 
   panel.append(grid);
 
@@ -2190,7 +2238,7 @@ function renderTechnical(agent) {
 function renderTarget(target) {
   if (!target) return null;
   const wrap = el("span", {},
-    el("span", { class: "target-chip target-" + target.resolution, text: target.resolution }));
+    el("span", { class: "target-chip target-" + target.resolution, text: RESOLUTION_LABELS[target.resolution] || target.resolution }));
   const ids = [
     target.workspaceId && "ws " + target.workspaceId,
     target.surfaceId && "surface " + target.surfaceId,

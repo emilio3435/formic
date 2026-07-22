@@ -843,6 +843,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .pane-inspector {
   flex: none;
   width: min(var(--inspector-w), 100%);
+  min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
   overflow-y: auto;
   border-left: 1px solid var(--line-strong);
   background: var(--surface);
@@ -855,6 +856,29 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .pane-inspector[hidden] { display: none; }
 @keyframes drawer-in { from { transform: translateX(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Overview + Technical: a tabbed single column while the drawer is narrow, then
+   both panels side-by-side once the viewport is wide enough to use the room. */
+.inspector-body { display: block; }
+@media (max-width: 1199.98px) {
+  .inspector-body[data-active-tab="overview"] > [data-tab="technical"],
+  .inspector-body[data-active-tab="technical"] > [data-tab="overview"] { display: none; }
+}
+@media (min-width: 1200px) {
+  :root { --inspector-w: clamp(38rem, 42vw, 60rem); }
+  .pane-inspector .inspector-tabs { display: none; }   /* no tab dance when both fit (beats base .inspector-tabs) */
+  .inspector-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.5rem 2rem;
+    align-items: start;
+  }
+  .inspector-body > [data-tab="technical"] {
+    border-left: 1px solid var(--line);
+    padding-left: 2rem;
+  }
+  .inspector-body > .inspector-panel { min-width: 0; }
+}
 
 .inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; overflow-wrap: anywhere; }
@@ -907,6 +931,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .detail-grid dt { font: 700 10px/1.4 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
 .detail-grid dd code { color: var(--muted); }
+/* Glossary terms: dotted underline signals "hover/focus for a plain-language
+   explainer"; the tooltip itself is the native title (keyboard-reachable via
+   tabindex). Focus outline comes from the global :focus-visible rule. */
+.term-hint { text-decoration: underline dotted; text-underline-offset: 2px; text-decoration-thickness: 1px; cursor: help; }
+.tech-caption { margin: 0 0 0.7rem; }
 
 .git-dirty { color: var(--warn); }
 .tests-passing { color: var(--ok); } .tests-failing { color: var(--bad); } .tests-running { color: var(--idle); } .tests-unknown { color: var(--faint); }
