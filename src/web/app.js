@@ -1813,6 +1813,18 @@ function selectEntity(sel) {
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
   render();
+  // On explicit open (not on background SSE re-renders), move focus to the
+  // drawer's lead element per kind — the differentiator band, or the title.
+  focusDrawerLead();
+}
+
+function focusDrawerLead() {
+  const pane = $("inspector");
+  if (!pane || pane.hidden) return;
+  const lead = pane.querySelector(".dw-lead") || pane.querySelector(".inspector-title");
+  if (!lead) return;
+  if (!lead.hasAttribute("tabindex")) lead.setAttribute("tabindex", "-1");
+  lead.focus({ preventScroll: true });
 }
 
 function closeInspector() {
@@ -1852,8 +1864,15 @@ function renderInspector() {
   const view = resolveSelection(sel);
   const renderer = view && DRAWER_RENDERERS[view.kind];
   if (!renderer) { pane.append(...missingDrawer()); return; }
+  pane.setAttribute("role", "region");
+  pane.setAttribute("aria-label", (DRAWER_ARIA_LABELS[view.kind] || "Detail") + " inspector");
   renderer(pane, view);
 }
+
+const DRAWER_ARIA_LABELS = {
+  agent: "Agent", intervention: "Intervention", advisory: "Advisory",
+  investigation: "Investigation", resolved: "Resolved finding", program: "Program",
+};
 
 const DRAWER_RENDERERS = {
   agent: renderAgentDrawer,

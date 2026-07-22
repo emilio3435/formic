@@ -847,6 +847,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   width: min(var(--inspector-w), 100%);
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
   overflow-y: auto;
+  overflow-x: hidden;   /* content wraps; guarantee no horizontal scroll at 375px */
   border-left: 1px solid var(--line-strong);
   background: var(--surface);
   padding: 1.15rem 1.2rem 3rem;
@@ -1276,6 +1277,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .triage-steps { grid-template-columns: 1fr; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
+  /* Per-type drawer controls stay comfortably tappable on touch. */
+  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
+  .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
 /* ---------- motion ---------- */
