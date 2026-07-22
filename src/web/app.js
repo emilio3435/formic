@@ -204,6 +204,13 @@ function conciseText(value, limit = 88) {
   return clipped.slice(0, boundary > limit * 0.65 ? boundary : clipped.length).trimEnd() + "…";
 }
 
+const NO_READABLE_MESSAGE = "No readable message yet";
+
+function formatLastHumanMessage(agent, limit = 120) {
+  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
+}
+
 const agentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
 
 /* Presentation-only program aliases. The source program id and name stay
@@ -520,7 +527,7 @@ globalThis.TheAntHill = {
   controlUnavailableText,
   totalsOf, issuesOf, viewMatches, matchesQuery, buildClusters, tokenSummary,
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
-  roleView,
+  roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS,
   broadcastEligible,
@@ -1264,14 +1271,7 @@ function renderSwarmAnchor(agent, depth, activeChildren) {
 }
 
 function rowSummary(agent) {
-  const outcome = deriveOutcome(agent);
-  if (outcome !== "healthy" && agent.statusReason) return conciseText(agent.statusReason, 120);
-  if (agent.transcriptTail) {
-    const lines = agent.transcriptTail.trim().split("\n");
-    return conciseText(lines[lines.length - 1], 120);
-  }
-  if (agent.task) return conciseText(agent.task, 120);
-  return conciseText(agent.statusReason, 120);
+  return formatLastHumanMessage(agent);
 }
 
 function rowFact(label, value, className = "") {
@@ -1345,7 +1345,7 @@ function renderAgentRow(agent, program, opts = {}) {
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
-    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Workspace, agent, and terminal description", text: description }) : null);
+    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human-readable message", text: description }) : null);
 
   const line1 = el("span", { class: "agent-grid" },
     el("span", { class: "row-state state-" + activity },
@@ -1636,13 +1636,6 @@ function renderOverview(agent, program) {
 
   panel.append(grid);
   panel.append(renderSwarmSection(agent, program));
-
-  if (agent.transcriptTail) {
-    const lines = agent.transcriptTail.trim().split("\n");
-    panel.append(
-      el("h3", { class: "section-title", text: "Last result" }),
-      el("p", { class: "last-result", text: lines.slice(-3).join("\n") }));
-  }
   return panel;
 }
 

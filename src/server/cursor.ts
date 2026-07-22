@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
+import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 
 const CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
@@ -111,10 +112,14 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   const rows = jsonlRecords(input.transcriptJsonl ?? "");
   let task: string | undefined;
   let transcriptTail: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let turnStatus: string | undefined;
   for (const row of rows) {
     const text = messageText(row);
     if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
+    if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
+      humanMessages.push({ role: row.role, content: row.message.content });
+    }
     if (row.role === "assistant" && text) transcriptTail = text;
     if (row.type === "turn_ended" && typeof row.status === "string") turnStatus = row.status;
   }
@@ -169,6 +174,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     tokens: { scope: "unknown", provenance: "unknown" },
     cost: null,
     subagentCount: input.subagentCount,
+    lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: input.transcriptPath
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
@@ -183,10 +189,14 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
   const rows = jsonlRecords(input.transcriptJsonl);
   let task: string | undefined;
   let transcriptTail: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let turnStatus: string | undefined;
   for (const row of rows) {
     const text = messageText(row);
     if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
+    if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
+      humanMessages.push({ role: row.role, content: row.message.content });
+    }
     if (row.role === "assistant" && text) transcriptTail = text;
     if (row.type === "turn_ended" && typeof row.status === "string") turnStatus = row.status;
   }
@@ -226,6 +236,7 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     cost: null,
     parentSourceSessionId: input.parentSessionId,
     threadDepth: 1,
+    lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],

@@ -33,6 +33,10 @@ Open <http://127.0.0.1:4701>. Override the port with `MOUNTAIN_PORT` when needed
 - OMP is not an Ant Hill launch dependency. Its collector is archived, read-only compatibility for historical session records and can never appear as active runtime work.
 - The primary token glance metric is the median latest request across working sessions. Per-session cumulative totals remain available in details and never inflate current-request usage.
 
+## Summary message contract
+
+`AgentSnapshot.lastHumanMessage` is `string | null`. Collectors choose the latest provider-shaped assistant or user prose after removing tool calls, diffs, structured envelopes, citations, commands, paths, and injected instructions; they then fall back to task text and a concise status reason. `null` is preserved as absence. The row helper `formatLastHumanMessage` bounds the display text and renders `No readable message yet` for null; `transcriptTail` remains technical inspector evidence and is never used as row summary text.
+
 ## Verification
 
 `bun run check` runs strict TypeScript plus the collector, identity, routing, notification, archive, snapshot/SSE, control, lifecycle, web-client, and HTTP-boundary tests.

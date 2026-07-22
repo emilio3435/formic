@@ -159,6 +159,24 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(laterSnapshot.controlHealth.lastCheckedAt).toBe(cmuxAttempt);
   });
 
+  test("snapshot exposes the additive summary field and preserves explicit absence", () => {
+    const withMessage = buildSnapshot({
+      agents: [collected({ lastHumanMessage: "Readable provider prose." })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const absent = buildSnapshot({
+      agents: [collected({ task: undefined, lastHumanMessage: null })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(withMessage.programs[0]?.agents[0]?.lastHumanMessage).toBe("Readable provider prose.");
+    expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
+  });
+
   test("exact cmux project metadata groups a home-cwd source without rewriting source truth", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",

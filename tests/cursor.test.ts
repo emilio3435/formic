@@ -60,11 +60,25 @@ describe("Cursor Agent persisted session truth", () => {
       statusReason: "Cursor recorded the last turn as successfully ended.",
       subagentCount: 2,
       transcriptTail: "Cursor identity is exact when the live process opens its session store.",
+      lastHumanMessage: "Cursor identity is exact when the live process opens its session store.",
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });
     expect(agent?.tokens.total).toBeUndefined();
     expect(agent?.artifacts[0]?.kind).toBe("transcript");
+  });
+
+  test("Cursor ignores tool output and diff text while retaining readable assistant prose", async () => {
+    const agent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: await fixture("cursor-meta.json"),
+      transcriptJsonl: await fixture("cursor-human-message-session.jsonl"),
+      nowMs: 1784689180000,
+    });
+
+    expect(agent?.lastHumanMessage).toBe("The Cursor route is ready for review.");
+    expect(agent?.lastHumanMessage).not.toContain("diff --git");
+    expect(agent?.lastHumanMessage).not.toContain("identity.ts");
   });
 
   test("parses a Cursor child as a real parent-linked session with its own model", () => {

@@ -74,6 +74,33 @@ describe("state derivations fall back from provider-native status", () => {
   });
 });
 
+describe("provider-aware row summaries", () => {
+  test("uses the sanitized snapshot field and never falls back to technical transcript text", () => {
+    const value = agent({
+      lastHumanMessage: "Readable review result.",
+      transcriptTail: "diff --git a/src/server/identity.ts b/src/server/identity.ts",
+      statusReason: "Tool result: /Users/me/the-mountain/src/server/identity.ts",
+    });
+
+    expect(M.rowSummary(value)).toBe("Readable review result.");
+    expect(M.rowSummary(value)).not.toContain("diff --git");
+    expect(M.rowSummary(value)).not.toContain("identity.ts");
+  });
+
+  test("renders explicit absence instead of inventing a message from the transcript", () => {
+    expect(M.formatLastHumanMessage(agent({ lastHumanMessage: null, transcriptTail: "tool output" })))
+      .toBe("No readable message yet");
+    expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
+  });
+
+  test("keeps the raw transcript tail in Technical inspector markup only", () => {
+    const overview = source.match(/function renderOverview\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0] || "";
+    const technical = source.match(/function renderTechnical\([\s\S]*?\n}\n\nfunction renderTarget/)?.[0] || "";
+    expect(overview).not.toContain("transcriptTail");
+    expect(technical).toContain("transcriptTail");
+  });
+});
+
 describe("views split Now from History", () => {
   test("Now is active work only; Idle and History remain explicit views", () => {
     const live = agent({ status: "running" });

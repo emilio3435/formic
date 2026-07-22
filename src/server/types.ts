@@ -27,6 +27,7 @@ export interface CollectedAgent {
   parentSourceSessionId?: string;
   threadDepth?: number;
   nickname?: string;
+  lastHumanMessage?: string | null;
   transcriptTail?: string;
   artifacts: Artifact[];
   gates: string[];

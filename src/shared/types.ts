@@ -74,6 +74,8 @@ export interface AgentSnapshot {
   parentAgentId?: string;
   threadDepth?: number;
   nickname?: string;
+  /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
+  lastHumanMessage: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;

@@ -129,6 +129,7 @@ function archiveCopy(agent: CollectedAgent): CollectedAgent {
     parentSourceSessionId: agent.parentSourceSessionId,
     threadDepth: agent.threadDepth,
     nickname: agent.nickname,
+    lastHumanMessage: agent.lastHumanMessage,
     transcriptTail: agent.transcriptTail,
     artifacts: agent.artifacts.map((artifact) => ({ ...artifact })),
     gates: [...agent.gates],

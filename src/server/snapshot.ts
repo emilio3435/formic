@@ -393,15 +393,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const activity = activityFor(source, archived);
     const outcome = outcomeFor(source, archived, Boolean(notification));
     const controlState = operatorControlState(target, archived || activity === "ended");
+    const snapshotStatusReason = archived
+      ? "Archived by source or operator."
+      : notificationSummary
+        ? `Unread cmux notification: ${notificationSummary}`
+        : source.statusReason;
     const agent: AgentSnapshot = {
       ...source,
       programId: program.id,
       status: archived ? "archived" : notification ? "attention" : source.status,
-      statusReason: archived
-        ? "Archived by source or operator."
-        : notificationSummary
-          ? `Unread cmux notification: ${notificationSummary}`
-          : source.statusReason,
+      statusReason: snapshotStatusReason,
       activity,
       outcome,
       controlState,
@@ -414,6 +415,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : undefined,
       threadDepth: source.threadDepth,
       nickname: source.nickname,
+      lastHumanMessage: source.lastHumanMessage !== undefined
+        ? source.lastHumanMessage === source.statusReason
+          ? snapshotStatusReason
+          : source.lastHumanMessage
+        : source.task ?? source.statusReason ?? null,
       transcriptTail: notification?.body
         ? `${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`.slice(-MAX_TRANSCRIPT_TAIL_CHARS)
         : source.transcriptTail,

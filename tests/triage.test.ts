@@ -17,6 +17,7 @@ function agent(id: string, programId: string, provider: AgentSnapshot["provider"
     programId,
     status: "running",
     statusReason: "Source activity is recent.",
+    lastHumanMessage: null,
     activity: "working",
     outcome: "healthy",
     controlState: "quarantined",

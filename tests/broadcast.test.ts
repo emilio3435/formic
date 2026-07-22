@@ -18,6 +18,7 @@ function agent(id: string, surfaceId: string, instruct = true): AgentSnapshot {
   return {
     id, provider: "codex", sourceSessionId: id, displayName: id, programId: "program",
     status: "running", statusReason: "Active", updatedAt: "2026-07-22T07:00:00.000Z",
+    lastHumanMessage: null,
     tokens: { provenance: "unknown" }, artifacts: [], gates: [],
     target: { surfaceId, resolution: "exact" },
     controls: actions.map((action) => ({ action, enabled: action !== "instruct" || instruct, reason: action === "instruct" && !instruct ? "Observed only." : undefined })),

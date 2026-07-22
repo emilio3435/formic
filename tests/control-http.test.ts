@@ -57,6 +57,7 @@ function agent(
     programId: "test-program",
     status: "running",
     statusReason: "Fixture activity is recent.",
+    lastHumanMessage: null,
     updatedAt: "2026-07-21T23:00:00.000Z",
     tokens: { provenance: "unknown" },
     artifacts: [],

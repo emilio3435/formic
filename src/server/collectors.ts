@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
+import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 
@@ -128,7 +129,14 @@ function statusFrom(updatedAt: string, exited: boolean, nowMs: number): {
 function withCurrentStatus(agent: CollectedAgent, nowMs: number): CollectedAgent {
   if (agent.status === "archived") return agent;
   const status = statusFrom(agent.updatedAt, false, nowMs);
-  return { ...agent, status: status.status, statusReason: status.reason };
+  return {
+    ...agent,
+    status: status.status,
+    statusReason: status.reason,
+    lastHumanMessage: agent.lastHumanMessage === agent.statusReason
+      ? status.reason
+      : agent.lastHumanMessage,
+  };
 }
 
 function fallbackUpdatedAt(meta: ParseMetadata): string {
@@ -150,6 +158,8 @@ function makeAgent(input: {
   parentSourceSessionId?: string;
   threadDepth?: number;
   nickname?: string;
+  humanMessages?: readonly HumanMessageCandidate[];
+  statusReason?: string;
   exited?: boolean;
   meta: ParseMetadata;
 }): CollectedAgent {
@@ -158,6 +168,7 @@ function makeAgent(input: {
     input.exited ?? false,
     input.meta.nowMs ?? Date.now(),
   );
+  const statusReason = input.statusReason ?? status.reason;
   const cwdName = input.cwd && input.cwd.replace(/\/+$/, "") !== homedir().replace(/\/+$/, "")
     ? basename(input.cwd)
     : undefined;
@@ -180,7 +191,13 @@ function makeAgent(input: {
     effort: input.effort,
     task: input.task,
     status: status.status,
-    statusReason: status.reason,
+    statusReason,
+    lastHumanMessage: extractLastHumanMessage(
+      input.provider,
+      input.humanMessages ?? [],
+      input.task,
+      statusReason,
+    ),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,
@@ -208,6 +225,7 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
   let model: string | undefined;
   let task: string | undefined;
   let tail: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let updatedAt = isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta);
   let input = 0;
   let output = 0;
@@ -226,6 +244,9 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
 
     const text = plainText(row.message?.content);
     if (row.message?.role === "user") task = nextTask(task, row.message?.content);
+    if (row.message?.role === "user" || row.message?.role === "assistant") {
+      humanMessages.push({ role: row.message.role, content: row.message?.content });
+    }
     if (text) tail = text;
     if (row.message?.role === "assistant") {
       model = typeof row.message?.model === "string" ? row.message.model : model;
@@ -264,13 +285,14 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
       provenance: sawUsage ? "observed" : "unknown",
     },
     transcriptTail: tail,
+    humanMessages,
+    statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
     exited,
     meta,
   });
   return {
     ...agent,
     status: "archived",
-    statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
   };
 }
 
@@ -286,6 +308,7 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
   let effort: string | undefined;
   let task: string | undefined;
   let tail: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let tokens: TokenUsage = { provenance: "unknown" };
   const threadSpawn = session?.source?.subagent?.thread_spawn;
   const parentSourceSessionId = typeof threadSpawn?.parent_thread_id === "string"
@@ -305,6 +328,7 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
     if (typeof payload.effort === "string" && payload.effort.trim()) effort = payload.effort.trim();
     if (row.type === "event_msg" && payload.type === "user_message") {
       task = nextTask(task, payload.message);
+      humanMessages.push({ role: "user", content: payload.message });
     }
     if (payload.type === "token_count" && payload.info?.total_token_usage) {
       const sessionUsage = payload.info.total_token_usage;
@@ -328,6 +352,9 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
     if (row.type === "response_item" && payload.type === "message") {
       const text = plainText(payload.content);
       if (payload.role === "user") task = nextTask(task, payload.content);
+      if (payload.role === "user" || payload.role === "assistant") {
+        humanMessages.push({ role: payload.role, content: payload.content });
+      }
       if (text) tail = text;
     }
     if (typeof payload.model === "string") model = payload.model;
@@ -347,6 +374,7 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
     threadDepth,
     nickname,
     transcriptTail: tail,
+    humanMessages,
     meta,
   });
 }
@@ -365,6 +393,7 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
   let effort: string | undefined;
   let task: string | undefined;
   let tail: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   const usageByMessage = new Map<string, {
     index: number;
     input: number;
@@ -388,6 +417,14 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
       else if (row.isMeta !== true) task = task ?? userTask(row.message?.content);
     }
     if (text) tail = text;
+    if ((row.type === "user" || row.type === "assistant") &&
+      (row.message?.role === "user" || row.message?.role === "assistant")) {
+      humanMessages.push({
+        role: row.message.role,
+        content: row.message?.content,
+        isMeta: row.isMeta === true,
+      });
+    }
     const usage = row.message?.usage;
     if (usage && row.type === "assistant") {
       model = typeof row.message.model === "string" ? row.message.model : model;
@@ -434,6 +471,7 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
       provenance: latestUsage ? "observed" : "unknown",
     },
     transcriptTail: tail,
+    humanMessages,
     meta,
   });
 }

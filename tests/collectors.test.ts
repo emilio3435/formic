@@ -74,6 +74,7 @@ describe("collector identity and usage truth", () => {
     );
     expect(agent?.displayName).toBe("Verify the immutable Lane 0 candidate.");
     expect(agent?.status).toBe("archived");
+    expect(agent?.lastHumanMessage).toBe("Goal: Verify the immutable Lane 0 candidate. Success means: the gate is honest.");
   });
 
   test("Codex exposes latest-request usage and keeps the cumulative session total separate", () => {
@@ -97,6 +98,23 @@ describe("collector identity and usage truth", () => {
     );
     expect(agent?.task).toBe("Implement safe identity routing.");
     expect(agent?.effort).toBe("xhigh");
+  });
+
+  test("Codex summary chooses the latest readable prose and keeps technical tail evidence separate", () => {
+    const agent = parseCodexJsonl(fixture("codex-human-message-session.jsonl"), { nowMs });
+
+    expect(agent?.lastHumanMessage).toBe("The identity route is ready for review.");
+    expect(agent?.lastHumanMessage).not.toContain("diff --git");
+    expect(agent?.lastHumanMessage).not.toContain("tool_result");
+    expect(agent?.lastHumanMessage).not.toContain("identity.ts");
+    expect(agent?.transcriptTail).toContain("git diff --check");
+  });
+
+  test("empty Codex transcripts use the concise status reason as the final fallback", () => {
+    const agent = parseCodexJsonl(fixture("empty-transcript-session.jsonl"), { nowMs });
+
+    expect(agent?.task).toBeUndefined();
+    expect(agent?.lastHumanMessage).toBe("No source activity in the last 3 minutes.");
   });
 
   test("Codex derives a cumulative total from source components when total_tokens is absent", () => {
@@ -238,6 +256,7 @@ describe("collector identity and usage truth", () => {
       effort: "high",
       task: "Design the responsive command center.",
       transcriptTail: "The UI now exposes routing health before controls.",
+      lastHumanMessage: "The UI now exposes routing health before controls.",
     });
     expect(agent?.tokens.provenance).toBe("observed");
     expect(agent?.tokens).toEqual({
