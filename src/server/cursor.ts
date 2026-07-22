@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 
-const CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
+export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface CursorMeta {
@@ -357,6 +357,7 @@ async function cursorChildAgents(
   transcriptPath: string | undefined,
   tracking: Database | undefined,
   nowMs: number,
+  windowMs: number,
 ): Promise<CollectedAgent[]> {
   if (!transcriptPath) return [];
   const directory = join(dirname(transcriptPath), "subagents");
@@ -373,7 +374,7 @@ async function cursorChildAgents(
     if (!UUID_PATTERN.test(sessionId)) continue;
     const path = join(directory, entry.name);
     const file = await stat(path);
-    if (nowMs - file.mtimeMs > CURSOR_SESSION_WINDOW_MS) continue;
+    if (nowMs - file.mtimeMs > windowMs) continue;
     const parsed = parseCursorChildSession({
       sessionId,
       parentSessionId: parent.sourceSessionId,
@@ -425,6 +426,7 @@ async function collectCursorGuiSessions(
   home: string,
   projects: readonly string[],
   nowMs: number,
+  windowMs: number,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -462,7 +464,7 @@ async function collectCursorGuiSessions(
     conversations = new Database(conversationPath, { readonly: true });
     const rows = conversations.query(
       "select id, title, updated_at, is_archived from conversations where source = 'local' and updated_at >= ? order by updated_at desc",
-    ).all(nowMs - CURSOR_SESSION_WINDOW_MS) as CursorConversationRow[];
+    ).all(nowMs - windowMs) as CursorConversationRow[];
     for (const row of rows) {
       if (typeof row.id !== "string" || !UUID_PATTERN.test(row.id)) continue;
       const cwd = sessionCwds.get(row.id);
@@ -493,7 +495,7 @@ async function collectCursorGuiSessions(
         });
         if (parsed) {
           agents.push(parsed);
-          agents.push(...await cursorChildAgents(parsed, transcriptPath, tracking, nowMs));
+          agents.push(...await cursorChildAgents(parsed, transcriptPath, tracking, nowMs, windowMs));
         }
       } catch (error) {
         errors.push(`cursor GUI ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -511,6 +513,7 @@ async function collectCursorGuiSessions(
 export async function collectCursorSessions(
   home = homedir(),
   nowMs = Date.now(),
+  windowMs = DEFAULT_CURSOR_SESSION_WINDOW_MS,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -538,7 +541,7 @@ export async function collectCursorSessions(
         return;
       }
       const updatedAtMs = Number(meta.updatedAtMs);
-      if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > CURSOR_SESSION_WINDOW_MS) return;
+      if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > windowMs) return;
 
       const storePath = join(sessionDirectory, "store.db");
       let store: CursorStoreEvidence | undefined;
@@ -574,7 +577,7 @@ export async function collectCursorSessions(
       if (parsed) agents.push(parsed);
     }),
   );
-  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs);
+  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs);
   errors.push(...gui.errors);
   const knownIds = new Set(agents.map((agent) => agent.id));
   for (const agent of gui.value) {

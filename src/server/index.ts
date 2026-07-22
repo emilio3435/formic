@@ -4,6 +4,7 @@ import { createMountainFetch } from "./app";
 import { BunCommandRunner } from "./command";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProgramAliasStore } from "./program-aliases";
+import { JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
 const PROJECT_ROOT = join(import.meta.dir, "../..");
@@ -17,9 +18,10 @@ const runner = new BunCommandRunner();
 const archiveStore = await JsonArchiveStore.open(join(PROJECT_ROOT, "data/archive.json"));
 const triageStore = await JsonTriageQueueStore.open(join(PROJECT_ROOT, "data/triage-queue.json"));
 const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "data/program-aliases.json"));
+const settingsStore = await JsonSettingsStore.open(join(PROJECT_ROOT, "data/settings.json"));
 const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJECT_ROOT, "data/investigations"));
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
-const state = new HubState(runner, archiveStore, programHints);
+const state = new HubState(runner, archiveStore, programHints, undefined, () => settingsStore.get());
 await state.refresh({ cmux: true });
 
 const mountainFetch = createMountainFetch({
@@ -29,6 +31,7 @@ const mountainFetch = createMountainFetch({
   triageStore,
   triageRunner,
   programAliasStore,
+  settingsStore,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });
 const server = Bun.serve({

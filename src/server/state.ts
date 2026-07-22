@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider } from "../shared/types";
 import { collectCmux, collectCmuxNotifications } from "./cmux";
-import { collectSessions } from "./collectors";
+import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint } from "./snapshot";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
+import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -35,12 +37,16 @@ export class HubState {
   #recentlyResolved: OperatorIssue[] = [];
   #hasSourceSnapshot = false;
 
+  #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
+
   constructor(
     private readonly runner: CommandRunner,
     private readonly archiveStore: ArchiveStore,
     private readonly programHints: readonly ProgramHint[],
     private readonly collectors: HubCollectors = DEFAULT_COLLECTORS,
+    private readonly settingsReader?: () => HubSettings,
   ) {
+    this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
     this.#snapshot = buildSnapshot({
       agents: [],
       surfaces: [],
@@ -51,6 +57,7 @@ export class HubState {
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
       issueLifecycle: this.#issueLifecycle,
       recentlyResolved: this.#recentlyResolved,
+      scanWindowHours: this.#scanWindowHours,
     });
   }
 
@@ -120,8 +127,10 @@ export class HubState {
   async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     const providers: Provider[] = ["omp", "codex", "claude", "cursor"];
+    this.#scanWindowHours = this.settingsReader?.().scanWindowHours ?? this.#scanWindowHours;
+    const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
     const [sessions, cmux, notifications] = await Promise.all([
-      this.collectors.sessions(),
+      this.collectors.sessions(homedir(), windowMs),
       options.cmux ? this.collectors.cmux(this.runner) : Promise.resolve(undefined),
       options.cmux ? this.collectors.notifications(this.runner) : Promise.resolve(undefined),
     ]);
@@ -152,6 +161,7 @@ export class HubState {
       issueLifecycle: this.#issueLifecycle,
       previousIssues: this.#hasSourceSnapshot ? this.#snapshot.issues : undefined,
       recentlyResolved: this.#recentlyResolved,
+      scanWindowHours: this.#scanWindowHours,
     });
     this.#hasSourceSnapshot = true;
     this.#recentlyResolved = [...(this.#snapshot.recentlyResolved ?? [])];

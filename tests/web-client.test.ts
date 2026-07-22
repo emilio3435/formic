@@ -194,6 +194,20 @@ describe("views split Now from History", () => {
     expect(M.viewMatches("working", agent({ status: "running" }))).toBe(true);
     expect(M.viewMatches("idle", agent({ status: "waiting" }))).toBe(true);
   });
+
+  test("lookback filters by updatedAt age and defaults to 6h", () => {
+    expect(M.DEFAULT_LOOKBACK_HOURS).toBe(6);
+    expect(M.parseLookbackHours("all")).toBeNull();
+    expect(M.parseLookbackHours("12")).toBe(12);
+    const now = Date.parse("2026-07-22T12:00:00.000Z");
+    const fresh = agent({ updatedAt: "2026-07-22T10:00:00.000Z" });
+    const stale = agent({ updatedAt: "2026-07-21T12:00:00.000Z" });
+    expect(M.withinLookback(fresh, 6, now)).toBe(true);
+    expect(M.withinLookback(stale, 6, now)).toBe(false);
+    expect(M.withinLookback(stale, null, now)).toBe(true);
+    expect(M.lookbackApplies("history")).toBe(true);
+    expect(M.lookbackApplies("now")).toBe(false);
+  });
 });
 
 describe("program rollups", () => {
@@ -663,6 +677,10 @@ describe("source hygiene", () => {
     expect(html).not.toContain('class="trail"');
     expect(html).not.toMatch(/class="ant /);
     expect(html).toContain('id="filter-bar" aria-label="Filters" hidden');
+    expect(html).toContain('data-view="usage"');
+    expect(html).toContain('id="usage-panel"');
+    expect(source).toContain("function renderUsagePanel(");
+    expect(source).toContain("setLookbackHours");
     expect(styles).not.toContain("@keyframes forage");
     expect(styles).not.toMatch(/\.colony\b/);
     expect(source).not.toContain('text: "Call tokens"');
@@ -702,20 +720,58 @@ describe("source hygiene", () => {
     expect(source).toContain("recentlyResolved");
   });
 
-  test("signal panels are toggleable and persist a subdued preference", () => {
-    expect(html).toContain('id="interventions-toggle"');
-    expect(html).toContain('id="warnings-toggle"');
-    expect(html).toContain('id="interventions-subdued"');
-    expect(html).toContain('id="warnings-subdued"');
+  test("the ham-fisted Subdue/Show buttons are gone", () => {
+    expect(html).not.toContain('id="interventions-toggle"');
+    expect(html).not.toContain('id="warnings-toggle"');
+    expect(html).not.toContain('id="interventions-subdued"');
+    expect(html).not.toContain('id="warnings-subdued"');
+    expect(html).not.toContain("Subdue");
+    expect(html).not.toContain("Show interventions");
+    expect(html).not.toContain("Show advisories");
+    expect(source).not.toContain('.signal-toggle');
+    expect(styles).not.toContain(".signal-toggle");
+    expect(styles).not.toContain(".signal-subdued");
+  });
+
+  test("signal sections collapse to a live ticker via the title caret, preference persists", () => {
+    // The section title is the only collapse affordance — a caret, not a button label.
+    expect(html).toContain('class="signal-collapse"');
+    expect(html).toContain('id="interventions-collapse"');
+    expect(html).toContain('id="warnings-collapse"');
+    expect(html).toContain('class="signal-caret"');
+    // Ticker mounts replace the collapsed body.
+    expect(html).toContain('id="interventions-ticker"');
+    expect(html).toContain('id="warnings-ticker"');
+    // Preference machinery persists, expressed without a visible SUBDUE control.
     expect(source).toContain('SIGNAL_PANEL_STORAGE_KEY');
     expect(source).toContain('function setSignalPanel(');
     expect(source).toContain('function renderSignalPanelHead(');
     expect(source).toContain('loadSignalPanels()');
-    expect(M.parseSignalPanels('{"interventions":"subdued","advisories":"open"}')).toEqual({
-      interventions: "subdued",
+    expect(source).toContain('setSignalPanel(panel, compact ? "open" : "compact")');
+    expect(M.parseSignalPanels('{"interventions":"compact","advisories":"open"}')).toEqual({
+      interventions: "compact",
       advisories: "open",
     });
-    expect(M.parseSignalPanels("not-json")).toEqual({ interventions: "open", advisories: "open" });
+    // Advisories ride the ticker by default; interventions keep their act-now detail.
+    expect(M.parseSignalPanels("not-json")).toEqual({ interventions: "open", advisories: "compact" });
+    expect(M.parseSignalPanels('{"interventions":"bogus"}')).toEqual({ interventions: "open", advisories: "compact" });
+  });
+
+  test("the ticker is a clipped, stepped instrument strip that opens the drawer and honors reduced motion", () => {
+    // List mounting builds ticker entries that route to the existing drawer kinds.
+    expect(source).toContain("function buildSignalTicker(");
+    expect(source).toContain("selectEntity({ kind: entry.kind, id: entry.id })");
+    expect(source).toContain('class: "signal-tick tone-" + entry.tone');
+    // Stepped right→left pull only engages once the strip is busy.
+    expect(source).toContain("TICKER_SCROLL_MIN");
+    expect(source).toContain("is-scrolling");
+    // Motion is CSS keyframes with a stepped timing function, disabled under reduced motion.
+    expect(styles).toContain("@keyframes signal-ticker-run");
+    expect(styles).toMatch(/\.is-scrolling\s+\.signal-tick-track\s*\{[^}]*steps\(/);
+    const reduced = styles.slice(styles.indexOf("prefers-reduced-motion: reduce", styles.indexOf("@keyframes signal-ticker-run")));
+    expect(reduced).toContain(".signal-ticker.is-scrolling .signal-tick-track { animation: none; }");
+    // No inline style attributes: the strip is class-driven only.
+    expect(source).not.toMatch(/\bstyle:\s*`/);
   });
 
   test("signal chrome uses outline indicators instead of filled hospital banners", () => {

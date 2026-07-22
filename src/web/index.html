@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=control-room-5">
+  <link rel="stylesheet" href="styles.css?v=lookback-usage-2">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -48,24 +48,28 @@
   <!-- Active interventions span the full canvas above the workboard/inspector split. -->
   <section id="interventions" class="interventions signal-band" aria-labelledby="interventions-title" hidden>
     <div class="signal-head">
-      <h2 id="interventions-title" class="section-title">Interventions</h2>
+      <button type="button" class="signal-collapse" id="interventions-collapse" aria-controls="interventions-list" aria-expanded="true" data-fkey="signal-collapse:interventions">
+        <svg class="signal-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="9 6 15 12 9 18"></polyline></svg>
+        <h2 id="interventions-title" class="section-title">Interventions</h2>
+      </button>
       <span id="interventions-count" class="signal-count" aria-live="polite"></span>
-      <button type="button" class="signal-toggle" id="interventions-toggle" aria-controls="interventions-list" aria-expanded="true" data-fkey="signal-toggle:interventions">Subdue</button>
     </div>
     <ul id="interventions-list" class="signal-list"></ul>
-    <button type="button" class="signal-subdued" id="interventions-subdued" hidden data-fkey="signal-expand:interventions">Show interventions</button>
+    <div id="interventions-ticker" class="signal-ticker" aria-label="Interventions signal ticker" hidden></div>
   </section>
 
   <div class="app-body">
     <main id="main" class="pane-list" tabindex="-1">
       <section id="warnings" class="warnings" aria-labelledby="warnings-title" hidden>
         <div class="signal-head">
-          <h2 id="warnings-title" class="section-title">Advisories</h2>
+          <button type="button" class="signal-collapse" id="warnings-collapse" aria-controls="warnings-list" aria-expanded="true" data-fkey="signal-collapse:advisories">
+            <svg class="signal-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="9 6 15 12 9 18"></polyline></svg>
+            <h2 id="warnings-title" class="section-title">Advisories</h2>
+          </button>
           <span id="warnings-count" class="signal-count" aria-live="polite"></span>
-          <button type="button" class="signal-toggle" id="warnings-toggle" aria-controls="warnings-list" aria-expanded="true" data-fkey="signal-toggle:advisories">Subdue</button>
         </div>
         <ul id="warnings-list" class="signal-list"></ul>
-        <button type="button" class="signal-subdued" id="warnings-subdued" hidden data-fkey="signal-expand:advisories">Show advisories</button>
+        <div id="warnings-ticker" class="signal-ticker" aria-label="Advisories signal ticker" hidden></div>
       </section>
 
       <section class="toolbar" aria-label="Views, search, and selection">
@@ -75,9 +79,10 @@
           <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
           <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
           <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
+          <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
         </nav>
         <div class="filter-bar" id="filter-bar" aria-label="Filters" hidden aria-hidden="true"></div>
-        <div class="toolbar-row">
+        <div class="toolbar-row" id="ops-toolbar-row">
           <div class="search-wrap">
             <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
             <input id="search" type="search" placeholder="Search agents, tasks, programs…" autocomplete="off">
@@ -88,6 +93,7 @@
       </section>
 
       <section id="programs" class="programs" aria-label="Programs and agents"></section>
+      <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
 
       <div id="empty-state" class="empty-state" hidden>
         <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">
@@ -109,6 +115,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=control-room-5"></script>
+  <script src="app.js?v=lookback-usage-2"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@ import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-mes
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 
-const SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
+export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const fileCache = new Map<string, { mtimeMs: number; size: number; agent: CollectedAgent | null }>();
 
 export interface ParseMetadata {
@@ -480,8 +480,9 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
   });
 }
 
-async function recentJsonlFiles(root: string, maxDepth: number): Promise<string[]> {
+async function recentJsonlFiles(root: string, maxDepth: number, windowMs: number): Promise<string[]> {
   const files: string[] = [];
+  const nowMs = Date.now();
   async function walk(directory: string, depth: number): Promise<void> {
     let entries;
     try {
@@ -496,7 +497,7 @@ async function recentJsonlFiles(root: string, maxDepth: number): Promise<string[
         if (!entry.isFile() || !entry.name.endsWith(".jsonl")) return;
         try {
           const details = await stat(path);
-          if (Date.now() - details.mtimeMs <= SESSION_WINDOW_MS) files.push(path);
+          if (nowMs - details.mtimeMs <= windowMs) files.push(path);
         } catch {
           // A source disappearing during a scan is harmless.
         }
@@ -512,10 +513,11 @@ async function collectProvider(
   root: string,
   depth: number,
   parser: (jsonl: string, meta: ParseMetadata) => CollectedAgent | null,
+  windowMs: number,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
-  const files = await recentJsonlFiles(root, depth);
+  const files = await recentJsonlFiles(root, depth, windowMs);
   await Promise.all(
     files.map(async (path) => {
       try {
@@ -537,14 +539,15 @@ async function collectProvider(
   return { value: agents, errors };
 }
 
-export async function collectSessions(home = homedir()): Promise<
-  Record<Provider, CollectionResult<CollectedAgent[]>>
-> {
+export async function collectSessions(
+  home = homedir(),
+  windowMs = DEFAULT_SESSION_WINDOW_MS,
+): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
   const [omp, codex, claude, cursor] = await Promise.all([
-    collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl),
-    collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl),
-    collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl),
-    collectCursorSessions(home),
+    collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs),
+    collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs),
+    collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs),
+    collectCursorSessions(home, Date.now(), windowMs),
   ]);
   return { omp, codex, claude, cursor };
 }

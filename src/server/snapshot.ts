@@ -46,6 +46,7 @@ export interface SnapshotInput {
   previousIssues?: readonly OperatorIssue[];
   recentlyResolved?: readonly OperatorIssue[];
   now?: Date;
+  scanWindowHours?: number;
 }
 
 export const MAX_RECENTLY_RESOLVED = 12;
@@ -550,9 +551,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     total: activeCursorAgents.length,
   };
 
+  const scanWindowHours = input.scanWindowHours;
   return {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
+    scanWindowHours,
+    lookbackHours: scanWindowHours,
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? cmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),

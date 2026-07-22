@@ -42,17 +42,30 @@ function svgChild(spec) {
   return node;
 }
 
+/* Instrument-panel glyph set — mixing-console / oscilloscope language rather than
+   clinical warning-triangle + info slop. Marks are built from straight rails,
+   nodes (LEDs), and peaks so severity reads as shape, not flood color. Angular
+   shapes use miter joins locally; connectors/waveforms keep the round default. */
 const ICON_PATHS = {
-  linked: [["rect", { x: 3, y: 9, width: 9.5, height: 6, rx: 3 }], ["rect", { x: 11.5, y: 9, width: 9.5, height: 6, rx: 3 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
-  observed: [["path", { d: "M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z" }], ["circle", { cx: 12, cy: 12, r: 2.6 }]],
-  quarantine: [["path", { d: "M12 3 4 6v5c0 4.5 3.2 7.6 8 9 4.8-1.4 8-4.5 8-9V6z" }], ["rect", { x: 9.3, y: 11.2, width: 5.4, height: 4.3, rx: 0.8 }], ["path", { d: "M10.4 11.2v-1.4a1.6 1.6 0 0 1 3.2 0v1.4" }]],
-  intervention: [["line", { x1: 12, y1: 5.5, x2: 12, y2: 13.5, "stroke-width": 2.6 }], ["circle", { cx: 12, cy: 17.6, r: 1.2, fill: "currentColor", stroke: "none" }]],
-  warning: [["path", { d: "M12 3.5 21.5 20H2.5z" }], ["line", { x1: 12, y1: 10, x2: 12, y2: 14.5 }], ["circle", { cx: 12, cy: 17.4, r: 1, fill: "currentColor", stroke: "none" }]],
-  check: [["polyline", { points: "20 6 9 17 4 12" }]],
-  rename: [["path", { d: "M4 20.5h4l10.3-10.3-4-4L4 16.5z" }], ["line", { x1: 13.5, y1: 7, x2: 17.5, y2: 11 }]],
-  broadcast: [["circle", { cx: 12, cy: 12, r: 2.2, fill: "currentColor", stroke: "none" }], ["path", { d: "M8.2 8.2a5.5 5.5 0 0 0 0 7.6" }], ["path", { d: "M15.8 8.2a5.5 5.5 0 0 1 0 7.6" }], ["path", { d: "M5.4 5.4a9.5 9.5 0 0 0 0 13.2" }], ["path", { d: "M18.6 5.4a9.5 9.5 0 0 1 0 13.2" }]],
+  // patch-bay link: two jack nodes joined by a rail
+  linked: [["circle", { cx: 6, cy: 12, r: 2.4 }], ["circle", { cx: 18, cy: 12, r: 2.4 }], ["line", { x1: 8.4, y1: 12, x2: 15.6, y2: 12 }]],
+  // monitor / observe: aperture lens
+  observed: [["path", { d: "M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6z" }], ["circle", { cx: 12, cy: 12, r: 2.4 }]],
+  // isolate: angular shield + latch
+  quarantine: [["path", { d: "M12 2.8 4.5 5.5v5.3c0 4.4 3.1 7.6 7.5 8.9 4.4-1.3 7.5-4.5 7.5-8.9V5.5z", "stroke-linejoin": "miter" }], ["rect", { x: 9.3, y: 11, width: 5.4, height: 4.4, rx: 0.4 }], ["path", { d: "M10.5 11V9.6a1.5 1.5 0 0 1 3 0V11" }]],
+  // intervention: peak bar driven to the rail + LED base
+  intervention: [["line", { x1: 12, y1: 4.5, x2: 12, y2: 13.5, "stroke-width": 2.6 }], ["rect", { x: 10.7, y: 16.6, width: 2.6, height: 2.6, fill: "currentColor", stroke: "none" }]],
+  // advisory: caution diamond (no clinical triangle) with peak stem + LED
+  warning: [["path", { d: "M12 2.8 21.2 12 12 21.2 2.8 12z", "stroke-linejoin": "miter" }], ["line", { x1: 12, y1: 7.6, x2: 12, y2: 12.8, "stroke-width": 2 }], ["rect", { x: 11, y: 15, width: 2, height: 2, fill: "currentColor", stroke: "none" }]],
+  // resolved: crisp confirm tick
+  check: [["polyline", { points: "4.5 12.5 9.5 17.5 19.5 6.5", "stroke-linejoin": "miter" }]],
+  // rename: nib + trim edge
+  rename: [["path", { d: "M4 20.5h4l10.3-10.3-4-4L4 16.5z", "stroke-linejoin": "miter" }], ["line", { x1: 13.5, y1: 7, x2: 17.5, y2: 11 }]],
+  // broadcast: transmit node with radiating carrier arcs
+  broadcast: [["circle", { cx: 12, cy: 12, r: 2.1, fill: "currentColor", stroke: "none" }], ["path", { d: "M8.2 8.2a5.5 5.5 0 0 0 0 7.6" }], ["path", { d: "M15.8 8.2a5.5 5.5 0 0 1 0 7.6" }], ["path", { d: "M5.4 5.4a9.5 9.5 0 0 0 0 13.2" }], ["path", { d: "M18.6 5.4a9.5 9.5 0 0 1 0 13.2" }]],
   close: [["line", { x1: 6, y1: 6, x2: 18, y2: 18 }], ["line", { x1: 18, y1: 6, x2: 6, y2: 18 }]],
   caret: [["polyline", { points: "9 6 15 12 9 18" }]],
+  // offline: dark node, severed rail
   offline: [["circle", { cx: 12, cy: 12, r: 9 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
 };
 
@@ -369,7 +382,17 @@ function issuesOf(snap) {
 
 /* ---------- views, search, facets ---------- */
 
-const VIEWS = ["now", "needs-you", "working", "idle", "history"];
+const OPS_VIEWS = ["now", "needs-you", "working", "idle", "history"];
+const VIEWS = [...OPS_VIEWS, "usage"];
+const LOOKBACK_STORAGE_KEY = "mtn3-lookbackHours";
+const LOOKBACK_PRESETS = [1, 6, 24, 36];
+const DEFAULT_LOOKBACK_HOURS = 6;
+const USAGE_RANGE_PRESETS = [
+  { id: "1h", hours: 1, label: "1h" },
+  { id: "24h", hours: 24, label: "24h" },
+  { id: "7d", hours: 24 * 7, label: "7d" },
+  { id: "30d", hours: 24 * 30, label: "30d" },
+];
 
 function viewMatches(view, agent) {
   const act = deriveActivity(agent);
@@ -380,8 +403,32 @@ function viewMatches(view, agent) {
     case "working": return act === "working";
     case "idle": return act === "idle";
     case "history": return act === "ended";
+    case "usage": return false;
     default: return true;
   }
+}
+
+function parseLookbackHours(raw) {
+  if (raw == null || raw === "" || raw === "all") return null;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0) return DEFAULT_LOOKBACK_HOURS;
+  return Math.min(24 * 30, Math.max(1, Math.round(hours)));
+}
+
+function withinLookback(agent, lookbackHours, nowMs = Date.now()) {
+  if (lookbackHours == null) return true;
+  const updated = Date.parse(agent.updatedAt);
+  if (!Number.isFinite(updated)) return false;
+  return nowMs - updated <= lookbackHours * 3_600_000;
+}
+
+function lookbackApplies(view) {
+  return view === "idle" || view === "history";
+}
+
+function lookbackLabel(hours) {
+  if (hours == null) return "all collected";
+  return hours + "h";
 }
 
 function matchesQuery(agent, program, query) {
@@ -779,18 +826,28 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
 
 const SIGNAL_PANEL_STORAGE_KEY = "mtn3-signal-panels";
 const SIGNAL_PANEL_KEYS = ["interventions", "advisories"];
+// Calm control-room defaults: interventions keep their full act-now detail open,
+// advisories ride the compact live ticker until an operator expands them.
+const SIGNAL_PANEL_DEFAULTS = { interventions: "open", advisories: "compact" };
+// Below this item count the ticker stays a still instrument strip; at or above,
+// the stepped right→left pull engages so a busy strip reads as motion, not spam.
+const TICKER_SCROLL_MIN = 4;
+
+function defaultSignalPanels() {
+  return { ...SIGNAL_PANEL_DEFAULTS };
+}
 
 function parseSignalPanels(raw) {
   try {
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!parsed || typeof parsed !== "object") return { interventions: "open", advisories: "open" };
-    const next = { interventions: "open", advisories: "open" };
+    if (!parsed || typeof parsed !== "object") return defaultSignalPanels();
+    const next = defaultSignalPanels();
     for (const key of SIGNAL_PANEL_KEYS) {
-      if (parsed[key] === "subdued" || parsed[key] === "open") next[key] = parsed[key];
+      if (parsed[key] === "compact" || parsed[key] === "open") next[key] = parsed[key];
     }
     return next;
   } catch {
-    return { interventions: "open", advisories: "open" };
+    return defaultSignalPanels();
   }
 }
 
@@ -805,7 +862,9 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
-  ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS,
+  ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
+  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
+  DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
@@ -826,6 +885,19 @@ const state = {
   query: "",
   facetProgram: "",
   facetProvider: "",
+  lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
+  scanWindowHours: 36,
+  settingsLoaded: false,
+  settingsPending: false,
+  usageRangeId: "24h",
+  usageCustomHours: 24,
+  usageLoading: false,
+  usageError: "",
+  usageSummary: null,
+  usageSeries: null,
+  usageWard: null,
+  usageInvocations: null,
+  usageFetchedAt: 0,
   contextDisplay: "percent", // percent | tokens
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
@@ -857,17 +929,85 @@ const state = {
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
-  // Operator can subdue signal bands; preference persists. Solved findings leave
-  // the active lists via source lifecycle — subdued UI never keeps a cleared id.
-  signalPanels: { interventions: "open", advisories: "open" }, // open | subdued
+  // Each signal section is either "open" (full detail list) or "compact" (the
+  // live ticker strip). The caret on the section title flips it; the preference
+  // persists. Solved findings leave the active lists via source lifecycle, so a
+  // compact ticker never keeps a cleared id.
+  signalPanels: defaultSignalPanels(), // open | compact
 };
 state.aliases = state.labels;
+
+function loadLookback() {
+  try {
+    const raw = localStorage.getItem(LOOKBACK_STORAGE_KEY);
+    if (raw == null) {
+      state.lookbackHours = DEFAULT_LOOKBACK_HOURS;
+      return;
+    }
+    state.lookbackHours = parseLookbackHours(raw);
+  } catch {
+    state.lookbackHours = DEFAULT_LOOKBACK_HOURS;
+  }
+}
+
+function saveLookback() {
+  try {
+    localStorage.setItem(
+      LOOKBACK_STORAGE_KEY,
+      state.lookbackHours == null ? "all" : String(state.lookbackHours),
+    );
+  } catch { /* storage unavailable */ }
+}
+
+function setLookbackHours(hours) {
+  const next = hours == null ? null : parseLookbackHours(hours);
+  if (next === state.lookbackHours) return;
+  state.lookbackHours = next;
+  saveLookback();
+  render();
+}
+
+async function fetchSettings() {
+  try {
+    const res = await fetch("/api/settings", { headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error("settings " + res.status);
+    const body = await res.json();
+    const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
+    if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    state.settingsLoaded = true;
+  } catch {
+    state.settingsLoaded = false;
+  }
+}
+
+async function postScanWindow(hours) {
+  const clamped = Math.max(1, Math.min(168, Math.round(Number(hours))));
+  if (!Number.isFinite(clamped)) return;
+  state.settingsPending = true;
+  renderFilterBar();
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ scanWindowHours: clamped }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) throw new Error((body.error && body.error.message) || ("settings " + res.status));
+    state.scanWindowHours = Number(body.scanWindowHours) || clamped;
+    await fetchSnapshot();
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error), "err");
+  } finally {
+    state.settingsPending = false;
+    render();
+  }
+}
 
 function loadSignalPanels() {
   try {
     state.signalPanels = parseSignalPanels(localStorage.getItem(SIGNAL_PANEL_STORAGE_KEY));
   } catch {
-    state.signalPanels = { interventions: "open", advisories: "open" };
+    state.signalPanels = defaultSignalPanels();
   }
 }
 
@@ -879,7 +1019,7 @@ function saveSignalPanels() {
 
 function setSignalPanel(panel, mode) {
   if (!SIGNAL_PANEL_KEYS.includes(panel)) return;
-  if (mode !== "open" && mode !== "subdued") return;
+  if (mode !== "open" && mode !== "compact") return;
   if (state.signalPanels[panel] === mode) return;
   state.signalPanels[panel] = mode;
   saveSignalPanels();
@@ -922,6 +1062,7 @@ async function fetchSnapshot() {
       throw new Error("unexpected snapshot shape");
     }
     state.snap = snap;
+    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
     state.fetchFailed = false;
     render();
   } catch (err) {
@@ -951,6 +1092,7 @@ function handleEventPayload(raw) {
     : null;
   if (snap) {
     state.snap = snap;
+    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
     state.fetchFailed = false;
     render();
   } else {
@@ -1347,30 +1489,102 @@ function renderTriage(issue) {
 
 /* Interventions (act now) and advisories (be aware) are separate information
    classes with distinct visual weight — never one repetitive card stack. */
-function renderSignalPanelHead(panel, count, subdued, label) {
+function renderSignalPanelHead(panel, count, compact) {
   const sectionId = panel === "interventions" ? "interventions" : "warnings";
-  const listId = panel === "interventions" ? "interventions-list" : "warnings-list";
   const countNode = $(sectionId === "interventions" ? "interventions-count" : "warnings-count");
-  const toggle = $(sectionId === "interventions" ? "interventions-toggle" : "warnings-toggle");
-  const chip = $(sectionId === "interventions" ? "interventions-subdued" : "warnings-subdued");
-  const list = $(listId);
+  const collapse = $(sectionId === "interventions" ? "interventions-collapse" : "warnings-collapse");
   const section = $(sectionId);
-  if (!countNode || !toggle || !chip || !list || !section) return;
+  if (!countNode || !collapse || !section) return;
 
   countNode.textContent = count ? String(count) : "";
   countNode.hidden = !count;
-  toggle.hidden = !count;
-  toggle.setAttribute("aria-expanded", subdued ? "false" : "true");
-  toggle.textContent = subdued ? "Show" : "Subdue";
-  toggle.onclick = () => setSignalPanel(panel, subdued ? "open" : "subdued");
 
-  list.hidden = subdued;
-  chip.hidden = !(subdued && count > 0);
-  chip.textContent = subdued && count
-    ? `${count} ${label}${count === 1 ? "" : "s"} subdued · show`
-    : "";
-  chip.onclick = () => setSignalPanel(panel, "open");
-  section.classList.toggle("is-subdued", subdued && count > 0);
+  // The section title doubles as the collapse caret — no "Subdue" chrome. Open
+  // shows the full detail list; compact hands the section to the live ticker.
+  collapse.hidden = !count;
+  collapse.setAttribute("aria-expanded", compact ? "false" : "true");
+  collapse.setAttribute(
+    "aria-label",
+    (compact ? "Expand " : "Collapse ") + (panel === "interventions" ? "interventions to detail" : "advisories to detail"),
+  );
+  collapse.onclick = () => setSignalPanel(panel, compact ? "open" : "compact");
+  section.classList.toggle("is-compact", compact && count > 0);
+}
+
+/* The compact state is a clipped instrument strip: mono glyph + short label per
+   signal, staggered left→right, that opens the same drawer on click. When the
+   strip overflows (many signals) a stepped right→left pull engages via CSS
+   keyframes; prefers-reduced-motion holds it still. */
+function tickerItem(entry, index) {
+  const node = el("button", {
+    type: "button",
+    class: "signal-tick tone-" + entry.tone,
+    dataset: { fkey: "tick:" + entry.kind + ":" + entry.id, tickStep: String(index % 6) },
+    "aria-label": entry.aria,
+    onclick: () => selectEntity({ kind: entry.kind, id: entry.id }),
+  },
+    el("span", { class: "signal-tick-glyph" }, icon(entry.glyph, { label: entry.glyphLabel })),
+    el("span", { class: "signal-tick-label", text: entry.label }));
+  return node;
+}
+
+function buildSignalTicker(container, entries) {
+  if (!container) return;
+  container.textContent = "";
+  if (!entries.length) {
+    container.hidden = true;
+    container.classList.remove("is-scrolling");
+    return;
+  }
+  container.hidden = false;
+  const track = el("div", { class: "signal-tick-track" });
+  const primary = el("div", { class: "signal-tick-group" });
+  entries.forEach((entry, i) => primary.append(tickerItem(entry, i)));
+  track.append(primary);
+
+  const scrolling = entries.length >= TICKER_SCROLL_MIN;
+  if (scrolling) {
+    // A second, aria-hidden copy makes the -50% translate loop seamless without
+    // any inline style. The tail copy stays mouse-clickable so a moving signal
+    // is never a dead target.
+    const tail = el("div", { class: "signal-tick-group", "aria-hidden": "true" });
+    entries.forEach((entry, i) => tail.append(tickerItem(entry, i)));
+    track.append(tail);
+  }
+  container.classList.toggle("is-scrolling", scrolling);
+  container.append(track);
+}
+
+function interventionTickerEntry(issue) {
+  const lifecycle = issueLifecycle(issue);
+  const tone = lifecycle.state === "blocked" ? "error" : lifecycle.state === "verifying" ? "warn" : "error";
+  return {
+    kind: "intervention", id: issue.id, glyph: "intervention", glyphLabel: "Intervention",
+    tone, label: issue.title, aria: "Open intervention: " + issue.title,
+  };
+}
+
+function advisoryTickerEntries(advisories, recentlyResolved, queuedOnly) {
+  const entries = [];
+  for (const issue of advisories) {
+    entries.push({
+      kind: "advisory", id: issue.id, glyph: "warning", glyphLabel: "Advisory",
+      tone: "warn", label: issue.title, aria: "Open advisory: " + issue.title,
+    });
+  }
+  for (const issue of recentlyResolved) {
+    entries.push({
+      kind: "resolved", id: issue.id, glyph: "check", glyphLabel: "Resolved",
+      tone: "moss", label: issue.title, aria: "Open resolved finding: " + issue.title,
+    });
+  }
+  for (const item of queuedOnly) {
+    entries.push({
+      kind: "investigation", id: item.issueId, glyph: "broadcast", glyphLabel: "Investigation",
+      tone: "info", label: item.headline, aria: "Open investigation: " + item.headline,
+    });
+  }
+  return entries;
 }
 
 function renderIssues() {
@@ -1390,25 +1604,38 @@ function renderIssues() {
     ? state.queueItems.filter((item) => !issues.some((issue) => issue.id === item.issueId) && !resolvedIds.has(item.issueId))
     : [];
   const byId = new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
-  const interventionsSubdued = state.signalPanels.interventions === "subdued";
-  const advisoriesSubdued = state.signalPanels.advisories === "subdued";
+  const interventionsCompact = state.signalPanels.interventions === "compact";
+  const advisoriesCompact = state.signalPanels.advisories === "compact";
   const advisoryTotal = advisories.length + recentlyResolved.length + queuedOnly.length;
+  const iTicker = $("interventions-ticker");
+  const wTicker = $("warnings-ticker");
 
+  // Open renders the full detail list; compact hands the section to the ticker.
   iList.textContent = "";
-  if (!interventionsSubdued) {
+  if (!interventionsCompact) {
     for (const issue of interventions) iList.append(renderIntervention(issue, byId));
   }
+  iList.hidden = interventionsCompact || interventions.length === 0;
+  buildSignalTicker(
+    iTicker,
+    interventionsCompact ? interventions.map(interventionTickerEntry) : [],
+  );
   iSection.hidden = interventions.length === 0;
-  renderSignalPanelHead("interventions", interventions.length, interventionsSubdued, "intervention");
+  renderSignalPanelHead("interventions", interventions.length, interventionsCompact);
 
   wList.textContent = "";
-  if (!advisoriesSubdued) {
+  if (!advisoriesCompact) {
     for (const issue of advisories) wList.append(renderAdvisory(issue, byId));
     for (const issue of recentlyResolved) wList.append(renderRecentlyResolved(issue));
     for (const item of queuedOnly) wList.append(renderInvestigationItem(item));
   }
+  wList.hidden = advisoriesCompact || advisoryTotal === 0;
+  buildSignalTicker(
+    wTicker,
+    advisoriesCompact ? advisoryTickerEntries(advisories, recentlyResolved, queuedOnly) : [],
+  );
   wSection.hidden = advisoryTotal === 0;
-  renderSignalPanelHead("advisories", advisoryTotal, advisoriesSubdued, "advisory");
+  renderSignalPanelHead("advisories", advisoryTotal, advisoriesCompact);
 }
 
 // Thin trigger only — the triage flow, affected chips, and technical detail now
@@ -1529,6 +1756,7 @@ function renderInvestigationItem(item) {
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
+    (!lookbackApplies(state.view) || withinLookback(agent, state.lookbackHours)) &&
     matchesQuery(agent, program, state.query) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
@@ -1536,34 +1764,132 @@ function currentFilter() {
 
 function renderTabs() {
   const agents = snapshotAgents(state.snap).map((x) => x.agent);
-  for (const view of VIEWS) {
+  for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
     countNode.textContent = state.snap
-      ? String(agents.filter((a) => viewMatches(view, a)).length)
+      ? String(agents.filter((a) =>
+          viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
+        ).length)
       : "";
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
     btn.setAttribute("aria-pressed", String(btn.dataset.view === state.view));
   }
   const toggle = $("select-toggle");
-  toggle.setAttribute("aria-pressed", String(state.selecting));
-  toggle.textContent = state.selecting ? "Done selecting" : "Select";
+  if (toggle) {
+    toggle.hidden = state.view === "usage";
+    toggle.setAttribute("aria-pressed", String(state.selecting));
+    toggle.textContent = state.selecting ? "Done selecting" : "Select";
+  }
+  const search = $("search");
+  const opsRow = $("ops-toolbar-row");
+  if (opsRow) opsRow.hidden = state.view === "usage";
+  if (search) search.disabled = state.view === "usage";
 }
 
-/* The compatibility mount remains in the shell, but facets stay available to
-   currentFilter() for callers that set them without adding a visible strip. */
+function filterChip(label, active, onclick, opts = {}) {
+  return el("button", {
+    type: "button",
+    class: "filter-chip" + (active ? " is-active" : ""),
+    "aria-pressed": String(Boolean(active)),
+    disabled: opts.disabled ? "" : null,
+    title: opts.title || null,
+    onclick,
+  }, label);
+}
+
+/* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
 function renderFilterBar() {
   const bar = $("filter-bar");
   if (!bar) return;
   bar.textContent = "";
+  if (state.view === "usage") {
+    bar.hidden = false;
+    bar.setAttribute("aria-hidden", "false");
+    bar.append(el("span", { class: "filter-lead", text: "Range" }));
+    for (const preset of USAGE_RANGE_PRESETS) {
+      bar.append(filterChip(preset.label, state.usageRangeId === preset.id, () => {
+        state.usageRangeId = preset.id;
+        state.usageCustomHours = preset.hours;
+        void loadUsageData(true);
+        render();
+      }));
+    }
+    const customActive = state.usageRangeId === "custom";
+    bar.append(filterChip(
+      customActive ? ("Custom " + state.usageCustomHours + "h") : "Custom",
+      customActive,
+      () => {
+        const raw = window.prompt("Usage range hours", String(state.usageCustomHours || 24));
+        if (raw == null) return;
+        const hours = Math.max(1, Math.min(24 * 90, Math.round(Number(raw))));
+        if (!Number.isFinite(hours)) return;
+        state.usageRangeId = "custom";
+        state.usageCustomHours = hours;
+        void loadUsageData(true);
+        render();
+      },
+    ));
+    return;
+  }
+  if (!lookbackApplies(state.view)) {
+    bar.hidden = true;
+    bar.setAttribute("aria-hidden", "true");
+    return;
+  }
+  bar.hidden = false;
+  bar.setAttribute("aria-hidden", "false");
+  bar.append(el("span", { class: "filter-lead", text: "Lookback" }));
+  for (const hours of LOOKBACK_PRESETS) {
+    bar.append(filterChip(hours + "h", state.lookbackHours === hours, () => setLookbackHours(hours)));
+  }
+  bar.append(filterChip("All", state.lookbackHours == null, () => setLookbackHours(null), {
+    title: "Show every session inside the collector scan window",
+  }));
+  const customActive = state.lookbackHours != null && !LOOKBACK_PRESETS.includes(state.lookbackHours);
+  bar.append(filterChip(
+    customActive ? ("Custom " + state.lookbackHours + "h") : "Custom",
+    customActive,
+    () => {
+      const raw = window.prompt("Lookback hours", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
+      if (raw == null) return;
+      setLookbackHours(raw);
+    },
+  ));
+  bar.append(el("span", { class: "filter-lead", text: "Scan" }));
+  const scanHours = Number((state.snap && state.snap.scanWindowHours) || state.scanWindowHours) || 36;
+  bar.append(filterChip(
+    scanHours + "h window",
+    false,
+    () => {
+      const raw = window.prompt("Collector scan window hours (1–168)", String(scanHours));
+      if (raw == null) return;
+      void postScanWindow(raw);
+    },
+    { disabled: state.settingsPending, title: "How far back collectors harvest sessions" },
+  ));
 }
 
 function renderScopeNote(shown) {
   const note = $("scope-note");
+  if (!note) return;
+  if (state.view === "usage") {
+    const range = usageRangeHours();
+    note.textContent = state.usageLoading
+      ? "Loading BurnBar usage…"
+      : `Usage range ${range}h · source BurnBar` + (state.usageSummary && state.usageSummary.available === false
+        ? " · unavailable"
+        : "");
+    return;
+  }
   if (!state.snap) { note.textContent = ""; return; }
   const t = totalsOf(state.snap);
+  const scan = state.snap.scanWindowHours || state.scanWindowHours;
   let text = `${shown} shown · ${t.live} live · ${t.tracked} tracked`;
+  if (lookbackApplies(state.view)) {
+    text += ` · lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`;
+  }
   if (state.query || state.facetProgram || state.facetProvider) text += " · filters applied";
   note.textContent = text;
 }
@@ -1586,7 +1912,21 @@ function toggleProgram(program) {
 
 function renderPrograms() {
   const root = $("programs");
+  const usage = $("usage-panel");
+  if (!root) return;
   root.textContent = "";
+  if (state.view === "usage") {
+    root.hidden = true;
+    if (usage) usage.hidden = false;
+    renderUsagePanel();
+    renderScopeNote(0);
+    return;
+  }
+  root.hidden = false;
+  if (usage) {
+    usage.hidden = true;
+    usage.textContent = "";
+  }
   if (!state.snap) { renderScopeNote(0); return; }
 
   const filter = currentFilter();
@@ -1602,8 +1942,15 @@ function renderPrograms() {
   const tracked = totalsOf(state.snap).tracked;
   if (shown || !tracked) return;
 
-  if (state.query || state.facetProgram || state.facetProvider) {
-    root.append(el("p", { class: "no-match", text: "Nothing matches the current search and filters in this view." }));
+  const lookbackHiding = lookbackApplies(state.view) && state.lookbackHours != null;
+  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding) {
+    const parts = [];
+    if (state.query || state.facetProgram || state.facetProvider) parts.push("search and filters");
+    if (lookbackHiding) parts.push("lookback (" + lookbackLabel(state.lookbackHours) + ")");
+    root.append(el("p", {
+      class: "no-match",
+      text: "Nothing matches the current " + parts.join(" and ") + " in this view.",
+    }));
   } else {
     const emptyByView = {
       "now": `No active work right now — idle sessions remain available in Idle.`,
@@ -2077,7 +2424,7 @@ function affectedChips(issue, label) {
   const byId = agentsById();
   const affected = (issue.affectedAgentIds || []).map((id) => byId.get(id)).filter(Boolean);
   if (!affected.length) return null;
-  return el("div", {},
+  return el("div", { class: "dw-affects" },
     el("h3", { class: "section-title", text: `${label} (${affected.length})` }),
     el("div", { class: "dw-chips" }, affected.map(({ agent, program }) =>
       el("button", {
@@ -3176,7 +3523,248 @@ function tickClocks() {
 function setView(view) {
   if (state.view === view || !VIEWS.includes(view)) return;
   state.view = view;
+  if (view === "usage") {
+    if (state.selecting) enterSelectMode(false);
+    void loadUsageData();
+  }
   render();
+}
+
+function usageRangeHours() {
+  if (state.usageRangeId === "custom") return state.usageCustomHours || 24;
+  const preset = USAGE_RANGE_PRESETS.find((item) => item.id === state.usageRangeId);
+  return preset ? preset.hours : 24;
+}
+
+function usageRangeBounds() {
+  const to = new Date();
+  const from = new Date(to.getTime() - usageRangeHours() * 3_600_000);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+function fmtUsd(value) {
+  if (value == null || !Number.isFinite(value)) return "not reported";
+  return "$" + value.toFixed(value >= 10 ? 2 : 3);
+}
+
+function agentIdForSession(sessionId) {
+  if (!sessionId || !state.snap) return null;
+  for (const { agent } of snapshotAgents(state.snap)) {
+    if (agent.sourceSessionId === sessionId || agent.id.endsWith(":" + sessionId)) return agent.id;
+  }
+  return null;
+}
+
+async function loadUsageData(force = false) {
+  if (state.usageLoading) return;
+  if (!force && state.usageFetchedAt && Date.now() - state.usageFetchedAt < 15_000 && state.usageSummary) {
+    return;
+  }
+  state.usageLoading = true;
+  state.usageError = "";
+  renderScopeNote(0);
+  const { from, to } = usageRangeBounds();
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const bucket = usageRangeHours() > 48 ? "1d" : "1h";
+  try {
+    const [summaryRes, seriesRes, wardRes, invRes] = await Promise.all([
+      fetch("/api/usage/summary?" + q),
+      fetch("/api/usage/series?" + q + "&bucket=" + bucket),
+      fetch("/api/usage/ward?" + q),
+      fetch("/api/usage/invocations?" + q + "&limit=40"),
+    ]);
+    state.usageSummary = await summaryRes.json();
+    state.usageSeries = await seriesRes.json();
+    state.usageWard = await wardRes.json();
+    state.usageInvocations = await invRes.json();
+    state.usageFetchedAt = Date.now();
+    if (state.usageSummary && state.usageSummary.available === false) {
+      state.usageError = state.usageSummary.error || "BurnBar usage unavailable.";
+    }
+  } catch (error) {
+    state.usageError = error instanceof Error ? error.message : String(error);
+    state.usageSummary = null;
+    state.usageSeries = null;
+    state.usageWard = null;
+    state.usageInvocations = null;
+  } finally {
+    state.usageLoading = false;
+    if (state.view === "usage") render();
+  }
+}
+
+function renderUsageSeriesChart(points) {
+  const wrap = el("div", { class: "usage-series" });
+  if (!points || !points.length) {
+    wrap.append(el("p", { class: "usage-empty", text: "No series points in this range." }));
+    return wrap;
+  }
+  const byBucket = new Map();
+  for (const point of points) {
+    const key = point.bucketStart;
+    byBucket.set(key, (byBucket.get(key) || 0) + (point.tokens || 0));
+  }
+  const entries = [...byBucket.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-48);
+  const max = Math.max(...entries.map((entry) => entry[1]), 1);
+  const width = Math.max(entries.length * 10, 120);
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} 64`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "usage-bars-svg");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Tokens over time");
+  entries.forEach(([bucket, tokens], index) => {
+    const h = Math.max(2, Math.round((tokens / max) * 56));
+    const rect = svgChild(["rect", {
+      x: index * 10 + 1,
+      y: 64 - h,
+      width: 8,
+      height: h,
+      class: "usage-bar-rect",
+    }]);
+    rect.setAttribute("title", bucket + " · " + fmtTok(tokens) + " tokens");
+    svg.append(rect);
+  });
+  wrap.append(svg);
+  const providers = [...new Set(points.map((point) => point.provider))].slice(0, 8);
+  if (providers.length) {
+    wrap.append(el("p", { class: "usage-series-legend", text: "Providers: " + providers.join(" · ") }));
+  }
+  return wrap;
+}
+
+function renderUsagePanel() {
+  const root = $("usage-panel");
+  if (!root) return;
+  root.textContent = "";
+  if (state.usageLoading && !state.usageSummary) {
+    root.append(el("p", { class: "usage-empty", text: "Loading BurnBar usage…" }));
+    return;
+  }
+  const summary = state.usageSummary;
+  if (!summary || summary.available === false) {
+    root.append(el("div", { class: "usage-unavailable" },
+      el("h2", { class: "usage-title", text: "Usage unavailable" }),
+      el("p", {
+        text: (summary && summary.error) || state.usageError ||
+          "BurnBar database could not be unlocked. Quotas sidecar may still be readable separately.",
+      }),
+      el("button", {
+        type: "button", class: "btn",
+        onclick: () => void loadUsageData(true),
+      }, "Retry")));
+    // Still show quotas/ward soft data if present without inventing spend zeros.
+    if (state.usageWard && state.usageWard.quotaPressure && state.usageWard.quotaPressure.length) {
+      root.append(renderUsageWard(state.usageWard, true));
+    }
+    return;
+  }
+
+  root.append(el("div", { class: "usage-kpis" },
+    reading("Processed tokens", el("span", { class: "reading-value", text: fmtTok(summary.processedTokens || 0) }),
+      el("span", { class: "reading-sub", text: "BurnBar observed" })),
+    reading("Estimated cost", el("span", { class: "reading-value", text: summary.costKnown ? fmtUsd(summary.estimatedCostUsd) : "not reported" }),
+      el("span", { class: "reading-sub", text: summary.costKnown ? "from BurnBar cost" : "cost missing on some rows" })),
+    reading("Invocations", el("span", { class: "reading-value", text: String(summary.invocations || 0) }),
+      el("span", { class: "reading-sub", text: "in selected range" })),
+    reading("Burn rate",
+      el("span", {
+        class: "reading-value",
+        text: summary.burnRateTokensPerHour == null ? "—" : fmtTok(Math.round(summary.burnRateTokensPerHour)) + "/h",
+      }),
+      el("span", { class: "reading-sub", text: "tokens per hour" }))));
+
+  if (summary.byProvider && summary.byProvider.length) {
+    const list = el("ul", { class: "usage-providers" });
+    for (const row of summary.byProvider.slice(0, 10)) {
+      list.append(el("li", {},
+        el("strong", { text: row.provider }),
+        ` · ${fmtTok(row.tokens)} tokens · ${row.invocations} calls · ${row.costUsd == null ? "cost n/a" : fmtUsd(row.costUsd)}`));
+    }
+    root.append(el("section", { class: "usage-section" },
+      el("h2", { class: "usage-title", text: "By provider" }),
+      list));
+  }
+
+  root.append(el("section", { class: "usage-section" },
+    el("h2", { class: "usage-title", text: "Series" }),
+    renderUsageSeriesChart(state.usageSeries && state.usageSeries.points)));
+
+  root.append(renderUsageWard(state.usageWard, false));
+
+  const table = el("table", { class: "usage-table" });
+  table.append(el("thead", {}, el("tr", {},
+    el("th", { text: "When" }),
+    el("th", { text: "Provider" }),
+    el("th", { text: "Model" }),
+    el("th", { text: "Tokens" }),
+    el("th", { text: "Cost" }),
+    el("th", { text: "Session" }))));
+  const body = el("tbody");
+  const rows = (state.usageInvocations && state.usageInvocations.invocations) || [];
+  if (!rows.length) {
+    body.append(el("tr", {}, el("td", { colspan: "6", text: "No invocations in this range." })));
+  } else {
+    for (const row of rows) {
+      const agentId = agentIdForSession(row.sessionId);
+      const sessionCell = agentId
+        ? el("button", {
+          type: "button", class: "linkish",
+          onclick: () => {
+            setView("now");
+            selectEntity({ kind: "agent", id: agentId });
+          },
+        }, row.sessionId.slice(0, 8))
+        : el("span", { text: (row.sessionId || "—").slice(0, 8) });
+      body.append(el("tr", {},
+        el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
+        el("td", { text: row.provider || "—" }),
+        el("td", { text: modelShort(row.model) || "—" }),
+        el("td", { text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
+        el("td", { text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
+        el("td", {}, sessionCell)));
+    }
+  }
+  table.append(body);
+  root.append(el("section", { class: "usage-section" },
+    el("h2", { class: "usage-title", text: "Recent invocations" }),
+    table));
+}
+
+function renderUsageWard(ward, quotasOnly) {
+  const section = el("section", { class: "usage-section" });
+  section.append(el("h2", { class: "usage-title", text: quotasOnly ? "Quota pressure" : "Spike / quota ward" }));
+  if (!ward || (ward.available === false && !(ward.quotaPressure && ward.quotaPressure.length))) {
+    section.append(el("p", { class: "usage-empty", text: (ward && ward.error) || "Ward data unavailable." }));
+    return section;
+  }
+  if (!quotasOnly) {
+    const spikes = ward.spikes || [];
+    if (!spikes.length) {
+      section.append(el("p", { class: "usage-empty", text: "No abrupt rate jumps vs the trailing baseline." }));
+    } else {
+      const list = el("ul", { class: "usage-ward-list" });
+      for (const spike of spikes.slice(0, 8)) {
+        list.append(el("li", {},
+          el("strong", { text: spike.provider + " / " + spike.model }),
+          ` · ${fmtTok(Math.round(spike.currentTokensPerHour))}/h vs baseline ${fmtTok(Math.round(spike.baselineTokensPerHour))}/h (${spike.ratio === 999 ? "new" : spike.ratio.toFixed(1) + "×"})`));
+      }
+      section.append(list);
+    }
+  }
+  const pressure = ward.quotaPressure || [];
+  if (pressure.length) {
+    const list = el("ul", { class: "usage-ward-list" });
+    for (const item of pressure.slice(0, 8)) {
+      list.append(el("li", {},
+        el("strong", { text: item.provider }),
+        ` · ${item.label} · ${Math.round(item.usedPercent)}% used` + (item.resetsAt ? " · resets " + agoText(item.resetsAt) : "")));
+    }
+    section.append(el("h3", { class: "usage-subtitle", text: "Quota pressure" }), list);
+  } else if (quotasOnly) {
+    section.append(el("p", { class: "usage-empty", text: "No quota buckets above 75%." }));
+  }
+  return section;
 }
 
 /* ---------- boot ---------- */
@@ -3185,6 +3773,8 @@ function boot() {
   loadOverrides();
   loadWidgetPreferences();
   loadSignalPanels();
+  loadLookback();
+  void fetchSettings();
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();

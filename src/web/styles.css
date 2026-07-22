@@ -130,13 +130,15 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .masthead {
   flex: none;
+  /* Graphite cap rule reads as a control-panel header, not a brochure banner. */
+  border-top: 2px solid var(--ink);
   border-bottom: 1px solid var(--line-strong);
   background: var(--surface);
 }
 .masthead-inner {
   max-width: var(--frame);
   margin: 0 auto;
-  padding: 0 1.1rem 0 0;
+  padding: 0 1.1rem;
   display: flex;
   align-items: stretch;
   justify-content: space-between;
@@ -156,25 +158,27 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   position: relative;
   z-index: 1;
   align-self: center;
-  padding: 0.9rem 0 0.9rem 1.2rem;
+  /* Text aligns to the shared 1.1rem content edge (matches the Summary label). */
+  padding: 0.85rem 0;
 }
 .wordmark h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 1.55rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   line-height: 1;
   color: var(--ink);
   text-shadow: none;
 }
 .eyebrow {
-  margin: 0.3rem 0 0;
-  font-size: 11px;
+  margin: 0.32rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--faint);
 }
 
 .conn {
@@ -196,7 +200,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
 .conn-live { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 40%, var(--line-strong)); }
-.conn-live .conn-dot { background: var(--moss); }
+/* A slow instrument heartbeat marks a live feed — calm opacity breathing, no
+   glow. Disabled wholesale by the prefers-reduced-motion rule below. */
+@keyframes conn-beat { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.conn-live .conn-dot { background: var(--moss); animation: conn-beat 2.6s ease-in-out infinite; }
 .conn-reconnecting, .conn-stale { color: var(--amber); }
 .conn-reconnecting .conn-dot, .conn-stale .conn-dot { background: var(--amber); }
 .conn-reconnecting .conn-dot { animation: sun-pulse 1.4s ease-in-out infinite; }
@@ -238,17 +245,19 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .rail-inner {
   max-width: var(--frame);
   margin: 0 auto;
-  padding: 0.4rem 1.1rem;
+  padding: 0.5rem 1.1rem 0.6rem;
   display: grid;
   grid-template-columns: minmax(13rem, 1.3fr) repeat(4, minmax(9rem, 1fr));
-  gap: 0.7rem;
-  align-items: center;
+  gap: 0 1.1rem;
+  /* Top-align so every reading's label sits on one line and the dividers run
+     the full height of the tallest column (the Degraded verdict). */
+  align-items: stretch;
 }
 .reading {
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
-  padding: 0 0.9rem 0 0;
+  gap: 0.12rem;
+  padding: 0 1.1rem 0 0;
   min-width: 0;
   border-right: 1px solid var(--line);
 }
@@ -275,7 +284,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   display: flex;
   align-items: baseline;
   gap: 0.4rem;
-  font-size: 1.2rem;
+  margin-top: 0.1rem;
+  font-size: 1.35rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
@@ -284,31 +294,40 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
-/* Degraded verdict's inline repair: re-pull the latest snapshot evidence. */
+/* Degraded verdict's inline repair: re-pull the latest snapshot evidence.
+   A quiet mono instrument chip — the amber ink signals status without a filled
+   hospital-banner flood. */
 .reading-repair {
   align-self: flex-start;
-  margin-top: 0.3rem;
-  padding: 0.2rem 0.6rem;
-  font-size: 11.5px;
+  margin-top: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
   font-weight: 700;
-  color: #fff;
-  background: var(--amber);
-  border: 1px solid var(--amber);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--raise);
+  border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--line-strong));
   border-radius: 4px;
 }
-.reading-repair:hover { background: color-mix(in srgb, var(--amber) 86%, #000); }
+.reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
 
 /* the System widget is the anchor */
 .verdict-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 1.2rem;
-  font-weight: 750;
+  gap: 0.45rem;
+  margin-top: 0.1rem;
+  font-size: 1.35rem;
+  font-weight: 700;
   font-family: var(--font-display);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.005em;
 }
-.verdict-chip .ico { width: 1.35rem; height: 1.35rem; }
+.verdict-chip .ico { width: 1.3rem; height: 1.3rem; }
 .verdict-ok { color: var(--moss); }
 .verdict-degraded { color: var(--amber); }
 .verdict-offline { color: var(--bad); }
@@ -392,12 +411,38 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .signal-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.55rem;
   margin-bottom: 0.35rem;
   min-height: 1.4rem;
 }
 .signal-head .section-title { margin: 0; }
+
+/* The section title is the only collapse affordance — a caret, never a labelled
+   "Subdue" button. Open = full detail list; collapsed = the live ticker. */
+.signal-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.signal-collapse[hidden] { display: none; }
+.signal-caret {
+  width: 0.72rem;
+  height: 0.72rem;
+  flex: none;
+  color: var(--faint);
+  transform: rotate(0deg);
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+.signal-collapse[aria-expanded="true"] .signal-caret { transform: rotate(90deg); }
+.signal-collapse:hover .signal-caret,
+.signal-collapse:focus-visible .signal-caret { color: var(--ink); }
 .interventions .section-title {
   color: var(--ink);
   font-family: var(--font-mono);
@@ -421,42 +466,91 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .interventions .signal-count { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 35%, var(--line)); }
 .warnings .signal-count { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, var(--line)); }
-.signal-toggle {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint);
+.signal-count { margin-right: auto; }
+
+/* ---------- signal ticker ----------
+   A clipped instrument strip that carries a section's signals as mono glyph +
+   label chips. Edges fade so items enter/leave without a hard cut. When the
+   strip overflows (many signals) a stepped right→left pull engages. */
+.signal-ticker {
+  position: relative;
+  overflow: hidden;
+  margin: 0.1rem 0 0;
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  padding: 0.2rem 0.5rem;
-  background: var(--raise);
-}
-.signal-toggle:hover { color: var(--ink); border-color: var(--muted); }
-.signal-subdued {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 0.55rem;
-  margin: 0;
-  padding: 0.45rem 0.7rem;
-  border: 1px dashed var(--line-strong);
   border-left: var(--signal-rail) solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--raise);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 2.25rem, #000 calc(100% - 2.25rem), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 2.25rem, #000 calc(100% - 2.25rem), transparent 100%);
+}
+.signal-ticker[hidden] { display: none; }
+.interventions .signal-ticker { border-left-color: var(--ember); }
+.warnings .signal-ticker { border-left-color: var(--amber); }
+
+.signal-tick-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+}
+.signal-ticker.is-scrolling .signal-tick-track {
+  /* steps() gives the jagged, stepped pull instead of a smooth marquee glide. */
+  animation: signal-ticker-run 30s steps(72, end) infinite;
+}
+.signal-ticker.is-scrolling:hover .signal-tick-track,
+.signal-ticker.is-scrolling:focus-within .signal-tick-track { animation-play-state: paused; }
+.signal-tick-group { display: flex; align-items: stretch; flex: none; }
+
+@keyframes signal-ticker-run {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+.signal-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  padding: 0.3rem 0.9rem;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 11.5px;
-  letter-spacing: 0.04em;
-  text-align: left;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  cursor: pointer;
+  /* Stagger each chip's rest position so the strip reads as instrument ticks,
+     not one flat row. tick-step is set per item (0–5) in the markup dataset. */
+  transform: translateY(0);
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.interventions .signal-subdued { border-left-color: var(--ember); }
-.warnings .signal-subdued { border-left-color: var(--amber); }
-.signal-subdued:hover { color: var(--ink); border-color: var(--muted); }
-.signal-subdued[hidden] { display: none; }
+.signal-tick[data-tick-step="1"] { transform: translateY(0.9px); }
+.signal-tick[data-tick-step="2"] { transform: translateY(-0.9px); }
+.signal-tick[data-tick-step="3"] { transform: translateY(1.6px); }
+.signal-tick[data-tick-step="4"] { transform: translateY(-1.6px); }
+.signal-tick[data-tick-step="5"] { transform: translateY(0.5px); }
+.signal-tick:hover, .signal-tick:focus-visible { color: var(--ink); background: var(--surface); }
+.signal-tick-glyph { display: inline-flex; flex: none; }
+.signal-tick-glyph .ico { width: 0.95rem; height: 0.95rem; }
+.signal-tick-label {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.signal-tick.tone-error .signal-tick-glyph { color: var(--ember); }
+.signal-tick.tone-warn .signal-tick-glyph { color: var(--amber); }
+.signal-tick.tone-moss .signal-tick-glyph { color: var(--moss); }
+.signal-tick.tone-info .signal-tick-glyph { color: var(--muted); }
+
 .signal-list[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Motion off: the ticker becomes a still, scannable strip. */
+  .signal-ticker.is-scrolling .signal-tick-track { animation: none; }
+  .signal-tick { transform: none; }
+  .signal-caret { transition: none; }
+}
 
 .signal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
 
@@ -471,9 +565,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border: 1px solid var(--line-strong);
   border-left: var(--signal-rail) solid var(--ember);
   border-radius: var(--radius-sm);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--ember) 7%, transparent) 0, transparent 4.5rem),
-    var(--surface);
+  background: var(--surface);
   box-shadow: none;
 }
 /* Row one — badge · copy · primary action, readable at a glance. */
@@ -567,9 +659,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border: 1px solid var(--line-strong);
   border-left: var(--signal-rail) solid var(--amber);
   border-radius: var(--radius-sm);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--amber) 6%, transparent) 0, transparent 3.5rem),
-    var(--surface);
+  background: var(--surface);
   overflow: hidden;
 }
 .signal-advisory {
@@ -751,7 +841,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program.open .program-caret { transform: rotate(90deg); }
 .program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
-.program-name { font-weight: 700; font-size: 1.02rem; letter-spacing: 0.01em; }
+.program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
 .program-alias-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
@@ -818,12 +908,15 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* Role cues remain distinct from provider and operational-state cues. The
    variables work whether the interaction lane adds the role class to a row or
    directly to its role label. */
-.role-orchestrator { --role-color: #5b4bb7; --role-surface: #f0eeff; --role-ink: #413296; }
-.role-frontend { --role-color: #086c95; --role-surface: #e8f5fb; --role-ink: #075a7c; }
-.role-backend { --role-color: #0a6c70; --role-surface: #e7f6f4; --role-ink: #07595b; }
-.role-verifier { --role-color: #8c3f90; --role-surface: #faedf9; --role-ink: #753078; }
-.role-tester { --role-color: #a35400; --role-surface: #fff1df; --role-ink: #894400; }
-.role-automation { --role-color: #067761; --role-surface: #e4f7f1; --role-ink: #05604f; }
+/* Role cues read as cool instrument tags: a saturated left border + ink carry
+   identity while surfaces stay near-neutral graphite (no candy stickers, no
+   lavender/magenta brochure chroma). */
+.role-orchestrator { --role-color: #3f4c6b; --role-surface: #eef0f5; --role-ink: #303a56; }
+.role-frontend { --role-color: #0a6790; --role-surface: #ecf2f6; --role-ink: #0a5576; }
+.role-backend { --role-color: #0c6669; --role-surface: #ebf2f1; --role-ink: #0a5456; }
+.role-verifier { --role-color: #5c5680; --role-surface: #eeeef4; --role-ink: #423d63; }
+.role-tester { --role-color: #995000; --role-surface: #f5efe6; --role-ink: #7e4300; }
+.role-automation { --role-color: #0a6f5b; --role-surface: #eaf2ef; --role-ink: #0a5749; }
 .agent-row.role-orchestrator,
 .agent-row.role-frontend,
 .agent-row.role-backend,
@@ -1011,6 +1104,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   overflow-y: auto;
   overflow-x: hidden;   /* content wraps; guarantee no horizontal scroll at 375px */
   border-left: 1px solid var(--line-strong);
+  /* Containment: a crisp bezel seam on the inner edge plus one soft directional
+     shadow so the pane reads as a docked instrument panel raised off the
+     workboard — not a white sheet bleeding into the canvas. Single-layer, no
+     floating card-stack. */
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.6), -16px 0 34px -30px rgba(18, 24, 32, 0.28);
   background: var(--surface);
   padding: 1.15rem 1.2rem 3rem;
   display: flex;
@@ -1039,7 +1137,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-accent--moss  { background: var(--moss); }
 .dw-accent--slate { background: var(--slate); }
 .dw-accent--ink   { background: var(--ink); }
-.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
+.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)), -16px 0 34px -30px rgba(18, 24, 32, 0.28); }
 /* One --prov per provider drives both the pane inset rail and the lineage
    current-node ring; set by a class so the strict CSP holds (no inline style). */
 .dw-provider--claude { --prov: var(--claude); }
@@ -1058,18 +1156,30 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
 .dw-lead--past { color: var(--moss); font-weight: 650; }
 
-.dw-block { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 0.7rem 0.75rem; }
-.dw-block--fix { border-color: color-mix(in srgb, var(--ember) 30%, var(--line)); }
-.dw-block-label { font: 700 9px/1.3 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.4rem; }
+.dw-block { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 0.75rem 0.8rem; }
+/* The Fix block is the point of an intervention: an ember edge-rail + faint tint
+   marks it without a hospital flood. */
+.dw-block--fix { border-color: color-mix(in srgb, var(--ember) 28%, var(--line)); background: var(--ember-soft); box-shadow: inset 2px 0 var(--ember); }
+.dw-block-label { font: 700 9px/1.3 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.45rem; }
 .dw-block--fix .dw-block-label { color: var(--ember); }
 
-.dw-chips { display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem; margin-top: 0.4rem; }
-.dw-chip { font-size: 12px; color: var(--ink); padding: 0.12rem 0.5rem; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--raise); cursor: pointer; }
+/* AFFECTS: a contained module (label + tag row) so the references read as an
+   intentional block, not chips dropped loose under a heading. */
+.dw-affects { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 0.7rem 0.75rem; }
+.dw-affects .section-title { margin: 0; }
+.dw-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+/* Squared reference tags (not rounded-full pills) keep the control-room's clear
+   edges; they are interactive links into the Agent drawer. */
+.dw-chip { display: inline-flex; align-items: center; font-size: 12px; color: var(--ink); padding: 0.22rem 0.55rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+.dw-chip:hover { border-color: var(--muted); color: var(--ember); }
 .dw-chip .dw-chip-prog { color: var(--faint); }
 .dw-impact { font-size: 11.5px; color: var(--faint); margin: 0; }
 
 .dw-full { width: 100%; }
-.btn.dw-ghost { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--line-strong)); background: transparent; }
+/* Escalate: the advisory's own action. A soft amber tint (not a naked outline)
+   gives it presence while staying quieter than an ember intervention button. */
+.btn.dw-ghost { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--line-strong)); background: var(--amber-soft); }
+.btn.dw-ghost:hover:not(:disabled) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, var(--surface)); }
 
 .dw-backlink { font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0.2rem 0; text-align: left; cursor: pointer; }
 .dw-backlink b { color: var(--ink); }
@@ -1138,7 +1248,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .signal-intervention.is-selected { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ember) 45%, transparent); }
 
 .inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
-.inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; overflow-wrap: anywhere; }
+.inspector-id { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
 .inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
@@ -1345,7 +1456,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* ---------- responsive ---------- */
 
 @media (max-width: 1180px) {
-  .rail-inner { grid-template-columns: repeat(3, 1fr); }
+  .rail-inner { grid-template-columns: repeat(3, 1fr); gap: 0.55rem 1.1rem; }
   .rail-inner .reading:nth-child(3n) { border-right: 0; }
   .agent-column-header,
   .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
@@ -1362,10 +1473,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
     width: auto;
     z-index: 40;
     border-left: 0;
+    box-shadow: none;   /* full-surface sheet: no docked-pane edge/raise */
     background: var(--canvas);
     padding: 1rem 1rem 3rem;
     animation: sheet-up 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  /* Provider sheets keep their identity rail, but drop the docked raise shadow. */
+  .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
@@ -1434,6 +1548,99 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   /* Per-type drawer controls stay comfortably tappable on touch. */
   .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
+}
+
+/* ---------- usage tab ---------- */
+
+.usage-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 0.25rem 0 1.5rem;
+}
+.usage-panel[hidden] { display: none; }
+.usage-title {
+  margin: 0 0 0.45rem;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.usage-subtitle {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.usage-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.65rem;
+}
+.usage-kpis .reading {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.usage-section {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.usage-empty { margin: 0; color: var(--faint); font-size: 13px; }
+.usage-unavailable {
+  padding: 1rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ember) 6%, var(--surface));
+  display: grid;
+  gap: 0.55rem;
+}
+.usage-providers, .usage-ward-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.3rem;
+  font-size: 13px;
+  color: var(--ink);
+}
+.usage-series-legend { margin: 0.45rem 0 0; font-size: 12px; color: var(--faint); }
+.usage-bars-svg {
+  width: 100%;
+  height: 64px;
+  display: block;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sand) 70%, transparent), transparent);
+  border-radius: var(--radius-sm);
+}
+.usage-bar-rect { fill: color-mix(in srgb, var(--ink) 72%, var(--clay)); }
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-table th, .usage-table td {
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.usage-table th {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.linkish {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--ember);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* ---------- motion ---------- */

@@ -2,8 +2,10 @@ import { stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import type { HubSnapshot, TriageQueueItem } from "../shared/types";
 import { handleBroadcastRequest } from "./broadcast";
+import { handleUsageRequest } from "./burnbar";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
+import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CommandRunner } from "./types";
@@ -40,6 +42,7 @@ export interface MountainAppDependencies {
   triageStore?: TriageQueueStore;
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
+  settingsStore?: JsonSettingsStore;
   webRoot: string;
 }
 
@@ -172,6 +175,17 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       if (!dependencies.programAliasStore) return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
       return handleProgramAliasRequest(request, dependencies.state.get(), dependencies.programAliasStore);
     }
+    if (url.pathname === "/api/settings") {
+      if (!dependencies.settingsStore) return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
+      return handleSettingsRequest(request, dependencies.settingsStore, {
+        afterUpdate: async () => {
+          await dependencies.state.refresh({ cmux: true });
+        },
+      });
+    }
+    if (url.pathname.startsWith("/api/usage/")) {
+      return handleUsageRequest(request);
+    }
     if (["/api/triage/generate", "/api/triage/queue", "/api/triage/run"].includes(url.pathname)) {
       const triageBody = request.method === "POST" ? request.clone() : undefined;
       const response = await handleTriageRequest(request, dependencies.state.get(), triageStore, dependencies.triageRunner);
@@ -247,6 +261,8 @@ export function emptySnapshot(): HubSnapshot {
   return {
     schemaVersion: 1,
     generatedAt: now,
+    scanWindowHours: 36,
+    lookbackHours: 36,
     controlHealth: { cmuxReachable: false, lastCheckedAt: now, errors: [], staleSources: [] },
     totals: {
       live: 0,
