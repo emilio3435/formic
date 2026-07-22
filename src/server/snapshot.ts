@@ -7,6 +7,7 @@ import type {
   ControlCapability,
   HubSnapshot,
   IssueLifecycle,
+  IssueWorkState,
   ModelPolicy,
   OperatorControlState,
   OperatorIssue,
@@ -14,6 +15,7 @@ import type {
   ProgramSnapshot,
   ProgramRollup,
   Provider,
+  TriageQueueSummary,
 } from "../shared/types";
 import { resolveAgentTarget } from "./targets";
 import {
@@ -45,12 +47,137 @@ export interface SnapshotInput {
   issueLifecycle?: ReadonlyMap<string, IssueLifecycle>;
   previousIssues?: readonly OperatorIssue[];
   recentlyResolved?: readonly OperatorIssue[];
+  triageSummaries?: readonly TriageQueueSummary[];
   now?: Date;
   scanWindowHours?: number;
 }
 
 export const MAX_RECENTLY_RESOLVED = 12;
 const RECENTLY_RESOLVED_TTL_MS = 15 * 60 * 1_000;
+
+const ISSUE_PROGRESS: Record<IssueWorkState, number> = {
+  needs_triage: 0,
+  watching: 0,
+  triaging: 15,
+  planned: 35,
+  queued: 50,
+  investigating: 70,
+  verifying: 85,
+  blocked: 70,
+  cleared: 100,
+};
+
+const IN_MOTION_STATES = new Set<IssueWorkState>([
+  "triaging",
+  "planned",
+  "queued",
+  "investigating",
+  "verifying",
+]);
+
+export function impactSummaryFor(
+  issue: OperatorIssue,
+  programs: readonly ProgramSnapshot[],
+): string {
+  const affectedIds = [...new Set(issue.affectedAgentIds)];
+  if (affectedIds.length === 0) return "System-wide — not tied to a specific agent";
+
+  const affected = new Set(affectedIds);
+  const matches = programs.flatMap((program) =>
+    program.agents
+      .filter((agent) => affected.has(agent.id))
+      .map((agent) => ({ agent, program })),
+  );
+  if (affectedIds.length === 1 && matches[0]) {
+    return `Touches 1 session: ${matches[0].agent.displayName} (${matches[0].program.name})`;
+  }
+
+  const programCounts = new Map<string, number>();
+  for (const { program } of matches) {
+    programCounts.set(program.name, (programCounts.get(program.name) ?? 0) + 1);
+  }
+  const programsByImpact = [...programCounts]
+    .sort(([leftName, leftCount], [rightName, rightCount]) =>
+      rightCount - leftCount || leftName.localeCompare(rightName),
+    );
+  const topPrograms = programsByImpact
+    .slice(0, 2)
+    .map(([name, count]) => `${name} (${count})`)
+    .join(", ");
+  const programLabel = programsByImpact.length === 1 ? "program" : "programs";
+  return `Touches ${affectedIds.length} sessions across ${programsByImpact.length} ${programLabel}`
+    + (topPrograms ? ` — mainly ${topPrograms}` : "");
+}
+
+export function issueWorkStateFor(
+  issue: OperatorIssue,
+  triage?: TriageQueueSummary,
+): IssueWorkState {
+  if (triage?.state === "running") return "investigating";
+  if (triage?.state === "queued") return "queued";
+  if (triage?.state === "completed") return "verifying";
+  if (triage?.state === "blocked") return "blocked";
+  if (issue.lifecycle?.state === "verifying") return "verifying";
+  if (issue.lifecycle?.state === "blocked") return "blocked";
+  if (issue.lifecycle?.state === "resolved") return "cleared";
+  return issue.severity === "error" ? "needs_triage" : "watching";
+}
+
+export function withAttentionBoard(
+  snapshot: HubSnapshot,
+  triageSummaries: readonly TriageQueueSummary[] = [],
+): HubSnapshot {
+  const summaries = triageSummaries.map(({ issueId, state }) => ({ issueId, state }));
+  const triageByIssue = new Map(summaries.map((summary) => [summary.issueId, summary]));
+  const decorate = (issue: OperatorIssue): OperatorIssue => {
+    const workState = issueWorkStateFor(issue, triageByIssue.get(issue.id));
+    return {
+      ...issue,
+      workState,
+      progress: ISSUE_PROGRESS[workState],
+      impactSummary: impactSummaryFor(issue, snapshot.programs),
+    };
+  };
+  const issues = (snapshot.issues ?? []).map(decorate);
+  const recentlyResolved = (snapshot.recentlyResolved ?? []).map(decorate);
+  const inMotionIds = new Set(
+    issues.filter((issue) => issue.workState && IN_MOTION_STATES.has(issue.workState)).map((issue) => issue.id),
+  );
+  const actNowIds = new Set(
+    issues
+      .filter((issue) => issue.severity === "error" && issue.lifecycle?.state !== "resolved")
+      .map((issue) => issue.id),
+  );
+  const watchIds = new Set(
+    issues
+      .filter((issue) =>
+        issue.severity !== "error" && !inMotionIds.has(issue.id) && issue.lifecycle?.state !== "resolved",
+      )
+      .map((issue) => issue.id),
+  );
+  for (const summary of summaries) {
+    if (summary.state === "queued" || summary.state === "running" || summary.state === "completed") {
+      inMotionIds.add(summary.issueId);
+    }
+    if (summary.state === "blocked" && !actNowIds.has(summary.issueId)) watchIds.add(summary.issueId);
+  }
+  const actNow = actNowIds.size;
+  const watch = watchIds.size;
+  const inMotion = inMotionIds.size;
+  return {
+    ...snapshot,
+    issues,
+    recentlyResolved,
+    triageSummaries: summaries,
+    attentionBoard: {
+      actNow,
+      watch,
+      inMotion,
+      cleared: recentlyResolved.length,
+      allClear: actNow + watch + inMotion === 0,
+    },
+  };
+}
 
 function hash(value: string): string {
   let result = 2_166_136_261;
@@ -552,7 +679,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   };
 
   const scanWindowHours = input.scanWindowHours;
-  return {
+  const snapshot: HubSnapshot = {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
     scanWindowHours,
@@ -587,6 +714,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     recentlyResolved,
     programs: orderedPrograms,
   };
+  return withAttentionBoard(snapshot, input.triageSummaries);
 }
 
 export function snapshotFingerprint(snapshot: HubSnapshot): string {

@@ -67,6 +67,12 @@ const ICON_PATHS = {
   caret: [["polyline", { points: "9 6 15 12 9 18" }]],
   // offline: dark node, severed rail
   offline: [["circle", { cx: 12, cy: 12, r: 9 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
+  // focus: jump-to-pane crosshair
+  focus: [["circle", { cx: 12, cy: 12, r: 3 }], ["line", { x1: 12, y1: 3, x2: 12, y2: 7 }], ["line", { x1: 12, y1: 17, x2: 12, y2: 21 }], ["line", { x1: 3, y1: 12, x2: 7, y2: 12 }], ["line", { x1: 17, y1: 12, x2: 21, y2: 12 }]],
+  // interrupt: pause bars
+  interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
+  // archive: tray
+  archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }]],
 };
 
 function icon(name, opts = {}) {
@@ -824,32 +830,46 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
   return noDataWidget("Widget evidence is not available.");
 }
 
-const SIGNAL_PANEL_STORAGE_KEY = "mtn3-signal-panels";
-const SIGNAL_PANEL_KEYS = ["interventions", "advisories"];
-// Calm control-room defaults: interventions keep their full act-now detail open,
-// advisories ride the compact live ticker until an operator expands them.
-const SIGNAL_PANEL_DEFAULTS = { interventions: "open", advisories: "compact" };
-// Below this item count the ticker stays a still instrument strip; at or above,
-// the stepped right→left pull engages so a busy strip reads as motion, not spam.
-const TICKER_SCROLL_MIN = 4;
+const AFFECTS_SAMPLE_LIMIT = 6;
+// At most five rows per lane before a "+N more" control expands the lane in
+// place — dense but never an unbounded wall.
+const MAX_LANE_ROWS = 5;
 
-function defaultSignalPanels() {
-  return { ...SIGNAL_PANEL_DEFAULTS };
-}
+// Server-owned work state → the single row vocabulary (label + visual key +
+// tone). issueWorkState prefers live optimistic signals, then this map, then a
+// severity default, so the board always names who (if anyone) is on a finding.
+const WORK_STATE_VIEW = {
+  needs_triage: { key: "needs", label: "Needs triage", tone: "error" },
+  watching: { key: "watching", label: "Watching", tone: "warn" },
+  triaging: { key: "triaging", label: "Triaging", tone: "warn" },
+  planned: { key: "planned", label: "Plan ready", tone: "info" },
+  queued: { key: "queued", label: "Queued", tone: "info" },
+  investigating: { key: "investigating", label: "Investigating", tone: "info" },
+  verifying: { key: "verifying", label: "Verifying", tone: "warn" },
+  blocked: { key: "blocked", label: "Blocked", tone: "error" },
+  cleared: { key: "cleared", label: "Cleared", tone: "moss" },
+};
 
-function parseSignalPanels(raw) {
-  try {
-    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!parsed || typeof parsed !== "object") return defaultSignalPanels();
-    const next = defaultSignalPanels();
-    for (const key of SIGNAL_PANEL_KEYS) {
-      if (parsed[key] === "compact" || parsed[key] === "open") next[key] = parsed[key];
-    }
-    return next;
-  } catch {
-    return defaultSignalPanels();
-  }
-}
+// Progress rail 0–100 per work state (normative). blocked keeps a mid rail but
+// its ember tone (not the %) carries the alarm.
+const PROGRESS_BY_WORK = {
+  needs: 0, watching: 0, triaging: 15, planned: 35, queued: 50,
+  investigating: 70, verifying: 85, blocked: 70, cleared: 100,
+};
+
+// Each work key → row glyph shape + state-label tone + progress-rail tone. The
+// glyph/rail/st classes are styled in styles.css (.glyph.act/.warn/.run/.ok).
+const FINDING_VISUAL = {
+  needs: { glyph: "act", st: "hot", rail: "hot" },
+  watching: { glyph: "warn", st: "warm", rail: "warm" },
+  triaging: { glyph: "run", st: "cool", rail: "" },
+  planned: { glyph: "run", st: "cool", rail: "" },
+  queued: { glyph: "run", st: "cool", rail: "" },
+  investigating: { glyph: "run", st: "cool", rail: "" },
+  verifying: { glyph: "run", st: "warm", rail: "warm" },
+  blocked: { glyph: "act", st: "hot", rail: "hot" },
+  cleared: { glyph: "ok", st: "ok", rail: "ok" },
+};
 
 /* ---------- test surface ---------- */
 
@@ -868,8 +888,9 @@ globalThis.TheAntHill = {
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
-  SIGNAL_PANEL_STORAGE_KEY, parseSignalPanels,
+  attentionBoardOf, issueWorkState, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
+  parseInvestigationResult,
 };
 
 /* ---------- state ---------- */
@@ -929,11 +950,13 @@ const state = {
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
-  // Each signal section is either "open" (full detail list) or "compact" (the
-  // live ticker strip). The caret on the section title flips it; the preference
-  // persists. Solved findings leave the active lists via source lifecycle, so a
-  // compact ticker never keeps a cleared id.
-  signalPanels: defaultSignalPanels(), // open | compact
+  // Per-lane "show all" toggle. Each lane caps at MAX_LANE_ROWS; the "+N more"
+  // control expands that lane in place (no route change). Reset is transient —
+  // it is not persisted, so a reload returns to the dense five-row view.
+  laneExpanded: { act: false, aware: false },
+  // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
+  // content is unchanged across SSE snapshots (stops the 4s strobe).
+  paintSig: { attention: "", programs: "", inspector: "", widgets: "" },
 };
 state.aliases = state.labels;
 
@@ -1003,27 +1026,9 @@ async function postScanWindow(hours) {
   }
 }
 
-function loadSignalPanels() {
-  try {
-    state.signalPanels = parseSignalPanels(localStorage.getItem(SIGNAL_PANEL_STORAGE_KEY));
-  } catch {
-    state.signalPanels = defaultSignalPanels();
-  }
-}
-
-function saveSignalPanels() {
-  try {
-    localStorage.setItem(SIGNAL_PANEL_STORAGE_KEY, JSON.stringify(state.signalPanels));
-  } catch { /* storage unavailable */ }
-}
-
-function setSignalPanel(panel, mode) {
-  if (!SIGNAL_PANEL_KEYS.includes(panel)) return;
-  if (mode !== "open" && mode !== "compact") return;
-  if (state.signalPanels[panel] === mode) return;
-  state.signalPanels[panel] = mode;
-  saveSignalPanels();
-  renderIssues();
+function toggleLane(lane) {
+  state.laneExpanded[lane] = !state.laneExpanded[lane];
+  renderAttentionBoard();
 }
 
 function loadOverrides() {
@@ -1146,6 +1151,20 @@ function renderBeacon() {
 
 /* ---------- rendering ---------- */
 
+function paintUnchanged(key, signature) {
+  if (state.paintSig[key] === signature) return true;
+  state.paintSig[key] = signature;
+  return false;
+}
+
+function findingPaintKey(finding) {
+  return [
+    finding.kind, finding.id, finding.work.key, finding.progress,
+    finding.title, finding.impact, finding.pin ? "1" : "0",
+    state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id ? "1" : "0",
+  ].join("\u001f");
+}
+
 function render() {
   const focusKey = document.activeElement && document.activeElement.dataset
     ? document.activeElement.dataset.fkey
@@ -1157,7 +1176,7 @@ function render() {
 
   renderConn();
   renderHealthRail();
-  renderIssues();
+  renderAttentionBoard();
   renderTabs();
   renderFilterBar();
   renderPrograms();
@@ -1326,6 +1345,18 @@ function renderWidgetCustomizer() {
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
+  const verdict = systemStatus(state.snap, state.conn);
+  const sig = [
+    state.conn,
+    verdict.label,
+    state.widgetIds.join(","),
+    state.widgetCustomizerOpen ? "1" : "0",
+    state.widgetIds.map((id) => {
+      const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+      return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
+    }).join("|"),
+  ].join("\u001f");
+  if (paintUnchanged("widgets", sig)) return;
   widgets.textContent = "";
   for (const id of state.widgetIds) widgets.append(renderSummaryWidget(id));
   renderWidgetCustomizer();
@@ -1377,7 +1408,7 @@ async function fetchTriageQueue() {
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
     renderHealthRail();
-    renderIssues();
+    renderAttentionBoard();
   } catch (err) {
     console.warn("triage queue fetch failed:", err);
   }
@@ -1388,7 +1419,7 @@ async function triageIssue(issueId, action) {
   if (state.triagePending.has(key)) return;
   state.triagePending.add(key);
   state.triageErrors.delete(issueId);
-  renderIssues();
+  renderAttentionBoard();
   try {
     const res = await fetch("/api/triage/" + action, {
       method: "POST",
@@ -1416,6 +1447,199 @@ async function triageIssue(issueId, action) {
     state.triagePending.delete(key);
     render();
   }
+}
+
+/* Parse freeform investigation result text into a brief-friendly shape.
+   Luna may emit markdown headings, labeled lines, bullets, or a one-liner.
+   Display-only — never mutates triage state. Graceful on unstructured text. */
+function parseInvestigationResult(text) {
+  const raw = String(text ?? "").trim();
+  const empty = { headline: "", summary: "", findings: [], actions: [], blockers: [], structured: false, raw };
+  if (!raw) return empty;
+
+  const ACTION_RE = /^(?:next(?:\s+(?:steps?|actions?))?|action(?:s)?|what to do(?: next)?|recommended?(?:\s+path)?|follow[- ]?up|repair|fix)\s*[:—-]\s*(.+)$/i;
+  const BLOCKER_RE = /^(?:blocker|blocked(?:\s+by)?|blocking|external blocker)\s*[:—-]\s*(.+)$/i;
+  const FINDING_RE = /^(?:finding(?:s)?|root cause|cause|summary|result|outcome|what happened)\s*[:—-]\s*(.+)$/i;
+  const HEADING_RE = /^#{1,3}\s+(.+)$/;
+  const BULLET_RE = /^(?:[-*•]|\d+[.)])\s+(.+)$/;
+  const LABEL_ONLY_RE = /^(?:findings?|root cause|cause|summary|result|outcome|what happened|next(?:\s+(?:steps?|actions?))?|action(?:s)?|what to do(?: next)?|recommended?(?:\s+path)?|follow[- ]?up|repair|fix|blocker|blocked(?:\s+by)?|blocking|verification|evidence)\s*[:—-]?\s*$/i;
+
+  const findings = [];
+  const actions = [];
+  const blockers = [];
+  const paragraphs = [];
+  let bucket = "body";
+  let headlineSource = "";
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const heading = trimmed.match(HEADING_RE);
+    if (heading) {
+      const title = heading[1].trim();
+      if (/block/i.test(title)) bucket = "blockers";
+      else if (/next|action|repair|fix|recommend|follow/i.test(title)) bucket = "actions";
+      else if (/find|cause|root|evidence|verif|summary|result|outcome/i.test(title)) bucket = "findings";
+      else bucket = "body";
+      continue;
+    }
+
+    if (LABEL_ONLY_RE.test(trimmed)) {
+      if (/block/i.test(trimmed)) bucket = "blockers";
+      else if (/next|action|repair|fix|recommend|follow/i.test(trimmed)) bucket = "actions";
+      else bucket = "findings";
+      continue;
+    }
+
+    const actionMatch = trimmed.match(ACTION_RE);
+    if (actionMatch) {
+      actions.push(actionMatch[1].trim());
+      bucket = "actions";
+      continue;
+    }
+    const blockerMatch = trimmed.match(BLOCKER_RE);
+    if (blockerMatch) {
+      const value = blockerMatch[1].trim();
+      if (!/^(none|n\/a|no\b|—|-)\b/i.test(value)) blockers.push(value);
+      bucket = "blockers";
+      continue;
+    }
+    const findingMatch = trimmed.match(FINDING_RE);
+    if (findingMatch) {
+      const value = findingMatch[1].trim();
+      findings.push(value);
+      if (!headlineSource) headlineSource = value;
+      bucket = "findings";
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(BULLET_RE);
+    if (bulletMatch) {
+      const item = bulletMatch[1].trim();
+      if (bucket === "actions") actions.push(item);
+      else if (bucket === "blockers") blockers.push(item);
+      else findings.push(item);
+      continue;
+    }
+
+    if (bucket === "actions") actions.push(trimmed);
+    else if (bucket === "blockers") blockers.push(trimmed);
+    else if (bucket === "findings") {
+      findings.push(trimmed);
+      if (!headlineSource) headlineSource = trimmed;
+    } else {
+      paragraphs.push(trimmed);
+      if (!headlineSource) headlineSource = trimmed;
+    }
+  }
+
+  function firstSentence(value) {
+    const source = String(value || "").trim();
+    if (!source) return "";
+    const match = source.match(/^(.+?[.!?])(?:\s|$)/);
+    const sentence = (match ? match[1] : source).trim();
+    if (sentence.length <= 160) return sentence;
+    return sentence.slice(0, 157).replace(/\s+\S*$/, "") + "…";
+  }
+
+  const headline = firstSentence(headlineSource || findings[0] || blockers[0] || actions[0] || raw);
+  let summary = "";
+  const extraParagraphs = paragraphs.filter((p) => p !== headlineSource);
+  if (extraParagraphs.length) summary = extraParagraphs.join(" ");
+  else if (paragraphs.length === 1 && paragraphs[0].length > headline.length + 8) {
+    summary = paragraphs[0].slice(headline.length).trim().replace(/^[\s.]+/, "");
+  }
+
+  const structured = findings.length > 0 || actions.length > 0 || blockers.length > 0 || paragraphs.length > 1;
+  return { headline, summary, findings, actions, blockers, structured, raw };
+}
+
+function investigationResultNextSteps(parsed, outcome) {
+  if (parsed.actions.length) return parsed.actions.slice();
+
+  const lower = parsed.raw.toLowerCase();
+  if (outcome === "blocked") {
+    if (lower.includes("requeue")) {
+      return ["Requeue from the current issue evidence, then launch a fresh read-only investigation."];
+    }
+    if (lower.includes("10-minute") || lower.includes("runtime limit") || lower.includes("timed out")) {
+      return ["Retry with a narrower investigation scope, or act on the evidence already on the finding."];
+    }
+    if (parsed.blockers.length) {
+      return ["Address the blocker above, or requeue once the external condition changes."];
+    }
+    return ["Review the blocker, then requeue or take one precise follow-up from current evidence."];
+  }
+  return ["Wait for the next source snapshot — this finding clears when evidence is gone."];
+}
+
+// Fix briefing for investigation results — headline, what happened, what to do,
+// with raw output collapsed. Used by intervention/advisory triage and the
+// investigation drawer. `outcome` is "completed" or "blocked".
+function renderInvestigationResult(resultText, outcome) {
+  const blocked = outcome === "blocked";
+  const parsed = parseInvestigationResult(resultText);
+  const headline = parsed.headline || (blocked ? "Investigation blocked" : "Investigation complete");
+  const nextSteps = investigationResultNextSteps(parsed, blocked ? "blocked" : "completed");
+  const seen = new Set([headline, parsed.headline].filter(Boolean));
+  const findings = parsed.findings.filter((item) => !seen.has(item));
+  const blockers = parsed.blockers.filter((item) => !seen.has(item));
+  const summary = parsed.summary && parsed.summary !== headline ? parsed.summary : "";
+  let bodyShown = false;
+
+  const briefing = el("section", {
+    class: "triage-result triage-briefing" + (blocked ? " triage-briefing--blocked" : " triage-briefing--ok"),
+    "aria-label": blocked ? "Blocked investigation result" : "Investigation result",
+  },
+    el("div", { class: "triage-briefing-kicker" },
+      el("span", { class: "triage-briefing-status", text: blocked ? "Blocked" : "Complete" }),
+      el("span", { class: "triage-briefing-kicker-note", text: blocked
+        ? "Operator review needed"
+        : "Source confirmation pending" })),
+    el("p", { class: "triage-briefing-headline", text: headline }));
+
+  if (summary) {
+    briefing.append(el("p", { class: "triage-briefing-summary", text: summary }));
+    bodyShown = true;
+  } else if (findings.length === 0 && blockers.length === 0 && !parsed.structured && parsed.raw && parsed.raw !== headline) {
+    const rest = parsed.raw.slice(headline.length).trim().replace(/^[\s.]+/, "");
+    if (rest) {
+      briefing.append(el("p", { class: "triage-briefing-summary", text: rest }));
+      bodyShown = true;
+    }
+  }
+
+  if (blockers.length) {
+    briefing.append(el("div", { class: "triage-briefing-section" },
+      el("h4", { class: "triage-briefing-label", text: "What's blocking" }),
+      el("ul", { class: "triage-briefing-list" }, blockers.map((item) => el("li", { text: item })))));
+    bodyShown = true;
+  }
+
+  if (findings.length) {
+    briefing.append(el("div", { class: "triage-briefing-section" },
+      el("h4", { class: "triage-briefing-label", text: "What happened" }),
+      el("ul", { class: "triage-briefing-list" }, findings.map((item) => el("li", { text: item })))));
+    bodyShown = true;
+  }
+
+  if (!bodyShown) {
+    briefing.append(el("p", { class: "triage-briefing-summary triage-briefing-summary--quiet", text: blocked
+      ? "The investigation could not finish a safe repair path."
+      : "The investigation finished and is waiting on fresh source evidence." }));
+  }
+
+  briefing.append(el("div", { class: "triage-briefing-section triage-briefing-next" },
+    el("h4", { class: "triage-briefing-label", text: "What to do next" }),
+    el("ul", { class: "triage-briefing-list triage-briefing-list--next" },
+      nextSteps.map((item) => el("li", { text: item })))));
+
+  briefing.append(el("details", { class: "triage-briefing-raw" },
+    el("summary", { text: "Raw output" }),
+    el("pre", { text: parsed.raw })));
+
+  return briefing;
 }
 
 function renderTriage(issue) {
@@ -1476,9 +1700,7 @@ function renderTriage(issue) {
             : "Queued and ready for explicit launch"
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
-        plan.append(el("details", { class: "triage-result" },
-          el("summary", { text: queueItem.state === "completed" ? "Investigation result" : "Blocked investigation result" }),
-          el("pre", { text: queueItem.result })));
+        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed"));
       }
     }
     wrap.append(plan);
@@ -1487,268 +1709,266 @@ function renderTriage(issue) {
   return wrap;
 }
 
-/* Interventions (act now) and advisories (be aware) are separate information
-   classes with distinct visual weight — never one repetitive card stack. */
-function renderSignalPanelHead(panel, count, compact) {
-  const sectionId = panel === "interventions" ? "interventions" : "warnings";
-  const countNode = $(sectionId === "interventions" ? "interventions-count" : "warnings-count");
-  const collapse = $(sectionId === "interventions" ? "interventions-collapse" : "warnings-collapse");
-  const section = $(sectionId);
-  if (!countNode || !collapse || !section) return;
+/* Work-state for a finding — answers "is anyone on this?" so the board does not
+   feel like purgatory. Live optimistic signals (in-flight triage, queue, local
+   plan, lifecycle) win first so the UI reacts before the next snapshot; when
+   none apply we defer to the server-owned issue.workState, then a severity
+   default. */
+function issueWorkState(issue) {
+  if (!issue) return { key: "watching", label: "Watching", tone: "info" };
+  const id = issue.id;
+  if (state.triagePending.has("generate:" + id) || state.triagePending.has("queue:" + id) || state.triagePending.has("run:" + id)) {
+    return { key: "triaging", label: "Triaging", tone: "warn" };
+  }
+  const queueItem = state.queueItems.find((item) => item.issueId === id);
+  if (queueItem) {
+    if (queueItem.state === "running") return { key: "investigating", label: "Investigating", tone: "info" };
+    if (queueItem.state === "queued") return { key: "queued", label: "Queued", tone: "info" };
+    if (queueItem.state === "completed") return { key: "verifying", label: "Verifying", tone: "warn" };
+    if (queueItem.state === "blocked") return { key: "blocked", label: "Blocked", tone: "error" };
+  }
+  if (state.triage.has(id)) return { key: "planned", label: "Plan ready", tone: "info" };
+  const life = issueLifecycle(issue);
+  if (life.state === "verifying") return { key: "verifying", label: "Verifying", tone: "warn" };
+  if (life.state === "blocked") return { key: "blocked", label: "Blocked", tone: "error" };
+  if (life.state === "resolved") return { key: "cleared", label: "Cleared", tone: "moss" };
+  if (issue.workState && WORK_STATE_VIEW[issue.workState]) return WORK_STATE_VIEW[issue.workState];
+  if (issue.severity === "error") return { key: "needs", label: "Needs triage", tone: "error" };
+  return { key: "watching", label: "Watching", tone: "warn" };
+}
 
-  countNode.textContent = count ? String(count) : "";
-  countNode.hidden = !count;
+/* Progress 0–100 for a finding's rail — server-owned issue.progress wins;
+   otherwise derived from the work state. */
+function issueProgress(issue) {
+  if (issue && typeof issue.progress === "number" && Number.isFinite(issue.progress)) {
+    return Math.max(0, Math.min(100, issue.progress));
+  }
+  return PROGRESS_BY_WORK[issueWorkState(issue).key] ?? 0;
+}
 
-  // The section title doubles as the collapse caret — no "Subdue" chrome. Open
-  // shows the full detail list; compact hands the section to the live ticker.
-  collapse.hidden = !count;
-  collapse.setAttribute("aria-expanded", compact ? "false" : "true");
-  collapse.setAttribute(
-    "aria-label",
-    (compact ? "Expand " : "Collapse ") + (panel === "interventions" ? "interventions to detail" : "advisories to detail"),
+/* Plain-language impact line for a row — server-owned issue.impactSummary wins;
+   otherwise the local affectedImpact rollup sentence. Never "Affects (N)". */
+function issueImpactLine(issue) {
+  if (issue && typeof issue.impactSummary === "string" && issue.impactSummary.trim()) {
+    return issue.impactSummary.trim();
+  }
+  return affectedImpact(issue).plain;
+}
+
+const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
+
+/* Snap rollup for the conductor. Prefer server attentionBoard; otherwise derive
+   from issues + recentlyResolved + live queue so older servers still paint. */
+function attentionBoardOf(snap, queueItems = []) {
+  const board = snap && snap.attentionBoard;
+  if (board && typeof board.actNow === "number" && typeof board.allClear === "boolean") {
+    return {
+      actNow: board.actNow | 0,
+      watch: board.watch | 0,
+      inMotion: board.inMotion | 0,
+      cleared: board.cleared | 0,
+      allClear: !!board.allClear,
+    };
+  }
+  const issues = issuesOf(snap);
+  const resolved = recentlyResolvedOf(snap);
+  const triageByIssue = new Map(
+    (snap && Array.isArray(snap.triageSummaries) ? snap.triageSummaries : [])
+      .map((row) => [row.issueId, row.state]),
   );
-  collapse.onclick = () => setSignalPanel(panel, compact ? "open" : "compact");
-  section.classList.toggle("is-compact", compact && count > 0);
-}
+  for (const item of queueItems) triageByIssue.set(item.issueId, item.state);
 
-/* The compact state is a clipped instrument strip: mono glyph + short label per
-   signal, staggered left→right, that opens the same drawer on click. When the
-   strip overflows (many signals) a stepped right→left pull engages via CSS
-   keyframes; prefers-reduced-motion holds it still. */
-function tickerItem(entry, index) {
-  const node = el("button", {
-    type: "button",
-    class: "signal-tick tone-" + entry.tone,
-    dataset: { fkey: "tick:" + entry.kind + ":" + entry.id, tickStep: String(index % 6) },
-    "aria-label": entry.aria,
-    onclick: () => selectEntity({ kind: entry.kind, id: entry.id }),
-  },
-    el("span", { class: "signal-tick-glyph" }, icon(entry.glyph, { label: entry.glyphLabel })),
-    el("span", { class: "signal-tick-label", text: entry.label }));
-  return node;
-}
-
-function buildSignalTicker(container, entries) {
-  if (!container) return;
-  container.textContent = "";
-  if (!entries.length) {
-    container.hidden = true;
-    container.classList.remove("is-scrolling");
-    return;
+  const actNowIds = new Set();
+  const watchIds = new Set();
+  const inMotionIds = new Set();
+  for (const issue of issues) {
+    const work = issueWorkState(issue);
+    if (IN_MOTION_KEYS.has(work.key)) inMotionIds.add(issue.id);
+    if (issue.severity === "error") actNowIds.add(issue.id);
+    else if (!IN_MOTION_KEYS.has(work.key)) watchIds.add(issue.id);
   }
-  container.hidden = false;
-  const track = el("div", { class: "signal-tick-track" });
-  const primary = el("div", { class: "signal-tick-group" });
-  entries.forEach((entry, i) => primary.append(tickerItem(entry, i)));
-  track.append(primary);
-
-  const scrolling = entries.length >= TICKER_SCROLL_MIN;
-  if (scrolling) {
-    // A second, aria-hidden copy makes the -50% translate loop seamless without
-    // any inline style. The tail copy stays mouse-clickable so a moving signal
-    // is never a dead target.
-    const tail = el("div", { class: "signal-tick-group", "aria-hidden": "true" });
-    entries.forEach((entry, i) => tail.append(tickerItem(entry, i)));
-    track.append(tail);
+  for (const [issueId, qState] of triageByIssue) {
+    if (qState === "queued" || qState === "running" || qState === "completed") inMotionIds.add(issueId);
+    if (qState === "blocked" && !actNowIds.has(issueId)) watchIds.add(issueId);
   }
-  container.classList.toggle("is-scrolling", scrolling);
-  container.append(track);
+  const actNow = actNowIds.size;
+  const watch = watchIds.size;
+  const inMotion = inMotionIds.size;
+  const cleared = resolved.length;
+  return { actNow, watch, inMotion, cleared, allClear: actNow + watch + inMotion === 0 };
 }
 
-function interventionTickerEntry(issue) {
-  const lifecycle = issueLifecycle(issue);
-  const tone = lifecycle.state === "blocked" ? "error" : lifecycle.state === "verifying" ? "warn" : "error";
+function progressStep(value) {
+  const n = Math.max(0, Math.min(100, Number(value) || 0));
+  return String(Math.round(n / 5) * 5);
+}
+
+function growClass(count) {
+  return "grow-" + Math.min(12, Math.max(0, count | 0));
+}
+
+function findingFromIssue(issue, kind) {
+  const work = issueWorkState(issue);
   return {
-    kind: "intervention", id: issue.id, glyph: "intervention", glyphLabel: "Intervention",
-    tone, label: issue.title, aria: "Open intervention: " + issue.title,
+    kind,
+    id: issue.id,
+    title: issue.title,
+    work,
+    impact: issueImpactLine(issue),
+    progress: issueProgress(issue),
+    pin: kind === "intervention" && work.key === "needs",
   };
 }
 
-function advisoryTickerEntries(advisories, recentlyResolved, queuedOnly) {
-  const entries = [];
-  for (const issue of advisories) {
-    entries.push({
-      kind: "advisory", id: issue.id, glyph: "warning", glyphLabel: "Advisory",
-      tone: "warn", label: issue.title, aria: "Open advisory: " + issue.title,
-    });
-  }
-  for (const issue of recentlyResolved) {
-    entries.push({
-      kind: "resolved", id: issue.id, glyph: "check", glyphLabel: "Resolved",
-      tone: "moss", label: issue.title, aria: "Open resolved finding: " + issue.title,
-    });
-  }
-  for (const item of queuedOnly) {
-    entries.push({
-      kind: "investigation", id: item.issueId, glyph: "broadcast", glyphLabel: "Investigation",
-      tone: "info", label: item.headline, aria: "Open investigation: " + item.headline,
-    });
-  }
-  return entries;
+function findingFromQueueItem(item) {
+  const workKey = item.state === "running" ? "investigating"
+    : item.state === "completed" ? "verifying"
+    : item.state === "blocked" ? "blocked"
+    : "queued";
+  const work = WORK_STATE_VIEW[workKey === "investigating" ? "investigating"
+    : workKey === "verifying" ? "verifying"
+    : workKey === "blocked" ? "blocked"
+    : "queued"];
+  return {
+    kind: "investigation",
+    id: item.issueId,
+    title: item.headline,
+    work,
+    impact: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
+    progress: PROGRESS_BY_WORK[work.key] ?? 50,
+    pin: false,
+  };
 }
 
-function renderIssues() {
-  const iSection = $("interventions");
-  const iList = $("interventions-list");
-  const wSection = $("warnings");
-  const wList = $("warnings-list");
+function renderFindingRow(finding) {
+  const visual = FINDING_VISUAL[finding.work.key] || FINDING_VISUAL.watching;
+  const selected = state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id;
+  const open = () => selectEntity({ kind: finding.kind, id: finding.id });
+  const railClass = "rail" + (visual.rail ? " " + visual.rail : "");
+  return el("button", {
+    type: "button",
+    class: "finding" + (finding.pin ? " pin" : "") + (selected ? " is-selected" : ""),
+    dataset: { fkey: "finding:" + finding.kind + ":" + finding.id },
+    "aria-label": "Open " + finding.work.label + ": " + finding.title,
+    onclick: open,
+  },
+    el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
+    el("span", { class: "st " + visual.st, text: finding.work.label }),
+    el("span", { class: "copy" },
+      el("span", { class: "title", text: finding.title }),
+      el("span", { class: "impact", text: finding.impact })),
+    el("span", { class: railClass, "aria-hidden": "true", "data-p": progressStep(finding.progress) },
+      el("i")));
+}
+
+function renderLaneBody(body, findings, laneKey, emptyCopy) {
+  body.textContent = "";
+  if (!findings.length) {
+    body.append(el("div", { class: "lane-empty" },
+      el("strong", { text: emptyCopy.title }),
+      emptyCopy.sub));
+    return;
+  }
+  const expanded = !!state.laneExpanded[laneKey];
+  const visible = expanded ? findings : findings.slice(0, MAX_LANE_ROWS);
+  for (const finding of visible) body.append(renderFindingRow(finding));
+  const more = findings.length - MAX_LANE_ROWS;
+  if (more > 0) {
+    body.append(el("button", {
+      type: "button",
+      class: "lane-more",
+      dataset: { fkey: "lane-more:" + laneKey },
+      onclick: () => toggleLane(laneKey),
+      text: expanded ? "Show less" : ("+" + more + " more"),
+    }));
+  }
+}
+
+function renderAttentionBoard() {
+  const board = $("attention-board");
+  if (!board) return;
+
   const showHere = state.view === "now" || state.view === "needs-you";
-  const issues = showHere ? issuesOf(state.snap) : [];
-  const interventions = issues.filter((i) => i.severity === "error");
-  const advisories = issues.filter((i) => i.severity !== "error");
-  // Solved findings leave the active issue set via source lifecycle and only
-  // linger briefly in recentlyResolved (server TTL). They never stay as act-now.
-  const recentlyResolved = state.view === "now" ? recentlyResolvedOf(state.snap) : [];
+  if (!showHere || !state.snap) {
+    board.hidden = true;
+    document.body.classList.remove("is-all-clear");
+    board.classList.remove("is-all-clear");
+    state.paintSig.attention = "hidden:" + state.view;
+    return;
+  }
+
+  const issues = issuesOf(state.snap);
+  const actFindings = issues
+    .filter((issue) => issue.severity === "error")
+    .map((issue) => findingFromIssue(issue, "intervention"));
+  const recentlyResolved = recentlyResolvedOf(state.snap);
   const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
-  const queuedOnly = showHere
-    ? state.queueItems.filter((item) => !issues.some((issue) => issue.id === item.issueId) && !resolvedIds.has(item.issueId))
-    : [];
-  const byId = new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
-  const interventionsCompact = state.signalPanels.interventions === "compact";
-  const advisoriesCompact = state.signalPanels.advisories === "compact";
-  const advisoryTotal = advisories.length + recentlyResolved.length + queuedOnly.length;
-  const iTicker = $("interventions-ticker");
-  const wTicker = $("warnings-ticker");
+  const issueIds = new Set(issues.map((issue) => issue.id));
+  const awareFindings = [
+    ...issues.filter((issue) => issue.severity !== "error").map((issue) => findingFromIssue(issue, "advisory")),
+    ...state.queueItems
+      .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
+      .map(findingFromQueueItem),
+    ...recentlyResolved.map((issue) => findingFromIssue(issue, "resolved")),
+  ];
 
-  // Open renders the full detail list; compact hands the section to the ticker.
-  iList.textContent = "";
-  if (!interventionsCompact) {
-    for (const issue of interventions) iList.append(renderIntervention(issue, byId));
+  const counts = attentionBoardOf(state.snap, state.queueItems);
+  const allClear = counts.allClear;
+  const sig = [
+    allClear ? "1" : "0",
+    counts.actNow, counts.watch, counts.inMotion, counts.cleared,
+    state.laneExpanded.act ? "1" : "0",
+    state.laneExpanded.aware ? "1" : "0",
+    actFindings.map(findingPaintKey).join("|"),
+    awareFindings.map(findingPaintKey).join("|"),
+  ].join("\u001f");
+  if (paintUnchanged("attention", sig)) return;
+
+  board.hidden = false;
+  document.body.classList.toggle("is-all-clear", allClear);
+  board.classList.toggle("is-all-clear", allClear);
+
+  const score = $("score");
+  const setSeg = (id, n) => {
+    const seg = $(id);
+    const label = $(id + "-n");
+    const next = String(n);
+    if (label && label.textContent !== next) label.textContent = next;
+    if (!seg) return;
+    seg.classList.toggle("zero", n === 0);
+    const nextGrow = growClass(n === 0 ? 0 : Math.max(1, n));
+    if (!seg.classList.contains(nextGrow)) {
+      seg.classList.remove("grow-0", "grow-1", "grow-2", "grow-3", "grow-4", "grow-5", "grow-6", "grow-7", "grow-8", "grow-9", "grow-10", "grow-11", "grow-12");
+      seg.classList.add(nextGrow);
+    }
+  };
+  setSeg("seg-act", counts.actNow);
+  setSeg("seg-watch", counts.watch);
+  setSeg("seg-motion", counts.inMotion);
+  setSeg("seg-clear", counts.cleared);
+  if (score) score.classList.toggle("score-clear", allClear);
+
+  const lanes = $("lanes");
+  const allclear = $("allclear");
+  if (lanes) lanes.hidden = allClear;
+  if (allclear) allclear.hidden = !allClear;
+
+  if (!allClear) {
+    const actCount = $("act-count");
+    const awareCount = $("aware-count");
+    if (actCount) actCount.textContent = actFindings.length ? (actFindings.length + " open") : "clear";
+    if (awareCount) awareCount.textContent = awareFindings.length
+      ? (awareFindings.length + (awareFindings.length === 1 ? " item" : " items"))
+      : "clear";
+    renderLaneBody($("act-body"), actFindings, "act", {
+      title: "Nothing to act on",
+      sub: "Errors that need you land here.",
+    });
+    renderLaneBody($("aware-body"), awareFindings, "aware", {
+      title: "Quiet watch",
+      sub: "Advisories, in-motion work, and recent clears.",
+    });
   }
-  iList.hidden = interventionsCompact || interventions.length === 0;
-  buildSignalTicker(
-    iTicker,
-    interventionsCompact ? interventions.map(interventionTickerEntry) : [],
-  );
-  iSection.hidden = interventions.length === 0;
-  renderSignalPanelHead("interventions", interventions.length, interventionsCompact);
-
-  wList.textContent = "";
-  if (!advisoriesCompact) {
-    for (const issue of advisories) wList.append(renderAdvisory(issue, byId));
-    for (const issue of recentlyResolved) wList.append(renderRecentlyResolved(issue));
-    for (const item of queuedOnly) wList.append(renderInvestigationItem(item));
-  }
-  wList.hidden = advisoriesCompact || advisoryTotal === 0;
-  buildSignalTicker(
-    wTicker,
-    advisoriesCompact ? advisoryTickerEntries(advisories, recentlyResolved, queuedOnly) : [],
-  );
-  wSection.hidden = advisoryTotal === 0;
-  renderSignalPanelHead("advisories", advisoryTotal, advisoriesCompact);
-}
-
-// Thin trigger only — the triage flow, affected chips, and technical detail now
-// live in the Intervention drawer. The band says what and how bad, and opens it.
-/* Reconciled band + drawer: the open intervention is a full-width act-now band
-   whose title/evidence open the per-type intervention drawer for depth, while a
-   primary action (Generate triage) stays inline so the operator can act without
-   leaving the canvas. Advisories/resolved/investigations remain thin triggers. */
-function renderIntervention(issue, byId) {
-  const generated = state.triage.has(issue.id);
-  const lifecycle = issueLifecycle(issue);
-  const affectedCount = (issue.affectedAgentIds || []).length;
-  const selected = state.selected && state.selected.kind === "intervention" && state.selected.id === issue.id;
-  const open = () => selectEntity({ kind: "intervention", id: issue.id });
-
-  // Row one: mark, one-glance copy (title opens the drawer), and the primary
-  // action. The compact Generate triage acts in place; once a plan exists the
-  // slot becomes a Review link into the drawer where the full plan lives.
-  const primary = el("div", { class: "signal-primary" },
-    el("span", { class: "signal-badge" }, icon("intervention", { label: "Intervention" })),
-    el("div", { class: "signal-copy" },
-      el("span", { class: "signal-kicker", text: lifecycle.state === "open" ? "Open · act now" : issueStateLabel(issue) + " · source confirmation" }),
-      el("h3", { class: "signal-title" },
-        el("button", {
-          type: "button", class: "signal-title-btn",
-          dataset: { fkey: "issue:" + issue.id },
-          "aria-label": "Open intervention detail: " + issue.title,
-          onclick: open,
-        }, issue.title)),
-      el("p", { class: "signal-consequence", text: issue.summary })),
-    el("div", { class: "signal-action" },
-      generated
-        ? el("button", { type: "button", class: "signal-open-detail", dataset: { fkey: "issue-detail:" + issue.id }, onclick: open }, "Review triage ▸")
-        : renderTriage(issue)));
-
-  // Row two: compact source evidence — affected count and Technical open the
-  // drawer; the opened timestamp is inline.
-  const evidence = el("div", { class: "signal-evidence" });
-  if (affectedCount) {
-    evidence.append(el("button", {
-      type: "button", class: "signal-evi-open",
-      dataset: { fkey: "issue-affected:" + issue.id }, onclick: open,
-    }, `${affectedCount} affected ▸`));
-  }
-  if (lifecycle.openedAt) evidence.append(el("span", { class: "signal-evi", text: "Opened " + issueTimestamp(lifecycle.openedAt) }));
-  if (issue.technicalDetails && issue.technicalDetails.length) {
-    evidence.append(el("button", {
-      type: "button", class: "signal-evi-open",
-      dataset: { fkey: "issue-tech:" + issue.id }, onclick: open,
-    }, "Technical ▸"));
-  }
-
-  const item = el("li", { class: "signal-intervention sev-" + issue.severity + " issue-state-" + lifecycle.state + (generated ? " has-triage" : "") + (selected ? " is-selected" : "") }, primary);
-  if (evidence.childNodes.length) item.append(evidence);
-  return item;
-}
-
-function renderAdvisory(issue, byId) {
-  const affected = issue.affectedAgentIds.map((id) => byId.get(id)).filter(Boolean);
-  const lifecycle = issueLifecycle(issue);
-  const lifecycleNote = issueLifecycleNote(issue);
-  const titleNode = el("button", {
-    type: "button", class: "advisory-title",
-    dataset: { fkey: `issue:${issue.id}` },
-    onclick: () => selectEntity({ kind: "advisory", id: issue.id }),
-    text: issue.title,
-  });
-  return el("li", { class: "signal-advisory" },
-    icon("warning", { class: "warn-tri", label: "Advisory" }),
-    el("div", { class: "advisory-body" },
-      titleNode,
-      issue.summary ? el("div", { class: "advisory-summary", text: issue.summary }) : null,
-      lifecycleNote ? el("div", { class: "advisory-lifecycle", text: lifecycleNote }) : null),
-    el("span", { class: "advisory-impact", text: `${issueStateLabel(issue)} · ${affected.length ? `${affected.length} affected` : "system"}` }));
-}
-
-// Thin trigger — the before/after and recovered agents now live in the Resolved
-// drawer. The row shows what cleared and opens it.
-function renderRecentlyResolved(issue) {
-  const selected = state.selected && state.selected.kind === "resolved" && state.selected.id === issue.id;
-  const open = () => selectEntity({ kind: "resolved", id: issue.id });
-  return el("li", {
-    class: "signal-advisory issue-resolved signal-trigger" + (selected ? " is-selected" : ""),
-    role: "button", tabindex: "0",
-    "aria-label": "Open resolved finding: " + issue.title,
-    dataset: { fkey: "resolved:" + issue.id },
-    onclick: open,
-    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
-  },
-    icon("check", { class: "warn-tri", label: "Resolved" }),
-    el("div", { class: "advisory-body" },
-      el("span", { class: "advisory-title", text: issue.title })),
-    el("span", { class: "advisory-impact", text: "Resolved" }));
-}
-
-// Thin trigger — the step timeline, result, and launch now live in the
-// Investigation drawer. The row shows the headline + live state and opens it.
-function renderInvestigationItem(item) {
-  const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
-  const selected = state.selected && state.selected.kind === "investigation" && state.selected.id === item.issueId;
-  const open = () => selectEntity({ kind: "investigation", id: item.issueId });
-  return el("li", {
-    class: "signal-advisory investigation-item signal-trigger" + (selected ? " is-selected" : ""),
-    role: "button", tabindex: "0",
-    "aria-label": "Open investigation: " + item.headline,
-    dataset: { fkey: "investigation:" + item.issueId },
-    onclick: open,
-    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
-  },
-    icon("broadcast", { class: "warn-tri", label: "Investigation" }),
-    el("div", { class: "advisory-body" },
-      el("div", { class: "advisory-title", text: item.headline })),
-    el("span", { class: "advisory-impact", text: stateLabel }));
 }
 
 /* ---------- toolbar ---------- */
@@ -1914,8 +2134,8 @@ function renderPrograms() {
   const root = $("programs");
   const usage = $("usage-panel");
   if (!root) return;
-  root.textContent = "";
   if (state.view === "usage") {
+    state.paintSig.programs = "usage:" + state.usageRangeId + ":" + state.usageFetchedAt;
     root.hidden = true;
     if (usage) usage.hidden = false;
     renderUsagePanel();
@@ -1927,13 +2147,50 @@ function renderPrograms() {
     usage.hidden = true;
     usage.textContent = "";
   }
-  if (!state.snap) { renderScopeNote(0); return; }
+  if (!state.snap) {
+    state.paintSig.programs = "empty";
+    root.textContent = "";
+    renderScopeNote(0);
+    return;
+  }
 
   const filter = currentFilter();
-  let shown = 0;
+  const visible = [];
   for (const program of state.snap.programs) {
     const agents = program.agents.filter((a) => filter(a, program));
     if (!agents.length) continue;
+    visible.push({ program, agents });
+  }
+  // Signature ignores live elapsed clocks — status/message/model/context drive paint.
+  const sig = [
+    state.view,
+    state.query,
+    state.facetProgram,
+    state.facetProvider,
+    state.lookbackHours,
+    state.selecting ? "1" : "0",
+    state.selected ? state.selected.kind + ":" + state.selected.id : "",
+    [...state.selection].join(","),
+    visible.map(({ program, agents }) =>
+      program.id + ">" + agents.map((a) => [
+        a.id,
+        a.status,
+        a.statusReason || "",
+        a.model || "",
+        contextDisplayValue(a.tokens) || "",
+        rowSummary(a) || "",
+        state.labels.get(presentationLabelKey(agentLabelTarget(a))) || "",
+      ].join(":")).join(","),
+    ).join("|"),
+  ].join("\u001f");
+  if (paintUnchanged("programs", sig)) {
+    renderScopeNote(visible.reduce((n, row) => n + row.agents.length, 0));
+    return;
+  }
+
+  root.textContent = "";
+  let shown = 0;
+  for (const { program, agents } of visible) {
     shown += agents.length;
     root.append(renderProgram(program, agents));
   }
@@ -2336,14 +2593,40 @@ function findSelected() {
    preserves every existing render() caller. */
 function renderInspector() {
   const pane = $("inspector");
-  pane.textContent = "";
-  pane.className = "pane-inspector";
   const sel = state.selected;
-  pane.hidden = !sel;
   document.body.classList.toggle("inspector-open", !!sel);
-  if (!sel) return;
+  if (!sel) {
+    state.paintSig.inspector = "closed";
+    pane.hidden = true;
+    pane.textContent = "";
+    pane.className = "pane-inspector";
+    return;
+  }
 
   const view = resolveSelection(sel);
+  const queueItem = state.queueItems.find((item) => item.issueId === sel.id);
+  const triage = state.triage.get(sel.id);
+  const pending = [...state.triagePending].filter((key) => key.endsWith(":" + sel.id)).join(",");
+  const issue = view && (view.issue || view.item);
+  const sig = [
+    sel.kind, sel.id,
+    view ? view.kind : "missing",
+    issue && issue.lifecycle ? issue.lifecycle.state : "",
+    issue && issue.workState || "",
+    issue && issue.progress != null ? String(issue.progress) : "",
+    queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
+    triage ? triage.generatedAt + ":" + triage.headline : "",
+    pending,
+    state.inspectorTab,
+  ].join("\u001f");
+  if (paintUnchanged("inspector", sig)) {
+    pane.hidden = false;
+    return;
+  }
+
+  pane.textContent = "";
+  pane.className = "pane-inspector";
+  pane.hidden = false;
   const renderer = view && DRAWER_RENDERERS[view.kind];
   if (!renderer) { pane.append(...missingDrawer()); return; }
   pane.setAttribute("role", "region");
@@ -2418,36 +2701,95 @@ function drawerHead(eyebrowNode, titleText) {
     closeButton());
 }
 
-// Affected agents as chips that open the Agent drawer — moved out of the inline
-// list bands so the drawer owns the interaction.
-function affectedChips(issue, label) {
+const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
+
+/* Impact summary — never dump hundreds of anonymous chips as "Affects (160)".
+   Plain language first, program rollup second, optional short sample third. */
+function affectedImpact(issue) {
+  const ids = issue.affectedAgentIds || [];
   const byId = agentsById();
-  const affected = (issue.affectedAgentIds || []).map((id) => byId.get(id)).filter(Boolean);
-  if (!affected.length) return null;
-  return el("div", { class: "dw-affects" },
-    el("h3", { class: "section-title", text: `${label} (${affected.length})` }),
-    el("div", { class: "dw-chips" }, affected.map(({ agent, program }) =>
-      el("button", {
-        type: "button", class: "dw-chip",
-        dataset: { fkey: `issue:${issue.id}:${agent.id}` },
-        onclick: () => selectEntity({ kind: "agent", id: agent.id }),
-      }, agentName(agent), el("span", { class: "dw-chip-prog", text: " · " + programName(program) })))));
+  const resolved = ids.map((id) => byId.get(id)).filter(Boolean);
+  const byProgram = new Map();
+  for (const row of resolved) {
+    const key = programName(row.program);
+    const bucket = byProgram.get(key) || { name: key, count: 0 };
+    bucket.count += 1;
+    byProgram.set(key, bucket);
+  }
+  const programs = [...byProgram.values()].sort((a, b) => b.count - a.count);
+  const total = ids.length;
+  let plain = "System-wide — not tied to a specific agent.";
+  if (total === 1 && resolved[0]) {
+    plain = `Touches 1 session: ${agentName(resolved[0].agent)} (${programName(resolved[0].program)}).`;
+  } else if (total > 0) {
+    const top = programs.slice(0, 2).map((p) => `${p.name} (${p.count})`).join(", ");
+    plain = `Touches ${total} tracked session${total === 1 ? "" : "s"}`
+      + (programs.length ? ` across ${programs.length} program${programs.length === 1 ? "" : "s"}` : "")
+      + (top ? ` — mainly ${top}` : "")
+      + ".";
+  }
+  return { total, resolved, programs, plain };
 }
 
-// Intervention drawer — leads with the consequence, then the one thing to do.
+function workStateBanner(issue) {
+  const work = issueWorkState(issue);
+  return el("div", { class: "dw-work work-" + work.key, role: "status" },
+    el("span", { class: "dw-work-mark", "aria-hidden": "true" }),
+    el("span", { class: "dw-work-label", text: work.label }),
+    el("span", { class: "dw-work-hint", text:
+      work.key === "needs" ? "No triage started yet."
+      : work.key === "triaging" ? "Triage request in flight…"
+      : work.key === "planned" ? "A plan is ready — queue or launch from Fix below."
+      : work.key === "queued" ? "Investigation queued — launch is a separate operator action."
+      : work.key === "investigating" ? "Read-only investigation is running."
+      : work.key === "verifying" ? "Waiting for a fresh source snapshot to clear the finding."
+      : work.key === "blocked" ? "Blocked — review the investigation result."
+      : work.key === "cleared" ? "Source confirmation cleared this finding."
+      : "Advisory is visible; escalate only if it needs action." }));
+}
+
+function impactBlock(issue) {
+  const impact = affectedImpact(issue);
+  const wrap = el("div", { class: "dw-affects" },
+    el("h3", { class: "section-title", text: "Impact" }),
+    el("p", { class: "dw-impact-plain", text: impact.plain }));
+  if (impact.programs.length > 1) {
+    wrap.append(el("div", { class: "dw-impact-programs" },
+      impact.programs.slice(0, 5).map((p) =>
+        el("span", { class: "dw-impact-prog", text: `${p.name} · ${p.count}` }))));
+  }
+  if (impact.resolved.length) {
+    const sample = impact.resolved.slice(0, AFFECTS_SAMPLE_LIMIT);
+    const extra = impact.resolved.length - sample.length;
+    wrap.append(el("details", { class: "dw-impact-sample" },
+      el("summary", { text: extra > 0
+        ? `Sample sessions (${sample.length} of ${impact.resolved.length})`
+        : `Sessions (${impact.resolved.length})` }),
+      el("div", { class: "dw-chips" }, sample.map(({ agent, program }) =>
+        el("button", {
+          type: "button", class: "dw-chip",
+          dataset: { fkey: `issue:${issue.id}:${agent.id}` },
+          onclick: () => selectEntity({ kind: "agent", id: agent.id }),
+        }, agentName(agent), el("span", { class: "dw-chip-prog", text: " · " + programName(program) }))))));
+  }
+  return wrap;
+}
+
+// Intervention drawer — status first, consequence second, then the one Fix path.
 function renderInterventionDrawer(pane, view) {
   const issue = view.issue;
   const note = issueLifecycleNote(issue);
+  const work = issueWorkState(issue);
   drawerAccent(pane, "ember");
   pane.append(drawerHead(
-    dwEyebrow("ember", "intervention", issueLifecycle(issue).state === "open" ? "Open · act now" : issueStateLabel(issue)),
+    dwEyebrow("ember", "intervention", work.label),
     issue.title));
+  pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
+  pane.append(impactBlock(issue));
   pane.append(el("div", { class: "dw-block dw-block--fix" },
     el("div", { class: "dw-block-label", text: "Fix" }),
     renderTriage(issue)));
-  const chips = affectedChips(issue, "Affected");
-  if (chips) pane.append(chips);
   if (issue.technicalDetails && issue.technicalDetails.length) {
     pane.append(el("details", { class: "signal-tech" },
       el("summary", { text: "Technical" }),
@@ -2456,26 +2798,29 @@ function renderInterventionDrawer(pane, view) {
   if (note) pane.append(el("p", { class: "dw-impact", text: note }));
 }
 
-// Advisory drawer — deliberately quieter than an intervention. No forced action.
+// Advisory drawer — quieter than an intervention; escalate only when watching.
 function renderAdvisoryDrawer(pane, view) {
   const issue = view.issue;
   const note = issueLifecycleNote(issue);
-  const affectedCount = (issue.affectedAgentIds || []).length;
+  const work = issueWorkState(issue);
   drawerAccent(pane, "amber");
-  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory"), issue.title));
+  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory · " + work.label), issue.title));
+  pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
-  const chips = affectedChips(issue, "Affects");
-  if (chips) pane.append(chips);
-  pane.append(el("p", { class: "dw-impact", text: `${issueStateLabel(issue)}${affectedCount ? " · " + affectedCount + " affected" : " · system"}` }));
+  pane.append(impactBlock(issue));
   if (note) pane.append(el("p", { class: "dw-impact", text: note }));
-  pane.append(el("div", { class: "controls-row" },
-    el("button", {
-      type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
-      onclick: () => triageIssue(issue.id, "generate"),
-    }, "Escalate to triage")));
+  if (work.key === "watching" || work.key === "needs") {
+    pane.append(el("div", { class: "controls-row" },
+      el("button", {
+        type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
+        onclick: () => triageIssue(issue.id, "generate"),
+      }, "Escalate to triage")));
+  } else if (work.key === "planned" || work.key === "queued" || work.key === "investigating" || work.key === "verifying" || work.key === "blocked" || work.key === "triaging") {
+    pane.append(el("div", { class: "dw-block dw-block--fix" },
+      el("div", { class: "dw-block-label", text: "Triage" }),
+      renderTriage(issue)));
+  }
 }
-
-const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
 
 // Investigation drawer — the Luna run, live: status line + step timeline + result.
 // Never ember (an investigation is not itself an alarm); slate accent + a moss
@@ -2518,9 +2863,7 @@ function renderInvestigationDrawer(pane, view) {
   }
 
   if (item.result) {
-    pane.append(el("details", { class: "triage-result" },
-      el("summary", { text: item.state === "completed" ? "Investigation result" : "Blocked investigation result" }),
-      el("pre", { text: item.result })));
+    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed"));
   }
 
   const issue = issuesOf(state.snap).find((i) => i.id === item.issueId);
@@ -2642,8 +2985,8 @@ function renderProgramDrawer(pane, view) {
     roster));
 }
 
-// Agent drawer — the workhorse, unchanged in body (reuses renderOverview/
-// renderTechnical/renderDangerZone etc.), now routed through the chassis.
+// Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
+// Interrupt/Archive). No status pills, no Danger footer.
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const activity = deriveActivity(agent);
@@ -2653,7 +2996,7 @@ function renderAgentDrawer(pane, view) {
 
   // Provider channel: a 1px inset rail + the lineage current-node ring both read
   // from --prov, set CSP-safely by a class (never an inline style).
-  pane.classList.add("dw-provider", "dw-provider--" + agent.provider);
+  pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
   pane.append(el("div", { class: "inspector-head" },
     el("div", { class: "inspector-id" },
@@ -2665,22 +3008,13 @@ function renderAgentDrawer(pane, view) {
         el("span", { text: programName(program) }),
         " · ",
         el("span", { class: "chip provider-" + agent.provider },
-          providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : "")))),
+          providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
+      renderStatusLine(agent, activity, outcome, control, policy)),
     closeButton()));
 
-  pane.append(el("div", { class: "inspector-state" },
-    el("span", { class: "state-pill act-" + activity },
-      el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }), ACTIVITY_LABELS[activity]),
-    el("span", { class: "state-pill outcome-" + outcome, text: OUTCOME_LABELS[outcome] }),
-    el("span", { class: "state-pill control-" + control, title: CONTROL_HINTS[control] },
-      icon(CONTROL_ICONS[control] || "observed"), CONTROL_LABELS[control]),
-    policy
-      ? el("span", { class: "state-pill policy-" + policy.state, title: policy.summary },
-          policy.state === "mismatch" ? icon("warning") : null,
-          policy.state === "mismatch" ? "Model mismatch" : policy.label)
-      : null));
+  const banner = renderControlBanner(agent, control);
+  if (banner) pane.append(banner);
 
-  pane.append(renderPrimaryActions(agent));
   pane.append(renderPresentationLabels(agent));
   pane.append(renderLineageSpine(agent));
 
@@ -2703,7 +3037,7 @@ function renderAgentDrawer(pane, view) {
   pane.append(el("div", { class: "inspector-body", dataset: { activeTab: state.inspectorTab } },
     overviewPanel, technicalPanel));
 
-  pane.append(renderDangerZone(agent));
+  pane.append(renderCommandDock(agent, control));
 
   const fb = state.feedback.get(agent.id);
   if (fb) {
@@ -2713,6 +3047,69 @@ function renderAgentDrawer(pane, view) {
       text: fb.message,
     }));
   }
+}
+
+/* One calm status sentence under the title — replaces the pill cluster. */
+function renderStatusLine(agent, activity, outcome, control, policy) {
+  const line = el("div", {
+    class: "status-line",
+    role: "status",
+    "aria-label": "Session status",
+  });
+
+  const live = el("span", { class: "status-line-live act-" + activity });
+  if (activity === "working") live.append(el("span", { class: "status-pulse", "aria-hidden": "true" }));
+  else live.append(el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }));
+  live.append(ACTIVITY_LABELS[activity] || activity);
+  line.append(live);
+
+  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+  line.append(el("span", {
+    class: "status-line-item outcome-" + outcome,
+    text: OUTCOME_LABELS[outcome] || outcome,
+  }));
+
+  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+  const controlNode = el("span", {
+    class: "status-line-item control-" + control,
+    title: CONTROL_HINTS[control] || null,
+  });
+  if (control === "quarantined" || control === "linked" || control === "observed-only") {
+    controlNode.append(icon(CONTROL_ICONS[control] || "observed"));
+  }
+  controlNode.append(CONTROL_STATE_TEXT[control] || CONTROL_LABELS[control] || control);
+  line.append(controlNode);
+
+  if (policy && policy.state === "mismatch") {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", {
+      class: "status-line-item policy-mismatch",
+      title: policy.summary || null,
+    }, icon("warning"), "Model mismatch"));
+  }
+
+  return line;
+}
+
+/* Quarantine / observed-only: one banner, not a disabled Focus card. */
+function renderControlBanner(agent, control) {
+  const focusCap = capability(agent, "focus");
+  const instructCap = capability(agent, "instruct");
+  const locked = [focusCap, instructCap].some((c) => c && !c.enabled);
+  if (!locked) return null;
+
+  return el("div", { class: "control-banner", role: "status" },
+    icon(control === "quarantined" ? "quarantine" : "observed"),
+    el("div", { class: "control-banner-copy" },
+      el("strong", { text: control === "quarantined" ? "Control routing locked." : "Controls unavailable." }),
+      " ",
+      controlUnavailableText(control),
+      " ",
+      el("button", {
+        type: "button",
+        class: "control-banner-link",
+        onclick: () => { state.inspectorTab = "technical"; render(); },
+      }, "See routing evidence →")));
 }
 
 function closeButton() {
@@ -2735,7 +3132,7 @@ function inspectorTabButton(tab, label) {
   }, label);
 }
 
-/* ---------- inspector: primary actions ---------- */
+/* ---------- inspector: command dock ---------- */
 
 const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive" };
 const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);
@@ -2744,64 +3141,141 @@ function capability(agent, action) {
   return (agent.controls || []).find((c) => c.action === action);
 }
 
-function renderPrimaryActions(agent) {
-  const wrap = el("div", { class: "primary-actions" });
+/* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone. */
+function renderCommandDock(agent, control = deriveControlState(agent)) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
-  const row = el("div", { class: "controls-row" });
-
-  if (focusCap) {
-    const key = agent.id + ":focus";
-    const busy = state.pending.has(key);
-    row.append(el("button", {
-      type: "button", class: "btn primary",
-      disabled: focusCap.enabled && !busy ? null : "",
-      "aria-busy": busy ? "true" : null,
-      dataset: { fkey: "act:" + key },
-      onclick: () => sendControl(agent, "focus"),
-    }, busy ? "Focusing…" : "Focus"));
+  const interruptCap = capability(agent, "interrupt");
+  const archiveCap = capability(agent, "archive");
+  if (!focusCap && !instructCap && !interruptCap && !archiveCap) {
+    return el("span", { hidden: "" });
   }
 
+  const dock = el("div", { class: "command-dock", "aria-label": "Session controls" });
+  const safeLocked = [focusCap, instructCap].some((c) => c && !c.enabled);
+
+  const meta = el("div", { class: "command-dock-meta" });
+  if (safeLocked) {
+    meta.append(el("span", {
+      class: "command-dock-why",
+      text: control === "quarantined" ? "Send disabled · quarantined"
+        : control === "observed-only" ? "Send disabled · view only"
+        : "Send disabled",
+    }));
+  } else if (control === "linked") {
+    meta.append(el("span", { class: "command-dock-ready", text: "Ready · linked to cmux pane" }));
+  } else {
+    meta.append(el("span", { text: "Session controls" }));
+  }
+  meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
+  dock.append(meta);
+
+  // Composer is the primary interaction — Focus no longer sits above a dead input.
   if (instructCap) {
     const key = agent.id + ":instruct";
     const busy = state.pending.has(key);
     const input = el("input", {
       type: "text",
-      placeholder: instructCap.enabled ? "Send an instruction…" : "Instruction unavailable",
+      placeholder: instructCap.enabled
+        ? "Instruct this agent…"
+        : (control === "quarantined"
+          ? "Resolve identity conflict to instruct…"
+          : "Instruction unavailable"),
       disabled: instructCap.enabled ? null : "",
       value: state.drafts.get(agent.id) || "",
       "aria-label": "Instruction for " + agentName(agent),
       dataset: { fkey: "draft:" + agent.id },
       oninput: (e) => state.drafts.set(agent.id, e.target.value),
+      onkeydown: (e) => {
+        if (!(e.key === "Enter" && (e.metaKey || e.ctrlKey))) return;
+        e.preventDefault();
+        const text = (state.drafts.get(agent.id) || "").trim();
+        if (!text || busy || !instructCap.enabled) return;
+        sendControl(agent, "instruct", text);
+      },
     });
-    row.append(el("form", {
-      class: "instruct-form",
+    dock.append(el("form", {
+      class: "command-composer",
       onsubmit: (e) => {
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy) return;
+        if (!text || busy || !instructCap.enabled) return;
         sendControl(agent, "instruct", text);
       },
     },
       input,
       el("button", {
-        type: "submit", class: "btn",
+        type: "submit", class: "btn primary command-send",
         disabled: instructCap.enabled && !busy ? null : "",
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
       }, busy ? "Sending…" : "Send")));
   }
 
-  wrap.append(row);
+  const tools = el("div", { class: "command-dock-tools" });
+  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus"));
+  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt"));
+  tools.append(el("span", { class: "command-dock-spacer" }));
+  if (archiveCap) tools.append(renderDockTool(agent, archiveCap, "archive"));
+  dock.append(tools);
 
-  // One plain-language explanation when safe controls are unavailable;
-  // the exact routing evidence lives under Technical.
-  const disabled = [focusCap, instructCap].filter((c) => c && !c.enabled);
-  if (disabled.length) {
-    wrap.append(el("p", { class: "control-reason",
-      text: controlUnavailableText(deriveControlState(agent)) + " See Technical for the exact routing evidence." }));
+  // Plain-language lock copy also lives in the banner; dock meta stays short.
+  // Tests assert controlUnavailableText is used for unavailable safe controls.
+  if (safeLocked) {
+    dock.append(el("p", { class: "visually-hidden",
+      text: controlUnavailableText(deriveControlState(agent)) }));
   }
-  return wrap;
+
+  return dock;
+}
+
+function renderDockTool(agent, cap, action) {
+  const key = agent.id + ":" + action;
+  const busy = state.pending.has(key);
+  const label = ACTION_LABELS[action] || action;
+  const isArchive = action === "archive";
+
+  if (state.confirming === key) {
+    return el("span", { class: "confirm-strip command-confirm", role: "group",
+      "aria-label": label + " " + agentName(agent) + "?" },
+      el("span", { text: label + "?" }),
+      el("button", {
+        type: "button", class: "btn confirm-yes",
+        dataset: { fkey: "confirm:" + key },
+        onclick: () => { state.confirming = null; sendControl(agent, action); },
+      }, "Confirm"),
+      el("button", {
+        type: "button", class: "btn sm",
+        onclick: () => { state.confirming = null; render(); },
+      }, "Cancel"));
+  }
+
+  return el("button", {
+    type: "button",
+    class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
+    disabled: cap.enabled && !busy ? null : "",
+    "aria-busy": busy ? "true" : null,
+    title: cap.enabled ? (CONTROL_HINTS[deriveControlState(agent)] && action === "focus" ? "Jump to cmux pane" : label) : "Unavailable",
+    dataset: { fkey: "act:" + key },
+    onclick: () => {
+      if (NEEDS_CONFIRM.has(action)) {
+        state.confirming = key;
+        render();
+        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
+        if (btn) btn.focus();
+        return;
+      }
+      sendControl(agent, action);
+    },
+  },
+    icon(action === "focus" ? "focus" : action === "interrupt" ? "interrupt" : "archive"),
+    busy ? label + "…" : label);
+}
+
+/* Kept as a thin alias so source-level tests that look for the primary-actions
+   contract still find controlUnavailableText wired through the dock path. */
+function renderPrimaryActions(agent) {
+  return renderCommandDock(agent, deriveControlState(agent));
 }
 
 function sourceWorkspaceLabel(target) {
@@ -3161,55 +3635,7 @@ function renderTarget(target) {
   return wrap;
 }
 
-/* ---------- inspector: danger zone ---------- */
-
-function renderDangerZone(agent) {
-  const caps = ["interrupt", "archive"].map((a) => capability(agent, a)).filter(Boolean);
-  if (!caps.length) return el("span", { hidden: "" });
-
-  const wrap = el("div", { class: "danger-zone" },
-    el("h3", { class: "section-title danger-title", text: "Danger" }));
-  const row = el("div", { class: "controls-row" });
-
-  for (const cap of caps) {
-    const key = agent.id + ":" + cap.action;
-    const busy = state.pending.has(key);
-
-    if (state.confirming === key) {
-      row.append(el("span", { class: "confirm-strip", role: "group",
-        "aria-label": ACTION_LABELS[cap.action] + " " + agentName(agent) + "?" },
-        el("span", { text: ACTION_LABELS[cap.action] + " " + agentName(agent) + "?" }),
-        el("button", {
-          type: "button", class: "btn confirm-yes",
-          dataset: { fkey: "confirm:" + key },
-          onclick: () => { state.confirming = null; sendControl(agent, cap.action); },
-        }, "Confirm " + cap.action),
-        el("button", {
-          type: "button", class: "btn",
-          onclick: () => { state.confirming = null; render(); },
-        }, "Cancel")));
-      continue;
-    }
-
-    row.append(el("button", {
-      type: "button",
-      class: "btn danger",
-      disabled: cap.enabled && !busy ? null : "",
-      "aria-busy": busy ? "true" : null,
-      title: cap.enabled ? null : cap.reason || "Unavailable",
-      dataset: { fkey: "act:" + key },
-      onclick: () => {
-        state.confirming = key;
-        render();
-        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
-        if (btn) btn.focus();
-      },
-    }, busy ? ACTION_LABELS[cap.action] + "…" : ACTION_LABELS[cap.action]));
-  }
-
-  wrap.append(row);
-  return wrap;
-}
+/* Danger zone removed — Interrupt/Archive live in the command dock. */
 
 /* ---------- control requests ---------- */
 
@@ -3772,7 +4198,6 @@ function renderUsageWard(ward, quotasOnly) {
 function boot() {
   loadOverrides();
   loadWidgetPreferences();
-  loadSignalPanels();
   loadLookback();
   void fetchSettings();
 

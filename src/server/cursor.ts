@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
 import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
@@ -260,36 +261,58 @@ function cursorModelFromSystemMessage(content: unknown): string | undefined {
   return match?.[1]?.trim();
 }
 
-export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
-  const database = new Database(path, { readonly: true });
-  try {
-    const metaRow = database.query("select value from meta where key = '0'").get() as
-      | { value?: string }
-      | null;
-    const metadata = decodeHexJson(metaRow?.value);
-    let model: string | undefined;
-    const rows = database
-      .query("select data from blobs where substr(data, 1, 1) = x'7B'")
-      .all() as { data: Uint8Array }[];
-    for (const row of rows) {
-      try {
-        const message = JSON.parse(Buffer.from(row.data).toString("utf8"));
-        if (message?.role === "system") {
-          model = cursorModelFromSystemMessage(message.content);
-          if (model) break;
-        }
-      } catch {
-        // Cursor's content-addressed store also contains non-JSON blobs.
+function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
+  const metaRow = database.query("select value from meta where key = '0'").get() as
+    | { value?: string }
+    | null;
+  const metadata = decodeHexJson(metaRow?.value);
+  let model: string | undefined;
+  const rows = database
+    .query("select data from blobs where substr(data, 1, 1) = x'7B'")
+    .all() as { data: Uint8Array }[];
+  for (const row of rows) {
+    try {
+      const message = JSON.parse(Buffer.from(row.data).toString("utf8"));
+      if (message?.role === "system") {
+        model = cursorModelFromSystemMessage(message.content);
+        if (model) break;
       }
+    } catch {
+      // Cursor's content-addressed store also contains non-JSON blobs.
     }
-    return {
-      agentId: typeof metadata?.agentId === "string" ? metadata.agentId : undefined,
-      name: typeof metadata?.name === "string" ? metadata.name : undefined,
-      mode: typeof metadata?.mode === "string" ? metadata.mode : undefined,
-      model,
-    };
-  } finally {
-    database.close();
+  }
+  return {
+    agentId: typeof metadata?.agentId === "string" ? metadata.agentId : undefined,
+    name: typeof metadata?.name === "string" ? metadata.name : undefined,
+    mode: typeof metadata?.mode === "string" ? metadata.mode : undefined,
+    model,
+  };
+}
+
+export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
+  try {
+    const database = new Database(path, { readonly: true });
+    try {
+      return readCursorStoreEvidenceFrom(database);
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    // Cursor stores are WAL-mode databases. If the read-only handle cannot
+    // create/access SQLite's shared-memory sidecar, inspect the main file as
+    // immutable evidence without ever opening the provider store writable.
+    try {
+      const database = new Database(`${pathToFileURL(path).href}?immutable=1`, {
+        readonly: true,
+      });
+      try {
+        return readCursorStoreEvidenceFrom(database);
+      } finally {
+        database.close();
+      }
+    } catch {
+      throw error;
+    }
   }
 }
 
@@ -540,6 +563,7 @@ export async function collectCursorSessions(
         errors.push(`cursor ${sessionId} metadata: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
+      if (meta.hasConversation === false) return;
       const updatedAtMs = Number(meta.updatedAtMs);
       if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > windowMs) return;
 

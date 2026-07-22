@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -177,6 +177,32 @@ describe("Cursor Agent persisted session truth", () => {
     });
   });
 
+  test("reads a WAL-mode store immutably when the read-only handle cannot create SQLite sidecars", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-wal-store-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.run("create table meta (key text primary key, value text)");
+    database.run("create table blobs (id text primary key, data blob)");
+    database.query("pragma journal_mode = wal").get();
+    database.run("insert into meta(key, value) values ('0', ?)", [
+      Buffer.from(JSON.stringify({ agentId: SESSION_ID, name: "WAL verifier" })).toString("hex"),
+    ]);
+    database.close();
+
+    await chmod(directory, 0o555);
+    try {
+      expect(readCursorStoreEvidence(path)).toEqual({
+        agentId: SESSION_ID,
+        name: "WAL verifier",
+        mode: undefined,
+        model: undefined,
+      });
+    } finally {
+      await chmod(directory, 0o755);
+    }
+  });
+
   test("rejects a store whose authoritative agentId conflicts with its session directory", async () => {
     const agent = parseCursorSession({
       sessionId: SESSION_ID,
@@ -232,6 +258,22 @@ describe("Cursor Agent persisted session truth", () => {
     await mkdir(join(home, ".cursor", "chats", "workspace-hash", SESSION_ID), { recursive: true });
 
     expect(await collectCursorSessions(home)).toEqual({ value: [], errors: [] });
+  });
+
+  test("silently skips Cursor metadata that marks a retained directory as non-conversation", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mountain-cursor-non-conversation-home-"));
+    temporaryDirectories.push(home);
+    const sessionDirectory = join(home, ".cursor", "chats", "workspace-hash", SESSION_ID);
+    await mkdir(sessionDirectory, { recursive: true });
+    await writeFile(join(sessionDirectory, "meta.json"), JSON.stringify({
+      schemaVersion: 1,
+      createdAtMs: 1784689000000,
+      updatedAtMs: 1784689180000,
+      cwd: "/Users/me/project",
+      hasConversation: false,
+    }));
+
+    expect(await collectCursorSessions(home, 1784689180000)).toEqual({ value: [], errors: [] });
   });
 
   test("collects Cursor GUI agents from the live conversation index without CLI chat metadata", async () => {

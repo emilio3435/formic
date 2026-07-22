@@ -21,7 +21,14 @@ const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "d
 const settingsStore = await JsonSettingsStore.open(join(PROJECT_ROOT, "data/settings.json"));
 const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJECT_ROOT, "data/investigations"));
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
-const state = new HubState(runner, archiveStore, programHints, undefined, () => settingsStore.get());
+const state = new HubState(
+  runner,
+  archiveStore,
+  programHints,
+  undefined,
+  () => settingsStore.get(),
+  () => triageStore.list(),
+);
 await state.refresh({ cmux: true });
 
 const mountainFetch = createMountainFetch({

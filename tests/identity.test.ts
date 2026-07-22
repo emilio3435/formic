@@ -89,7 +89,7 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [agent], runner);
 
     expect(enriched.errors).toEqual([]);
-    expect(runner.commands[1]).toEqual(["lsof", "-a", "-p", "4242", "-Fn"]);
+    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-a", "-p", "4242", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([
       "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
     ]);
@@ -123,7 +123,7 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [agent], runner);
 
     expect(enriched.errors).toEqual([]);
-    expect(runner.commands[1]).toEqual(["lsof", "-a", "-p", "202", "-Fn"]);
+    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-a", "-p", "202", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([
       "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
     ]);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildSnapshot, snapshotFingerprint } from "../src/server/snapshot";
+import { buildSnapshot, impactSummaryFor, snapshotFingerprint } from "../src/server/snapshot";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
-import type { IssueLifecycle } from "../src/shared/types";
+import type { IssueLifecycle, OperatorIssue } from "../src/shared/types";
 
 const archiveStore: ArchiveStore = {
   has: () => false,
@@ -451,6 +451,119 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(program.rollup).toMatchObject({ total: 2, live: 2, working: 2, linked: 0 });
   });
 
+  test("stressed snapshots roll up open, watched, and persisted in-motion work", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      sourceErrors: {
+        codex: ["Codex collection is incomplete."],
+        claude: ["Claude collection is incomplete."],
+      },
+      cmuxErrors: ["cmux control is unavailable"],
+      triageSummaries: [
+        { issueId: "system:codex-collector", state: "running" },
+        { issueId: "queue:detached", state: "queued" },
+        { issueId: "queue:verification", state: "completed" },
+        { issueId: "queue:blocked", state: "blocked" },
+      ],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.attentionBoard).toEqual({
+      actNow: 1,
+      watch: 2,
+      inMotion: 3,
+      cleared: 0,
+      allClear: false,
+    });
+    expect(snapshot.triageSummaries).toEqual([
+      { issueId: "system:codex-collector", state: "running" },
+      { issueId: "queue:detached", state: "queued" },
+      { issueId: "queue:verification", state: "completed" },
+      { issueId: "queue:blocked", state: "blocked" },
+    ]);
+    expect(snapshot.issues?.find(({ id }) => id === "system:cmux-control")).toMatchObject({
+      workState: "needs_triage",
+      progress: 0,
+      impactSummary: "Touches 1 session: Test session (unique-project)",
+    });
+    expect(snapshot.issues?.find(({ id }) => id === "system:codex-collector")).toMatchObject({
+      workState: "investigating",
+      progress: 70,
+    });
+    expect(snapshot.issues?.find(({ id }) => id === "system:claude-collector")).toMatchObject({
+      workState: "watching",
+      progress: 0,
+    });
+  });
+
+  test("an empty active board stays all-clear while resolved findings remain in the TTL window", () => {
+    const previousIssue: OperatorIssue = {
+      id: "system:previous",
+      kind: "system",
+      severity: "error",
+      title: "Previous incident",
+      summary: "The source used to report an incident.",
+      affectedAgentIds: [],
+      lifecycle: { state: "open", openedAt: "2026-07-21T22:58:00.000Z" },
+    };
+    const snapshot = buildSnapshot({
+      agents: [],
+      surfaces: [],
+      previousIssues: [previousIssue],
+      triageSummaries: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:00.000Z"),
+    });
+
+    expect(snapshot.issues).toEqual([]);
+    expect(snapshot.attentionBoard).toEqual({
+      actNow: 0,
+      watch: 0,
+      inMotion: 0,
+      cleared: 1,
+      allClear: true,
+    });
+    expect(snapshot.recentlyResolved).toMatchObject([{
+      id: previousIssue.id,
+      workState: "cleared",
+      progress: 100,
+      impactSummary: "System-wide — not tied to a specific agent",
+    }]);
+  });
+
+  test("impact summaries describe zero, one, and many affected sessions", () => {
+    const base = buildSnapshot({
+      agents: [
+        collected({ id: "codex:alpha-a", sourceSessionId: "alpha-a", displayName: "Alpha A", cwd: "/work/alpha" }),
+        collected({ id: "codex:alpha-b", sourceSessionId: "alpha-b", displayName: "Alpha B", cwd: "/work/alpha" }),
+        collected({ id: "codex:beta", sourceSessionId: "beta", displayName: "Beta", cwd: "/work/beta" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const issue = (affectedAgentIds: string[]): OperatorIssue => ({
+      id: `system:impact-${affectedAgentIds.length}`,
+      kind: "system",
+      severity: "warning",
+      title: "Impact fixture",
+      summary: "Impact fixture.",
+      affectedAgentIds,
+    });
+
+    expect(impactSummaryFor(issue([]), base.programs)).toBe(
+      "System-wide — not tied to a specific agent",
+    );
+    expect(impactSummaryFor(issue(["codex:alpha-a"]), base.programs)).toBe(
+      "Touches 1 session: Alpha A (alpha)",
+    );
+    expect(impactSummaryFor(issue(["codex:alpha-a", "codex:alpha-b", "codex:beta"]), base.programs)).toBe(
+      "Touches 3 sessions across 2 programs — mainly alpha (2), beta (1)",
+    );
+  });
+
   test("issues retain open and verification evidence until a fresh source clears them", () => {
     const sourceErrors = ["cmux control is unavailable"];
     const opened = buildSnapshot({
@@ -462,6 +575,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const issue = opened.issues?.[0]!;
     expect(issue.lifecycle).toMatchObject({ state: "open", openedAt: "2026-07-21T23:00:00.000Z" });
+    expect(opened.attentionBoard).toMatchObject({ actNow: 1, inMotion: 0, cleared: 0, allClear: false });
 
     const verifyingLifecycle: IssueLifecycle = {
       state: "verifying",
@@ -479,6 +593,8 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:02:00.000Z"),
     });
     expect(verifying.issues?.[0]?.lifecycle).toEqual(verifyingLifecycle);
+    expect(verifying.issues?.[0]).toMatchObject({ workState: "verifying", progress: 85 });
+    expect(verifying.attentionBoard).toMatchObject({ actNow: 1, inMotion: 1, cleared: 0, allClear: false });
     expect(verifying.recentlyResolved).toEqual([]);
 
     const stillReported = buildSnapshot({
@@ -504,8 +620,11 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:04:00.000Z"),
     });
     expect(cleared.issues).toEqual([]);
+    expect(cleared.attentionBoard).toEqual({ actNow: 0, watch: 0, inMotion: 0, cleared: 1, allClear: true });
     expect(cleared.recentlyResolved).toMatchObject([{
       id: issue.id,
+      workState: "cleared",
+      progress: 100,
       lifecycle: {
         state: "resolved",
         resolvedAt: "2026-07-21T23:04:00.000Z",

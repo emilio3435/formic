@@ -127,7 +127,9 @@ export async function enrichCmuxIdentity(
   ];
   let openFiles = new Map<number, string[]>();
   if (pids.length > 0) {
-    const openFileResult = await runner.run(["lsof", "-a", "-p", pids.join(","), "-Fn"], 10_000);
+    // Absolute path: Bun/server PATH can omit /usr/sbin, which made identity
+    // enrichment fail-closed and left agents partially/quarantined.
+    const openFileResult = await runner.run(["/usr/sbin/lsof", "-a", "-p", pids.join(","), "-Fn"], 10_000);
     openFiles = parseOpenFiles(openFileResult.stdout);
     const hasUsableIdentityOutput = [...openFiles.values()]
       .flat()

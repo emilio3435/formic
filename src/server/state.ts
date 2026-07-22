@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider } from "../shared/types";
+import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, TriageQueueSummary } from "../shared/types";
 import { collectCmux, collectCmuxNotifications } from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
-import { buildSnapshot, type ProgramHint } from "./snapshot";
+import { buildSnapshot, type ProgramHint, withAttentionBoard } from "./snapshot";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
@@ -45,6 +45,7 @@ export class HubState {
     private readonly programHints: readonly ProgramHint[],
     private readonly collectors: HubCollectors = DEFAULT_COLLECTORS,
     private readonly settingsReader?: () => HubSettings,
+    private readonly triageReader?: () => readonly TriageQueueSummary[],
   ) {
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
     this.#snapshot = buildSnapshot({
@@ -57,6 +58,7 @@ export class HubState {
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
       issueLifecycle: this.#issueLifecycle,
       recentlyResolved: this.#recentlyResolved,
+      triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
     });
   }
@@ -96,7 +98,10 @@ export class HubState {
       issue.id === issueId ? { ...issue, lifecycle } : issue,
     );
     if (issues.every((issue, index) => issue === this.#snapshot.issues?.[index])) return;
-    this.#snapshot = { ...this.#snapshot, issues };
+    this.#snapshot = withAttentionBoard(
+      { ...this.#snapshot, issues },
+      this.triageReader?.() ?? this.#snapshot.triageSummaries,
+    );
     for (const listener of this.#listeners) listener(this.#snapshot);
   }
 
@@ -161,6 +166,7 @@ export class HubState {
       issueLifecycle: this.#issueLifecycle,
       previousIssues: this.#hasSourceSnapshot ? this.#snapshot.issues : undefined,
       recentlyResolved: this.#recentlyResolved,
+      triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
     });
     this.#hasSourceSnapshot = true;

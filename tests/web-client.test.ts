@@ -469,11 +469,21 @@ describe("unavailable-control explanation stays plain-language", () => {
     }
   });
 
-  test("renderPrimaryActions never echoes capability reasons in the Overview", () => {
-    const fn = source.match(/function renderPrimaryActions\(agent\) \{[\s\S]*?\n\}/)?.[0];
-    expect(fn).toBeDefined();
-    expect(fn).toContain("controlUnavailableText(deriveControlState(agent))");
-    expect(fn).not.toContain(".reason");
+  test("command dock never echoes capability reasons in the Overview", () => {
+    expect(source).toContain("function renderCommandDock(");
+    expect(source).toContain("function renderControlBanner(");
+    expect(source).toContain("controlUnavailableText(");
+    // Dock tools must not surface raw capability.reason strings in the Overview.
+    const dockStart = source.indexOf("function renderCommandDock(");
+    const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
+    const bannerStart = source.indexOf("function renderControlBanner(");
+    const bannerEnd = source.indexOf("\nfunction ", bannerStart + 10);
+    const dock = source.slice(dockStart, dockEnd === -1 ? undefined : dockEnd);
+    const banner = source.slice(bannerStart, bannerEnd === -1 ? undefined : bannerEnd);
+    expect(dock).toContain("controlUnavailableText(");
+    expect(banner).toContain("controlUnavailableText(");
+    expect(dock).not.toContain(".reason");
+    expect(banner).not.toContain(".reason");
   });
 });
 
@@ -580,28 +590,23 @@ describe("operations canvas layout", () => {
     expect(styles).not.toContain("--maxw");
   });
 
-  test("the active intervention band spans the full frame above the workboard split", () => {
-    const bandIdx = html.indexOf('id="interventions"');
+  test("the attention board spans the full frame above the workboard split", () => {
+    const bandIdx = html.indexOf('id="attention-board"');
     const bodyIdx = html.indexOf('class="app-body"');
     expect(bandIdx).toBeGreaterThan(-1);
     expect(bandIdx).toBeLessThan(bodyIdx);
-    expect(html).toContain('class="interventions signal-band"');
+    expect(html).toContain('class="attention-board signal-band"');
     expect(styles).toMatch(/\.signal-band\s*\{[^}]*max-width:\s*var\(--frame\)/);
   });
 
-  test("the intervention is a two-row band that ALSO opens the per-type drawer", () => {
-    // Band structure (canvas): primary copy + inline action + evidence rows.
-    expect(source).toContain('class: "signal-primary"');
-    expect(source).toContain('class: "signal-action"');
-    expect(source).toContain('class: "signal-evidence"');
-    // Reconciliation: the band still opens the integration lane's intervention
-    // drawer, and keeps the inline Generate-triage primary action.
-    expect(source).toContain('selectEntity({ kind: "intervention", id: issue.id })');
-    expect(source).toContain('class: "signal-title-btn"');
+  test("finding rows open the drawer; triage stays drawer-only", () => {
+    expect(source).toContain("function renderFindingRow(");
+    expect(source).toContain("function renderAttentionBoard(");
+    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
     expect(source).toContain("renderTriage(issue)");
-    // Advisories/resolved/investigations stay thin triggers into the drawer.
-    expect(source).toContain('selectEntity({ kind: "advisory", id: issue.id })');
-    expect(source).toContain('class: "signal-advisory issue-resolved signal-trigger"');
+    // Board must not grow Generate-triage chrome; drawer keeps it.
+    expect(source).not.toContain('class: "signal-primary"');
+    expect(source).not.toContain('class: "signal-title-btn"');
   });
 
   test("the inspector/drawer holds a stable 480-520px desktop pane, no 42vw overshoot", () => {
@@ -664,11 +669,13 @@ describe("source hygiene", () => {
 
   test("the redesigned control surface exposes its structural anchors", () => {
     for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
-      "interventions-list", "warnings-list", "nest-beacon", "health-widgets", "customize-summary",
+      "attention-board", "score", "lanes", "act-body", "aware-body", "allclear",
+      "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain(">Interventions</h2>");
+    expect(html).toContain(">Act now</h2>");
+    expect(html).toContain(">Be aware</h2>");
     expect(html).toContain(">Alerts<span");
     expect(source).toContain("function renderWidgetCustomizer()");
     expect(source).toContain("onchange: (event) => setWidgetEnabled");
@@ -720,66 +727,71 @@ describe("source hygiene", () => {
     expect(source).toContain("recentlyResolved");
   });
 
-  test("the ham-fisted Subdue/Show buttons are gone", () => {
-    expect(html).not.toContain('id="interventions-toggle"');
-    expect(html).not.toContain('id="warnings-toggle"');
-    expect(html).not.toContain('id="interventions-subdued"');
-    expect(html).not.toContain('id="warnings-subdued"');
+  test("the ham-fisted Subdue/Show buttons and ticket ticker are gone", () => {
     expect(html).not.toContain("Subdue");
     expect(html).not.toContain("Show interventions");
     expect(html).not.toContain("Show advisories");
-    expect(source).not.toContain('.signal-toggle');
-    expect(styles).not.toContain(".signal-toggle");
+    expect(html).not.toContain('id="interventions-ticker"');
+    expect(html).not.toContain('id="warnings-ticker"');
+    expect(html).not.toContain('class="signal-collapse"');
+    expect(source).not.toContain("function buildSignalTicker(");
+    expect(source).not.toContain("SIGNAL_PANEL_STORAGE_KEY");
+    expect(source).not.toContain("loadSignalPanels(");
+    expect(styles).not.toContain("@keyframes signal-ticker-run");
+    expect(styles).not.toContain(".signal-ticker");
     expect(styles).not.toContain(".signal-subdued");
   });
 
-  test("signal sections collapse to a live ticker via the title caret, preference persists", () => {
-    // The section title is the only collapse affordance — a caret, not a button label.
-    expect(html).toContain('class="signal-collapse"');
-    expect(html).toContain('id="interventions-collapse"');
-    expect(html).toContain('id="warnings-collapse"');
-    expect(html).toContain('class="signal-caret"');
-    // Ticker mounts replace the collapsed body.
-    expect(html).toContain('id="interventions-ticker"');
-    expect(html).toContain('id="warnings-ticker"');
-    // Preference machinery persists, expressed without a visible SUBDUE control.
-    expect(source).toContain('SIGNAL_PANEL_STORAGE_KEY');
-    expect(source).toContain('function setSignalPanel(');
-    expect(source).toContain('function renderSignalPanelHead(');
-    expect(source).toContain('loadSignalPanels()');
-    expect(source).toContain('setSignalPanel(panel, compact ? "open" : "compact")');
-    expect(M.parseSignalPanels('{"interventions":"compact","advisories":"open"}')).toEqual({
-      interventions: "compact",
-      advisories: "open",
-    });
-    // Advisories ride the ticker by default; interventions keep their act-now detail.
-    expect(M.parseSignalPanels("not-json")).toEqual({ interventions: "open", advisories: "compact" });
-    expect(M.parseSignalPanels('{"interventions":"bogus"}')).toEqual({ interventions: "open", advisories: "compact" });
-  });
-
-  test("the ticker is a clipped, stepped instrument strip that opens the drawer and honors reduced motion", () => {
-    // List mounting builds ticker entries that route to the existing drawer kinds.
-    expect(source).toContain("function buildSignalTicker(");
-    expect(source).toContain("selectEntity({ kind: entry.kind, id: entry.id })");
-    expect(source).toContain('class: "signal-tick tone-" + entry.tone');
-    // Stepped right→left pull only engages once the strip is busy.
-    expect(source).toContain("TICKER_SCROLL_MIN");
-    expect(source).toContain("is-scrolling");
-    // Motion is CSS keyframes with a stepped timing function, disabled under reduced motion.
-    expect(styles).toContain("@keyframes signal-ticker-run");
-    expect(styles).toMatch(/\.is-scrolling\s+\.signal-tick-track\s*\{[^}]*steps\(/);
-    const reduced = styles.slice(styles.indexOf("prefers-reduced-motion: reduce", styles.indexOf("@keyframes signal-ticker-run")));
-    expect(reduced).toContain(".signal-ticker.is-scrolling .signal-tick-track { animation: none; }");
-    // No inline style attributes: the strip is class-driven only.
+  test("conductor + lanes + all-clear match the hybrid contract", () => {
+    expect(html).toContain('id="attention-board"');
+    expect(html).toContain('class="conductor"');
+    expect(html).toContain("All clear · nothing needs you");
+    expect(html).toContain("Colony is clear");
+    expect(source).toContain("function attentionBoardOf(");
+    expect(source).toContain("function issueWorkState(");
+    expect(source).toContain("function issueImpactLine(");
+    expect(source).toContain("is-all-clear");
+    expect(source).toContain('text: "Impact"');
+    expect(source).toContain("function workStateBanner(");
+    expect(source).not.toContain('affectedChips(issue, "Affects")');
     expect(source).not.toMatch(/\bstyle:\s*`/);
+    expect(styles).toContain(".conductor");
+    expect(styles).toContain(".finding");
+    expect(styles).toContain(".allclear");
+    expect(styles).toContain('.rail[data-p="35"]');
+    expect(styles).toContain("body.is-all-clear");
   });
 
-  test("signal chrome uses outline indicators instead of filled hospital banners", () => {
+  test("attentionBoardOf prefers server rollup and falls back cleanly", () => {
+    const withBoard = snapshot({
+      attentionBoard: { actNow: 2, watch: 1, inMotion: 3, cleared: 4, allClear: false },
+      issues: [],
+    });
+    expect(M.attentionBoardOf(withBoard)).toEqual({
+      actNow: 2, watch: 1, inMotion: 3, cleared: 4, allClear: false,
+    });
+    const derived = snapshot({
+      issues: [
+        { id: "e1", kind: "system", severity: "error", title: "E", summary: "s", affectedAgentIds: [] },
+        { id: "w1", kind: "system", severity: "warning", title: "W", summary: "s", affectedAgentIds: [] },
+      ],
+      recentlyResolved: [
+        { id: "r1", kind: "system", severity: "error", title: "R", summary: "s", affectedAgentIds: [] },
+      ],
+    });
+    expect(M.attentionBoardOf(derived)).toEqual({
+      actNow: 1, watch: 1, inMotion: 0, cleared: 1, allClear: false,
+    });
+    expect(M.attentionBoardOf(snapshot({ issues: [], recentlyResolved: [] }))).toEqual({
+      actNow: 0, watch: 0, inMotion: 0, cleared: 0, allClear: true,
+    });
+  });
+
+  test("signal chrome uses techno-orchestra tokens, not hospital banner fills", () => {
     expect(styles).toContain('"Techno orchestra"');
     expect(styles).toContain("--signal-rail: 2px");
-    expect(styles).toMatch(/\.signal-badge\s*\{[^}]*background:\s*var\(--raise\)/);
-    expect(styles).toMatch(/\.signal-intervention\s*\{[^}]*border-left:\s*var\(--signal-rail\)\s*solid\s*var\(--ember\)/);
-    expect(styles).not.toMatch(/\.signal-badge\s*\{[^}]*background:\s*var\(--ember\)/);
+    expect(styles).toContain(".glyph.act");
+    expect(styles).toContain(".st.hot");
     expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
   });
 });

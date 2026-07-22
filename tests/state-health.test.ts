@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { HubState, type HubCollectors } from "../src/server/state";
 import type { ArchiveStore, CommandRunner } from "../src/server/types";
+import type { TriageQueueSummary } from "../src/shared/types";
 
 const emptySessions = () => ({
   omp: { value: [], errors: [] },
@@ -48,5 +49,47 @@ describe("cmux collection time truth", () => {
     expect(sessionCalls).toBe(3);
     expect(cmuxCalls).toBe(1);
     expect(state.get().controlHealth.lastCheckedAt).toBe(checkedAt);
+  });
+
+  test("snapshot refreshes read current triage summaries into the attention board", async () => {
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    let triageSummaries: TriageQueueSummary[] = [{ issueId: "queue:detached", state: "queued" }];
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      undefined,
+      () => triageSummaries,
+    );
+
+    await state.refresh({ cmux: true });
+    expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "queued" }]);
+    expect(state.get().attentionBoard).toEqual({
+      actNow: 0,
+      watch: 0,
+      inMotion: 1,
+      cleared: 0,
+      allClear: false,
+    });
+
+    triageSummaries = [{ issueId: "queue:detached", state: "blocked" }];
+    await state.refresh();
+    expect(state.get().attentionBoard).toEqual({
+      actNow: 0,
+      watch: 1,
+      inMotion: 0,
+      cleared: 0,
+      allClear: false,
+    });
   });
 });

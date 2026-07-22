@@ -120,6 +120,16 @@ export interface ProgramSnapshot {
 }
 
 export type IssueLifecycleState = "open" | "verifying" | "resolved" | "blocked";
+export type IssueWorkState =
+  | "needs_triage"
+  | "watching"
+  | "triaging"
+  | "planned"
+  | "queued"
+  | "investigating"
+  | "verifying"
+  | "blocked"
+  | "cleared";
 
 export interface IssueLifecycle {
   state: IssueLifecycleState;
@@ -138,6 +148,9 @@ export interface OperatorIssue {
   affectedAgentIds: string[];
   technicalDetails?: string[];
   lifecycle?: IssueLifecycle;
+  workState?: IssueWorkState;
+  progress?: number;
+  impactSummary?: string;
 }
 
 export type TriageMode = "direct" | "coordinated" | "investigation";
@@ -162,9 +175,11 @@ export interface TriageRecommendation {
   investigationPrompt?: string;
 }
 
+export type TriageQueueState = "queued" | "running" | "completed" | "blocked";
+
 export interface TriageQueueItem extends TriageRecommendation {
   id: string;
-  state: "queued" | "running" | "completed" | "blocked";
+  state: TriageQueueState;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -172,6 +187,19 @@ export interface TriageQueueItem extends TriageRecommendation {
   runModel?: string;
   pid?: number;
   result?: string;
+}
+
+export interface TriageQueueSummary {
+  issueId: string;
+  state: TriageQueueState;
+}
+
+export interface AttentionBoard {
+  actNow: number;
+  watch: number;
+  inMotion: number;
+  cleared: number;
+  allClear: boolean;
 }
 
 export interface SourceHealthSummary {
@@ -218,6 +246,8 @@ export interface HubSnapshot {
   };
   issues?: OperatorIssue[];
   recentlyResolved?: OperatorIssue[];
+  attentionBoard?: AttentionBoard;
+  triageSummaries?: TriageQueueSummary[];
   programs: ProgramSnapshot[];
 }
 

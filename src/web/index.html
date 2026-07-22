@@ -45,33 +45,52 @@
     </div>
   </section>
 
-  <!-- Active interventions span the full canvas above the workboard/inspector split. -->
-  <section id="interventions" class="interventions signal-band" aria-labelledby="interventions-title" hidden>
-    <div class="signal-head">
-      <button type="button" class="signal-collapse" id="interventions-collapse" aria-controls="interventions-list" aria-expanded="true" data-fkey="signal-collapse:interventions">
-        <svg class="signal-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="9 6 15 12 9 18"></polyline></svg>
-        <h2 id="interventions-title" class="section-title">Interventions</h2>
-      </button>
-      <span id="interventions-count" class="signal-count" aria-live="polite"></span>
+  <!-- Attention board: a conductor score plus two inbox-dense lanes, spanning
+       the full canvas above the workboard/inspector split. When nothing needs
+       the operator the score collapses to a full-moss all-clear banner and the
+       lanes are replaced by the calm "Colony is clear" panel. -->
+  <section id="attention-board" class="attention-board signal-band" aria-label="Attention" hidden>
+    <div class="conductor" aria-label="Attention score">
+      <div class="score" id="score">
+        <div class="seg ember" id="seg-act"><span class="seg-label">Act now</span> <span id="seg-act-n">0</span></div>
+        <div class="seg amber" id="seg-watch"><span class="seg-label">Watch</span> <span id="seg-watch-n">0</span></div>
+        <div class="seg slate" id="seg-motion"><span class="seg-label">In motion</span> <span id="seg-motion-n">0</span></div>
+        <div class="seg moss" id="seg-clear"><span class="seg-label">Cleared</span> <span id="seg-clear-n">0</span></div>
+        <div class="seg moss clear-banner" aria-live="polite">
+          <span class="mark" aria-hidden="true"></span>
+          All clear · nothing needs you
+        </div>
+      </div>
     </div>
-    <ul id="interventions-list" class="signal-list"></ul>
-    <div id="interventions-ticker" class="signal-ticker" aria-label="Interventions signal ticker" hidden></div>
+
+    <div class="lanes" id="lanes">
+      <section class="lane" aria-labelledby="act-title">
+        <div class="lane-head">
+          <h2 id="act-title" class="lane-title">Act now</h2>
+          <span class="n" id="act-count" aria-live="polite"></span>
+        </div>
+        <div class="lane-body" id="act-body"></div>
+      </section>
+      <section class="lane" aria-labelledby="aware-title">
+        <div class="lane-head">
+          <h2 id="aware-title" class="lane-title">Be aware</h2>
+          <span class="n" id="aware-count" aria-live="polite"></span>
+        </div>
+        <div class="lane-body" id="aware-body"></div>
+      </section>
+    </div>
+
+    <div class="allclear" id="allclear" aria-live="polite" hidden>
+      <div class="allclear-mark" aria-hidden="true">✓</div>
+      <div class="allclear-copy">
+        <h2>Colony is clear</h2>
+        <p>No interventions or advisories. The conductor is full green — the workboard is the only stage.</p>
+      </div>
+    </div>
   </section>
 
   <div class="app-body">
     <main id="main" class="pane-list" tabindex="-1">
-      <section id="warnings" class="warnings" aria-labelledby="warnings-title" hidden>
-        <div class="signal-head">
-          <button type="button" class="signal-collapse" id="warnings-collapse" aria-controls="warnings-list" aria-expanded="true" data-fkey="signal-collapse:advisories">
-            <svg class="signal-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="9 6 15 12 9 18"></polyline></svg>
-            <h2 id="warnings-title" class="section-title">Advisories</h2>
-          </button>
-          <span id="warnings-count" class="signal-count" aria-live="polite"></span>
-        </div>
-        <ul id="warnings-list" class="signal-list"></ul>
-        <div id="warnings-ticker" class="signal-ticker" aria-label="Advisories signal ticker" hidden></div>
-      </section>
-
       <section class="toolbar" aria-label="Views, search, and selection">
         <nav class="views" role="group" aria-label="View" id="views">
           <button type="button" class="view-tab" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
