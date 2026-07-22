@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>The Ant Hill — Drawer States Mockup</title>
+<style>
+/* ---- real :root tokens copied from src/web/styles.css ---- */
+:root{
+  --canvas:#f6f8fa; --surface:#ffffff; --raise:#ffffff; --sand:#eef2f5;
+  --ink:#17212b; --muted:#4b5866; --faint:#5f6d7b; --line:#dbe2e8; --line-strong:#b9c4ce;
+  --ember:#b42318; --amber:#8a5100; --moss:#216e49; --slate:#46647e; --clay:#697582;
+  --ember-soft:#fde8e5; --amber-soft:#fff1d9; --moss-soft:#e5f3eb;
+  --working:var(--moss); --idle:var(--slate); --ended:var(--clay); --needs:var(--ember);
+  --blocked:var(--ember); --failed:#b42318; --ok:var(--moss); --warn:var(--amber); --bad:#b42318;
+  --claude:#a64b2a; --codex:#2e6d58; --omp:#68469a; --cursor:#3d6585;
+  --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI",system-ui,sans-serif;
+  --font-mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+  --radius:8px; --radius-sm:5px;
+  --shadow-soft:0 1px 2px rgba(23,33,43,.04),0 8px 22px rgba(23,33,43,.05);
+  --shadow-lift:0 2px 6px rgba(23,33,43,.07),0 18px 44px rgba(23,33,43,.12);
+  /* depth tokens (from .agent-row.depth-*) */
+  --d0:#17212b; --d1:#6c8b6b; --d2:#b6794f; --d3:#667c91; --d4:#776b8f;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font-ui);font-size:16px;line-height:1.45;-webkit-font-smoothing:antialiased;}
+code,.mono{font-family:var(--font-mono);font-size:.86em;}
+
+.page-head{padding:1.6rem 1.6rem .4rem;max-width:120rem;margin:0 auto;}
+.page-head h1{font-size:1.5rem;margin:0 0 .25rem;}
+.page-head p{margin:0;color:var(--muted);font-size:13.5px;max-width:70ch;}
+.legend{display:flex;flex-wrap:wrap;gap:.5rem;margin:.9rem 0 .2rem;}
+.legend span{display:inline-flex;align-items:center;gap:.35rem;font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:.15rem .55rem;background:var(--surface);}
+.legend i{width:.7rem;height:.7rem;border-radius:2px;}
+
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(21rem,1fr));gap:1.25rem;padding:1.2rem 1.6rem 3rem;max-width:120rem;margin:0 auto;align-items:start;}
+.cell{display:flex;flex-direction:column;gap:.5rem;min-width:0;}
+.cell-cap{font:700 10px/1.3 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);}
+.cell-cap b{color:var(--ink);}
+
+/* ---- drawer chassis ---- */
+.drawer{position:relative;background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);box-shadow:var(--shadow-soft);overflow:hidden;display:flex;flex-direction:column;}
+.drawer .accent{height:2px;width:100%;}
+.acc-ember{background:var(--ember);} .acc-amber{background:var(--amber);}
+.acc-moss{background:var(--moss);} .acc-slate{background:var(--slate);} .acc-ink{background:var(--ink);}
+.drawer.provider-claude{box-shadow:inset 3px 0 var(--claude),var(--shadow-soft);}
+.inner{padding:.9rem 1rem 1rem;display:flex;flex-direction:column;gap:.7rem;}
+
+.head{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem;}
+.eyebrow{display:inline-flex;align-items:center;gap:.35rem;font:750 9.5px/1.3 var(--font-mono);letter-spacing:.11em;text-transform:uppercase;}
+.eyebrow.em{color:var(--ember);} .eyebrow.am{color:var(--amber);} .eyebrow.mo{color:var(--moss);}
+.eyebrow.sl{color:var(--slate);} .eyebrow.nk{color:var(--faint);}
+.title{margin:.15rem 0 0;font-size:1.4rem;font-weight:600;line-height:1.15;overflow-wrap:anywhere;}
+.title.sm{font-size:1.15rem;}
+.sub{margin:.15rem 0 0;font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:.3rem;align-items:baseline;}
+.close{flex:none;display:inline-flex;align-items:center;gap:.3rem;min-height:30px;padding:.25rem .55rem;font-size:12px;font-weight:650;color:var(--ink);background:var(--raise);border:1px solid var(--line-strong);border-radius:var(--radius-sm);}
+.close svg{width:.85rem;height:.85rem;}
+
+.lead{font-size:1.05rem;font-weight:700;line-height:1.3;color:var(--ink);overflow-wrap:anywhere;}
+.lead.quiet{font-size:.95rem;font-weight:500;color:var(--muted);}
+.lead.past{color:var(--moss);font-weight:650;}
+
+/* pills */
+.pills{display:flex;flex-wrap:wrap;gap:.4rem;padding:.55rem;border-radius:var(--radius-sm);background:var(--sand);}
+.pill{display:inline-flex;align-items:center;gap:.3rem;padding:.16rem .55rem;border-radius:999px;border:1px solid var(--line-strong);font-size:12px;font-weight:650;color:var(--muted);background:var(--raise);}
+.pill svg{width:.85rem;height:.85rem;}
+.pill.work{color:var(--working);border-color:color-mix(in srgb,var(--working) 45%,transparent);}
+.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);}
+.pill.link{color:var(--moss);}
+.pill.needs{color:var(--needs);border-color:color-mix(in srgb,var(--needs) 45%,transparent);}
+.dot{width:.62rem;height:.62rem;border-radius:50%;flex:none;background:var(--line-strong);}
+.dot.work{background:var(--working);box-shadow:0 0 0 3px color-mix(in srgb,var(--working) 22%,transparent);}
+.dot.idle{background:var(--idle);} .dot.end{background:var(--ended);} .dot.needs{background:var(--needs);}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;padding:.45rem .85rem;min-height:38px;font-size:13px;font-weight:650;color:var(--ink);background:var(--raise);border:1px solid var(--line-strong);border-radius:var(--radius-sm);}
+.btn.primary{color:#fff;background:var(--ink);border-color:var(--ink);}
+.btn.full{width:100%;}
+.btn.ghost{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line-strong));background:transparent;}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,var(--line-strong));}
+.row{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;}
+.instruct{display:flex;gap:.45rem;flex:1 1 100%;}
+.instruct input{flex:1 1 8rem;padding:.4rem .6rem;min-height:38px;font:inherit;font-size:13px;color:var(--faint);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius-sm);}
+
+/* block framing */
+.block{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--raise);padding:.7rem .75rem;}
+.block .lbl{font:700 9px/1.3 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:.4rem;}
+.sect-title{font:700 10px/1.4 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin:.2rem 0 0;}
+
+/* chips */
+.chips{display:flex;flex-wrap:wrap;gap:.3rem .4rem;}
+.chip{font-size:12px;color:var(--ink);padding:.12rem .5rem;border:1px solid var(--line-strong);border-radius:999px;background:var(--raise);}
+.chip .p{color:var(--faint);}
+.impact{font-size:11.5px;color:var(--faint);}
+
+/* technical / detail grid */
+.dl{display:grid;grid-template-columns:7rem 1fr;gap:.4rem .7rem;margin:0;}
+.dl dt{font:700 9.5px/1.4 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);}
+.dl dd{margin:0;font-size:12.5px;overflow-wrap:anywhere;}
+.dl dd code{color:var(--muted);}
+.dl .u{text-decoration:underline dotted;text-underline-offset:2px;}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;}
+@media(max-width:26rem){.split{grid-template-columns:1fr;}}
+.tech-cap{margin:0;font-size:11.5px;color:var(--muted);}
+
+/* triage / investigation */
+.steps{display:grid;gap:.4rem;margin:.2rem 0 0;padding:0;list-style:none;counter-reset:t;}
+.steps li{counter-increment:t;padding:.45rem .5rem;border-left:2px solid var(--line-strong);border-radius:0 4px 4px 0;background:var(--surface);font-size:12px;}
+.steps li::before{content:"0" counter(t);display:block;color:var(--faint);font:10px var(--font-mono);}
+.steps b{display:block;margin:.1rem 0;font-size:12.5px;}
+.steps span{display:block;color:var(--muted);}
+.pre{margin:.4rem 0 0;padding:.55rem .65rem;max-height:9rem;overflow:auto;background:var(--sand);border-radius:4px;font:11.5px/1.5 var(--font-mono);color:var(--muted);white-space:pre-wrap;}
+.status-line{display:inline-flex;align-items:center;gap:.4rem;font-size:12.5px;color:var(--muted);}
+.pulse{width:.6rem;height:.6rem;border-radius:50%;background:var(--moss);box-shadow:0 0 0 3px color-mix(in srgb,var(--moss) 22%,transparent);animation:p 1.6s ease-in-out infinite;}
+@keyframes p{0%,100%{opacity:1;}50%{opacity:.4;}}
+.backlink{font-size:12px;color:var(--muted);}
+.backlink b{color:var(--ink);}
+
+/* rollup meter (program) */
+.meter{display:flex;height:.7rem;border-radius:999px;overflow:hidden;background:var(--line);}
+.meter i{height:100%;}
+.seg-work{background:var(--working);} .seg-idle{background:var(--idle);} .seg-needs{background:var(--needs);} .seg-end{background:var(--ended);opacity:.55;}
+.roster{display:grid;gap:.35rem;}
+.roster-row{display:grid;grid-template-columns:auto 1fr auto;gap:.5rem;align-items:center;font-size:12.5px;}
+.role-chip{display:inline-flex;align-items:center;padding:.06rem .4rem;border:1px solid;border-left:3px solid;border-radius:4px;font-size:9.5px;font-weight:700;white-space:nowrap;}
+.role-orchestrator{--rc:#5b4bb7;--rs:#f0eeff;--ri:#413296;}
+.role-backend{--rc:#0a6c70;--rs:#e7f6f4;--ri:#07595b;}
+.role-frontend{--rc:#086c95;--rs:#e8f5fb;--ri:#075a7c;}
+.role-tester{--rc:#a35400;--rs:#fff1df;--ri:#894400;}
+.role-chip{border-color:color-mix(in srgb,var(--rc) 48%,var(--line));border-left-color:var(--rc);color:var(--ri);background:var(--rs);}
+.roster-state{font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:.3rem;}
+
+/* lineage spine */
+.spine{border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--raise);padding:.6rem .7rem;}
+.spine .lbl{font:700 9px/1.3 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:.45rem;}
+.lin{display:grid;grid-template-columns:1.1rem 1fr;gap:0 .5rem;align-items:center;}
+.lin .node{display:grid;grid-template-columns:subgrid;grid-column:1/3;align-items:center;min-height:26px;}
+.lin .rail{position:relative;justify-self:center;width:1.1rem;height:100%;display:flex;align-items:center;justify-content:center;}
+.lin .rail::before{content:"";position:absolute;top:0;bottom:0;width:1.5px;background:var(--line-strong);}
+.lin .node:first-child .rail::before{top:50%;}
+.lin .node:last-child .rail::before{bottom:50%;}
+.lin .glyph{position:relative;z-index:1;width:.7rem;height:.7rem;border-radius:50%;background:var(--surface);border:2px solid var(--d1);}
+.lin .node.d0 .glyph{border-color:var(--d0);}
+.lin .node.d1 .glyph{border-color:var(--d1);}
+.lin .node.cur .glyph{width:.85rem;height:.85rem;background:var(--claude);border-color:var(--claude);box-shadow:0 0 0 3px color-mix(in srgb,var(--claude) 20%,transparent);}
+.lin .name{font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lin .name .m{color:var(--faint);font-size:11px;}
+.lin .name.cur{font-weight:750;}
+.child-fan{margin-top:.45rem;padding-left:1.1rem;display:grid;gap:.25rem;border-left:1.5px solid var(--d1);margin-left:.5rem;}
+.child-fan .kid{display:flex;align-items:center;gap:.4rem;font-size:12px;color:var(--muted);}
+.child-fan .more{color:var(--slate);font-size:11.5px;}
+
+.foot{border-top:1px solid color-mix(in srgb,var(--bad) 25%,var(--line));padding-top:.6rem;}
+.foot .lbl{color:var(--bad);font:700 10px/1.4 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;margin-bottom:.35rem;}
+.reason{font-size:12px;color:var(--faint);margin:0;}
+.link-inline{color:var(--ink);border-bottom:1px solid var(--line-strong);}
+.opacity-past{opacity:.9;}
+.disc summary{cursor:pointer;color:var(--faint);font-size:11.5px;font-weight:600;list-style:none;}
+.disc summary::before{content:"▸ ";}
+.disc[open] summary::before{content:"▾ ";}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>The Ant Hill — Inspector Drawer States</h1>
+  <p>Six distinct drawer designs, one shared chassis. Each type differs by a single accent channel (top rule + eyebrow color), its lead element, and its body blocks — never by rainbow color-coding. Rendered with the real <code>styles.css</code> tokens on the current light theme. Companion plan: <code>DRAWER-STATES-PLAN-2026-07-22.md</code>.</p>
+  <div class="legend">
+    <span><i style="background:var(--ember)"></i>Intervention · ember</span>
+    <span><i style="background:var(--amber)"></i>Advisory · amber</span>
+    <span><i style="background:var(--claude)"></i>Agent · provider</span>
+    <span><i style="background:var(--ink)"></i>Program · ink</span>
+    <span><i style="background:var(--slate)"></i>Investigation · slate</span>
+    <span><i style="background:var(--moss)"></i>Resolved · moss</span>
+  </div>
+</div>
+
+<div class="gallery">
+
+  <!-- INTERVENTION -->
+  <div class="cell">
+    <div class="cell-cap"><b>1 · Intervention</b> — act now</div>
+    <div class="drawer">
+      <div class="accent acc-ember"></div>
+      <div class="inner">
+        <div class="head">
+          <span class="eyebrow em">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:.9rem;height:.9rem"><line x1="12" y1="5.5" x2="12" y2="13.5" stroke-width="2.6"/><circle cx="12" cy="17.6" r="1.2" fill="currentColor" stroke="none"/></svg>
+            Open · act now
+          </span>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="lead">Backend lane failed typecheck and is blocking 3 downstream agents.</div>
+        <div class="block" style="border-color:color-mix(in srgb,var(--ember) 30%,var(--line));">
+          <div class="lbl" style="color:var(--ember)">Fix</div>
+          <button class="btn primary full">Generate triage</button>
+        </div>
+        <div>
+          <div class="sect-title">Affected (3)</div>
+          <div class="chips" style="margin-top:.4rem">
+            <button class="chip">luna-be <span class="p">· Hormiga</span></button>
+            <button class="chip">sol-fe <span class="p">· Hormiga</span></button>
+            <button class="chip">tester-2 <span class="p">· Hormiga</span></button>
+          </div>
+        </div>
+        <details class="disc">
+          <summary>Technical</summary>
+          <div class="pre">tsc --noEmit → 4 errors
+ x-campaign-builder/host.ts:212  TS2345
+ launchpad-rail/config.ts:88     TS2322</div>
+        </details>
+        <p class="impact">Verifying since 3:14 PM · awaiting a fresh source snapshot to clear the finding.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADVISORY -->
+  <div class="cell">
+    <div class="cell-cap"><b>2 · Advisory</b> — be aware</div>
+    <div class="drawer">
+      <div class="accent acc-amber"></div>
+      <div class="inner">
+        <div class="head">
+          <span class="eyebrow am">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" style="width:.95rem;height:.95rem"><path d="M12 3.5 21.5 20H2.5z"/><line x1="12" y1="10" x2="12" y2="14.5"/><circle cx="12" cy="17.4" r="1" fill="currentColor" stroke="none"/></svg>
+            Advisory
+          </span>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="lead quiet">Cursor session reports a non-approved model (grok expected). Controls stay available; no action is forced.</div>
+        <div>
+          <div class="sect-title">Affects</div>
+          <div class="chips" style="margin-top:.4rem">
+            <button class="chip">luna-audit <span class="p">· Hormiga</span></button>
+          </div>
+        </div>
+        <p class="impact">Open · 1 affected</p>
+        <div class="row"><button class="btn ghost">Escalate to triage</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AGENT -->
+  <div class="cell">
+    <div class="cell-cap"><b>3 · Agent</b> — running session</div>
+    <div class="drawer provider-claude">
+      <div class="inner">
+        <div class="head">
+          <div style="min-width:0">
+            <span class="eyebrow nk">Working · Healthy</span>
+            <h2 class="title sm">luna-integration</h2>
+            <p class="sub"><span>Hormiga Dormida</span><span>·</span><span style="color:var(--claude);font-weight:650">Claude · sol 5.6</span></p>
+          </div>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="pills">
+          <span class="pill work"><span class="dot work"></span>Working</span>
+          <span class="pill ok">Healthy</span>
+          <span class="pill link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="9" width="9.5" height="6" rx="3"/><rect x="11.5" y="9" width="9.5" height="6" rx="3"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Linked</span>
+          <span class="pill ok">Compliant</span>
+        </div>
+        <div class="block" style="display:flex;flex-direction:column;gap:.45rem">
+          <div class="row">
+            <button class="btn primary">Focus</button>
+            <div class="instruct"><input placeholder="Send an instruction…"><button class="btn">Send</button></div>
+          </div>
+        </div>
+        <div class="spine">
+          <div class="lbl">Lineage</div>
+          <div class="lin">
+            <div class="node d0"><span class="rail"><span class="glyph"></span></span><span class="name">luna-lead <span class="m">· orchestrator</span></span></div>
+            <div class="node d1"><span class="rail"><span class="glyph"></span></span><span class="name">swarm-3 <span class="m">· verifier</span></span></div>
+            <div class="node cur"><span class="rail"><span class="glyph"></span></span><span class="name cur">luna-integration <span class="m">· this</span></span></div>
+          </div>
+          <div class="child-fan">
+            <div class="kid"><span class="dot work"></span>codex-be — Working</div>
+            <div class="kid"><span class="dot idle"></span>sol-fe — Idle</div>
+            <div class="more">⊕ 2 more subagents ▸</div>
+          </div>
+        </div>
+        <div class="split">
+          <div>
+            <div class="sect-title">Overview</div>
+            <dl class="dl" style="margin-top:.4rem">
+              <dt>task</dt><dd>Wire Luna triage into the drawer</dd>
+              <dt class="u">running for</dt><dd class="mono">22m</dd>
+              <dt class="u">latest call</dt><dd class="mono">48k tokens</dd>
+              <dt class="u">context</dt><dd class="mono">41%</dd>
+            </dl>
+          </div>
+          <div>
+            <div class="sect-title">Technical</div>
+            <dl class="dl" style="margin-top:.4rem">
+              <dt>session id</dt><dd><code>claude:0f2a…</code></dd>
+              <dt class="u">working dir</dt><dd><code>/Users/…/luna</code></dd>
+              <dt class="u">nesting</dt><dd>1</dd>
+              <dt>git</dt><dd><code>feat/x-cb</code> @ <code>a1b2c3d</code></dd>
+            </dl>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="lbl">Danger</div>
+          <div class="row"><button class="btn danger">Interrupt</button><button class="btn danger">Archive</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROGRAM -->
+  <div class="cell">
+    <div class="cell-cap"><b>4 · Program</b> — the swarm at a glance</div>
+    <div class="drawer">
+      <div class="accent acc-ink"></div>
+      <div class="inner">
+        <div class="head">
+          <div style="min-width:0">
+            <span class="eyebrow nk">Program</span>
+            <h2 class="title sm">Hormiga Dormida</h2>
+          </div>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="block">
+          <div class="lbl">9 agents</div>
+          <div class="meter">
+            <i class="seg-work" style="width:22%"></i>
+            <i class="seg-idle" style="width:11%"></i>
+            <i class="seg-needs" style="width:11%"></i>
+            <i class="seg-end" style="width:56%"></i>
+          </div>
+          <p class="impact" style="margin:.4rem 0 0">2 working · 1 idle · 1 alert · 5 done</p>
+        </div>
+        <dl class="dl">
+          <dt>purpose</dt><dd>Paid-social crawl→plan engine</dd>
+        </dl>
+        <div class="row"><button class="btn primary full">Broadcast to 3 eligible</button></div>
+        <div>
+          <div class="sect-title">Roster</div>
+          <div class="roster" style="margin-top:.45rem">
+            <div class="roster-row"><span class="role-chip role-orchestrator">Orchestrator</span><span>luna-lead</span><span class="roster-state"><span class="dot work"></span>Working</span></div>
+            <div class="roster-row"><span class="role-chip role-backend">Backend</span><span>codex-be</span><span class="roster-state"><span class="dot work"></span>Working</span></div>
+            <div class="roster-row"><span class="role-chip role-frontend">Frontend</span><span>sol-fe</span><span class="roster-state"><span class="dot idle"></span>Idle</span></div>
+            <div class="roster-row"><span class="role-chip role-tester">Tester</span><span>tester-2</span><span class="roster-state" style="color:var(--ember)"><span class="dot needs"></span>Needs you</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- INVESTIGATION -->
+  <div class="cell">
+    <div class="cell-cap"><b>5 · Investigation</b> — Luna run, live</div>
+    <div class="drawer">
+      <div class="accent acc-slate"></div>
+      <div class="inner">
+        <div class="head">
+          <span class="eyebrow sl">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:.95rem;height:.95rem"><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M8.2 8.2a5.5 5.5 0 0 0 0 7.6"/><path d="M15.8 8.2a5.5 5.5 0 0 1 0 7.6"/></svg>
+            Investigation · Running
+          </span>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="lead sm" style="font-size:1.05rem">Diagnose backend typecheck failure</div>
+        <div class="status-line"><span class="pulse"></span>running · native Luna</div>
+        <div>
+          <div class="sect-title">Plan (4 steps)</div>
+          <ol class="steps">
+            <li><b>Reproduce</b><span>Run tsc --noEmit in the agent cwd</span></li>
+            <li><b>Localize</b><span>Parse the first error frame</span></li>
+            <li><b>Diagnose</b><span>Trace the offending type import</span></li>
+            <li><b>Propose</b><span>Draft a bounded fix, read-only</span></li>
+          </ol>
+        </div>
+        <details class="disc">
+          <summary>Result (appears on completion)</summary>
+          <div class="pre">pending — investigation still running</div>
+        </details>
+        <p class="backlink">↖ From intervention: <b>Backend lane failed typecheck…</b></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESOLVED -->
+  <div class="cell">
+    <div class="cell-cap"><b>6 · Resolved</b> — cleared finding</div>
+    <div class="drawer opacity-past">
+      <div class="accent acc-moss"></div>
+      <div class="inner">
+        <div class="head">
+          <span class="eyebrow mo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:.95rem;height:.95rem"><polyline points="20 6 9 17 4 12"/></svg>
+            Resolved
+          </span>
+          <button class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>Close</button>
+        </div>
+        <div class="lead past">Cleared 3:40 PM · source confirmation.</div>
+        <dl class="dl">
+          <dt>was</dt><dd>Backend lane failed typecheck</dd>
+          <dt>now</dt><dd>Fresh snapshot shows tests passing</dd>
+        </dl>
+        <div>
+          <div class="sect-title">Recovered</div>
+          <div class="chips" style="margin-top:.4rem"><button class="chip">codex-be <span class="p">· Hormiga</span></button></div>
+        </div>
+        <div class="row"><button class="btn">Dismiss</button></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
