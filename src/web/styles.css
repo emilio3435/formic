@@ -602,6 +602,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .program-rename:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 .program-rename .ico { width: 0.95rem; height: 0.95rem; }
+.program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
 .program-rollup { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup .hot { color: var(--ember); font-weight: 700; }
@@ -932,14 +934,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-steps span { display: block; color: var(--muted); }
 
 /* program: segmented rollup meter + roster */
-.dw-meter { display: flex; height: 0.7rem; border-radius: 999px; overflow: hidden; background: var(--line); }
+.dw-meter { display: flex; height: 0.7rem; width: 100%; border-radius: 999px; overflow: hidden; background: var(--line); }
 .dw-meter i { height: 100%; display: block; }
-.dw-seg-work { background: var(--working); }
-.dw-seg-idle { background: var(--idle); }
-.dw-seg-needs { background: var(--needs); }
-.dw-seg-end { background: var(--ended); opacity: 0.55; }
+/* The bands are SVG rects (widths are geometry, CSP-safe) so they take fill;
+   the background twins keep the classes reusable for any div-based meter. */
+.dw-seg-work { background: var(--working); fill: var(--working); }
+.dw-seg-idle { background: var(--idle); fill: var(--idle); }
+.dw-seg-needs { background: var(--needs); fill: var(--needs); }
+.dw-seg-end { background: var(--ended); fill: var(--ended); opacity: 0.55; }
 .dw-roster { display: grid; gap: 0.35rem; margin-top: 0.45rem; }
-.dw-roster-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem; align-items: center; font-size: 12.5px; }
+.dw-roster-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem; align-items: center; font: inherit; font-size: 12.5px; width: 100%; padding: 0.15rem 0; background: none; border: 0; text-align: left; cursor: pointer; }
+.dw-roster-row:hover .dw-roster-name { color: var(--ember); }
+.dw-roster-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dw-roster-state { font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; }
 
 /* lineage spine (the signature nesting element) */

@@ -91,6 +91,29 @@ function svgMeter(pct, cls, opts = {}) {
   return svg;
 }
 
+/* Segmented SVG meter — one contiguous bar split into proportional bands, each a
+   rect whose width is a geometry attribute (never inline style, so the strict
+   CSP holds). segments = [{ cls, value }]; zero-value bands are skipped. */
+function svgSegmentMeter(segments, opts = {}) {
+  const total = segments.reduce((sum, seg) => sum + Math.max(0, seg.value), 0);
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 8");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "dw-meter");
+  svg.setAttribute("role", "img");
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+  let x = 0;
+  if (total > 0) {
+    for (const seg of segments) {
+      const w = (Math.max(0, seg.value) / total) * 100;
+      if (w <= 0) continue;
+      svg.append(svgChild(["rect", { x, y: 0, width: w, height: 8, class: seg.cls }]));
+      x += w;
+    }
+  }
+  return svg;
+}
+
 /* ---------- formatting ---------- */
 
 const fmtTok = (n) =>
@@ -1515,6 +1538,13 @@ function renderProgram(program, agents) {
       dataset: { fkey: "prog-rename:" + program.id },
       onclick: () => startRename(programLabelTarget(program)),
     }, icon("rename")),
+    el("button", {
+      type: "button",
+      class: "program-details",
+      "aria-label": "Open program details for " + label,
+      dataset: { fkey: "prog-details:" + program.id },
+      onclick: () => selectEntity({ kind: "program", id: program.id }),
+    }, "Details"),
     rollup);
 
   const section = el("section", { class: "program" + (open ? " open" : ""), "aria-label": label },
@@ -1831,6 +1861,7 @@ const DRAWER_RENDERERS = {
   advisory: renderAdvisoryDrawer,
   investigation: renderInvestigationDrawer,
   resolved: renderResolvedDrawer,
+  program: renderProgramDrawer,
 };
 
 function resolveSelection(sel) {
@@ -1851,6 +1882,10 @@ function resolveSelection(sel) {
     const pool = [...issuesOf(state.snap), ...recentlyResolvedOf(state.snap)];
     const issue = pool.find((i) => i.id === sel.id && issueLifecycle(i).state === "resolved");
     return issue ? { kind: "resolved", issue } : null;
+  }
+  if (sel.kind === "program") {
+    const program = state.snap.programs.find((p) => p.id === sel.id);
+    return program ? { kind: "program", program } : null;
   }
   return null;
 }
@@ -2016,6 +2051,94 @@ function renderResolvedDrawer(pane, view) {
 
   const chips = affectedChips(issue, "Recovered");
   if (chips) pane.append(chips);
+}
+
+const ROSTER_ROLE_ORDER = ["orchestrator", "backend", "frontend", "verifier", "tester", "automation", "agent"];
+const ROSTER_ROLE_SHORT = {
+  orchestrator: "Orchestrator", backend: "Backend", frontend: "Frontend",
+  verifier: "Verifier", tester: "Tester", automation: "Automation", agent: "Agent",
+};
+
+/* Each agent falls in exactly one meter band so the segments sum to the roster
+   count (alerts take priority over their working/idle activity). */
+function programMeterSegments(agents) {
+  let needs = 0, working = 0, idle = 0, ended = 0;
+  for (const a of agents) {
+    const act = deriveActivity(a);
+    if (act === "ended") { ended++; continue; }
+    if (deriveOutcome(a) !== "healthy") { needs++; continue; }
+    if (act === "working") working++;
+    else idle++;
+  }
+  return [
+    { cls: "dw-seg-work", value: working },
+    { cls: "dw-seg-idle", value: idle },
+    { cls: "dw-seg-needs", value: needs },
+    { cls: "dw-seg-end", value: ended },
+  ];
+}
+
+function programRosterRow(agent) {
+  const rv = roleView(agent.role);
+  const act = deriveActivity(agent);
+  const outcome = deriveOutcome(agent);
+  const needs = outcome !== "healthy" && act !== "ended";
+  const dotCls = needs ? "dw-dot--needs" : act === "working" ? "dw-dot--work" : act === "ended" ? "dw-dot--end" : "dw-dot--idle";
+  const stateText = needs ? OUTCOME_LABELS[outcome] : ACTIVITY_LABELS[act];
+  return el("button", {
+    type: "button", class: "dw-roster-row",
+    dataset: { fkey: "roster:" + agent.id },
+    onclick: () => selectEntity({ kind: "agent", id: agent.id }),
+    "aria-label": "Open " + agentName(agent) + " · " + (ROSTER_ROLE_SHORT[rv.key] || rv.label) + " · " + stateText,
+  },
+    el("span", { class: "role-chip role-" + rv.key, text: ROSTER_ROLE_SHORT[rv.key] || rv.label }),
+    el("span", { class: "dw-roster-name", text: agentName(agent) }),
+    el("span", { class: "dw-roster-state" }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), stateText));
+}
+
+// Program drawer — the swarm at a glance. Neutral ink accent (a program isn't an
+// alarm); a segmented health meter and a role-grouped roster are unique here.
+function renderProgramDrawer(pane, view) {
+  const program = view.program;
+  const agents = program.agents;
+  const r = deriveRollup(agents);
+  drawerAccent(pane, "ink");
+  pane.append(drawerHead(dwEyebrow("ink", null, "Program"), programName(program)));
+
+  pane.append(el("div", { class: "dw-block" },
+    el("div", { class: "dw-block-label", text: agents.length + (agents.length === 1 ? " agent" : " agents") }),
+    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" }),
+    el("p", { class: "dw-impact", text: rollupParts(r).map((p) => p.text).join(" · ") })));
+
+  if (program.purpose || program.path) {
+    const grid = el("dl", { class: "detail-grid" });
+    if (program.purpose) dtdd(grid, "purpose", program.purpose);
+    if (program.path) dtdd(grid, "path", program.path, { code: true });
+    pane.append(grid);
+  }
+
+  const eligible = agents.filter(broadcastEligible).length;
+  pane.append(el("div", { class: "controls-row" },
+    el("button", {
+      type: "button", class: "btn primary dw-full",
+      disabled: eligible ? null : "",
+      dataset: { fkey: "prog-broadcast:" + program.id },
+      onclick: () => { enterSelectMode(true); selectProgramEligible(program); },
+    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients")));
+
+  const roster = el("div", { class: "dw-roster" });
+  const grouped = new Map();
+  for (const a of agents) {
+    const key = roleView(a.role).key;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(a);
+  }
+  for (const key of ROSTER_ROLE_ORDER) {
+    for (const a of grouped.get(key) || []) roster.append(programRosterRow(a));
+  }
+  pane.append(el("div", {},
+    el("h3", { class: "section-title", text: "Roster" }),
+    roster));
 }
 
 // Agent drawer — the workhorse, unchanged in body (reuses renderOverview/
