@@ -1,0 +1,52 @@
+{
+  "programs": [
+    {
+      "id": "chronicle-room",
+      "name": "Chronicle Room",
+      "purpose": "Make the advertising platforms feel like one editorial operating room, Google first.",
+      "match": ["hd-chronicle", "chronicle-room"]
+    },
+    {
+      "id": "master-health",
+      "name": "Master Health",
+      "purpose": "Reduce large-file debt and improve repository health.",
+      "match": ["hd-master-health"]
+    },
+    {
+      "id": "settings-baseline",
+      "name": "Settings & Baseline UX",
+      "purpose": "Improve cockpit settings and baseline experience.",
+      "match": ["hd-cmux-master-integration", "hd-settings-cockpit", "cockpit-settings", "settings page", "signal settings", "settings boundary"]
+    },
+    {
+      "id": "hormiga",
+      "name": "Hormiga",
+      "purpose": "Operate LaHormigaDormida safely across live and isolated checkouts.",
+      "match": ["LaHormigaDormida", "HormigaDormida", "/Developer/hd-"]
+    },
+    {
+      "id": "elio-suite",
+      "name": "Elio Suite",
+      "purpose": "Build the Elio intelligence suite and supporting products.",
+      "match": ["elio-intelligence-suite", "elioai", "elio-pocket"]
+    },
+    {
+      "id": "job-bored",
+      "name": "Job-Bored",
+      "purpose": "Operate the job-search product and its trusted automation lanes.",
+      "match": ["Job-Bored", "job-bored"]
+    },
+    {
+      "id": "openburnbar",
+      "name": "OpenBurnBar",
+      "purpose": "Build and operate the BurnBar macOS app.",
+      "match": ["OpenBurnBar", "openburnbar"]
+    },
+    {
+      "id": "the-mountain",
+      "name": "The Ant Hill",
+      "purpose": "Provide a truthful, glanceable global command center for agent work.",
+      "match": ["the-mountain", "/mountain"]
+    }
+  ]
+}

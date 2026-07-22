@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>The Ant Hill — operator console</title>
+  <link rel="stylesheet" href="styles.css?v=colony-4">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to agent list</a>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="masthead-scene">
+        <!-- Living colony horizon. Ambient ants forage along the trail; the sun
+             above the mound is the connection beacon. Fully static under
+             prefers-reduced-motion (see styles.css). -->
+        <svg class="colony" viewBox="0 0 520 120" preserveAspectRatio="xMidYMax slice" role="img" aria-label="The Ant Hill — a colony at first light">
+          <defs>
+            <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+              <stop class="sky-top" offset="0"></stop>
+              <stop class="sky-low" offset="1"></stop>
+            </linearGradient>
+            <linearGradient id="soil" x1="0" y1="0" x2="0" y2="1">
+              <stop class="soil-top" offset="0"></stop>
+              <stop class="soil-low" offset="1"></stop>
+            </linearGradient>
+          </defs>
+          <rect class="scene-sky" x="0" y="0" width="520" height="120" fill="url(#sky)"></rect>
+          <!-- distant ridges -->
+          <path class="ridge ridge-far" d="M0,82 C90,72 150,78 240,74 C330,70 400,78 520,70 L520,120 L0,120 Z"></path>
+          <path class="ridge ridge-near" d="M0,94 C120,88 190,98 300,92 C400,87 460,94 520,91 L520,120 L0,120 Z"></path>
+          <!-- low first-light sun / beacon -->
+          <circle id="nest-beacon" class="beacon" cx="232" cy="78" r="10" aria-hidden="true"></circle>
+          <!-- ground -->
+          <rect class="ground" x="0" y="102" width="520" height="18" fill="url(#soil)"></rect>
+          <!-- the mound -->
+          <path class="mound" d="M298,102 C324,74 356,64 380,64 C404,64 436,74 462,102 Z"></path>
+          <ellipse class="mound-mouth" cx="380" cy="96" rx="9" ry="4.5"></ellipse>
+          <!-- foraging trail (the signature) -->
+          <path class="trail" d="M18,112 C140,103 240,118 338,108 S480,104 502,110"></path>
+          <g class="ants" aria-hidden="true">
+            <ellipse class="ant ant-1" rx="2.3" ry="1.35"></ellipse>
+            <ellipse class="ant ant-2" rx="2.3" ry="1.35"></ellipse>
+            <ellipse class="ant ant-3" rx="2.3" ry="1.35"></ellipse>
+            <ellipse class="ant ant-4" rx="2.3" ry="1.35"></ellipse>
+          </g>
+        </svg>
+        <div class="wordmark">
+          <h1>The Ant&nbsp;Hill</h1>
+          <p class="eyebrow">Live multi-agent control room</p>
+        </div>
+      </div>
+      <p id="conn-badge" class="conn conn-connecting">
+        <span class="conn-dot" aria-hidden="true"></span>
+        <span id="conn-label">Connecting</span>
+      </p>
+    </div>
+  </header>
+
+  <!-- One scan-ordered operational rail: verdict → activity → attention → context → policy. -->
+  <section id="health-rail" class="health-rail" aria-label="Fleet health"></section>
+
+  <div class="app-body">
+    <main id="main" class="pane-list" tabindex="-1">
+      <section id="interventions" class="interventions" aria-labelledby="interventions-title" hidden>
+        <h2 id="interventions-title" class="section-title">Needs you</h2>
+        <ul id="interventions-list" class="signal-list"></ul>
+      </section>
+
+      <section id="warnings" class="warnings" aria-labelledby="warnings-title" hidden>
+        <h2 id="warnings-title" class="section-title">Advisories</h2>
+        <ul id="warnings-list" class="signal-list"></ul>
+      </section>
+
+      <section class="toolbar" aria-label="Views, filters, and search">
+        <nav class="views" role="group" aria-label="View" id="views">
+          <button type="button" class="view-tab" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
+          <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Agent alerts<span class="count" id="count-needs-you"></span></button>
+          <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
+          <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
+          <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
+        </nav>
+        <div class="filter-bar" id="filter-bar" aria-label="Filters"></div>
+        <div class="toolbar-row">
+          <div class="search-wrap">
+            <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
+            <input id="search" type="search" placeholder="Search agents, tasks, programs…" autocomplete="off">
+          </div>
+          <button type="button" class="btn select-toggle" id="select-toggle" aria-pressed="false">Select</button>
+        </div>
+        <p id="scope-note" class="scope-note" aria-live="polite"></p>
+      </section>
+
+      <section id="programs" class="programs" aria-label="Programs and agents"></section>
+
+      <div id="empty-state" class="empty-state" hidden>
+        <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">
+          <path d="M8,50 C36,44 58,54 86,49" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0.5 7"></path>
+          <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50 Z" fill="currentColor" opacity="0.12"></path>
+          <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50" fill="none" stroke="currentColor" stroke-width="1.6"></path>
+          <ellipse cx="140" cy="45" rx="7" ry="3.4" fill="currentColor" opacity="0.5"></ellipse>
+        </svg>
+        <p id="empty-message">The colony is still.</p>
+        <p id="empty-hint" class="empty-hint"></p>
+        <button type="button" class="btn" id="empty-retry" hidden>Retry connection</button>
+      </div>
+    </main>
+
+    <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
+  </div>
+
+  <div id="broadcast-bar" class="broadcast-bar" hidden aria-live="polite"></div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js?v=colony-4"></script>
+</body>
+</html>

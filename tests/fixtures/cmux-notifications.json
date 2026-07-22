@@ -1,0 +1,40 @@
+{
+  "notifications": [
+    {
+      "id": "older-exact",
+      "surface_id": "SURFACE-EXACT",
+      "workspace_id": "WORKSPACE-EXACT",
+      "created_at": "2026-07-21T23:00:00.000Z",
+      "read": false,
+      "title": "Waiting",
+      "body": "Older approval request"
+    },
+    {
+      "id": "newer-exact",
+      "surface_id": "SURFACE-EXACT",
+      "workspace_id": "WORKSPACE-EXACT",
+      "created_at": "2026-07-21T23:05:00.000Z",
+      "read": false,
+      "title": "Blocked",
+      "body": "Newest exact-surface blocker"
+    },
+    {
+      "id": "read-exact",
+      "surface_id": "SURFACE-EXACT",
+      "workspace_id": "WORKSPACE-EXACT",
+      "created_at": "2026-07-21T23:06:00.000Z",
+      "read": true,
+      "title": "Resolved",
+      "body": "This read message must not hold attention"
+    },
+    {
+      "id": "other-surface",
+      "surface_id": "SURFACE-OTHER",
+      "workspace_id": "WORKSPACE-OTHER",
+      "created_at": "2026-07-21T23:07:00.000Z",
+      "read": false,
+      "title": "Other agent",
+      "body": "Must not leak across agents"
+    }
+  ]
+}

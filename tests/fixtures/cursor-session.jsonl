@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"Verify The Mountain routing without changing live state."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I am checking persisted Cursor identity and cmux pane evidence."},{"type":"tool_use","name":"Read","input":{"path":"src/server/identity.ts"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Cursor identity is exact when the live process opens its session store."}]}}
+{"type":"turn_ended","status":"success"}

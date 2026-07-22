@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Mountain v3 implementation ledger</title>
+    <style>
+      body { max-width: 74rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.5 system-ui; color: #18211b; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #ccd5ce; padding: .65rem; text-align: left; vertical-align: top; }
+      th { background: #eef3ef; }
+      code { background: #eef3ef; padding: .1rem .25rem; }
+    </style>
+  </head>
+  <body>
+    <h1>The Mountain v3 implementation ledger</h1>
+    <p><strong>Scope:</strong> isolated rebuild at <code>/Users/emilionunezgarcia/Developer/the-mountain</code>, bound to <code>127.0.0.1:4701</code>. Live v2 remains untouched.</p>
+    <table>
+      <thead><tr><th>Milestone</th><th>Status</th><th>Evidence / blocker</th></tr></thead>
+      <tbody>
+        <tr><td>M0 — isolated baseline and contracts</td><td>Complete</td><td>Goal, ledger, typed API contract, program hints, standalone git metadata, and Bun lockfile created before implementation.</td></tr>
+        <tr><td>M1 — identity and collector truth</td><td>Complete</td><td>Codex, Claude, Cursor Agent, legacy OMP history, and cmux preserve source session IDs and recorded cwd. Cursor merges direct-CLI metadata with GUI conversation, project-membership, model, transcript, and subagent evidence. GUI cards require exact cmux identity and cannot claim a pane through cwd fallback. Injected instruction envelopes are excluded from tasks, home-cwd sources retain their raw cwd while receiving evidence-backed presentation groups, and OMP compatibility records are archived-only.</td></tr>
+        <tr><td>M2 — fail-loud controls and request safety</td><td>Complete</td><td>Unit and live HTTP probes prove same-origin structured actions, real non-zero/stderr propagation, and fail-closed missing, ambiguous, stale-fallback, and conflicted routes.</td></tr>
+        <tr><td>M3 — mission and artifact UX</td><td>Complete</td><td>Active-first mission view, human assignment names, explicit Home / Unassigned history, purpose, token/cost provenance, disabled reasons, keyboard labeling, and responsive layouts passed browser review without horizontal overflow.</td></tr>
+        <tr><td>M4 — automated and disposable live verification</td><td>Complete</td><td><code>bun run check</code>: 66/66 tests and 204 assertions; TypeScript and browser JavaScript clean. An isolated disposable workspace proved exact focus, instruct, and interrupt with HTTP 200, then was closed and removed. No Chronicle or other real agent workspace was controlled. Cursor GUI, home-attribution, human-name, and archived-OMP corrections passed live API and browser checks. See <a href="./VERIFICATION.md">VERIFICATION.md</a>.</td></tr>
+      </tbody>
+    </table>
+    <h2>Boundaries</h2>
+    <p>No commit, push, deployment, launchd edit, or port-4700 cutover is authorized. The existing loose files under <code>~/mountain</code> are read-only reference material.</p>
+    <h2>Known live condition</h2>
+    <p>The point-in-time 2026-07-21 snapshot reported two real cmux surfaces with conflicting open-session evidence. Both remained visibly quarantined from control; this is live environment state, not a silent routing fallback.</p>
+  </body>
+</html>

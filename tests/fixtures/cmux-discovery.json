@@ -1,0 +1,36 @@
+{
+  "count": 4,
+  "terminals": [
+    {
+      "current_directory": "/Users/emilionunezgarcia/Developer/the-mountain",
+      "git_branch": "main",
+      "git_dirty": true,
+      "pane_id": "PANE-EXACT",
+      "surface_id": "SURFACE-EXACT",
+      "workspace_id": "WORKSPACE-EXACT",
+      "workspace_title": "The Mountain backend",
+      "source_session_id": "019f86c4-codex-7000-aeb8-26e2cfd0e8ec"
+    },
+    {
+      "current_directory": "/Users/emilionunezgarcia",
+      "pane_id": "PANE-DUPLICATE-A",
+      "surface_id": "SURFACE-DUPLICATE-A",
+      "workspace_id": "WORKSPACE-DUPLICATE-A",
+      "workspace_title": "CODEX - Platform UX"
+    },
+    {
+      "current_directory": "/Users/emilionunezgarcia",
+      "pane_id": "PANE-DUPLICATE-B",
+      "surface_id": "SURFACE-DUPLICATE-B",
+      "workspace_id": "WORKSPACE-DUPLICATE-B",
+      "workspace_title": "Chronicle orchestrator"
+    },
+    {
+      "current_directory": "/Users/emilionunezgarcia/Developer/unique-project",
+      "pane_id": "PANE-UNIQUE-CWD",
+      "surface_id": "SURFACE-UNIQUE-CWD",
+      "workspace_id": "WORKSPACE-UNIQUE-CWD",
+      "workspace_title": "Unique project"
+    }
+  ]
+}
