@@ -39,6 +39,79 @@ function agent(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function snapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-07-22T03:00:00.000Z",
+    controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
+    totals: {
+      live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      sourceHealth: { healthy: 2, degraded: 0, total: 2 },
+    },
+    programs: [{ id: "p", name: "P", agents: [agent()] }],
+    ...overrides,
+  };
+}
+
+describe("summary status and widgets", () => {
+  test("maps live connection, source, and control evidence to one system verdict", () => {
+    const healthy = snapshot();
+    expect(M.systemStatus(healthy, "live").label).toBe("Operational");
+    expect(M.systemStatus(snapshot({ totals: { ...healthy.totals, sourceHealth: { healthy: 1, degraded: 1, total: 2 } } }), "live").label).toBe("Degraded");
+    expect(M.systemStatus(snapshot({ controlHealth: { ...healthy.controlHealth, cmuxReachable: false } }), "live").label).toBe("Degraded");
+    expect(M.systemStatus(healthy, "stale").label).toBe("Degraded");
+    expect(M.systemStatus(null, "offline").label).toBe("Offline");
+  });
+
+  test("keeps the requested defaults, catalog, and persisted order valid", () => {
+    expect(M.DEFAULT_WIDGET_IDS).toEqual(["system", "active-work", "attention", "context-peak", "source-health"]);
+    expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
+      "system", "active-work", "attention", "context-peak", "source-health",
+      "waiting", "history", "model-policy", "routing-health", "context-reporting",
+    ]);
+    expect(M.WIDGET_STORAGE_KEY).toBe("mtn3-summary-widgets");
+    expect(M.parseWidgetPreference(JSON.stringify(["system", "attention", "waiting"]))).toEqual(["system", "attention", "waiting"]);
+    expect(M.parseWidgetPreference("not-json")).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds(["attention", "system"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds(["system", "attention", "attention"])).toEqual(M.DEFAULT_WIDGET_IDS);
+  });
+
+  test("reorders selectable widgets while keeping the system verdict pinned", () => {
+    const defaults = M.DEFAULT_WIDGET_IDS;
+    expect(M.reorderWidgetIds(defaults, "attention", -1)).toEqual([
+      "system", "attention", "active-work", "context-peak", "source-health",
+    ]);
+    expect(M.reorderWidgetIds(defaults, "system", 1)).toEqual(defaults);
+    expect(M.reorderWidgetIds(["system", "attention", "waiting"], "waiting", -1)).toEqual([
+      "system", "waiting", "attention",
+    ]);
+  });
+
+  test("counts active interventions and advisories once in Attention", () => {
+    const snap = snapshot({
+      issues: [
+        { id: "system:1", kind: "system", severity: "error", title: "Control failure", summary: "s", affectedAgentIds: [] },
+        { id: "system:2", kind: "system", severity: "warning", title: "Stale source", summary: "s", affectedAgentIds: [] },
+      ],
+    });
+    expect(M.attentionSummary(snap)).toEqual({ count: 2, interventions: 1, advisories: 1 });
+    expect(M.summaryWidgetData("attention", snap)).toMatchObject({ value: "2", unit: "findings" });
+  });
+
+  test("uses explicit No data values when optional evidence is absent", () => {
+    const absent = snapshot({
+      totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0 },
+      controlHealth: undefined,
+    });
+    for (const id of ["context-peak", "source-health", "model-policy", "routing-health", "context-reporting"]) {
+      expect(M.summaryWidgetData(id, absent).value, id).toBe("No data");
+      expect(M.summaryWidgetData(id, absent).sublabel, id).toBeTruthy();
+    }
+    expect(M.summaryWidgetData("active-work", null).value).toBe("No data");
+    expect(M.summaryWidgetData("system", null, "offline").value).toBe("Offline");
+  });
+});
+
 describe("state derivations fall back from provider-native status", () => {
   test("legacy statuses map to the provider-neutral language", () => {
     expect(M.deriveActivity(agent({ status: "running" }))).toBe("working");
@@ -473,9 +546,15 @@ describe("source hygiene", () => {
 
   test("the redesigned control surface exposes its structural anchors", () => {
     for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
-      "interventions-list", "warnings-list", "nest-beacon"]) {
+      "interventions-list", "warnings-list", "nest-beacon", "health-widgets", "customize-summary",
+      "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
+    expect(html).toContain(">Interventions</h2>");
+    expect(html).toContain(">Alerts<span");
+    expect(source).toContain("function renderWidgetCustomizer()");
+    expect(source).toContain("onchange: (event) => setWidgetEnabled");
+    expect(source).toContain('aria-label": `Move ${widget.label} up`');
     expect(html).not.toContain('class="colony"');
     expect(html).not.toContain('class="trail"');
     expect(html).not.toMatch(/class="ant /);
@@ -495,6 +574,15 @@ describe("source hygiene", () => {
   test("base type stays readable and the parchment slop layer is gone", () => {
     expect(styles).toMatch(/body\s*\{[\s\S]*?font-size:\s*16px/);
     expect(styles).not.toContain("background-image: url");
+  });
+
+  test("summary customization has a touch-sized mobile layout", () => {
+    const mobile = styles.match(/@media \(max-width: 720px\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(mobile).toContain(".rail-inner { grid-template-columns: 1fr 1fr");
+    expect(mobile).toContain(".widget-options { grid-template-columns: 1fr; }");
+    expect(mobile).toContain(".widget-option { min-height: 2.8rem; }");
+    expect(mobile).toContain(".widget-move { width: 2.75rem; height: 2.75rem; }");
+    expect(styles).toContain(".widget-move");
   });
 
   test("interventions separate recommendation, queueing, and explicit read-only launch", () => {

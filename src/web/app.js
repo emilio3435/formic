@@ -131,7 +131,7 @@ const providerLabel = (p) => PROVIDER_LABELS[p] || p;
 /* ---------- provider-neutral state language ---------- */
 
 const ACTIVITY_LABELS = { working: "Working", idle: "Idle", ended: "Ended", unknown: "Unknown" };
-const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Needs you", blocked: "Blocked", failed: "Failed" };
+const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Alert", blocked: "Blocked", failed: "Failed" };
 const CONTROL_LABELS = { linked: "Linked", "observed-only": "Observed only", quarantined: "Quarantined" };
 const CONTROL_HINTS = {
   linked: "This session is linked to an exact cmux target; controls route safely.",
@@ -540,6 +540,177 @@ function liveElapsedText(agent, generatedAt) {
   return fmtElapsed(agent.elapsedMs);
 }
 
+/* ---------- summary widgets ---------- */
+
+const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
+const DEFAULT_WIDGET_IDS = Object.freeze([
+  "system", "active-work", "attention", "context-peak", "source-health",
+]);
+const WIDGET_CATALOG = Object.freeze([
+  { id: "system", label: "System", required: true },
+  { id: "active-work", label: "Active work" },
+  { id: "attention", label: "Attention" },
+  { id: "context-peak", label: "Context peak" },
+  { id: "source-health", label: "Source health" },
+  { id: "waiting", label: "Waiting" },
+  { id: "history", label: "History" },
+  { id: "model-policy", label: "Model policy" },
+  { id: "routing-health", label: "Routing health" },
+  { id: "context-reporting", label: "Context reporting" },
+]);
+const WIDGET_IDS = new Set(WIDGET_CATALOG.map((widget) => widget.id));
+
+function defaultWidgetIds() {
+  return [...DEFAULT_WIDGET_IDS];
+}
+
+function normalizeWidgetIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return defaultWidgetIds();
+  const unique = new Set(ids);
+  if (ids[0] !== "system" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
+    return defaultWidgetIds();
+  }
+  return [...ids];
+}
+
+function parseWidgetPreference(raw) {
+  if (typeof raw !== "string" || !raw) return defaultWidgetIds();
+  try { return normalizeWidgetIds(JSON.parse(raw)); } catch { return defaultWidgetIds(); }
+}
+
+function reorderWidgetIds(ids, id, direction) {
+  const ordered = normalizeWidgetIds(ids);
+  const index = ordered.indexOf(id);
+  const target = index + direction;
+  if (index <= 0 || !Number.isInteger(direction) || target <= 0 || target >= ordered.length) return ordered;
+  [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
+  return ordered;
+}
+
+function systemStatus(snap, conn = "live") {
+  if (!snap || conn === "offline") return { key: "offline", label: "Offline", tone: "offline" };
+  const control = snap.controlHealth;
+  const source = snap.totals && snap.totals.sourceHealth;
+  const sourceDegraded = source && source.total > 0 && (source.degraded > 0 || source.healthy < source.total);
+  const controlDegraded = !control || control.cmuxReachable !== true || control.errors?.length > 0 || control.staleSources?.length > 0;
+  const feedDegraded = conn !== "live";
+  if (sourceDegraded || controlDegraded || feedDegraded) return { key: "degraded", label: "Degraded", tone: "degraded" };
+  return { key: "operational", label: "Operational", tone: "ok" };
+}
+
+function attentionSummary(snap) {
+  if (!snap) return null;
+  const findings = issuesOf(snap);
+  return {
+    count: findings.length,
+    interventions: findings.filter((issue) => issue.severity === "error").length,
+    advisories: findings.filter((issue) => issue.severity !== "error").length,
+  };
+}
+
+function noDataWidget(sublabel) {
+  return { value: "No data", unit: "", sublabel, tone: "missing" };
+}
+
+function summaryWidgetData(id, snap, conn = "live", display = "percent") {
+  if (id === "system") {
+    const status = systemStatus(snap, conn);
+    return {
+      value: status.label,
+      unit: "",
+      sublabel: !snap
+        ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
+        : status.key === "operational" ? "Sources and controls healthy."
+          : conn !== "live" ? "Live snapshot feed is not healthy."
+            : "Source or control evidence needs review.",
+      tone: status.tone,
+      icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
+    };
+  }
+  if (!snap) return noDataWidget("Waiting for the first snapshot.");
+
+  const totals = totalsOf(snap);
+  if (id === "active-work") {
+    return { value: String(totals.working), unit: "working", sublabel: `${totals.live} live · ${totals.tracked} tracked`, tone: "ok" };
+  }
+  if (id === "attention") {
+    const attention = attentionSummary(snap);
+    return {
+      value: String(attention.count),
+      unit: attention.count === 1 ? "finding" : "findings",
+      sublabel: attention.count
+        ? `${attention.interventions} intervention${attention.interventions === 1 ? "" : "s"} · ${attention.advisories} advis${attention.advisories === 1 ? "ory" : "ories"}`
+        : "No active findings.",
+      tone: attention.count ? "hot" : "ok",
+    };
+  }
+  if (id === "context-peak") {
+    const peak = peakContext(snap);
+    if (!peak) return noDataWidget("No live context reports.");
+    const coverage = totals.tokenReporting != null && totals.tokenEligible != null
+      ? ` · ${totals.tokenReporting}/${totals.tokenEligible} reporting` : "";
+    return {
+      value: contextDisplayValue(peak.agent.tokens, display),
+      unit: display === "percent" ? "peak window" : "",
+      sublabel: "Highest observed" + coverage,
+      tone: peak.pct >= 85 ? "hot" : "ok",
+      meterPct: peak.pct,
+    };
+  }
+  if (id === "source-health") {
+    const source = totals.sourceHealth;
+    if (!source || source.total <= 0) return noDataWidget("Source health is not reported.");
+    return {
+      value: `${source.healthy}/${source.total}`,
+      unit: "healthy",
+      sublabel: `${source.degraded} degraded · ${source.total} total`,
+      tone: source.degraded ? "warn" : "ok",
+    };
+  }
+  if (id === "waiting") {
+    return { value: String(totals.idle), unit: "waiting", sublabel: "Idle sessions awaiting work.", tone: "ok" };
+  }
+  if (id === "history") {
+    return { value: String(totals.history), unit: "done", sublabel: "Completed or archived sessions.", tone: "ok" };
+  }
+  if (id === "model-policy") {
+    const policy = totals.cursorModelHealth;
+    if (!policy || policy.total <= 0) return noDataWidget("Model policy is not reported.");
+    const mismatch = Number(policy.mismatch) || 0;
+    return {
+      value: mismatch ? String(mismatch) : "OK",
+      unit: mismatch ? (mismatch === 1 ? "mismatch" : "mismatches") : "",
+      sublabel: `${policy.compliant} compliant · ${policy.unreported} unreported`,
+      tone: mismatch ? "hot" : "ok",
+    };
+  }
+  if (id === "routing-health") {
+    const control = snap.controlHealth;
+    if (!control) return noDataWidget("Routing health is not reported.");
+    const stale = control.staleSources?.length || 0;
+    const errors = control.errors?.length || 0;
+    const degraded = control.cmuxReachable !== true || stale > 0 || errors > 0;
+    return {
+      value: degraded ? "Degraded" : "Ready",
+      unit: "",
+      sublabel: degraded ? `${stale} stale source${stale === 1 ? "" : "s"} · ${errors} error${errors === 1 ? "" : "s"}` : "Controls reachable.",
+      tone: degraded ? "warn" : "ok",
+    };
+  }
+  if (id === "context-reporting") {
+    if (totals.tokenReporting == null || totals.tokenEligible == null) {
+      return noDataWidget("Context reporting is not reported.");
+    }
+    return {
+      value: `${totals.tokenReporting}/${totals.tokenEligible}`,
+      unit: "reporting",
+      sublabel: totals.tokenEligible ? "Live sessions reporting context." : "No sessions eligible to report context.",
+      tone: "ok",
+    };
+  }
+  return noDataWidget("Widget evidence is not available.");
+}
+
 /* ---------- test surface ---------- */
 
 globalThis.TheAntHill = {
@@ -553,6 +724,9 @@ globalThis.TheAntHill = {
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS,
   broadcastEligible,
+  WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
+  normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
+  systemStatus, attentionSummary, summaryWidgetData,
 };
 
 /* ---------- state ---------- */
@@ -575,6 +749,8 @@ const state = {
   labelsLoaded: false,
   labelLoadError: "",
   renaming: null,              // presentation target key currently being edited
+  widgetIds: defaultWidgetIds(),
+  widgetCustomizerOpen: false,
   renameDraft: "",
   renamePending: false,
   renameError: "",
@@ -610,6 +786,18 @@ function saveOverrides() {
   try {
     localStorage.setItem("mtn3-programs", JSON.stringify(Object.fromEntries(state.programOverrides)));
   } catch { /* storage unavailable */ }
+}
+
+function loadWidgetPreferences() {
+  try {
+    state.widgetIds = parseWidgetPreference(localStorage.getItem(WIDGET_STORAGE_KEY));
+  } catch {
+    state.widgetIds = defaultWidgetIds();
+  }
+}
+
+function saveWidgetPreferences() {
+  try { localStorage.setItem(WIDGET_STORAGE_KEY, JSON.stringify(state.widgetIds)); } catch { /* storage unavailable */ }
 }
 
 /* ---------- data flow ---------- */
@@ -762,65 +950,9 @@ function toggleContextDisplay() {
   render();
 }
 
-/* One scan-ordered rail: verdict → activity → attention → context → policy. */
-function renderHealthRail() {
-  const rail = $("health-rail");
-  rail.textContent = "";
-  const inner = el("div", { class: "rail-inner" });
-
-  if (!state.snap) {
-    const off = state.conn === "offline";
-    inner.append(reading("System",
-      el("span", { class: "reading-value" },
-        el("span", { class: "verdict-chip " + (off ? "verdict-offline" : "verdict-warn") },
-          icon(off ? "offline" : "warning"), off ? "Offline" : "Connecting…")),
-      el("span", { class: "reading-sub", text: off ? "The Ant Hill server is unreachable on 127.0.0.1:4701." : "Waiting for the first snapshot." }),
-      "reading-verdict"));
-    rail.append(inner);
-    return;
-  }
-
-  const t = totalsOf(state.snap);
-  const allIssues = issuesOf(state.snap);
-  const interventions = allIssues.filter((i) => i.severity === "error");
-  const advisories = allIssues.filter((i) => i.severity !== "error");
-  const needsCount = Math.max(t.needsYouAgents, 0) + interventions.filter((i) => i.kind !== "agent").length;
-  const h = state.snap.controlHealth;
-
-  // 1 — verdict
-  let vClass, vIcon, vWord;
-  if (state.conn === "offline") { vClass = "verdict-offline"; vIcon = "offline"; vWord = "Offline"; }
-  else if (needsCount > 0 || interventions.length) { vClass = "verdict-alert"; vIcon = "intervention"; vWord = "Needs you"; }
-  else if (advisories.length) { vClass = "verdict-warn"; vIcon = "warning"; vWord = "Advisories"; }
-  else { vClass = "verdict-ok"; vIcon = "check"; vWord = "All clear"; }
-  const subBits = [`${t.live} live of ${t.tracked} tracked`, "snapshot " + agoText(state.snap.generatedAt)];
-  if (!h.cmuxReachable) subBits.push("cmux unreachable");
-  inner.append(reading("System",
-    el("span", { class: "reading-value" },
-      el("span", { class: "verdict-chip " + vClass }, icon(vIcon), vWord)),
-    el("span", { class: "reading-sub", dataset: { ago: state.snap.generatedAt }, text: subBits.join(" · ") }),
-    "reading-verdict"));
-
-  // 2 — activity (working now, waiting behind)
-  inner.append(reading("Activity",
-    el("span", { class: "reading-value is-ok" }, String(t.working), el("span", { class: "unit", text: "working" })),
-    el("span", { class: "reading-sub", text: `${t.idle} waiting · ${t.history} done` })));
-
-  // 3 — attention (what needs me)
-  inner.append(reading("Needs you",
-    el("span", { class: "reading-value" + (needsCount > 0 ? " is-hot" : "") }, String(needsCount), el("span", { class: "unit", text: needsCount === 1 ? "action" : "actions" })),
-    el("span", { class: "reading-sub", text: needsCount ? `${interventions.length} intervention${interventions.length === 1 ? "" : "s"} · ${advisories.length} advisor${advisories.length === 1 ? "y" : "ies"}` : "Nothing waiting on you" })));
-
-  // 4 — context consumed
-  const peak = peakContext(state.snap);
-  const ctxValue = el("span", { class: "reading-value" + (peak && peak.pct >= 85 ? " is-hot" : "") });
-  ctxValue.append(peak ? contextDisplayValue(peak.agent.tokens) : "not reported");
-  if (peak && state.contextDisplay === "percent") ctxValue.append(el("span", { class: "unit", text: "peak window" }));
-  const ctxSub = el("span", { class: "reading-sub" });
-  if (peak) ctxSub.append(svgMeter(peak.pct, "ctx-meter", { fillClass: "ctx-fill", trackClass: "ctx-track", label: `Peak context ${peak.pct}%` }));
-  const coverageText = t.tokenReporting != null && t.tokenEligible != null ? `${t.tokenReporting}/${t.tokenEligible} reporting` : "";
-  ctxSub.append(el("span", { text: (peak ? "highest observed" : "context usage not reported") + (coverageText ? " · " + coverageText : "") }));
-  inner.append(reading(el("button", {
+function widgetLabelNode(id, label) {
+  if (id !== "context-peak") return el("span", { class: "reading-label", text: label });
+  return el("button", {
     type: "button",
     class: "reading-label context-toggle",
     "aria-label": state.contextDisplay === "percent" ? "Show Context tokens" : "Show Context %",
@@ -828,23 +960,107 @@ function renderHealthRail() {
     title: "Toggle context display",
     dataset: { fkey: "context-toggle" },
     onclick: toggleContextDisplay,
-  }, contextDisplayLabel()), ctxValue, ctxSub));
+  }, label);
+}
 
-  // 5 — model policy
-  const policyParts = cursorPolicyParts(t.cursorModelHealth);
-  let policyValue, policySub;
-  if (policyParts) {
-    const mismatch = parseInt(policyParts[0].text, 10) || 0;
-    policyValue = el("span", { class: "reading-value" + (mismatch > 0 ? " is-hot" : " is-ok") },
-      mismatch > 0 ? String(mismatch) : "OK", mismatch > 0 ? el("span", { class: "unit", text: mismatch === 1 ? "mismatch" : "mismatches" }) : null);
-    policySub = el("span", { class: "reading-sub", text: `${policyParts[1].text} · ${policyParts[2].text}` });
+function renderSummaryWidget(id) {
+  const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
+  const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+  const valueClass = ["reading-value", data.tone === "hot" ? "is-hot" : "", data.tone === "ok" ? "is-ok" : "", data.tone === "missing" ? "reading-no-data" : ""]
+    .filter(Boolean).join(" ");
+  let valueNode;
+  if (id === "system") {
+    valueNode = el("span", { class: valueClass },
+      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
   } else {
-    policyValue = el("span", { class: "reading-value", text: "—" });
-    policySub = el("span", { class: "reading-sub", text: "No Cursor sessions tracked" });
+    valueNode = el("span", { class: valueClass }, data.value,
+      data.unit ? el("span", { class: "unit", text: data.unit }) : null);
   }
-  inner.append(reading("Model policy", policyValue, policySub));
+  const subNode = el("span", { class: "reading-sub" });
+  if (data.meterPct != null) {
+    subNode.append(svgMeter(data.meterPct, "ctx-meter", {
+      fillClass: "ctx-fill", trackClass: "ctx-track", label: `Peak context ${data.meterPct}%`,
+    }));
+  }
+  subNode.append(el("span", { text: data.sublabel + (id === "system" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "") }));
+  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, "reading-widget widget-" + id);
+}
 
-  rail.append(inner);
+function setWidgetEnabled(id, enabled) {
+  const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
+  if (!meta || meta.required) return;
+  const next = state.widgetIds.filter((widgetId) => widgetId !== id);
+  if (enabled) next.push(id);
+  state.widgetIds = normalizeWidgetIds(next);
+  saveWidgetPreferences();
+  renderHealthRail();
+}
+
+function moveWidget(id, direction) {
+  const next = reorderWidgetIds(state.widgetIds, id, direction);
+  if (next.join("|") === state.widgetIds.join("|")) return;
+  state.widgetIds = next;
+  saveWidgetPreferences();
+  renderHealthRail();
+}
+
+function renderWidgetCustomizer() {
+  const panel = $("widget-customizer");
+  const toggle = $("customize-summary");
+  const options = $("widget-options");
+  if (!panel || !toggle || !options) return;
+  panel.hidden = !state.widgetCustomizerOpen;
+  toggle.setAttribute("aria-expanded", String(state.widgetCustomizerOpen));
+  if (!state.widgetCustomizerOpen) return;
+
+  const focusKey = document.activeElement?.dataset?.fkey;
+  options.textContent = "";
+  const orderedCatalog = [
+    ...state.widgetIds.map((id) => WIDGET_CATALOG.find((widget) => widget.id === id)),
+    ...WIDGET_CATALOG.filter((widget) => !state.widgetIds.includes(widget.id)),
+  ];
+  for (const widget of orderedCatalog) {
+    const selected = state.widgetIds.includes(widget.id);
+    const position = state.widgetIds.indexOf(widget.id);
+    const row = el("div", { class: "widget-option" + (selected ? " is-selected" : ""), role: "listitem" });
+    const input = el("input", {
+      type: "checkbox",
+      id: "widget-option-" + widget.id,
+      checked: selected ? "" : null,
+      disabled: widget.required ? "" : null,
+      "aria-label": widget.required ? `${widget.label} is always shown` : `Show ${widget.label}`,
+      dataset: { fkey: "widget-toggle:" + widget.id },
+      onchange: (event) => setWidgetEnabled(widget.id, event.currentTarget.checked),
+    });
+    const label = el("label", { class: "widget-option-label", for: "widget-option-" + widget.id },
+      input, el("span", { text: widget.label }), widget.required ? el("span", { class: "widget-required", text: "always shown" }) : null);
+    const controls = el("span", { class: "widget-reorder", "aria-label": `Reorder ${widget.label}` },
+      el("button", {
+        type: "button", class: "widget-move", disabled: !selected || widget.required || position <= 1 ? "" : null,
+        "aria-label": `Move ${widget.label} up`, title: "Move up", dataset: { fkey: `widget-move:${widget.id}:up` },
+        onclick: () => moveWidget(widget.id, -1),
+      }, "↑"),
+      el("button", {
+        type: "button", class: "widget-move", disabled: !selected || widget.required || position < 0 || position >= state.widgetIds.length - 1 ? "" : null,
+        "aria-label": `Move ${widget.label} down`, title: "Move down", dataset: { fkey: `widget-move:${widget.id}:down` },
+        onclick: () => moveWidget(widget.id, 1),
+      }, "↓"));
+    row.append(label, controls);
+    options.append(row);
+  }
+  if (focusKey) {
+    const node = document.querySelector(`[data-fkey="${CSS.escape(focusKey)}"]`);
+    if (node) node.focus({ preventScroll: true });
+  }
+}
+
+/* One status verdict and one configurable, scan-ordered widget rail. */
+function renderHealthRail() {
+  const widgets = $("health-widgets");
+  if (!widgets) return;
+  widgets.textContent = "";
+  for (const id of state.widgetIds) widgets.append(renderSummaryWidget(id));
+  renderWidgetCustomizer();
 }
 
 /* ---------- issues ---------- */
@@ -1204,7 +1420,7 @@ function renderPrograms() {
   } else {
     const emptyByView = {
       "now": `No active work right now — idle sessions remain available in Idle.`,
-      "needs-you": "No agent alerts. System interventions may still require operator action.",
+      "needs-you": "No alerts. System interventions may still require operator action.",
       "working": "No agents are working right now.",
       "idle": "No idle agents.",
       "history": "No ended sessions recorded yet.",
@@ -1223,7 +1439,7 @@ function renderPrograms() {
 
 function rollupParts(r) {
   const parts = [];
-  if (r.needsYou) parts.push({ text: r.needsYou + " needs you", hot: true });
+  if (r.needsYou) parts.push({ text: r.needsYou + (r.needsYou === 1 ? " alert" : " alerts"), hot: true });
   if (r.working) parts.push({ text: r.working + " working" });
   if (r.idle) parts.push({ text: r.idle + " idle" });
   if (r.ended) parts.push({ text: r.ended + " done" });
@@ -2332,6 +2548,7 @@ function setView(view) {
 
 function boot() {
   loadOverrides();
+  loadWidgetPreferences();
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
@@ -2344,6 +2561,17 @@ function boot() {
   });
 
   $("select-toggle").addEventListener("click", () => enterSelectMode(!state.selecting));
+
+  $("customize-summary").addEventListener("click", () => {
+    state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
+    renderHealthRail();
+  });
+
+  $("widget-reset").addEventListener("click", () => {
+    state.widgetIds = defaultWidgetIds();
+    saveWidgetPreferences();
+    renderHealthRail();
+  });
 
   $("empty-retry").addEventListener("click", () => {
     setConn("connecting");
@@ -2365,6 +2593,9 @@ function boot() {
     } else if (state.broadcastConfirming) {
       state.broadcastConfirming = false;
       render();
+    } else if (state.widgetCustomizerOpen) {
+      state.widgetCustomizerOpen = false;
+      renderHealthRail();
     } else if (state.selecting) {
       enterSelectMode(false);
     } else if (state.selectedId) {

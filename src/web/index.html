@@ -26,13 +26,29 @@
     </div>
   </header>
 
-  <!-- One scan-ordered operational rail: verdict → activity → attention → context → policy. -->
-  <section id="health-rail" class="health-rail" aria-label="Fleet health"></section>
+  <!-- One status verdict plus a configurable, scan-ordered summary rail. -->
+  <section id="health-rail" class="health-rail" aria-label="Fleet health">
+    <div class="rail-header">
+      <span class="rail-heading">Summary</span>
+      <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
+    </div>
+    <div id="health-widgets" class="rail-inner"></div>
+    <div id="widget-customizer" class="widget-customizer" hidden>
+      <div class="widget-customizer-inner">
+        <div>
+          <h2 id="widget-customizer-title">Customize summary</h2>
+          <p class="widget-help">Choose widgets and use the arrow controls to set their order.</p>
+        </div>
+        <div id="widget-options" class="widget-options" role="list" aria-labelledby="widget-customizer-title"></div>
+        <button type="button" class="btn widget-reset" id="widget-reset">Reset defaults</button>
+      </div>
+    </div>
+  </section>
 
   <div class="app-body">
     <main id="main" class="pane-list" tabindex="-1">
       <section id="interventions" class="interventions" aria-labelledby="interventions-title" hidden>
-        <h2 id="interventions-title" class="section-title">Needs you</h2>
+        <h2 id="interventions-title" class="section-title">Interventions</h2>
         <ul id="interventions-list" class="signal-list"></ul>
       </section>
 
@@ -44,7 +60,7 @@
       <section class="toolbar" aria-label="Views, search, and selection">
         <nav class="views" role="group" aria-label="View" id="views">
           <button type="button" class="view-tab" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
-          <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Agent alerts<span class="count" id="count-needs-you"></span></button>
+          <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Alerts<span class="count" id="count-needs-you"></span></button>
           <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
           <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
           <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
