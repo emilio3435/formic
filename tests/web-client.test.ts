@@ -701,6 +701,31 @@ describe("source hygiene", () => {
     expect(source).toContain("await fetchSnapshot()");
     expect(source).toContain("recentlyResolved");
   });
+
+  test("signal panels are toggleable and persist a subdued preference", () => {
+    expect(html).toContain('id="interventions-toggle"');
+    expect(html).toContain('id="warnings-toggle"');
+    expect(html).toContain('id="interventions-subdued"');
+    expect(html).toContain('id="warnings-subdued"');
+    expect(source).toContain('SIGNAL_PANEL_STORAGE_KEY');
+    expect(source).toContain('function setSignalPanel(');
+    expect(source).toContain('function renderSignalPanelHead(');
+    expect(source).toContain('loadSignalPanels()');
+    expect(M.parseSignalPanels('{"interventions":"subdued","advisories":"open"}')).toEqual({
+      interventions: "subdued",
+      advisories: "open",
+    });
+    expect(M.parseSignalPanels("not-json")).toEqual({ interventions: "open", advisories: "open" });
+  });
+
+  test("signal chrome uses outline indicators instead of filled hospital banners", () => {
+    expect(styles).toContain('"Techno orchestra"');
+    expect(styles).toContain("--signal-rail: 2px");
+    expect(styles).toMatch(/\.signal-badge\s*\{[^}]*background:\s*var\(--raise\)/);
+    expect(styles).toMatch(/\.signal-intervention\s*\{[^}]*border-left:\s*var\(--signal-rail\)\s*solid\s*var\(--ember\)/);
+    expect(styles).not.toMatch(/\.signal-badge\s*\{[^}]*background:\s*var\(--ember\)/);
+    expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
+  });
 });
 
 describe("fail-loud control invariants (source-level)", () => {

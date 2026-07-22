@@ -1,33 +1,33 @@
 /* The Ant Hill v3 — operator console
-   "Colony control room": a calm, clear, high-acuity surface built on neutral
-   light, high-contrast ink, and a small set of semantic accents. Structure carries
-   meaning — nested program/swarm trees, a scan-ordered health rail, and clear
-   information classes for interventions (act now) vs advisories (be aware).
-   Status is carried by shape, label, and color together; monospace is reserved
-   for identifiers, paths, timestamps, and token values. All meters use SVG
-   attributes, never inline style, so the strict CSP holds. */
+   "Techno orchestra": a cool control-room surface — graphite light ground,
+   instrument-panel rails, and clear status marks. Interventions (act now) and
+   advisories (be aware) use outline indicators and left-edge signal rails, not
+   filled hospital banners. Status is carried by shape, label, and color together;
+   monospace is reserved for identifiers, paths, timestamps, and token values.
+   All meters use SVG attributes, never inline style, so the strict CSP holds. */
 
 :root {
-  /* ground */
-  --canvas: #f6f8fa;
-  --surface: #ffffff;
+  /* ground — cool graphite control room */
+  --canvas: #f3f5f7;
+  --surface: #fbfcfd;
   --raise: #ffffff;
-  --sand: #eef2f5;
-  --ink: #17212b;
-  --muted: #4b5866;
-  --faint: #5f6d7b;
-  --line: #dbe2e8;
-  --line-strong: #b9c4ce;
+  --sand: #e8edf2;
+  --ink: #121820;
+  --muted: #445260;
+  --faint: #5a6876;
+  --line: #d4dce4;
+  --line-strong: #aeb9c4;
 
-  /* semantic accents */
-  --ember: #b42318;   /* intervention / attention */
-  --amber: #8a5100;   /* advisory / warning */
-  --moss: #216e49;    /* working / healthy / ok */
-  --slate: #46647e;   /* idle */
-  --clay: #697582;    /* ended */
-  --ember-soft: #fde8e5;
-  --amber-soft: #fff1d9;
-  --moss-soft: #e5f3eb;
+  /* semantic accents — indicator inks, not flood fills */
+  --ember: #c23b2e;   /* intervention / attention */
+  --amber: #9a6b12;   /* advisory / warning */
+  --moss: #1f6b4a;    /* working / healthy / ok */
+  --slate: #3f5f78;   /* idle */
+  --clay: #64707c;    /* ended */
+  --ember-soft: color-mix(in srgb, var(--ember) 9%, var(--surface));
+  --amber-soft: color-mix(in srgb, var(--amber) 10%, var(--surface));
+  --moss-soft: color-mix(in srgb, var(--moss) 10%, var(--surface));
+  --signal-rail: 2px;
 
   /* semantic aliases */
   --working: var(--moss);
@@ -389,26 +389,92 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .interventions { margin-bottom: 0.55rem; }
 .warnings { margin-bottom: 0.75rem; }
 .interventions[hidden], .warnings[hidden] { display: none; }
-.interventions .section-title { color: var(--ember); margin-bottom: 0.3rem; }
-.warnings .section-title { color: var(--amber); margin-bottom: 0.3rem; }
 
-.signal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.signal-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin-bottom: 0.35rem;
+  min-height: 1.4rem;
+}
+.signal-head .section-title { margin: 0; }
+.interventions .section-title {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+}
+.warnings .section-title {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+}
+.signal-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 0.05rem 0.4rem;
+  background: var(--raise);
+}
+.interventions .signal-count { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 35%, var(--line)); }
+.warnings .signal-count { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, var(--line)); }
+.signal-toggle {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  padding: 0.2rem 0.5rem;
+  background: var(--raise);
+}
+.signal-toggle:hover { color: var(--ink); border-color: var(--muted); }
+.signal-subdued {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px dashed var(--line-strong);
+  border-left: var(--signal-rail) solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+.interventions .signal-subdued { border-left-color: var(--ember); }
+.warnings .signal-subdued { border-left-color: var(--amber); }
+.signal-subdued:hover { color: var(--ink); border-color: var(--muted); }
+.signal-subdued[hidden] { display: none; }
+.signal-list[hidden] { display: none; }
 
-/* Intervention: a full-canvas action band. Row one carries the decisive mark,
-   one-glance copy, and the inline primary action; row two keeps source evidence
-   compact. The title and evidence open the intervention drawer for full detail
-   (roster, technical, triage plan); the band itself is the strongest
-   containment, with minimal inner framing. */
+.signal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* Intervention: instrument-panel band. Outline mark + left rail carry severity;
+   no filled amber/red flood. Title/evidence open the drawer; Generate triage
+   stays inline. */
 .signal-intervention {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid color-mix(in srgb, var(--ember) 32%, var(--line));
-  border-left: 4px solid var(--ember);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--ember-soft) 38%, var(--surface));
-  box-shadow: var(--shadow-soft);
+  padding: 0.7rem 0.95rem;
+  border: 1px solid var(--line-strong);
+  border-left: var(--signal-rail) solid var(--ember);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--ember) 7%, transparent) 0, transparent 4.5rem),
+    var(--surface);
+  box-shadow: none;
 }
 /* Row one — badge · copy · primary action, readable at a glance. */
 .signal-primary {
@@ -430,17 +496,34 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   place-items: center;
   width: 2rem;
   height: 2rem;
-  border-radius: 50%;
-  color: #fff;
-  background: var(--ember);
+  border-radius: 4px;
+  color: var(--ember);
+  background: var(--raise);
+  border: 1.5px solid color-mix(in srgb, var(--ember) 70%, var(--line));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ember) 12%, transparent);
 }
-.signal-badge .ico { width: 1.1rem; height: 1.1rem; }
+.signal-badge .ico { width: 1.05rem; height: 1.05rem; }
 .signal-copy { min-width: 0; }
-.signal-kicker { font-size: 9.5px; font-weight: 750; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ember); }
+.signal-kicker {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
 .signal-intervention.issue-state-verifying { border-left-color: var(--amber); }
 .signal-intervention.issue-state-blocked { border-left-color: var(--bad); }
 .signal-intervention.issue-state-verifying .signal-kicker { color: var(--amber); }
 .signal-intervention.issue-state-blocked .signal-kicker { color: var(--bad); }
+.signal-intervention.issue-state-verifying .signal-badge {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 70%, var(--line));
+}
+.signal-intervention.issue-state-blocked .signal-badge {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 70%, var(--line));
+}
 .signal-title { margin: 0.05rem 0 0; font-size: 1rem; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .signal-consequence {
   margin: 0.1rem 0 0;
@@ -463,7 +546,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   padding-left: calc(2.1rem + 0.95rem);
 }
 .signal-evidence:empty { display: none; }
-.signal-evi { color: var(--faint); font-size: 11.5px; }
+.signal-evi { color: var(--faint); font-size: 11.5px; font-family: var(--font-mono); }
 .signal-evi-open { color: var(--faint); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .signal-evi-open:hover { color: var(--ink); text-decoration: underline; }
 /* .signal-tech / .signal-affected / .signal-agent are reused by the drawer body. */
@@ -477,14 +560,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .signal-tech ul { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--muted); max-width: 80ch; }
 .signal-tech li { overflow-wrap: anywhere; white-space: normal; }
 
-/* Advisories are grouped into one amber strip with hairline dividers — dense,
-   scannable, and small, so agent rows stay above the fold. */
+/* Advisories: one cool panel with hairline rows and an amber rail — dense and
+   scannable, never a flooded warning banner. */
 #warnings-list.signal-list {
   gap: 0;
-  border: 1px solid color-mix(in srgb, var(--amber) 26%, var(--line));
-  border-left: 3px solid var(--amber);
+  border: 1px solid var(--line-strong);
+  border-left: var(--signal-rail) solid var(--amber);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--amber-soft) 34%, var(--surface));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--amber) 6%, transparent) 0, transparent 3.5rem),
+    var(--surface);
   overflow: hidden;
 }
 .signal-advisory {
@@ -492,19 +577,30 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   grid-template-columns: 1.25rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.35rem 0.75rem;
+  padding: 0.4rem 0.75rem;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--amber) 18%, var(--line));
+  border-bottom: 1px solid var(--line);
+  background: transparent;
 }
 .signal-advisory:last-child { border-bottom: 0; }
-.signal-advisory .warn-tri { color: var(--amber); width: 1.2rem; height: 1.2rem; }
+.signal-advisory .warn-tri { color: var(--amber); width: 1.15rem; height: 1.15rem; }
 .advisory-body { min-width: 0; display: flex; align-items: baseline; gap: 0.5rem; }
 .advisory-title { flex: none; font-weight: 650; font-size: 13px; }
 .advisory-summary { min-width: 0; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .advisory-lifecycle { min-width: 0; color: var(--faint); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.advisory-impact { color: var(--faint); font-size: 11px; text-align: right; white-space: nowrap; }
+.advisory-impact {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-align: right;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
 .issue-resolved { border-left-color: var(--moss); }
 .issue-resolved .warn-tri { color: var(--moss); }
+#warnings-list:has(.issue-resolved:only-child),
+#warnings-list:has(.issue-resolved:first-child:last-child) { border-left-color: var(--moss); }
 
 /* triage plan (kept, calmer) */
 .triage-actions { grid-column: 2; margin-top: 0.6rem; }
@@ -538,7 +634,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .triage-result summary { cursor: pointer; font-weight: 700; }
 .triage-result pre { max-height: 18rem; margin-top: 0.5rem; padding: 0.65rem; overflow: auto; white-space: pre-wrap; background: var(--sand); border-radius: 4px; font: 12px/1.5 var(--font-mono); }
 .triage-error { margin: 0.4rem 0 0; color: var(--ember); font-size: 13px; font-weight: 650; }
-.investigation-item .signal-badge { background: var(--amber); }
+.investigation-item .signal-badge {
+  color: var(--amber);
+  background: var(--raise);
+  border-color: color-mix(in srgb, var(--amber) 70%, var(--line));
+}
 
 /* ---------- toolbar: views, filter chips, search ---------- */
 

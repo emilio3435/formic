@@ -777,6 +777,23 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
   return noDataWidget("Widget evidence is not available.");
 }
 
+const SIGNAL_PANEL_STORAGE_KEY = "mtn3-signal-panels";
+const SIGNAL_PANEL_KEYS = ["interventions", "advisories"];
+
+function parseSignalPanels(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== "object") return { interventions: "open", advisories: "open" };
+    const next = { interventions: "open", advisories: "open" };
+    for (const key of SIGNAL_PANEL_KEYS) {
+      if (parsed[key] === "subdued" || parsed[key] === "open") next[key] = parsed[key];
+    }
+    return next;
+  } catch {
+    return { interventions: "open", advisories: "open" };
+  }
+}
+
 /* ---------- test surface ---------- */
 
 globalThis.TheAntHill = {
@@ -792,6 +809,7 @@ globalThis.TheAntHill = {
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
+  SIGNAL_PANEL_STORAGE_KEY, parseSignalPanels,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
 };
 
@@ -839,8 +857,34 @@ const state = {
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
+  // Operator can subdue signal bands; preference persists. Solved findings leave
+  // the active lists via source lifecycle — subdued UI never keeps a cleared id.
+  signalPanels: { interventions: "open", advisories: "open" }, // open | subdued
 };
 state.aliases = state.labels;
+
+function loadSignalPanels() {
+  try {
+    state.signalPanels = parseSignalPanels(localStorage.getItem(SIGNAL_PANEL_STORAGE_KEY));
+  } catch {
+    state.signalPanels = { interventions: "open", advisories: "open" };
+  }
+}
+
+function saveSignalPanels() {
+  try {
+    localStorage.setItem(SIGNAL_PANEL_STORAGE_KEY, JSON.stringify(state.signalPanels));
+  } catch { /* storage unavailable */ }
+}
+
+function setSignalPanel(panel, mode) {
+  if (!SIGNAL_PANEL_KEYS.includes(panel)) return;
+  if (mode !== "open" && mode !== "subdued") return;
+  if (state.signalPanels[panel] === mode) return;
+  state.signalPanels[panel] = mode;
+  saveSignalPanels();
+  renderIssues();
+}
 
 function loadOverrides() {
   try {
@@ -1303,6 +1347,32 @@ function renderTriage(issue) {
 
 /* Interventions (act now) and advisories (be aware) are separate information
    classes with distinct visual weight — never one repetitive card stack. */
+function renderSignalPanelHead(panel, count, subdued, label) {
+  const sectionId = panel === "interventions" ? "interventions" : "warnings";
+  const listId = panel === "interventions" ? "interventions-list" : "warnings-list";
+  const countNode = $(sectionId === "interventions" ? "interventions-count" : "warnings-count");
+  const toggle = $(sectionId === "interventions" ? "interventions-toggle" : "warnings-toggle");
+  const chip = $(sectionId === "interventions" ? "interventions-subdued" : "warnings-subdued");
+  const list = $(listId);
+  const section = $(sectionId);
+  if (!countNode || !toggle || !chip || !list || !section) return;
+
+  countNode.textContent = count ? String(count) : "";
+  countNode.hidden = !count;
+  toggle.hidden = !count;
+  toggle.setAttribute("aria-expanded", subdued ? "false" : "true");
+  toggle.textContent = subdued ? "Show" : "Subdue";
+  toggle.onclick = () => setSignalPanel(panel, subdued ? "open" : "subdued");
+
+  list.hidden = subdued;
+  chip.hidden = !(subdued && count > 0);
+  chip.textContent = subdued && count
+    ? `${count} ${label}${count === 1 ? "" : "s"} subdued · show`
+    : "";
+  chip.onclick = () => setSignalPanel(panel, "open");
+  section.classList.toggle("is-subdued", subdued && count > 0);
+}
+
 function renderIssues() {
   const iSection = $("interventions");
   const iList = $("interventions-list");
@@ -1312,22 +1382,33 @@ function renderIssues() {
   const issues = showHere ? issuesOf(state.snap) : [];
   const interventions = issues.filter((i) => i.severity === "error");
   const advisories = issues.filter((i) => i.severity !== "error");
+  // Solved findings leave the active issue set via source lifecycle and only
+  // linger briefly in recentlyResolved (server TTL). They never stay as act-now.
   const recentlyResolved = state.view === "now" ? recentlyResolvedOf(state.snap) : [];
   const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
   const queuedOnly = showHere
     ? state.queueItems.filter((item) => !issues.some((issue) => issue.id === item.issueId) && !resolvedIds.has(item.issueId))
     : [];
   const byId = new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  const interventionsSubdued = state.signalPanels.interventions === "subdued";
+  const advisoriesSubdued = state.signalPanels.advisories === "subdued";
+  const advisoryTotal = advisories.length + recentlyResolved.length + queuedOnly.length;
 
   iList.textContent = "";
-  for (const issue of interventions) iList.append(renderIntervention(issue, byId));
+  if (!interventionsSubdued) {
+    for (const issue of interventions) iList.append(renderIntervention(issue, byId));
+  }
   iSection.hidden = interventions.length === 0;
+  renderSignalPanelHead("interventions", interventions.length, interventionsSubdued, "intervention");
 
   wList.textContent = "";
-  for (const issue of advisories) wList.append(renderAdvisory(issue, byId));
-  for (const issue of recentlyResolved) wList.append(renderRecentlyResolved(issue));
-  for (const item of queuedOnly) wList.append(renderInvestigationItem(item));
-  wSection.hidden = advisories.length === 0 && recentlyResolved.length === 0 && queuedOnly.length === 0;
+  if (!advisoriesSubdued) {
+    for (const issue of advisories) wList.append(renderAdvisory(issue, byId));
+    for (const issue of recentlyResolved) wList.append(renderRecentlyResolved(issue));
+    for (const item of queuedOnly) wList.append(renderInvestigationItem(item));
+  }
+  wSection.hidden = advisoryTotal === 0;
+  renderSignalPanelHead("advisories", advisoryTotal, advisoriesSubdued, "advisory");
 }
 
 // Thin trigger only — the triage flow, affected chips, and technical detail now
@@ -3103,6 +3184,7 @@ function setView(view) {
 function boot() {
   loadOverrides();
   loadWidgetPreferences();
+  loadSignalPanels();
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();

@@ -47,15 +47,25 @@
 
   <!-- Active interventions span the full canvas above the workboard/inspector split. -->
   <section id="interventions" class="interventions signal-band" aria-labelledby="interventions-title" hidden>
-    <h2 id="interventions-title" class="section-title">Interventions</h2>
+    <div class="signal-head">
+      <h2 id="interventions-title" class="section-title">Interventions</h2>
+      <span id="interventions-count" class="signal-count" aria-live="polite"></span>
+      <button type="button" class="signal-toggle" id="interventions-toggle" aria-controls="interventions-list" aria-expanded="true" data-fkey="signal-toggle:interventions">Subdue</button>
+    </div>
     <ul id="interventions-list" class="signal-list"></ul>
+    <button type="button" class="signal-subdued" id="interventions-subdued" hidden data-fkey="signal-expand:interventions">Show interventions</button>
   </section>
 
   <div class="app-body">
     <main id="main" class="pane-list" tabindex="-1">
       <section id="warnings" class="warnings" aria-labelledby="warnings-title" hidden>
-        <h2 id="warnings-title" class="section-title">Advisories</h2>
+        <div class="signal-head">
+          <h2 id="warnings-title" class="section-title">Advisories</h2>
+          <span id="warnings-count" class="signal-count" aria-live="polite"></span>
+          <button type="button" class="signal-toggle" id="warnings-toggle" aria-controls="warnings-list" aria-expanded="true" data-fkey="signal-toggle:advisories">Subdue</button>
+        </div>
         <ul id="warnings-list" class="signal-list"></ul>
+        <button type="button" class="signal-subdued" id="warnings-subdued" hidden data-fkey="signal-expand:advisories">Show advisories</button>
       </section>
 
       <section class="toolbar" aria-label="Views, search, and selection">
