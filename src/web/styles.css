@@ -894,6 +894,12 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-accent--slate { background: var(--slate); }
 .dw-accent--ink   { background: var(--ink); }
 .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
+/* One --prov per provider drives both the pane inset rail and the lineage
+   current-node ring; set by a class so the strict CSP holds (no inline style). */
+.dw-provider--claude { --prov: var(--claude); }
+.dw-provider--codex  { --prov: var(--codex); }
+.dw-provider--cursor { --prov: var(--cursor); }
+.dw-provider--omp    { --prov: var(--omp); }
 
 .dw-eyebrow { display: inline-flex; align-items: center; gap: 0.35rem; font: 750 9.5px/1.3 var(--font-mono); letter-spacing: 0.11em; text-transform: uppercase; color: var(--faint); }
 .dw-eyebrow svg { width: 0.9rem; height: 0.9rem; }
@@ -965,6 +971,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-lin-name { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
 .dw-lin-name .dw-lin-meta { color: var(--faint); font-size: 11px; }
 .dw-lin-name.dw-cur-name { font-weight: 750; cursor: default; }
+.dw-lin-crumb { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dw-child-fan { margin: 0.45rem 0 0 0.5rem; padding-left: 1.1rem; display: grid; gap: 0.25rem; border-left: 1.5px solid var(--moss); }
 .dw-kid { display: flex; align-items: center; gap: 0.4rem; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 .dw-more { color: var(--slate); font-size: 11.5px; }

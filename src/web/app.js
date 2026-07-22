@@ -2150,6 +2150,10 @@ function renderAgentDrawer(pane, view) {
   const control = deriveControlState(agent);
   const policy = modelPolicyView(agent);
 
+  // Provider channel: a 1px inset rail + the lineage current-node ring both read
+  // from --prov, set CSP-safely by a class (never an inline style).
+  pane.classList.add("dw-provider", "dw-provider--" + agent.provider);
+
   pane.append(el("div", { class: "inspector-head" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
@@ -2177,6 +2181,7 @@ function renderAgentDrawer(pane, view) {
 
   pane.append(renderPrimaryActions(agent));
   pane.append(renderPresentationLabels(agent));
+  pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
@@ -2425,10 +2430,13 @@ function renderOverview(agent, program) {
     : null, { absent: "not reported" });
 
   panel.append(grid);
-  panel.append(renderSwarmSection(agent, program));
   return panel;
 }
 
+/* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
+   (P4), but it MUST stay defined immediately after renderOverview: a test
+   asserts the renderOverview…renderSwarmSection source adjacency. Do not
+   reorder or delete it. */
 function renderSwarmSection(agent, program) {
   const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
   const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
@@ -2459,6 +2467,84 @@ function renderSwarmSection(agent, program) {
       agentName(child) + " — " + ACTIVITY_LABELS[act]));
   }
   return wrap;
+}
+
+/* Lineage spine — the signature nesting element. Ancestors climb a single thin
+   rail to the current agent (a filled provider-colored ring); direct children
+   fan out below. Depth is encoded by color, never by indentation, so it can
+   never degrade into a repeated card stack. Deep chains (>4 ancestors) collapse
+   the middle into a ⋯ breadcrumb crumb (plan §4). */
+function lineageMeta(text) {
+  return el("span", { class: "dw-lin-meta", text: " " + text });
+}
+
+function lineageNode(a, depthCls) {
+  const rv = roleView(a.role);
+  return el("div", { class: "dw-node " + depthCls },
+    el("span", { class: "dw-rail" }, el("span", { class: "dw-glyph", "aria-hidden": "true" })),
+    el("button", {
+      type: "button", class: "dw-lin-name",
+      dataset: { fkey: "lineage:" + a.id },
+      onclick: () => selectEntity({ kind: "agent", id: a.id }),
+    }, agentName(a), rv.key !== "agent" ? lineageMeta("· " + rv.label) : null));
+}
+
+function lineageCrumb(text) {
+  return el("div", { class: "dw-node" },
+    el("span", { class: "dw-rail" }, el("span", { class: "dw-glyph", "aria-hidden": "true" })),
+    el("span", { class: "dw-lin-crumb", text }));
+}
+
+function lineageKid(child) {
+  const act = deriveActivity(child);
+  const outcome = deriveOutcome(child);
+  const needs = outcome !== "healthy" && act !== "ended";
+  const dotCls = needs ? "dw-dot--needs" : act === "working" ? "dw-dot--work" : act === "ended" ? "dw-dot--end" : "dw-dot--idle";
+  const stateText = needs ? OUTCOME_LABELS[outcome] : ACTIVITY_LABELS[act];
+  return el("button", {
+    type: "button", class: "dw-kid",
+    dataset: { fkey: "lineage-kid:" + child.id },
+    onclick: () => selectEntity({ kind: "agent", id: child.id }),
+  }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), agentName(child) + " — " + stateText);
+}
+
+function renderLineageSpine(agent) {
+  const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
+  const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
+  const ancestors = [];
+  const seen = new Set([agent.id]);
+  let p = agent.parentAgentId ? fullById.get(agent.parentAgentId) : null;
+  while (p && !seen.has(p.id)) { seen.add(p.id); ancestors.push(p); p = p.parentAgentId ? fullById.get(p.parentAgentId) : null; }
+  ancestors.reverse(); // root → immediate parent
+  const untrackedParent = !!agent.parentAgentId && !fullById.get(agent.parentAgentId);
+
+  if (!ancestors.length && !children.length && !untrackedParent) return el("span", { hidden: "" });
+
+  const lin = el("div", { class: "dw-lin" });
+  if (untrackedParent) {
+    lin.append(lineageCrumb("Orchestrator not tracked"));
+  } else if (ancestors.length > 4) {
+    // Collapse the middle; keep the nearest ancestor next to the current node.
+    lin.append(lineageCrumb("⋯ " + (ancestors.length - 1) + " earlier ancestors"));
+    lin.append(lineageNode(ancestors[ancestors.length - 1], "dw-d2"));
+  } else {
+    ancestors.forEach((a, i) => lin.append(lineageNode(a, "dw-d" + Math.min(i, 2))));
+  }
+  lin.append(el("div", { class: "dw-node dw-cur" },
+    el("span", { class: "dw-rail" }, el("span", { class: "dw-glyph", "aria-hidden": "true" })),
+    el("span", { class: "dw-lin-name dw-cur-name" }, agentName(agent), lineageMeta("· this"))));
+
+  const spine = el("div", { class: "dw-spine", "aria-label": "Lineage" },
+    el("div", { class: "dw-spine-label", text: "Lineage" }),
+    lin);
+
+  if (children.length) {
+    const fan = el("div", { class: "dw-child-fan" });
+    for (const child of children.slice(0, 5)) fan.append(lineageKid(child));
+    if (children.length > 5) fan.append(el("span", { class: "dw-more", text: "+" + (children.length - 5) + " more subagents" }));
+    spine.append(fan);
+  }
+  return spine;
 }
 
 /* ---------- inspector: technical ---------- */
