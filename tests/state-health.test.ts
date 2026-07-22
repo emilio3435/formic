@@ -82,14 +82,15 @@ describe("cmux collection time truth", () => {
       allClear: false,
     });
 
+    // Orphan blocked triage rows (no live issue) must not keep Watch hot.
     triageSummaries = [{ issueId: "queue:detached", state: "blocked" }];
     await state.refresh();
     expect(state.get().attentionBoard).toEqual({
       actNow: 0,
-      watch: 1,
+      watch: 0,
       inMotion: 0,
       cleared: 0,
-      allClear: false,
+      allClear: true,
     });
   });
 });

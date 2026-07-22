@@ -375,14 +375,27 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   max-width: var(--frame);
   margin: 0 auto;
   display: flex;
-  gap: 1.5rem;
+}
+
+/* One docked instrument: workboard + Details share a bordered shell with an
+   internal divider — not two floating panes with a canvas gap between them. */
+.ops-stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--raise);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
 }
 
 .pane-list {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0.6rem 0 5rem;
+  padding: 0.6rem 0.85rem 5rem;
   scrollbar-gutter: stable;
 }
 
@@ -425,6 +438,17 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-radius: 4px;
   overflow: hidden;
 }
+.score-legend {
+  margin: 0.45rem 0.1rem 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.score-legend[hidden] { display: none; }
+body.is-all-clear .score-legend,
+.attention-board.is-all-clear .score-legend { display: none; }
 .attention-board,
 .lane-body,
 #programs {
@@ -527,7 +551,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 
 .finding {
   display: grid;
-  grid-template-columns: 0.85rem 6.8rem minmax(0, 1fr) 4.8rem;
+  grid-template-columns: 0.85rem 6.8rem minmax(0, 1fr) 5.4rem;
   gap: 0.55rem;
   align-items: center;
   padding: 0.55rem 0.75rem;
@@ -596,37 +620,37 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .st.warm { color: var(--amber); }
 .st.cool { color: var(--slate); }
 .st.ok { color: var(--moss); }
-.rail {
-  height: 3px;
-  background: var(--line);
-  border-radius: 99px;
-  overflow: hidden;
+/* Four-tick workflow rail: Watch → Triage → Verify → Cleared. Active ticks
+   fill left-to-right from the finding's work stage; tone follows work key. */
+.stage-rail {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  align-items: center;
+  height: 6px;
 }
-.rail > i { display: block; height: 100%; width: 0%; background: var(--slate); }
-.rail[data-p="0"] > i { width: 0%; }
-.rail[data-p="5"] > i { width: 5%; }
-.rail[data-p="10"] > i { width: 10%; }
-.rail[data-p="15"] > i { width: 15%; }
-.rail[data-p="20"] > i { width: 20%; }
-.rail[data-p="25"] > i { width: 25%; }
-.rail[data-p="30"] > i { width: 30%; }
-.rail[data-p="35"] > i { width: 35%; }
-.rail[data-p="40"] > i { width: 40%; }
-.rail[data-p="45"] > i { width: 45%; }
-.rail[data-p="50"] > i { width: 50%; }
-.rail[data-p="55"] > i { width: 55%; }
-.rail[data-p="60"] > i { width: 60%; }
-.rail[data-p="65"] > i { width: 65%; }
-.rail[data-p="70"] > i { width: 70%; }
-.rail[data-p="75"] > i { width: 75%; }
-.rail[data-p="80"] > i { width: 80%; }
-.rail[data-p="85"] > i { width: 85%; }
-.rail[data-p="90"] > i { width: 90%; }
-.rail[data-p="95"] > i { width: 95%; }
-.rail[data-p="100"] > i { width: 100%; }
-.rail.hot > i { background: var(--ember); }
-.rail.warm > i { background: var(--amber); }
-.rail.ok > i { background: var(--moss); }
+.stage-rail > i {
+  display: block;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--line);
+}
+.stage-rail[data-stage="1"] > i:nth-child(-n+1),
+.stage-rail[data-stage="2"] > i:nth-child(-n+2),
+.stage-rail[data-stage="3"] > i:nth-child(-n+3),
+.stage-rail[data-stage="4"] > i:nth-child(-n+4) { background: var(--slate); }
+.stage-rail.hot[data-stage="1"] > i:nth-child(-n+1),
+.stage-rail.hot[data-stage="2"] > i:nth-child(-n+2),
+.stage-rail.hot[data-stage="3"] > i:nth-child(-n+3),
+.stage-rail.hot[data-stage="4"] > i:nth-child(-n+4) { background: var(--ember); }
+.stage-rail.warm[data-stage="1"] > i:nth-child(-n+1),
+.stage-rail.warm[data-stage="2"] > i:nth-child(-n+2),
+.stage-rail.warm[data-stage="3"] > i:nth-child(-n+3),
+.stage-rail.warm[data-stage="4"] > i:nth-child(-n+4) { background: var(--amber); }
+.stage-rail.ok[data-stage="1"] > i:nth-child(-n+1),
+.stage-rail.ok[data-stage="2"] > i:nth-child(-n+2),
+.stage-rail.ok[data-stage="3"] > i:nth-child(-n+3),
+.stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
 
 .lane-empty {
   flex: 1;
@@ -702,7 +726,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 @media (max-width: 860px) {
   .lanes { grid-template-columns: 1fr; }
   .finding { grid-template-columns: 0.85rem 6.2rem minmax(0, 1fr); }
-  .finding .rail { display: none; }
+  .finding .stage-rail { display: none; }
   body.is-all-clear .allclear { flex-direction: column; text-align: center; }
   /* Narrow conductor: 2×2 so labels never clip (IN MOTION / CLEARED). */
   .score:not(.score-clear) {
@@ -1236,19 +1260,17 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 /* ---------- inspector: layered drawer ---------- */
 
 .pane-inspector {
+  --inspector-pad-x: 1.2rem;
   flex: none;
   width: min(var(--inspector-w), 100%);
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
   overflow-y: auto;
   overflow-x: hidden;   /* content wraps; guarantee no horizontal scroll at 375px */
+  /* Internal divider only — the ops-stage shell owns the outer frame/raise. */
   border-left: 1px solid var(--line-strong);
-  /* Containment: a crisp bezel seam on the inner edge plus one soft directional
-     shadow so the pane reads as a docked instrument panel raised off the
-     workboard — not a white sheet bleeding into the canvas. Single-layer, no
-     floating card-stack. */
-  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.6), -16px 0 34px -30px rgba(18, 24, 32, 0.28);
+  box-shadow: none;
   background: var(--surface);
-  padding: 1.15rem 1.2rem 3rem;
+  padding: 1.15rem var(--inspector-pad-x) 3rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -1256,7 +1278,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   animation: drawer-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .pane-inspector[hidden] { display: none; }
-@keyframes drawer-in { from { transform: translateX(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes drawer-in { from { transform: translateX(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* Overview + Technical: a tabbed single column at every desktop width, so the
    drawer holds a calm 480–520px without cramming two panels together. */
@@ -1275,7 +1297,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .dw-accent--moss  { background: var(--moss); }
 .dw-accent--slate { background: var(--slate); }
 .dw-accent--ink   { background: var(--ink); }
-.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)), -16px 0 34px -30px rgba(18, 24, 32, 0.28); }
+.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
 /* One --prov per provider drives both the pane inset rail and the lineage
    current-node ring; set by a class so the strict CSP holds (no inline style). */
 .dw-provider--claude { --prov: var(--claude); }
@@ -1517,12 +1539,19 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 }
 .control-banner-link:hover { text-decoration: underline; }
 
-/* Sticky command dock — composer owns the bottom; tools stay quiet. */
+/* Sticky command dock — composer owns the bottom; tools stay quiet.
+   Horizontal bleed tracks --inspector-pad-x so mobile (1rem pad) does not
+   overshoot the viewport the way a hard-coded -1.2rem did. */
 .pane-inspector.dw-agent { padding-bottom: 0; }
 .command-dock {
   position: sticky; bottom: 0; z-index: 3;
-  margin-top: auto; margin-left: -1.2rem; margin-right: -1.2rem;
-  padding: 0.7rem 1.2rem 1rem;
+  box-sizing: border-box;
+  width: auto;
+  max-width: 100%;
+  margin-top: auto;
+  margin-left: calc(-1 * var(--inspector-pad-x));
+  margin-right: calc(-1 * var(--inspector-pad-x));
+  padding: 0.7rem var(--inspector-pad-x) 1rem;
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 55%, transparent), var(--raise) 32%);
   box-shadow: 0 -12px 28px -22px rgba(18, 24, 32, 0.4);
@@ -1763,7 +1792,16 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
    surface over the whole viewport, so selecting anything never squeezes the
    workboard. */
 @media (max-width: 1024px) {
+  /* Full-sheet inspector owns the viewport; drop the shared desktop shell. */
+  .ops-stage {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    overflow: visible;
+  }
   .pane-inspector {
+    --inspector-pad-x: 1rem;
     position: fixed;
     inset: 0;
     width: auto;
@@ -1771,7 +1809,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
     border-left: 0;
     box-shadow: none;   /* full-surface sheet: no docked-pane edge/raise */
     background: var(--canvas);
-    padding: 1rem 1rem 3rem;
+    padding: 1rem var(--inspector-pad-x) 3rem;
     animation: sheet-up 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Provider sheets keep their identity rail, but drop the docked raise shadow. */

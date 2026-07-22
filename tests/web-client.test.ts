@@ -599,6 +599,21 @@ describe("operations canvas layout", () => {
     expect(styles).toMatch(/\.signal-band\s*\{[^}]*max-width:\s*var\(--frame\)/);
   });
 
+  test("workboard + inspector share one ops-stage shell with an internal divider", () => {
+    expect(html).toContain('class="ops-stage"');
+    const stageIdx = html.indexOf('class="ops-stage"');
+    const mainIdx = html.indexOf('id="main"');
+    const inspectorIdx = html.indexOf('id="inspector"');
+    expect(stageIdx).toBeGreaterThan(-1);
+    expect(stageIdx).toBeLessThan(mainIdx);
+    expect(mainIdx).toBeLessThan(inspectorIdx);
+    expect(styles).toContain(".ops-stage");
+    expect(styles).toMatch(/\.app-body\s*\{[^}]*display:\s*flex/);
+    expect(styles).not.toMatch(/\.app-body\s*\{[^}]*gap:\s*1\.5rem/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*border-left:\s*1px solid var\(--line-strong\)/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*none/);
+  });
+
   test("finding rows open the drawer; triage stays drawer-only", () => {
     expect(source).toContain("function renderFindingRow(");
     expect(source).toContain("function renderAttentionBoard(");
@@ -745,20 +760,30 @@ describe("source hygiene", () => {
   test("conductor + lanes + all-clear match the hybrid contract", () => {
     expect(html).toContain('id="attention-board"');
     expect(html).toContain('class="conductor"');
+    expect(html).toContain('id="score-legend"');
     expect(html).toContain("All clear · nothing needs you");
     expect(html).toContain("Colony is clear");
+    expect(html).toContain("Act now: errors that need you");
+    expect(html).toContain("Watch: advisories or blocked work awaiting a decision");
+    expect(html).toContain("In motion: triage or verification is running");
+    expect(html).toContain("Cleared: recently confirmed gone");
     expect(source).toContain("function attentionBoardOf(");
     expect(source).toContain("function issueWorkState(");
+    expect(source).toContain("function issueStage(");
     expect(source).toContain("function issueImpactLine(");
     expect(source).toContain("is-all-clear");
     expect(source).toContain('text: "Impact"');
     expect(source).toContain("function workStateBanner(");
+    expect(source).toContain("stage-rail");
+    expect(source).toContain("Stage: ");
     expect(source).not.toContain('affectedChips(issue, "Affects")');
     expect(source).not.toMatch(/\bstyle:\s*`/);
     expect(styles).toContain(".conductor");
+    expect(styles).toContain(".score-legend");
     expect(styles).toContain(".finding");
     expect(styles).toContain(".allclear");
-    expect(styles).toContain('.rail[data-p="35"]');
+    expect(styles).toContain(".stage-rail");
+    expect(styles).toContain('data-stage="3"');
     expect(styles).toContain("body.is-all-clear");
   });
 
@@ -784,6 +809,70 @@ describe("source hygiene", () => {
     });
     expect(M.attentionBoardOf(snapshot({ issues: [], recentlyResolved: [] }))).toEqual({
       actNow: 0, watch: 0, inMotion: 0, cleared: 0, allClear: true,
+    });
+  });
+
+  test("resolved lifecycle beats a blocked queue row for the finding label", () => {
+    const issue = {
+      id: "system:cleared",
+      kind: "system",
+      severity: "warning",
+      title: "Cleared advisory",
+      summary: "Gone.",
+      affectedAgentIds: [],
+      lifecycle: { state: "resolved", openedAt: "2026-07-21T22:00:00.000Z", resolvedAt: "2026-07-21T23:00:00.000Z" },
+    };
+    const blockedQueue = [{ issueId: issue.id, state: "blocked", headline: "stale" }];
+    expect(M.issueWorkState(issue, blockedQueue)).toEqual({
+      key: "cleared", label: "Cleared", tone: "moss",
+    });
+    expect(M.issueStateLabel(issue)).toBe("Resolved");
+    expect(M.issueStage(issue)).toBe(4);
+  });
+
+  test("orphan blocked queue items do not inflate client Watch when only Cleared remains", () => {
+    const board = M.attentionBoardOf(
+      snapshot({
+        issues: [],
+        recentlyResolved: [
+          {
+            id: "system:gone",
+            kind: "system",
+            severity: "error",
+            title: "Gone",
+            summary: "s",
+            affectedAgentIds: [],
+            lifecycle: { state: "resolved", openedAt: "2026-07-21T22:00:00.000Z", resolvedAt: "2026-07-21T23:00:00.000Z" },
+          },
+        ],
+      }),
+      [
+        { issueId: "system:gone", state: "blocked" },
+        { issueId: "queue:orphan", state: "blocked" },
+      ],
+    );
+    expect(board).toEqual({
+      actNow: 0, watch: 0, inMotion: 0, cleared: 1, allClear: true,
+    });
+  });
+
+  test("live blocked findings still count toward Watch and show Blocked", () => {
+    const issue = {
+      id: "system:live-blocked",
+      kind: "system",
+      severity: "warning",
+      title: "Needs a decision",
+      summary: "s",
+      affectedAgentIds: [],
+      lifecycle: { state: "open", openedAt: "2026-07-21T22:00:00.000Z" },
+    };
+    const queue = [{ issueId: issue.id, state: "blocked", headline: "blocked" }];
+    expect(M.issueWorkState(issue, queue)).toEqual({
+      key: "blocked", label: "Blocked", tone: "error",
+    });
+    expect(M.issueStage("blocked")).toBe(3);
+    expect(M.attentionBoardOf(snapshot({ issues: [issue], recentlyResolved: [] }), queue)).toEqual({
+      actNow: 0, watch: 1, inMotion: 0, cleared: 0, allClear: false,
     });
   });
 

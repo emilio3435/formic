@@ -52,15 +52,16 @@
   <section id="attention-board" class="attention-board signal-band" aria-label="Attention" hidden>
     <div class="conductor" aria-label="Attention score">
       <div class="score" id="score">
-        <div class="seg ember" id="seg-act"><span class="seg-label">Act now</span> <span id="seg-act-n">0</span></div>
-        <div class="seg amber" id="seg-watch"><span class="seg-label">Watch</span> <span id="seg-watch-n">0</span></div>
-        <div class="seg slate" id="seg-motion"><span class="seg-label">In motion</span> <span id="seg-motion-n">0</span></div>
-        <div class="seg moss" id="seg-clear"><span class="seg-label">Cleared</span> <span id="seg-clear-n">0</span></div>
+        <div class="seg ember" id="seg-act" title="Act now: errors that need you"><span class="seg-label">Act now</span> <span id="seg-act-n">0</span></div>
+        <div class="seg amber" id="seg-watch" title="Watch: advisories or blocked work awaiting a decision"><span class="seg-label">Watch</span> <span id="seg-watch-n">0</span></div>
+        <div class="seg slate" id="seg-motion" title="In motion: triage or verification is running"><span class="seg-label">In motion</span> <span id="seg-motion-n">0</span></div>
+        <div class="seg moss" id="seg-clear" title="Cleared: recently confirmed gone"><span class="seg-label">Cleared</span> <span id="seg-clear-n">0</span></div>
         <div class="seg moss clear-banner" aria-live="polite">
           <span class="mark" aria-hidden="true"></span>
           All clear · nothing needs you
         </div>
       </div>
+      <p class="score-legend" id="score-legend" aria-live="polite"></p>
     </div>
 
     <div class="lanes" id="lanes">
@@ -90,44 +91,46 @@
   </section>
 
   <div class="app-body">
-    <main id="main" class="pane-list" tabindex="-1">
-      <section class="toolbar" aria-label="Views, search, and selection">
-        <nav class="views" role="group" aria-label="View" id="views">
-          <button type="button" class="view-tab" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
-          <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Alerts<span class="count" id="count-needs-you"></span></button>
-          <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
-          <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
-          <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
-          <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
-        </nav>
-        <div class="filter-bar" id="filter-bar" aria-label="Filters" hidden aria-hidden="true"></div>
-        <div class="toolbar-row" id="ops-toolbar-row">
-          <div class="search-wrap">
-            <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
-            <input id="search" type="search" placeholder="Search agents, tasks, programs…" autocomplete="off">
+    <div class="ops-stage">
+      <main id="main" class="pane-list" tabindex="-1">
+        <section class="toolbar" aria-label="Views, search, and selection">
+          <nav class="views" role="group" aria-label="View" id="views">
+            <button type="button" class="view-tab" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
+            <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Alerts<span class="count" id="count-needs-you"></span></button>
+            <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
+            <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
+            <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
+            <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
+          </nav>
+          <div class="filter-bar" id="filter-bar" aria-label="Filters" hidden aria-hidden="true"></div>
+          <div class="toolbar-row" id="ops-toolbar-row">
+            <div class="search-wrap">
+              <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
+              <input id="search" type="search" placeholder="Search agents, tasks, programs…" autocomplete="off">
+            </div>
+            <button type="button" class="btn select-toggle" id="select-toggle" aria-pressed="false">Select</button>
           </div>
-          <button type="button" class="btn select-toggle" id="select-toggle" aria-pressed="false">Select</button>
+          <p id="scope-note" class="scope-note" aria-live="polite"></p>
+        </section>
+
+        <section id="programs" class="programs" aria-label="Programs and agents"></section>
+        <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
+
+        <div id="empty-state" class="empty-state" hidden>
+          <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">
+            <path d="M8,50 C36,44 58,54 86,49" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0.5 7"></path>
+            <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50 Z" fill="currentColor" opacity="0.12"></path>
+            <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50" fill="none" stroke="currentColor" stroke-width="1.6"></path>
+            <ellipse cx="140" cy="45" rx="7" ry="3.4" fill="currentColor" opacity="0.5"></ellipse>
+          </svg>
+          <p id="empty-message">The colony is still.</p>
+          <p id="empty-hint" class="empty-hint"></p>
+          <button type="button" class="btn" id="empty-retry" hidden>Retry connection</button>
         </div>
-        <p id="scope-note" class="scope-note" aria-live="polite"></p>
-      </section>
+      </main>
 
-      <section id="programs" class="programs" aria-label="Programs and agents"></section>
-      <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
-
-      <div id="empty-state" class="empty-state" hidden>
-        <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">
-          <path d="M8,50 C36,44 58,54 86,49" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0.5 7"></path>
-          <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50 Z" fill="currentColor" opacity="0.12"></path>
-          <path d="M70,50 C92,26 118,14 140,14 C162,14 188,26 200,50" fill="none" stroke="currentColor" stroke-width="1.6"></path>
-          <ellipse cx="140" cy="45" rx="7" ry="3.4" fill="currentColor" opacity="0.5"></ellipse>
-        </svg>
-        <p id="empty-message">The colony is still.</p>
-        <p id="empty-hint" class="empty-hint"></p>
-        <button type="button" class="btn" id="empty-retry" hidden>Retry connection</button>
-      </div>
-    </main>
-
-    <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
+      <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
+    </div>
   </div>
 
   <div id="broadcast-bar" class="broadcast-bar" hidden aria-live="polite"></div>

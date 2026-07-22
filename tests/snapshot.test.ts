@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildSnapshot, impactSummaryFor, snapshotFingerprint } from "../src/server/snapshot";
+import {
+  buildSnapshot,
+  impactSummaryFor,
+  issueWorkStateFor,
+  snapshotFingerprint,
+  withAttentionBoard,
+} from "../src/server/snapshot";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
 import type { IssueLifecycle, OperatorIssue } from "../src/shared/types";
 
@@ -472,7 +478,7 @@ describe("snapshot control safety and SSE deduplication", () => {
 
     expect(snapshot.attentionBoard).toEqual({
       actNow: 1,
-      watch: 2,
+      watch: 1,
       inMotion: 3,
       cleared: 0,
       allClear: false,
@@ -660,5 +666,102 @@ describe("snapshot control safety and SSE deduplication", () => {
 
     expect(snapshot.issues).toMatchObject([{ id: issue.id, lifecycle: blocked }]);
     expect(snapshot.recentlyResolved).toEqual([]);
+  });
+
+  test("resolved lifecycle beats a stale blocked triage summary for work state", () => {
+    const issue: OperatorIssue = {
+      id: "system:cleared-finding",
+      kind: "system",
+      severity: "warning",
+      title: "Cleared finding",
+      summary: "Source no longer reports this.",
+      affectedAgentIds: [],
+      lifecycle: {
+        state: "resolved",
+        openedAt: "2026-07-21T22:58:00.000Z",
+        resolvedAt: "2026-07-21T23:00:00.000Z",
+        result: "Fresh source confirmation no longer reports this issue.",
+      },
+    };
+    expect(issueWorkStateFor(issue, { issueId: issue.id, state: "blocked" })).toBe("cleared");
+  });
+
+  test("orphan blocked triage summaries do not inflate Watch or block all-clear", () => {
+    const cleared: OperatorIssue = {
+      id: "system:previous",
+      kind: "system",
+      severity: "error",
+      title: "Previous incident",
+      summary: "Gone from the source.",
+      affectedAgentIds: [],
+      lifecycle: {
+        state: "resolved",
+        openedAt: "2026-07-21T22:58:00.000Z",
+        resolvedAt: "2026-07-21T23:00:00.000Z",
+      },
+    };
+    const board = withAttentionBoard(
+      {
+        schemaVersion: 1,
+        generatedAt: "2026-07-21T23:00:00.000Z",
+        controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
+        totals: {
+          live: 0, tracked: 0, attention: 0, working: 0, idle: 0, history: 0,
+          sourceHealth: { healthy: 0, degraded: 0, total: 0 },
+        },
+        programs: [],
+        issues: [],
+        recentlyResolved: [cleared],
+      },
+      [
+        { issueId: cleared.id, state: "blocked" },
+        { issueId: "queue:orphan-blocked", state: "blocked" },
+      ],
+    );
+
+    expect(board.attentionBoard).toEqual({
+      actNow: 0,
+      watch: 0,
+      inMotion: 0,
+      cleared: 1,
+      allClear: true,
+    });
+    expect(board.recentlyResolved?.[0]?.workState).toBe("cleared");
+  });
+
+  test("live blocked findings still count toward Watch", () => {
+    const liveBlocked: OperatorIssue = {
+      id: "system:live-blocked",
+      kind: "system",
+      severity: "warning",
+      title: "Needs a decision",
+      summary: "Investigation blocked.",
+      affectedAgentIds: [],
+      lifecycle: { state: "open", openedAt: "2026-07-21T22:58:00.000Z" },
+    };
+    const board = withAttentionBoard(
+      {
+        schemaVersion: 1,
+        generatedAt: "2026-07-21T23:00:00.000Z",
+        controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
+        totals: {
+          live: 0, tracked: 0, attention: 0, working: 0, idle: 0, history: 0,
+          sourceHealth: { healthy: 0, degraded: 0, total: 0 },
+        },
+        programs: [],
+        issues: [liveBlocked],
+        recentlyResolved: [],
+      },
+      [{ issueId: liveBlocked.id, state: "blocked" }],
+    );
+
+    expect(board.issues?.[0]?.workState).toBe("blocked");
+    expect(board.attentionBoard).toMatchObject({
+      actNow: 0,
+      watch: 1,
+      inMotion: 0,
+      cleared: 0,
+      allClear: false,
+    });
   });
 });

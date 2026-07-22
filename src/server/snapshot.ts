@@ -113,13 +113,14 @@ export function issueWorkStateFor(
   issue: OperatorIssue,
   triage?: TriageQueueSummary,
 ): IssueWorkState {
+  // Source clearance outranks a stale triage/queue row — resolved findings stay Cleared.
+  if (issue.lifecycle?.state === "resolved") return "cleared";
   if (triage?.state === "running") return "investigating";
   if (triage?.state === "queued") return "queued";
   if (triage?.state === "completed") return "verifying";
   if (triage?.state === "blocked") return "blocked";
   if (issue.lifecycle?.state === "verifying") return "verifying";
   if (issue.lifecycle?.state === "blocked") return "blocked";
-  if (issue.lifecycle?.state === "resolved") return "cleared";
   return issue.severity === "error" ? "needs_triage" : "watching";
 }
 
@@ -140,6 +141,8 @@ export function withAttentionBoard(
   };
   const issues = (snapshot.issues ?? []).map(decorate);
   const recentlyResolved = (snapshot.recentlyResolved ?? []).map(decorate);
+  const liveIssueIds = new Set(issues.map((issue) => issue.id));
+  const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
   const inMotionIds = new Set(
     issues.filter((issue) => issue.workState && IN_MOTION_STATES.has(issue.workState)).map((issue) => issue.id),
   );
@@ -159,7 +162,15 @@ export function withAttentionBoard(
     if (summary.state === "queued" || summary.state === "running" || summary.state === "completed") {
       inMotionIds.add(summary.issueId);
     }
-    if (summary.state === "blocked" && !actNowIds.has(summary.issueId)) watchIds.add(summary.issueId);
+    // Orphan blocked rows for cleared/non-live issues must not keep Watch hot.
+    if (
+      summary.state === "blocked"
+      && liveIssueIds.has(summary.issueId)
+      && !resolvedIds.has(summary.issueId)
+      && !actNowIds.has(summary.issueId)
+    ) {
+      watchIds.add(summary.issueId);
+    }
   }
   const actNow = actNowIds.size;
   const watch = watchIds.size;

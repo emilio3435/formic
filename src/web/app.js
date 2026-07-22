@@ -850,12 +850,21 @@ const WORK_STATE_VIEW = {
   cleared: { key: "cleared", label: "Cleared", tone: "moss" },
 };
 
-// Progress rail 0–100 per work state (normative). blocked keeps a mid rail but
+// Progress 0–100 per work state (normative). blocked keeps a mid value but
 // its ember tone (not the %) carries the alarm.
 const PROGRESS_BY_WORK = {
   needs: 0, watching: 0, triaging: 15, planned: 35, queued: 50,
   investigating: 70, verifying: 85, blocked: 70, cleared: 100,
 };
+
+// Four-tick stage rail: Watch → Triage → Verify → Cleared.
+const STAGE_BY_WORK = {
+  needs: 1, watching: 1,
+  triaging: 2, planned: 2, queued: 2, investigating: 2,
+  verifying: 3, blocked: 3,
+  cleared: 4,
+};
+const STAGE_LABELS = ["Watch", "Triage", "Verify", "Cleared"];
 
 // Each work key → row glyph shape + state-label tone + progress-rail tone. The
 // glyph/rail/st classes are styled in styles.css (.glyph.act/.warn/.run/.ok).
@@ -888,7 +897,7 @@ globalThis.TheAntHill = {
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
-  attentionBoardOf, issueWorkState, affectedImpact, issueProgress, issueImpactLine,
+  attentionBoardOf, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
   parseInvestigationResult,
 };
@@ -1713,14 +1722,17 @@ function renderTriage(issue) {
    feel like purgatory. Live optimistic signals (in-flight triage, queue, local
    plan, lifecycle) win first so the UI reacts before the next snapshot; when
    none apply we defer to the server-owned issue.workState, then a severity
-   default. */
-function issueWorkState(issue) {
+   default. Source clearance (lifecycle resolved) outranks a stale queue row. */
+function issueWorkState(issue, queueItems = state.queueItems) {
   if (!issue) return { key: "watching", label: "Watching", tone: "info" };
   const id = issue.id;
   if (state.triagePending.has("generate:" + id) || state.triagePending.has("queue:" + id) || state.triagePending.has("run:" + id)) {
     return { key: "triaging", label: "Triaging", tone: "warn" };
   }
-  const queueItem = state.queueItems.find((item) => item.issueId === id);
+  const life = issueLifecycle(issue);
+  if (life.state === "resolved") return { key: "cleared", label: "Cleared", tone: "moss" };
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const queueItem = items.find((item) => item.issueId === id);
   if (queueItem) {
     if (queueItem.state === "running") return { key: "investigating", label: "Investigating", tone: "info" };
     if (queueItem.state === "queued") return { key: "queued", label: "Queued", tone: "info" };
@@ -1728,13 +1740,19 @@ function issueWorkState(issue) {
     if (queueItem.state === "blocked") return { key: "blocked", label: "Blocked", tone: "error" };
   }
   if (state.triage.has(id)) return { key: "planned", label: "Plan ready", tone: "info" };
-  const life = issueLifecycle(issue);
   if (life.state === "verifying") return { key: "verifying", label: "Verifying", tone: "warn" };
   if (life.state === "blocked") return { key: "blocked", label: "Blocked", tone: "error" };
-  if (life.state === "resolved") return { key: "cleared", label: "Cleared", tone: "moss" };
   if (issue.workState && WORK_STATE_VIEW[issue.workState]) return WORK_STATE_VIEW[issue.workState];
   if (issue.severity === "error") return { key: "needs", label: "Needs triage", tone: "error" };
   return { key: "watching", label: "Watching", tone: "warn" };
+}
+
+/* Discrete stage index 1–4 for the finding rail (Watch → Triage → Verify → Cleared). */
+function issueStage(workKeyOrIssue) {
+  const key = typeof workKeyOrIssue === "string"
+    ? workKeyOrIssue
+    : issueWorkState(workKeyOrIssue).key;
+  return STAGE_BY_WORK[key] ?? 1;
 }
 
 /* Progress 0–100 for a finding's rail — server-owned issue.progress wins;
@@ -1772,6 +1790,8 @@ function attentionBoardOf(snap, queueItems = []) {
   }
   const issues = issuesOf(snap);
   const resolved = recentlyResolvedOf(snap);
+  const liveIssueIds = new Set(issues.map((issue) => issue.id));
+  const resolvedIds = new Set(resolved.map((issue) => issue.id));
   const triageByIssue = new Map(
     (snap && Array.isArray(snap.triageSummaries) ? snap.triageSummaries : [])
       .map((row) => [row.issueId, row.state]),
@@ -1782,25 +1802,28 @@ function attentionBoardOf(snap, queueItems = []) {
   const watchIds = new Set();
   const inMotionIds = new Set();
   for (const issue of issues) {
-    const work = issueWorkState(issue);
+    const work = issueWorkState(issue, queueItems);
     if (IN_MOTION_KEYS.has(work.key)) inMotionIds.add(issue.id);
     if (issue.severity === "error") actNowIds.add(issue.id);
     else if (!IN_MOTION_KEYS.has(work.key)) watchIds.add(issue.id);
   }
   for (const [issueId, qState] of triageByIssue) {
     if (qState === "queued" || qState === "running" || qState === "completed") inMotionIds.add(issueId);
-    if (qState === "blocked" && !actNowIds.has(issueId)) watchIds.add(issueId);
+    // Orphan blocked queue rows for cleared/non-live issues must not inflate Watch.
+    if (
+      qState === "blocked"
+      && liveIssueIds.has(issueId)
+      && !resolvedIds.has(issueId)
+      && !actNowIds.has(issueId)
+    ) {
+      watchIds.add(issueId);
+    }
   }
   const actNow = actNowIds.size;
   const watch = watchIds.size;
   const inMotion = inMotionIds.size;
   const cleared = resolved.length;
   return { actNow, watch, inMotion, cleared, allClear: actNow + watch + inMotion === 0 };
-}
-
-function progressStep(value) {
-  const n = Math.max(0, Math.min(100, Number(value) || 0));
-  return String(Math.round(n / 5) * 5);
 }
 
 function growClass(count) {
@@ -1844,7 +1867,9 @@ function renderFindingRow(finding) {
   const visual = FINDING_VISUAL[finding.work.key] || FINDING_VISUAL.watching;
   const selected = state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id;
   const open = () => selectEntity({ kind: finding.kind, id: finding.id });
-  const railClass = "rail" + (visual.rail ? " " + visual.rail : "");
+  const stage = issueStage(finding.work.key);
+  const stageName = STAGE_LABELS[stage - 1] || finding.work.label;
+  const railClass = "stage-rail" + (visual.rail ? " " + visual.rail : "");
   return el("button", {
     type: "button",
     class: "finding" + (finding.pin ? " pin" : "") + (selected ? " is-selected" : ""),
@@ -1857,8 +1882,11 @@ function renderFindingRow(finding) {
     el("span", { class: "copy" },
       el("span", { class: "title", text: finding.title }),
       el("span", { class: "impact", text: finding.impact })),
-    el("span", { class: railClass, "aria-hidden": "true", "data-p": progressStep(finding.progress) },
-      el("i")));
+    el("span", {
+      class: railClass,
+      "aria-label": "Stage: " + stageName + " (" + stage + " of 4)",
+      "data-stage": String(stage),
+    }, el("i"), el("i"), el("i"), el("i")));
 }
 
 function renderLaneBody(body, findings, laneKey, emptyCopy) {
@@ -1947,6 +1975,17 @@ function renderAttentionBoard() {
   setSeg("seg-motion", counts.inMotion);
   setSeg("seg-clear", counts.cleared);
   if (score) score.classList.toggle("score-clear", allClear);
+
+  const legend = $("score-legend");
+  if (legend) {
+    const needYou = counts.actNow === 1 ? "1 need you" : (counts.actNow + " need you");
+    const watching = counts.watch === 1 ? "1 watching" : (counts.watch + " watching");
+    const motion = counts.inMotion === 1 ? "1 in motion" : (counts.inMotion + " in motion");
+    const cleared = counts.cleared === 1 ? "1 cleared" : (counts.cleared + " cleared");
+    const nextLegend = needYou + " · " + watching + " · " + motion + " · " + cleared;
+    if (legend.textContent !== nextLegend) legend.textContent = nextLegend;
+    legend.hidden = allClear;
+  }
 
   const lanes = $("lanes");
   const allclear = $("allclear");
