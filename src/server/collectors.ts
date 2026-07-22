@@ -100,7 +100,9 @@ function taskDisplayName(task?: string): string | undefined {
   const lines = task
     ?.split("\n")
     .map((line) => line.trim())
-    .filter((line) => Boolean(line) && !/^<\/?file\b/i.test(line) && !/^\*\*user\*\*:?$/i.test(line));
+    .filter((line) => Boolean(line)
+      && !/^<\/?(?:file|command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr|local-command-caveat|system-reminder)\b/i.test(line)
+      && !/^\*\*user\*\*:?$/i.test(line));
   let firstLine = lines?.find((line) => /^(?:goal|mission|task|objective):\s*/i.test(line)) ?? lines?.[0];
   if (!firstLine) return undefined;
   const handoff = firstLine.indexOf("<--");
@@ -110,6 +112,8 @@ function taskDisplayName(task?: string): string | undefined {
     .replace(/^(?:goal|mission|task|objective):\s*/i, "")
     .replace(/^you are\s+(?:the\s+)?/i, "")
     .replace(/^[-*]\s+/, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1")
     .trim();
   if (!firstLine) return undefined;
   return firstLine.length > 100 ? `${firstLine.slice(0, 99).trimEnd()}…` : firstLine;

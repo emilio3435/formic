@@ -46,6 +46,15 @@ function readableText(text: string): string | undefined {
     .replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "")
     .replace(/<user_query\b[^>]*>|<\/user_query>/gi, "")
     .replace(/<file\b[^>]*>|<\/file>/gi, "")
+    // Slash-command + local-command transport envelopes (Claude Code) are
+    // machinery, not human words — drop the whole block, content included.
+    .replace(/<(command-name|command-message|command-args|command-contents)>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<(local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>/gi, " ")
+    // Flatten markdown so the one-line human view reads as prose, not source.
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1")
     .trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
 
