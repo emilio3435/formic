@@ -880,6 +880,103 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .inspector-body > .inspector-panel { min-width: 0; }
 }
 
+/* ---------- inspector: per-type drawer states ----------
+   One shared chassis; each entity type differs only by a single accent channel
+   (2px top rule + eyebrow color), its lead element, and its body blocks — never
+   by rainbow color-coding. All classes are dw-* namespaced to avoid colliding
+   with the base .btn/.pill/.title/.chip styles above. */
+.dw-accent { height: 2px; width: 100%; margin: -1.15rem -1.2rem 0; width: auto; border-radius: var(--radius) var(--radius) 0 0; }
+.dw-accent--ember { background: var(--ember); }
+.dw-accent--amber { background: var(--amber); }
+.dw-accent--moss  { background: var(--moss); }
+.dw-accent--slate { background: var(--slate); }
+.dw-accent--ink   { background: var(--ink); }
+.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
+
+.dw-eyebrow { display: inline-flex; align-items: center; gap: 0.35rem; font: 750 9.5px/1.3 var(--font-mono); letter-spacing: 0.11em; text-transform: uppercase; color: var(--faint); }
+.dw-eyebrow svg { width: 0.9rem; height: 0.9rem; }
+.dw-eyebrow--ember { color: var(--ember); }
+.dw-eyebrow--amber { color: var(--amber); }
+.dw-eyebrow--moss  { color: var(--moss); }
+.dw-eyebrow--slate { color: var(--slate); }
+
+.dw-lead { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
+.dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
+.dw-lead--past { color: var(--moss); font-weight: 650; }
+
+.dw-block { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 0.7rem 0.75rem; }
+.dw-block--fix { border-color: color-mix(in srgb, var(--ember) 30%, var(--line)); }
+.dw-block-label { font: 700 9px/1.3 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.4rem; }
+.dw-block--fix .dw-block-label { color: var(--ember); }
+
+.dw-chips { display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem; margin-top: 0.4rem; }
+.dw-chip { font-size: 12px; color: var(--ink); padding: 0.12rem 0.5rem; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--raise); cursor: pointer; }
+.dw-chip .dw-chip-prog { color: var(--faint); }
+.dw-impact { font-size: 11.5px; color: var(--faint); margin: 0; }
+
+.dw-full { width: 100%; }
+.btn.dw-ghost { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--line-strong)); background: transparent; }
+
+.dw-backlink { font-size: 12px; color: var(--muted); }
+.dw-backlink b { color: var(--ink); }
+
+/* investigation: status line + step timeline (reuses the shared step visual) */
+.dw-status { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 12.5px; color: var(--muted); }
+.dw-pulse { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--moss); box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 22%, transparent); animation: dw-pulse 1.6s ease-in-out infinite; }
+@keyframes dw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.dw-steps { display: grid; gap: 0.4rem; margin: 0.4rem 0 0; padding: 0; list-style: none; counter-reset: dwstep; }
+.dw-steps li { counter-increment: dwstep; padding: 0.45rem 0.5rem; border-left: 2px solid var(--line-strong); border-radius: 0 4px 4px 0; background: var(--surface); font-size: 12px; }
+.dw-steps li::before { content: "0" counter(dwstep); display: block; color: var(--faint); font: 10px var(--font-mono); }
+.dw-steps b { display: block; margin: 0.1rem 0; font-size: 12.5px; }
+.dw-steps span { display: block; color: var(--muted); }
+
+/* program: segmented rollup meter + roster */
+.dw-meter { display: flex; height: 0.7rem; border-radius: 999px; overflow: hidden; background: var(--line); }
+.dw-meter i { height: 100%; display: block; }
+.dw-seg-work { background: var(--working); }
+.dw-seg-idle { background: var(--idle); }
+.dw-seg-needs { background: var(--needs); }
+.dw-seg-end { background: var(--ended); opacity: 0.55; }
+.dw-roster { display: grid; gap: 0.35rem; margin-top: 0.45rem; }
+.dw-roster-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.5rem; align-items: center; font-size: 12.5px; }
+.dw-roster-state { font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; }
+
+/* lineage spine (the signature nesting element) */
+.dw-spine { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 0.6rem 0.7rem; }
+.dw-spine-label { font: 700 9px/1.3 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.45rem; }
+.dw-lin { display: grid; grid-template-columns: 1.1rem 1fr; gap: 0 0.5rem; align-items: center; }
+.dw-node { display: grid; grid-template-columns: subgrid; grid-column: 1 / 3; align-items: center; min-height: 26px; }
+.dw-rail { position: relative; justify-self: center; width: 1.1rem; height: 100%; display: flex; align-items: center; justify-content: center; }
+.dw-rail::before { content: ""; position: absolute; top: 0; bottom: 0; width: 1.5px; background: var(--line-strong); }
+.dw-node:first-child .dw-rail::before { top: 50%; }
+.dw-node:last-child .dw-rail::before { bottom: 50%; }
+.dw-glyph { position: relative; z-index: 1; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--surface); border: 2px solid var(--clay); }
+.dw-node.dw-d0 .dw-glyph { border-color: var(--ink); }
+.dw-node.dw-d1 .dw-glyph { border-color: var(--moss); }
+.dw-node.dw-d2 .dw-glyph { border-color: var(--amber); }
+.dw-node.dw-cur .dw-glyph { width: 0.85rem; height: 0.85rem; background: var(--prov, var(--claude)); border-color: var(--prov, var(--claude)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--prov, var(--claude)) 20%, transparent); }
+.dw-lin-name { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.dw-lin-name .dw-lin-meta { color: var(--faint); font-size: 11px; }
+.dw-lin-name.dw-cur-name { font-weight: 750; cursor: default; }
+.dw-child-fan { margin: 0.45rem 0 0 0.5rem; padding-left: 1.1rem; display: grid; gap: 0.25rem; border-left: 1.5px solid var(--moss); }
+.dw-kid { display: flex; align-items: center; gap: 0.4rem; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.dw-more { color: var(--slate); font-size: 11.5px; }
+.dw-dot { width: 0.62rem; height: 0.62rem; border-radius: 50%; flex: none; background: var(--line-strong); }
+.dw-dot--work { background: var(--working); }
+.dw-dot--idle { background: var(--idle); }
+.dw-dot--end { background: var(--ended); }
+.dw-dot--needs { background: var(--needs); }
+
+.pane-inspector.dw-past { opacity: 0.9; }
+/* .dw-pulse animation is already disabled by the universal prefers-reduced-motion
+   rule (`*, *::before, *::after { animation: none !important }`) below. */
+
+/* inline signal bands are now thin triggers that open the matching drawer */
+.signal-trigger { cursor: pointer; }
+.signal-trigger:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; border-radius: var(--radius-sm); }
+.signal-trigger-status { font-size: 12px; color: var(--faint); white-space: nowrap; align-self: center; }
+.signal-intervention.is-selected { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ember) 45%, transparent); }
+
 .inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; overflow-wrap: anywhere; }
 .inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }

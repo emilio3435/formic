@@ -797,6 +797,7 @@ const state = {
   broadcastResults: null,      // Map agentId -> { ok, error }
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
+  selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   inspectorTab: "overview", // overview | technical
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // `${agentId}:${action}`
@@ -1301,40 +1302,41 @@ function affectedDisclosure(issue, byId) {
     chips);
 }
 
+// Thin trigger only — the triage flow, affected chips, and technical detail now
+// live in the Intervention drawer. The band says what and how bad, and opens it.
 function renderIntervention(issue, byId) {
-  const triage = renderTriage(issue);
   const generated = state.triage.has(issue.id);
   const lifecycle = issueLifecycle(issue);
-  const lifecycleNote = issueLifecycleNote(issue);
-  const side = el("div", { class: "signal-side" },
-    // Compact "Generate triage" sits inline top-right; once a plan exists it
-    // moves to a full-width row below so the band stays short until acted on.
-    generated ? null : triage,
-    affectedDisclosure(issue, byId),
-    issue.technicalDetails && issue.technicalDetails.length
-      ? el("details", { class: "signal-tech" },
-          el("summary", { text: "Technical" }),
-          el("ul", {}, issue.technicalDetails.map((d) => el("li", { class: "mono", text: d }))))
-      : null);
-  const item = el("li", { class: "signal-intervention sev-" + issue.severity + " issue-state-" + lifecycle.state + (generated ? " has-triage" : "") },
+  const affectedCount = (issue.affectedAgentIds || []).length;
+  const selected = state.selected && state.selected.kind === "intervention" && state.selected.id === issue.id;
+  const open = () => selectEntity({ kind: "intervention", id: issue.id });
+  const status = generated ? "Triage ready ▸" : affectedCount ? `${affectedCount} affected ▸` : "Open ▸";
+  return el("li", {
+    class: "signal-intervention signal-trigger sev-" + issue.severity + " issue-state-" + lifecycle.state + (selected ? " is-selected" : ""),
+    role: "button", tabindex: "0",
+    "aria-label": "Open intervention: " + issue.title,
+    dataset: { fkey: "issue:" + issue.id },
+    onclick: open,
+    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
+  },
     el("span", { class: "signal-badge" }, icon("intervention", { label: "Intervention" })),
     el("div", { class: "signal-copy" },
       el("span", { class: "signal-kicker", text: lifecycle.state === "open" ? "Open · act now" : issueStateLabel(issue) + " · source confirmation" }),
       el("h3", { class: "signal-title", text: issue.title }),
-      el("p", { class: "signal-consequence", text: issue.summary }),
-      lifecycleNote ? el("p", { class: "issue-lifecycle-note", text: lifecycleNote }) : null),
-    side);
-  if (generated) item.append(triage);
-  return item;
+      el("p", { class: "signal-consequence", text: issue.summary })),
+    el("div", { class: "signal-side" }, el("span", { class: "signal-trigger-status", text: status })));
 }
 
 function renderAdvisory(issue, byId) {
   const affected = issue.affectedAgentIds.map((id) => byId.get(id)).filter(Boolean);
   const lifecycle = issueLifecycle(issue);
   const lifecycleNote = issueLifecycleNote(issue);
-  const titleNode = affected.length
-    ? el("button", { type: "button", class: "advisory-title", dataset: { fkey: `issue:${issue.id}` }, onclick: () => selectAgent(affected[0].agent.id), text: issue.title })
-    : el("span", { class: "advisory-title", text: issue.title });
+  const titleNode = el("button", {
+    type: "button", class: "advisory-title",
+    dataset: { fkey: `issue:${issue.id}` },
+    onclick: () => selectEntity({ kind: "advisory", id: issue.id }),
+    text: issue.title,
+  });
   return el("li", { class: "signal-advisory" },
     icon("warning", { class: "warn-tri", label: "Advisory" }),
     el("div", { class: "advisory-body" },
@@ -1777,13 +1779,22 @@ function swarmNote(agent, opts) {
 /* ---------- selection + inspector ---------- */
 
 function selectAgent(agentId) {
-  state.selectedId = agentId;
+  selectEntity({ kind: "agent", id: agentId });
+}
+
+// Unified entry point for every drawer kind. Agents keep populating the legacy
+// state.selectedId so the row is-selected highlight, findSelected, and
+// closeInspector focus-return all keep working untouched.
+function selectEntity(sel) {
+  state.selected = sel;
+  state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
   render();
 }
 
 function closeInspector() {
   const id = state.selectedId;
+  state.selected = null;
   state.selectedId = null;
   state.confirming = null;
   render();
@@ -1802,25 +1813,132 @@ function findSelected() {
   return null;
 }
 
+/* Drawer router: one chassis, a distinct body per entity kind. selectEntity
+   sets state.selected = {kind,id}; resolveSelection maps it to a live record and
+   DRAWER_RENDERERS routes to the per-type body. Keeping this as renderInspector
+   preserves every existing render() caller. */
 function renderInspector() {
   const pane = $("inspector");
   pane.textContent = "";
-  const open = !!state.selectedId;
-  pane.hidden = !open;
-  document.body.classList.toggle("inspector-open", open);
-  if (!open) return;
+  pane.className = "pane-inspector";
+  const sel = state.selected;
+  pane.hidden = !sel;
+  document.body.classList.toggle("inspector-open", !!sel);
+  if (!sel) return;
 
-  const found = findSelected();
-  if (!found) {
-    pane.append(
-      el("div", { class: "inspector-head" },
-        el("h2", { class: "inspector-title", text: "Session left the snapshot" }),
-        closeButton()),
-      el("p", { class: "inspector-note", text: "This session is no longer reported by any collector. It may reappear in History on the next snapshot." }));
-    return;
+  const view = resolveSelection(sel);
+  const renderer = view && DRAWER_RENDERERS[view.kind];
+  if (!renderer) { pane.append(...missingDrawer()); return; }
+  renderer(pane, view);
+}
+
+const DRAWER_RENDERERS = {
+  agent: renderAgentDrawer,
+  intervention: renderInterventionDrawer,
+  advisory: renderAdvisoryDrawer,
+};
+
+function resolveSelection(sel) {
+  if (!sel || !state.snap) return null;
+  if (sel.kind === "agent") {
+    const found = findSelected();
+    return found ? { kind: "agent", agent: found.agent, program: found.program } : null;
   }
+  if (sel.kind === "intervention" || sel.kind === "advisory") {
+    const issue = issuesOf(state.snap).find((i) => i.id === sel.id);
+    return issue ? { kind: sel.kind, issue } : null;
+  }
+  return null;
+}
 
-  const { agent, program } = found;
+function missingDrawer() {
+  return [
+    el("div", { class: "inspector-head" },
+      el("h2", { class: "inspector-title", text: "No longer in the snapshot" }),
+      closeButton()),
+    el("p", { class: "inspector-note", text: "This entity is no longer reported by any collector. It may reappear on the next snapshot." }),
+  ];
+}
+
+function agentsById() {
+  return new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+}
+
+function drawerAccent(pane, kind) {
+  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
+}
+
+function dwEyebrow(kindClass, iconName, text) {
+  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
+}
+
+function drawerHead(eyebrowNode, titleText) {
+  return el("div", { class: "inspector-head" },
+    el("div", { class: "inspector-id" }, eyebrowNode, el("h2", { class: "inspector-title", text: titleText })),
+    closeButton());
+}
+
+// Affected agents as chips that open the Agent drawer — moved out of the inline
+// list bands so the drawer owns the interaction.
+function affectedChips(issue, label) {
+  const byId = agentsById();
+  const affected = (issue.affectedAgentIds || []).map((id) => byId.get(id)).filter(Boolean);
+  if (!affected.length) return null;
+  return el("div", {},
+    el("h3", { class: "section-title", text: `${label} (${affected.length})` }),
+    el("div", { class: "dw-chips" }, affected.map(({ agent, program }) =>
+      el("button", {
+        type: "button", class: "dw-chip",
+        dataset: { fkey: `issue:${issue.id}:${agent.id}` },
+        onclick: () => selectEntity({ kind: "agent", id: agent.id }),
+      }, agentName(agent), el("span", { class: "dw-chip-prog", text: " · " + programName(program) })))));
+}
+
+// Intervention drawer — leads with the consequence, then the one thing to do.
+function renderInterventionDrawer(pane, view) {
+  const issue = view.issue;
+  const note = issueLifecycleNote(issue);
+  drawerAccent(pane, "ember");
+  pane.append(drawerHead(
+    dwEyebrow("ember", "intervention", issueLifecycle(issue).state === "open" ? "Open · act now" : issueStateLabel(issue)),
+    issue.title));
+  pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
+  pane.append(el("div", { class: "dw-block dw-block--fix" },
+    el("div", { class: "dw-block-label", text: "Fix" }),
+    renderTriage(issue)));
+  const chips = affectedChips(issue, "Affected");
+  if (chips) pane.append(chips);
+  if (issue.technicalDetails && issue.technicalDetails.length) {
+    pane.append(el("details", { class: "signal-tech" },
+      el("summary", { text: "Technical" }),
+      el("ul", {}, issue.technicalDetails.map((d) => el("li", { class: "mono", text: d })))));
+  }
+  if (note) pane.append(el("p", { class: "dw-impact", text: note }));
+}
+
+// Advisory drawer — deliberately quieter than an intervention. No forced action.
+function renderAdvisoryDrawer(pane, view) {
+  const issue = view.issue;
+  const note = issueLifecycleNote(issue);
+  const affectedCount = (issue.affectedAgentIds || []).length;
+  drawerAccent(pane, "amber");
+  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory"), issue.title));
+  pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
+  const chips = affectedChips(issue, "Affects");
+  if (chips) pane.append(chips);
+  pane.append(el("p", { class: "dw-impact", text: `${issueStateLabel(issue)}${affectedCount ? " · " + affectedCount + " affected" : " · system"}` }));
+  if (note) pane.append(el("p", { class: "dw-impact", text: note }));
+  pane.append(el("div", { class: "controls-row" },
+    el("button", {
+      type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
+      onclick: () => triageIssue(issue.id, "generate"),
+    }, "Escalate to triage")));
+}
+
+// Agent drawer — the workhorse, unchanged in body (reuses renderOverview/
+// renderTechnical/renderDangerZone etc.), now routed through the chassis.
+function renderAgentDrawer(pane, view) {
+  const { agent, program } = view;
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
