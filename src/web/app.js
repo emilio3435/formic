@@ -1283,25 +1283,6 @@ function renderIssues() {
   wSection.hidden = advisories.length === 0 && recentlyResolved.length === 0 && queuedOnly.length === 0;
 }
 
-/* Affected agents live behind one concise count disclosure so the band stays
-   compact; the chips only appear when the operator opens it. */
-function affectedDisclosure(issue, byId) {
-  const affected = issue.affectedAgentIds.map((id) => byId.get(id)).filter(Boolean);
-  const count = affected.length || issue.affectedAgentIds.length;
-  if (!count) return null;
-  const chips = el("div", { class: "signal-affected" });
-  for (const { agent, program } of affected) {
-    chips.append(el("button", {
-      type: "button", class: "signal-agent",
-      dataset: { fkey: `issue:${issue.id}:${agent.id}` },
-      onclick: () => selectAgent(agent.id),
-    }, agentName(agent), el("span", { class: "signal-agent-prog", text: " · " + programName(program) })));
-  }
-  return el("details", { class: "affected-disclosure" },
-    el("summary", { text: `${count} affected` }),
-    chips);
-}
-
 // Thin trigger only — the triage flow, affected chips, and technical detail now
 // live in the Intervention drawer. The band says what and how bad, and opens it.
 function renderIntervention(issue, byId) {
@@ -1346,31 +1327,43 @@ function renderAdvisory(issue, byId) {
     el("span", { class: "advisory-impact", text: `${issueStateLabel(issue)} · ${affected.length ? `${affected.length} affected` : "system"}` }));
 }
 
+// Thin trigger — the before/after and recovered agents now live in the Resolved
+// drawer. The row shows what cleared and opens it.
 function renderRecentlyResolved(issue) {
-  const lifecycle = issueLifecycle(issue);
-  const result = lifecycle.result || "Source confirmation cleared the finding.";
-  return el("li", { class: "signal-advisory issue-resolved" },
+  const selected = state.selected && state.selected.kind === "resolved" && state.selected.id === issue.id;
+  const open = () => selectEntity({ kind: "resolved", id: issue.id });
+  return el("li", {
+    class: "signal-advisory issue-resolved signal-trigger" + (selected ? " is-selected" : ""),
+    role: "button", tabindex: "0",
+    "aria-label": "Open resolved finding: " + issue.title,
+    dataset: { fkey: "resolved:" + issue.id },
+    onclick: open,
+    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
+  },
     icon("check", { class: "warn-tri", label: "Resolved" }),
     el("div", { class: "advisory-body" },
-      el("span", { class: "advisory-title", text: issue.title }),
-      el("div", { class: "advisory-summary", text: `Resolved ${issueTimestamp(lifecycle.resolvedAt)} · ${result}` })),
+      el("span", { class: "advisory-title", text: issue.title })),
     el("span", { class: "advisory-impact", text: "Resolved" }));
 }
 
+// Thin trigger — the step timeline, result, and launch now live in the
+// Investigation drawer. The row shows the headline + live state and opens it.
 function renderInvestigationItem(item) {
-  const stateLabel = item.state === "running" ? "Running" : item.state === "completed" ? "Verifying" : item.state === "blocked" ? "Blocked" : "Queued";
-  const card = el("li", { class: "signal-advisory investigation-item" },
+  const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
+  const selected = state.selected && state.selected.kind === "investigation" && state.selected.id === item.issueId;
+  const open = () => selectEntity({ kind: "investigation", id: item.issueId });
+  return el("li", {
+    class: "signal-advisory investigation-item signal-trigger" + (selected ? " is-selected" : ""),
+    role: "button", tabindex: "0",
+    "aria-label": "Open investigation: " + item.headline,
+    dataset: { fkey: "investigation:" + item.issueId },
+    onclick: open,
+    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
+  },
     icon("broadcast", { class: "warn-tri", label: "Investigation" }),
     el("div", { class: "advisory-body" },
-      el("div", { class: "advisory-title", text: item.headline }),
-      el("div", { class: "advisory-summary", text: item.state === "completed"
-        ? "Investigation complete · source confirmation pending"
-        : `Investigation ${stateLabel.toLowerCase()} · ${item.state === "running" ? (item.runModel || "native Luna") : item.rationale}` })),
+      el("div", { class: "advisory-title", text: item.headline })),
     el("span", { class: "advisory-impact", text: stateLabel }));
-  if (item.result) card.append(el("details", { class: "triage-result" },
-    el("summary", { text: item.state === "completed" ? "Investigation result" : "Blocked investigation result" }),
-    el("pre", { text: item.result })));
-  return card;
 }
 
 /* ---------- toolbar ---------- */
@@ -1836,6 +1829,8 @@ const DRAWER_RENDERERS = {
   agent: renderAgentDrawer,
   intervention: renderInterventionDrawer,
   advisory: renderAdvisoryDrawer,
+  investigation: renderInvestigationDrawer,
+  resolved: renderResolvedDrawer,
 };
 
 function resolveSelection(sel) {
@@ -1847,6 +1842,15 @@ function resolveSelection(sel) {
   if (sel.kind === "intervention" || sel.kind === "advisory") {
     const issue = issuesOf(state.snap).find((i) => i.id === sel.id);
     return issue ? { kind: sel.kind, issue } : null;
+  }
+  if (sel.kind === "investigation") {
+    const item = state.queueItems.find((it) => it.issueId === sel.id || it.id === sel.id);
+    return item ? { kind: "investigation", item } : null;
+  }
+  if (sel.kind === "resolved") {
+    const pool = [...issuesOf(state.snap), ...recentlyResolvedOf(state.snap)];
+    const issue = pool.find((i) => i.id === sel.id && issueLifecycle(i).state === "resolved");
+    return issue ? { kind: "resolved", issue } : null;
   }
   return null;
 }
@@ -1933,6 +1937,85 @@ function renderAdvisoryDrawer(pane, view) {
       type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
       onclick: () => triageIssue(issue.id, "generate"),
     }, "Escalate to triage")));
+}
+
+const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
+
+// Investigation drawer — the Luna run, live: status line + step timeline + result.
+// Never ember (an investigation is not itself an alarm); slate accent + a moss
+// pulse while running.
+function renderInvestigationDrawer(pane, view) {
+  const item = view.item;
+  const running = item.state === "running";
+  const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
+  drawerAccent(pane, "slate");
+  pane.append(drawerHead(
+    dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    item.headline));
+
+  const status = el("div", { class: "dw-status" });
+  if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
+  status.append(el("span", { text:
+    item.state === "running" ? "running · " + (item.runModel || "native Luna")
+    : item.state === "completed" ? "complete · source confirmation pending"
+    : item.state === "blocked" ? "blocked · review result"
+    : "queued and ready for explicit launch" }));
+  pane.append(status);
+
+  if (item.steps && item.steps.length) {
+    pane.append(el("div", {},
+      el("h3", { class: "section-title", text: "Plan (" + item.steps.length + (item.steps.length === 1 ? " step)" : " steps)") }),
+      el("ol", { class: "dw-steps", "aria-label": "Investigation plan" }, item.steps.map((step) =>
+        el("li", {}, el("b", { text: step.title }), el("span", { text: step.detail }))))));
+  }
+
+  if (item.state === "queued") {
+    const launching = state.triagePending.has("run:" + item.issueId);
+    pane.append(el("div", { class: "controls-row" },
+      el("button", {
+        type: "button", class: "btn primary dw-full",
+        disabled: launching ? "" : null,
+        "aria-busy": launching ? "true" : null,
+        dataset: { fkey: "run:" + item.issueId },
+        onclick: () => triageIssue(item.issueId, "run"),
+      }, launching ? "Launching…" : "Launch read-only Luna")));
+  }
+
+  if (item.result) {
+    pane.append(el("details", { class: "triage-result" },
+      el("summary", { text: item.state === "completed" ? "Investigation result" : "Blocked investigation result" }),
+      el("pre", { text: item.result })));
+  }
+
+  const issue = issuesOf(state.snap).find((i) => i.id === item.issueId);
+  if (issue) {
+    const kind = issue.severity === "error" ? "intervention" : "advisory";
+    pane.append(el("button", {
+      type: "button", class: "dw-backlink",
+      dataset: { fkey: "backlink:" + item.issueId },
+      onclick: () => selectEntity({ kind, id: item.issueId }),
+    }, "↖ From " + kind + ": ", el("b", { text: issue.title })));
+  }
+}
+
+// Resolved drawer — the only past-tense, no-action state. Moss accent, reduced
+// opacity, and a before/after trail of what cleared it.
+function renderResolvedDrawer(pane, view) {
+  const issue = view.issue;
+  const lifecycle = issueLifecycle(issue);
+  const result = lifecycle.result || "Source confirmation cleared the finding.";
+  pane.classList.add("dw-past");
+  drawerAccent(pane, "moss");
+  pane.append(drawerHead(dwEyebrow("moss", "check", "Resolved"), issue.title));
+  pane.append(el("p", { class: "dw-lead dw-lead--past", text: "Cleared " + issueTimestamp(lifecycle.resolvedAt) }));
+
+  const grid = el("dl", { class: "detail-grid" });
+  dtdd(grid, "was", issue.summary || issue.title);
+  dtdd(grid, "now", result);
+  pane.append(grid);
+
+  const chips = affectedChips(issue, "Recovered");
+  if (chips) pane.append(chips);
 }
 
 // Agent drawer — the workhorse, unchanged in body (reuses renderOverview/
