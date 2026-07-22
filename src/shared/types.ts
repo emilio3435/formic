@@ -38,6 +38,15 @@ export interface CmuxTarget {
   workspaceTitle?: string;
   surfaceId?: string;
   paneId?: string;
+  /** Live cmux pane cwd when known — may differ from the provider session cwd. */
+  surfaceCwd?: string;
+  /**
+   * True when an exact session/process link points at a cmux pane whose cwd
+   * disagrees with the provider session cwd (common for home-cwd orchestrators
+   * sitting inside a project-titled workspace). Controls may still be linked;
+   * display must not pretend the agent "lives" in the pane folder.
+   */
+  cwdMismatch?: boolean;
   resolution: TargetResolution;
   reason?: string;
 }

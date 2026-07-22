@@ -532,14 +532,22 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain('type: "submit"');
   });
 
-  test("unnamed child naming is a text action and source identities remain visible", () => {
-    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname)');
+  test("agent names track terminal titles and stay editable in the list", () => {
+    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.id)');
+    expect(source).toContain("function preferredRenameTarget(agent)");
+    expect(source).toContain("function terminalSourceName(agent)");
+    expect(source).toContain("workspaceTitle");
+    expect(source).toContain("cwdMismatch");
+    expect(source).toContain('!agent.target?.cwdMismatch');
     expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
     expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
-    expect(row).not.toContain("Name agent");
-    expect(row).toContain('return el("button"');
+    expect(row).toContain('class: "agent-rename"');
+    expect(row).toContain("preferredRenameTarget(agent)");
+    expect(row).toContain('role: "button"');
+    expect(row).toContain("agent-row-edit-wrap");
+    expect(row).not.toContain('return el("button"');
   });
 
   test("broadcast posts only eligible recipients and never fabricates delivery", () => {
@@ -570,6 +578,15 @@ describe("calm program and agent list rendering", () => {
     expect(source).not.toContain("class: \"fact-age\"");
     expect(styles).toContain(".agent-column-header");
     expect(styles).toContain("-webkit-line-clamp: 3");
+  });
+
+  test("status column is a light with tooltip, not repeated Working text", () => {
+    const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(row).toBeDefined();
+    expect(row).toContain('title: stateText');
+    expect(row).toContain("act-glyph act-");
+    expect(row).not.toContain('el("span", { text: stateText })');
+    expect(styles).toContain("Status is a light + tooltip only");
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
@@ -716,12 +733,12 @@ describe("source hygiene", () => {
 
   test("interventions separate recommendation, queueing, and explicit read-only launch", () => {
     expect(source).toContain('fetch("/api/triage/" + action');
-    expect(source).toContain('"Generate triage"');
+    expect(source).toContain('"Triage this finding"');
     expect(source).toContain('"Queue investigation"');
     expect(source).toContain('"Launch read-only Luna"');
     expect(source).toContain("Launch remains a separate operator action.");
     expect(source).not.toMatch(/\/api\/triage\/(spawn|execute)/);
-    expect(source).toContain("source confirmation pending");
+    expect(source).toContain("waiting for fresh data");
     expect(source).toContain("waiting for a fresh source snapshot to clear the finding");
     expect(source).toContain("await fetchSnapshot()");
     expect(source).toContain("recentlyResolved");
@@ -793,6 +810,64 @@ describe("source hygiene", () => {
     expect(styles).toContain(".glyph.act");
     expect(styles).toContain(".st.hot");
     expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
+  });
+});
+
+describe("act-now honesty (lanes never contradict work state)", () => {
+  test("an in-motion error counts In motion, never Act now", () => {
+    const verifyingError = {
+      id: "e-verifying", kind: "system", severity: "error", title: "Verifying error", summary: "s",
+      affectedAgentIds: [],
+      lifecycle: { state: "verifying", openedAt: "2026-07-22T05:00:00.000Z", verificationStartedAt: "2026-07-22T05:01:00.000Z" },
+    };
+    const openError = { id: "e-open", kind: "system", severity: "error", title: "Open error", summary: "s", affectedAgentIds: [] };
+    expect(M.attentionBoardOf(snapshot({ issues: [verifyingError, openError] }))).toEqual({
+      actNow: 1, watch: 0, inMotion: 1, cleared: 0, allClear: false,
+    });
+  });
+
+  test("a queued or running triage summary moves an error out of Act now", () => {
+    const err = { id: "e1", kind: "system", severity: "error", title: "E", summary: "s", affectedAgentIds: [] };
+    expect(M.attentionBoardOf(snapshot({ issues: [err], triageSummaries: [{ issueId: "e1", state: "running" }] }))).toEqual({
+      actNow: 0, watch: 0, inMotion: 1, cleared: 0, allClear: false,
+    });
+  });
+
+  test("the board routes in-motion findings into Be aware and derives segments from lane membership", () => {
+    const fn = source.match(/function renderAttentionBoard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain("!IN_MOTION_KEYS.has(f.work.key)");
+    expect(fn).toContain("inFlightFindings");
+    expect(fn).toContain("actNow: actFindings.length");
+  });
+});
+
+describe("single lock narrative in the agent drawer", () => {
+  test("the banner owns the lock reason; the dock meta never repeats it", () => {
+    const dockStart = source.indexOf("function renderCommandDock(");
+    const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
+    const dock = source.slice(dockStart, dockEnd);
+    expect(dock).not.toContain("Send disabled");
+    expect(dock).toContain('"Ready · linked"');
+    expect(dock).toContain("command-dock--linked");
+    // The ⌘↵ hint renders only when Send can actually send.
+    expect(dock).toContain("instructCap && instructCap.enabled");
+    // Control feedback lives inside the dock, above the composer.
+    expect(dock).toContain("control-feedback");
+    // Archive is demoted under More when Send/Focus are locked.
+    expect(dock).toContain("command-dock-more");
+    expect(styles).toContain(".command-dock--linked");
+  });
+});
+
+describe("investigation briefings lead with one wired action", () => {
+  test("blocked and verifying results expose a primary button, not prose only", () => {
+    expect(source).toContain("function investigationResultCta(");
+    expect(source).toContain('"Retriage from evidence"');
+    expect(source).toContain('"Check source now"');
+    const briefing = source.match(/function renderInvestigationResult\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(briefing).toContain("investigationResultCta(");
+    // Body cap: blockers first, at most three bullets; the rest stays in Raw.
+    expect(briefing).toContain("BRIEFING_MAX_BULLETS");
   });
 });
 

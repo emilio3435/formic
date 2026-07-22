@@ -52,7 +52,7 @@ describe("Cursor Agent persisted session truth", () => {
       id: `cursor:${SESSION_ID}`,
       provider: "cursor",
       sourceSessionId: SESSION_ID,
-      displayName: "Verify The Mountain routing without changing live state.",
+      displayName: "Cursor · the-mountain",
       cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
       model: "Cursor Grok 4.5",
       task: "Verify The Mountain routing without changing live state.",
@@ -99,7 +99,7 @@ describe("Cursor Agent persisted session truth", () => {
 
     expect(child).toMatchObject({
       id: "cursor:6514e366-df29-434b-979d-52a26168e188",
-      displayName: "Verify the email build.",
+      displayName: "Cursor · elio-intelligence-suite",
       model: "gpt-5.6-sol-xhigh",
       parentSourceSessionId: SESSION_ID,
       threadDepth: 1,
@@ -232,7 +232,7 @@ describe("Cursor Agent persisted session truth", () => {
     });
 
     expect(agent?.task).toBe("Goal: Review safe routing.\n\nReturn evidence.");
-    expect(agent?.displayName).toBe("Review safe routing.");
+    expect(agent?.displayName).toBe("Cursor · project");
   });
 
   test("uses a readable project fallback when a generic Cursor session has no task", () => {
