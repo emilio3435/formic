@@ -353,7 +353,7 @@ function tokenSummary(tokens) {
   const scopeNote = tokens.scope === "latest-turn" ? "latest model call · " : "";
   const title = scopeNote + (parts.length ? parts.join(" · ") + " · " : "") + "provenance: " + tokens.provenance;
   const text = tokens.total != null
-    ? marks[tokens.provenance] + fmtTok(tokens.total) + " tok"
+    ? marks[tokens.provenance] + fmtTok(tokens.total) + " tokens"
     : marks[tokens.provenance] + parts.join(" · ");
   return { label, text, known: true, title };
 }
@@ -371,10 +371,10 @@ function contextDisplayLabel() {
   return CONTEXT_DISPLAY_LABELS[state.contextDisplay] || CONTEXT_DISPLAY_LABELS.percent;
 }
 
-function contextDisplayValue(tokens) {
+function contextDisplayValue(tokens, display = state.contextDisplay) {
   const usage = contextUsage(tokens);
   if (!usage) return "not reported";
-  return state.contextDisplay === "tokens"
+  return display === "tokens"
     ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
     : usage.pct + "%";
 }

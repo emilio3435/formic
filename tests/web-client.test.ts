@@ -133,8 +133,8 @@ describe("token honesty", () => {
   });
 
   test("observed and estimated totals are formatted and marked", () => {
-    expect(M.tokenSummary({ provenance: "observed", total: 1_500_000 }).text).toBe("1.5M tok");
-    expect(M.tokenSummary({ provenance: "estimated", total: 2000 }).text).toBe("≈2k tok");
+    expect(M.tokenSummary({ provenance: "observed", total: 1_500_000 }).text).toBe("1.5M tokens");
+    expect(M.tokenSummary({ provenance: "estimated", total: 2000 }).text).toBe("≈2k tokens");
   });
 
   test("totals expose reporting coverage instead of inventing numbers", () => {
@@ -152,7 +152,7 @@ describe("latest-turn token semantics", () => {
   test("latest-turn usage is labeled as the latest call, not session usage", () => {
     const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 42_000, input: 40_000, output: 2000 });
     expect(s.label).toBe("latest call");
-    expect(s.text).toBe("42k tok");
+    expect(s.text).toBe("42k tokens");
     expect(s.title).toContain("latest model call");
   });
 
@@ -171,6 +171,21 @@ describe("latest-turn token semantics", () => {
     expect(M.contextUsage({ provenance: "observed", scope: "latest-turn", total: 250_000, contextWindow: 200_000 })).toEqual({ pct: 100, text: "250k of 200k (125%)" });
     expect(M.contextUsage({ provenance: "observed", contextWindow: 200_000 })).toBeNull();
     expect(M.contextUsage(undefined)).toBeNull();
+  });
+
+  test("context display switches between percentage and readable token capacity", () => {
+    const tokens = { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 };
+    expect(M.contextDisplayValue(tokens, "percent")).toBe("25%");
+    expect(M.contextDisplayValue(tokens, "tokens")).toBe("50k / 200k");
+    expect(M.contextDisplayValue({ provenance: "unknown" }, "percent")).toBe("not reported");
+  });
+
+  test("role aliases resolve to stable visual role categories", () => {
+    expect(M.roleView("orchestration")).toEqual({ key: "orchestrator", label: "Orchestrator" });
+    expect(M.roleView("designer")).toEqual({ key: "frontend", label: "Frontend / designer" });
+    expect(M.roleView("implementer")).toEqual({ key: "backend", label: "Backend implementer" });
+    expect(M.roleView("qa")).toEqual({ key: "tester", label: "Tester" });
+    expect(M.roleView("unknown lane")).toEqual({ key: "agent", label: "Agent" });
   });
 });
 
@@ -382,18 +397,20 @@ describe("source hygiene", () => {
       "interventions-list", "warnings-list", "nest-beacon"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    // the colony masthead scene with its foraging trail is present (not display:none'd)
-    expect(html).toContain('class="colony"');
-    expect(html).toContain('class="trail"');
-    expect(html).toMatch(/class="ant /);
-    expect(styles).not.toMatch(/\.ant-trail\s*\{[^}]*display:\s*none/);
+    expect(html).not.toContain('class="colony"');
+    expect(html).not.toContain('class="trail"');
+    expect(html).not.toMatch(/class="ant /);
+    expect(html).toContain('id="filter-bar" aria-label="Filters" hidden');
+    expect(styles).not.toContain("@keyframes forage");
+    expect(styles).not.toMatch(/\.colony\b/);
+    expect(source).not.toContain('text: "Call tokens"');
+    expect(source).not.toContain('+ " tok"');
   });
 
-  test("ambient colony motion has a complete reduced-motion fallback", () => {
-    expect(styles).toContain("@keyframes forage");
+  test("reduced motion still disables the remaining interface transitions", () => {
     const reduced = styles.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(reduced).toContain("animation: none");
-    expect(reduced).toContain("offset-distance"); // ants parked at fixed positions
+    expect(reduced).toContain("transition: none");
   });
 
   test("base type stays readable and the parchment slop layer is gone", () => {
