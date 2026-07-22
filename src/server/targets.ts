@@ -4,6 +4,7 @@ import type { CmuxSurface, CollectedAgent } from "./types";
 function target(surface: CmuxSurface, resolution: CmuxTarget["resolution"], reason: string): CmuxTarget {
   return {
     workspaceId: surface.workspaceId,
+    workspaceTitle: surface.workspaceTitle,
     surfaceId: surface.surfaceId,
     paneId: surface.paneId,
     resolution,

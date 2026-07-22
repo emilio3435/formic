@@ -211,12 +211,32 @@ function formatLastHumanMessage(agent, limit = 120) {
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
-const agentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
+const sourceAgentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
 
-/* Presentation-only program aliases. The source program id and name stay
-   stable; the alias is a display label the operator controls. */
+function presentationLabelKey(target) {
+  if (!target) return "";
+  if (target.kind === "program") return "program:" + target.programId;
+  if (target.kind === "workspace") return "workspace:" + target.workspaceId;
+  if (target.kind === "room") return "room:" + target.surfaceId;
+  if (target.kind === "agent") return "agent:" + target.agentId;
+  return "";
+}
+
+const programLabelTarget = (program) => ({ kind: "program", programId: program.id });
+const workspaceLabelTarget = (workspaceId) => ({ kind: "workspace", workspaceId });
+const roomLabelTarget = (surfaceId) => ({ kind: "room", surfaceId });
+const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id });
+const agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname);
+
+function agentName(agent) {
+  const label = agent && state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
+  return label && agentLabelEligible(agent) ? label : sourceAgentName(agent);
+}
+
+/* Presentation-only labels. Source identities stay stable; the label is a
+   display value the operator controls. */
 function programName(program) {
-  const alias = program && state.aliases.get(program.id);
+  const alias = program && state.aliases.get(presentationLabelKey(programLabelTarget(program)));
   return alias || (program ? program.name : "");
 }
 
@@ -530,6 +550,7 @@ globalThis.TheAntHill = {
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
+  sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS,
   broadcastEligible,
 };
@@ -548,8 +569,12 @@ const state = {
   facetProgram: "",
   facetProvider: "",
   contextDisplay: "percent", // percent | tokens
-  aliases: new Map(),          // programId -> alias (presentation only)
-  renaming: null,              // programId currently being renamed
+  labels: new Map(),           // stable presentation target key -> label
+  aliases: null,               // compatibility name for the existing program-alias seam
+  labelsLoading: false,
+  labelsLoaded: false,
+  labelLoadError: "",
+  renaming: null,              // presentation target key currently being edited
   renameDraft: "",
   renamePending: false,
   renameError: "",
@@ -572,6 +597,7 @@ const state = {
   triageErrors: new Map(),
   queueItems: [],
 };
+state.aliases = state.labels;
 
 function loadOverrides() {
   try {
@@ -1217,26 +1243,32 @@ function renderProgram(program, agents) {
   });
 
   const label = programName(program);
-  const aliased = state.aliases.has(program.id);
-  const head = el("button", {
-    type: "button",
-    class: "program-head",
-    "aria-expanded": String(open),
-    "aria-controls": bodyId,
-    dataset: { fkey: "prog:" + program.id },
-    onclick: () => toggleProgram(program),
-  },
-    el("span", { class: "program-caret" }, icon("caret")),
-    el("span", { class: "program-name", text: label }),
-    aliased ? el("span", { class: "program-alias-tag", title: "Renamed from " + program.name, text: "alias" }) : null,
-    el("span", {
+  const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
+  const head = el("div", { class: "program-head" },
+    el("button", {
+      type: "button",
+      class: "program-caret",
+      "aria-expanded": String(open),
+      "aria-controls": bodyId,
+      "aria-label": (open ? "Collapse " : "Expand ") + label,
+      dataset: { fkey: "prog:" + program.id },
+      onclick: () => toggleProgram(program),
+    }, icon("caret")),
+    el("button", {
+      type: "button",
+      class: "program-label",
+      "aria-label": "Edit label for " + label,
+      dataset: { fkey: "prog-label:" + program.id },
+      onclick: () => startRename(programLabelTarget(program)),
+    },
+      el("span", { class: "program-name", text: label }),
+      aliased ? el("span", { class: "program-alias-tag", title: "Source program: " + program.name, text: "label" }) : null),
+    el("button", {
+      type: "button",
       class: "program-rename",
-      role: "button",
-      tabindex: "0",
-      "aria-label": "Rename " + label,
+      "aria-label": "Edit label for " + label,
       dataset: { fkey: "prog-rename:" + program.id },
-      onclick: (e) => { e.stopPropagation(); startRename(program); },
-      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); startRename(program); } },
+      onclick: () => startRename(programLabelTarget(program)),
     }, icon("rename")),
     rollup);
 
@@ -1255,31 +1287,42 @@ function renderProgram(program, agents) {
       }, pool.length ? `Select ${pool.length} eligible` : "No eligible agents"),
       chosen ? el("span", { class: "program-select-note", text: `${chosen} of ${pool.length} selected` }) : null));
   }
-  if (state.renaming === program.id) section.append(renderRenameForm(program));
+  if (state.renaming === presentationLabelKey(programLabelTarget(program))) section.append(renderRenameForm(program));
   section.append(el("div", { class: "program-agents", id: bodyId }, open ? renderAgentRows(program, agents) : null));
   return section;
 }
 
 function renderRenameForm(program) {
+  const target = programLabelTarget(program);
+  return renderLabelForm(target, {
+    inputKey: "rename-input:" + program.id,
+    placeholder: "Display name for this program",
+    ariaLabel: "New display name for " + program.name,
+    source: "Source program: " + program.name + " · id stays " + program.id,
+  });
+}
+
+function renderLabelForm(target, opts) {
+  const key = presentationLabelKey(target);
   return el("form", {
     class: "rename-form",
-    onsubmit: (e) => { e.preventDefault(); submitRename(program.id); },
+    onsubmit: (e) => { e.preventDefault(); submitRename(target); },
   },
     el("input", {
       type: "text",
       value: state.renameDraft,
       maxlength: "80",
-      placeholder: "Display name for this program",
-      "aria-label": "New display name for " + program.name,
+      placeholder: opts.placeholder,
+      "aria-label": opts.ariaLabel,
       disabled: state.renamePending ? "" : null,
-      dataset: { fkey: "rename-input:" + program.id },
+      dataset: { fkey: opts.inputKey || "label-input:" + key },
       oninput: (e) => { state.renameDraft = e.target.value; },
       onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); cancelRename(); } },
     }),
     el("button", { type: "submit", class: "btn primary", disabled: state.renamePending ? "" : null, "aria-busy": state.renamePending ? "true" : null }, state.renamePending ? "Saving…" : "Save"),
     el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => cancelRename() }, "Cancel"),
-    state.aliases.has(program.id) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => { state.renameDraft = ""; submitRename(program.id); } }, "Reset") : null,
-    el("span", { class: "rename-source", text: "Source program: " + program.name + " · id stays " + program.id }),
+    state.aliases.has(key) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => { state.renameDraft = ""; submitRename(target); } }, "Reset") : null,
+    el("span", { class: "rename-source", text: opts.source }),
     state.renameError ? el("p", { class: "rename-error", role: "alert", text: state.renameError }) : null);
 }
 
@@ -1401,11 +1444,14 @@ function renderAgentRow(agent, program, opts = {}) {
 
   const eligible = broadcastEligible(agent);
   const checked = state.selection.has(agent.id);
+  const hasLabel = agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  const sourceName = sourceAgentName(agent);
 
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
     el("span", { class: "agent-name", text: agentName(agent) }),
     el("span", { class: "row-identity-tags" },
+      hasLabel ? el("span", { class: "source-label", title: "Source-backed agent label", text: "source: " + sourceName }) : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
@@ -1517,6 +1563,9 @@ function renderInspector() {
   pane.append(el("div", { class: "inspector-head" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
+      agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)))
+        ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
+        : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
@@ -1537,6 +1586,7 @@ function renderInspector() {
       : null));
 
   pane.append(renderPrimaryActions(agent));
+  pane.append(renderPresentationLabels(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
@@ -1648,6 +1698,74 @@ function renderPrimaryActions(agent) {
   if (disabled.length) {
     wrap.append(el("p", { class: "control-reason",
       text: controlUnavailableText(deriveControlState(agent)) + " See Technical for the exact routing evidence." }));
+  }
+  return wrap;
+}
+
+function sourceWorkspaceLabel(target) {
+  return target.workspaceTitle || "cmux workspace " + target.workspaceId;
+}
+
+function sourceRoomLabel(target) {
+  return "cmux room " + target.surfaceId;
+}
+
+function renderPresentationLabels(agent) {
+  const targets = [];
+  if (agent.target && agent.target.workspaceId) {
+    targets.push({
+      target: workspaceLabelTarget(agent.target.workspaceId),
+      kind: "workspace",
+      source: sourceWorkspaceLabel(agent.target),
+      sourceEvidence: "Source workspace: " + sourceWorkspaceLabel(agent.target) + " · id stays " + agent.target.workspaceId,
+    });
+  }
+  if (agent.target && agent.target.surfaceId) {
+    targets.push({
+      target: roomLabelTarget(agent.target.surfaceId),
+      kind: "room",
+      source: sourceRoomLabel(agent.target),
+      sourceEvidence: "Source room surface id stays " + agent.target.surfaceId,
+    });
+  }
+  if (agentLabelEligible(agent)) {
+    targets.push({
+      target: agentLabelTarget(agent),
+      kind: "agent",
+      source: sourceAgentName(agent),
+      sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
+    });
+  }
+  if (!targets.length) return el("span", { hidden: "" });
+
+  const wrap = el("div", { class: "presentation-labels" },
+    el("h3", { class: "section-title", text: "Presentation labels" }));
+  if (state.labelsLoading) wrap.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
+  if (state.labelLoadError) wrap.append(el("p", { class: "label-status err", role: "status", text: "Saved labels unavailable: " + state.labelLoadError }));
+  for (const item of targets) {
+    const key = presentationLabelKey(item.target);
+    const label = state.aliases.get(key);
+    const editing = state.renaming === key;
+    const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent" : "Name " + item.kind;
+    const row = el("div", { class: "label-row" },
+      el("div", { class: "label-copy" },
+        el("span", { class: "label-value", text: label || item.source }),
+        el("span", { class: "label-source", text: "Source: " + item.source })),
+      editing ? null : el("button", {
+        type: "button", class: "btn label-action",
+        "aria-label": actionText + " " + item.kind + " label",
+        dataset: { fkey: "label-edit:" + key },
+        onclick: () => startRename(item.target),
+      }, actionText));
+    wrap.append(row);
+    if (editing) {
+      wrap.append(renderLabelForm(item.target, {
+        inputKey: "label-input:" + key,
+        placeholder: "Display label for this " + item.kind,
+        ariaLabel: "New display label for " + item.kind,
+        source: item.sourceEvidence,
+      }));
+    }
   }
   return wrap;
 }
@@ -1840,6 +1958,7 @@ function renderTarget(target) {
     target.paneId && "pane " + target.paneId,
   ].filter(Boolean);
   if (ids.length) wrap.append(" ", el("code", { text: ids.join(" · ") }));
+  if (target.workspaceTitle) wrap.append(" ", el("span", { class: "source-label", text: "· source title: " + target.workspaceTitle }));
   if (target.reason) wrap.append(" ", el("span", { class: "absent", text: "— " + target.reason }));
   return wrap;
 }
@@ -1943,26 +2062,35 @@ async function sendControl(agent, action, instruction) {
   toast(result.message.split("\n")[0], result.ok ? "ok" : "err");
 }
 
-/* ---------- program aliases (presentation only) ---------- */
+/* ---------- presentation labels (source identities stay authoritative) ---------- */
 
-async function fetchAliases() {
+async function fetchLabels() {
+  state.labelsLoading = true;
+  state.labelLoadError = "";
   try {
     const res = await fetch("/api/program-aliases", { headers: { accept: "application/json" } });
     const body = await res.json();
-    if (!res.ok || !body || body.ok !== true || typeof body.aliases !== "object") throw new Error("bad alias response");
-    state.aliases = new Map(Object.entries(body.aliases));
+    if (!res.ok || !body || body.ok !== true || typeof body.labels !== "object") throw new Error("bad label response");
+    state.labels = new Map(Object.entries(body.labels));
+    state.aliases = state.labels;
+    state.labelsLoaded = true;
     render();
   } catch (err) {
-    console.warn("alias fetch failed:", err);
+    state.labelLoadError = err && err.message ? err.message : "Label loading failed";
+    console.warn("label fetch failed:", err);
+  } finally {
+    state.labelsLoading = false;
   }
 }
 
-function startRename(program) {
-  state.renaming = program.id;
-  state.renameDraft = state.aliases.get(program.id) || "";
+function startRename(target) {
+  const key = presentationLabelKey(target);
+  state.renaming = key;
+  state.renameDraft = state.aliases.get(key) || "";
   state.renameError = "";
   render();
-  const input = document.querySelector(`[data-fkey="rename-input:${CSS.escape(program.id)}"]`);
+  const inputKey = target.kind === "program" ? "rename-input:" + target.programId : "label-input:" + key;
+  const input = document.querySelector(`[data-fkey="${CSS.escape(inputKey)}"]`);
   if (input) { input.focus(); input.select(); }
 }
 
@@ -1972,10 +2100,10 @@ function cancelRename() {
   render();
 }
 
-async function submitRename(programId) {
+async function submitRename(target) {
   if (state.renamePending) return;
-  const alias = state.renameDraft.trim();
-  if (alias.length > 80) { state.renameError = "Keep the alias under 80 characters."; render(); return; }
+  const label = state.renameDraft.trim();
+  if (label.length > 80) { state.renameError = "Keep the label under 80 characters."; render(); return; }
   state.renamePending = true;
   state.renameError = "";
   render();
@@ -1983,15 +2111,16 @@ async function submitRename(programId) {
     const res = await fetch("/api/program-aliases", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ programId, alias }),
+      body: JSON.stringify({ target, label }),
     });
     const body = await res.json().catch(() => null);
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
     }
-    if (alias) state.aliases.set(programId, alias); else state.aliases.delete(programId);
+    if (label) state.aliases.set(presentationLabelKey(target), label); else state.aliases.delete(presentationLabelKey(target));
     state.renaming = null;
-    toast(alias ? "Program renamed to " + alias : "Program alias reset", "ok");
+    const labelName = target.kind === "program" ? "Program" : target.kind[0].toUpperCase() + target.kind.slice(1);
+    toast(label ? labelName + " label saved as " + label : labelName + " label reset", "ok");
   } catch (err) {
     state.renameError = err && err.message ? err.message : "Save failed";
   } finally {
@@ -2256,7 +2385,7 @@ function boot() {
   }, 5000);
 
   fetchSnapshot();
-  fetchAliases();
+  fetchLabels();
   fetchTriageQueue();
   connect();
 }

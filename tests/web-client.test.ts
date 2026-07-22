@@ -413,6 +413,38 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain("id stays ");
   });
 
+  test("labels hydrate from the existing loopback path and submit stable target payloads", () => {
+    expect(source).toContain("async function fetchLabels()");
+    expect(source).toContain("state.labelsLoading");
+    expect(source).toContain("state.labelsLoaded");
+    expect(source).toContain("body.labels");
+    expect(source).toContain("JSON.stringify({ target, label })");
+    expect(source).toContain("reset");
+    expect(source).toContain('fetchLabels();');
+  });
+
+  test("program labels use semantic keyboard controls with a caret that only expands", () => {
+    const fn = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}/)?.[0];
+    expect(fn).toBeDefined();
+    expect(fn).toContain('el("div", { class: "program-head" }');
+    expect(fn).toContain('class: "program-caret"');
+    expect(fn).toContain('class: "program-label"');
+    expect(fn).toContain('onclick: () => toggleProgram(program)');
+    expect(fn).not.toContain('role: "button"');
+    expect(source).toContain('onkeydown: (e) => { if (e.key === "Escape")');
+    expect(source).toContain('type: "submit"');
+  });
+
+  test("unnamed child naming is a text action and source identities remain visible", () => {
+    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname)');
+    expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
+    expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
+    const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(row).toBeDefined();
+    expect(row).not.toContain("Name agent");
+    expect(row).toContain('return el("button"');
+  });
+
   test("broadcast posts only eligible recipients and never fabricates delivery", () => {
     expect(source).toContain('fetch("/api/broadcast"');
     expect(source).toContain("agentIds: eligible.map");

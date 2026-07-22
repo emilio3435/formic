@@ -35,11 +35,18 @@ export interface CostUsage {
 
 export interface CmuxTarget {
   workspaceId?: string;
+  workspaceTitle?: string;
   surfaceId?: string;
   paneId?: string;
   resolution: TargetResolution;
   reason?: string;
 }
+
+export type PresentationLabelTarget =
+  | { kind: "program"; programId: string }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "room"; surfaceId: string }
+  | { kind: "agent"; agentId: string };
 
 export interface ControlCapability {
   action: ControlAction;
