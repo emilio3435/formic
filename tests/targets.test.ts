@@ -122,6 +122,27 @@ describe("safe cmux target resolution", () => {
     );
   });
 
+  test("shared cwd with no cmux surface is view-only missing, not quarantined", () => {
+    const first = agent({
+      id: "codex:first",
+      sourceSessionId: "first",
+      cwd: "/Users/emilionunezgarcia/Developer/not-open",
+    });
+    const second = agent({
+      id: "claude:second",
+      provider: "claude",
+      sourceSessionId: "second",
+      cwd: first.cwd,
+      status: "waiting",
+    });
+    const target = resolveAgentTarget(first, surfaces, [first, second]);
+
+    expect(target).toEqual({
+      resolution: "missing",
+      reason: "No cmux surface matches this source session or cwd.",
+    });
+  });
+
   test("stale siblings do not disqualify a single active source from one-to-one cwd fallback", () => {
     const running = agent({ cwd: "/Users/emilionunezgarcia/Developer/unique-project" });
     const stale = agent({

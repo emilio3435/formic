@@ -89,6 +89,12 @@ export function resolveAgentTarget(
     (candidate) => eligibleForCwdFallback(candidate) && sameCwd(candidate.cwd, agent.cwd),
   );
   if (cwdSources.length !== 1 || cwdSources[0]?.id !== agent.id) {
+    // Shared cwd with no cmux surface is "not linked" (view only), not an
+    // identity conflict. Only quarantine when a surface exists and ownership
+    // would be a guess among multiple active sources.
+    if (cwdMatches.length === 0) {
+      return { resolution: "missing", reason: "No cmux surface matches this source session or cwd." };
+    }
     return {
       resolution: "ambiguous",
       reason: `${cwdSources.length} active sources share this cwd; cwd fallback requires exactly one and controls are disabled.`,
