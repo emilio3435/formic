@@ -1,6 +1,6 @@
 /* The Ant Hill v3 — operator console
-   "Colony control room": a calm, natural, high-acuity surface built on warm
-   earth light, deep soil ink, and one living ember accent. Structure carries
+   "Colony control room": a calm, clear, high-acuity surface built on neutral
+   light, high-contrast ink, and a small set of semantic accents. Structure carries
    meaning — nested program/swarm trees, a scan-ordered health rail, and clear
    information classes for interventions (act now) vs advisories (be aware).
    Status is carried by shape, label, and color together; monospace is reserved
@@ -9,25 +9,25 @@
 
 :root {
   /* ground */
-  --canvas: #f2ede2;
-  --surface: #fbf8f1;
+  --canvas: #f6f8fa;
+  --surface: #ffffff;
   --raise: #ffffff;
-  --sand: #ece3d1;
-  --ink: #221e18;
-  --muted: #5b5447;
-  --faint: #857c6c;
-  --line: #e2d9c6;
-  --line-strong: #cabfa6;
+  --sand: #eef2f5;
+  --ink: #17212b;
+  --muted: #4b5866;
+  --faint: #5f6d7b;
+  --line: #dbe2e8;
+  --line-strong: #b9c4ce;
 
-  /* living accents */
-  --ember: #bd5233;   /* intervention / attention / needs-you */
-  --amber: #c1852b;   /* advisory / warning */
-  --moss: #57794b;    /* working / healthy / ok */
-  --slate: #587480;   /* idle */
-  --clay: #9d8a72;    /* ended */
-  --ember-soft: #f3e0d7;
-  --amber-soft: #f5e9d2;
-  --moss-soft: #e2ead9;
+  /* semantic accents */
+  --ember: #b42318;   /* intervention / attention / needs-you */
+  --amber: #8a5100;   /* advisory / warning */
+  --moss: #216e49;    /* working / healthy / ok */
+  --slate: #46647e;   /* idle */
+  --clay: #697582;    /* ended */
+  --ember-soft: #fde8e5;
+  --amber-soft: #fff1d9;
+  --moss-soft: #e5f3eb;
 
   /* semantic aliases */
   --working: var(--moss);
@@ -35,40 +35,40 @@
   --ended: var(--clay);
   --needs: var(--ember);
   --blocked: var(--ember);
-  --failed: #a83621;
+  --failed: #b42318;
   --ok: var(--moss);
   --warn: var(--amber);
-  --bad: #a83621;
+  --bad: #b42318;
   --terracotta: var(--ember);
 
   /* providers (quiet, ink-forward marks) */
-  --claude: #b25b34;
-  --codex: #3f6e5a;
-  --omp: #6d4e9e;
-  --cursor: #4a6b86;
+  --claude: #a64b2a;
+  --codex: #2e6d58;
+  --omp: #68469a;
+  --cursor: #3d6585;
 
-  /* colony scene */
-  --sky-top: #f5e6d4;
-  --sky-low: #f7efe0;
-  --soil-top: #c8a878;
-  --soil-deep: #9c7c52;
-  --ridge-far: #dcc9a4;
-  --ridge-near: #cbb489;
-  --mound: #b18c5c;
-  --mound-mouth: #6f5636;
-  --trail: #8a6f49;
-  --ant: #3a2c1c;
+  /* legacy illustration tokens retained for markup compatibility */
+  --sky-top: #f6f8fa;
+  --sky-low: #eef2f5;
+  --soil-top: #c8d1da;
+  --soil-deep: #9ba8b5;
+  --ridge-far: #dbe2e8;
+  --ridge-near: #c7d0d9;
+  --mound: #aebac5;
+  --mound-mouth: #52606d;
+  --trail: #71808d;
+  --ant: #263746;
 
-  --font-ui: "Avenir Next", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-display: "Iowan Old Style", "Palatino", "Georgia", serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-ui);
   --font-mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 
-  --radius: 10px;
-  --radius-sm: 7px;
+  --radius: 8px;
+  --radius-sm: 5px;
   --maxw: 90rem;
   --inspector-w: 31rem;
-  --shadow-soft: 0 1px 2px rgba(52, 40, 22, 0.05), 0 8px 22px rgba(52, 40, 22, 0.06);
-  --shadow-lift: 0 2px 6px rgba(52, 40, 22, 0.08), 0 18px 44px rgba(52, 40, 22, 0.14);
+  --shadow-soft: 0 1px 2px rgba(23, 33, 43, 0.04), 0 8px 22px rgba(23, 33, 43, 0.05);
+  --shadow-lift: 0 2px 6px rgba(23, 33, 43, 0.07), 0 18px 44px rgba(23, 33, 43, 0.12);
 }
 
 * { box-sizing: border-box; }
@@ -149,7 +149,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   gap: 1rem;
 }
 
-.masthead-scene { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.masthead-scene { position: relative; display: flex; flex: 1 1 auto; align-items: center; min-width: 0; min-height: 0; overflow: hidden; }
+.masthead-scene > .colony { display: none; }
 .colony {
   position: absolute;
   inset: 0;
@@ -157,8 +158,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   height: 100%;
   display: block;
 }
-.masthead-scene { min-height: 72px; }
-
 .sky-top { stop-color: var(--sky-top); }
 .sky-low { stop-color: var(--sky-low); }
 .soil-top { stop-color: var(--soil-top); }
@@ -215,7 +214,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   letter-spacing: 0.02em;
   line-height: 1;
   color: var(--ink);
-  text-shadow: 0 1px 0 rgba(255, 250, 240, 0.7);
+  text-shadow: none;
 }
 .eyebrow {
   margin: 0.3rem 0 0;
@@ -257,7 +256,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .health-rail {
   flex: none;
   border-bottom: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, var(--surface), var(--canvas));
+  background: var(--surface);
 }
 .rail-inner {
   max-width: var(--maxw);
@@ -476,22 +475,24 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .views { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .view-tab {
-  padding: 0.3rem 0.8rem;
+  padding: 0.28rem 0.7rem 0.36rem;
   min-height: 32px;
   font-size: 13.5px;
   font-weight: 650;
   color: var(--muted);
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--surface);
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
   display: inline-flex;
   align-items: baseline;
   gap: 0.4rem;
 }
-.view-tab:hover { border-color: var(--muted); }
-.view-tab[aria-pressed="true"] { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.views { gap: 0; align-items: stretch; border-bottom: 1px solid var(--line-strong); }
+.view-tab:hover { color: var(--ink); background: var(--sand); border-color: var(--line); border-bottom-color: var(--line-strong); }
+.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface); border-color: var(--line-strong); border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--surface); }
 .view-tab .count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
-.view-tab[aria-pressed="true"] .count { color: color-mix(in srgb, var(--surface) 72%, var(--ink)); }
+.view-tab[aria-pressed="true"] .count { color: var(--muted); }
 .view-tab .count:empty { display: none; }
 
 /* filter chips (above search) — single scrolling row to spare vertical space */
@@ -509,7 +510,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   font-weight: 600;
   color: var(--muted);
   border: 1px dashed var(--line-strong);
-  border-radius: 999px;
+  border-radius: 4px;
   background: var(--surface);
 }
 .filter-chip:hover { border-color: var(--muted); color: var(--ink); }
@@ -638,6 +639,22 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.provider-omp:not(.is-selected) { border-left-color: color-mix(in srgb, var(--omp) 50%, transparent); }
 .agent-row.provider-cursor:not(.is-selected) { border-left-color: color-mix(in srgb, var(--cursor) 50%, transparent); }
 
+/* Role cues remain distinct from provider and operational-state cues. The
+   variables work whether the interaction lane adds the role class to a row or
+   directly to its role label. */
+.role-orchestrator { --role-color: #5b4bb7; --role-surface: #f0eeff; --role-ink: #413296; }
+.role-frontend { --role-color: #086c95; --role-surface: #e8f5fb; --role-ink: #075a7c; }
+.role-backend { --role-color: #0a6c70; --role-surface: #e7f6f4; --role-ink: #07595b; }
+.role-verifier { --role-color: #8c3f90; --role-surface: #faedf9; --role-ink: #753078; }
+.role-tester { --role-color: #a35400; --role-surface: #fff1df; --role-ink: #894400; }
+.role-automation { --role-color: #067761; --role-surface: #e4f7f1; --role-ink: #05604f; }
+.agent-row.role-orchestrator,
+.agent-row.role-frontend,
+.agent-row.role-backend,
+.agent-row.role-verifier,
+.agent-row.role-tester,
+.agent-row.role-automation { box-shadow: inset 3px 0 var(--role-color); }
+
 .agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
 .agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
@@ -677,7 +694,19 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-name { display: block; font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-row.is-parent .agent-name { font-weight: 800; }
 .row-identity-tags { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.12rem; }
-.role-chip { padding: 0.02rem 0.4rem; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--role-color, var(--line-strong)) 48%, var(--line));
+  border-left: 3px solid var(--role-color, var(--line-strong));
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--role-ink, var(--muted));
+  background: var(--role-surface, var(--surface));
+  white-space: nowrap;
+}
 .swarm-chip { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 999px; padding: 0.02rem 0.4rem; white-space: nowrap; }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
@@ -689,7 +718,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .row-fact.is-unknown .row-fact-value { color: var(--faint); font-size: 11px; font-weight: 500; }
 
 .token-fact-value { display: flex; align-items: center; gap: 0.4rem; }
-.token-meter { flex: 0 0 2.6rem; height: 0.4rem; display: block; }
+/* Compatibility: token text remains the readable source of truth; the old
+   green bar was decorative and made the primary row noisy. */
+.token-meter { display: none; }
 .tm-track { fill: var(--line); }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
@@ -989,7 +1020,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 @media (max-width: 720px) {
   .masthead-inner { flex-direction: column; padding: 0; }
-  .masthead-scene { min-height: 92px; width: 100%; }
+  .masthead-scene { min-height: 0; width: 100%; }
   .wordmark { padding: 0.7rem 0 0.7rem 1rem; }
   .conn { align-self: flex-start; margin: 0 0 0.6rem 1rem; }
   .rail-inner { grid-template-columns: 1fr 1fr; gap: 0.5rem; padding: 0.6rem 0.8rem; }
