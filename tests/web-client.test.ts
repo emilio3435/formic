@@ -558,6 +558,81 @@ describe("calm program and agent list rendering", () => {
   });
 });
 
+describe("operations canvas layout", () => {
+  test("the desktop shell shares one 1680px content frame", () => {
+    expect(styles).toContain("--frame: min(1680px, calc(100vw - 64px))");
+    const framed = styles.match(/max-width:\s*var\(--frame\)/g) ?? [];
+    expect(framed.length).toBeGreaterThanOrEqual(5);
+    expect(styles).not.toContain("--maxw");
+  });
+
+  test("the active intervention band spans the full frame above the workboard split", () => {
+    const bandIdx = html.indexOf('id="interventions"');
+    const bodyIdx = html.indexOf('class="app-body"');
+    expect(bandIdx).toBeGreaterThan(-1);
+    expect(bandIdx).toBeLessThan(bodyIdx);
+    expect(html).toContain('class="interventions signal-band"');
+    expect(styles).toMatch(/\.signal-band\s*\{[^}]*max-width:\s*var\(--frame\)/);
+  });
+
+  test("the intervention is a two-row band that ALSO opens the per-type drawer", () => {
+    // Band structure (canvas): primary copy + inline action + evidence rows.
+    expect(source).toContain('class: "signal-primary"');
+    expect(source).toContain('class: "signal-action"');
+    expect(source).toContain('class: "signal-evidence"');
+    // Reconciliation: the band still opens the integration lane's intervention
+    // drawer, and keeps the inline Generate-triage primary action.
+    expect(source).toContain('selectEntity({ kind: "intervention", id: issue.id })');
+    expect(source).toContain('class: "signal-title-btn"');
+    expect(source).toContain("renderTriage(issue)");
+    // Advisories/resolved/investigations stay thin triggers into the drawer.
+    expect(source).toContain('selectEntity({ kind: "advisory", id: issue.id })');
+    expect(source).toContain('class: "signal-advisory issue-resolved signal-trigger"');
+  });
+
+  test("the inspector/drawer holds a stable 480-520px desktop pane, no 42vw overshoot", () => {
+    expect(styles).toContain("--inspector-w: clamp(480px, 32vw, 520px)");
+    expect(styles).not.toContain("clamp(38rem, 42vw, 60rem)");
+    expect(styles).not.toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)");
+  });
+
+  test("below 1024px the inspector becomes a full-surface drawer and keeps the workboard wide", () => {
+    expect(styles).toContain("@media (max-width: 1024px)");
+    expect(styles).not.toContain("@media (max-width: 900px)");
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    expect(block).toContain(".pane-inspector");
+    expect(block).toContain("position: fixed");
+    expect(block).toContain("inset: 0");
+    expect(block).toContain("min-height: 44px");
+  });
+
+  test("the full-width band cannot introduce horizontal overflow", () => {
+    expect(styles).toMatch(/body\s*\{[\s\S]*?overflow-x:\s*hidden/);
+  });
+
+  test("a Degraded verdict names its reason and exposes the existing refresh action", () => {
+    const degraded = snapshot({
+      issues: [
+        { id: "system:2", kind: "system", severity: "warning", title: "Stale source", summary: "s", affectedAgentIds: [] },
+        { id: "system:1", kind: "system", severity: "error", title: "CMUX control is degraded", summary: "s", affectedAgentIds: [] },
+      ],
+    });
+    expect(M.topSourceIssue(degraded)?.title).toBe("CMUX control is degraded");
+    expect(M.topSourceIssue(snapshot())).toBeNull();
+    expect(source).toContain("topSourceIssue(state.snap)");
+    expect(source).toContain('dataset: { fkey: "degraded-refresh" }');
+    expect(source).toContain("onclick: () => fetchSnapshot()");
+    expect(styles).toContain(".reading-repair");
+  });
+
+  test("live re-render preserves focus via the stable fkey restore loop", () => {
+    expect(source).toContain("document.activeElement.dataset");
+    expect(source).toContain("node.focus({ preventScroll: true })");
+    expect(source).toContain('document.getElementById("agent-" + id)');
+  });
+});
+
 describe("source hygiene", () => {
   test("no literal control bytes in the client source", () => {
     // eslint-disable-next-line no-control-regex

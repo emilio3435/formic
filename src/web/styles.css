@@ -53,8 +53,13 @@
 
   --radius: 8px;
   --radius-sm: 5px;
-  --maxw: 90rem;
-  --inspector-w: 31rem;
+  /* One shared canvas frame: a wide control-room band capped at 1680px with a
+     32px gutter each side, so masthead, summary, intervention, workboard, and
+     inspector/drawer all align to the same content edge. */
+  --frame: min(1680px, calc(100vw - 64px));
+  /* Stable desktop inspector/drawer: holds 480–520px from 1440px upward; the
+     extra canvas width goes to the workboard, not the pane. */
+  --inspector-w: clamp(480px, 32vw, 520px);
   --shadow-soft: 0 1px 2px rgba(23, 33, 43, 0.04), 0 8px 22px rgba(23, 33, 43, 0.05);
   --shadow-lift: 0 2px 6px rgba(23, 33, 43, 0.07), 0 18px 44px rgba(23, 33, 43, 0.12);
 }
@@ -73,6 +78,7 @@ body {
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;   /* the full-width band spans a flex row; guard against a stray scrollbar */
 }
 
 /* ---------- utilities ---------- */
@@ -128,7 +134,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   background: var(--surface);
 }
 .masthead-inner {
-  max-width: var(--maxw);
+  max-width: var(--frame);
   margin: 0 auto;
   padding: 0 1.1rem 0 0;
   display: flex;
@@ -205,7 +211,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   background: var(--surface);
 }
 .rail-header {
-  max-width: var(--maxw);
+  max-width: var(--frame);
   margin: 0 auto;
   padding: 0.35rem 1.1rem 0;
   display: flex;
@@ -230,7 +236,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .rail-action:hover, .rail-action[aria-expanded="true"] { color: var(--ink); border-color: var(--line-strong); background: var(--sand); }
 .rail-inner {
-  max-width: var(--maxw);
+  max-width: var(--frame);
   margin: 0 auto;
   padding: 0.4rem 1.1rem;
   display: grid;
@@ -278,6 +284,19 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
+/* Degraded verdict's inline repair: re-pull the latest snapshot evidence. */
+.reading-repair {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+}
+.reading-repair:hover { background: color-mix(in srgb, var(--amber) 86%, #000); }
 
 /* the System widget is the anchor */
 .verdict-chip {
@@ -310,7 +329,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
 .widget-customizer { border-top: 1px solid var(--line); background: var(--sand); }
-.widget-customizer-inner { max-width: var(--maxw); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
+.widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
 .widget-help { margin: 0.15rem 0 0; color: var(--muted); font-size: 12px; }
 .widget-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.4rem; margin-top: 0.7rem; }
@@ -328,14 +347,32 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- app body ---------- */
 
-.app-body { flex: 1; display: flex; min-height: 0; }
+/* Workboard + inspector share one centered canvas band, so the split lines up
+   with the masthead, summary, and intervention frame above it. */
+.app-body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: var(--frame);
+  margin: 0 auto;
+  display: flex;
+  gap: 1.5rem;
+}
 
 .pane-list {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0.6rem max(1rem, calc((100% - var(--maxw)) / 2)) 5rem;
+  padding: 0.6rem 0 5rem;
   scrollbar-gutter: stable;
+}
+
+/* The active-intervention band spans the full canvas frame above the split. */
+.signal-band {
+  width: 100%;
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0.7rem 0 0.15rem;
 }
 
 .section-title {
@@ -357,21 +394,37 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .signal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
 
-/* Intervention: a compact flowing action band — decisive mark, one-line
-   consequence, inline Generate triage, and affected agents tucked behind a
-   count disclosure. Subtle tint, not one large pink box. */
+/* Intervention: a full-canvas action band. Row one carries the decisive mark,
+   one-glance copy, and the inline primary action; row two keeps source evidence
+   compact. The title and evidence open the intervention drawer for full detail
+   (roster, technical, triage plan); the band itself is the strongest
+   containment, with minimal inner framing. */
 .signal-intervention {
-  display: grid;
-  grid-template-columns: 2.1rem minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 0.85rem;
-  padding: 0.45rem 0.85rem;
-  border: 1px solid color-mix(in srgb, var(--ember) 30%, var(--line));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 32%, var(--line));
   border-left: 4px solid var(--ember);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--ember-soft) 38%, var(--surface));
   box-shadow: var(--shadow-soft);
 }
+/* Row one — badge · copy · primary action, readable at a glance. */
+.signal-primary {
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.95rem;
+}
+.signal-action { display: flex; align-items: center; justify-content: flex-end; white-space: nowrap; }
+.signal-action .triage-actions { grid-column: auto; margin: 0; }
+.signal-action .triage-generate { min-height: 36px; }
+.signal-open-detail { color: var(--ember); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.signal-open-detail:hover { text-decoration: underline; }
+/* The title opens the drawer; it stays a heading visually. */
+.signal-title-btn { display: block; width: 100%; text-align: left; font: inherit; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.signal-title-btn:hover { text-decoration: underline; text-underline-offset: 0.15em; }
 .signal-badge {
   display: grid;
   place-items: center;
@@ -400,20 +453,29 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   overflow: hidden;
 }
 .issue-lifecycle-note { margin: 0.25rem 0 0; color: var(--faint); font-size: 11.5px; }
-.signal-side { display: flex; flex-direction: row; align-items: center; gap: 0.7rem; white-space: nowrap; }
-.signal-side .triage-actions { grid-column: auto; margin: 0; }
-.signal-side .triage-generate { min-height: 34px; }
+/* Row two — evidence: aligns under the copy column and wraps calmly. Affected
+   count and Technical are buttons that open the intervention drawer for depth. */
+.signal-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 1.15rem;
+  padding-left: calc(2.1rem + 0.95rem);
+}
+.signal-evidence:empty { display: none; }
+.signal-evi { color: var(--faint); font-size: 11.5px; }
+.signal-evi-open { color: var(--faint); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.signal-evi-open:hover { color: var(--ink); text-decoration: underline; }
+/* .signal-tech / .signal-affected / .signal-agent are reused by the drawer body. */
 .affected-disclosure summary, .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
 .affected-disclosure summary:hover, .signal-tech summary:hover { color: var(--ink); }
 .signal-affected { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem; align-items: baseline; white-space: normal; }
 .signal-agent { font-size: 12px; color: var(--ink); padding: 0.12rem 0.5rem; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--raise); }
 .signal-agent:hover { border-color: var(--ink); }
 .signal-agent-prog { color: var(--faint); }
-.signal-tech { grid-column: 2 / -1; font-size: 12px; }
+.signal-tech { font-size: 12px; }
 .signal-tech ul { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--muted); max-width: 80ch; }
 .signal-tech li { overflow-wrap: anywhere; white-space: normal; }
-/* Generate triage / plan stays inline in the band, below the header row. */
-.signal-intervention .triage-actions { grid-column: 1 / -1; margin: 0.5rem 0 0; }
 
 /* Advisories are grouped into one amber strip with hairline dividers — dense,
    scannable, and small, so agent rows stay above the fold. */
@@ -676,7 +738,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
 .agent-column-header {
-  grid-template-columns: minmax(6.5rem, 0.85fr) minmax(12rem, 2fr) minmax(6.5rem, 0.8fr) minmax(5.5rem, 0.75fr) minmax(7rem, 0.9fr);
+  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
   padding: 0.45rem 0.85rem 0.35rem 0.8rem;
   border-bottom: 1px solid var(--line);
   background: var(--sand);
@@ -691,7 +753,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .agent-grid {
   display: grid;
-  grid-template-columns: minmax(6.5rem, 0.85fr) minmax(12rem, 2fr) minmax(6.5rem, 0.8fr) minmax(5.5rem, 0.75fr) minmax(7rem, 0.9fr);
+  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
@@ -860,28 +922,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .pane-inspector[hidden] { display: none; }
 @keyframes drawer-in { from { transform: translateX(14px); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* Overview + Technical: a tabbed single column while the drawer is narrow, then
-   both panels side-by-side once the viewport is wide enough to use the room. */
+/* Overview + Technical: a tabbed single column at every desktop width, so the
+   drawer holds a calm 480–520px without cramming two panels together. */
 .inspector-body { display: block; }
-@media (max-width: 1199.98px) {
-  .inspector-body[data-active-tab="overview"] > [data-tab="technical"],
-  .inspector-body[data-active-tab="technical"] > [data-tab="overview"] { display: none; }
-}
-@media (min-width: 1200px) {
-  :root { --inspector-w: clamp(38rem, 42vw, 60rem); }
-  .pane-inspector .inspector-tabs { display: none; }   /* no tab dance when both fit (beats base .inspector-tabs) */
-  .inspector-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 0.5rem 2rem;
-    align-items: start;
-  }
-  .inspector-body > [data-tab="technical"] {
-    border-left: 1px solid var(--line);
-    padding-left: 2rem;
-  }
-  .inspector-body > .inspector-panel { min-width: 0; }
-}
+.inspector-body[data-active-tab="overview"] > [data-tab="technical"],
+.inspector-body[data-active-tab="technical"] > [data-tab="overview"] { display: none; }
 
 /* ---------- inspector: per-type drawer states ----------
    One shared chassis; each entity type differs only by a single accent channel
@@ -1203,11 +1248,14 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .rail-inner { grid-template-columns: repeat(3, 1fr); }
   .rail-inner .reading:nth-child(3n) { border-right: 0; }
   .agent-column-header,
-  .agent-grid { grid-template-columns: minmax(4.5rem, 0.85fr) minmax(6rem, 1.7fr) minmax(4.5rem, 0.75fr) minmax(4rem, 0.7fr) minmax(5rem, 0.8fr); }
+  .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
   .triage-steps { grid-template-columns: repeat(2, minmax(11rem, 1fr)); }
 }
 
-@media (max-width: 900px) {
+/* Below the docked-pane threshold the inspector/drawer becomes a full-detail
+   surface over the whole viewport, so selecting anything never squeezes the
+   workboard. */
+@media (max-width: 1024px) {
   .pane-inspector {
     position: fixed;
     inset: 0;
@@ -1219,6 +1267,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
     animation: sheet-up 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
+  /* Touch sweep: tappable controls clear 44px from tablet down. */
+  .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
+  .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename,
+  .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
+  .reading-repair { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -1267,9 +1320,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .agent-row.is-child { padding-left: calc(0.65rem + var(--tree-depth) * 0.85rem); }
   .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + var(--tree-depth) * 0.85rem); }
   .swarm-note { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
-  .signal-intervention { grid-template-columns: 2rem 1fr; }
+  .signal-primary { grid-template-columns: 2rem minmax(0, 1fr); }
   .signal-badge { width: 2rem; height: 2rem; }
-  .signal-side { grid-column: 1 / -1; margin-top: 0.4rem; flex-wrap: wrap; }
+  .signal-action { grid-column: 1 / -1; justify-content: flex-start; margin-top: 0.3rem; }
+  .signal-evidence { padding-left: 0; }
   /* Advisories: title only on narrow screens; summary/impact would collide. */
   .advisory-body { display: block; min-width: 0; }
   .advisory-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

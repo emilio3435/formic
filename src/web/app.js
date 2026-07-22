@@ -665,6 +665,15 @@ function attentionSummary(snap) {
   };
 }
 
+/* The named reason behind a Degraded verdict: the most severe live finding, so
+   the summary can say what is wrong (not just that something is) beside the
+   verdict and its refresh action. Null when nothing is reported. */
+function topSourceIssue(snap) {
+  const findings = issuesOf(snap);
+  if (!findings.length) return null;
+  return findings.find((issue) => issue.severity === "error") || findings[0];
+}
+
 function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
@@ -783,7 +792,7 @@ globalThis.TheAntHill = {
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
-  systemStatus, attentionSummary, summaryWidgetData,
+  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
 };
 
 /* ---------- state ---------- */
@@ -1040,7 +1049,22 @@ function renderSummaryWidget(id) {
       fillClass: "ctx-fill", trackClass: "ctx-track", label: `Peak context ${data.meterPct}%`,
     }));
   }
-  subNode.append(el("span", { text: data.sublabel + (id === "system" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "") }));
+  // A Degraded verdict names its reason (the top live finding) beside the chip
+  // and exposes the existing refresh control right there.
+  const degraded = id === "system" && data.tone === "degraded";
+  const reason = degraded ? topSourceIssue(state.snap) : null;
+  const snapNote = id === "system" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
+  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
+  if (degraded) {
+    subNode.append(el("button", {
+      type: "button",
+      class: "reading-repair",
+      title: "Re-pull the latest snapshot evidence",
+      "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
+      dataset: { fkey: "degraded-refresh" },
+      onclick: () => fetchSnapshot(),
+    }, "Refresh"));
+  }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, "reading-widget widget-" + id);
 }
 
@@ -1308,27 +1332,57 @@ function renderIssues() {
 
 // Thin trigger only — the triage flow, affected chips, and technical detail now
 // live in the Intervention drawer. The band says what and how bad, and opens it.
+/* Reconciled band + drawer: the open intervention is a full-width act-now band
+   whose title/evidence open the per-type intervention drawer for depth, while a
+   primary action (Generate triage) stays inline so the operator can act without
+   leaving the canvas. Advisories/resolved/investigations remain thin triggers. */
 function renderIntervention(issue, byId) {
   const generated = state.triage.has(issue.id);
   const lifecycle = issueLifecycle(issue);
   const affectedCount = (issue.affectedAgentIds || []).length;
   const selected = state.selected && state.selected.kind === "intervention" && state.selected.id === issue.id;
   const open = () => selectEntity({ kind: "intervention", id: issue.id });
-  const status = generated ? "Triage ready ▸" : affectedCount ? `${affectedCount} affected ▸` : "Open ▸";
-  return el("li", {
-    class: "signal-intervention signal-trigger sev-" + issue.severity + " issue-state-" + lifecycle.state + (selected ? " is-selected" : ""),
-    role: "button", tabindex: "0",
-    "aria-label": "Open intervention: " + issue.title,
-    dataset: { fkey: "issue:" + issue.id },
-    onclick: open,
-    onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } },
-  },
+
+  // Row one: mark, one-glance copy (title opens the drawer), and the primary
+  // action. The compact Generate triage acts in place; once a plan exists the
+  // slot becomes a Review link into the drawer where the full plan lives.
+  const primary = el("div", { class: "signal-primary" },
     el("span", { class: "signal-badge" }, icon("intervention", { label: "Intervention" })),
     el("div", { class: "signal-copy" },
       el("span", { class: "signal-kicker", text: lifecycle.state === "open" ? "Open · act now" : issueStateLabel(issue) + " · source confirmation" }),
-      el("h3", { class: "signal-title", text: issue.title }),
+      el("h3", { class: "signal-title" },
+        el("button", {
+          type: "button", class: "signal-title-btn",
+          dataset: { fkey: "issue:" + issue.id },
+          "aria-label": "Open intervention detail: " + issue.title,
+          onclick: open,
+        }, issue.title)),
       el("p", { class: "signal-consequence", text: issue.summary })),
-    el("div", { class: "signal-side" }, el("span", { class: "signal-trigger-status", text: status })));
+    el("div", { class: "signal-action" },
+      generated
+        ? el("button", { type: "button", class: "signal-open-detail", dataset: { fkey: "issue-detail:" + issue.id }, onclick: open }, "Review triage ▸")
+        : renderTriage(issue)));
+
+  // Row two: compact source evidence — affected count and Technical open the
+  // drawer; the opened timestamp is inline.
+  const evidence = el("div", { class: "signal-evidence" });
+  if (affectedCount) {
+    evidence.append(el("button", {
+      type: "button", class: "signal-evi-open",
+      dataset: { fkey: "issue-affected:" + issue.id }, onclick: open,
+    }, `${affectedCount} affected ▸`));
+  }
+  if (lifecycle.openedAt) evidence.append(el("span", { class: "signal-evi", text: "Opened " + issueTimestamp(lifecycle.openedAt) }));
+  if (issue.technicalDetails && issue.technicalDetails.length) {
+    evidence.append(el("button", {
+      type: "button", class: "signal-evi-open",
+      dataset: { fkey: "issue-tech:" + issue.id }, onclick: open,
+    }, "Technical ▸"));
+  }
+
+  const item = el("li", { class: "signal-intervention sev-" + issue.severity + " issue-state-" + lifecycle.state + (generated ? " has-triage" : "") + (selected ? " is-selected" : "") }, primary);
+  if (evidence.childNodes.length) item.append(evidence);
+  return item;
 }
 
 function renderAdvisory(issue, byId) {
