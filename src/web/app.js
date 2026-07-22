@@ -365,6 +365,75 @@ function contextUsage(tokens) {
   return { pct: Math.min(100, rawPct), text: fmtTok(tokens.total) + " of " + fmtTok(tokens.contextWindow) + " (" + rawPct + "%)" };
 }
 
+const CONTEXT_DISPLAY_LABELS = { percent: "Context %", tokens: "Context tokens" };
+
+function contextDisplayLabel() {
+  return CONTEXT_DISPLAY_LABELS[state.contextDisplay] || CONTEXT_DISPLAY_LABELS.percent;
+}
+
+function contextDisplayValue(tokens) {
+  const usage = contextUsage(tokens);
+  if (!usage) return "not reported";
+  return state.contextDisplay === "tokens"
+    ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
+    : usage.pct + "%";
+}
+
+const ROLE_LABELS = {
+  orchestrator: "Orchestrator",
+  frontend: "Frontend / designer",
+  backend: "Backend implementer",
+  verifier: "Verifier",
+  tester: "Tester",
+  automation: "Automation",
+  agent: "Agent",
+};
+
+const ROLE_ALIASES = {
+  orchestrator: "orchestrator",
+  orchestration: "orchestrator",
+  coordinator: "orchestrator",
+  "swarm owner": "orchestrator",
+  frontend: "frontend",
+  "front end": "frontend",
+  designer: "frontend",
+  design: "frontend",
+  ui: "frontend",
+  ux: "frontend",
+  "frontend / designer": "frontend",
+  backend: "backend",
+  "back end": "backend",
+  server: "backend",
+  engine: "backend",
+  implementer: "backend",
+  "backend implementer": "backend",
+  verifier: "verifier",
+  reviewer: "verifier",
+  auditor: "verifier",
+  gatekeeper: "verifier",
+  validator: "verifier",
+  tester: "tester",
+  testing: "tester",
+  test: "tester",
+  qa: "tester",
+  "test lane": "tester",
+  automation: "automation",
+  autopilot: "automation",
+  automated: "automation",
+};
+
+function roleView(role) {
+  const normalized = String(role || "agent")
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ");
+  const key = ROLE_ALIASES[normalized] || ROLE_LABELS[normalized] ? normalized : "agent";
+  const canonical = ROLE_ALIASES[key] || (ROLE_LABELS[key] ? key : "agent");
+  return { key: canonical, label: ROLE_LABELS[canonical] };
+}
+
 /* Header "Typical request": prefer the server-computed median; otherwise a
    narrow fallback — the median of live latest-invocation totals we can see. */
 function typicalRequestOf(snap) {
@@ -450,7 +519,8 @@ globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
   controlUnavailableText,
   totalsOf, issuesOf, viewMatches, matchesQuery, buildClusters, tokenSummary,
-  contextUsage, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
+  contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
+  roleView,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS,
   broadcastEligible,
@@ -469,6 +539,7 @@ const state = {
   query: "",
   facetProgram: "",
   facetProvider: "",
+  contextDisplay: "percent", // percent | tokens
   aliases: new Map(),          // programId -> alias (presentation only)
   renaming: null,              // programId currently being renamed
   renameDraft: "",
@@ -643,10 +714,18 @@ function peakContext(snap) {
 }
 
 function reading(label, valueNode, subNode, extraClass) {
+  const labelNode = label && label.nodeType
+    ? label
+    : el("span", { class: "reading-label", text: label });
   return el("div", { class: "reading" + (extraClass ? " " + extraClass : "") },
-    el("span", { class: "reading-label", text: label }),
+    labelNode,
     valueNode,
     subNode || null);
+}
+
+function toggleContextDisplay() {
+  state.contextDisplay = state.contextDisplay === "tokens" ? "percent" : "tokens";
+  render();
 }
 
 /* One scan-ordered rail: verdict → activity → attention → context → policy. */
@@ -699,16 +778,23 @@ function renderHealthRail() {
     el("span", { class: "reading-sub", text: needsCount ? `${interventions.length} intervention${interventions.length === 1 ? "" : "s"} · ${advisories.length} advisor${advisories.length === 1 ? "y" : "ies"}` : "Nothing waiting on you" })));
 
   // 4 — context consumed
-  const typical = typicalRequestOf(state.snap);
   const peak = peakContext(state.snap);
   const ctxValue = el("span", { class: "reading-value" + (peak && peak.pct >= 85 ? " is-hot" : "") });
-  if (peak) ctxValue.append(String(peak.pct) + "%", el("span", { class: "unit", text: "peak window" }));
-  else ctxValue.append(typical ? fmtTok(typical.value) : "—", el("span", { class: "unit", text: "typical call" }));
+  ctxValue.append(peak ? contextDisplayValue(peak.agent.tokens) : "not reported");
+  if (peak && state.contextDisplay === "percent") ctxValue.append(el("span", { class: "unit", text: "peak window" }));
   const ctxSub = el("span", { class: "reading-sub" });
   if (peak) ctxSub.append(svgMeter(peak.pct, "ctx-meter", { fillClass: "ctx-fill", trackClass: "ctx-track", label: `Peak context ${peak.pct}%` }));
   const coverageText = t.tokenReporting != null && t.tokenEligible != null ? `${t.tokenReporting}/${t.tokenEligible} reporting` : "";
-  ctxSub.append(el("span", { text: (typical ? "typical call " + fmtTok(typical.value) : "usage not reported") + (coverageText ? " · " + coverageText : "") }));
-  inner.append(reading("Context", ctxValue, ctxSub));
+  ctxSub.append(el("span", { text: (peak ? "highest observed" : "context usage not reported") + (coverageText ? " · " + coverageText : "") }));
+  inner.append(reading(el("button", {
+    type: "button",
+    class: "reading-label context-toggle",
+    "aria-label": state.contextDisplay === "percent" ? "Show Context tokens" : "Show Context %",
+    "aria-pressed": String(state.contextDisplay === "tokens"),
+    title: "Toggle context display",
+    dataset: { fkey: "context-toggle" },
+    onclick: toggleContextDisplay,
+  }, contextDisplayLabel()), ctxValue, ctxSub));
 
   // 5 — model policy
   const policyParts = cursorPolicyParts(t.cursorModelHealth);
@@ -965,49 +1051,12 @@ function renderTabs() {
   toggle.textContent = state.selecting ? "Done selecting" : "Select";
 }
 
-function filterChip(label, active, onclick, kind) {
-  return el("button", {
-    type: "button",
-    class: "filter-chip" + (active ? " is-active" : "") + (kind ? " chip-" + kind : ""),
-    "aria-pressed": String(active),
-    dataset: { fkey: "filter:" + kind + ":" + label },
-    onclick,
-  },
-    el("span", { text: label }),
-    active ? el("span", { class: "chip-remove", "aria-hidden": "true" }, icon("close")) : null);
-}
-
-function clearFilters() {
-  state.facetProgram = "";
-  state.facetProvider = "";
-  state.query = "";
-  const search = $("search");
-  if (search) search.value = "";
-  render();
-}
-
-/* Customizable filter chips above search: provider and program filters shown as
-   toggles; the active filter stays visible and is removed by re-clicking it. */
+/* The compatibility mount remains in the shell, but facets stay available to
+   currentFilter() for callers that set them without adding a visible strip. */
 function renderFilterBar() {
   const bar = $("filter-bar");
+  if (!bar) return;
   bar.textContent = "";
-  if (!state.snap) return;
-  bar.append(el("span", { class: "filter-lead", text: "Filter" }));
-
-  // OMP is archived compatibility history, not part of the active stack — never a filter chip.
-  const providers = [...new Set(snapshotAgents(state.snap).map(({ agent }) => agent.provider))]
-    .filter((p) => p !== "omp").sort();
-  for (const p of providers) {
-    const active = state.facetProvider === p;
-    bar.append(filterChip(providerLabel(p), active, () => { state.facetProvider = active ? "" : p; render(); }, "provider"));
-  }
-  for (const prog of state.snap.programs) {
-    const active = state.facetProgram === prog.id;
-    bar.append(filterChip(programName(prog), active, () => { state.facetProgram = active ? "" : prog.id; render(); }, "program"));
-  }
-  if (state.facetProgram || state.facetProvider || state.query) {
-    bar.append(el("button", { type: "button", class: "filter-clear", dataset: { fkey: "filter-clear" }, onclick: clearFilters }, "Clear all filters"));
-  }
 }
 
 function renderScopeNote(shown) {
@@ -1251,14 +1300,15 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-function tokenFact(agent, summary) {
+function contextFact(agent) {
   const usage = contextUsage(agent.tokens);
-  const value = el("span", { class: "row-fact-value token-fact-value", title: summary.title }, summary.text);
-  if (usage) {
-    value.append(svgMeter(usage.pct, "token-meter", { label: `Latest call uses ${usage.pct}% of context — ${usage.text}` }));
-  }
-  return el("span", { class: "row-fact fact-tokens" + (summary.known ? "" : " is-unknown") },
-    el("span", { class: "row-fact-label", text: "Call tokens" }), value);
+  return el("span", { class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown") },
+    el("span", { class: "row-fact-label", text: contextDisplayLabel() }),
+    el("span", {
+      class: "row-fact-value context-fact-value",
+      title: usage ? usage.text : "This source does not report observed context usage.",
+      text: contextDisplayValue(agent.tokens),
+    }));
 }
 
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
@@ -1278,9 +1328,11 @@ function renderAgentRow(agent, program, opts = {}) {
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
   const policy = modelPolicyView(agent);
+  const role = roleView(agent.role);
   const selected = state.selectedId === agent.id;
   const clusterNote = swarmNote(agent, opts);
-  const tokens = tokenSummary(agent.tokens);
+  const summary = rowSummary(agent);
+  const description = [clusterNote, summary].filter(Boolean).join(" · ");
   const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
 
   const eligible = broadcastEligible(agent);
@@ -1290,9 +1342,10 @@ function renderAgentRow(agent, program, opts = {}) {
     providerMark(agent),
     el("span", { class: "agent-name", text: agentName(agent) }),
     el("span", { class: "row-identity-tags" },
-      agent.role && agent.role !== "agent" ? el("span", { class: "role-chip", text: agent.role }) : null,
+      role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
-      opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null));
+      opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
+    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Workspace, agent, and terminal description", text: description }) : null);
 
   const line1 = el("span", { class: "agent-grid" },
     el("span", { class: "row-state state-" + activity },
@@ -1304,15 +1357,11 @@ function renderAgentRow(agent, program, opts = {}) {
     el("span", { class: "row-fact fact-age" },
       el("span", { class: "row-fact-label", text: "Updated" }),
       el("span", { class: "row-fact-value", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })),
-    tokenFact(agent, tokens),
+    contextFact(agent),
     controlFact(control));
 
-  const summary = rowSummary(agent);
-  const line2 = el("span", { class: "row-update" },
-    clusterNote ? el("span", { class: "swarm-note", text: clusterNote + " · " }) : null,
-    el("span", { class: "row-summary", text: summary }));
-
   const rowClass = "agent-row provider-" + agent.provider +
+    " role-" + role.key +
     (opts.depth > 0 ? " is-child depth-" + Math.min(opts.depth, 4) : "") +
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
@@ -1328,7 +1377,7 @@ function renderAgentRow(agent, program, opts = {}) {
       "aria-hidden": "true",
     }, checked ? icon("check") : null));
   }
-  children.push(line1, line2);
+  children.push(line1);
 
   return el("button", {
     type: "button",
@@ -1657,10 +1706,10 @@ function renderTechnical(agent) {
     ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: t.provenance }))
     : el("span", { class: "absent", text: "none reported (provenance: " + t.provenance + ")" }));
   dtdd(grid, "session total", t.sessionTotal != null
-    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tok · cumulative this session" })
+    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
     : null);
   dtdd(grid, "context window", t.contextWindow != null
-    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tok" })
+    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tokens" })
     : null);
 
   const policy = modelPolicyView(agent);
