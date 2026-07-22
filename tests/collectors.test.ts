@@ -13,7 +13,7 @@ const fixture = (name: string): string =>
 const nowMs = Date.parse("2026-07-21T23:31:00.000Z");
 
 describe("collector identity and usage truth", () => {
-  test("OMP trusts the session record's exact cwd instead of reconstructing it from the storage path", () => {
+  test("OMP exposes its final observed turn separately from the cumulative session total", () => {
     const agent = parseOmpJsonl(fixture("omp-session.jsonl"), {
       sourcePath:
         "/Users/emilionunezgarcia/.omp/agent/sessions/-Developer-hd-master-health-tester-v2-20260721/session.jsonl",
@@ -37,14 +37,54 @@ describe("collector identity and usage truth", () => {
       cachedInput: 74_711,
       total: 76_153,
       sessionTotal: 76_153,
-      scope: "session",
+      scope: "latest-turn",
       provenance: "observed",
     });
+    expect(agent?.tokens.contextWindow).toBeUndefined();
     expect(agent?.artifacts).toEqual([{
       label: "OMP transcript",
       path: "/Users/emilionunezgarcia/.omp/agent/sessions/-Developer-hd-master-health-tester-v2-20260721/session.jsonl",
       kind: "transcript",
     }]);
+  });
+
+  test("OMP leaves token usage unknown when no assistant usage record exists", () => {
+    const agent = parseOmpJsonl([
+      JSON.stringify({
+        type: "session",
+        id: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+        timestamp: "2026-07-21T22:20:25.304Z",
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "No usage payload." }] },
+      }),
+    ].join("\n"), { nowMs });
+
+    expect(agent?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
+  });
+
+  test("OMP keeps the cumulative session total separate from the latest assistant turn", () => {
+    const agent = parseOmpJsonl([
+      fixture("omp-session.jsonl"),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          usage: { input: 3, output: 4, cacheRead: 5, cacheWrite: 1, totalTokens: 13 },
+        },
+      }),
+    ].join("\n"), { nowMs });
+
+    expect(agent?.tokens).toEqual({
+      input: 3,
+      output: 4,
+      cachedInput: 5,
+      total: 13,
+      sessionTotal: 76_166,
+      scope: "latest-turn",
+      provenance: "observed",
+    });
   });
 
   test("legacy OMP records stay historical and unwrap prompt-file names", () => {
@@ -123,6 +163,18 @@ describe("collector identity and usage truth", () => {
 
     expect(agent?.tokens.total).toBe(37_448);
     expect(agent?.tokens.sessionTotal).toBe(61_701);
+  });
+
+  test("Codex omits the context window when its observed token event does not report one", () => {
+    const session = fixture("codex-session.jsonl").replace(',"model_context_window":258400', "");
+    const agent = parseCodexJsonl(session, { nowMs });
+
+    expect(agent?.tokens).toMatchObject({
+      total: 37_448,
+      scope: "latest-turn",
+      provenance: "observed",
+    });
+    expect(agent?.tokens.contextWindow).toBeUndefined();
   });
 
   test("Codex skips injected context and names the card from the real assignment", () => {
@@ -268,6 +320,7 @@ describe("collector identity and usage truth", () => {
       scope: "latest-turn",
       provenance: "observed",
     });
+    expect(agent?.tokens.contextWindow).toBeUndefined();
   });
 
   test("Claude counts repeated rows for one message ID once and exposes the latest request", () => {
@@ -317,6 +370,18 @@ describe("collector identity and usage truth", () => {
       scope: "latest-turn",
       provenance: "observed",
     });
+  });
+
+  test("Claude leaves token usage unknown when the source has no assistant usage", () => {
+    const agent = parseClaudeJsonl(JSON.stringify({
+      type: "user",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      timestamp: "2026-07-21T23:30:00.000Z",
+      message: { role: "user", content: "Inspect without usage." },
+    }), { nowMs });
+
+    expect(agent?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
   });
 
   test("Claude ignores metadata envelopes before choosing a human card name", () => {

@@ -231,11 +231,8 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
   let tail: string | undefined;
   const humanMessages: HumanMessageCandidate[] = [];
   let updatedAt = isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta);
-  let input = 0;
-  let output = 0;
-  let cachedInput = 0;
-  let total = 0;
-  let sawUsage = false;
+  let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
+  let sessionTotal = 0;
   let exited = false;
 
   for (const row of rows) {
@@ -256,17 +253,14 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
       model = typeof row.message?.model === "string" ? row.message.model : model;
       const usage = row.message?.usage;
       if (!usage) continue;
-      sawUsage = true;
-      input += Number(usage?.input ?? 0);
-      output += Number(usage?.output ?? 0);
-      cachedInput += Number(usage?.cacheRead ?? 0);
-      total += Number(
-        usage?.totalTokens ??
-          Number(usage?.input ?? 0) +
-            Number(usage?.output ?? 0) +
-            Number(usage?.cacheRead ?? 0) +
-            Number(usage?.cacheWrite ?? 0),
-      );
+      const input = Number(usage.input ?? 0);
+      const output = Number(usage.output ?? 0);
+      const cachedInput = Number(usage.cacheRead ?? 0);
+      const cacheWrite = Number(usage.cacheWrite ?? 0);
+      const total = Number(usage.totalTokens ?? input + output + cachedInput + cacheWrite);
+      if (![input, output, cachedInput, total].every(Number.isFinite)) continue;
+      latestUsage = { input, output, cachedInput, total };
+      sessionTotal += total;
     }
   }
 
@@ -279,15 +273,14 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
     task,
     startedAt: isoTimestamp(session.timestamp),
     updatedAt,
-    tokens: {
-      input,
-      output,
-      cachedInput,
-      total,
-      sessionTotal: total,
-      scope: "session",
-      provenance: sawUsage ? "observed" : "unknown",
-    },
+    tokens: latestUsage
+      ? {
+          ...latestUsage,
+          sessionTotal,
+          scope: "latest-turn",
+          provenance: "observed",
+        }
+      : { scope: "unknown", provenance: "unknown" },
     transcriptTail: tail,
     humanMessages,
     statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
@@ -462,18 +455,20 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
     task,
     startedAt,
     updatedAt,
-    tokens: {
-      input: latestUsage?.input,
-      output: latestUsage?.output,
-      cachedInput: latestUsage?.cachedInput,
-      // Anthropic exposes cache creation as a separate input component. The
-      // shared schema has no cache-write field, so preserve raw input/cache-read
-      // fields and include cache creation exactly once in the observed total.
-      total: latestUsage ? usageTotal(latestUsage) : undefined,
-      sessionTotal: latestUsage ? sessionTotal : undefined,
-      scope: latestUsage ? "latest-turn" : "unknown",
-      provenance: latestUsage ? "observed" : "unknown",
-    },
+    tokens: latestUsage
+      ? {
+          input: latestUsage.input,
+          output: latestUsage.output,
+          cachedInput: latestUsage.cachedInput,
+          // Anthropic exposes cache creation as a separate input component. The
+          // shared schema has no cache-write field, so preserve raw input/cache-read
+          // fields and include cache creation exactly once in the observed total.
+          total: usageTotal(latestUsage),
+          sessionTotal,
+          scope: "latest-turn",
+          provenance: "observed",
+        }
+      : { scope: "unknown", provenance: "unknown" },
     transcriptTail: tail,
     humanMessages,
     meta,
