@@ -1,11 +1,11 @@
 import { stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
-import type { HubSnapshot } from "../shared/types";
+import type { HubSnapshot, TriageQueueItem } from "../shared/types";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { snapshotFingerprint } from "./snapshot";
-import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueItem, type TriageQueueStore } from "./triage";
+import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CommandRunner } from "./types";
 
 export interface MountainAppState {

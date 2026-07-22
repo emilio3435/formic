@@ -32,6 +32,7 @@ function agent(overrides: Partial<AgentSnapshot> = {}): AgentSnapshot {
     },
     controls: [],
     ...overrides,
+    lastHumanMessage: overrides.lastHumanMessage ?? null,
   };
 }
 

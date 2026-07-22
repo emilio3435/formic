@@ -13,6 +13,7 @@ function lifecycleSnapshot(): HubSnapshot {
     programId: "fixture",
     status: "running",
     statusReason: "Fixture is active.",
+    lastHumanMessage: null,
     updatedAt: "2026-07-22T06:00:00.000Z",
     tokens: { provenance: "unknown" },
     artifacts: [],
