@@ -529,6 +529,35 @@ describe("redesigned network contracts (source-level)", () => {
   });
 });
 
+describe("calm program and agent list rendering", () => {
+  test("the message lane is additive and falls back to the existing summary", () => {
+    const message = "Review the responsive control room layout across desktop and mobile widths.";
+    expect(M.rowSummary(agent({ lastHumanMessage: message }))).toContain("Review the responsive control room layout");
+    expect(M.rowSummary(agent({ lastHumanMessage: "   " }))).toBe("Streaming output.");
+  });
+
+  test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
+    expect(source).toContain("function renderAgentColumnHeader()");
+    expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
+    for (const label of ["Status", "Agent/message", "Model", "Context", "Access"]) {
+      expect(source).toContain(`text: "${label}"`);
+    }
+    expect(source).not.toContain('rowFact("Effort"');
+    expect(source).not.toContain("class: \"fact-age\"");
+    expect(styles).toContain(".agent-column-header");
+    expect(styles).toContain("-webkit-line-clamp: 3");
+  });
+
+  test("selected rows retain an accessible full-text inspector path", () => {
+    expect(source).toContain("Select to open the full message and session details in the inspector.");
+    expect(source).toContain('text: "Last human message"');
+    expect(source).toContain('class: "last-human-message"');
+    expect(source).toContain('dtdd(grid, "effort", agent.effort)');
+    expect(styles).toContain("white-space: pre-wrap");
+    expect(styles).toContain("min-height: 44px");
+  });
+});
+
 describe("source hygiene", () => {
   test("no literal control bytes in the client source", () => {
     // eslint-disable-next-line no-control-regex

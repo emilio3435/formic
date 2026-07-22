@@ -1576,7 +1576,19 @@ function renderAgentRows(program, agents) {
     for (const child of children.get(agent.id) || []) appendTree(child, depth + 1);
   };
   for (const agent of roots) appendTree(agent, 0);
-  return rows;
+  return [renderAgentColumnHeader(), ...rows];
+}
+
+function renderAgentColumnHeader() {
+  return el("div", {
+    class: "agent-grid agent-column-header",
+    "aria-label": "Agent list columns",
+  },
+    el("span", { class: "agent-column-label", text: "Status" }),
+    el("span", { class: "agent-column-label", text: "Agent/message" }),
+    el("span", { class: "agent-column-label", text: "Model" }),
+    el("span", { class: "agent-column-label", text: "Context" }),
+    el("span", { class: "agent-column-label", text: "Access" }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -1594,12 +1606,15 @@ function renderSwarmAnchor(agent, depth, activeChildren) {
 }
 
 function rowSummary(agent) {
-  return formatLastHumanMessage(agent);
+  const message = formatLastHumanMessage(agent);
+  if (message !== NO_READABLE_MESSAGE) return message;
+  if (agent.task) return conciseText(agent.task, 120);
+  if (agent.statusReason) return conciseText(agent.statusReason, 120);
+  return NO_READABLE_MESSAGE;
 }
 
 function rowFact(label, value, className = "") {
-  return el("span", { class: "row-fact " + className },
-    el("span", { class: "row-fact-label", text: label }),
+  return el("span", { class: "row-fact " + className, "aria-label": `${label}: ${value}`, title: String(value) },
     el("span", { class: "row-fact-value", text: value }));
 }
 
@@ -1625,12 +1640,15 @@ function providerMark(agent) {
 
 function contextFact(agent) {
   const usage = contextUsage(agent.tokens);
-  return el("span", { class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown") },
-    el("span", { class: "row-fact-label", text: contextDisplayLabel() }),
+  const value = contextDisplayValue(agent.tokens);
+  return el("span", {
+    class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
+    "aria-label": `${contextDisplayLabel()}: ${value}`,
+  },
     el("span", {
       class: "row-fact-value context-fact-value",
       title: usage ? usage.text : "This source does not report observed context usage.",
-      text: contextDisplayValue(agent.tokens),
+      text: value,
     }));
 }
 
@@ -1639,9 +1657,11 @@ const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "obser
 
 function controlFact(control) {
   const stateText = CONTROL_STATE_TEXT[control] || "View only";
-  return el("span", { class: "row-fact fact-control control-" + control },
-    el("span", { class: "row-fact-label", text: "Access" }),
-    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control], "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control] },
+  return el("span", {
+    class: "row-fact fact-control control-" + control,
+    "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control],
+  },
+    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control] },
       el("span", { class: "control-icon" }, icon(CONTROL_ICONS[control] || "observed")),
       el("span", { class: "control-access-text", text: stateText })));
 }
@@ -1671,7 +1691,7 @@ function renderAgentRow(agent, program, opts = {}) {
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
-    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human-readable message", text: description }) : null);
+    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   const line1 = el("span", { class: "agent-grid" },
     el("span", { class: "row-state state-" + activity },
@@ -1679,10 +1699,6 @@ function renderAgentRow(agent, program, opts = {}) {
       el("span", { text: stateText })),
     identity,
     rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
-    rowFact("Effort", agent.effort || "not reported", "fact-effort"),
-    el("span", { class: "row-fact fact-age" },
-      el("span", { class: "row-fact-label", text: "Updated" }),
-      el("span", { class: "row-fact-value", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })),
     contextFact(agent),
     controlFact(control));
 
@@ -1712,7 +1728,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     disabled: state.selecting && !eligible ? "" : null,
-    "aria-label": `${agentName(agent)}. ${ACTIVITY_LABELS[activity]}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${modelShort(agent.model) || "Model not reported"}.${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : ""}`,
+    "aria-label": `${agentName(agent)}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: () => state.selecting ? (eligible && toggleSelect(agent.id)) : selectAgent(agent.id),
   }, children);
@@ -2006,6 +2022,12 @@ function renderOverview(agent, program) {
   const grid = el("dl", { class: "detail-grid" });
   const outcome = deriveOutcome(agent);
 
+  if (typeof agent.lastHumanMessage === "string" && agent.lastHumanMessage.trim()) {
+    panel.append(
+      el("h3", { class: "section-title", text: "Last human message" }),
+      el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
+  }
+
   dtdd(grid, "task", agent.task);
   if (outcome !== "healthy") {
     dtdd(grid, OUTCOME_LABELS[outcome].toLowerCase(), agent.statusReason);
@@ -2079,6 +2101,7 @@ function renderTechnical(agent) {
   dtdd(grid, "source cwd", agent.cwd, { code: true });
   dtdd(grid, "provider status", `${agent.status} — ${agent.statusReason}`);
   dtdd(grid, "model", agent.model);
+  dtdd(grid, "effort", agent.effort);
   dtdd(grid, "started", agent.startedAt
     ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
     : null);
