@@ -1009,7 +1009,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail,
+  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -1071,7 +1071,7 @@ const state = {
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   drafts: new Map(),      // agentId -> instruct draft text
-  confirming: null,       // `${agentId}:${action}`
+  confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation
@@ -3247,7 +3247,13 @@ function renderProgramDrawer(pane, view) {
    B4 reuses both for the other drawer types' heads. */
 function quietSourceLine(agent) {
   const terminal = terminalSourceName(agent);
-  if (terminal) return terminal === agentName(agent) ? null : "Terminal: " + terminal;
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  if (terminal) {
+    // A cwd mismatch must keep its mark even when the shown name happens to
+    // equal the terminal title — only calm matching identities go quiet.
+    if (terminal === agentName(agent) && !mismatch) return null;
+    return "Terminal: " + terminal;
+  }
   const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
     || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   return hasCustomName ? "Source agent: " + sourceAgentName(agent) : null;
@@ -3268,7 +3274,7 @@ function verdictGate(agent, outcome) {
   const text = gate ? conciseText(gate, 64)
     : agent.statusReason ? conciseText(agent.statusReason, 64)
       : OUTCOME_LABELS.blocked;
-  return el("span", { class: "verdict-gate", title: agent.statusReason || null },
+  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
     icon("warning"), text);
 }
 
@@ -3281,9 +3287,9 @@ function headPrimaryAction(agent) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
-  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus");
+  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
   const interruptCap = capability(agent, "interrupt");
-  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt");
+  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
   return null;
 }
 
@@ -3617,19 +3623,24 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   return dock;
 }
 
-function renderDockTool(agent, cap, action) {
+function renderDockTool(agent, cap, action, opts = {}) {
   const key = agent.id + ":" + action;
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
+  // focus restore and the confirm strip must bind to the clicked instance —
+  // never both surfaces at once. Busy/sendControl state stays shared via key.
+  const fkey = (opts.fkeyPrefix || "") + "act:" + key;
+  const confirmKey = (opts.fkeyPrefix || "") + "confirm:" + key;
 
-  if (state.confirming === key) {
+  if (state.confirming === fkey) {
     return el("span", { class: "confirm-strip command-confirm", role: "group",
       "aria-label": label + " " + agentName(agent) + "?" },
       el("span", { text: label + "?" }),
       el("button", {
         type: "button", class: "btn confirm-yes",
-        dataset: { fkey: "confirm:" + key },
+        dataset: { fkey: confirmKey },
         onclick: () => { state.confirming = null; sendControl(agent, action); },
       }, "Confirm"),
       el("button", {
@@ -3644,12 +3655,12 @@ function renderDockTool(agent, cap, action) {
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
     title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
-    dataset: { fkey: "act:" + key },
+    dataset: { fkey },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
-        state.confirming = key;
+        state.confirming = fkey;
         render();
-        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
+        const btn = document.querySelector(`[data-fkey="${CSS.escape(confirmKey)}"]`);
         if (btn) btn.focus();
         return;
       }
@@ -4814,10 +4825,12 @@ function boot() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (state.confirming) {
+      // state.confirming holds the full instance fkey ("[head:]act:<id>:<action>"),
+      // so Escape restores focus to the exact instance that opened the strip.
       const key = state.confirming;
       state.confirming = null;
       render();
-      const origin = document.querySelector(`[data-fkey="${CSS.escape("act:" + key)}"]`);
+      const origin = document.querySelector(`[data-fkey="${CSS.escape(key)}"]`);
       if (origin) origin.focus();
     } else if (state.renaming) {
       cancelRename();

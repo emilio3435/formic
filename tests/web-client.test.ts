@@ -1165,3 +1165,113 @@ describe("verdict head — act from the top (B2)", () => {
     expect(M.quietSourceLine(agent())).toBeNull();
   });
 });
+
+describe("B2 review fixes — instance-scoped head keys + executable head logic", () => {
+  /* app.js is imported without a document (DOM wiring stays un-booted), but
+     headPrimaryAction/verdictGate build real nodes via el()/icon(). A minimal
+     fake document, installed only around each call, lets the tests execute the
+     actual helpers and assert on the returned nodes. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+
+  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; absent → null", () => {
+    const locked = agent({ controls: [
+      { action: "focus", enabled: false, reason: "no route" },
+      { action: "instruct", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    expect(withDom(() => M.headPrimaryAction(locked))).toBeNull();
+
+    const focusReady = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "instruct", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const focusTool: any = withDom(() => M.headPrimaryAction(focusReady));
+    expect(focusTool).not.toBeNull();
+    expect(focusTool.className).toContain("dock-tool");
+    expect(focusTool.dataset.fkey).toBe("head:act:codex:a1:focus");
+
+    const interruptOnly = agent({ controls: [{ action: "interrupt", enabled: true }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
+    expect(interruptTool).not.toBeNull();
+    expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
+
+    expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
+  });
+
+  test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
+    // Visible text from gates; statusReason empty → the tooltip carries the
+    // gate text, never an empty title.
+    const gated = agent({ gates: ["needs-review"], statusReason: "" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip: any = withDom(() => M.verdictGate(gated, "blocked"));
+    expect(chip).not.toBeNull();
+    expect(chip.className).toBe("verdict-gate");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip.children.some((c: any) => c.textContent === "needs-review")).toBe(true);
+    expect(chip.attributes.title).toBe("needs-review");
+
+    // No gate → statusReason carries both the visible text and the tooltip.
+    const reason = agent({ statusReason: "Blocked by CI gate on main." });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip2: any = withDom(() => M.verdictGate(reason, "blocked"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip2.children.some((c: any) => c.textContent === "Blocked by CI gate on main.")).toBe(true);
+    expect(chip2.attributes.title).toBe("Blocked by CI gate on main.");
+
+    expect(withDom(() => M.verdictGate(agent(), "healthy"))).toBeNull();
+  });
+
+  test("cwd mismatch keeps its mark even when the shown name equals the terminal title", () => {
+    const aliasLike = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(aliasLike)).toBe("Terminal: Ridge pane");
+    expect(M.fullSourceDetail(aliasLike)).toContain("Session cwd ≠ pane folder");
+    // Without the mismatch the same identity stays quiet.
+    const calm = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane" },
+    });
+    expect(M.quietSourceLine(calm)).toBeNull();
+  });
+
+  test("instance-scoped keys: head prefixes its fkeys; confirm strip and Escape bind to one instance", () => {
+    const dockToolFn = source.match(/function renderDockTool\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(dockToolFn).toContain('opts.fkeyPrefix || ""');
+    // The confirm strip renders only for the instance that opened it.
+    expect(dockToolFn).toContain("state.confirming === fkey");
+    expect(dockToolFn).toContain("state.confirming = fkey");
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('fkeyPrefix: "head:"');
+    // Escape restores focus to the exact instance fkey stored in state.confirming.
+    expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+  });
+});
