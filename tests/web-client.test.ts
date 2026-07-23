@@ -176,8 +176,11 @@ describe("provider-aware row summaries", () => {
     const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
       || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
       || "";
+    // Bookshelf seam: Chat shows readable You/Agent turns only — the raw
+    // transcript tail is Evidence-only machinery behind the disclosure.
     expect(operate).not.toContain("transcriptTail");
-    expect(chat).toContain("transcriptTail");
+    expect(chat).toContain("lastAgentMessage");
+    expect(chat).not.toContain("renderChatTurn(\"assistant\", agent.transcriptTail)");
     expect(evidence).toContain("transcriptTail");
   });
 });
@@ -1012,16 +1015,27 @@ describe("fail-loud control invariants (source-level)", () => {
 });
 
 describe("Take A agent drawer — Operate · Chat · Evidence", () => {
-  test("tabs are Operate, Chat, and Evidence", () => {
-    expect(source).toContain('inspectorTabButton("operate", "Operate")');
-    expect(source).toContain('inspectorTabButton("chat", "Chat")');
-    expect(source).toContain('inspectorTabButton("evidence", "Evidence")');
-    expect(source).not.toContain('inspectorTabButton("overview", "Overview")');
-    expect(source).not.toContain('inspectorTabButton("technical", "Technical")');
-    expect(source).toContain('inspectorTab: "operate"');
-    expect(styles).toContain('data-active-tab="operate"');
-    expect(styles).toContain('data-active-tab="chat"');
-    expect(styles).toContain('data-active-tab="evidence"');
+  test("bookshelf shelf replaces tabs: Operate + Chat open, Evidence behind the caterpillar rail", () => {
+    // No tab dance — the drawer is a horizontal shelf.
+    expect(source).not.toContain("inspectorTabButton(");
+    expect(source).toContain('class: "drawer-shelf"');
+    expect(source).toContain('key: "operate"');
+    expect(source).toContain('key: "chat"');
+    expect(source).toContain("renderEvidenceShelf(agent)");
+    // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
+    expect(source).toContain("evidenceOpen: false");
+    expect(source).toContain('class: "shelf-evidence-rail"');
+    // Metrics are hidden behind the disclosure: vitals render inside the
+    // Evidence shelf, never in Operate.
+    const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] || "";
+    expect(evidenceShelf).toContain("renderVitals(agent)");
+    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
+    expect(operate).not.toContain("renderVitals(");
+    expect(styles).toContain(".drawer-shelf {");
+    expect(styles).toContain(".shelf-evidence-rail {");
+    // Widescreen split: roster rail ~40%, drawer ~60%.
+    expect(styles).toContain("body.inspector-open .pane-list");
+    expect(styles).toContain("flex: 0 0 clamp(380px, 40%, 760px)");
   });
 
   test("Names rename UI stays collapsed under a disclosure", () => {

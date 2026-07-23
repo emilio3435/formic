@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
-import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
+import {
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  type HumanMessageCandidate,
+} from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
@@ -191,6 +195,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     cost: null,
     subagentCount: input.subagentCount,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
+    lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: input.transcriptPath
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
@@ -263,6 +269,8 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     parentSourceSessionId: input.parentSessionId,
     threadDepth: 1,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
+    lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],

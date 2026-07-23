@@ -628,6 +628,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : undefined,
       threadDepth: source.threadDepth,
       nickname: source.nickname,
+      lastUserMessage: source.lastUserMessage,
+      lastAgentMessage: source.lastAgentMessage,
       lastHumanMessage: source.lastHumanMessage !== undefined
         ? source.lastHumanMessage === source.statusReason
           ? snapshotStatusReason
