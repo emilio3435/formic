@@ -588,13 +588,17 @@ describe("calm program and agent list rendering", () => {
     expect(styles).toContain("-webkit-line-clamp: 3");
   });
 
-  test("status column is a light with tooltip, not repeated Working text", () => {
+  test("status column is the state-colored activity word plus a red alert span, not a bare dot", () => {
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
+    // Full state still lives in the tooltip + row aria-label.
     expect(row).toContain('title: stateText');
-    expect(row).toContain("act-glyph act-");
-    expect(row).not.toContain('el("span", { text: stateText })');
-    expect(styles).toContain("Status is a light + tooltip only");
+    // The activity word carries the state color (act-<activity>); no duplicate dot glyph.
+    expect(row).toContain('class: "act-" + activity, text: ACTIVITY_LABELS[activity]');
+    expect(row).not.toContain("act-glyph act-");
+    // The alert suffix rides its own red span rather than an uncolored word.
+    expect(row).toContain('class: "row-state-alert"');
+    expect(styles).toContain(".row-state-alert { color: var(--needs); }");
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {

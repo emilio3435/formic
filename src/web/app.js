@@ -186,11 +186,20 @@ function agoText(iso) {
 
 const MODEL_SHORT = [
   ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"], ["grok", "grok"],
-  ["opus", "opus"], ["sonnet", "sonnet"], ["haiku", "haiku"],
 ];
+// Anthropic families whose transcript id carries a version we want to keep
+// (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
+const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku"];
 function modelShort(m) {
   if (!m) return null;
   const low = m.toLowerCase();
+  for (const fam of ANTHROPIC_VERSIONED) {
+    const at = low.indexOf(fam);
+    if (at === -1) continue;
+    // Trailing version group right after the family (e.g. "-4-8" → "4.8").
+    const ver = low.slice(at + fam.length).match(/^[-_](\d+(?:[-_]\d+)*)/);
+    return ver ? fam + " " + ver[1].replace(/[-_]/g, ".") : fam;
+  }
   for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
   return m.length > 18 ? m.slice(0, 17) + "…" : m;
 }
@@ -585,12 +594,23 @@ function contextDisplayLabel() {
   return CONTEXT_DISPLAY_LABELS[state.contextDisplay] || CONTEXT_DISPLAY_LABELS.percent;
 }
 
+// Claude transcripts carry observed token totals but no context-window size, so
+// a truthful "% used" is impossible (a fabricated denominator would misreport
+// 1M-context sessions ~5x). When the window is unknown but we have an observed
+// total, show the absolute token count instead of "not reported".
+function hasObservedTotal(tokens) {
+  return Boolean(tokens && Number.isFinite(tokens.total) && tokens.total > 0);
+}
+
 function contextDisplayValue(tokens, display = state.contextDisplay) {
   const usage = contextUsage(tokens);
-  if (!usage) return "not reported";
-  return display === "tokens"
-    ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
-    : usage.pct + "%";
+  if (usage) {
+    return display === "tokens"
+      ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
+      : usage.pct + "%";
+  }
+  if (hasObservedTotal(tokens)) return fmtTok(tokens.total) + " tokens";
+  return "not reported";
 }
 
 const ROLE_LABELS = {
@@ -2631,13 +2651,18 @@ function providerMark(agent) {
 function contextFact(agent) {
   const usage = contextUsage(agent.tokens);
   const value = contextDisplayValue(agent.tokens);
+  const title = usage
+    ? usage.text
+    : hasObservedTotal(agent.tokens)
+      ? "Context window size not reported by Claude; showing observed tokens."
+      : "This source does not report observed context usage.";
   return el("span", {
     class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
     "aria-label": `${contextDisplayLabel()}: ${value}`,
   },
     el("span", {
       class: "row-fact-value context-fact-value",
-      title: usage ? usage.text : "This source does not report observed context usage.",
+      title,
       text: value,
     }));
 }
@@ -2666,8 +2691,9 @@ function renderAgentRow(agent, program, opts = {}) {
   const clusterNote = swarmNote(agent, opts);
   const summary = rowSummary(agent);
   const description = [clusterNote, summary].filter(Boolean).join(" · ");
-  // Status column is a light only — the word "Working" repeated down a busy
-  // fleet is noise. Full state lives in the tooltip + row aria-label.
+  // Status column shows the activity word colored by state (the color already
+  // encodes working/idle/ended, so no separate dot), with any alert suffix on
+  // its own red span. Full state stays in the tooltip + row aria-label.
   const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
 
   const eligible = broadcastEligible(agent);
@@ -2732,10 +2758,8 @@ function renderAgentRow(agent, program, opts = {}) {
       title: stateText,
       "aria-label": "Status: " + stateText,
     },
-      el("span", {
-        class: "act-glyph act-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
-        "aria-hidden": "true",
-      })),
+      el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
+      outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
     identity,
     rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
     contextFact(agent),
