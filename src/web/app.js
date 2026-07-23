@@ -517,8 +517,9 @@ function buildClusters(agents) {
 /* ---------- token honesty ----------
    When tokens.scope === "latest-turn", total/input/output/cachedInput describe
    the latest invocation — that is the primary number everywhere, labeled as
-   such. Cumulative session usage (tokens.sessionTotal) belongs only in
-   Technical details. Sources that report nothing stay "not reported". */
+   such. Cumulative session usage (tokens.sessionTotal) belongs in Evidence.
+   Dense list widgets may still say "not reported"; the agent drawer omits
+   empty fields entirely (Take C). */
 
 function tokenSummary(tokens) {
   const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
@@ -934,7 +935,7 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
-  preferredRenameTarget, terminalSourceName,
+  preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -3581,7 +3582,12 @@ function renderNamesDisclosure(agent) {
     }
   }
 
-  return el("details", { class: "names-disclosure" },
+  const editingHere = targets.some((item) => state.renaming === presentationLabelKey(item.target));
+  return el("details", {
+    class: "names-disclosure",
+    // Stay open while a rename form is live so re-render does not tuck it away.
+    open: editingHere || state.labelsLoading || state.labelLoadError ? "" : null,
+  },
     el("summary", { text: "Names" }),
     body);
 }
@@ -3874,55 +3880,75 @@ function renderLineageSpine(agent) {
   return spine;
 }
 
-/* ---------- inspector: technical ---------- */
+/* ---------- inspector: Evidence ---------- */
 
-function renderTechnical(agent) {
+function copyIdButton(label, value, key) {
+  if (!value) return null;
+  return el("button", {
+    type: "button",
+    class: "btn sm evidence-copy-id",
+    title: value,
+    dataset: { fkey: key },
+    onclick: () => copyText(value),
+  }, "Copy " + label);
+}
+
+function controlLinkSentence(target) {
+  if (!target) return null;
+  const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
+  const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
+  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+    return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
+      + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  if (target.resolution === "ambiguous") {
+    return "Control routing is quarantined — identity evidence is ambiguous"
+      + (terminal ? " for " + terminal : "")
+      + ".";
+  }
+  return "No safe control link"
+    + (terminal ? " for " + terminal : "")
+    + (resolution ? " · " + resolution : "")
+    + ".";
+}
+
+function renderControlLink(target) {
+  if (!target) return null;
+  const wrap = el("div", { class: "evidence-control-link" });
+  const sentence = controlLinkSentence(target);
+  wrap.append(el("p", {
+    class: "evidence-control-sentence",
+    title: target.cwdMismatch ? CWD_MISMATCH_HINT : READY_LINKED_HINT,
+    text: sentence,
+  }));
+  const ids = el("div", { class: "evidence-ids" });
+  const buttons = [
+    copyIdButton("workspace", target.workspaceId, "copy-ws:" + (target.workspaceId || "")),
+    copyIdButton("surface", target.surfaceId, "copy-surface:" + (target.surfaceId || "")),
+    copyIdButton("pane", target.paneId, "copy-pane:" + (target.paneId || "")),
+  ].filter(Boolean);
+  for (const btn of buttons) ids.append(btn);
+  if (buttons.length) wrap.append(ids);
+  return wrap;
+}
+
+function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  panel.append(el("p", { class: "inspector-note tech-caption",
-    text: "The raw evidence behind the Overview — hover any underlined term for what it means." }));
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session id", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
-  dtdd(grid, "working directory", agent.cwd, { code: true });
-  if (agent.target && agent.target.surfaceCwd && agent.target.surfaceCwd !== (agent.cwd || "").replace(/\/+$/, "")) {
+  dtdd(grid, "session cwd", agent.cwd, { code: true });
+  const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
+  const surfaceCwd = agent.target && agent.target.surfaceCwd
+    ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
+    : "";
+  if (surfaceCwd && surfaceCwd !== sessionCwd) {
     dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
       code: true,
-      hint: "cmux pane cwd. Differs from the provider session working directory when the process started elsewhere (often ~) and the shell later moved.",
+      hint: CWD_MISMATCH_HINT,
     });
   }
-  dtdd(grid, "status", `${agent.status} — ${agent.statusReason}`);
-  dtdd(grid, "model", agent.model);
-  dtdd(grid, "reasoning effort", agent.effort);
-  dtdd(grid, "started", agent.startedAt
-    ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
-    : null);
-  dtdd(grid, "nesting level", agent.threadDepth != null ? String(agent.threadDepth) : null);
-  dtdd(grid, "orchestrator id", agent.parentAgentId, { code: true, absent: "none" });
-  dtdd(grid, "subagents", agent.subagentCount != null ? String(agent.subagentCount) : null);
-
-  const t = agent.tokens || { provenance: "unknown" };
-  const tokParts = [];
-  if (t.input != null) tokParts.push("in " + fmtTok(t.input));
-  if (t.output != null) tokParts.push("out " + fmtTok(t.output));
-  if (t.cachedInput != null) tokParts.push("cached " + fmtTok(t.cachedInput));
-  if (t.total != null) tokParts.push("total " + fmtTok(t.total));
-  const tokLabel = t.scope === "latest-turn" ? "latest call" : "tokens";
-  dtdd(grid, tokLabel, tokParts.length
-    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: provenanceLabel(t.provenance) }))
-    : el("span", { class: "absent", text: "none reported (" + provenanceLabel(t.provenance) + ")" }), { hint: TOKENS_HINT });
-  dtdd(grid, "session total", t.sessionTotal != null
-    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
-    : null);
-  dtdd(grid, "context window", t.contextWindow != null
-    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tokens" })
-    : null);
-
-  const policy = modelPolicyView(agent);
-  dtdd(grid, "model policy", policy
-    ? el("span", { class: "policy-" + policy.state },
-        policy.label + (policy.expected ? " — expected " + policy.expected : ""),
-        el("span", { class: "absent", text: " · " + policy.summary }))
-    : null, { absent: "not evaluated" });
 
   dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
     ? el("span", {},
@@ -3931,29 +3957,32 @@ function renderTechnical(agent) {
         agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
     : null);
 
-  dtdd(grid, "tests", agent.tests
-    ? el("span", { class: "tests-" + agent.tests.state },
-        agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : ""))
-    : null);
-
-  dtdd(grid, "checks", agent.gates && agent.gates.length
-    ? el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g })))
-    : el("span", { class: "absent", text: "none" }));
-
-  dtdd(grid, "control link", renderTarget(agent.target));
-
-  const routing = el("ul", { class: "routing-list" });
-  for (const cap of agent.controls || []) {
-    routing.append(el("li", {},
-      el("span", { class: "mono", text: cap.action }),
-      " — ",
-      cap.enabled
-        ? el("span", { class: "ok", text: "enabled" })
-        : el("span", { class: "absent", text: "disabled: " + (cap.reason || "no reason reported") })));
+  const t = agent.tokens || {};
+  if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
+    const parts = [];
+    if (t.input != null) parts.push("in " + fmtTok(t.input));
+    if (t.output != null) parts.push("out " + fmtTok(t.output));
+    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
+    if (t.total != null) parts.push("total " + fmtTok(t.total));
+    dtdd(grid, "latest call", el("span", {
+      class: "mono",
+      text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
+    }), { hint: LATEST_CALL_HINT });
   }
-  dtdd(grid, "available controls", routing);
+  if (t.sessionTotal != null) {
+    dtdd(grid, "session total", el("span", {
+      class: "mono",
+      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
+    }), { hint: SESSION_TOTAL_HINT });
+  }
 
-  panel.append(grid);
+  const link = renderControlLink(agent.target);
+  if (link) dtdd(grid, "control link", link);
+
+  if (grid.childNodes.length) panel.append(grid);
+
+  const names = renderNamesDisclosure(agent);
+  if (names) panel.append(names);
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
@@ -3964,7 +3993,7 @@ function renderTechnical(agent) {
           el("span", { text: a.label }),
           el("span", { class: "artifact-path", text: a.path }),
           el("button", {
-            type: "button", class: "btn",
+            type: "button", class: "btn sm",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
           }, "Copy path")))));
@@ -3975,29 +4004,20 @@ function renderTechnical(agent) {
       el("h3", { class: "section-title", text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+  }
   return panel;
 }
 
+/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
+function renderTechnical(agent) {
+  return renderEvidence(agent);
+}
+
 function renderTarget(target) {
-  if (!target) return null;
-  const wrap = el("span", {},
-    el("span", { class: "target-chip target-" + target.resolution, text: RESOLUTION_LABELS[target.resolution] || target.resolution }));
-  const ids = [
-    target.workspaceId && "ws " + target.workspaceId,
-    target.surfaceId && "surface " + target.surfaceId,
-    target.paneId && "pane " + target.paneId,
-  ].filter(Boolean);
-  if (ids.length) wrap.append(" ", el("code", { text: ids.join(" · ") }));
-  if (target.workspaceTitle) wrap.append(" ", el("span", { class: "source-label", text: "· terminal: " + target.workspaceTitle }));
-  if (target.cwdMismatch) {
-    wrap.append(" ", el("span", {
-      class: "source-label is-mismatch",
-      text: "· cwd mismatch",
-      title: target.reason || "Session cwd and pane folder disagree",
-    }));
-  }
-  if (target.reason) wrap.append(" ", el("span", { class: "absent", text: "— " + target.reason }));
-  return wrap;
+  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */
