@@ -173,9 +173,14 @@ function makeAgent(input: {
     input.meta.nowMs ?? Date.now(),
   );
   const statusReason = input.statusReason ?? status.reason;
-  const cwdName = input.cwd && input.cwd.replace(/\/+$/, "") !== homedir().replace(/\/+$/, "")
-    ? basename(input.cwd)
-    : undefined;
+  const normalizedCwd = input.cwd?.replace(/\/+$/, "");
+  const atHome = Boolean(normalizedCwd && normalizedCwd === homedir().replace(/\/+$/, ""));
+  const cwdName = normalizedCwd && !atHome ? basename(normalizedCwd) : undefined;
+  const cwdIdentity = cwdName
+    ? `${PROVIDER_NAMES[input.provider]} · ${cwdName}`
+    : atHome
+      ? `${PROVIDER_NAMES[input.provider]} · Home`
+      : undefined;
   const explicitName = input.displayName?.trim();
   const usefulExplicitName = explicitName &&
     !/^Session update(?:\s*\[.*\])?$/i.test(explicitName) &&
@@ -186,10 +191,13 @@ function makeAgent(input: {
     id: `${input.provider}:${input.sourceSessionId}`,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
+    // Identity first (folder / Home), task second. The prompt belongs in the
+    // message lane — not as the agent/terminal name operators hunt for in cmux.
     displayName:
       usefulExplicitName ||
+      cwdIdentity ||
       taskDisplayName(input.task) ||
-      (cwdName ? `${PROVIDER_NAMES[input.provider]} · ${cwdName}` : `${PROVIDER_NAMES[input.provider]} session`),
+      `${PROVIDER_NAMES[input.provider]} session`,
     cwd: input.cwd,
     model: input.model,
     effort: input.effort,
@@ -317,7 +325,9 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
   const threadSpawn = session?.source?.subagent?.thread_spawn;
   const parentSourceSessionId = typeof threadSpawn?.parent_thread_id === "string"
     ? threadSpawn.parent_thread_id
-    : undefined;
+    : typeof session?.parent_thread_id === "string"
+      ? session.parent_thread_id
+      : undefined;
   const threadDepth = Number.isInteger(threadSpawn?.depth) && threadSpawn.depth >= 0
     ? threadSpawn.depth
     : undefined;

@@ -40,7 +40,26 @@ describe("safe cmux target resolution", () => {
       surfaceId: "SURFACE-EXACT",
       paneId: "PANE-EXACT",
       resolution: "exact",
+      surfaceCwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      cwdMismatch: true,
     });
+    expect(target.reason).toContain("differs from session cwd");
+  });
+
+  test("exact session match with agreeing cwd does not flag a mismatch", () => {
+    const target = resolveAgentTarget(
+      agent({
+        sourceSessionId: "019f86c4-codex-7000-aeb8-26e2cfd0e8ec",
+        cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      }),
+      surfaces,
+    );
+
+    expect(target).toMatchObject({
+      resolution: "exact",
+      surfaceCwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+    });
+    expect(target.cwdMismatch).toBeUndefined();
   });
 
   test("the only exact cwd match is allowed as an explicit fallback", () => {
@@ -98,6 +117,22 @@ describe("safe cmux target resolution", () => {
     expect(target.resolution).toBe("missing");
     expect(target.surfaceId).toBeUndefined();
     expect(target.reason).toBe("cwd fallback requires a running or waiting source; source is stale.");
+  });
+
+  test("a not-ready CMUX surface is excluded from control routing", () => {
+    const target = resolveAgentTarget(
+      agent({
+        sourceSessionId: "019f86c4-codex-7000-aeb8-26e2cfd0e8ec",
+        cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      }),
+      [{
+        ...surfaces[0],
+        runtimeSurfaceReady: false,
+      }],
+    );
+
+    expect(target.resolution).toBe("missing");
+    expect(target.surfaceId).toBeUndefined();
   });
 
   test("two active sources sharing one cwd fail closed instead of sharing one surface", () => {

@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/server/index.ts",
-    "start": "bun src/server/index.ts",
+    "start": "bash scripts/anthill-start.sh",
+    "start:server": "bun src/server/index.ts",
+    "start:ops": "bash scripts/anthill-start.sh --in-cmux",
+    "start:external": "bash scripts/anthill-start.sh --external",
+    "setup:cmux": "bun scripts/setup-cmux-password.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "check": "bun run typecheck && bun test"

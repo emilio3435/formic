@@ -184,7 +184,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
   });
 
-  test("exact cmux project metadata groups a home-cwd source without rewriting source truth", () => {
+  test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",
       task: "Continue the platform review.",
@@ -207,9 +207,16 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const agent = snapshot.programs[0]?.agents[0];
 
-    expect(snapshot.programs[0]?.name).toBe("Hormiga");
+    // Session still lives at ~ — do not file it under Hormiga just because the
+    // cmux pane title/folder says so.
+    expect(snapshot.programs[0]?.name).toBe("Home");
     expect(agent?.cwd).toBe("/Users/emilionunezgarcia");
-    expect(agent?.target.resolution).toBe("exact");
+    expect(agent?.target).toMatchObject({
+      resolution: "exact",
+      cwdMismatch: true,
+      workspaceTitle: "CODEX - Platform UX",
+      surfaceCwd: "/Users/emilionunezgarcia/Developer/LaHormigaDormida",
+    });
   });
 
   test("a configured HD task hint groups a home-cwd source while unrelated home work stays unassigned", () => {
@@ -241,7 +248,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs.find(({ id }) => id === "hormiga")?.agents.map(({ id }) => id)).toEqual([
       "codex:hd-task",
     ]);
-    expect(snapshot.programs.find(({ name }) => name === "Home / Unassigned")?.agents.map(({ id }) => id)).toEqual([
+    expect(snapshot.programs.find(({ name }) => name === "Home")?.agents.map(({ id }) => id)).toEqual([
       "codex:personal-task",
     ]);
   });

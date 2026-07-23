@@ -166,11 +166,19 @@ describe("provider-aware row summaries", () => {
     expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
   });
 
-  test("keeps the raw transcript tail in Technical inspector markup only", () => {
-    const overview = source.match(/function renderOverview\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0] || "";
-    const technical = source.match(/function renderTechnical\([\s\S]*?\n}\n\nfunction renderTarget/)?.[0] || "";
-    expect(overview).not.toContain("transcriptTail");
-    expect(technical).toContain("transcriptTail");
+  test("keeps the raw transcript tail in Chat/Evidence, not Operate", () => {
+    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
+      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
+      || "";
+    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
+      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
+      || "";
+    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
+      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
+      || "";
+    expect(operate).not.toContain("transcriptTail");
+    expect(chat).toContain("transcriptTail");
+    expect(evidence).toContain("transcriptTail");
   });
 });
 
@@ -469,11 +477,11 @@ describe("unavailable-control explanation stays plain-language", () => {
     }
   });
 
-  test("command dock never echoes capability reasons in the Overview", () => {
+  test("command dock never echoes capability reasons in the Operate chrome", () => {
     expect(source).toContain("function renderCommandDock(");
     expect(source).toContain("function renderControlBanner(");
     expect(source).toContain("controlUnavailableText(");
-    // Dock tools must not surface raw capability.reason strings in the Overview.
+    // Dock tools must not surface raw capability.reason strings in Operate chrome.
     const dockStart = source.indexOf("function renderCommandDock(");
     const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
     const bannerStart = source.indexOf("function renderControlBanner(");
@@ -532,14 +540,22 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain('type: "submit"');
   });
 
-  test("unnamed child naming is a text action and source identities remain visible", () => {
-    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname)');
+  test("agent names track terminal titles and stay editable in the list", () => {
+    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.id)');
+    expect(source).toContain("function preferredRenameTarget(agent)");
+    expect(source).toContain("function terminalSourceName(agent)");
+    expect(source).toContain("workspaceTitle");
+    expect(source).toContain("cwdMismatch");
+    expect(source).toContain('!agent.target?.cwdMismatch');
     expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
     expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
-    expect(row).not.toContain("Name agent");
-    expect(row).toContain('return el("button"');
+    expect(row).toContain('class: "agent-rename"');
+    expect(row).toContain("preferredRenameTarget(agent)");
+    expect(row).toContain('role: "button"');
+    expect(row).toContain("agent-row-edit-wrap");
+    expect(row).not.toContain('return el("button"');
   });
 
   test("broadcast posts only eligible recipients and never fabricates delivery", () => {
@@ -572,11 +588,22 @@ describe("calm program and agent list rendering", () => {
     expect(styles).toContain("-webkit-line-clamp: 3");
   });
 
+  test("status column is a light with tooltip, not repeated Working text", () => {
+    const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(row).toBeDefined();
+    expect(row).toContain('title: stateText');
+    expect(row).toContain("act-glyph act-");
+    expect(row).not.toContain('el("span", { text: stateText })');
+    expect(styles).toContain("Status is a light + tooltip only");
+  });
+
   test("selected rows retain an accessible full-text inspector path", () => {
     expect(source).toContain("Select to open the full message and session details in the inspector.");
     expect(source).toContain('text: "Last human message"');
     expect(source).toContain('class: "last-human-message"');
-    expect(source).toContain('dtdd(grid, "reasoning effort", agent.effort)');
+    expect(source).toContain("function renderOperate(");
+    expect(source).toContain("function renderChat(");
+    expect(source).toContain("function renderEvidence(");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
   });
@@ -731,12 +758,12 @@ describe("source hygiene", () => {
 
   test("interventions separate recommendation, queueing, and explicit read-only launch", () => {
     expect(source).toContain('fetch("/api/triage/" + action');
-    expect(source).toContain('"Generate triage"');
+    expect(source).toContain('"Triage this finding"');
     expect(source).toContain('"Queue investigation"');
     expect(source).toContain('"Launch read-only Luna"');
     expect(source).toContain("Launch remains a separate operator action.");
     expect(source).not.toMatch(/\/api\/triage\/(spawn|execute)/);
-    expect(source).toContain("source confirmation pending");
+    expect(source).toContain("waiting for fresh data");
     expect(source).toContain("waiting for a fresh source snapshot to clear the finding");
     expect(source).toContain("await fetchSnapshot()");
     expect(source).toContain("recentlyResolved");
@@ -885,6 +912,64 @@ describe("source hygiene", () => {
   });
 });
 
+describe("act-now honesty (lanes never contradict work state)", () => {
+  test("an in-motion error counts In motion, never Act now", () => {
+    const verifyingError = {
+      id: "e-verifying", kind: "system", severity: "error", title: "Verifying error", summary: "s",
+      affectedAgentIds: [],
+      lifecycle: { state: "verifying", openedAt: "2026-07-22T05:00:00.000Z", verificationStartedAt: "2026-07-22T05:01:00.000Z" },
+    };
+    const openError = { id: "e-open", kind: "system", severity: "error", title: "Open error", summary: "s", affectedAgentIds: [] };
+    expect(M.attentionBoardOf(snapshot({ issues: [verifyingError, openError] }))).toEqual({
+      actNow: 1, watch: 0, inMotion: 1, cleared: 0, allClear: false,
+    });
+  });
+
+  test("a queued or running triage summary moves an error out of Act now", () => {
+    const err = { id: "e1", kind: "system", severity: "error", title: "E", summary: "s", affectedAgentIds: [] };
+    expect(M.attentionBoardOf(snapshot({ issues: [err], triageSummaries: [{ issueId: "e1", state: "running" }] }))).toEqual({
+      actNow: 0, watch: 0, inMotion: 1, cleared: 0, allClear: false,
+    });
+  });
+
+  test("the board routes in-motion findings into Be aware and derives segments from lane membership", () => {
+    const fn = source.match(/function renderAttentionBoard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain("!IN_MOTION_KEYS.has(f.work.key)");
+    expect(fn).toContain("inFlightFindings");
+    expect(fn).toContain("actNow: actFindings.length");
+  });
+});
+
+describe("single lock narrative in the agent drawer", () => {
+  test("the banner owns the lock reason; the dock meta never repeats it", () => {
+    const dockStart = source.indexOf("function renderCommandDock(");
+    const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
+    const dock = source.slice(dockStart, dockEnd);
+    expect(dock).not.toContain("Send disabled");
+    expect(dock).toContain('"Ready · linked"');
+    expect(dock).toContain("command-dock--linked");
+    // The ⌘↵ hint renders only when Send can actually send.
+    expect(dock).toContain("instructCap && instructCap.enabled");
+    // Control feedback lives inside the dock, above the composer.
+    expect(dock).toContain("control-feedback");
+    // Archive is demoted under More when Send/Focus are locked.
+    expect(dock).toContain("command-dock-more");
+    expect(styles).toContain(".command-dock--linked");
+  });
+});
+
+describe("investigation briefings lead with one wired action", () => {
+  test("blocked and verifying results expose a primary button, not prose only", () => {
+    expect(source).toContain("function investigationResultCta(");
+    expect(source).toContain('"Retriage from evidence"');
+    expect(source).toContain('"Check source now"');
+    const briefing = source.match(/function renderInvestigationResult\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(briefing).toContain("investigationResultCta(");
+    // Body cap: blockers first, at most three bullets; the rest stays in Raw.
+    expect(briefing).toContain("BRIEFING_MAX_BULLETS");
+  });
+});
+
 describe("fail-loud control invariants (source-level)", () => {
   test("interrupt and archive require explicit confirmation", () => {
     expect(source).toContain('const NEEDS_CONFIRM = new Set(["interrupt", "archive"])');
@@ -899,9 +984,76 @@ describe("fail-loud control invariants (source-level)", () => {
     expect(source).not.toMatch(/\.innerHTML\s*=/);
   });
 
-  test("cost stays honest when unreported", () => {
-    expect(source).toContain('absent: "not reported"');
-    expect(source).toContain("agent.cost.currency");
-    expect(source).toContain("agent.cost.provenance");
+  test("drawer omits empty fields instead of filler absences", () => {
+    expect(source).toContain("if (value == null || value === \"\") return;");
+    expect(source).not.toContain('absent: "not reported"');
+    expect(source).not.toContain('absent: "not evaluated"');
+    expect(source).not.toContain('absent: "none"');
+    // Cost is never a filler row in the drawer body.
+    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
+      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
+      || "";
+    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
+      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
+      || "";
+    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
+      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
+      || "";
+    expect(operate).not.toContain("agent.cost");
+    expect(chat).not.toContain("agent.cost");
+    expect(chat).not.toContain("agent.tests");
+    expect(chat).not.toContain("agent.gates");
+    expect(evidence).not.toContain("agent.cost");
+  });
+});
+
+describe("Take A agent drawer — Operate · Chat · Evidence", () => {
+  test("tabs are Operate, Chat, and Evidence", () => {
+    expect(source).toContain('inspectorTabButton("operate", "Operate")');
+    expect(source).toContain('inspectorTabButton("chat", "Chat")');
+    expect(source).toContain('inspectorTabButton("evidence", "Evidence")');
+    expect(source).not.toContain('inspectorTabButton("overview", "Overview")');
+    expect(source).not.toContain('inspectorTabButton("technical", "Technical")');
+    expect(source).toContain('inspectorTab: "operate"');
+    expect(styles).toContain('data-active-tab="operate"');
+    expect(styles).toContain('data-active-tab="chat"');
+    expect(styles).toContain('data-active-tab="evidence"');
+  });
+
+  test("Names rename UI stays collapsed under a disclosure", () => {
+    expect(source).toContain("function renderNamesDisclosure(");
+    expect(source).toContain('el("summary", { text: "Names" })');
+    expect(source).toContain('class: "names-disclosure"');
+    expect(source).not.toContain('text: "Presentation labels"');
+    expect(styles).toContain(".names-disclosure");
+    // Names live in Evidence, not always-on chrome above the tabs.
+    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\n\/\* One calm status/)?.[0]
+      || source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\nfunction renderStatusLine/)?.[0]
+      || "";
+    expect(drawer).not.toContain("renderPresentationLabels(");
+    expect(drawer).not.toContain("renderNamesDisclosure(");
+    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
+      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
+      || "";
+    expect(evidence).toContain("renderNamesDisclosure(");
+  });
+
+  test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {
+    expect(source).toContain("CWD_MISMATCH_HINT");
+    expect(source).toContain("READY_LINKED_HINT");
+    expect(source).toContain("LATEST_CALL_HINT");
+    expect(source).toContain("SESSION_TOTAL_HINT");
+    expect(source).toContain("session cwd ≠ pane folder");
+    expect(source).toContain("function controlLinkSentence(");
+    expect(source).toContain("copyIdButton(");
+  });
+
+  test("Operate shows task only when meaningfully different from the human message", () => {
+    expect(source).toContain("function taskMeaningfullyDifferent(");
+    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
+      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
+      || "";
+    expect(operate).toContain("taskMeaningfullyDifferent(agent)");
+    expect(operate).toContain("renderOperateMeta(agent)");
   });
 });

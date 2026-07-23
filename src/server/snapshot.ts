@@ -546,7 +546,8 @@ function programFor(
   if (!cwd) return { id: `${agent.provider}-unassigned`, name: `${agent.provider.toUpperCase()} · No project` };
   const normalizedCwd = cwd.replace(/\/+$/, "");
   if (normalizedCwd === homedir().replace(/\/+$/, "")) {
-    return { id: `cwd-home-${hash(normalizedCwd)}`, name: "Home / Unassigned", path: cwd };
+    // cwd is literally ~ — not "unassigned", just not a project checkout.
+    return { id: `cwd-home-${hash(normalizedCwd)}`, name: "Home", path: cwd };
   }
   const name = basename(cwd) || cwd;
   return { id: `cwd-${slug(name)}-${hash(cwd)}`, name, path: cwd };
@@ -588,11 +589,14 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           })
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
       : undefined;
+    // Only let the cmux pane own program grouping when the session cwd agrees.
+    // Otherwise a home-cwd orchestrator in a project-titled workspace gets filed
+    // under the wrong program (the bug that made "Settings UX" look like Home).
     const program = programFor(
       source,
       input.programHints ?? [],
       surface,
-      target.resolution === "exact",
+      target.resolution === "exact" && !target.cwdMismatch,
     );
     const notificationSummary = notification
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)

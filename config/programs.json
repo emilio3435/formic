@@ -16,13 +16,23 @@
       "id": "settings-baseline",
       "name": "Settings & Baseline UX",
       "purpose": "Improve cockpit settings and baseline experience.",
-      "match": ["hd-cmux-master-integration", "hd-settings-cockpit", "cockpit-settings", "settings page", "signal settings", "settings boundary"]
+      "match": [
+        "hd-cmux-master-integration",
+        "hd-settings",
+        "settings-land",
+        "settings-authority",
+        "hd-settings-cockpit",
+        "cockpit-settings",
+        "settings page",
+        "signal settings",
+        "settings boundary"
+      ]
     },
     {
       "id": "hormiga",
       "name": "Hormiga",
       "purpose": "Operate LaHormigaDormida safely across live and isolated checkouts.",
-      "match": ["LaHormigaDormida", "HormigaDormida", "/Developer/hd-"]
+      "match": ["LaHormigaDormida", "HormigaDormida", "sem-hormiga"]
     },
     {
       "id": "elio-suite",

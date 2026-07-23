@@ -157,8 +157,12 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     ?.replace(/^(?:goal|mission|task|objective):\s*/i, "")
     .trim()
     .slice(0, 100);
+  const cwdBase = meta.cwd ? basename(meta.cwd.replace(/\/+$/, "")) : "";
+  const cwdIdentity = cwdBase ? `Cursor · ${cwdBase}` : "Cursor session";
+  // Prefer folder identity over prompt-as-title so the agent lane matches a
+  // hunt-able terminal/project name; the task stays in the message lane.
   const displayName = genericCursorName(input.store?.name)
-    ? taskName || (basename(meta.cwd) ? `Cursor · ${basename(meta.cwd)}` : "Cursor session")
+    ? cwdIdentity || taskName || "Cursor session"
     : input.store!.name!.trim();
   return {
     id: `cursor:${input.sessionId}`,
@@ -221,12 +225,14 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     ?.replace(/^(?:goal|mission|task|objective):\s*/i, "")
     .trim()
     .slice(0, 100);
+  const childCwdBase = input.cwd ? basename(input.cwd.replace(/\/+$/, "")) : "";
+  const childIdentity = childCwdBase ? `Cursor · ${childCwdBase}` : "Cursor child agent";
 
   return {
     id: `cursor:${input.sessionId}`,
     provider: "cursor",
     sourceSessionId: input.sessionId,
-    displayName: taskName || "Cursor child agent",
+    displayName: childIdentity || taskName || "Cursor child agent",
     cwd: input.cwd,
     model: input.model,
     task,

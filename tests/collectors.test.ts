@@ -72,7 +72,7 @@ describe("collector identity and usage truth", () => {
     expect(agent?.task).toBe(
       "Goal: Verify the immutable Lane 0 candidate.\n\nSuccess means: the gate is honest.",
     );
-    expect(agent?.displayName).toBe("Verify the immutable Lane 0 candidate.");
+    expect(agent?.displayName).toBe("OMP · hd-master-health-20260721");
     expect(agent?.status).toBe("archived");
     expect(agent?.lastHumanMessage).toBe("Goal: Verify the immutable Lane 0 candidate. Success means: the gate is honest.");
   });
@@ -176,7 +176,7 @@ describe("collector identity and usage truth", () => {
     expect(agent?.task).toBe(
       "Goal: Restore the Hormiga settings cockpit safely.\n\nSuccess means: all focused tests pass.",
     );
-    expect(agent?.displayName).toBe("Restore the Hormiga settings cockpit safely.");
+    expect(agent?.displayName).toBe("Codex · Home");
   });
 
   test("Codex preserves native parent-thread evidence for swarm hierarchy", () => {
@@ -211,6 +211,21 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("Codex preserves a native top-level parent_thread_id for inherited guardian sessions", () => {
+    const agent = parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      payload: {
+        id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
+        parent_thread_id: "019f8650-960c-7dc0-b75a-68dda4a57a1b",
+        cwd: "/Users/emilionunezgarcia",
+        source: { subagent: { other: "guardian" } },
+      },
+    }), { nowMs });
+
+    expect(agent?.parentSourceSessionId).toBe("019f8650-960c-7dc0-b75a-68dda4a57a1b");
+  });
+
   test("taskless home sessions use a readable provider label instead of a UUID fragment", () => {
     const agent = parseCodexJsonl(JSON.stringify({
       type: "session_meta",
@@ -221,7 +236,7 @@ describe("collector identity and usage truth", () => {
       },
     }), { nowMs });
 
-    expect(agent?.displayName).toBe("Codex session");
+    expect(agent?.displayName).toBe("Codex · Home");
     expect(agent?.displayName).not.toContain("019f87f0");
   });
 
@@ -241,7 +256,8 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toStartWith("/Users/me/handoff.md <--");
-    expect(agent?.displayName).toBe("help me revamp The Mountain control hub.");
+    expect(agent?.displayName).toBe("Codex · Home");
+    expect(agent?.displayName).not.toContain("help me revamp");
   });
 
   test("Claude preserves the source session, cwd, model, task, and observed token provenance", () => {
@@ -338,7 +354,7 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toBe("Mission: Redesign the Platforms operating room.");
-    expect(agent?.displayName).toBe("Redesign the Platforms operating room.");
+    expect(agent?.displayName).toBe("Claude · Home");
   });
 
   test("partially written trailing records do not erase a valid live session", () => {

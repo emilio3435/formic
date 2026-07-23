@@ -49,6 +49,7 @@ export interface CmuxSurface {
   dirty?: boolean;
   head?: string;
   tty?: string;
+  runtimeSurfaceReady?: boolean;
   sourceSessionIds: string[];
   identityConflict?: string;
 }

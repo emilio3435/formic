@@ -4,13 +4,21 @@ A local-first, light-mode command center for direct Codex, Claude, and Cursor Ag
 
 ## Run locally
 
+**Day to day (this is the whole workflow):**
+
 ```bash
-bun install
-bun run check
-bun run start
+bun start
 ```
 
-Open <http://127.0.0.1:4701>. Override the port with `MOUNTAIN_PORT` when needed; the server always binds to loopback.
+That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). Open <http://127.0.0.1:4702>.
+
+**Once per machine** (already done on this Mac if `data/cmux-socket.env` exists):
+
+```bash
+bun run setup:cmux
+```
+
+That saves a local cmux password so Ant Hill can see terminal names and use Focus/Send even when started outside cmux. You should not need to think about it again.
 
 ## Safety model
 

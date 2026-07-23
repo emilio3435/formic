@@ -133,6 +133,34 @@ function svgSegmentMeter(segments, opts = {}) {
   return svg;
 }
 
+/* SVG donut ring — filled arc length is a geometry attribute (stroke-dasharray
+   on a circle whose circumference is 100), never inline style, so the strict CSP
+   (style-src 'self') holds. Center % is an SVG <text>. */
+function svgRing(pct, opts = {}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "vital-ring");
+  svg.setAttribute("role", "progressbar");
+  svg.setAttribute("aria-valuemin", "0");
+  svg.setAttribute("aria-valuemax", "100");
+  svg.setAttribute("aria-valuenow", String(clamped));
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+  svg.append(svgChild(["circle", { cx: 18, cy: 18, r: 15.915, class: "ring-track" }]));
+  svg.append(svgChild(["circle", {
+    cx: 18, cy: 18, r: 15.915, class: "ring-fill" + tone,
+    "stroke-dasharray": clamped + " " + (100 - clamped),
+  }]));
+  const label = document.createElementNS(SVGNS, "text");
+  label.setAttribute("x", "18");
+  label.setAttribute("y", "18");
+  label.setAttribute("class", "ring-pct");
+  label.textContent = clamped + "%";
+  svg.append(label);
+  return svg;
+}
+
 /* ---------- formatting ---------- */
 
 const fmtTok = (n) =>
@@ -183,31 +211,27 @@ const CONTROL_HINTS = {
 
 /* Plain-language glossary. dtdd() looks up a row's term here and, when found,
    renders it with a dotted underline + explainer tooltip (hover or keyboard
-   focus). Definitions stay jargon-free — this is the human layer over the raw
-   Technical evidence, so a first-time operator can read the drawer unaided. */
-const TOKENS_HINT = "Token counts for the most recent model call. “measured” = reported by the provider; “estimated” = inferred.";
+   focus). Learn-style one-liners stay contextual — only fields that render. */
+const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
+const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
+const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
+const CWD_MISMATCH_HINT = "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).";
 const GLOSSARY = {
-  // Overview
+  // Operate
   "running for": "Wall-clock time since this agent started running.",
-  context: "How big the latest model call is against the model's context window.",
-  cost: "Estimated spend on this agent so far. “measured” = billed by the provider; “estimated” = inferred.",
-  // Technical
-  "session id": "The provider's own ID for this session, prefixed by the provider name.",
-  "working directory": "The folder on disk this agent is running in.",
-  status: "The raw run status reported by the provider, with its reason.",
+  "last update": "When this session last reported activity.",
+  role: "Operator role assigned to this agent in the swarm (orchestrator, verifier, etc.).",
   model: "The model this agent is currently running on.",
-  "reasoning effort": "How hard the model is set to think per step — higher effort means more reasoning.",
-  "nesting level": "How deep this agent sits in the orchestrator → subagent tree. 0 is top-level.",
-  "orchestrator id": "ID of the agent that spawned this one, if any.",
-  subagents: "How many child agents this one has spawned.",
-  "session total": "Total tokens used across this whole session so far.",
-  "context window": "The model's maximum context size — how much it can hold at once.",
-  "model policy": "Whether the running model matches the model this lane is supposed to use.",
+  context: "How big the latest model call is against the model's context window.",
+  // Evidence
+  "session cwd": "The folder on disk the provider session reports as its working directory.",
+  "terminal folder": CWD_MISMATCH_HINT,
+  "session id": "The provider's own ID for this session, prefixed by the provider name.",
   git: "The branch and commit the agent's working copy is on; flags uncommitted changes.",
-  tests: "The latest test-run result this agent reported.",
-  checks: "Named pre-ship gates this agent must pass — e.g. typecheck or lint.",
-  "control link": "Which cmux workspace/pane this session is wired to for Focus and Send, and how confidently it was matched.",
-  "available controls": "Which operator actions are turned on for this agent, and why any are off.",
+  "control link": "Which cmux terminal this session is wired to for Focus and Send, and how confidently it was matched.",
+  "latest call": LATEST_CALL_HINT,
+  "session total": SESSION_TOTAL_HINT,
+  "Ready · linked": READY_LINKED_HINT,
 };
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -263,9 +287,9 @@ function deriveRollup(agents) {
 
 const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
-/* Plain-language control explanation for the Overview. Never echoes capability
-   reasons here — live reasons carry raw cmux/session IDs, which belong only in
-   the Technical routing evidence. */
+/* Plain-language control explanation for the Operate chrome. Never echoes
+   capability reasons here — live reasons carry raw cmux/session IDs, which
+   belong only in Evidence. */
 function controlUnavailableText(controlState) {
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
@@ -287,7 +311,30 @@ function formatLastHumanMessage(agent, limit = 120) {
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
-const sourceAgentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
+/* Short folder/Home identity for when cmux titles are unavailable. */
+function cwdIdentityName(agent) {
+  if (!agent || typeof agent.cwd !== "string" || !agent.cwd.trim()) return "";
+  const normalized = agent.cwd.replace(/\/+$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  const provider = providerLabel(agent.provider);
+  if (parts.length <= 2 && (parts[0] === "Users" || parts[0] === "home")) {
+    return provider + " · Home";
+  }
+  const base = parts[parts.length - 1];
+  return base ? provider + " · " + base : provider + " · Home";
+}
+
+function sourceAgentName(agent) {
+  if (!agent) return "";
+  if (agent.nickname) return conciseText(agent.nickname);
+  const identity = cwdIdentityName(agent);
+  const display = typeof agent.displayName === "string" ? agent.displayName.trim() : "";
+  // Keep short provider·folder identities; replace prompt-as-title blobs.
+  const shortIdentity = display.length > 0 && display.length <= 56 && display.includes("·");
+  if (shortIdentity) return conciseText(display);
+  if (identity) return conciseText(identity);
+  return conciseText(display || agent.task || providerLabel(agent.provider) + " agent");
+}
 
 function presentationLabelKey(target) {
   if (!target) return "";
@@ -302,11 +349,40 @@ const programLabelTarget = (program) => ({ kind: "program", programId: program.i
 const workspaceLabelTarget = (workspaceId) => ({ kind: "workspace", workspaceId });
 const roomLabelTarget = (surfaceId) => ({ kind: "room", surfaceId });
 const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id });
-const agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname);
+/* Every live agent can take a presentation label. Prefer editing the linked
+   cmux workspace when present so Ant Hill names stay hunt-able in the wild. */
+const agentLabelEligible = (agent) => Boolean(agent && agent.id);
+
+/* Live cmux / terminal title for this session, when routing knows one. */
+function terminalSourceName(agent) {
+  const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
+    ? agent.target.workspaceTitle.trim()
+    : "";
+  return title ? conciseText(title) : "";
+}
+
+/* Rename target: workspace first (shared terminal identity), else the agent. */
+function preferredRenameTarget(agent) {
+  if (agent && agent.target && agent.target.workspaceId) {
+    return workspaceLabelTarget(agent.target.workspaceId);
+  }
+  return agentLabelTarget(agent);
+}
 
 function agentName(agent) {
-  const label = agent && state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
-  return label && agentLabelEligible(agent) ? label : sourceAgentName(agent);
+  if (!agent) return "";
+  const agentLabel = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
+  if (agentLabel) return agentLabel;
+  if (agent.target && agent.target.workspaceId) {
+    const workspaceLabel = state.aliases.get(presentationLabelKey(workspaceLabelTarget(agent.target.workspaceId)));
+    if (workspaceLabel) return workspaceLabel;
+  }
+  // Prefer the cmux terminal title only when the session cwd agrees with the
+  // pane. A home-cwd orch parked in a project-titled workspace must stay
+  // "Codex · Home" — not borrow the workspace name.
+  const terminal = terminalSourceName(agent);
+  if (terminal && !agent.target?.cwdMismatch) return terminal;
+  return sourceAgentName(agent);
 }
 
 /* Presentation-only labels. Source identities stay stable; the label is a
@@ -468,8 +544,9 @@ function buildClusters(agents) {
 /* ---------- token honesty ----------
    When tokens.scope === "latest-turn", total/input/output/cachedInput describe
    the latest invocation — that is the primary number everywhere, labeled as
-   such. Cumulative session usage (tokens.sessionTotal) belongs only in
-   Technical details. Sources that report nothing stay "not reported". */
+   such. Cumulative session usage (tokens.sessionTotal) belongs in Evidence.
+   Dense list widgets may still say "not reported"; the agent drawer omits
+   empty fields entirely (Take C). */
 
 function tokenSummary(tokens) {
   const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
@@ -734,6 +811,7 @@ function noDataWidget(sublabel) {
 function summaryWidgetData(id, snap, conn = "live", display = "percent") {
   if (id === "system") {
     const status = systemStatus(snap, conn);
+    const control = snap && snap.controlHealth;
     return {
       value: status.label,
       unit: "",
@@ -741,7 +819,9 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
         : status.key === "operational" ? "Sources and controls healthy."
           : conn !== "live" ? "Live snapshot feed is not healthy."
-            : "Source or control evidence needs review.",
+            : control && control.cmuxReachable !== true
+              ? "cmux unreachable — terminal titles and Focus/Send stay offline."
+              : "Source or control evidence needs review.",
       tone: status.tone,
       icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
     };
@@ -891,6 +971,7 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
+  preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -950,7 +1031,7 @@ const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  inspectorTab: "overview", // overview | technical
+  inspectorTab: "operate", // operate | chat | evidence
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // `${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1450,6 +1531,13 @@ async function triageIssue(issueId, action) {
       await fetchSnapshot();
       await fetchTriageQueue();
     }
+    // Compress Triage→Queue into one beat when the plan is investigation-shaped:
+    // queueing is bounded and persistent, and launch stays a separate explicit
+    // operator action, so the extra click was a dead stop, not a safety gate.
+    if (action === "generate" && recommendation && recommendation.queueRecommended
+      && !state.queueItems.some((item) => item.issueId === issueId)) {
+      await triageIssue(issueId, "queue");
+    }
   } catch (err) {
     state.triageErrors.set(issueId, err && err.message ? err.message : "Triage request failed");
   } finally {
@@ -1583,17 +1671,47 @@ function investigationResultNextSteps(parsed, outcome) {
   return ["Wait for the next source snapshot — this finding clears when evidence is gone."];
 }
 
+/* One primary, wired action for a finished investigation. Blocked results
+   regenerate a fresh plan from the current issue evidence (the server queue
+   holds one item per finding, so a true requeue is not available); verifying
+   results re-pull the source snapshot that clears the finding. */
+function investigationResultCta(outcome, issueId) {
+  if (!issueId) return null;
+  if (outcome === "blocked") {
+    const busy = state.triagePending.has("generate:" + issueId);
+    return el("button", {
+      type: "button",
+      class: "btn primary triage-briefing-cta",
+      disabled: busy ? "" : null,
+      "aria-busy": busy ? "true" : null,
+      dataset: { fkey: "briefing-cta:" + issueId },
+      onclick: () => triageIssue(issueId, "generate"),
+    }, busy ? "Retriaging…" : "Retriage from evidence");
+  }
+  return el("button", {
+    type: "button",
+    class: "btn primary triage-briefing-cta",
+    dataset: { fkey: "briefing-cta:" + issueId },
+    onclick: () => { void fetchSnapshot(); void fetchTriageQueue(); },
+  }, "Check source now");
+}
+
 // Fix briefing for investigation results — headline, what happened, what to do,
 // with raw output collapsed. Used by intervention/advisory triage and the
-// investigation drawer. `outcome` is "completed" or "blocked".
-function renderInvestigationResult(resultText, outcome) {
+// investigation drawer. `outcome` is "completed" or "blocked"; `opts.issueId`
+// wires the one primary follow-up action.
+const BRIEFING_MAX_BULLETS = 3;
+function renderInvestigationResult(resultText, outcome, opts = {}) {
   const blocked = outcome === "blocked";
   const parsed = parseInvestigationResult(resultText);
   const headline = parsed.headline || (blocked ? "Investigation blocked" : "Investigation complete");
   const nextSteps = investigationResultNextSteps(parsed, blocked ? "blocked" : "completed");
   const seen = new Set([headline, parsed.headline].filter(Boolean));
-  const findings = parsed.findings.filter((item) => !seen.has(item));
-  const blockers = parsed.blockers.filter((item) => !seen.has(item));
+  // Body cap: blockers first, then findings, at most three bullets total —
+  // everything else stays in the collapsed Raw output.
+  const blockers = parsed.blockers.filter((item) => !seen.has(item)).slice(0, BRIEFING_MAX_BULLETS);
+  const findings = parsed.findings.filter((item) => !seen.has(item))
+    .slice(0, Math.max(0, BRIEFING_MAX_BULLETS - blockers.length));
   const summary = parsed.summary && parsed.summary !== headline ? parsed.summary : "";
   let bodyShown = false;
 
@@ -1605,10 +1723,10 @@ function renderInvestigationResult(resultText, outcome) {
       el("span", { class: "triage-briefing-status", text: blocked ? "Blocked" : "Complete" }),
       el("span", { class: "triage-briefing-kicker-note", text: blocked
         ? "Operator review needed"
-        : "Source confirmation pending" })),
+        : "Waiting for fresh data" })),
     el("p", { class: "triage-briefing-headline", text: headline }));
 
-  if (summary) {
+  if (summary && !blockers.length && !findings.length) {
     briefing.append(el("p", { class: "triage-briefing-summary", text: summary }));
     bodyShown = true;
   } else if (findings.length === 0 && blockers.length === 0 && !parsed.structured && parsed.raw && parsed.raw !== headline) {
@@ -1639,10 +1757,13 @@ function renderInvestigationResult(resultText, outcome) {
       : "The investigation finished and is waiting on fresh source evidence." }));
   }
 
+  // One primary button first; short supporting prose after (never prose-only).
+  const cta = investigationResultCta(blocked ? "blocked" : "completed", opts.issueId);
   briefing.append(el("div", { class: "triage-briefing-section triage-briefing-next" },
     el("h4", { class: "triage-briefing-label", text: "What to do next" }),
+    cta,
     el("ul", { class: "triage-briefing-list triage-briefing-list--next" },
-      nextSteps.map((item) => el("li", { text: item })))));
+      nextSteps.slice(0, 2).map((item) => el("li", { text: item })))));
 
   briefing.append(el("details", { class: "triage-briefing-raw" },
     el("summary", { text: "Raw output" }),
@@ -1669,7 +1790,7 @@ function renderTriage(issue) {
       "aria-busy": generating ? "true" : null,
       dataset: { fkey: "triage:" + issue.id },
       onclick: () => triageIssue(issue.id, "generate"),
-    }, generating ? "Analyzing…" : "Generate triage"));
+    }, generating ? "Triaging…" : "Triage this finding"));
   } else {
     const plan = el("section", { class: "triage-plan", "aria-label": "Generated triage" },
       el("div", { class: "triage-plan-head" },
@@ -1704,12 +1825,12 @@ function renderTriage(issue) {
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
           ? queueItem.state === "running" ? "Investigation running · " + (queueItem.runModel || "native Luna")
-            : queueItem.state === "completed" ? "Investigation complete · source confirmation pending"
+            : queueItem.state === "completed" ? "Investigation complete · waiting for fresh data"
             : queueItem.state === "blocked" ? "Investigation blocked · review result"
             : "Queued and ready for explicit launch"
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
-        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed"));
+        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed", { issueId: issue.id }));
       }
     }
     wrap.append(plan);
@@ -1798,23 +1919,33 @@ function attentionBoardOf(snap, queueItems = []) {
   );
   for (const item of queueItems) triageByIssue.set(item.issueId, item.state);
 
+  // Lanes are mutually exclusive: a finding that is in motion is never also
+  // "act now" — Act means a human decision is needed right now.
   const actNowIds = new Set();
   const watchIds = new Set();
   const inMotionIds = new Set();
   for (const issue of issues) {
     const work = issueWorkState(issue, queueItems);
     if (IN_MOTION_KEYS.has(work.key)) inMotionIds.add(issue.id);
-    if (issue.severity === "error") actNowIds.add(issue.id);
-    else if (!IN_MOTION_KEYS.has(work.key)) watchIds.add(issue.id);
+    else if (issue.severity === "error") actNowIds.add(issue.id);
+    else watchIds.add(issue.id);
   }
   for (const [issueId, qState] of triageByIssue) {
-    if (qState === "queued" || qState === "running" || qState === "completed") inMotionIds.add(issueId);
+    // In-motion is mutually exclusive with Act now / Watch: an issue being
+    // worked never also nags in another lane (merge of the lane's exclusivity
+    // with main's orphan-blocked guard).
+    if (qState === "queued" || qState === "running" || qState === "completed") {
+      inMotionIds.add(issueId);
+      actNowIds.delete(issueId);
+      watchIds.delete(issueId);
+    }
     // Orphan blocked queue rows for cleared/non-live issues must not inflate Watch.
     if (
       qState === "blocked"
       && liveIssueIds.has(issueId)
       && !resolvedIds.has(issueId)
       && !actNowIds.has(issueId)
+      && !inMotionIds.has(issueId)
     ) {
       watchIds.add(issueId);
     }
@@ -1878,7 +2009,6 @@ function renderFindingRow(finding) {
     onclick: open,
   },
     el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
-    el("span", { class: "st " + visual.st, text: finding.work.label }),
     el("span", { class: "copy" },
       el("span", { class: "title", text: finding.title }),
       el("span", { class: "impact", text: finding.impact })),
@@ -1926,21 +2056,44 @@ function renderAttentionBoard() {
   }
 
   const issues = issuesOf(state.snap);
-  const actFindings = issues
-    .filter((issue) => issue.severity === "error")
-    .map((issue) => findingFromIssue(issue, "intervention"));
+  // Act now = needs a human decision right now. In-motion findings (triage,
+  // queue, investigation, verification underway) move to Be aware so the lane
+  // never contradicts its own work-state chip ("Act now" + "Verifying").
+  const issueFindings = issues.map((issue) =>
+    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory"));
+  const actFindings = issueFindings.filter((f) => f.kind === "intervention" && !IN_MOTION_KEYS.has(f.work.key));
+  const inFlightFindings = issueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key));
+  const watchFindings = issueFindings.filter((f) => f.kind === "advisory" && !IN_MOTION_KEYS.has(f.work.key));
   const recentlyResolved = recentlyResolvedOf(state.snap);
   const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
   const issueIds = new Set(issues.map((issue) => issue.id));
+  const orphanQueueFindings = state.queueItems
+    .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
+    .map(findingFromQueueItem);
   const awareFindings = [
-    ...issues.filter((issue) => issue.severity !== "error").map((issue) => findingFromIssue(issue, "advisory")),
-    ...state.queueItems
-      .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
-      .map(findingFromQueueItem),
+    ...watchFindings,
+    ...orphanQueueFindings.filter((f) => !IN_MOTION_KEYS.has(f.work.key)),
+    ...inFlightFindings,
+    ...orphanQueueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key)),
     ...recentlyResolved.map((issue) => findingFromIssue(issue, "resolved")),
   ];
 
-  const counts = attentionBoardOf(state.snap, state.queueItems);
+  // Segments mirror lane membership exactly — the score is derived from what
+  // the lanes actually render, so the conductor can never contradict them.
+  let watchCount = 0;
+  let inMotionCount = 0;
+  for (const f of awareFindings) {
+    if (f.kind === "resolved") continue;
+    if (IN_MOTION_KEYS.has(f.work.key)) inMotionCount += 1;
+    else watchCount += 1;
+  }
+  const counts = {
+    actNow: actFindings.length,
+    watch: watchCount,
+    inMotion: inMotionCount,
+    cleared: recentlyResolved.length,
+    allClear: actFindings.length + watchCount + inMotionCount === 0,
+  };
   const allClear = counts.allClear;
   const sig = [
     allClear ? "1" : "0",
@@ -2513,27 +2666,76 @@ function renderAgentRow(agent, program, opts = {}) {
   const clusterNote = swarmNote(agent, opts);
   const summary = rowSummary(agent);
   const description = [clusterNote, summary].filter(Boolean).join(" · ");
+  // Status column is a light only — the word "Working" repeated down a busy
+  // fleet is noise. Full state lives in the tooltip + row aria-label.
   const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
 
   const eligible = broadcastEligible(agent);
   const checked = state.selection.has(agent.id);
-  const hasLabel = agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  const nameTarget = preferredRenameTarget(agent);
+  const nameKey = presentationLabelKey(nameTarget);
+  const editing = state.renaming === nameKey;
+  const displayName = agentName(agent);
+  const terminal = terminalSourceName(agent);
+  const customLabel = state.aliases.has(nameKey)
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   const sourceName = sourceAgentName(agent);
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+
+  const activate = () => {
+    if (state.selecting) {
+      if (eligible) toggleSelect(agent.id);
+      return;
+    }
+    selectAgent(agent.id);
+  };
 
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
-    el("span", { class: "agent-name", text: agentName(agent) }),
+    el("span", { class: "agent-name-wrap" },
+      el("span", { class: "agent-name", text: displayName }),
+      state.selecting ? null : el("button", {
+        type: "button",
+        class: "agent-rename",
+        "aria-label": "Rename " + displayName,
+        title: terminal
+          ? "Edit display name (defaults from terminal: " + terminal + ")"
+          : "Edit display name",
+        dataset: { fkey: "agent-rename:" + agent.id },
+        onclick: (e) => {
+          e.stopPropagation();
+          startRename(nameTarget, { draft: displayName });
+        },
+      }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
-      hasLabel ? el("span", { class: "source-label", title: "Source-backed agent label", text: "source: " + sourceName }) : null,
+      cwdMismatch && terminal
+        ? el("span", {
+          class: "source-label is-mismatch",
+          title: "This agent session cwd differs from the cmux pane folder. Title is the terminal; identity stays the session.",
+          text: "terminal: " + terminal + " · cwd differs",
+        })
+        : customLabel && terminal
+          ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
+          : customLabel
+            ? el("span", { class: "source-label", title: "Provider source name", text: "source: " + sourceName })
+            : terminal && terminal !== displayName
+              ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
+              : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   const line1 = el("span", { class: "agent-grid" },
-    el("span", { class: "row-state state-" + activity },
-      el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }),
-      el("span", { text: stateText })),
+    el("span", {
+      class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+      title: stateText,
+      "aria-label": "Status: " + stateText,
+    },
+      el("span", {
+        class: "act-glyph act-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+        "aria-hidden": "true",
+      })),
     identity,
     rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
     contextFact(agent),
@@ -2547,7 +2749,8 @@ function renderAgentRow(agent, program, opts = {}) {
     (outcome !== "healthy" ? " is-" + outcome : "") +
     (activity === "ended" ? " is-ended" : "") +
     (state.selecting ? " is-selecting" : "") +
-    (checked ? " is-checked" : "");
+    (checked ? " is-checked" : "") +
+    (editing ? " is-renaming" : "");
 
   const children = [];
   if (state.selecting) {
@@ -2558,17 +2761,45 @@ function renderAgentRow(agent, program, opts = {}) {
   }
   children.push(line1);
 
-  return el("button", {
-    type: "button",
+  const row = el("div", {
     class: rowClass,
     id: "agent-" + agent.id,
+    role: "button",
+    tabindex: state.selecting && !eligible ? "-1" : "0",
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
-    disabled: state.selecting && !eligible ? "" : null,
-    "aria-label": `${agentName(agent)}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-disabled": state.selecting && !eligible ? "true" : null,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
-    onclick: () => state.selecting ? (eligible && toggleSelect(agent.id)) : selectAgent(agent.id),
+    onclick: (e) => {
+      if (e.target.closest(".agent-rename, .rename-form")) return;
+      if (state.selecting && !eligible) return;
+      activate();
+    },
+    onkeydown: (e) => {
+      if (e.target.closest(".agent-rename, .rename-form, input, button")) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      if (state.selecting && !eligible) return;
+      activate();
+    },
   }, children);
+
+  if (!editing) return row;
+
+  const kind = nameTarget.kind;
+  return el("div", { class: "agent-row-edit-wrap" },
+    row,
+    renderLabelForm(nameTarget, {
+      inputKey: "label-input:" + nameKey,
+      placeholder: kind === "workspace" ? "Name that matches the cmux terminal" : "Display name for this agent",
+      ariaLabel: "New display name for " + displayName,
+      source: kind === "workspace"
+        ? (terminal
+          ? "Terminal title: " + terminal + " · workspace id stays " + nameTarget.workspaceId
+          : "Workspace id stays " + nameTarget.workspaceId)
+        : "Source agent: " + sourceName + " · id stays " + agent.id,
+    }));
 }
 
 function swarmNote(agent, opts) {
@@ -2853,7 +3084,7 @@ function renderAdvisoryDrawer(pane, view) {
       el("button", {
         type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
         onclick: () => triageIssue(issue.id, "generate"),
-      }, "Escalate to triage")));
+      }, "Triage this advisory")));
   } else if (work.key === "planned" || work.key === "queued" || work.key === "investigating" || work.key === "verifying" || work.key === "blocked" || work.key === "triaging") {
     pane.append(el("div", { class: "dw-block dw-block--fix" },
       el("div", { class: "dw-block-label", text: "Triage" }),
@@ -2877,7 +3108,7 @@ function renderInvestigationDrawer(pane, view) {
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
   status.append(el("span", { text:
     item.state === "running" ? "running · " + (item.runModel || "native Luna")
-    : item.state === "completed" ? "complete · source confirmation pending"
+    : item.state === "completed" ? "complete · waiting for fresh data"
     : item.state === "blocked" ? "blocked · review result"
     : "queued and ready for explicit launch" }));
   pane.append(status);
@@ -2902,7 +3133,7 @@ function renderInvestigationDrawer(pane, view) {
   }
 
   if (item.result) {
-    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed"));
+    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed", { issueId: item.issueId }));
   }
 
   const issue = issuesOf(state.snap).find((i) => i.id === item.issueId);
@@ -3037,12 +3268,26 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
+  const terminal = terminalSourceName(agent);
+  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   pane.append(el("div", { class: "inspector-head" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
-      agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)))
-        ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
-        : null,
+      cwdMismatch && terminal
+        ? el("p", {
+          class: "inspector-source-name is-mismatch",
+          title: CWD_MISMATCH_HINT,
+          text: "Terminal: " + terminal + " · session cwd ≠ pane folder",
+        })
+        : hasCustomName && terminal
+          ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
+          : hasCustomName
+            ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
+            : terminal && terminal !== agentName(agent)
+              ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
+              : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
@@ -3054,7 +3299,6 @@ function renderAgentDrawer(pane, view) {
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
 
-  pane.append(renderPresentationLabels(agent));
   pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
@@ -3062,30 +3306,27 @@ function renderAgentDrawer(pane, view) {
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
+  const tab = ["operate", "chat", "evidence"].includes(state.inspectorTab)
+    ? state.inspectorTab
+    : "operate";
+  if (tab !== state.inspectorTab) state.inspectorTab = tab;
+
   pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
-    inspectorTabButton("overview", "Overview"),
-    inspectorTabButton("technical", "Technical")));
+    inspectorTabButton("operate", "Operate"),
+    inspectorTabButton("chat", "Chat"),
+    inspectorTabButton("evidence", "Evidence")));
 
-  // Both panels always render. In the narrow drawer CSS shows only the active
-  // tab; once the drawer is wide enough the tabs hide and both sit side-by-side
-  // (Option 2 — use the horizontal room instead of forcing a tab dance).
-  const overviewPanel = renderOverview(agent, program);
-  overviewPanel.dataset.tab = "overview";
-  const technicalPanel = renderTechnical(agent);
-  technicalPanel.dataset.tab = "technical";
-  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: state.inspectorTab } },
-    overviewPanel, technicalPanel));
+  const operatePanel = renderOperate(agent, program);
+  operatePanel.dataset.tab = "operate";
+  const chatPanel = renderChat(agent);
+  chatPanel.dataset.tab = "chat";
+  const evidencePanel = renderEvidence(agent);
+  evidencePanel.dataset.tab = "evidence";
+  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: tab } },
+    operatePanel, chatPanel, evidencePanel));
 
+  // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));
-
-  const fb = state.feedback.get(agent.id);
-  if (fb) {
-    pane.append(el("p", {
-      class: "control-feedback " + (fb.ok ? "ok" : "err"),
-      role: "status",
-      text: fb.message,
-    }));
-  }
 }
 
 /* One calm status sentence under the title — replaces the pill cluster. */
@@ -3147,7 +3388,7 @@ function renderControlBanner(agent, control) {
       el("button", {
         type: "button",
         class: "control-banner-link",
-        onclick: () => { state.inspectorTab = "technical"; render(); },
+        onclick: () => { state.inspectorTab = "evidence"; render(); },
       }, "See routing evidence →")));
 }
 
@@ -3190,24 +3431,33 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
     return el("span", { hidden: "" });
   }
 
-  const dock = el("div", { class: "command-dock", "aria-label": "Session controls" });
   const safeLocked = [focusCap, instructCap].some((c) => c && !c.enabled);
+  const linkedReady = !safeLocked && control === "linked";
+  const dock = el("div", {
+    class: "command-dock" + (linkedReady ? " command-dock--linked" : ""),
+    "aria-label": "Session controls",
+  });
 
-  const meta = el("div", { class: "command-dock-meta" });
-  if (safeLocked) {
-    meta.append(el("span", {
-      class: "command-dock-why",
-      text: control === "quarantined" ? "Send disabled · quarantined"
-        : control === "observed-only" ? "Send disabled · view only"
-        : "Send disabled",
-    }));
-  } else if (control === "linked") {
-    meta.append(el("span", { class: "command-dock-ready", text: "Ready · linked to cmux pane" }));
-  } else {
-    meta.append(el("span", { text: "Session controls" }));
+  // One lock narrative: the control banner owns the reason. The dock meta only
+  // speaks when the link is live, and the send hint only when Send can send.
+  const showHint = Boolean(instructCap && instructCap.enabled);
+  if (linkedReady || showHint) {
+    const meta = el("div", { class: "command-dock-meta" });
+    meta.append(linkedReady
+      ? el("span", { class: "command-dock-ready", text: "Ready · linked" })
+      : el("span", { "aria-hidden": "true" }));
+    if (showHint) meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
+    dock.append(meta);
   }
-  meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
-  dock.append(meta);
+
+  const fb = state.feedback.get(agent.id);
+  if (fb) {
+    dock.append(el("p", {
+      class: "control-feedback " + (fb.ok ? "ok" : "err"),
+      role: "status",
+      text: fb.message,
+    }));
+  }
 
   // Composer is the primary interaction — Focus no longer sits above a dead input.
   if (instructCap) {
@@ -3255,8 +3505,15 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus"));
   if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt"));
   tools.append(el("span", { class: "command-dock-spacer" }));
-  if (archiveCap) tools.append(renderDockTool(agent, archiveCap, "archive"));
+  // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
+  // the dock does not offer a destructive peer next to dead controls.
+  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive"));
   dock.append(tools);
+  if (archiveCap && safeLocked) {
+    dock.append(el("details", { class: "command-dock-more" },
+      el("summary", { text: "More" }),
+      renderDockTool(agent, archiveCap, "archive")));
+  }
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
   // Tests assert controlUnavailableText is used for unavailable safe controls.
@@ -3294,7 +3551,7 @@ function renderDockTool(agent, cap, action) {
     class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
-    title: cap.enabled ? (CONTROL_HINTS[deriveControlState(agent)] && action === "focus" ? "Jump to cmux pane" : label) : "Unavailable",
+    title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
     dataset: { fkey: "act:" + key },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
@@ -3318,21 +3575,22 @@ function renderPrimaryActions(agent) {
 }
 
 function sourceWorkspaceLabel(target) {
-  return target.workspaceTitle || "cmux workspace " + target.workspaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal workspace";
 }
 
 function sourceRoomLabel(target) {
-  return "cmux room " + target.surfaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal";
 }
 
-function renderPresentationLabels(agent) {
+function presentationLabelTargets(agent) {
   const targets = [];
   if (agent.target && agent.target.workspaceId) {
+    const terminal = terminalSourceName(agent) || sourceWorkspaceLabel(agent.target);
     targets.push({
       target: workspaceLabelTarget(agent.target.workspaceId),
       kind: "workspace",
-      source: sourceWorkspaceLabel(agent.target),
-      sourceEvidence: "Source workspace: " + sourceWorkspaceLabel(agent.target) + " · id stays " + agent.target.workspaceId,
+      source: terminal.startsWith("terminal:") ? terminal : "terminal: " + terminal,
+      sourceEvidence: "Terminal / workspace: " + terminal + " · id stays " + agent.target.workspaceId,
     });
   }
   if (agent.target && agent.target.surfaceId) {
@@ -3340,7 +3598,7 @@ function renderPresentationLabels(agent) {
       target: roomLabelTarget(agent.target.surfaceId),
       kind: "room",
       source: sourceRoomLabel(agent.target),
-      sourceEvidence: "Source room surface id stays " + agent.target.surfaceId,
+      sourceEvidence: "Terminal surface id stays " + agent.target.surfaceId,
     });
   }
   if (agentLabelEligible(agent)) {
@@ -3351,12 +3609,22 @@ function renderPresentationLabels(agent) {
       sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
     });
   }
-  if (!targets.length) return el("span", { hidden: "" });
+  return targets;
+}
 
-  const wrap = el("div", { class: "presentation-labels" },
-    el("h3", { class: "section-title", text: "Presentation labels" }));
-  if (state.labelsLoading) wrap.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
-  if (state.labelLoadError) wrap.append(el("p", { class: "label-status err", role: "status", text: "Saved labels unavailable: " + state.labelLoadError }));
+/* Names (presentation labels) stay collapsed — rare rename UI, not chrome. */
+function renderNamesDisclosure(agent) {
+  const targets = presentationLabelTargets(agent);
+  if (!targets.length && !state.labelsLoading && !state.labelLoadError) return null;
+
+  const body = el("div", { class: "presentation-labels" });
+  if (state.labelsLoading) body.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
+  if (state.labelLoadError) {
+    body.append(el("p", {
+      class: "label-status err", role: "status",
+      text: "Saved labels unavailable: " + state.labelLoadError,
+    }));
+  }
   for (const item of targets) {
     const key = presentationLabelKey(item.target);
     const label = state.aliases.get(key);
@@ -3372,9 +3640,9 @@ function renderPresentationLabels(agent) {
         dataset: { fkey: "label-edit:" + key },
         onclick: () => startRename(item.target),
       }, actionText));
-    wrap.append(row);
+    body.append(row);
     if (editing) {
-      wrap.append(renderLabelForm(item.target, {
+      body.append(renderLabelForm(item.target, {
         inputKey: "label-input:" + key,
         placeholder: "Display label for this " + item.kind,
         ariaLabel: "New display label for " + item.kind,
@@ -3382,12 +3650,27 @@ function renderPresentationLabels(agent) {
       }));
     }
   }
-  return wrap;
+
+  const editingHere = targets.some((item) => state.renaming === presentationLabelKey(item.target));
+  return el("details", {
+    class: "names-disclosure",
+    // Stay open while a rename form is live so re-render does not tuck it away.
+    open: editingHere || state.labelsLoading || state.labelLoadError ? "" : null,
+  },
+    el("summary", { text: "Names" }),
+    body);
 }
 
-/* ---------- inspector: overview ---------- */
+/* Kept as a thin alias so source-level rename contracts still resolve. */
+function renderPresentationLabels(agent) {
+  return renderNamesDisclosure(agent) || el("span", { hidden: "" });
+}
+
+/* ---------- inspector: Operate · Chat · Evidence ---------- */
 
 function dtdd(grid, label, value, opts = {}) {
+  // Take C hard rule: if a value isn’t there, the field isn’t rendered.
+  if (value == null || value === "") return;
   const hint = opts.hint ?? GLOSSARY[label];
   grid.append(hint
     ? el("dt", {}, el("span", {
@@ -3396,60 +3679,164 @@ function dtdd(grid, label, value, opts = {}) {
       }))
     : el("dt", { text: label }));
   const dd = el("dd", {});
-  if (value == null || value === "") {
-    dd.append(el("span", { class: "absent", text: opts.absent || "not reported" }));
-  } else if (value.nodeType) {
-    dd.append(value);
-  } else {
-    dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
-  }
+  if (value.nodeType) dd.append(value);
+  else dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
   grid.append(dd);
 }
 
-function renderOverview(agent, program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const grid = el("dl", { class: "detail-grid" });
-  const outcome = deriveOutcome(agent);
+function normalizeCompareText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
 
-  if (typeof agent.lastHumanMessage === "string" && agent.lastHumanMessage.trim()) {
+function taskMeaningfullyDifferent(agent) {
+  const task = typeof agent?.task === "string" ? agent.task.trim() : "";
+  if (!task) return false;
+  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (!message) return true;
+  const a = normalizeCompareText(task);
+  const b = normalizeCompareText(message);
+  if (!a || a === b) return false;
+  if (a.length >= 12 && b.includes(a)) return false;
+  if (b.length >= 12 && a.includes(b)) return false;
+  return true;
+}
+
+function transcriptArtifact(agent) {
+  return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
+}
+
+/* One instrument tile: label + figure. Callers only pass real data — the band
+   omits absent tiles entirely (no "not reported" face), matching the drawer's
+   omit-empty rule. */
+function vitalTile(label, figure) {
+  return el("div", { class: "vital" },
+    el("span", { class: "vital-label", text: label }),
+    figure);
+}
+
+/* Vitals band — the numbers an operator acts on, rendered as instruments (a
+   context ring, session spend + cache efficiency, uptime) instead of a grey meta
+   row. Every tile self-guards; if nothing has data the band renders nothing. */
+function renderVitals(agent) {
+  const t = agent.tokens || {};
+  const tiles = [];
+
+  // Context pressure — a ring when we have an observed window, else the raw token
+  // summary so any source with tokens still gets a tile.
+  const ctx = contextUsage(t);
+  if (ctx) {
+    tiles.push(vitalTile("Context",
+      el("div", { class: "vital-ring-wrap" },
+        svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
+        el("div", { class: "vital-figure" },
+          el("div", { class: "vital-big mono" },
+            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))))));
+  } else {
+    const tok = tokenSummary(t);
+    if (tok.known) {
+      tiles.push(vitalTile(tok.label === "latest call" ? "Latest call" : "Tokens",
+        el("div", { class: "vital-big mono", title: tok.title, text: tok.text })));
+    }
+  }
+
+  // Session spend + cache-hit efficiency (computed, not raw).
+  const cacheHit = (t.cachedInput != null && t.input) ? Math.round((t.cachedInput / t.input) * 100) : null;
+  if (t.sessionTotal != null) {
+    tiles.push(vitalTile("Session tokens",
+      el("div", {},
+        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
+        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
+        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)));
+  }
+
+  // Uptime.
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
+  if (elapsed && elapsed !== "—") {
+    tiles.push(vitalTile("Uptime",
+      el("div", { class: "vital-big mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed })));
+  } else if (agent.updatedAt) {
+    tiles.push(vitalTile("Last update",
+      el("div", { class: "vital-big mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })));
+  }
+
+  if (!tiles.length) return null;
+  const band = el("div", { class: "vitals" });
+  for (const tile of tiles) band.append(tile);
+  return band;
+}
+
+function renderOperateMeta(agent) {
+  const items = [];
+  if (agent.role && agent.role !== "agent") {
+    items.push({
+      label: "role",
+      hint: GLOSSARY.role,
+      node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
+    });
+  }
+  if (agent.model) {
+    items.push({
+      label: "model",
+      hint: GLOSSARY.model,
+      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
+    });
+  }
+  // Uptime, token, and context figures now lead the Operate tab in the vitals
+  // instrument band (renderVitals). This meta row stays identity-only.
+  if (!items.length) return null;
+
+  const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
+  for (const item of items) {
+    row.append(el("span", { class: "operate-meta-item" },
+      el("span", {
+        class: "operate-meta-label term-hint",
+        tabindex: "0",
+        title: item.hint || null,
+        "aria-label": item.hint ? `${item.label}: ${item.hint}` : item.label,
+        text: item.label,
+      }),
+      item.node));
+  }
+  return row;
+}
+
+function renderOperate(agent, _program) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (message) {
     panel.append(
       el("h3", { class: "section-title", text: "Last human message" }),
       el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
   }
 
-  dtdd(grid, "task", agent.task);
-  if (outcome !== "healthy") {
-    dtdd(grid, OUTCOME_LABELS[outcome].toLowerCase(), agent.statusReason);
+  if (taskMeaningfullyDifferent(agent)) {
+    panel.append(
+      el("h3", { class: "section-title", text: "Task" }),
+      el("p", { class: "operate-task", text: agent.task.trim() }));
   }
-  dtdd(grid, "last update", el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }));
-  dtdd(grid, "running for", el("span", {
-    class: "mono",
-    dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
-    text: liveElapsedText(agent, state.snap && state.snap.generatedAt),
-  }));
-  dtdd(grid, "role", agent.role && agent.role !== "agent" ? agent.role : null, { absent: "general agent" });
 
-  const tok = tokenSummary(agent.tokens);
-  dtdd(grid, tok.label, el("span", { title: tok.title, class: tok.known ? "mono" : "absent", text: tok.text }), { hint: TOKENS_HINT });
-  const ctx = contextUsage(agent.tokens);
-  if (ctx) {
-    dtdd(grid, "context", el("span", {
-      class: "mono",
-      title: "Latest call size against the model's context window.",
-      text: ctx.text,
+  const outcome = deriveOutcome(agent);
+  if (outcome !== "healthy" && agent.statusReason) {
+    panel.append(el("p", {
+      class: "operate-outcome-note outcome-" + outcome,
+      text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
     }));
   }
-  dtdd(grid, "cost", agent.cost
-    ? `${agent.cost.currency} ${Number(agent.cost.amount).toFixed(4)} · ${provenanceLabel(agent.cost.provenance)}${agent.cost.note ? " · " + agent.cost.note : ""}`
-    : null, { absent: "not reported" });
 
-  panel.append(grid);
+  const vitals = renderVitals(agent);
+  if (vitals) panel.append(vitals);
+
+  const meta = renderOperateMeta(agent);
+  if (meta) panel.append(meta);
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
+  }
   return panel;
 }
 
 /* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
-   (P4), but it MUST stay defined immediately after renderOverview: a test
-   asserts the renderOverview…renderSwarmSection source adjacency. Do not
+   (P4), but it MUST stay defined immediately after renderOperate: a test
+   asserts the renderOperate…renderSwarmSection source adjacency. Do not
    reorder or delete it. */
 function renderSwarmSection(agent, program) {
   const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
@@ -3481,6 +3868,38 @@ function renderSwarmSection(agent, program) {
       agentName(child) + " — " + ACTIVITY_LABELS[act]));
   }
   return wrap;
+}
+
+function renderChatTurn(role, text) {
+  return el("div", { class: "chat-turn chat-turn--" + role },
+    el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
+    el("p", { class: "chat-turn-body", tabindex: "0", text }));
+}
+
+function renderChat(agent) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const user = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  const assistant = typeof agent.transcriptTail === "string" ? agent.transcriptTail.trim() : "";
+  if (user) panel.append(renderChatTurn("user", agent.lastHumanMessage));
+  if (assistant) panel.append(renderChatTurn("assistant", agent.transcriptTail));
+
+  const artifact = transcriptArtifact(agent);
+  if (artifact && artifact.path) {
+    panel.append(el("p", { class: "chat-transcript-link" },
+      el("span", { text: "Transcript: " }),
+      el("code", { text: artifact.path }),
+      " ",
+      el("button", {
+        type: "button", class: "btn sm",
+        dataset: { fkey: `copy-transcript:${agent.id}` },
+        onclick: () => copyText(artifact.path),
+      }, "Copy path")));
+  }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
+  }
+  return panel;
 }
 
 /* Lineage spine — the signature nesting element. Ancestors climb a single thin
@@ -3561,49 +3980,75 @@ function renderLineageSpine(agent) {
   return spine;
 }
 
-/* ---------- inspector: technical ---------- */
+/* ---------- inspector: Evidence ---------- */
 
-function renderTechnical(agent) {
+function copyIdButton(label, value, key) {
+  if (!value) return null;
+  return el("button", {
+    type: "button",
+    class: "btn sm evidence-copy-id",
+    title: value,
+    dataset: { fkey: key },
+    onclick: () => copyText(value),
+  }, "Copy " + label);
+}
+
+function controlLinkSentence(target) {
+  if (!target) return null;
+  const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
+  const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
+  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+    return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
+      + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  if (target.resolution === "ambiguous") {
+    return "Control routing is quarantined — identity evidence is ambiguous"
+      + (terminal ? " for " + terminal : "")
+      + ".";
+  }
+  return "No safe control link"
+    + (terminal ? " for " + terminal : "")
+    + (resolution ? " · " + resolution : "")
+    + ".";
+}
+
+function renderControlLink(target) {
+  if (!target) return null;
+  const wrap = el("div", { class: "evidence-control-link" });
+  const sentence = controlLinkSentence(target);
+  wrap.append(el("p", {
+    class: "evidence-control-sentence",
+    title: target.cwdMismatch ? CWD_MISMATCH_HINT : READY_LINKED_HINT,
+    text: sentence,
+  }));
+  const ids = el("div", { class: "evidence-ids" });
+  const buttons = [
+    copyIdButton("workspace", target.workspaceId, "copy-ws:" + (target.workspaceId || "")),
+    copyIdButton("surface", target.surfaceId, "copy-surface:" + (target.surfaceId || "")),
+    copyIdButton("pane", target.paneId, "copy-pane:" + (target.paneId || "")),
+  ].filter(Boolean);
+  for (const btn of buttons) ids.append(btn);
+  if (buttons.length) wrap.append(ids);
+  return wrap;
+}
+
+function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  panel.append(el("p", { class: "inspector-note tech-caption",
-    text: "The raw evidence behind the Overview — hover any underlined term for what it means." }));
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session id", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
-  dtdd(grid, "working directory", agent.cwd, { code: true });
-  dtdd(grid, "status", `${agent.status} — ${agent.statusReason}`);
-  dtdd(grid, "model", agent.model);
-  dtdd(grid, "reasoning effort", agent.effort);
-  dtdd(grid, "started", agent.startedAt
-    ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
-    : null);
-  dtdd(grid, "nesting level", agent.threadDepth != null ? String(agent.threadDepth) : null);
-  dtdd(grid, "orchestrator id", agent.parentAgentId, { code: true, absent: "none" });
-  dtdd(grid, "subagents", agent.subagentCount != null ? String(agent.subagentCount) : null);
-
-  const t = agent.tokens || { provenance: "unknown" };
-  const tokParts = [];
-  if (t.input != null) tokParts.push("in " + fmtTok(t.input));
-  if (t.output != null) tokParts.push("out " + fmtTok(t.output));
-  if (t.cachedInput != null) tokParts.push("cached " + fmtTok(t.cachedInput));
-  if (t.total != null) tokParts.push("total " + fmtTok(t.total));
-  const tokLabel = t.scope === "latest-turn" ? "latest call" : "tokens";
-  dtdd(grid, tokLabel, tokParts.length
-    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: provenanceLabel(t.provenance) }))
-    : el("span", { class: "absent", text: "none reported (" + provenanceLabel(t.provenance) + ")" }), { hint: TOKENS_HINT });
-  dtdd(grid, "session total", t.sessionTotal != null
-    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
-    : null);
-  dtdd(grid, "context window", t.contextWindow != null
-    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tokens" })
-    : null);
-
-  const policy = modelPolicyView(agent);
-  dtdd(grid, "model policy", policy
-    ? el("span", { class: "policy-" + policy.state },
-        policy.label + (policy.expected ? " — expected " + policy.expected : ""),
-        el("span", { class: "absent", text: " · " + policy.summary }))
-    : null, { absent: "not evaluated" });
+  dtdd(grid, "session cwd", agent.cwd, { code: true });
+  const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
+  const surfaceCwd = agent.target && agent.target.surfaceCwd
+    ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
+    : "";
+  if (surfaceCwd && surfaceCwd !== sessionCwd) {
+    dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
+      code: true,
+      hint: CWD_MISMATCH_HINT,
+    });
+  }
 
   dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
     ? el("span", {},
@@ -3612,29 +4057,32 @@ function renderTechnical(agent) {
         agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
     : null);
 
-  dtdd(grid, "tests", agent.tests
-    ? el("span", { class: "tests-" + agent.tests.state },
-        agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : ""))
-    : null);
-
-  dtdd(grid, "checks", agent.gates && agent.gates.length
-    ? el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g })))
-    : el("span", { class: "absent", text: "none" }));
-
-  dtdd(grid, "control link", renderTarget(agent.target));
-
-  const routing = el("ul", { class: "routing-list" });
-  for (const cap of agent.controls || []) {
-    routing.append(el("li", {},
-      el("span", { class: "mono", text: cap.action }),
-      " — ",
-      cap.enabled
-        ? el("span", { class: "ok", text: "enabled" })
-        : el("span", { class: "absent", text: "disabled: " + (cap.reason || "no reason reported") })));
+  const t = agent.tokens || {};
+  if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
+    const parts = [];
+    if (t.input != null) parts.push("in " + fmtTok(t.input));
+    if (t.output != null) parts.push("out " + fmtTok(t.output));
+    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
+    if (t.total != null) parts.push("total " + fmtTok(t.total));
+    dtdd(grid, "latest call", el("span", {
+      class: "mono",
+      text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
+    }), { hint: LATEST_CALL_HINT });
   }
-  dtdd(grid, "available controls", routing);
+  if (t.sessionTotal != null) {
+    dtdd(grid, "session total", el("span", {
+      class: "mono",
+      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
+    }), { hint: SESSION_TOTAL_HINT });
+  }
 
-  panel.append(grid);
+  const link = renderControlLink(agent.target);
+  if (link) dtdd(grid, "control link", link);
+
+  if (grid.childNodes.length) panel.append(grid);
+
+  const names = renderNamesDisclosure(agent);
+  if (names) panel.append(names);
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
@@ -3645,7 +4093,7 @@ function renderTechnical(agent) {
           el("span", { text: a.label }),
           el("span", { class: "artifact-path", text: a.path }),
           el("button", {
-            type: "button", class: "btn",
+            type: "button", class: "btn sm",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
           }, "Copy path")))));
@@ -3656,22 +4104,20 @@ function renderTechnical(agent) {
       el("h3", { class: "section-title", text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+  }
   return panel;
 }
 
+/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
+function renderTechnical(agent) {
+  return renderEvidence(agent);
+}
+
 function renderTarget(target) {
-  if (!target) return null;
-  const wrap = el("span", {},
-    el("span", { class: "target-chip target-" + target.resolution, text: RESOLUTION_LABELS[target.resolution] || target.resolution }));
-  const ids = [
-    target.workspaceId && "ws " + target.workspaceId,
-    target.surfaceId && "surface " + target.surfaceId,
-    target.paneId && "pane " + target.paneId,
-  ].filter(Boolean);
-  if (ids.length) wrap.append(" ", el("code", { text: ids.join(" · ") }));
-  if (target.workspaceTitle) wrap.append(" ", el("span", { class: "source-label", text: "· source title: " + target.workspaceTitle }));
-  if (target.reason) wrap.append(" ", el("span", { class: "absent", text: "— " + target.reason }));
-  return wrap;
+  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */
@@ -3746,10 +4192,12 @@ async function fetchLabels() {
   }
 }
 
-function startRename(target) {
+function startRename(target, opts = {}) {
   const key = presentationLabelKey(target);
   state.renaming = key;
-  state.renameDraft = state.aliases.get(key) || "";
+  // Prefer a saved alias; otherwise seed from the live display name (often the
+  // cmux terminal title) so edits feel like renaming what you already see.
+  state.renameDraft = state.aliases.get(key) || (typeof opts.draft === "string" ? opts.draft : "") || "";
   state.renameError = "";
   render();
   const inputKey = target.kind === "program" ? "rename-input:" + target.programId : "label-input:" + key;
