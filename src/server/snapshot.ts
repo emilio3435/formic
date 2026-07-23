@@ -18,7 +18,7 @@ import type {
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
-import { resolveAgentTarget } from "./targets";
+import { resolveAgentTargetWithTrace } from "./targets";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -527,7 +527,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   }
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
-    const target = resolveAgentTarget(source, input.surfaces, sources);
+    const { target, trace: identityTrace } = resolveAgentTargetWithTrace(source, input.surfaces, sources);
     const surface = target.surfaceId
       ? input.surfaces.find((candidate) => candidate.surfaceId === target.surfaceId)
       : undefined;
@@ -597,6 +597,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
+      identityTrace,
       controls: controlsFor(source, target, archived),
     };
     const group = programs.get(program.id) ?? { ...program, agents: [] };
@@ -691,9 +692,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
 export function snapshotFingerprint(snapshot: HubSnapshot): string {
   const { generatedAt: _generatedAt, controlHealth, ...stable } = snapshot;
   const { lastCheckedAt: _lastCheckedAt, ...stableHealth } = controlHealth;
+  // identityTrace is debug evidence — its detail (pids, commands, binding
+  // timestamps) must not push SSE snapshots when nothing user-visible changed.
   const programs = stable.programs.map((program) => ({
     ...program,
-    agents: program.agents.map(({ elapsedMs: _elapsedMs, ...agent }) => agent),
+    agents: program.agents.map(({ elapsedMs: _elapsedMs, identityTrace: _identityTrace, ...agent }) => agent),
   }));
   return JSON.stringify({ ...stable, programs, controlHealth: stableHealth });
 }

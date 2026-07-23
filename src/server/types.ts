@@ -3,6 +3,7 @@ import type {
   Artifact,
   CostUsage,
   Provider,
+  SurfaceIdentityTrace,
   TokenUsage,
 } from "../shared/types";
 
@@ -38,6 +39,12 @@ export interface CollectedAgent {
     workspaceId?: string;
     surfaceId?: string;
     paneId?: string;
+    /** Overrides the default tier-1 target reason (e.g. binding bridges). */
+    reason?: string;
+    /** Set when a persisted identity binding supplied this target. */
+    source?: "binding";
+    /** Last time live lsof evidence confirmed the binding, when known. */
+    confirmedAt?: string;
   };
 }
 
@@ -55,6 +62,8 @@ export interface CmuxSurface {
   runtimeSurfaceReady?: boolean;
   sourceSessionIds: string[];
   identityConflict?: string;
+  /** Evidence observed by the most recent identity scan for this surface. */
+  identityTrace?: SurfaceIdentityTrace;
 }
 
 export interface CmuxNotification {
