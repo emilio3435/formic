@@ -413,6 +413,11 @@ const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
 function claudeContextWindow(model: string | undefined): number | undefined {
   if (!model) return undefined;
   const id = model.toLowerCase();
+  // Ground truth first: if the model id ever carries an explicit 1M-context
+  // marker (e.g. "claude-opus-4-8[1m]"), honor it directly regardless of the
+  // table. This is absent from transcripts today, but costs nothing and gives
+  // free per-session accuracy if Anthropic ever stamps the beta into message.model.
+  if (id.includes("[1m]")) return 1_000_000;
   for (const [needle, window] of CLAUDE_CONTEXT_WINDOWS) {
     if (id.includes(needle)) return window;
   }

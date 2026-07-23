@@ -306,8 +306,11 @@ describe("collector identity and usage truth", () => {
     expect(parseClaudeJsonl(row("claude-opus-4-8[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-sonnet-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    // An explicit [1m] marker is honored even for a model not in the table (ground truth).
+    expect(parseClaudeJsonl(row("claude-haiku-5[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
     expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
+    expect(parseClaudeJsonl(row("claude-haiku-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
   });
 
   test("Claude counts repeated rows for one message ID once and exposes the latest request", () => {
