@@ -1038,6 +1038,7 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
     expect(operate).not.toContain("renderVitals(");
+    expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
     expect(styles).toContain(".shelf-evidence-rail {");
     // Widescreen split: roster rail ~40%, drawer ~60%.
@@ -1084,8 +1085,29 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
 });
 
 describe("verdict head — act from the top (B2)", () => {
-  const agentDrawer = () =>
-    source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+  /* Brace-counted extraction, not a landmark regex: it walks from the
+     signature's opening `{` to its true matching `}` by depth, so it can
+     never stop early at a column-0 `}` that belongs to nested content, and
+     it never depends on whatever function/comment happens to follow —
+     inserting a new top-level helper anywhere else in the file cannot
+     truncate or widen the body it returns. */
+  function extractFunctionBody(signature: string): string {
+    const start = source.indexOf(signature);
+    if (start === -1) return "";
+    const braceStart = source.indexOf("{", start);
+    if (braceStart === -1) return "";
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return source.slice(start, i + 1);
+      }
+    }
+    return "";
+  }
+  const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
 
   test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
     const drawer = agentDrawer();
@@ -1200,7 +1222,7 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     }
   }
 
-  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; absent → null", () => {
+  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; both enabled → focus wins; absent → null", () => {
     const locked = agent({ controls: [
       { action: "focus", enabled: false, reason: "no route" },
       { action: "instruct", enabled: true },
@@ -1223,6 +1245,17 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
     expect(interruptTool).not.toBeNull();
     expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
+
+    // Priority head-to-head: both focus and interrupt enabled at once — focus
+    // must win, not just when interrupt is absent entirely.
+    const bothEnabled = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bothTool: any = withDom(() => M.headPrimaryAction(bothEnabled));
+    expect(bothTool).not.toBeNull();
+    expect(bothTool.dataset.fkey).toBe("head:act:codex:a1:focus");
 
     expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
   });
