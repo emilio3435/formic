@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>Ant Hill — state card mockups · 2026-07-23</title>
+<style>
+  /* Tokens verbatim from DESIGN-LANGUAGE.md (techno orchestra) */
+  :root {
+    --canvas:#f3f5f7; --surface:#fbfcfd; --raise:#ffffff; --sand:#e8edf2;
+    --ink:#121820; --muted:#445260; --faint:#5a6876;
+    --line:#d4dce4; --line-strong:#aeb9c4;
+    --ember:#c23b2e; --amber:#9a6b12; --moss:#1f6b4a; --slate:#3f5f78; --clay:#64707c;
+    --ember-soft:color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --amber-soft:color-mix(in srgb, var(--amber) 10%, var(--surface));
+    --moss-soft:color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --signal-rail:2px;
+    --claude:#a64b2a; --codex:#2e6d58; --omp:#68469a; --cursor:#3d6585;
+    --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--canvas); color:var(--ink); font:14px/1.45 var(--font-ui); padding:2rem 2.5rem 5rem; }
+  h1 { font-size:1.15rem; margin-bottom:.3rem; }
+  .note { color:var(--faint); font-size:.8rem; margin-bottom:2.2rem; max-width:70ch; }
+  .spec { font:600 .62rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:2.6rem 0 .3rem; }
+  .spec b { color:var(--moss); }
+  .variant-note { font-size:.78rem; color:var(--muted); margin:.15rem 0 .7rem; max-width:80ch; }
+  .frame { background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; overflow:hidden; }
+  .wide { max-width:1400px; }
+  .drawer { max-width:880px; }
+  .mono { font-family:var(--font-mono); }
+
+  /* ============ A. STRIP EXPANSION ROWS — use the width ============ */
+  .frow { display:flex; align-items:center; gap:.9rem; padding:.55rem 1rem .55rem .85rem; border-top:1px solid var(--line); position:relative; cursor:pointer; }
+  .frow:first-child { border-top:0; }
+  .frow::before { content:""; position:absolute; left:0; top:15%; bottom:15%; width:var(--signal-rail); background:var(--rail,var(--amber)); border-radius:1px; }
+  .frow:hover { background:var(--sand); }
+  .fglyph { flex:none; width:16px; height:16px; color:var(--rail,var(--amber)); }
+  .ftitle { font-weight:650; white-space:nowrap; }
+  .fsummary { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 0; min-width:8ch; }
+  .fmeta { flex:none; display:flex; align-items:center; gap:.85rem; }
+  .fchip { font:500 .72rem/1 var(--font-mono); color:var(--muted); border:1px solid var(--line); background:var(--raise); border-radius:99px; padding:.28rem .55rem; white-space:nowrap; }
+  .fstate { font:600 .66rem/1 var(--font-mono); letter-spacing:.09em; text-transform:uppercase; color:var(--rail,var(--amber)); white-space:nowrap; }
+  .fage { font:400 .72rem/1 var(--font-mono); color:var(--faint); white-space:nowrap; }
+  .fsteps { display:flex; gap:4px; align-items:center; }
+  .fsteps i { width:14px; height:4px; border-radius:2px; background:var(--line-strong); }
+  .fsteps i.done { background:var(--rail,var(--amber)); }
+  .fsteps i.now { background:var(--rail,var(--amber)); opacity:.45; }
+  /* A2: two-line */
+  .frow2 { display:grid; grid-template-columns:16px 1fr auto; grid-template-rows:auto auto; column-gap:.9rem; row-gap:.15rem; align-items:center; padding:.5rem 1rem .55rem .85rem; border-top:1px solid var(--line); position:relative; }
+  .frow2::before { content:""; position:absolute; left:0; top:12%; bottom:12%; width:var(--signal-rail); background:var(--rail,var(--amber)); }
+  .frow2 .fglyph { grid-row:1 / span 2; }
+  .frow2 .l1 { display:flex; gap:.9rem; align-items:baseline; min-width:0; }
+  .frow2 .fsummary { flex:1 1 0; }
+  .frow2 .fmeta { grid-column:3; grid-row:1 / span 2; }
+  .frow2 .l2 { grid-column:2; display:flex; gap:.85rem; align-items:center; font:400 .74rem/1 var(--font-mono); color:var(--faint); }
+
+  /* ============ shared card chrome ============ */
+  .card { position:relative; background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; overflow:hidden; }
+  .card::before { content:""; position:absolute; left:0; top:0; bottom:0; width:var(--signal-rail); background:var(--rail,var(--amber)); }
+  .eyebrow { font:600 .6rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; }
+  .kchip { display:inline-flex; align-items:center; gap:.35rem; border:1px solid currentColor; border-radius:4px; padding:.22rem .45rem; font:700 .6rem/1 var(--font-mono); letter-spacing:.11em; text-transform:uppercase; }
+
+  /* ============ B1. investigation — instrument brief ============ */
+  .b1-head { display:flex; align-items:center; gap:.7rem; padding:.75rem 1rem .6rem 1.1rem; }
+  .b1-title { font-size:.98rem; font-weight:700; flex:1; }
+  .live { display:inline-flex; align-items:center; gap:.4rem; color:var(--amber); font:600 .68rem/1 var(--font-mono); letter-spacing:.08em; }
+  .live i { width:7px; height:7px; border-radius:50%; background:var(--amber); }
+  .band { display:flex; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--raise); }
+  .inst { flex:1 1 auto; padding:.55rem .9rem .6rem 1.1rem; border-left:1px solid var(--line); min-width:0; }
+  .inst:first-child { border-left:0; }
+  .inst .v { font:650 .85rem/1.2 var(--font-ui); white-space:nowrap; display:flex; align-items:center; gap:.4rem; }
+  .inst .k { font:600 .56rem/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; color:var(--faint); margin-top:.25rem; }
+  .pmark { width:10px; height:10px; border-radius:3px; flex:none; }
+  .spine { display:flex; padding:.8rem 1.1rem .35rem; gap:0; }
+  .step { flex:1; position:relative; padding-right:1rem; min-width:0; }
+  .step::before { content:""; position:absolute; top:7px; left:22px; right:6px; height:2px; background:var(--line-strong); }
+  .step:last-child::before { display:none; }
+  .dot { width:16px; height:16px; border-radius:50%; border:2px solid var(--line-strong); background:var(--raise); display:flex; align-items:center; justify-content:center; font:700 .55rem/1 var(--font-mono); color:var(--faint); position:relative; z-index:1; }
+  .step.done .dot { border-color:var(--amber); background:var(--amber); color:#fff; }
+  .step.now .dot { border-color:var(--amber); color:var(--amber); box-shadow:0 0 0 3px var(--amber-soft); }
+  .step .st { font:600 .72rem/1.25 var(--font-ui); margin:.45rem 0 .1rem; }
+  .step .sd { font-size:.68rem; color:var(--faint); line-height:1.3; max-width:22ch; }
+  .step.now .st { color:var(--amber); }
+  .b1-foot { padding:.55rem 1.1rem .75rem; color:var(--muted); font-size:.76rem; }
+
+  /* ============ B2. investigation — dossier ============ */
+  .b2 { display:grid; grid-template-columns:1fr 250px; }
+  .b2-main { padding:.8rem 1.1rem .9rem; }
+  .b2-title { font-size:.98rem; font-weight:700; margin:.35rem 0 .25rem; }
+  .b2-why { color:var(--muted); font-size:.78rem; max-width:52ch; }
+  .vspine { margin-top:.8rem; }
+  .vstep { display:grid; grid-template-columns:16px 1fr; gap:.6rem; position:relative; padding-bottom:.55rem; }
+  .vstep::before { content:""; position:absolute; left:7px; top:16px; bottom:-2px; width:2px; background:var(--line); }
+  .vstep:last-child::before { display:none; }
+  .vstep .st { font:600 .76rem/1.35 var(--font-ui); }
+  .vstep .sd { font-size:.7rem; color:var(--faint); }
+  .vstep.done .st { color:var(--muted); text-decoration:line-through; text-decoration-color:var(--line-strong); }
+  .b2-side { border-left:1px solid var(--line); background:var(--raise); padding:.75rem .9rem; display:flex; flex-direction:column; gap:.6rem; }
+  .kv { display:flex; justify-content:space-between; align-items:center; gap:.6rem; font-size:.74rem; }
+  .kv .k { color:var(--faint); font:600 .58rem/1 var(--font-mono); letter-spacing:.12em; text-transform:uppercase; }
+  .kv .v { font-weight:600; display:flex; align-items:center; gap:.35rem; }
+  .impact-chips { display:flex; flex-wrap:wrap; gap:.3rem; }
+  .impact-chips .fchip { padding:.24rem .5rem; }
+
+  /* ============ C1. result — verdict instrument ============ */
+  .c1-head { display:flex; gap:.9rem; padding:.85rem 1.1rem .7rem; align-items:center; }
+  .shield { flex:none; width:38px; height:38px; border-radius:50%; border:2px solid var(--moss); color:var(--moss); display:flex; align-items:center; justify-content:center; background:var(--moss-soft); }
+  .c1-verdict { font-size:1rem; font-weight:750; }
+  .c1-sub { color:var(--muted); font-size:.78rem; margin-top:.1rem; }
+  .c1-state { margin-left:auto; text-align:right; }
+  .evi { margin:0 1.1rem; border:1px solid var(--line); border-radius:8px; background:var(--raise); overflow:hidden; }
+  .evi-head { display:flex; justify-content:space-between; padding:.45rem .7rem; border-bottom:1px solid var(--line); background:var(--sand); }
+  .route { display:grid; grid-template-columns:1fr 20px 1fr auto; align-items:center; gap:.5rem; padding:.42rem .7rem; font:500 .74rem/1 var(--font-mono); border-top:1px solid var(--line); }
+  .route:first-of-type { border-top:0; }
+  .route .sid { color:var(--ink); overflow:hidden; text-overflow:ellipsis; }
+  .route .arr { color:var(--faint); text-align:center; }
+  .route .tty { color:var(--cursor); font-weight:600; }
+  .route .flag { justify-self:end; }
+  .badge-amber { color:var(--amber); border:1px solid var(--amber); border-radius:4px; font:700 .56rem/1 var(--font-mono); letter-spacing:.08em; padding:.18rem .4rem; text-transform:uppercase; }
+  .c1-actions { display:flex; align-items:center; gap:.6rem; padding:.8rem 1.1rem .85rem; }
+  .btn { font:600 .78rem/1 var(--font-ui); border-radius:7px; padding:.55rem .9rem; cursor:pointer; border:1px solid var(--ink); }
+  .btn.primary { background:var(--ink); color:#fff; }
+  .btn.ghost { background:var(--raise); color:var(--ink); border-color:var(--line-strong); }
+  .c1-meta { margin-left:auto; font:400 .7rem/1.4 var(--font-mono); color:var(--faint); text-align:right; }
+
+  /* ============ C2. result — flight strip ============ */
+  .c2 { display:grid; grid-template-columns:56px 1fr 205px; }
+  .c2-rail { display:flex; align-items:center; justify-content:center; border-right:1px solid var(--line); background:var(--moss-soft); color:var(--moss); }
+  .c2-main { padding:.75rem 1rem .8rem; min-width:0; }
+  .c2-main .c1-verdict { font-size:.95rem; }
+  .c2-evi { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.5rem; }
+  .c2-evi .fchip b { color:var(--cursor); }
+  .c2-side { border-left:1px solid var(--line); background:var(--raise); padding:.7rem .8rem; display:flex; flex-direction:column; gap:.5rem; justify-content:center; }
+  svg { display:block; }
+</style>
+</head>
+<body>
+
+<h1>State cards — revamp mockups</h1>
+<p class="note">Vocabulary: techno-orchestra tokens verbatim (graphite ground, indicator inks, signal rails, mono = identifiers only). Real content from tonight's live findings. Each section shows variants — pick per section; they compose.</p>
+
+<!-- ================= A ================= -->
+<div class="spec">A · strip expansion rows — <b>A1 “inline ledger” (recommended)</b></div>
+<p class="variant-note">One line per finding, full width earning its keep: full title, live summary, then a right-aligned instrument cluster — impact chip, compact 4-step spine (was: a rail stretched across 1300px), state word, age. Row height 36px.</p>
+<div class="frame wide">
+  <div class="frow" style="--rail:var(--amber)">
+    <svg class="fglyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 16H3z"/><circle cx="12" cy="15" r="0.5"/></svg>
+    <span class="ftitle">Recent Cursor model routing mismatches</span>
+    <span class="fsummary">4 ended Cursor sessions used a different model than expected — retained as history, not presented as active.</span>
+    <div class="fmeta">
+      <span class="fchip">4 sessions · 3 programs</span>
+      <span class="fsteps"><i class="done"></i><i class="done"></i><i class="now"></i><i></i></span>
+      <span class="fstate">investigating</span>
+      <span class="fage">32m</span>
+    </div>
+  </div>
+  <div class="frow" style="--rail:var(--amber)">
+    <svg class="fglyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    <span class="ftitle">Restore trustworthy collection</span>
+    <span class="fsummary">Investigation complete — safely blocked; waiting on a fresh source snapshot to clear the finding.</span>
+    <div class="fmeta">
+      <span class="fchip">2 agents · 2 programs</span>
+      <span class="fsteps"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></span>
+      <span class="fstate" style="color:var(--moss)">verifying</span>
+      <span class="fage">1h 05m</span>
+    </div>
+  </div>
+  <div class="frow" style="--rail:var(--amber)">
+    <svg class="fglyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    <span class="ftitle">Re-establish one session identity per cmux surface</span>
+    <span class="fsummary">Both CMUX surfaces expose multiple provider session files on one TTY; identity cleared, routing disabled.</span>
+    <div class="fmeta">
+      <span class="fchip">2 surfaces</span>
+      <span class="fsteps"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></span>
+      <span class="fstate" style="color:var(--moss)">verifying</span>
+      <span class="fage">1h 12m</span>
+    </div>
+  </div>
+</div>
+
+<div class="spec">A · strip expansion rows — A2 “two-line dense”</div>
+<p class="variant-note">Same right cluster; summary gets its own line plus a mono evidence line (affected names). More scannable, ~52px per row.</p>
+<div class="frame wide">
+  <div class="frow2" style="--rail:var(--amber)">
+    <svg class="fglyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 16H3z"/><circle cx="12" cy="15" r="0.5"/></svg>
+    <div class="l1"><span class="ftitle">Recent Cursor model routing mismatches</span><span class="fsummary">4 ended Cursor sessions used a different model than expected.</span></div>
+    <div class="l2">The Ant Hill · 2&nbsp;&nbsp;Hormiga · 1&nbsp;&nbsp;Elio Suite · 1</div>
+    <div class="fmeta">
+      <span class="fsteps"><i class="done"></i><i class="done"></i><i class="now"></i><i></i></span>
+      <span class="fstate">investigating</span>
+      <span class="fage">32m</span>
+    </div>
+  </div>
+  <div class="frow2" style="--rail:var(--amber)">
+    <svg class="fglyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    <div class="l1"><span class="ftitle">Re-establish one session identity per cmux surface</span><span class="fsummary">Two surfaces expose multiple provider session files on one TTY.</span></div>
+    <div class="l2">542577F9… → ttys003&nbsp;&nbsp;·&nbsp;&nbsp;8C3BB027… → ttys005</div>
+    <div class="fmeta">
+      <span class="fsteps"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></span>
+      <span class="fstate" style="color:var(--moss)">verifying</span>
+      <span class="fage">1h 12m</span>
+    </div>
+  </div>
+</div>
+
+<!-- ================= B ================= -->
+<div class="spec">B · investigation card — <b>B1 “instrument brief” (recommended)</b></div>
+<p class="variant-note">Verdict head, then a vitals band (the same instrument idiom as the strip: value + micro-label), then the plan as a horizontal step spine — current step ringed. No shouting banners; one glance says what's running, with what, how far along.</p>
+<div class="drawer card" style="--rail:var(--amber)">
+  <div class="b1-head">
+    <span class="kchip" style="color:var(--amber)">Investigation</span>
+    <span class="b1-title">Trace the historical launcher and verify the Grok-only rule</span>
+    <span class="live"><i></i>RUNNING</span>
+  </div>
+  <div class="band">
+    <div class="inst"><div class="v"><span class="pmark" style="background:var(--codex)"></span>GPT-5.6 Luna</div><div class="k">model</div></div>
+    <div class="inst"><div class="v">xhigh</div><div class="k">effort</div></div>
+    <div class="inst"><div class="v"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>read-only</div><div class="k">access</div></div>
+    <div class="inst"><div class="v">2 agents · 2 programs</div><div class="k">scope</div></div>
+    <div class="inst"><div class="v mono">38m</div><div class="k">elapsed</div></div>
+  </div>
+  <div class="spine">
+    <div class="step done"><div class="dot">✓</div><div class="st">Snapshot launcher history</div><div class="sd">Cursor session files across affected TTYs.</div></div>
+    <div class="step now"><div class="dot">2</div><div class="st">Verify the Grok-only rule</div><div class="sd">Match each ended session's model against policy.</div></div>
+    <div class="step"><div class="dot">3</div><div class="st">Report mismatches</div><div class="sd">Evidence bundle onto the finding.</div></div>
+  </div>
+  <div class="b1-foot">Cursor evidence overlaps enough to isolate in one bounded pass — read-only, no session is touched.</div>
+</div>
+
+<div class="spec">B · investigation card — B2 “dossier”</div>
+<p class="variant-note">Two columns: narrative + vertical plan spine left (done steps struck through), evidence rail right (key-value vitals + impact chips). Denser when plans grow past 3 steps.</p>
+<div class="drawer card" style="--rail:var(--amber)">
+  <div class="b2">
+    <div class="b2-main">
+      <span class="kchip" style="color:var(--amber)">Investigation · running</span>
+      <div class="b2-title">Trace the historical launcher and verify the Grok-only rule</div>
+      <div class="b2-why">The overlap across Cursor evidence is broad enough to isolate in a bounded, read-only pass.</div>
+      <div class="vspine">
+        <div class="vstep done"><div class="dot" style="border-color:var(--amber);background:var(--amber);color:#fff">✓</div><div><div class="st">Snapshot launcher history</div></div></div>
+        <div class="vstep"><div class="dot" style="border-color:var(--amber);color:var(--amber)">2</div><div><div class="st">Verify the Grok-only rule</div><div class="sd">Match each ended session's model against policy.</div></div></div>
+        <div class="vstep"><div class="dot">3</div><div><div class="st">Report mismatches onto the finding</div></div></div>
+      </div>
+    </div>
+    <div class="b2-side">
+      <div class="kv"><span class="k">model</span><span class="v"><span class="pmark" style="background:var(--codex)"></span>GPT-5.6 Luna</span></div>
+      <div class="kv"><span class="k">effort</span><span class="v">xhigh</span></div>
+      <div class="kv"><span class="k">access</span><span class="v">read-only</span></div>
+      <div class="kv"><span class="k">elapsed</span><span class="v mono">38m</span></div>
+      <div class="kv"><span class="k">impact</span></div>
+      <div class="impact-chips"><span class="fchip">The Ant Hill · 2</span><span class="fchip">Hormiga · 1</span><span class="fchip">Elio Suite · 1</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= C ================= -->
+<div class="spec">C · result card — <b>C1 “verdict instrument” (recommended)</b></div>
+<p class="variant-note">Outcome leads as an image: shield glyph + plain verdict. Evidence becomes a visual route table (session → tty, conflict badged) instead of prose bullets. Actions on one row with mono timestamps right.</p>
+<div class="drawer card" style="--rail:var(--moss)">
+  <div class="c1-head">
+    <div class="shield"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+    <div>
+      <div class="c1-verdict">Safely blocked — no sessions disrupted</div>
+      <div class="c1-sub">Identity cleared and exact/cwd routing disabled; quarantine holds until fresh evidence lands.</div>
+    </div>
+    <div class="c1-state">
+      <span class="kchip" style="color:var(--moss)">Complete</span>
+      <div class="fage" style="margin-top:.3rem">waiting on fresh data</div>
+    </div>
+  </div>
+  <div class="evi">
+    <div class="evi-head"><span class="eyebrow" style="color:var(--faint)">Evidence — 2 surfaces share one tty</span><span class="eyebrow" style="color:var(--faint)">cmux · cursor</span></div>
+    <div class="route"><span class="sid">542577F9-…-CBAFD9E2</span><span class="arr">→</span><span class="tty">ttys003</span><span class="flag badge-amber">conflict</span></div>
+    <div class="route"><span class="sid">8C3BB027-…-91A44D01</span><span class="arr">→</span><span class="tty">ttys005</span><span class="flag badge-amber">conflict</span></div>
+  </div>
+  <div class="c1-actions">
+    <button class="btn primary">Check source now</button>
+    <button class="btn ghost">Requeue investigation</button>
+    <div class="c1-meta">completed 10:42 PM<br>verifying since 10:15 PM</div>
+  </div>
+</div>
+
+<div class="spec">C · result card — C2 “flight strip”</div>
+<p class="variant-note">Horizontal: moss rail + glyph left, verdict and chip-evidence center, action column right. Shortest read; evidence compresses to chips.</p>
+<div class="drawer card" style="--rail:var(--moss)">
+  <div class="c2">
+    <div class="c2-rail"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+    <div class="c2-main">
+      <span class="kchip" style="color:var(--moss)">Complete · waiting on fresh data</span>
+      <div class="c1-verdict" style="margin-top:.35rem">Safely blocked — no sessions disrupted</div>
+      <div class="c1-sub">Quarantine active; identity cleared on both surfaces.</div>
+      <div class="c2-evi">
+        <span class="fchip"><b>542577F9…</b> → ttys003</span>
+        <span class="fchip"><b>8C3BB027…</b> → ttys005</span>
+      </div>
+    </div>
+    <div class="c2-side">
+      <button class="btn primary">Check source now</button>
+      <button class="btn ghost">Requeue</button>
+      <div class="fage">completed 10:42 PM</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

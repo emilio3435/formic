@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ant Hill — Before / After — July 22 → 23</title>
+<style>
+  :root { --ink:#1a1d1a; --soft:#5c655c; --moss:#2e6b3f; --ember:#b33a2e; --card:#ffffff; --bg:#f4f4ef; --line:#e2e2da; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:16px/1.55 -apple-system, "SF Pro Text", Segoe UI, sans-serif; color:var(--ink); background:var(--bg); padding:2.5rem 1.5rem 5rem; }
+  main { max-width:1200px; margin:0 auto; }
+  h1 { font-size:1.7rem; letter-spacing:-.01em; }
+  .sub { color:var(--soft); margin:.35rem 0 2rem; }
+  h2 { font-size:1.15rem; margin:2.6rem 0 .8rem; padding-top:1.4rem; border-top:1px solid var(--line); }
+  h3 { font-size:.95rem; margin:1.2rem 0 .4rem; }
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media (max-width:900px){ .pair { grid-template-columns:1fr; } }
+  figure { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.7rem; }
+  figure img { width:100%; border-radius:6px; display:block; }
+  figcaption { font-size:.8rem; color:var(--soft); padding:.55rem .2rem 0; }
+  figcaption b { color:var(--ink); }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:.9rem; }
+  th, td { text-align:left; padding:.55rem .8rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--soft); background:#fafaf6; }
+  tr:last-child td { border-bottom:none; }
+  .tag { display:inline-block; font-size:.7rem; padding:.1rem .45rem; border-radius:99px; border:1px solid var(--line); color:var(--soft); white-space:nowrap; }
+  .tag.live { color:var(--moss); border-color:#bcd8c4; background:#eef6f0; }
+  .tag.flight { color:#8a6d1f; border-color:#e4d5a6; background:#faf5e4; }
+  .gap { color:var(--ember); font-weight:600; }
+  ul { padding-left:1.2rem; } li { margin:.3rem 0; }
+  .plain { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1.1rem 1.3rem; }
+  .plain li { margin:.55rem 0; }
+  code { font:.84em ui-monospace, "SF Mono", monospace; background:#eeeee6; padding:.08em .35em; border-radius:4px; }
+  .note { font-size:.85rem; color:var(--soft); margin-top:.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>The Ant Hill — what changed in the last day</h1>
+  <p class="sub">Left: yesterday's build (00f4bf0, still running at <a href="http://127.0.0.1:4710">127.0.0.1:4710</a>). Right: what's live now (5b71f38 at <a href="http://127.0.0.1:4701">127.0.0.1:4701</a>). Same live data, same moment, both real servers — open both links and compare by hand any time.</p>
+
+  <h2>1 · The main room, side by side</h2>
+  <div class="pair">
+    <figure><img src="before-after-shots-2026-07-23/before-main-1440.png" alt="before, main view"><figcaption><b>Before.</b> Old five-column grid (Status first), generic search box, no token/elapsed columns, an Access column taking space.</figcaption></figure>
+    <figure><img src="before-after-shots-2026-07-23/after-main-1440.png" alt="after, main view"><figcaption><b>After.</b> Agent identity leads the row; model + context share one instrument; live token totals and elapsed time on every row; program header shows a rollup (3 agents · 2 working · 1 alert · 110M tokens); search box now tells you it can match name, model, cwd, provider, role, status, session id; quiet rows show "updated 27m ago".</figcaption></figure>
+  </div>
+
+  <h2>2 · The inspector drawer, side by side</h2>
+  <div class="pair">
+    <figure><img src="before-after-shots-2026-07-23/before-drawer-1440.png" alt="before, drawer"><figcaption><b>Before.</b> Original drawer layout.</figcaption></figure>
+    <figure><img src="before-after-shots-2026-07-23/after-drawer-1440.png" alt="after, drawer"><figcaption><b>After.</b> Verdict-first head, control banner only when locked, Operate | Chat panes with Evidence tucked behind the rail, lineage spine for swarms.</figcaption></figure>
+  </div>
+  <p class="note">The full restyle step-by-step archive (per-task before/after shots) lives in <code>~/Developer/the-mountain-lanes/qa-baseline-20260722/</code> — open <code>compare.html</code> there for the granular walk.</p>
+
+  <h2>3 · Everything that landed (all crews, ~36 hours)</h2>
+  <table>
+    <tr><th>When</th><th>Program / crew</th><th>What you got, in plain terms</th><th>Status</th></tr>
+    <tr><td>Jul 23 early</td><td>Pulse strip (PR #1)</td><td>The old "Act now / Be aware" band became one calm pulse strip: needs-you count, momentum, burn, context peak, health.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 morning</td><td>Body restyle (3 workstreams, ~21 commits)</td><td>Whole-app visual overhaul: design-language tokens everywhere, verdict-first inspector, row instruments (model·context·tokens·elapsed on every row), program rollups, denser rows (one more per screen), keyboard focus fixes. 295 tests.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 midday</td><td>State cards (PR #2)</td><td>Issues and investigations render as ledger-style cards with a plan brief and verdict result instead of raw text walls.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 midday</td><td>Vitals collectors (BE)</td><td>Token/usage numbers are now truth-guarded: latest-turn vs session totals kept separate, absent data shown as unknown instead of zeros.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 afternoon</td><td>Under-hood BE (SOL crew)</td><td>Dashboard stops guessing: a Codex session with no recorded model now says "not reported" instead of silently assuming one. Model facts moved to <code>config/models.json</code> so new models are a config edit, not a code change. Failed "send instruction" attempts now say exactly what happened.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 afternoon</td><td>Identity doctor (Fable crew)</td><td>The session↔terminal matching now keeps its evidence: <code>/api/debug/identity</code> answers "why is this agent quarantined / why can't I Focus it" in one request. Confirmed matches are remembered (sticky bindings) so a momentary scan miss no longer breaks Focus/Send. New <code>ARCHITECTURE.md</code> explains the whole machine.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 afternoon</td><td>Operator UX (Opus crew)</td><td>Broadcast tells you <i>why</i> a recipient is grayed out; search reveals its powers; rows show which cmux terminal an agent lives in, and Focus previews its destination before you click; quiet rows admit their age.</td><td><span class="tag live">LIVE</span></td></tr>
+    <tr><td>Jul 23 now</td><td>Scroll shell + sticky headers</td><td>Fix in flight on a fresh branch: the room keeps headers pinned while long lists scroll.</td><td><span class="tag flight">IN FLIGHT</span></td></tr>
+  </table>
+
+  <h2>4 · The Cursor data gap — investigated, fixes in flight</h2>
+  <p><b>Measured on the live system:</b> of <b>220 Cursor sessions</b> tracked, <span class="gap">188 showed no model (85%)</span>, <span class="gap">220 of 220 showed no token usage</span>, and Composer had never been detected once.</p>
+  <p><b>Verdict from a full read of every Cursor database on this Mac:</b> the model blindness is <i>our bug, not Cursor hiding data</i>. Cursor records the model in fields the dashboard never read — terminal sessions carry it inside each reply (recoverable for <b>92%</b> of sessions, every family: Grok, Composer&nbsp;2/2.5, GPT, Claude) plus a newer clean field on recent sessions, and GUI sessions carry it in the editor's own conversation store (<b>100%</b> of 863 conversations, every Composer variant present). The dashboard had been reading a marketing sentence out of the system prompt, which only Grok's prompt contains.</p>
+  <p><b>Token usage is different: it genuinely is not on your disk.</b> Cursor's local stores were scanned exhaustively (40,000 message records, every candidate field name): the usage counters exist but are permanently zero locally — real consumption lives only on Cursor's servers/billing dashboard. The dashboard will keep saying "unknown" there because anything else would be invented. One honest extra exists: Cursor stores how full each conversation's context window is (available for 77% of GUI sessions), which can power the context gauge as long as it's labeled "context used", never billing.</p>
+  <p><b>RESOLVED — landed and live the same day.</b> Two Opus 4.8 crews rewired model extraction to the real fields and updated the compliance policy for native families. Final live measurement: <b>162 of 162 Cursor sessions now report a model — 0% blank, down from 85% this morning.</b> The last 137 holdouts turned out to be <i>subagent</i> sessions (child agents spawned by a parent), a path with no model source at all until a universal by-session-id lookup was added — caught only because coverage was re-measured on production after the first deploy, not just in tests. Bonus finding now visible: <b>73 Cursor sessions ran BYOK models (mostly Opus thinking-high) instead of Cursor-native ones</b> — exactly the policy violations the dashboard was built to catch, previously invisible. "Composer counts as compliant" remains a config default you can veto in one line.</p>
+
+  <h2>5 · What's next, in plain english</h2>
+  <div class="plain"><ul>
+    <li><b>Your call — publish to GitHub.</b> Everything above is only on this Mac. Main is several merges ahead of GitHub; say the word and it gets pushed.</li>
+    <li><b>Your call — the Access column.</b> The restyle removed the visible Ready/Quarantined column from rows (it still lives in the drawer). One line brings it back if you miss it.</li>
+    <li><b>Cursor fixes (next up).</b> Opus 4.8 crews repair model + usage reporting for Cursor sessions so Grok/Composer runs stop showing blank. Plan lands as soon as the store investigation reports.</li>
+    <li><b>Speed work (queued).</b> The server currently re-reads whole transcripts every 4 seconds; teaching it to read only new lines makes it much lighter as your fleet grows. Same for Cursor's databases.</li>
+    <li><b>Keyboard driving (queued).</b> j/k to move between agents, one key to Focus — waiting so it doesn't collide with the scroll-shell fix in flight.</li>
+    <li><b>Housekeeping (queued).</b> Old archived agents and investigation files pile up forever; they'll get an expiry. Two internal cleanups (shared origin-check helper, options-object constructor) are ticketed with the restyle crew.</li>
+  </ul></div>
+
+  <p class="note">Generated 2026-07-23 by the Swarm Control orchestrator. Screenshots in <code>before-after-shots-2026-07-23/</code> alongside this file.</p>
+</main>
+</body>
+</html>
