@@ -377,7 +377,7 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
     provider: "codex",
     sourceSessionId: sessionId,
     cwd: typeof session.cwd === "string" ? session.cwd : undefined,
-    model: model ?? "gpt-5.6-sol",
+    model,
     effort,
     task,
     startedAt: isoTimestamp(session.timestamp ?? sessionRow?.timestamp),

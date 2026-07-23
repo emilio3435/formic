@@ -157,6 +157,12 @@ describe("collector identity and usage truth", () => {
     expect(agent?.lastHumanMessage).toBe("No source activity in the last 3 minutes.");
   });
 
+  test("Codex leaves the model undefined when the transcript never reports one", () => {
+    const agent = parseCodexJsonl(fixture("codex-session-without-model.jsonl"), { nowMs });
+
+    expect(agent?.model).toBeUndefined();
+  });
+
   test("Codex derives a cumulative total from source components when total_tokens is absent", () => {
     const session = fixture("codex-session.jsonl").replace('"total_tokens":61701', '"total_tokens":null');
     const agent = parseCodexJsonl(session, { nowMs });
