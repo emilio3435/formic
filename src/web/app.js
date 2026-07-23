@@ -1010,6 +1010,7 @@ globalThis.TheAntHill = {
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  renderAgentRow, renderAgentColumnHeader,
   renderProgramDrawer, programRollupLine,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
@@ -2552,15 +2553,18 @@ function renderAgentRows(program, agents) {
 }
 
 function renderAgentColumnHeader() {
+  // Identity on the left, the right-aligned instrument cluster on the right:
+  // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
+  // aria-label; the terminal/source naming tags fold into the tooltip + drawer.)
   return el("div", {
     class: "agent-grid agent-column-header",
     "aria-label": "Agent list columns",
   },
-    el("span", { class: "agent-column-label", text: "Status" }),
     el("span", { class: "agent-column-label", text: "Agent/message" }),
-    el("span", { class: "agent-column-label", text: "Model" }),
-    el("span", { class: "agent-column-label", text: "Context" }),
-    el("span", { class: "agent-column-label", text: "Access" }));
+    el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -2585,11 +2589,6 @@ function rowSummary(agent) {
   return NO_READABLE_MESSAGE;
 }
 
-function rowFact(label, value, className = "") {
-  return el("span", { class: "row-fact " + className, "aria-label": `${label}: ${value}`, title: String(value) },
-    el("span", { class: "row-fact-value", text: value }));
-}
-
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
@@ -2610,38 +2609,11 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-function contextFact(agent) {
-  const usage = contextUsage(agent.tokens);
-  const value = contextDisplayValue(agent.tokens);
-  const title = usage
-    ? usage.text
-    : hasObservedTotal(agent.tokens)
-      ? "Context window size not reported by Claude; showing observed tokens."
-      : "This source does not report observed context usage.";
-  return el("span", {
-    class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
-    "aria-label": `${contextDisplayLabel()}: ${value}`,
-  },
-    el("span", {
-      class: "row-fact-value context-fact-value",
-      title,
-      text: value,
-    }));
-}
-
+// Shared control vocabulary — the icon key + human state word for each access
+// state. The agent row folds Access into its aria-label; the drawer status line
+// renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
-
-function controlFact(control) {
-  const stateText = CONTROL_STATE_TEXT[control] || "View only";
-  return el("span", {
-    class: "row-fact fact-control control-" + control,
-    "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control],
-  },
-    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control] },
-      el("span", { class: "control-icon" }, icon(CONTROL_ICONS[control] || "observed")),
-      el("span", { class: "control-access-text", text: stateText })));
-}
 
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
@@ -2665,10 +2637,13 @@ function renderAgentRow(agent, program, opts = {}) {
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
   const terminal = terminalSourceName(agent);
-  const customLabel = state.aliases.has(nameKey)
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   const sourceName = sourceAgentName(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  // The terminal / source / cwd-mismatch naming detail leaves the visible row.
+  // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
+  // sentence into the row tooltip + aria-label; the drawer still carries it too.
+  const sourceDetail = fullSourceDetail(agent);
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
   const activate = () => {
     if (state.selecting) {
@@ -2696,25 +2671,32 @@ function renderAgentRow(agent, program, opts = {}) {
         },
       }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
-      cwdMismatch && terminal
+      // De-noised: only the cwd-mismatch state keeps a visible mark — a small
+      // ember dot with an accessible label. The full sentence rides the row
+      // tooltip + aria-label and the drawer; no naming prose on the row.
+      cwdMismatch
         ? el("span", {
-          class: "source-label is-mismatch",
-          title: "This agent session cwd differs from the cmux pane folder. Title is the terminal; identity stays the session.",
-          text: "terminal: " + terminal + " · cwd differs",
+          class: "source-mismatch-dot",
+          role: "img",
+          "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
+          title: sourceDetail || CWD_MISMATCH_HINT,
         })
-        : customLabel && terminal
-          ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-          : customLabel
-            ? el("span", { class: "source-label", title: "Provider source name", text: "source: " + sourceName })
-            : terminal && terminal !== displayName
-              ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-              : null,
+        : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
-  const line1 = el("span", { class: "agent-grid" },
+  // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
+  // elapsed. Values ride --font-mono with tabular-nums; each cell is omitted
+  // honestly when its number is unknown (never fabricated), matching the
+  // vitals-band precedent. Access + the naming detail fold into the aria-label.
+  const ctxUsage = contextUsage(agent.tokens);
+  const modelText = modelShort(agent.model) || "not reported";
+  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const tokens = tokenSummary(agent.tokens);
+
+  const instruments = el("span", { class: "row-instruments" },
     el("span", {
       class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
       title: stateText,
@@ -2722,10 +2704,29 @@ function renderAgentRow(agent, program, opts = {}) {
     },
       el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
       outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
-    identity,
-    rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
-    contextFact(agent),
-    controlFact(control));
+    el("span", {
+      class: "ri-cell ri-model" + (modelShort(agent.model) ? "" : " is-unknown"),
+      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
+      title: ctxUsage ? ctxUsage.text : (modelShort(agent.model) || "Model not reported"),
+    },
+      el("span", { class: "ri-value mono", text: modelCtx })),
+    tokens.known
+      ? el("span", {
+        class: "ri-cell ri-tokens",
+        "aria-label": "Tokens: " + tokens.text,
+        title: tokens.title,
+      },
+        el("span", { class: "ri-value mono", text: tokens.text }))
+      : null,
+    elapsed && elapsed !== "—"
+      ? el("span", {
+        class: "ri-cell ri-elapsed",
+        "aria-label": "Elapsed: " + elapsed,
+      },
+        el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
+      : null);
+
+  const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
   const rowClass = "agent-row provider-" + agent.provider +
     " role-" + role.key +
@@ -2752,10 +2753,13 @@ function renderAgentRow(agent, program, opts = {}) {
     id: "agent-" + agent.id,
     role: "button",
     tabindex: state.selecting && !eligible ? "-1" : "0",
+    // The de-noised naming detail rides the tooltip for sighted hover; screen
+    // readers get it (plus tokens/elapsed/access) in the aria-label below.
+    title: sourceDetail || null,
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;

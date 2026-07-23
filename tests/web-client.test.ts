@@ -603,7 +603,10 @@ describe("calm program and agent list rendering", () => {
   test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
     expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
-    for (const label of ["Status", "Agent/message", "Model", "Context", "Access"]) {
+    // C1: the header now names the identity column plus the promoted instrument
+    // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
+    // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
       expect(source).toContain(`text: "${label}"`);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -634,6 +637,165 @@ describe("calm program and agent list rendering", () => {
     expect(source).toContain("function renderEvidence(");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
+  });
+});
+
+describe("agent rows: instrument cluster + de-noise (C1)", () => {
+  /* Same DOM-less execution trick B2/B3/B4 used: a minimal fake document lets
+     renderAgentRow build real nodes via el()/icon(), so these assert on what the
+     row actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // First node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function findByClass(node: any, token: string): any {
+    if (!node || typeof node !== "object") return null;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) return node;
+    for (const kid of node.children || []) {
+      const hit = findByClass(kid, token);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  const program = { id: "p1", name: "Prog" };
+
+  test("(a) the executed row renders a .row-instruments cluster with mono model/ctx%/tokens/elapsed", () => {
+    expect(typeof M.renderAgentRow).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(live, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    const text = textOf(instruments);
+    expect(text).toContain("gpt-5-codex"); // model short id, reused from modelShort
+    expect(text).toContain("20%");         // ctx% (40k/200k) — DESIGN "model + ctx%"
+    expect(text).toContain("40k");         // observed tokens, reused from tokenSummary
+    expect(text).toContain("2m");          // 125s uptime → fmtElapsed "2m"
+    // Values ride the canonical "<size> mono" convention (DESIGN rule 2 —
+    // mono for values), like vital-big mono; status word is the one non-value.
+    const monoVals = classesOf(instruments)
+      .filter((c) => /\bri-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBeGreaterThanOrEqual(3); // model, tokens, elapsed
+  });
+
+  test("(b) unknown tokens/context omit cells honestly — no fabricated numbers", () => {
+    const bare = agent({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      tokens: { provenance: "unknown" },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(bare, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    // Model still shows its honest short id, but no invented context percentage.
+    const modelCell = findByClass(instruments, "ri-model");
+    expect(modelCell).not.toBeNull();
+    expect(textOf(modelCell)).toContain("opus 4.8");
+    // Honest omission (vitals-band precedent): no tokens cell, no elapsed cell.
+    expect(findByClass(instruments, "ri-tokens")).toBeNull();
+    expect(findByClass(instruments, "ri-elapsed")).toBeNull();
+    const text = textOf(instruments);
+    expect(text).not.toContain("%");            // no invented percentage
+    expect(text).not.toContain("not reported"); // cell omitted, never faked as text
+  });
+
+  test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
+    const rowSrc = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(rowSrc).toBeDefined();
+    // The visible "terminal: " / "source: " / "cwd differs" text tags are gone
+    // from the row output path (they now live in the drawer + tooltip only).
+    expect(rowSrc).not.toContain('"terminal: " + terminal');
+    expect(rowSrc).not.toContain('"source: " + sourceName');
+    expect(rowSrc).not.toContain('" · cwd differs"');
+    // De-noised detail is reused from the drawer's helper, not re-forked.
+    expect(rowSrc).toContain("fullSourceDetail(agent)");
+    // Executed: a cwd-mismatch session renders exactly one small marked indicator
+    // carrying an accessible label — and no naming prose survives on the row.
+    const mism = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true, workspaceTitle: "ridge-term" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(mism, program));
+    const dot = findByClass(row, "source-mismatch-dot");
+    expect(dot).not.toBeNull();
+    expect(dot.attributes["aria-label"]).toBeTruthy();
+    expect(textOf(row)).not.toContain("cwd differs");
+    expect(textOf(row)).not.toContain("terminal:");
+    // A calm (non-mismatch) session shows no source mark at all on the row.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calmRow: any = withDom(() => M.renderAgentRow(agent(), program));
+    expect(findByClass(calmRow, "source-mismatch-dot")).toBeNull();
+  });
+
+  test("(d) the column header names the promoted instrument columns", () => {
+    expect(source).toContain("function renderAgentColumnHeader()");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const header: any = withDom(() => M.renderAgentColumnHeader());
+    const text = textOf(header);
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Elapsed"]) {
+      expect(text).toContain(label);
+    }
+  });
+
+  test("(e) alert washes pair their tint with a state-colored edge rail (Rule 1 — indicator inks, not flood fills)", () => {
+    // WS-C audit finding: is-needs-you / is-blocked / is-failed carried a soft tint
+    // but NO colored rail. Codified open-q2 threshold: a ≤10% tint must always ride
+    // WITH a status-colored edge mark. Assert each alert modifier now sets one.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rail = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(${ink}\\)`),
+      );
+      expect(rail).not.toBeNull();
+      // And the tint it rides with is still present (paired, not replaced).
+      const tint = styles.match(new RegExp(`\\.agent-row\\.${mod}\\b[^\\n{]*\\{[^}]*background:[^;}]*color-mix`));
+      expect(tint).not.toBeNull();
+    }
   });
 });
 
