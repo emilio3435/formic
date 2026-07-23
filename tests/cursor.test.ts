@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -56,8 +56,10 @@ describe("Cursor Agent persisted session truth", () => {
       cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
       model: "Cursor Grok 4.5",
       task: "Verify The Mountain routing without changing live state.",
-      status: "waiting",
-      statusReason: "Cursor recorded the last turn as successfully ended.",
+      // The fixture session was updated 55s ago: freshness wins over the last
+      // turn_ended:"success" record, so it reads as working rather than idle.
+      status: "running",
+      statusReason: "Cursor session activity is fresh within the last 3 minutes.",
       subagentCount: 2,
       transcriptTail: "Cursor identity is exact when the live process opens its session store.",
       lastHumanMessage: "Cursor identity is exact when the live process opens its session store.",
@@ -66,6 +68,48 @@ describe("Cursor Agent persisted session truth", () => {
     });
     expect(agent?.tokens.total).toBeUndefined();
     expect(agent?.artifacts[0]?.kind).toBe("transcript");
+  });
+
+  test("keeps a fresh Cursor session working despite a stale turn_ended:success record", () => {
+    const nowMs = 1784689180000;
+    const agent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: JSON.stringify({
+        createdAtMs: nowMs - 10 * 60_000,
+        updatedAtMs: nowMs - 30_000, // a new turn is actively streaming (30s ago)
+        cwd: "/Users/me/project",
+        hasConversation: true,
+      }),
+      transcriptJsonl: [
+        JSON.stringify({ role: "user", message: { content: "Ship the fix." } }),
+        JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "On it." }] } }),
+        JSON.stringify({ type: "turn_ended", status: "success" }), // last completed turn
+      ].join("\n"),
+      nowMs,
+    });
+
+    expect(agent).toMatchObject({
+      status: "running",
+      statusReason: "Cursor session activity is fresh within the last 3 minutes.",
+    });
+  });
+
+  test("a streaming transcript mtime keeps a session working when turn-boundary metadata is stale", () => {
+    const nowMs = 1784689180000;
+    const agent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: JSON.stringify({
+        createdAtMs: nowMs - 60 * 60_000,
+        updatedAtMs: nowMs - 20 * 60_000, // turn-boundary write is 20 minutes stale
+        cwd: "/Users/me/project",
+        hasConversation: true,
+      }),
+      transcriptJsonl: JSON.stringify({ type: "turn_ended", status: "success" }),
+      transcriptMtimeMs: nowMs - 30_000, // but the JSONL is still being appended
+      nowMs,
+    });
+
+    expect(agent?.status).toBe("running");
   });
 
   test("Cursor ignores tool output and diff text while retaining readable assistant prose", async () => {
@@ -103,7 +147,9 @@ describe("Cursor Agent persisted session truth", () => {
       model: "gpt-5.6-sol-xhigh",
       parentSourceSessionId: SESSION_ID,
       threadDepth: 1,
-      status: "stale",
+      // Transcript mtime equals now: a fresh child stays working despite the
+      // last turn_ended:"success" already recorded in the cumulative transcript.
+      status: "running",
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });
@@ -292,6 +338,10 @@ describe("Cursor Agent persisted session truth", () => {
       JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "The GUI agent is waiting for review." }] } }),
       JSON.stringify({ type: "turn_ended", status: "success" }),
     ].join("\n"));
+    // Pin the transcript mtime old (matching the ~13-min-old conversation) so this
+    // settled, success-ended session deterministically reads as "waiting" — proving
+    // the mtime liveness signal does not falsely promote an idle session to running.
+    await utimes(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), new Date(1784691238958), new Date(1784691238958));
     await writeFile(join(transcriptDirectory, "subagents", `${CHILD_SESSION_ID}.jsonl`), [
       JSON.stringify({ role: "user", message: { content: "Goal: Verify the Email Assistant build." } }),
       JSON.stringify({ role: "assistant", message: { content: "The focused build passed." } }),
