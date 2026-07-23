@@ -33,7 +33,7 @@ That saves a local cmux password so Ant Hill can see terminal names and use Focu
 ## Data truth
 
 - Cursor Agent cards merge direct-CLI chat metadata with GUI agents from Cursor's local conversation index, project-membership state, model tracking, transcripts, and subagent records.
-- Cursor child-agent transcripts are first-class parent-linked records. Reported Grok-family models are compliant, reported non-Grok models are violations, and missing model evidence stays visibly unverified.
+- Cursor child-agent transcripts are first-class parent-linked records. Reported Cursor-native models (Grok and Composer families, per `config/models.json` `cursorNativeFamilies`) are compliant, reported non-native models are violations, and missing model evidence stays visibly unverified.
 - Cursor token totals and cost remain visibly unknown because the local Cursor records do not expose authoritative billing totals.
 - Cursor GUI cards expose data only. Their cmux actions require exact terminal identity and never use cwd-only fallback.
 - Injected agent instructions and transport envelopes are excluded from task names. Primary labels use the real assignment; source session IDs remain in card details.
