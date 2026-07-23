@@ -82,6 +82,42 @@ describe("cmux collection time truth", () => {
     expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "blocked" }]);
     expect(state.get().issues).toEqual([]);
   });
+  test("per-source health timestamps set on success and survive later failure", async () => {
+    let codexErrors: string[] = [];
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: [], errors: codexErrors },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], collectors);
+
+    expect(state.get().totals.sourceHealth?.byProvider?.codex).toEqual({
+      healthy: false,
+      lastHealthyAt: null,
+    });
+
+    await state.refresh();
+    const firstSuccess = state.get().totals.sourceHealth?.byProvider?.codex;
+    expect(firstSuccess?.healthy).toBe(true);
+    expect(typeof firstSuccess?.lastHealthyAt).toBe("string");
+    expect(Number.isFinite(Date.parse(firstSuccess?.lastHealthyAt ?? ""))).toBe(true);
+    const lastHealthyAt = firstSuccess?.lastHealthyAt ?? null;
+
+    codexErrors = ["Codex collection failed."];
+    await state.refresh();
+    expect(state.get().totals.sourceHealth?.byProvider?.codex).toEqual({
+      healthy: false,
+      lastHealthyAt,
+    });
+  });
   test("a hung burn reader cannot block refresh", async () => {
     const collectors: HubCollectors = {
       sessions: async () => emptySessions(),

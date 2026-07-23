@@ -53,6 +53,15 @@ export interface MountainFetch {
 
 export function createMountainFetch(dependencies: MountainAppDependencies): MountainFetch {
   const triageStore = dependencies.triageStore ?? new MemoryTriageQueueStore();
+  let recollectInFlight: Promise<HubSnapshot> | undefined;
+  const recollect = (): Promise<HubSnapshot> => {
+    if (!recollectInFlight) {
+      recollectInFlight = dependencies.state.refresh({ cmux: true }).finally(() => {
+        recollectInFlight = undefined;
+      });
+    }
+    return recollectInFlight;
+  };
   const clients = new Set<ReadableStreamDefaultController<string>>();
   const heartbeatTimers = new Map<ReadableStreamDefaultController<string>, ReturnType<typeof setInterval>>();
   const removeClient = (client: ReadableStreamDefaultController<string>): void => {
@@ -113,6 +122,19 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   const fetch = (async (request: Request): Promise<Response> => {
     if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/api/recollect") {
+      try {
+        const snapshot = await recollect();
+        return Response.json(snapshot, {
+          headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+        });
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: 500, headers: SECURITY_HEADERS },
+        );
+      }
+    }
     if (request.method === "GET" && url.pathname === "/api/snapshot") {
       return Response.json(dependencies.state.get(), {
         headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
@@ -275,7 +297,17 @@ export function emptySnapshot(): HubSnapshot {
       history: 0,
       tokenReporting: 0,
       tokenEligible: 0,
-      sourceHealth: { healthy: 0, degraded: 4, total: 4 },
+      sourceHealth: {
+        healthy: 0,
+        degraded: 4,
+        total: 4,
+        byProvider: {
+          omp: { healthy: false, lastHealthyAt: null },
+          codex: { healthy: false, lastHealthyAt: null },
+          claude: { healthy: false, lastHealthyAt: null },
+          cursor: { healthy: false, lastHealthyAt: null },
+        },
+      },
     },
     issues: [],
     recentlyResolved: [],

@@ -244,10 +244,16 @@ export interface HubPulse {
   };
 }
 
+export interface SourceHealth {
+  healthy: boolean;
+  lastHealthyAt: string | null;
+}
+
 export interface SourceHealthSummary {
   healthy: number;
   degraded: number;
   total: number;
+  byProvider?: Record<Provider, SourceHealth>;
 }
 
 export interface ControlHealth {
