@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeContextWindow } from "../src/server/collectors";
 import {
+  cursorNativeFamily,
   DEFAULT_MODEL_CONFIG,
   loadModelConfig,
   modelFamily,
@@ -19,6 +20,32 @@ describe("model knowledge config", () => {
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("gpt-5.6-sol-max", config)).toBe("gpt-5.6-sol");
     expect(modelFamily("fable-5-high", config)).toBe("claude-fable-5");
+    // Composer families collapse to their version, not the shorter "composer-2".
+    expect(modelFamily("composer-2.5-fast", config)).toBe("composer-2.5");
+    expect(modelFamily("composer-2", config)).toBe("composer-2");
+  });
+
+  test("Cursor-native families match Grok and Composer, not foreign models", () => {
+    const config = loadModelConfig(shippedPath);
+
+    expect(cursorNativeFamily("grok-4.5", config)).toBe("grok-4.5");
+    expect(cursorNativeFamily("grok-4.5-fast-xhigh", config)).toBe("grok-4.5");
+    expect(cursorNativeFamily("cursor-grok-4.5-high-fast", config)).toBe("cursor-grok-4.5");
+    expect(cursorNativeFamily("composer-2", config)).toBe("composer-2");
+    expect(cursorNativeFamily("composer-2.5", config)).toBe("composer-2.5");
+    // Hyphen-bounded prefix keeps composer-2.5-fast off the composer-2 family.
+    expect(cursorNativeFamily("composer-2.5-fast", config)).toBe("composer-2.5");
+    // Foreign models are not Cursor-native.
+    expect(cursorNativeFamily("gpt-5.6-sol-xhigh", config)).toBeUndefined();
+    expect(cursorNativeFamily("claude-fable-5-thinking-high", config)).toBeUndefined();
+    expect(cursorNativeFamily("claude-opus-4-8-thinking-high", config)).toBeUndefined();
+  });
+
+  test("cursorNativeFamilies survives a missing file via compiled defaults", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mountain-models-"));
+
+    expect(loadModelConfig(join(directory, "missing.json")).cursorNativeFamilies)
+      .toEqual(["grok-4.5", "cursor-grok-4.5", "composer-2", "composer-2.5"]);
   });
 
   test("a missing or malformed file uses all compiled defaults", () => {
