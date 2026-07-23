@@ -184,7 +184,29 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
   });
 
-  test("exact cmux project metadata groups a home-cwd source without rewriting source truth", () => {
+  test("the surface rename and both exchange sides propagate onto the agent snapshot", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected({
+        lastUserMessage: "Ship the inspector panel.",
+        lastAgentMessage: "Done — the panel is live.",
+      })],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: ["test-session"],
+        title: "cmux-session-restore-debug",
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs[0]?.agents[0];
+
+    // The rename reaches the client and beats the first user message as identity.
+    expect(agent?.surfaceTitle).toBe("cmux-session-restore-debug");
+    expect(agent?.lastUserMessage).toBe("Ship the inspector panel.");
+    expect(agent?.lastAgentMessage).toBe("Done — the panel is live.");
+  });
+
+  test("exact cmux link with cwd mismatch keeps Home grouping and flags the pane disagreement", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",
       task: "Continue the platform review.",

@@ -312,7 +312,25 @@ function formatLastHumanMessage(agent, limit = 120) {
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
-const sourceAgentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
+/* Identity line = "[Platform] · [folder/name]". Never borrow a pane title when
+   the session cwd disagrees with the terminal folder (cwd mismatch). */
+function sourceAgentName(agent) {
+  const label = providerLabel(agent.provider);
+  const cwdBase = typeof agent.cwd === "string" ? agent.cwd.split("/").filter(Boolean).pop() || "" : "";
+  const homeCwd = typeof agent.cwd === "string" && /\/Users\/[^/]+\/?$/.test(agent.cwd.replace(/\/+$/, ""));
+  const folderLabel = homeCwd ? "Home" : cwdBase;
+  const paneTitle = agent.target && agent.target.cwdMismatch ? "" : (agent.surfaceTitle || "");
+  const name = conciseText((agent.nickname || paneTitle || folderLabel || "").trim(), 60);
+  return name ? `${label} · ${name}` : `${label} session`;
+}
+
+/* Live cmux / terminal title for this session, when routing knows one. */
+function terminalSourceName(agent) {
+  const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
+    ? agent.target.workspaceTitle.trim()
+    : (agent && typeof agent.surfaceTitle === "string" ? agent.surfaceTitle.trim() : "");
+  return title ? conciseText(title) : "";
+}
 
 function presentationLabelKey(target) {
   if (!target) return "";
@@ -920,7 +938,7 @@ globalThis.TheAntHill = {
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
-  sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
+  sourceAgentName, terminalSourceName, presentationLabelKey, agentLabelEligible, programName,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -2472,9 +2490,19 @@ function renderSwarmAnchor(agent, depth, activeChildren) {
     el("span", { class: "swarm-anchor-arrow", "aria-hidden": "true", text: "⌄" }));
 }
 
+/* The message line reflects both sides of the exchange: the last USER request and
+   the latest legible AGENT reply, as "You: … · Agent: …". On snapshots that
+   predate the split fields, lastUserMessage is undefined, so fall back to the
+   any-role lastHumanMessage for the "You:" part; an explicit null means no user
+   message survived cleaning and no "You:" part is shown. */
 function rowSummary(agent) {
-  const message = formatLastHumanMessage(agent);
-  if (message !== NO_READABLE_MESSAGE) return message;
+  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
+  const userText = typeof userRaw === "string" ? userRaw.trim() : "";
+  const agentText = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
+  const parts = [];
+  if (userText) parts.push("You: " + conciseText(userText, 100));
+  if (agentText) parts.push("Agent: " + conciseText(agentText, 100));
+  if (parts.length) return parts.join(" · ");
   if (agent.task) return conciseText(agent.task, 120);
   if (agent.statusReason) return conciseText(agent.statusReason, 120);
   return NO_READABLE_MESSAGE;

@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
-import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
+import {
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  type HumanMessageCandidate,
+} from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 
@@ -173,6 +177,7 @@ function makeAgent(input: {
     input.meta.nowMs ?? Date.now(),
   );
   const statusReason = input.statusReason ?? status.reason;
+  const humanMessages = input.humanMessages ?? [];
   const cwdName = input.cwd && input.cwd.replace(/\/+$/, "") !== homedir().replace(/\/+$/, "")
     ? basename(input.cwd)
     : undefined;
@@ -198,10 +203,12 @@ function makeAgent(input: {
     statusReason,
     lastHumanMessage: extractLastHumanMessage(
       input.provider,
-      input.humanMessages ?? [],
+      humanMessages,
       input.task,
       statusReason,
     ),
+    lastUserMessage: extractLastMessageByRole(input.provider, humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole(input.provider, humanMessages, "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,

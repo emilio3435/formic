@@ -85,8 +85,14 @@ export interface AgentSnapshot {
   parentAgentId?: string;
   threadDepth?: number;
   nickname?: string;
+  /** The cmux surface name (terminal rename) when one is set. */
+  surfaceTitle?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
+  /** Latest sanitized human-legible USER request; null when none survived cleaning. */
+  lastUserMessage?: string | null;
+  /** Latest sanitized human-legible AGENT reply; null when none survived cleaning. */
+  lastAgentMessage?: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;

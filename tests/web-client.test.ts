@@ -155,9 +155,32 @@ describe("provider-aware row summaries", () => {
       statusReason: "Tool result: /Users/me/the-mountain/src/server/identity.ts",
     });
 
-    expect(M.rowSummary(value)).toBe("Readable review result.");
+    // Pre-split snapshots (no lastUserMessage) still surface the any-role message,
+    // now labeled as the user side of the exchange, never the raw transcript.
+    expect(M.rowSummary(value)).toBe("You: Readable review result.");
     expect(M.rowSummary(value)).not.toContain("diff --git");
     expect(M.rowSummary(value)).not.toContain("identity.ts");
+  });
+
+  test("renders both sides of the exchange as one You/Agent line, each sanitized", () => {
+    const value = agent({
+      lastUserMessage: "Ship the inspector panel.",
+      lastAgentMessage: "Done — tests pass and the panel is live.",
+      lastHumanMessage: "Done — tests pass and the panel is live.",
+    });
+    const summary = M.rowSummary(value);
+
+    // Both the request and the reply appear, in order, on a single line.
+    expect(summary).toBe("You: Ship the inspector panel. · Agent: Done — tests pass and the panel is live.");
+    expect(summary.indexOf("You:")).toBeLessThan(summary.indexOf("Agent:"));
+  });
+
+  test("shows only the agent side when no user request survived cleaning", () => {
+    expect(M.rowSummary(agent({
+      lastUserMessage: null,
+      lastAgentMessage: "Investigation complete.",
+      lastHumanMessage: "Investigation complete.",
+    }))).toBe("Agent: Investigation complete.");
   });
 
   test("renders explicit absence instead of inventing a message from the transcript", () => {
@@ -166,11 +189,19 @@ describe("provider-aware row summaries", () => {
     expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
   });
 
-  test("keeps the raw transcript tail in Technical inspector markup only", () => {
-    const overview = source.match(/function renderOverview\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0] || "";
-    const technical = source.match(/function renderTechnical\([\s\S]*?\n}\n\nfunction renderTarget/)?.[0] || "";
-    expect(overview).not.toContain("transcriptTail");
-    expect(technical).toContain("transcriptTail");
+  test("keeps the raw transcript tail in Chat/Evidence, not Operate", () => {
+    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
+      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
+      || "";
+    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
+      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
+      || "";
+    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
+      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
+      || "";
+    expect(operate).not.toContain("transcriptTail");
+    expect(chat).toContain("transcriptTail");
+    expect(evidence).toContain("transcriptTail");
   });
 });
 
@@ -530,6 +561,48 @@ describe("redesigned network contracts (source-level)", () => {
     expect(fn).not.toContain('role: "button"');
     expect(source).toContain('onkeydown: (e) => { if (e.key === "Escape")');
     expect(source).toContain('type: "submit"');
+  });
+
+  test("the identity name is the surface rename, never the chat message or task", () => {
+    // The cmux rename wins over displayName/task so a stale first prompt never
+    // masquerades as the agent's name.
+    expect(M.sourceAgentName(agent({
+      provider: "codex",
+      surfaceTitle: "cmux-session-restore-debug",
+      task: "Fix the flaky routing test before the deploy window closes.",
+      displayName: "Fix the flaky routing test before the deploy window closes.",
+    }))).toBe("Codex · cmux-session-restore-debug");
+
+    // cwd mismatch → ignore pane title; home cwd reads as Home.
+    expect(M.sourceAgentName(agent({
+      provider: "codex",
+      surfaceTitle: "Settings UX — Sol",
+      cwd: "/Users/emilionunezgarcia",
+      target: { resolution: "exact", cwdMismatch: true, workspaceTitle: "Settings UX — Sol" },
+    }))).toBe("Codex · Home");
+
+    // No rename → fall back to the cwd basename, still platform-prefixed.
+    expect(M.sourceAgentName(agent({
+      provider: "claude",
+      surfaceTitle: undefined,
+      cwd: "/Users/me/Developer/the-mountain",
+      task: "Some long user request that must not become the name.",
+    }))).toBe("Claude · the-mountain");
+
+    // No rename and no cwd → a bare platform session label, never the message.
+    expect(M.sourceAgentName(agent({
+      provider: "cursor",
+      surfaceTitle: undefined,
+      cwd: undefined,
+      task: "Another user message that must never surface as the name.",
+    }))).toBe("Cursor session");
+  });
+
+  test("cwd-mismatch honesty keeps terminal title out of the identity line", () => {
+    expect(source).toContain("cwdMismatch");
+    expect(source).toContain("!agent.target?.cwdMismatch");
+    expect(source).toContain("cwd differs");
+    expect(source).toContain("terminalSourceName");
   });
 
   test("unnamed child naming is a text action and source identities remain visible", () => {
