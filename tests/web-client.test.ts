@@ -1571,6 +1571,54 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     );
     expect(perType).toBeTruthy();
     expect(perType).not.toContain("#fff");
+    // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
+    // those class strings, or it would render as an unstyled element. Back the
+    // grep claim with the suite (source = app.js text, html = index.html text).
+    expect(source).not.toContain("state-pill");
+    expect(source).not.toContain("inspector-state");
+    expect(html).not.toContain("state-pill");
+    expect(html).not.toContain("inspector-state");
+  });
+
+  test("(e) orphan cleanup: drawerHead is gone; every drawer head is drawerVerdictHead", () => {
+    // The migration moved all five entity heads to drawerVerdictHead, orphaning
+    // drawerHead — the change created the orphan, so the change removes it.
+    expect(source).not.toContain("function drawerHead(");
+    expect(source).not.toContain("drawerHead(");
+    // The agent drawer builds its head inline; missingDrawer uses a bare
+    // .inspector-head — so the base class stays live, only the helper is gone.
+    expect(source).toContain('el("div", { class: "inspector-head inspector-verdict" }'); // drawerVerdictHead
+    for (const fn of ["renderInterventionDrawer", "renderAdvisoryDrawer",
+      "renderInvestigationDrawer", "renderResolvedDrawer", "renderProgramDrawer"]) {
+      expect(bodyOf(fn)).toContain("drawerVerdictHead(");
+    }
+  });
+
+  test("(f) confirm parity: head triage/launch fire triageIssue directly, exactly like their body twins", () => {
+    // Controller ruling: a head action must have IDENTICAL confirm semantics to
+    // its body twin. The confirm mechanism (state.confirming) is scoped to
+    // renderDockTool and gated on NEEDS_CONFIRM = {interrupt, archive} only —
+    // triage/queue/run never enter it. So the parity-correct head is a direct
+    // triageIssue() call, mirroring the body. This test pins that both sides
+    // fire directly and neither reaches for the confirm gate.
+    expect(source).toContain('const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);');
+    const head1 = source.match(/function issueHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const head2 = source.match(/function investigationHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyTriage = source.match(/function renderTriage\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyInvestigation = bodyOf("renderInvestigationDrawer");
+    for (const chunk of [head1, head2, bodyTriage, bodyInvestigation]) {
+      expect(chunk).toBeTruthy();
+      expect(chunk).toContain("triageIssue(");        // direct fire on both sides
+      expect(chunk).not.toContain("state.confirming"); // no confirm gate on either
+      expect(chunk).not.toContain("NEEDS_CONFIRM");
+    }
+    // The head's onclick calls the SAME triageIssue actions the body does.
+    expect(head1).toContain('triageIssue(id, "run")');
+    expect(head1).toContain('triageIssue(id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "run")');
+    expect(head2).toContain('triageIssue(item.issueId, "run")');
+    expect(bodyInvestigation).toContain('triageIssue(item.issueId, "run")');
   });
 
   test("(d2) audit closed: control-banner conforms to --failed ink + --ember-soft tint (settled ruling)", () => {

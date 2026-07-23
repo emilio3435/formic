@@ -2951,12 +2951,6 @@ function dwEyebrow(kindClass, iconName, text) {
   return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
 }
 
-function drawerHead(eyebrowNode, titleText) {
-  return el("div", { class: "inspector-head" },
-    el("div", { class: "inspector-id" }, eyebrowNode, el("h2", { class: "inspector-title", text: titleText })),
-    closeButton());
-}
-
 /* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
    the agent drawer: the status kicker + title (+ an optional sub line) on the
    left, Close and the one promoted action stacked on the right. The agent drawer
