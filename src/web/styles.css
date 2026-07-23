@@ -69,7 +69,13 @@ html { height: 100%; }
 
 body {
   margin: 0;
-  height: 100%;
+  /* 2026 app-shell frame: the shell is exactly the viewport. `100dvh` tracks the
+     dynamic viewport (mobile toolbars) and replaces the fragile height:100% chain;
+     the `100vh` line before it is the fallback for engines without dvh. A definite
+     height (not min-height) is what lets .app-body's flex:1/min-height:0 resolve so
+     the panes scroll INTERNALLY instead of the document. */
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--canvas);
@@ -79,6 +85,11 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;   /* the full-width pulse strip wraps a flex row; guard against a stray scrollbar */
+  /* Root-cause fix is the dvh frame + bounded chrome expansions below; this clip is
+     an additional guard so a sub-pixel rounding can never turn the doc into a
+     scroller (chrome + panes are all internally bounded). Fixed dock/toast and
+     .pane-list sticky headers are unaffected (body is not their containing block). */
+  overflow-y: clip;
 }
 
 /* ---------- utilities ---------- */
@@ -352,7 +363,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
-.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); }
+/* Same Part-0 guard as #pulse-findings: the customizer expands inside the flex:none
+   summary strip, so it is bounded to the viewport and scrolls internally rather than
+   growing the chrome until the document scrolls. */
+.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50vh, 22rem); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
 .widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
 .widget-help { margin: 0.15rem 0 0; color: var(--muted); font-size: 12px; }
@@ -397,10 +411,21 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 
 .pane-list {
+  /* The roster's stuck program/column headers pin at these offsets. --program-head-h
+     matches the single-line head (46px desktop; re-pointed to 60px in the <=1024px
+     block where the touch sweep grows the head's buttons). --column-head-h matches
+     the column header's own height and drives the rows' scroll-margin (head + column). */
+  --program-head-h: 46px;
+  --column-head-h: 25px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 0.6rem 0.85rem 5rem;
+  overscroll-behavior: contain;   /* no scroll-chaining to the page at the roster's ends */
+  /* No padding-top: a scroll container clips at its PADDING box, so top padding
+     would let scrolling rows paint a sliver ABOVE the sticky headers. The toolbar
+     carries that top breathing via margin instead (it scrolls away cleanly), so
+     the frozen headers pin flush to the pane's top edge. */
+  padding: 0 0.85rem 5rem;
   scrollbar-gutter: stable;
 }
 
@@ -469,10 +494,17 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 #pulse-findings {
   max-width: var(--frame);
   margin: 0 auto 0.15rem;
+  /* Part-0 fix: this expansion lives in the flex:none .health-rail, so without a
+     bound it grows the chrome past the viewport and the document scrolls. Cap it
+     against the viewport and scroll the ledger internally; the chrome stays put.
+     vh fallback line before dvh, matching the body's fallback discipline. */
+  max-height: min(40vh, 26rem);
+  max-height: min(40dvh, 26rem);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--raise);
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   contain: layout paint;
 }
 .pulse-more {
@@ -864,7 +896,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- toolbar: views, filter chips, search ---------- */
 
-.toolbar { margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.toolbar { margin-top: 0.6rem; margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
 
 .views { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .view-tab {
@@ -958,13 +990,25 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
-  overflow: hidden;
+  /* `clip` (not `hidden`) keeps the rounded-corner clipping WITHOUT making the
+     card a sticky scroll-scope: `overflow:hidden` pinned .program-head to the
+     card instead of the roster, so it scrolled away (probe D: head to -269px).
+     `clip` is not a scroll container, so the head pins to .pane-list. */
+  overflow: clip;
 }
 .program-head {
+  /* Frozen roster header: pins to the top of the .pane-list scroll, above the
+     rows in z, with an OPAQUE --surface so rows occlude cleanly under it (the
+     :hover --sand wash is preserved). It is kept to a single line (nowrap +
+     truncating name) so its stuck height equals --program-head-h exactly. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface);
   display: flex;
   width: 100%;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.25rem 0.7rem;
   padding: 0.5rem 0.9rem;
   min-height: 38px;
@@ -974,9 +1018,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-caret { flex: none; color: var(--faint); font-size: 11px; transition: transform 150ms ease; display: inline-grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: var(--radius-sm); }
 .program-caret:hover { color: var(--ink); background: var(--raise); }
 .program.open .program-caret { transform: rotate(90deg); }
-.program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
+.program-label { display: inline-flex; align-items: center; gap: 0.35rem; flex: 0 1 auto; min-width: 0; overflow: hidden; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
-.program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
+/* Truncates so the sticky head stays one line at any pane width instead of
+   wrapping the rollup below it (which would break the --program-head-h offset). */
+.program-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
 .program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
@@ -992,10 +1038,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.7rem; }
-.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
-.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.program-rollup-label { font-size: 11px; color: var(--faint); }
+/* nowrap keeps the rollup's cells on one line so the sticky head is single-line
+   (the head's --program-head-h offset depends on it); the name truncates first,
+   then the rollup shrinks HONESTLY (min-width:0 + per-cell overflow) instead of
+   being silently cropped by the .program overflow:clip ancestor. The alerts cell
+   never shrinks and so is the last thing to go — it must always stay legible. */
+.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
+.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.program-rollup-label { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -1035,6 +1087,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-left: 4px solid transparent;
   cursor: pointer;
   box-sizing: border-box;
+  /* Keyboard parity: Tab/arrow focus scrolls the row clear of the stuck header
+     stack (program head + column header) so it never lands hidden beneath them. */
+  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));
 }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
@@ -1097,6 +1152,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    every row use it, so instrument values line up in scannable columns and the
    header labels sit exactly above them (fr tracks resolve identically per row). */
 .agent-column-header {
+  /* Pins directly under the stuck .program-head; --program-head-h is the head's
+     single-line height so the two freeze as a flush stack. --sand is already
+     opaque, so rows occlude cleanly under it. Below the head in z so an incoming
+     program's head can cover it at a section boundary. */
+  position: sticky;
+  top: var(--program-head-h);
+  z-index: 2;
   grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
   padding: 0.45rem 0.85rem 0.35rem 0.8rem;
   border-bottom: 1px solid var(--line);
@@ -1325,13 +1387,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.depth-2 { --tree-depth: 2; --tree-color: #b6794f; }
 .agent-row.depth-3 { --tree-depth: 3; --tree-color: #667c91; }
 .agent-row.depth-4 { --tree-depth: 4; --tree-color: #776b8f; }
-.agent-row.is-child { padding-left: calc(0.8rem + var(--tree-depth) * 1.3rem); border-left-color: var(--tree-color); }
-.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + var(--tree-depth) * 1.3rem); }
+/* Indent cap (N=3): full indent for the first 3 levels, then stop — 3·1.3rem +
+   0.8rem base = 4.7rem = 75px ≈ 19.8% of the 380px min drawer-open pane (25% =
+   95px), where uncapped depth-4 hit 96px and crushed the content column. Deeper
+   nesting reuses the level-3 indent; the depth colour + swarm/depth chips carry
+   the rest of the hierarchy. min(var(--tree-depth), 3) caps the multiplier. */
+.agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--tree-color); }
+.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 1.3rem); }
 .agent-row.is-child::before {
   content: "";
   position: absolute;
   top: -1px;
-  left: calc(0.55rem + (var(--tree-depth) - 1) * 1.3rem);
+  left: calc(0.55rem + (min(var(--tree-depth), 3) - 1) * 1.3rem);
   width: 0.8rem;
   height: 1.95rem;
   border-left: 1.5px solid var(--tree-color);
@@ -1351,11 +1418,12 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-height: 40px;
   padding: 0.4rem 0.7rem;
   text-align: left;
+  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));   /* clear the stuck header stack on keyboard focus */
   color: var(--muted);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--sand) 55%, var(--raise));
 }
-.swarm-anchor.is-child { padding-left: calc(0.7rem + var(--tree-depth) * 1.3rem); }
+.swarm-anchor.is-child { padding-left: calc(0.7rem + min(var(--tree-depth), 3) * 1.3rem); }   /* matches the capped agent-row indent */
 .swarm-anchor strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .swarm-anchor > span:not(.provider-mark) { color: var(--faint); font: 10px var(--font-mono); text-transform: uppercase; }
 .swarm-anchor:hover { background: var(--sand); }
@@ -1373,6 +1441,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
   overflow-y: auto;
   overflow-x: hidden;   /* content wraps; guarantee no horizontal scroll at 375px */
+  overscroll-behavior: contain;   /* the drawer's scroll never chains to the page */
+  scrollbar-gutter: stable;       /* match the roster: no content shift when the bar appears */
   /* Internal divider only — the ops-stage shell owns the outer frame/raise. */
   border-left: 1px solid var(--line-strong);
   box-shadow: none;
@@ -2239,6 +2309,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    surface over the whole viewport, so selecting anything never squeezes the
    workboard. */
 @media (max-width: 1024px) {
+  /* The touch sweep below grows the head's rename/details controls to 44px, so
+     the single-line head is taller here — re-point the sticky offset to match so
+     the column header stays flush under it. */
+  .pane-list { --program-head-h: 60px; }
   /* Full-sheet inspector owns the viewport; drop the shared desktop shell. */
   .ops-stage {
     border: 0;
@@ -2287,8 +2361,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .widget-options { grid-template-columns: 1fr; }
   .widget-option { min-height: 2.8rem; }
   .widget-move { width: 2.75rem; height: 2.75rem; }
-  .pane-list { padding: 0.85rem 0.65rem 5rem; }
+  .pane-list { padding: 0 0.65rem 5rem; }   /* top breathing rides the toolbar margin; headers pin flush */
   .program-head { min-height: 44px; }
+  /* Narrow screens can't fit the whole rollup beside the truncating name; drop
+     the least-critical tokens cell (the alerts cell is never dropped). Also raise
+     the stuck column header's scroll-margin offset to the 2-row mobile header. */
+  .program-rollup-cell--tokens { display: none; }
+  .pane-list { --column-head-h: 44px; }
   .program-rename,
   .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }
   .agent-column-header,
@@ -2318,8 +2397,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .agent-row:hover .row-summary,
   .agent-row:focus .row-summary,
   .agent-row.is-selected .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
-  .agent-row.is-child { padding-left: calc(0.65rem + var(--tree-depth) * 0.85rem); }
-  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + var(--tree-depth) * 0.85rem); }
+  .agent-row.is-child { padding-left: calc(0.65rem + min(var(--tree-depth), 3) * 0.85rem); }
+  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 0.85rem); }
   .swarm-note { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
   .signal-primary { grid-template-columns: 2rem minmax(0, 1fr); }
   .signal-badge { width: 2rem; height: 2rem; }
