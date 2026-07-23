@@ -323,6 +323,29 @@ describe("collector identity and usage truth", () => {
     expect(agent?.tokens.contextWindow).toBeUndefined();
   });
 
+  test("Claude derives the 1M context window for Opus 4.8 and Sonnet 5, undefined otherwise", () => {
+    const row = (model: string) => JSON.stringify({
+      type: "assistant",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      timestamp: "2026-07-21T23:30:02.000Z",
+      message: {
+        id: "msg-ctx",
+        role: "assistant",
+        model,
+        content: [{ type: "text", text: "Working." }],
+        usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 40 },
+      },
+    });
+
+    expect(parseClaudeJsonl(row("claude-opus-4-8"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-opus-4-8[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-sonnet-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
+    expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
+    expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
+  });
+
   test("Claude counts repeated rows for one message ID once and exposes the latest request", () => {
     const base = {
       type: "assistant",

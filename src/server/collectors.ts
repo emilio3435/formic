@@ -376,6 +376,25 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
   });
 }
 
+// Anthropic transcripts do not record the context-window size the way Codex
+// exposes `model_context_window`. Derive it from the model id for models whose
+// window is known in this deployment; leave undefined otherwise so the UI falls
+// back to an honest observed-token count instead of a fabricated percentage.
+// Opus 4.8 and Sonnet 5 run the 1M-token context here.
+const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
+  ["opus-4-8", 1_000_000],
+  ["sonnet-5", 1_000_000],
+];
+
+function claudeContextWindow(model: string | undefined): number | undefined {
+  if (!model) return undefined;
+  const id = model.toLowerCase();
+  for (const [needle, window] of CLAUDE_CONTEXT_WINDOWS) {
+    if (id.includes(needle)) return window;
+  }
+  return undefined;
+}
+
 export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): CollectedAgent | null {
   const rows = records(jsonl);
   const identity = rows.find(
@@ -465,6 +484,7 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
           // fields and include cache creation exactly once in the observed total.
           total: usageTotal(latestUsage),
           sessionTotal,
+          contextWindow: claudeContextWindow(model),
           scope: "latest-turn",
           provenance: "observed",
         }
