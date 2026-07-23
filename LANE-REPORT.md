@@ -120,3 +120,65 @@ GET /api/debug/identity?agent=claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec
 - Bindings do not bridge sessions whose bound surface disappeared from discovery (tier 1 simply finds no match and falls through) — acceptable: cmux restart invalidates surface IDs anyway.
 - The bridge-skip on a reclaimed surface (decision 4) is documented in ARCHITECTURE.md but not annotated as an explicit trace step; the related-surface evidence in the debug endpoint makes it visible.
 - `collectors.ts`/`cursor.ts` token semantics, `control.ts` execution, triage/issue code, and all `src/web` files untouched per lane boundaries.
+
+---
+
+# Lane Report — opus-cursor-policy-20260723
+
+Branch `ant-hill/opus-cursor-policy-20260723`, cut from `main` @ 5b71f38. Goal:
+make the Cursor model policy and the row model display honest for Cursor's own
+model families, ahead of a sibling lane's model-extraction fix that will start
+reporting real strings (`composer-2.5-fast`, `composer-2`, `cursor-grok-4.5-high-fast`,
+`grok-4.5-fast-xhigh`, `claude-…`, `gpt-…-sol`, …). Nothing pushed.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `55a1695` | feat(model-config): `cursorNativeFamilies` list + `composer-2`/`composer-2.5` aliases + `cursorNativeFamily()` helper (config + defaults + tests) |
+| `2cc52fa` | feat(snapshot): `cursorModelPolicy` treats any Cursor-native family as compliant (+ tests) |
+| `02d4ff3` | feat(app): `modelShort` short forms for Composer and Grok (+ tests) |
+| `(this)`  | docs: lane report |
+
+## Behavior
+
+- **Config**: `cursorNativeFamilies = [grok-4.5, cursor-grok-4.5, composer-2, composer-2.5]`.
+  Matching mirrors the existing alias approach (exact or hyphen-bounded prefix),
+  so `composer-2.5-fast` resolves to `composer-2.5`, never `composer-2`. Compiled
+  `DEFAULT_MODEL_CONFIG` and the shipped `config/models.json` stay identical (the
+  `toEqual` test enforces it); missing/malformed file → compiled defaults, the
+  file-present/absent pattern preserved.
+- **Policy**: an observed model in ANY native family → `compliant`; a reported
+  non-native model → `mismatch`; missing model → `unreported`. The subagent
+  parent-inheritance branches (expected = parent model, `cursor-ai-tracking`
+  evidence, unverified-parent → unreported) are unchanged. Summaries name the
+  family that matched.
+- **Display**: `composer-2.5-fast → "composer 2.5 fast"`, `composer-2 → "composer 2"`,
+  `cursor-grok-4.5-high-fast → "grok 4.5"`, all within the existing 18-char bound
+  and mono style. Anthropic/Codex/Sol/Luna/Fable short forms unchanged. The bare
+  `["grok","grok"]` `MODEL_SHORT` entry was replaced by the versioned Grok branch.
+
+## Verification
+
+`bun run check` green: **350 pass / 0 fail** (344 base + 6 new), `tsc --noEmit`
+clean, TS strict, no `any`. New coverage: composer compliant, cursor-grok
+compliant, claude/gpt reported → mismatch, missing → unreported, config-absent
+defaults, `cursorNativeFamily` matching, and the `modelShort` cases.
+
+## DECISION AWAITING OWNER CONFIRMATION
+
+**"Composer counts as compliant native" is a DEFAULT, not a settled ruling —
+Emilio may veto.** If Composer should NOT be an approved native family, it is a
+one-line config reversal: remove `"composer-2"` and `"composer-2.5"` from
+`cursorNativeFamilies` in `config/models.json`. No code change needed — Composer
+sessions then read as `mismatch`. Aliases/short-forms can stay regardless so the
+names still render cleanly.
+
+## Out of scope / untouched
+
+- `bun.lock` (pre-existing uncommitted dep-install change) left untouched, not
+  buried in any commit.
+- No CSS, no render functions (active layout/sticky-header lane elsewhere).
+- README "Data truth" section was read for policy intent but not edited (outside
+  the allowed file set). Its wording still says "Grok-family … compliant" and
+  should be widened to "Cursor-native (Grok + Composer)" if this default holds.
