@@ -459,12 +459,12 @@ function composerEffort(selectedModels: unknown): string | undefined {
   return undefined;
 }
 
-// GUI PRIMARY model source: composerData:<conversationId>.modelConfig covers every
-// family incl. Composer variants. "default" means "no explicit model", so it is
-// treated as unreported and left to the ai-tracking fallback. The state.vscdb is a
-// live WAL database; callers open it read-only and may lack the cursorDiskKV table
-// on older installs, so the query is guarded.
-function guiComposerModel(database: Database, sessionId: string): CursorStoreEvidence {
+// Shared model source keyed purely by session id: composerData:<sessionId>.modelConfig
+// covers every family incl. Composer variants and exists for EVERY Cursor session id
+// (roots and subagents alike). "default" means "no explicit model", so it is treated as
+// unreported. The state.vscdb is a live WAL database; callers open it read-only and may
+// lack the cursorDiskKV table on older installs, so the query is guarded.
+function composerModelForSession(database: Database, sessionId: string): CursorStoreEvidence {
   let row: { value?: string | Uint8Array } | null;
   try {
     row = database.query("select value from cursorDiskKV where key = ?").get(`composerData:${sessionId}`) as
@@ -620,7 +620,7 @@ async function collectCursorGuiSessions(
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
         // PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
-        const composer = hasComposerData && state ? guiComposerModel(state, row.id) : {};
+        const composer = hasComposerData && state ? composerModelForSession(state, row.id) : {};
         const parsed = parseCursorSession({
           sessionId: row.id,
           metaJson: JSON.stringify({
@@ -659,6 +659,41 @@ async function collectCursorGuiSessions(
     state?.close();
   }
   return { value: agents, errors };
+}
+
+// Universal last-resort model source. Any collected Cursor session still missing a
+// model is filled from composerData keyed by its own session id. This is what covers
+// subagents: they are enumerated from a parent's subagents/*.jsonl and otherwise only
+// consult ai-code-tracking (which is silent for them), yet composerData holds their
+// model. Running here — after every entry path (chats store.db, agent-transcripts,
+// conversation-search, subagents) — leaves no path uncovered. Tokens are untouched.
+async function fillMissingCursorModels(
+  home: string,
+  agents: CollectedAgent[],
+  errors: string[],
+): Promise<void> {
+  const missing = agents.filter((agent) => !agent.model);
+  if (missing.length === 0) return;
+  const statePath = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
+  if (!(await readableFile(statePath))) return;
+  let state: Database | undefined;
+  try {
+    state = new Database(statePath, { readonly: true });
+    const hasComposerData = state
+      .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
+      .get() !== null;
+    if (!hasComposerData) return;
+    for (const agent of missing) {
+      const composer = composerModelForSession(state, agent.sourceSessionId);
+      if (!composer.model) continue;
+      agent.model = composer.model;
+      if (composer.effort && !agent.effort) agent.effort = composer.effort;
+    }
+  } catch (error) {
+    errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    state?.close();
+  }
 }
 
 export async function collectCursorSessions(
@@ -745,5 +780,6 @@ export async function collectCursorSessions(
   for (const agent of gui.value) {
     if (!knownIds.has(agent.id)) agents.push(agent);
   }
+  await fillMissingCursorModels(home, agents, errors);
   return { value: agents, errors };
 }

@@ -615,6 +615,88 @@ describe("Cursor Agent persisted session truth", () => {
     expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)?.model).toBe("grok-4.5");
   });
 
+  test("fills a subagent's model from composerData by session id when no other source has it", async () => {
+    // Reproduces the live gap: 137 model-less Cursor agents were all subagents,
+    // enumerated from a parent's subagents/*.jsonl. They are absent from
+    // conversation-search and have no ai-tracking row, so their model lived only in
+    // cursorDiskKV composerData keyed by the child's own session id.
+    const home = await mkdtemp(join(tmpdir(), "mountain-cursor-subagent-composer-"));
+    temporaryDirectories.push(home);
+    const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+    const projectCwd = "/Users/me/elio-intelligence-suite";
+    const projectId = "378abb0f-fefb-4ae9-bdf3-754920b7b4fe";
+    const projectDirectory = join(home, ".cursor", "projects", "Users-me-elio-intelligence-suite");
+    const transcriptDirectory = join(projectDirectory, "agent-transcripts", GUI_SESSION_ID);
+    await mkdir(join(transcriptDirectory, "subagents"), { recursive: true });
+    await mkdir(globalStorage, { recursive: true });
+    const nowMs = 1784692000000;
+    await writeFile(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), [
+      JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "Coordinate the swarm." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), new Date(1784691238958), new Date(1784691238958));
+    const childPath = join(transcriptDirectory, "subagents", `${CHILD_SESSION_ID}.jsonl`);
+    await writeFile(childPath, [
+      JSON.stringify({ role: "user", message: { content: "Goal: Verify the build." } }),
+      JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "Build verified." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(childPath, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+
+    const state = new Database(join(globalStorage, "state.vscdb"));
+    state.run("create table ItemTable (key text primary key, value blob)");
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjectMembership.v1",
+      JSON.stringify({ [GUI_SESSION_ID]: projectId, [CHILD_SESSION_ID]: projectId }),
+    ]);
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjects.v1",
+      JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
+    ]);
+    state.run("create table cursorDiskKV (key text primary key, value blob)");
+    // Only the child's composerData carries a model; the parent has none, so the
+    // parent must not accidentally supply the child's answer.
+    state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
+      `composerData:${CHILD_SESSION_ID}`,
+      JSON.stringify({
+        modelConfig: {
+          modelName: "cursor-grok-4.5-high-fast",
+          selectedModels: [{ parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }] }],
+        },
+        usageData: {},
+      }),
+    ]);
+    state.close();
+
+    const conversations = new Database(join(globalStorage, "conversation-search.db"));
+    conversations.run(`create table conversations (
+      fts_rowid integer primary key,
+      source text not null,
+      scope text not null,
+      id text not null,
+      title text not null,
+      updated_at integer not null,
+      is_archived integer not null,
+      root_fingerprint text,
+      cache_fingerprint text
+    )`);
+    // Only the PARENT conversation exists; the subagent is deliberately absent.
+    conversations.run(
+      "insert into conversations(source, scope, id, title, updated_at, is_archived, root_fingerprint) values ('local', '', ?, ?, ?, 0, 'fingerprint')",
+      [GUI_SESSION_ID, "Swarm parent", 1784691238958],
+    );
+    conversations.close();
+    // No ai-code-tracking.db at all: composerData is the child's only model source.
+
+    const result = await collectCursorSessions(home, nowMs);
+
+    expect(result.errors).toEqual([]);
+    const child = result.value.find(({ id }) => id === `cursor:${CHILD_SESSION_ID}`);
+    expect(child?.parentSourceSessionId).toBe(GUI_SESSION_ID);
+    expect(child?.model).toBe("cursor-grok-4.5-high-fast");
+    expect(child?.effort).toBe("high");
+  });
+
   test("keeps Cursor sessions out of the token usage and burn rollups", () => {
     const nowMs = 1784689180000;
     const cursorAgent = parseCursorSession({
