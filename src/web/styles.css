@@ -78,7 +78,7 @@ body {
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;   /* the full-width band spans a flex row; guard against a stray scrollbar */
+  overflow-x: hidden;   /* the full-width pulse strip wraps a flex row; guard against a stray scrollbar */
 }
 
 /* ---------- utilities ---------- */
@@ -216,6 +216,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   flex: none;
   border-bottom: 1px solid var(--line-strong);
   background: var(--surface);
+  /* The strip changes height as it collapses to one calm line or opens the
+     inline panel; ease those transitions (killed by prefers-reduced-motion). */
+  transition: height 150ms ease, opacity 150ms ease;
 }
 .rail-header {
   max-width: var(--frame);
@@ -246,14 +249,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   max-width: var(--frame);
   margin: 0 auto;
   padding: 0.5rem 1.1rem 0.6rem;
-  display: grid;
-  grid-template-columns: minmax(13rem, 1.3fr) repeat(4, minmax(9rem, 1fr));
+  /* Left→right priority strip: cells flow in fixed order and re-weight by
+     urgency (.cell-hot grows, .cell-micro shrinks) instead of sitting in a
+     rigid 5-column grid. Stretch keeps the dividers full-height. */
+  display: flex;
+  flex-wrap: wrap;
   gap: 0 1.1rem;
-  /* Top-align so every reading's label sits on one line and the dividers run
-     the full height of the tallest column (the Degraded verdict). */
   align-items: stretch;
 }
 .reading {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 0.12rem;
@@ -316,7 +321,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
 
-/* the System widget is the anchor */
+/* the Health verdict chip (full cell when degraded, micro-chip when OK) */
 .verdict-chip {
   display: inline-flex;
   align-items: center;
@@ -399,14 +404,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   scrollbar-gutter: stable;
 }
 
-/* The active-intervention band spans the full canvas frame above the split. */
-.signal-band {
-  width: 100%;
-  max-width: var(--frame);
-  margin: 0 auto;
-  padding: 0.7rem 0 0.15rem;
-}
-
 .section-title {
   margin: 0 0 0.55rem;
   font-size: 11.5px;
@@ -416,138 +413,85 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--muted);
 }
 
-/* ---------- attention board: conductor + two inbox lanes ---------- */
+#programs { contain: layout paint; }
 
-.attention-board {
-  display: grid;
-  gap: 0.65rem;
-  margin-bottom: 0.55rem;
-}
-.attention-board[hidden] { display: none; }
+/* ---------- pulse strip: urgency-weighted cells + inline expansion ---------- */
 
-.conductor {
-  border: 1px solid var(--line-strong);
-  border-radius: 7px;
-  background: var(--raise);
-  padding: 0.55rem;
+/* Cells re-weight by urgency inside the flex rail: a hot cell grows, takes
+   ember ink and a larger value; a micro cell collapses to a trailing chip. */
+.reading.cell-hot { flex-grow: 2.4; }
+.cell-hot .reading-label { color: var(--ember); }
+.cell-hot .reading-value { font-size: 1.7rem; color: var(--ember); }
+.reading.cell-micro {
+  flex: 0 0 auto;
+  border-right: 0;
+  padding-right: 0;
 }
-.score {
-  display: flex;
-  gap: 3px;
-  min-height: 2.15rem;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.score-legend {
-  margin: 0.45rem 0.1rem 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-.score-legend[hidden] { display: none; }
-body.is-all-clear .score-legend,
-.attention-board.is-all-clear .score-legend { display: none; }
-.attention-board,
-.lane-body,
-#programs {
-  contain: layout paint;
-}
-.score .seg {
+.cell-micro .reading-value { font-size: 0.95rem; }
+/* The micro health cell and the calm line render a bare .verdict-chip (no
+   .reading-value wrapper), so the chip itself takes the micro scale. */
+.cell-micro .verdict-chip,
+.pulse-calm .verdict-chip { font-size: 0.95rem; }
+.cell-micro .verdict-chip .ico,
+.pulse-calm .verdict-chip .ico { width: 1em; height: 1em; }
+
+/* Calm collapse: the whole cell row folds to one moss line. The pulse-cleared
+   class washes moss in once, then transitions back out when it is dropped on
+   the next paint — a one-shot delight, no keyframe loop. */
+.pulse-calm {
+  /* The line renders inside .rail-inner (a flex row); fill the row and carry
+     the frame gutter itself so calm and stressed states share one left edge. */
+  flex: 1 1 100%;
+  padding: 0.5rem 1.1rem 0.6rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  padding: 0 0.65rem;
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  min-width: 0;
-  flex: 1 1 0;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  color: var(--moss);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 320ms ease;
 }
-.score .seg > span { flex: none; }
-.score .seg span { font-variant-numeric: tabular-nums; }
-.score .seg.ember { background: var(--ember); }
-.score .seg.amber { background: var(--amber); }
-.score .seg.slate { background: var(--slate); }
-.score .seg.moss { background: var(--moss); }
-.score .seg.zero { opacity: 0.35; }
-.score .seg.grow-0 { flex: 0.35 1 0; }
-.score .seg.grow-1 { flex: 1 1 0; }
-.score .seg.grow-2 { flex: 2 1 0; }
-.score .seg.grow-3 { flex: 3 1 0; }
-.score .seg.grow-4 { flex: 4 1 0; }
-.score .seg.grow-5 { flex: 5 1 0; }
-.score .seg.grow-6 { flex: 6 1 0; }
-.score .seg.grow-7 { flex: 7 1 0; }
-.score .seg.grow-8 { flex: 8 1 0; }
-.score .seg.grow-9 { flex: 9 1 0; }
-.score .seg.grow-10 { flex: 10 1 0; }
-.score .seg.grow-11 { flex: 11 1 0; }
-.score .seg.grow-12 { flex: 12 1 0; }
-.score .seg.clear-banner {
-  display: none;
-  justify-content: center;
-  gap: 0.55rem;
-  letter-spacing: 0.14em;
-  flex: 1 1 auto;
-}
-.score .seg.clear-banner .mark {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: #fff;
-  opacity: 0.9;
-}
-body.is-all-clear .score .seg:not(.clear-banner),
-.attention-board.is-all-clear .score .seg:not(.clear-banner) { display: none; }
-body.is-all-clear .score .seg.clear-banner,
-.attention-board.is-all-clear .score .seg.clear-banner,
-.score.score-clear .seg.clear-banner { display: flex; }
-body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
+/* app.js drops the one-shot class on the rail (the calm line is rebuilt each
+   paint), so the wash targets the calm line through the rail. */
+.health-rail.pulse-cleared .pulse-calm { background-color: var(--moss-soft); }
+/* Calm: the rail-inner gutter yields to the calm line's own padding, so the
+   moss wash spans the full strip line. */
+.health-rail.is-calm .rail-inner { padding: 0; }
 
-.lanes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.65rem;
-}
-.lanes[hidden] { display: none; }
-.lane {
+/* Activity sparkline on the calm line — sized here (the SVG carries only a
+   viewBox; an unsized inline SVG would fall back to the 300×150 default). */
+.pulse-spark { flex: none; width: 6rem; height: 1.1rem; }
+
+/* Inline expansion: a bordered panel of finding rows, matching the old lane.
+   The element carries only the id (index.html markup is a fixed contract). */
+#pulse-findings {
+  max-width: var(--frame);
+  margin: 0 auto 0.15rem;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--raise);
-  min-height: 11rem;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
+  contain: layout paint;
 }
-.lane-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem 0.5rem;
-  border-bottom: 1px solid var(--line);
+.pulse-more {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  min-height: 44px;
 }
-.lane-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  text-transform: none;
-  color: var(--ink);
-}
-.lane-head .n {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--faint);
-  letter-spacing: 0.04em;
-}
-.lane-body { display: flex; flex-direction: column; flex: 1; }
+.pulse-more:hover { color: var(--ink); background: var(--surface); }
 
 /* Finding row — title first; the work state rides as a quiet chip on the right.
    The pin is a firm ember left rail (an instrument mark), not a pastel wash. */
@@ -612,23 +556,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   background: var(--moss);
   border-radius: 50%;
 }
-.st {
-  justify-self: end;
-  padding: 0.14rem 0.4rem;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--surface);
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  color: var(--muted);
-}
-.st.hot { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 40%, var(--line)); }
-.st.warm { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
-.st.cool { color: var(--slate); }
-.st.ok { color: var(--moss); }
 /* Four-tick workflow rail: Watch → Triage → Verify → Cleared. Active ticks
    fill left-to-right from the finding's work stage; tone follows work key. */
 .stage-rail {
@@ -660,98 +587,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .stage-rail.ok[data-stage="2"] > i:nth-child(-n+2),
 .stage-rail.ok[data-stage="3"] > i:nth-child(-n+3),
 .stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
-
-.lane-empty {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  padding: 1.4rem 1rem;
-  color: var(--faint);
-  font-size: 12px;
-}
-.lane-empty strong {
-  display: block;
-  font-family: var(--font-display);
-  font-size: 1.05rem;
-  color: var(--moss);
-  margin-bottom: 0.25rem;
-  letter-spacing: -0.01em;
-}
-.lane-more {
-  appearance: none;
-  border: 0;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  font: 650 11px/1 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 0.65rem 0.75rem;
-  cursor: pointer;
-  text-align: left;
-  min-height: 44px;
-}
-.lane-more:hover { color: var(--ink); background: var(--surface); }
-
-.allclear {
-  display: flex;
-  border: 1px solid color-mix(in srgb, var(--moss) 35%, var(--line-strong));
-  border-radius: 8px;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--moss) 8%, transparent), transparent 40%),
-    var(--raise);
-  padding: 1.15rem 1.2rem;
-  align-items: center;
-  gap: 1rem;
-}
-.allclear[hidden] { display: none; }
-.allclear-mark {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  border: 2px solid var(--moss);
-  color: var(--moss);
-  display: grid;
-  place-items: center;
-  font-size: 1rem;
-  font-weight: 700;
-  flex: none;
-}
-.allclear-copy h2 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-weight: 800;
-  letter-spacing: -0.015em;
-  color: var(--moss);
-}
-.allclear-copy p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-@media (max-width: 860px) {
-  .lanes { grid-template-columns: 1fr; }
-  .finding { grid-template-columns: 0.85rem 6.2rem minmax(0, 1fr); }
-  .finding .stage-rail { display: none; }
-  body.is-all-clear .allclear { flex-direction: column; text-align: center; }
-  /* Narrow conductor: 2×2 so labels never clip (IN MOTION / CLEARED). */
-  .score:not(.score-clear) {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-auto-rows: minmax(2rem, auto);
-    min-height: 0;
-  }
-  .score:not(.score-clear) .seg {
-    flex: none;
-    letter-spacing: 0.06em;
-    font-size: 10px;
-    padding: 0.35rem 0.55rem;
-  }
-  .score:not(.score-clear) .seg.clear-banner { display: none; }
-}
 
 /* Drawer-shared signal helpers (Impact / Technical) */
 .affected-disclosure summary, .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
@@ -2133,8 +1968,9 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 /* ---------- responsive ---------- */
 
 @media (max-width: 1180px) {
-  .rail-inner { grid-template-columns: repeat(3, 1fr); gap: 0.55rem 1.1rem; }
-  .rail-inner .reading:nth-child(3n) { border-right: 0; }
+  /* Wrap the strip to two rows; drop dividers so wrapped cells don't stray. */
+  .rail-inner { gap: 0.55rem 1.1rem; }
+  .rail-inner .reading { flex: 1 1 calc(33.333% - 0.74rem); border-right: 0; }
   .agent-column-header,
   .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
   .triage-steps { grid-template-columns: repeat(2, minmax(11rem, 1fr)); }
@@ -2181,9 +2017,10 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .conn { align-self: flex-start; margin: 0 0 0.6rem 1rem; }
   .rail-header { padding: 0.35rem 0.8rem 0; }
   .rail-action { min-height: 44px; }
-  .rail-inner { grid-template-columns: 1fr 1fr; gap: 0.5rem; padding: 0.6rem 0.8rem; }
-  .reading { border-right: 0; padding-right: 0.5rem; }
-  .widget-system { grid-column: 1 / -1; padding-left: 0; }
+  /* Stack the strip: one cell per row; the calm line matches the gutter. */
+  .rail-inner { gap: 0.5rem; padding: 0.6rem 0.8rem; }
+  .rail-inner .reading { flex: 1 1 100%; border-right: 0; padding-right: 0; }
+  .pulse-calm { padding: 0.55rem 0.8rem; }
   .reading-value { font-size: 1.2rem; }
   .widget-customizer-inner { padding: 0.7rem 0.8rem 0.8rem; }
   .widget-options { grid-template-columns: 1fr; }

@@ -5,6 +5,7 @@ import type {
   AgentRole,
   AgentSnapshot,
   ControlCapability,
+  HubPulse,
   HubSnapshot,
   IssueLifecycle,
   IssueWorkState,
@@ -67,14 +68,6 @@ const ISSUE_PROGRESS: Record<IssueWorkState, number> = {
   cleared: 100,
 };
 
-const IN_MOTION_STATES = new Set<IssueWorkState>([
-  "triaging",
-  "planned",
-  "queued",
-  "investigating",
-  "verifying",
-]);
-
 export function impactSummaryFor(
   issue: OperatorIssue,
   programs: readonly ProgramSnapshot[],
@@ -124,7 +117,7 @@ export function issueWorkStateFor(
   return issue.severity === "error" ? "needs_triage" : "watching";
 }
 
-export function withAttentionBoard(
+export function withIssueDecoration(
   snapshot: HubSnapshot,
   triageSummaries: readonly TriageQueueSummary[] = [],
 ): HubSnapshot {
@@ -139,55 +132,16 @@ export function withAttentionBoard(
       impactSummary: impactSummaryFor(issue, snapshot.programs),
     };
   };
-  const issues = (snapshot.issues ?? []).map(decorate);
-  const recentlyResolved = (snapshot.recentlyResolved ?? []).map(decorate);
-  const liveIssueIds = new Set(issues.map((issue) => issue.id));
-  const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
-  const inMotionIds = new Set(
-    issues.filter((issue) => issue.workState && IN_MOTION_STATES.has(issue.workState)).map((issue) => issue.id),
-  );
-  const actNowIds = new Set(
-    issues
-      .filter((issue) => issue.severity === "error" && issue.lifecycle?.state !== "resolved")
-      .map((issue) => issue.id),
-  );
-  const watchIds = new Set(
-    issues
-      .filter((issue) =>
-        issue.severity !== "error" && !inMotionIds.has(issue.id) && issue.lifecycle?.state !== "resolved",
-      )
-      .map((issue) => issue.id),
-  );
-  for (const summary of summaries) {
-    if (summary.state === "queued" || summary.state === "running" || summary.state === "completed") {
-      inMotionIds.add(summary.issueId);
-    }
-    // Orphan blocked rows for cleared/non-live issues must not keep Watch hot.
-    if (
-      summary.state === "blocked"
-      && liveIssueIds.has(summary.issueId)
-      && !resolvedIds.has(summary.issueId)
-      && !actNowIds.has(summary.issueId)
-    ) {
-      watchIds.add(summary.issueId);
-    }
-  }
-  const actNow = actNowIds.size;
-  const watch = watchIds.size;
-  const inMotion = inMotionIds.size;
   return {
     ...snapshot,
-    issues,
-    recentlyResolved,
+    issues: (snapshot.issues ?? []).map(decorate),
+    recentlyResolved: (snapshot.recentlyResolved ?? []).map(decorate),
     triageSummaries: summaries,
-    attentionBoard: {
-      actNow,
-      watch,
-      inMotion,
-      cleared: recentlyResolved.length,
-      allClear: actNow + watch + inMotion === 0,
-    },
   };
+}
+
+export function withPulse(snapshot: HubSnapshot, pulse: HubPulse): HubSnapshot {
+  return { ...snapshot, pulse };
 }
 
 function hash(value: string): string {
@@ -731,7 +685,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     recentlyResolved,
     programs: orderedPrograms,
   };
-  return withAttentionBoard(snapshot, input.triageSummaries);
+  return withIssueDecoration(snapshot, input.triageSummaries);
 }
 
 export function snapshotFingerprint(snapshot: HubSnapshot): string {

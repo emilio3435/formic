@@ -51,7 +51,7 @@ describe("cmux collection time truth", () => {
     expect(state.get().controlHealth.lastCheckedAt).toBe(checkedAt);
   });
 
-  test("snapshot refreshes read current triage summaries into the attention board", async () => {
+  test("snapshot refreshes read current triage summaries", async () => {
     const collectors: HubCollectors = {
       sessions: async () => emptySessions(),
       cmux: async () => ({ value: [], errors: [] }),
@@ -74,23 +74,49 @@ describe("cmux collection time truth", () => {
 
     await state.refresh({ cmux: true });
     expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "queued" }]);
-    expect(state.get().attentionBoard).toEqual({
-      actNow: 0,
-      watch: 0,
-      inMotion: 1,
-      cleared: 0,
-      allClear: false,
-    });
+    expect(state.get().issues).toEqual([]);
 
-    // Orphan blocked triage rows (no live issue) must not keep Watch hot.
+    // Orphan blocked triage rows remain passthrough data without live issues.
     triageSummaries = [{ issueId: "queue:detached", state: "blocked" }];
     await state.refresh();
-    expect(state.get().attentionBoard).toEqual({
-      actNow: 0,
-      watch: 0,
-      inMotion: 0,
-      cleared: 0,
-      allClear: true,
+    expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "blocked" }]);
+    expect(state.get().issues).toEqual([]);
+  });
+  test("a hung burn reader cannot block refresh", async () => {
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    let burnCalls = 0;
+    const burnReader = () => {
+      burnCalls += 1;
+      return new Promise<never>(() => {});
+    };
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      undefined,
+      undefined,
+      burnReader,
+    );
+
+    const refresh = state.refresh();
+    let settled = false;
+    void refresh.then(() => {
+      settled = true;
     });
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+
+    expect(settled).toBe(true);
+    expect(burnCalls).toBe(1);
+    expect((await refresh).pulse).toBeDefined();
   });
 });

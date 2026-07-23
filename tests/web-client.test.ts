@@ -63,31 +63,35 @@ describe("summary status and widgets", () => {
     expect(M.systemStatus(null, "offline").label).toBe("Offline");
   });
 
-  test("keeps the requested defaults, catalog, and persisted order valid", () => {
-    expect(M.DEFAULT_WIDGET_IDS).toEqual(["system", "active-work", "attention", "context-peak", "source-health"]);
+  test("keeps the 5-widget Pulse catalog, needs-you pin, and persisted order valid", () => {
+    expect(M.DEFAULT_WIDGET_IDS).toEqual(["needs-you", "momentum", "burn", "context-peak", "health"]);
     expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
-      "system", "active-work", "attention", "context-peak", "source-health",
-      "waiting", "history", "model-policy", "routing-health", "context-reporting",
+      "needs-you", "momentum", "burn", "context-peak", "health",
     ]);
     expect(M.WIDGET_STORAGE_KEY).toBe("mtn3-summary-widgets");
-    expect(M.parseWidgetPreference(JSON.stringify(["system", "attention", "waiting"]))).toEqual(["system", "attention", "waiting"]);
+    expect(M.parseWidgetPreference(JSON.stringify(["needs-you", "burn", "health"]))).toEqual(["needs-you", "burn", "health"]);
     expect(M.parseWidgetPreference("not-json")).toEqual(M.DEFAULT_WIDGET_IDS);
-    expect(M.normalizeWidgetIds(["attention", "system"])).toEqual(M.DEFAULT_WIDGET_IDS);
-    expect(M.normalizeWidgetIds(["system", "attention", "attention"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    // Old "system"-first stored preferences (and any preference not pinned on
+    // needs-you) fall through the existing fallback-to-defaults path — the
+    // retired ids are simply unknown to the new catalog, no bespoke migration.
+    expect(M.normalizeWidgetIds(["system", "attention", "context-peak"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds(["burn", "needs-you"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds(["needs-you", "burn", "burn"])).toEqual(M.DEFAULT_WIDGET_IDS);
   });
 
-  test("reorders selectable widgets while keeping the system verdict pinned", () => {
+  test("reorders selectable widgets while keeping the needs-you verdict pinned first", () => {
     const defaults = M.DEFAULT_WIDGET_IDS;
-    expect(M.reorderWidgetIds(defaults, "attention", -1)).toEqual([
-      "system", "attention", "active-work", "context-peak", "source-health",
+    expect(M.reorderWidgetIds(defaults, "momentum", -1)).toEqual(defaults); // already the first movable slot
+    expect(M.reorderWidgetIds(defaults, "burn", -1)).toEqual([
+      "needs-you", "burn", "momentum", "context-peak", "health",
     ]);
-    expect(M.reorderWidgetIds(defaults, "system", 1)).toEqual(defaults);
-    expect(M.reorderWidgetIds(["system", "attention", "waiting"], "waiting", -1)).toEqual([
-      "system", "waiting", "attention",
+    expect(M.reorderWidgetIds(defaults, "needs-you", 1)).toEqual(defaults); // the pin never moves
+    expect(M.reorderWidgetIds(["needs-you", "momentum", "health"], "health", -1)).toEqual([
+      "needs-you", "health", "momentum",
     ]);
   });
 
-  test("counts active interventions and advisories once in Attention", () => {
+  test("needs-you counts active interventions and advisories once, with a top-2 title sublabel", () => {
     const snap = snapshot({
       issues: [
         { id: "system:1", kind: "system", severity: "error", title: "Control failure", summary: "s", affectedAgentIds: [] },
@@ -95,20 +99,36 @@ describe("summary status and widgets", () => {
       ],
     });
     expect(M.attentionSummary(snap)).toEqual({ count: 2, interventions: 1, advisories: 1 });
-    expect(M.summaryWidgetData("attention", snap)).toMatchObject({ value: "2", unit: "findings" });
+    const data = M.summaryWidgetData("needs-you", snap);
+    expect(data).toMatchObject({ value: "2", unit: "findings", tone: "hot" });
+    expect(data.sublabel).toBe("Control failure · Stale source");
   });
 
-  test("uses explicit No data values when optional evidence is absent", () => {
-    const absent = snapshot({
-      totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0 },
-      controlHealth: undefined,
-    });
-    for (const id of ["context-peak", "source-health", "model-policy", "routing-health", "context-reporting"]) {
-      expect(M.summaryWidgetData(id, absent).value, id).toBe("No data");
-      expect(M.summaryWidgetData(id, absent).sublabel, id).toBeTruthy();
+  test("uses explicit No data values when optional pulse/context evidence is absent", () => {
+    const snap = snapshot();
+    for (const id of ["context-peak", "burn"]) {
+      expect(M.summaryWidgetData(id, snap).value, id).toBe("No data");
+      expect(M.summaryWidgetData(id, snap).sublabel, id).toBeTruthy();
     }
-    expect(M.summaryWidgetData("active-work", null).value).toBe("No data");
-    expect(M.summaryWidgetData("system", null, "offline").value).toBe("Offline");
+    expect(M.summaryWidgetData("momentum", null).value).toBe("No data");
+    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
+  });
+
+  test("momentum copy stays window-honest and never fabricates a zero-window readout", () => {
+    const withMomentum = (momentum: Record<string, unknown>) => snapshot({ pulse: { momentum } });
+    // No pulse at all (older server) degrades gracefully.
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toBe("No completion data yet.");
+    // Under one completed 5-min bucket there is no completion window to report,
+    // but stall detection (updatedAt-based) is valid immediately.
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 0 })).sublabel)
+      .toBe("No completion data yet.");
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 2 })).sublabel)
+      .toBe("2 quiet 15m+");
+    // A young tracker reports its real window, never a fabricated "this hour".
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 3, observedWindowMs: 20 * 60_000, stalled: 1 })).sublabel)
+      .toBe("↑3 done in 20m observed · 1 quiet 15m+");
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 3, observedWindowMs: 3_600_000, stalled: 0 })).sublabel)
+      .toBe("↑3 done this hour");
   });
 });
 
@@ -624,15 +644,6 @@ describe("operations canvas layout", () => {
     expect(styles).not.toContain("--maxw");
   });
 
-  test("the attention board spans the full frame above the workboard split", () => {
-    const bandIdx = html.indexOf('id="attention-board"');
-    const bodyIdx = html.indexOf('class="app-body"');
-    expect(bandIdx).toBeGreaterThan(-1);
-    expect(bandIdx).toBeLessThan(bodyIdx);
-    expect(html).toContain('class="attention-board signal-band"');
-    expect(styles).toMatch(/\.signal-band\s*\{[^}]*max-width:\s*var\(--frame\)/);
-  });
-
   test("workboard + inspector share one ops-stage shell with an internal divider", () => {
     expect(html).toContain('class="ops-stage"');
     const stageIdx = html.indexOf('class="ops-stage"');
@@ -648,12 +659,12 @@ describe("operations canvas layout", () => {
     expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*none/);
   });
 
-  test("finding rows open the drawer; triage stays drawer-only", () => {
+  test("finding rows open the drawer; the strip never grows its own triage chrome", () => {
     expect(source).toContain("function renderFindingRow(");
-    expect(source).toContain("function renderAttentionBoard(");
+    expect(source).toContain("function pulseStripModel(");
     expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
     expect(source).toContain("renderTriage(issue)");
-    // Board must not grow Generate-triage chrome; drawer keeps it.
+    // The strip must not grow Generate-triage chrome; the drawer keeps it.
     expect(source).not.toContain('class: "signal-primary"');
     expect(source).not.toContain('class: "signal-title-btn"');
   });
@@ -675,7 +686,7 @@ describe("operations canvas layout", () => {
     expect(block).toContain("min-height: 44px");
   });
 
-  test("the full-width band cannot introduce horizontal overflow", () => {
+  test("the full-width strip cannot introduce horizontal overflow", () => {
     expect(styles).toMatch(/body\s*\{[\s\S]*?overflow-x:\s*hidden/);
   });
 
@@ -712,19 +723,17 @@ describe("source hygiene", () => {
     expect(source).not.toMatch(/\bstyle:\s*`/);
     expect(source).not.toContain("width:${");
     expect(source).toContain("function svgMeter(");
+    expect(source).toContain("function svgSparkline(");
     expect(source).toContain("createElementNS");
     expect(source).toContain("function icon(");
   });
 
   test("the redesigned control surface exposes its structural anchors", () => {
     for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
-      "attention-board", "score", "lanes", "act-body", "aware-body", "allclear",
-      "nest-beacon", "health-widgets", "customize-summary",
+      "pulse-findings", "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain(">Act now</h2>");
-    expect(html).toContain(">Be aware</h2>");
     expect(html).toContain(">Alerts<span");
     expect(source).toContain("function renderWidgetCustomizer()");
     expect(source).toContain("onchange: (event) => setWidgetEnabled");
@@ -754,9 +763,9 @@ describe("source hygiene", () => {
     expect(styles).not.toContain("background-image: url");
   });
 
-  test("summary customization has a touch-sized mobile layout", () => {
+  test("the strip stacks to one cell per row on mobile; customization stays touch-sized", () => {
     const mobile = styles.match(/@media \(max-width: 720px\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(mobile).toContain(".rail-inner { grid-template-columns: 1fr 1fr");
+    expect(mobile).toContain(".rail-inner .reading { flex: 1 1 100%; border-right: 0; padding-right: 0; }");
     expect(mobile).toContain(".widget-options { grid-template-columns: 1fr; }");
     expect(mobile).toContain(".widget-option { min-height: 2.8rem; }");
     expect(mobile).toContain(".widget-move { width: 2.75rem; height: 2.75rem; }");
@@ -791,61 +800,6 @@ describe("source hygiene", () => {
     expect(styles).not.toContain(".signal-subdued");
   });
 
-  test("conductor + lanes + all-clear match the hybrid contract", () => {
-    expect(html).toContain('id="attention-board"');
-    expect(html).toContain('class="conductor"');
-    expect(html).toContain('id="score-legend"');
-    expect(html).toContain("All clear · nothing needs you");
-    expect(html).toContain("Colony is clear");
-    expect(html).toContain("Act now: errors that need you");
-    expect(html).toContain("Watch: advisories or blocked work awaiting a decision");
-    expect(html).toContain("In motion: triage or verification is running");
-    expect(html).toContain("Cleared: recently confirmed gone");
-    expect(source).toContain("function attentionBoardOf(");
-    expect(source).toContain("function issueWorkState(");
-    expect(source).toContain("function issueStage(");
-    expect(source).toContain("function issueImpactLine(");
-    expect(source).toContain("is-all-clear");
-    expect(source).toContain('text: "Impact"');
-    expect(source).toContain("function workStateBanner(");
-    expect(source).toContain("stage-rail");
-    expect(source).toContain("Stage: ");
-    expect(source).not.toContain('affectedChips(issue, "Affects")');
-    expect(source).not.toMatch(/\bstyle:\s*`/);
-    expect(styles).toContain(".conductor");
-    expect(styles).toContain(".score-legend");
-    expect(styles).toContain(".finding");
-    expect(styles).toContain(".allclear");
-    expect(styles).toContain(".stage-rail");
-    expect(styles).toContain('data-stage="3"');
-    expect(styles).toContain("body.is-all-clear");
-  });
-
-  test("attentionBoardOf prefers server rollup and falls back cleanly", () => {
-    const withBoard = snapshot({
-      attentionBoard: { actNow: 2, watch: 1, inMotion: 3, cleared: 4, allClear: false },
-      issues: [],
-    });
-    expect(M.attentionBoardOf(withBoard)).toEqual({
-      actNow: 2, watch: 1, inMotion: 3, cleared: 4, allClear: false,
-    });
-    const derived = snapshot({
-      issues: [
-        { id: "e1", kind: "system", severity: "error", title: "E", summary: "s", affectedAgentIds: [] },
-        { id: "w1", kind: "system", severity: "warning", title: "W", summary: "s", affectedAgentIds: [] },
-      ],
-      recentlyResolved: [
-        { id: "r1", kind: "system", severity: "error", title: "R", summary: "s", affectedAgentIds: [] },
-      ],
-    });
-    expect(M.attentionBoardOf(derived)).toEqual({
-      actNow: 1, watch: 1, inMotion: 0, cleared: 1, allClear: false,
-    });
-    expect(M.attentionBoardOf(snapshot({ issues: [], recentlyResolved: [] }))).toEqual({
-      actNow: 0, watch: 0, inMotion: 0, cleared: 0, allClear: true,
-    });
-  });
-
   test("resolved lifecycle beats a blocked queue row for the finding label", () => {
     const issue = {
       id: "system:cleared",
@@ -864,33 +818,7 @@ describe("source hygiene", () => {
     expect(M.issueStage(issue)).toBe(4);
   });
 
-  test("orphan blocked queue items do not inflate client Watch when only Cleared remains", () => {
-    const board = M.attentionBoardOf(
-      snapshot({
-        issues: [],
-        recentlyResolved: [
-          {
-            id: "system:gone",
-            kind: "system",
-            severity: "error",
-            title: "Gone",
-            summary: "s",
-            affectedAgentIds: [],
-            lifecycle: { state: "resolved", openedAt: "2026-07-21T22:00:00.000Z", resolvedAt: "2026-07-21T23:00:00.000Z" },
-          },
-        ],
-      }),
-      [
-        { issueId: "system:gone", state: "blocked" },
-        { issueId: "queue:orphan", state: "blocked" },
-      ],
-    );
-    expect(board).toEqual({
-      actNow: 0, watch: 0, inMotion: 0, cleared: 1, allClear: true,
-    });
-  });
-
-  test("live blocked findings still count toward Watch and show Blocked", () => {
+  test("live blocked findings still show Blocked, and a queued/running investigation moves an issue in motion", () => {
     const issue = {
       id: "system:live-blocked",
       kind: "system",
@@ -900,50 +828,126 @@ describe("source hygiene", () => {
       affectedAgentIds: [],
       lifecycle: { state: "open", openedAt: "2026-07-21T22:00:00.000Z" },
     };
-    const queue = [{ issueId: issue.id, state: "blocked", headline: "blocked" }];
-    expect(M.issueWorkState(issue, queue)).toEqual({
+    expect(M.issueWorkState(issue, [{ issueId: issue.id, state: "blocked", headline: "blocked" }])).toEqual({
       key: "blocked", label: "Blocked", tone: "error",
     });
     expect(M.issueStage("blocked")).toBe(3);
-    expect(M.attentionBoardOf(snapshot({ issues: [issue], recentlyResolved: [] }), queue)).toEqual({
-      actNow: 0, watch: 1, inMotion: 0, cleared: 0, allClear: false,
-    });
+    expect(M.issueWorkState(issue, [{ issueId: issue.id, state: "running" }]).key).toBe("investigating");
+    expect(M.issueWorkState(issue, [{ issueId: issue.id, state: "queued" }]).key).toBe("queued");
   });
 
   test("signal chrome uses techno-orchestra tokens, not hospital banner fills", () => {
     expect(styles).toContain('"Techno orchestra"');
     expect(styles).toContain("--signal-rail: 2px");
     expect(styles).toContain(".glyph.act");
-    expect(styles).toContain(".st.hot");
     expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
   });
 });
 
-describe("act-now honesty (lanes never contradict work state)", () => {
-  test("an in-motion error counts In motion, never Act now", () => {
+describe("pulse strip — verdict-first summary", () => {
+  test("the verdict button and calm line carry the markup the strip depends on", () => {
+    expect(html).toContain('<div id="pulse-findings" hidden></div>');
+    expect(source).toContain('class: valueClass + " pulse-verdict"');
+    expect(source).toContain('"aria-expanded": String(state.pulseExpanded)');
+    expect(source).toContain('"aria-controls": "pulse-findings"');
+    expect(source).toContain('dataset: { fkey: "pulse-verdict" }');
+    expect(source).toContain("onclick: togglePulseFindings");
+    expect(source).toContain('class: "pulse-calm", role: "status"');
+    expect(source).toContain("function renderPulseCalm(");
+    expect(source).toContain("function renderHealthRail(");
+  });
+
+  test("pulseStripModel collapses to calm only when nothing needs the operator", () => {
+    expect(M.pulseStripModel(snapshot(), "live", []).calm).toBe(true);
+
+    const withIssue = snapshot({
+      issues: [{ id: "e", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }],
+    });
+    expect(M.pulseStripModel(withIssue, "live", []).calm).toBe(false);
+
+    const degradedControl = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(M.pulseStripModel(degradedControl, "live", []).calm).toBe(false);
+
+    const hotContext = snapshot({
+      programs: [{
+        id: "p", name: "P",
+        agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 190_000, contextWindow: 200_000 } })],
+      }],
+    });
+    expect(M.pulseStripModel(hotContext, "live", []).calm).toBe(false); // 95% peak context is hot
+
+    expect(M.pulseStripModel(null, "live", []).calm).toBe(false);
+  });
+
+  test("ordered findings put true interventions and advisories ahead of in-motion work", () => {
     const verifyingError = {
       id: "e-verifying", kind: "system", severity: "error", title: "Verifying error", summary: "s",
       affectedAgentIds: [],
       lifecycle: { state: "verifying", openedAt: "2026-07-22T05:00:00.000Z", verificationStartedAt: "2026-07-22T05:01:00.000Z" },
     };
     const openError = { id: "e-open", kind: "system", severity: "error", title: "Open error", summary: "s", affectedAgentIds: [] };
-    expect(M.attentionBoardOf(snapshot({ issues: [verifyingError, openError] }))).toEqual({
-      actNow: 1, watch: 0, inMotion: 1, cleared: 0, allClear: false,
-    });
+    const advisory = { id: "w-open", kind: "system", severity: "warning", title: "Open advisory", summary: "s", affectedAgentIds: [] };
+    const snap = snapshot({ issues: [verifyingError, openError, advisory] });
+
+    const model = M.pulseStripModel(snap, "live", []);
+    expect(model.findings.map((f: { id: string }) => f.id)).toEqual(["e-open", "w-open", "e-verifying"]);
+    expect(model.findings.map((f: { work: { key: string } }) => f.work.key)).toEqual(["needs", "watching", "verifying"]);
+
+    // An in-motion error must never surface in the needs-you top-2 sublabel —
+    // that would contradict the strip's own "in motion" classification.
+    const data = M.summaryWidgetData("needs-you", snap);
+    expect(data.sublabel).toBe("Open error · Open advisory");
   });
 
-  test("a queued or running triage summary moves an error out of Act now", () => {
-    const err = { id: "e1", kind: "system", severity: "error", title: "E", summary: "s", affectedAgentIds: [] };
-    expect(M.attentionBoardOf(snapshot({ issues: [err], triageSummaries: [{ issueId: "e1", state: "running" }] }))).toEqual({
-      actNow: 0, watch: 0, inMotion: 1, cleared: 0, allClear: false,
+  test("orphan queue items referencing a resolved issue are excluded; live orphans are included", () => {
+    const snap = snapshot({
+      issues: [],
+      recentlyResolved: [
+        {
+          id: "system:gone", kind: "system", severity: "error", title: "Gone", summary: "s",
+          affectedAgentIds: [],
+          lifecycle: { state: "resolved", openedAt: "2026-07-21T22:00:00.000Z", resolvedAt: "2026-07-21T23:00:00.000Z" },
+        },
+      ],
     });
+    const model = M.pulseStripModel(snap, "live", [
+      { issueId: "system:gone", state: "blocked", headline: "stale" },
+      { issueId: "queue:orphan", state: "blocked", headline: "orphan investigation" },
+    ]);
+    expect(model.findings.map((f: { id: string }) => f.id)).toEqual(["queue:orphan"]);
   });
 
-  test("the board routes in-motion findings into Be aware and derives segments from lane membership", () => {
-    const fn = source.match(/function renderAttentionBoard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fn).toContain("!IN_MOTION_KEYS.has(f.work.key)");
-    expect(fn).toContain("inFlightFindings");
-    expect(fn).toContain("actNow: actFindings.length");
+  test("the strip renders findings and widgets with no board-level triage CTAs — triage stays drawer-only", () => {
+    const pulseFindingsPanel = source.match(/function renderPulseFindings\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const summaryWidget = source.match(/function renderSummaryWidget\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const pulseCalm = source.match(/function renderPulseCalm\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const findingRow = source.match(/function renderFindingRow\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(pulseFindingsPanel).toBeTruthy();
+    expect(summaryWidget).toBeTruthy();
+    expect(pulseCalm).toBeTruthy();
+    expect(findingRow).toBeTruthy();
+    for (const chunk of [pulseFindingsPanel, summaryWidget, pulseCalm, findingRow]) {
+      expect(chunk).not.toContain("triageIssue(");
+      expect(chunk).not.toContain('"Triage this finding"');
+      expect(chunk).not.toContain('"Queue investigation"');
+      expect(chunk).not.toContain("renderTriage(");
+    }
+    expect(findingRow).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
+  });
+
+  test("strip CSS binds to the DOM app.js actually builds", () => {
+    // The expansion panel carries only the id (the markup is a fixed contract),
+    // so a class selector would never bind — the panel must be styled by id.
+    expect(styles).toMatch(/#pulse-findings\s*\{/);
+    expect(styles).not.toMatch(/\.pulse-findings\s*\{/);
+    // app.js drops the one-shot pulse-cleared class on the rail, so the moss
+    // wash must reach the calm line through the rail, not expect the class
+    // on the (rebuilt-each-paint) calm line itself.
+    expect(source).toContain('rail.classList.add("pulse-cleared")');
+    expect(styles).toMatch(/\.health-rail\.pulse-cleared \.pulse-calm/);
+    // svgSparkline emits only a viewBox (CSP: no inline styles); without a CSS
+    // size the SVG falls back to the 300×150 default and breaks the calm line.
+    expect(styles).toMatch(/\.pulse-spark\s*\{[^}]*width/);
   });
 });
 

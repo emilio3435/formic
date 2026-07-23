@@ -279,7 +279,6 @@ export function emptySnapshot(): HubSnapshot {
     },
     issues: [],
     recentlyResolved: [],
-    attentionBoard: { actNow: 0, watch: 0, inMotion: 0, cleared: 0, allClear: true },
     triageSummaries: [],
     programs: [],
   };
