@@ -9,6 +9,7 @@ import {
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
+import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const fileCache = new Map<string, { mtimeMs: number; size: number; agent: CollectedAgent | null }>();
@@ -397,13 +398,10 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
 // window is known in this deployment; leave undefined otherwise so the UI falls
 // back to an honest observed-token count instead of a fabricated percentage.
 // Opus 4.8, Sonnet 5, and Fable 5 run the 1M-token context here.
-const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
-  ["opus-4-8", 1_000_000],
-  ["sonnet-5", 1_000_000],
-  ["fable-5", 1_000_000],
-];
-
-function claudeContextWindow(model: string | undefined): number | undefined {
+export function claudeContextWindow(
+  model: string | undefined,
+  config: ModelConfig = MODEL_CONFIG,
+): number | undefined {
   if (!model) return undefined;
   const id = model.toLowerCase();
   // Ground truth first: if the model id ever carries an explicit 1M-context
@@ -411,7 +409,7 @@ function claudeContextWindow(model: string | undefined): number | undefined {
   // table. This is absent from transcripts today, but costs nothing and gives
   // free per-session accuracy if Anthropic ever stamps the beta into message.model.
   if (id.includes("[1m]")) return 1_000_000;
-  for (const [needle, window] of CLAUDE_CONTEXT_WINDOWS) {
+  for (const [needle, window] of Object.entries(config.claudeContextWindows)) {
     if (id.includes(needle)) return window;
   }
   return undefined;
