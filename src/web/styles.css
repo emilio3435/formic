@@ -419,7 +419,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-width: 0;
   overflow-y: auto;
   overscroll-behavior: contain;   /* no scroll-chaining to the page at the roster's ends */
-  padding: 0.6rem 0.85rem 5rem;
+  /* No padding-top: a scroll container clips at its PADDING box, so top padding
+     would let scrolling rows paint a sliver ABOVE the sticky headers. The toolbar
+     carries that top breathing via margin instead (it scrolls away cleanly), so
+     the frozen headers pin flush to the pane's top edge. */
+  padding: 0 0.85rem 5rem;
   scrollbar-gutter: stable;
 }
 
@@ -888,7 +892,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- toolbar: views, filter chips, search ---------- */
 
-.toolbar { margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.toolbar { margin-top: 0.6rem; margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
 
 .views { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .view-tab {
@@ -982,13 +986,25 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
-  overflow: hidden;
+  /* `clip` (not `hidden`) keeps the rounded-corner clipping WITHOUT making the
+     card a sticky scroll-scope: `overflow:hidden` pinned .program-head to the
+     card instead of the roster, so it scrolled away (probe D: head to -269px).
+     `clip` is not a scroll container, so the head pins to .pane-list. */
+  overflow: clip;
 }
 .program-head {
+  /* Frozen roster header: pins to the top of the .pane-list scroll, above the
+     rows in z, with an OPAQUE --surface so rows occlude cleanly under it (the
+     :hover --sand wash is preserved). It is kept to a single line (nowrap +
+     truncating name) so its stuck height equals --program-head-h exactly. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface);
   display: flex;
   width: 100%;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.25rem 0.7rem;
   padding: 0.5rem 0.9rem;
   min-height: 38px;
@@ -998,9 +1014,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-caret { flex: none; color: var(--faint); font-size: 11px; transition: transform 150ms ease; display: inline-grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: var(--radius-sm); }
 .program-caret:hover { color: var(--ink); background: var(--raise); }
 .program.open .program-caret { transform: rotate(90deg); }
-.program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
+.program-label { display: inline-flex; align-items: center; gap: 0.35rem; flex: 0 1 auto; min-width: 0; overflow: hidden; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
-.program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
+/* Truncates so the sticky head stays one line at any pane width instead of
+   wrapping the rollup below it (which would break the --program-head-h offset). */
+.program-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
 .program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
@@ -1016,7 +1034,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+/* nowrap keeps the rollup's cells on one line so the sticky head is single-line
+   (the head's --program-head-h offset depends on it); the name truncates first. */
+.program-rollup { margin-left: auto; display: inline-flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
 .program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .program-rollup-label { font-size: 11px; color: var(--faint); }
@@ -1059,6 +1079,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-left: 4px solid transparent;
   cursor: pointer;
   box-sizing: border-box;
+  /* Keyboard parity: Tab/arrow focus scrolls the row clear of the stuck header
+     stack (program head + column header) so it never lands hidden beneath them. */
+  scroll-margin-top: calc(var(--program-head-h) + 25px);
 }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
@@ -1121,6 +1144,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    every row use it, so instrument values line up in scannable columns and the
    header labels sit exactly above them (fr tracks resolve identically per row). */
 .agent-column-header {
+  /* Pins directly under the stuck .program-head; --program-head-h is the head's
+     single-line height so the two freeze as a flush stack. --sand is already
+     opaque, so rows occlude cleanly under it. Below the head in z so an incoming
+     program's head can cover it at a section boundary. */
+  position: sticky;
+  top: var(--program-head-h);
+  z-index: 2;
   grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
   padding: 0.45rem 0.85rem 0.35rem 0.8rem;
   border-bottom: 1px solid var(--line);
@@ -1375,6 +1405,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-height: 40px;
   padding: 0.4rem 0.7rem;
   text-align: left;
+  scroll-margin-top: calc(var(--program-head-h) + 25px);   /* clear the stuck header stack on keyboard focus */
   color: var(--muted);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--sand) 55%, var(--raise));
@@ -2265,6 +2296,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    surface over the whole viewport, so selecting anything never squeezes the
    workboard. */
 @media (max-width: 1024px) {
+  /* The touch sweep below grows the head's rename/details controls to 44px, so
+     the single-line head is taller here — re-point the sticky offset to match so
+     the column header stays flush under it. */
+  .pane-list { --program-head-h: 60px; }
   /* Full-sheet inspector owns the viewport; drop the shared desktop shell. */
   .ops-stage {
     border: 0;
@@ -2313,7 +2348,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .widget-options { grid-template-columns: 1fr; }
   .widget-option { min-height: 2.8rem; }
   .widget-move { width: 2.75rem; height: 2.75rem; }
-  .pane-list { padding: 0.85rem 0.65rem 5rem; }
+  .pane-list { padding: 0 0.65rem 5rem; }   /* top breathing rides the toolbar margin; headers pin flush */
   .program-head { min-height: 44px; }
   .program-rename,
   .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }

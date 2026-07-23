@@ -2589,3 +2589,45 @@ describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", (
     expect(block).not.toContain("height: 100dvh");
   });
 });
+describe("scroll shell: sticky left-pane headers (Part 2)", () => {
+  // (b) The program head pins to the top of the roster scroll with an OPAQUE
+  //     surface so rows occlude under it, above the rows in z.
+  test("(b) .program-head is sticky at top:0 with an opaque --surface background", () => {
+    const head = styles.match(/\.program-head\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(head).toContain("position: sticky");
+    expect(head).toContain("top: 0");
+    expect(head).toContain("background: var(--surface)");
+    expect(head).toMatch(/z-index:\s*\d/);
+    // Prevented from wrapping so its stuck height is a stable single line.
+    expect(head).toContain("flex-wrap: nowrap");
+  });
+
+  // (b) The column header pins directly below the stuck program head, offset by a
+  //     CSS var that matches the single-line head, keeping its opaque --sand.
+  test("(b) .agent-column-header is sticky below the head via --program-head-h, keeping --sand", () => {
+    const col = styles.match(/\.agent-column-header\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(col).toContain("position: sticky");
+    expect(col).toContain("top: var(--program-head-h)");
+    expect(col).toContain("background: var(--sand)"); // already opaque, preserved
+    // The offset var is defined (and re-pointed where the touch sweep grows the head).
+    expect(styles).toContain("--program-head-h:");
+  });
+
+  // (b) The `.program { overflow: hidden }` scroll-scope is what breaks sticky
+  //     (probe D: head scrolls to -269 under hidden). `clip` keeps the rounded
+  //     corners AND lets the head pin to the roster.
+  test("(b) .program uses overflow: clip (not hidden) so sticky escapes the card scope", () => {
+    const prog = styles.match(/\.program\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(prog).toContain("overflow: clip");
+    expect(prog).not.toContain("overflow: hidden");
+  });
+
+  // (c) Keyboard parity: focused rows clear the stuck stack (head + column header)
+  //     so Tab/arrow focus never lands hidden beneath the frozen headers.
+  test("(c) rows carry scroll-margin-top equal to the stuck header stack", () => {
+    const row = styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(row).toContain("scroll-margin-top:");
+    expect(row).toContain("var(--program-head-h)");
+  });
+});
+
