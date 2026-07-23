@@ -127,9 +127,10 @@ throughout the pulse work: mono also carries uppercase micro-labels/kickers at
 9–12px with letter-spacing (`.eyebrow`, `.agent-column-label`, `.dw-eyebrow`,
 `.dw-block-label`, `.shelf-title`, `.vital-label`, `.chat-turn-role`,
 `.detail-grid dt`, `.operate-meta-label`) — instrument labels, not prose.
-`.program-alias-tag` deviates from the idiom: it has the same uppercase, tracked,
-faint-ink look but never sets `font-family`, so it renders in `--font-ui`, not
-mono. Large display numerals split: `.reading-value` stays `--font-ui` with
+`.program-alias-tag` historically deviated from the idiom — same uppercase,
+tracked, faint-ink look but no `font-family`, so it rendered in `--font-ui`, not
+mono — but as of Task A4 it sets `font-family: var(--font-mono)` and now conforms
+to the mono micro-label idiom. Large display numerals split: `.reading-value` stays `--font-ui` with
 `font-variant-numeric: tabular-nums`, while `.vital-big` values are always mono —
 every `renderVitals` call site in `app.js` pairs the class with `mono`
 (`"vital-big mono"`). Mono never carries headings or sentence prose.
