@@ -493,14 +493,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .pulse-more:hover { color: var(--ink); background: var(--surface); }
 
-/* Finding row — title first; the work state rides as a quiet chip on the right.
-   The pin is a firm ember left rail (an instrument mark), not a pastel wash. */
+/* Finding row — two-line ledger (mockup A2). Line one: full title + live
+   summary sharing the width; line two: mono evidence tokens. The right meta
+   cluster (compact stage rail, state word, age) is fixed — nothing stretches
+   to fill the strip. Pin stays the firm ember left rail. */
 .finding {
   display: grid;
-  grid-template-columns: 0.85rem 6.8rem minmax(0, 1fr) 5.4rem;
+  grid-template-columns: 0.85rem minmax(0, 1fr) auto;
   gap: 0.55rem;
   align-items: center;
-  padding: 0.55rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border: 0;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
@@ -517,23 +519,51 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .finding.pin { box-shadow: inset 3px 0 var(--ember); }
 .finding.is-selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
 .finding.pin.is-selected { box-shadow: inset 3px 0 var(--ember), inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
-.finding .copy { min-width: 0; }
+.finding .copy { min-width: 0; display: flex; flex-direction: column; gap: 0.16rem; }
+.finding .lede { display: flex; align-items: baseline; gap: 0.7rem; min-width: 0; overflow: hidden; }
 .finding .title {
-  display: block;
+  flex: 0 1 auto;
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.finding .impact {
-  display: block;
-  margin-top: 0.12rem;
-  font-size: 11px;
-  color: var(--faint);
+.finding .gist {
+  flex: 1 1 3rem;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.finding .trace {
+  display: flex;
+  gap: 1.1rem;
+  font: 400 11px/1.2 var(--font-mono);
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.finding .trace i { font-style: normal; }
+.finding .meta { display: flex; align-items: center; gap: 0.8rem; justify-self: end; }
+.finding .meta .stage-rail { width: 4.6rem; }
+.finding .state {
+  font: 650 10px/1.2 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.finding .state.st-hot { color: var(--ember); }
+.finding .state.st-warm { color: var(--amber); }
+.finding .state.st-cool { color: var(--slate); }
+.finding .state.st-ok { color: var(--moss); }
+.finding .age {
+  font: 400 11px/1.2 var(--font-mono);
+  color: var(--faint);
+  min-width: 3.4ch;
+  text-align: right;
 }
 .glyph {
   width: 0.7rem;
@@ -609,20 +639,69 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   font-weight: 700;
 }
 .triage-generate:hover:not(:disabled) { background: #34302a; }
-.triage-plan { margin-top: 0.4rem; padding: 0.75rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); }
-.triage-plan-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.55rem; }
-.triage-mode { padding: 0.15rem 0.45rem; border-radius: 4px; color: #fff; background: var(--ink); font: 700 10px/1.3 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
-.triage-mode-investigation { background: var(--ember); }
-.triage-outcome { font-size: 1rem; }
-.triage-rationale { margin: 0.35rem 0 0.55rem; color: var(--muted); font-size: 13px; }
-.triage-details > summary { cursor: pointer; color: var(--ink); font: 700 12px var(--font-mono); text-transform: uppercase; }
-.triage-details[open] > summary { margin-bottom: 0.45rem; }
-.triage-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.45rem; margin: 0; padding: 0; list-style: none; counter-reset: triage; }
-.triage-steps li { counter-increment: triage; padding: 0.5rem; border-left: 2px solid var(--line-strong); border-radius: 0 4px 4px 0; background: var(--surface); font-size: 12px; }
-.triage-steps li::before { content: "0" counter(triage); display: block; color: var(--faint); font: 10px var(--font-mono); }
-.triage-steps strong, .triage-steps span { display: block; }
-.triage-steps strong { margin: 0.15rem 0; font-size: 13px; }
-.triage-steps span { color: var(--muted); }
+/* Triage plan — instrument brief (mockup B1): verdict head, vitals band,
+   always-visible step spine, rationale foot. Investigation stays an amber
+   outline chip (indicator ink, no flood fill). */
+.triage-plan { margin-top: 0.4rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); overflow: hidden; }
+.tri-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.55rem; padding: 0.65rem 0.75rem 0.55rem; }
+.tri-kind {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0.18rem 0.42rem;
+  color: var(--slate);
+  font: 700 10px/1.3 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.tri-kind-investigation { color: var(--amber); }
+.tri-kind-direct { color: var(--moss); }
+.tri-kind-coordinated { color: var(--slate); }
+.triage-outcome { font-size: 1rem; flex: 1 1 12rem; min-width: 0; }
+.tri-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: 650 10px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tri-live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.tri-live-warm { color: var(--amber); }
+.tri-live-cool { color: var(--slate); }
+.tri-live-ok { color: var(--moss); }
+.tri-live-hot { color: var(--ember); }
+.tri-band { display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.tri-inst { flex: 1 1 auto; min-width: 0; padding: 0.45rem 0.75rem 0.5rem; border-left: 1px solid var(--line); }
+.tri-inst:first-child { border-left: 0; }
+.tri-inst-v { display: block; font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tri-inst-k { display: block; margin-top: 0.18rem; font: 600 9px/1 var(--font-mono); letter-spacing: 0.13em; text-transform: uppercase; color: var(--faint); }
+.tri-spine { display: flex; margin: 0; padding: 0.7rem 0.75rem 0.15rem; list-style: none; }
+.tri-step { flex: 1 1 0; min-width: 0; position: relative; padding-right: 0.9rem; font-size: 12px; }
+.tri-step::before { content: ""; position: absolute; top: 8px; left: 22px; right: 5px; height: 2px; background: var(--line-strong); }
+.tri-step:last-child { padding-right: 0; }
+.tri-step:last-child::before { display: none; }
+.tri-dot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--raise);
+  font: 700 9px/1 var(--font-mono);
+  color: var(--faint);
+}
+.tri-spine.is-done .tri-dot { border-color: var(--moss); background: var(--moss); color: #fff; }
+.tri-step strong { display: block; margin: 0.4rem 0 0.1rem; font-size: 12.5px; }
+.tri-step span { display: block; color: var(--faint); font-size: 11.5px; line-height: 1.35; padding-right: 0.4rem; }
+.triage-rationale { margin: 0.45rem 0 0.6rem; padding: 0 0.75rem; color: var(--muted); font-size: 13px; }
+.triage-plan .triage-queue-row, .triage-plan .triage-result { margin-left: 0.75rem; margin-right: 0.75rem; }
+.triage-plan .triage-queue-row { margin-top: 0.2rem; margin-bottom: 0.7rem; }
+.triage-plan .triage-result { width: auto; margin-bottom: 0.75rem; }
 .triage-queue-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.7rem; margin-top: 0.65rem; }
 .triage-queue { min-height: 38px; color: #fff; background: var(--ink); border-color: var(--ink); font-weight: 700; }
 .triage-queue-note { color: var(--faint); font-size: 12px; }
@@ -645,13 +724,54 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   background: color-mix(in srgb, var(--ember) 5%, var(--surface));
   border-color: color-mix(in srgb, var(--ember) 22%, var(--line));
 }
-.triage-briefing-kicker {
+/* Verdict head (mockup C1): outcome glyph ring left, verdict center, state
+   chip + note right. Evidence routes render as a mono table, actions ride one
+   row with timestamps on the right edge. */
+.brf-head { display: flex; align-items: flex-start; gap: 0.7rem; }
+.brf-glyph {
+  flex: none;
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.45rem 0.65rem;
-  margin-bottom: 0.3rem;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--moss);
+  border-radius: 50%;
+  color: var(--moss);
+  background: var(--moss-soft);
 }
+.brf-glyph .ico { width: 15px; height: 15px; }
+.triage-briefing--blocked .brf-glyph { border-color: var(--ember); color: var(--ember); background: var(--ember-soft); }
+.brf-lede { flex: 1 1 0; min-width: 0; align-self: center; }
+.brf-state { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 0.15rem; text-align: right; }
+.brf-routes { margin-top: 0.65rem; border: 1px solid var(--line); border-radius: 6px; background: var(--raise); overflow: hidden; }
+.brf-routes-head {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--sand);
+  font: 700 9.5px/1.3 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.brf-route {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.2rem auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.38rem 0.6rem;
+  border-top: 1px solid var(--line);
+  font: 500 12px/1.3 var(--font-mono);
+}
+.brf-route:first-of-type { border-top: 0; }
+.brf-route-from { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brf-route-arr { color: var(--faint); text-align: center; }
+.brf-route-to { color: var(--cursor); font-weight: 650; }
+.brf-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.55rem 0.8rem; }
+.brf-actions .triage-briefing-cta { margin-bottom: 0; }
+.brf-times { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 0.1rem; font: 400 11px/1.35 var(--font-mono); color: var(--faint); }
+.brf-times i { font-style: normal; }
+.brf-actions + .triage-briefing-list--next { margin-top: 0.45rem; }
 .triage-briefing-status {
   font: 700 10px/1.3 var(--font-mono);
   letter-spacing: 0.07em;
@@ -707,7 +827,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--ink);
   font-weight: 600;
 }
-.triage-briefing-cta + .triage-briefing-list--next { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.brf-actions + .triage-briefing-list--next { color: var(--muted); font-weight: 500; font-size: 12.5px; }
 .triage-briefing-list--next li::marker { color: var(--moss); }
 .triage-briefing--blocked .triage-briefing-list--next li::marker { color: var(--ember); }
 .triage-briefing-raw {
@@ -1973,7 +2093,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .rail-inner .reading { flex: 1 1 calc(33.333% - 0.74rem); border-right: 0; }
   .agent-column-header,
   .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
-  .triage-steps { grid-template-columns: repeat(2, minmax(11rem, 1fr)); }
+  .tri-spine { flex-wrap: wrap; gap: 0.5rem 0; }
+  .tri-step { flex: 1 1 46%; }
 }
 
 /* Below the docked-pane threshold the inspector/drawer becomes a full-detail
@@ -2066,7 +2187,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .advisory-body { display: block; min-width: 0; }
   .advisory-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .advisory-summary, .advisory-impact { display: none; }
-  .triage-steps { grid-template-columns: 1fr; }
+  .tri-spine { flex-direction: column; gap: 0.45rem; }
+  .tri-step { flex: 1 1 auto; padding-right: 0; }
+  .tri-step::before { display: none; }
+  .finding .gist, .finding .trace { display: none; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch. */

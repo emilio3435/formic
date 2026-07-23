@@ -1017,7 +1017,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
-  parseInvestigationResult,
+  parseInvestigationResult, routeFromBullet,
 };
 
 /* ---------- state ---------- */
@@ -1813,8 +1813,27 @@ function investigationResultCta(outcome, issueId) {
 // Fix briefing for investigation results — headline, what happened, what to do,
 // with raw output collapsed. Used by intervention/advisory triage and the
 // investigation drawer. `outcome` is "completed" or "blocked"; `opts.issueId`
-// wires the one primary follow-up action.
+// wires the one primary follow-up action; `opts.startedAt`/`opts.completedAt`
+// feed the mono timestamps in the action row.
 const BRIEFING_MAX_BULLETS = 3;
+
+/* A bullet shaped like "`542577F9…` → `ttys003`" is evidence routing, not
+   prose — the result card renders those as a route table (mockup C1). Only a
+   clear single arrow with short endpoints qualifies; anything else stays a
+   plain bullet. Pure, exported for tests. */
+function routeFromBullet(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw || raw.length > 120) return null;
+  // Endpoints are identifiers (session ids, ttys, paths) — never words with
+  // spaces, never chained arrows. Prose with an arrow mid-sentence stays prose.
+  const match = raw.match(/^`?([^\s`→>]{1,60})`?\s*(?:→|->)\s*`?([^\s`→>]{1,60})`?$/);
+  if (!match) return null;
+  const from = match[1].trim();
+  const to = match[2].trim();
+  if (!from || !to) return null;
+  return { from, to };
+}
+
 function renderInvestigationResult(resultText, outcome, opts = {}) {
   const blocked = outcome === "blocked";
   const parsed = parseInvestigationResult(resultText);
@@ -1822,23 +1841,30 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
   const nextSteps = investigationResultNextSteps(parsed, blocked ? "blocked" : "completed");
   const seen = new Set([headline, parsed.headline].filter(Boolean));
   // Body cap: blockers first, then findings, at most three bullets total —
-  // everything else stays in the collapsed Raw output.
+  // everything else stays in the collapsed Raw output. Route-shaped bullets
+  // render as an evidence table and do not count against the cap.
   const blockers = parsed.blockers.filter((item) => !seen.has(item)).slice(0, BRIEFING_MAX_BULLETS);
-  const findings = parsed.findings.filter((item) => !seen.has(item))
+  const routes = parsed.findings.map(routeFromBullet).filter(Boolean);
+  const findings = parsed.findings.filter((item) => !seen.has(item) && !routeFromBullet(item))
     .slice(0, Math.max(0, BRIEFING_MAX_BULLETS - blockers.length));
   const summary = parsed.summary && parsed.summary !== headline ? parsed.summary : "";
   let bodyShown = false;
 
+  // Verdict head (mockup C1): outcome glyph ring + plain-language verdict,
+  // state chip and note on the right. The glyph is the image; no banner fill.
   const briefing = el("section", {
     class: "triage-result triage-briefing" + (blocked ? " triage-briefing--blocked" : " triage-briefing--ok"),
     "aria-label": blocked ? "Blocked investigation result" : "Investigation result",
   },
-    el("div", { class: "triage-briefing-kicker" },
-      el("span", { class: "triage-briefing-status", text: blocked ? "Blocked" : "Complete" }),
-      el("span", { class: "triage-briefing-kicker-note", text: blocked
-        ? "Operator review needed"
-        : "Waiting for fresh data" })),
-    el("p", { class: "triage-briefing-headline", text: headline }));
+    el("div", { class: "brf-head" },
+      el("span", { class: "brf-glyph", "aria-hidden": "true" }, icon(blocked ? "warning" : "check")),
+      el("div", { class: "brf-lede" },
+        el("p", { class: "triage-briefing-headline", text: headline })),
+      el("div", { class: "brf-state" },
+        el("span", { class: "triage-briefing-status", text: blocked ? "Blocked" : "Complete" }),
+        el("span", { class: "triage-briefing-kicker-note", text: blocked
+          ? "Operator review needed"
+          : "Waiting for fresh data" }))));
 
   if (summary && !blockers.length && !findings.length) {
     briefing.append(el("p", { class: "triage-briefing-summary", text: summary }));
@@ -1849,6 +1875,16 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
       briefing.append(el("p", { class: "triage-briefing-summary", text: rest }));
       bodyShown = true;
     }
+  }
+
+  if (routes.length) {
+    briefing.append(el("div", { class: "brf-routes", role: "table", "aria-label": "Evidence routes" },
+      el("div", { class: "brf-routes-head", text: "Evidence" }),
+      routes.map((route) => el("div", { class: "brf-route", role: "row" },
+        el("span", { class: "brf-route-from", text: route.from }),
+        el("span", { class: "brf-route-arr", "aria-hidden": "true", text: "→" }),
+        el("span", { class: "brf-route-to", text: route.to })))));
+    bodyShown = true;
   }
 
   if (blockers.length) {
@@ -1872,10 +1908,21 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
   }
 
   // One primary button first; short supporting prose after (never prose-only).
+  // Mono timestamps ride the right edge of the action row when the queue item
+  // reported them — never synthesized.
   const cta = investigationResultCta(blocked ? "blocked" : "completed", opts.issueId);
+  const times = [];
+  if (opts.completedAt && Number.isFinite(Date.parse(opts.completedAt))) {
+    times.push((blocked ? "blocked " : "completed ") + issueTimestamp(opts.completedAt));
+  }
+  if (opts.startedAt && Number.isFinite(Date.parse(opts.startedAt))) {
+    times.push("started " + issueTimestamp(opts.startedAt));
+  }
   briefing.append(el("div", { class: "triage-briefing-section triage-briefing-next" },
     el("h4", { class: "triage-briefing-label", text: "What to do next" }),
-    cta,
+    el("div", { class: "brf-actions" },
+      cta,
+      times.length ? el("span", { class: "brf-times" }, times.map((t) => el("i", { text: t }))) : null),
     el("ul", { class: "triage-briefing-list triage-briefing-list--next" },
       nextSteps.slice(0, 2).map((item) => el("li", { text: item })))));
 
@@ -1887,8 +1934,10 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
 }
 
 function renderTriage(issue) {
-  const recommendation = state.triage.get(issue.id);
   const queueItem = state.queueItems.find((item) => item.issueId === issue.id);
+  // A queue item IS a recommendation (TriageQueueItem extends it), so a page
+  // reload mid-investigation still shows the plan — not a stale Triage button.
+  const recommendation = state.triage.get(issue.id) || queueItem;
   const queued = !!queueItem;
   const generating = state.triagePending.has("generate:" + issue.id);
   const queueing = state.triagePending.has("queue:" + issue.id);
@@ -1906,15 +1955,52 @@ function renderTriage(issue) {
       onclick: () => triageIssue(issue.id, "generate"),
     }, generating ? "Triaging…" : "Triage this finding"));
   } else {
-    const plan = el("section", { class: "triage-plan", "aria-label": "Generated triage" },
-      el("div", { class: "triage-plan-head" },
-        el("span", { class: "triage-mode triage-mode-" + recommendation.mode, text: recommendation.mode }),
-        el("strong", { class: "triage-outcome", text: recommendation.headline })),
-      el("p", { class: "triage-rationale", text: recommendation.rationale }),
-      el("details", { class: "triage-details" },
-        el("summary", { text: recommendation.steps.length + "-step plan" }),
-        el("ol", { class: "triage-steps" }, recommendation.steps.map((step) =>
-          el("li", {}, el("strong", { text: step.title }), el("span", { text: step.detail }))))));
+    // Instrument brief (mockup B1): verdict head → vitals band → the plan as
+    // an always-visible horizontal step spine → rationale foot. The band only
+    // shows instruments we actually know (runModel splits into model/effort/
+    // access when the launcher reported them; nothing is fabricated).
+    const qState = queueItem ? queueItem.state : null;
+    const live = qState === "running" ? { key: "running", label: "Running", tone: "warm" }
+      : qState === "queued" ? { key: "queued", label: "Queued", tone: "cool" }
+      : qState === "completed" ? { key: "complete", label: "Complete", tone: "ok" }
+      : qState === "blocked" ? { key: "blocked", label: "Blocked", tone: "hot" }
+      : { key: "ready", label: "Plan ready", tone: "cool" };
+    const inst = (value, label) => el("span", { class: "tri-inst" },
+      el("span", { class: "tri-inst-v", text: value }),
+      el("span", { class: "tri-inst-k", text: label }));
+    const band = el("div", { class: "tri-band" });
+    const modelParts = queueItem && queueItem.runModel
+      ? String(queueItem.runModel).split(/\s*·\s*/).filter(Boolean) : [];
+    if (modelParts[0]) band.append(inst(modelParts[0], "model"));
+    if (modelParts[1]) band.append(inst(modelParts[1], "effort"));
+    if (modelParts[2]) band.append(inst(modelParts[2], "access"));
+    if (Number.isFinite(recommendation.affectedAgents) && Number.isFinite(recommendation.affectedPrograms)) {
+      band.append(inst(recommendation.affectedAgents + " agents · " + recommendation.affectedPrograms + " programs", "scope"));
+    }
+    if (Array.isArray(recommendation.providers) && recommendation.providers.length) {
+      band.append(inst(recommendation.providers.join(" · "), "evidence"));
+    }
+    const clockFrom = qState === "completed" || qState === "blocked"
+      ? queueItem.startedAt : qState === "running" ? queueItem.startedAt : queueItem ? queueItem.createdAt : null;
+    const clockTo = (qState === "completed" || qState === "blocked") && queueItem.completedAt
+      ? Date.parse(queueItem.completedAt) : Date.now();
+    if (clockFrom && Number.isFinite(Date.parse(clockFrom))) {
+      band.append(inst(fmtElapsed(Math.max(0, clockTo - Date.parse(clockFrom))),
+        qState === "completed" || qState === "blocked" ? "ran for" : qState === "running" ? "elapsed" : "queued"));
+    }
+    const plan = el("section", { class: "triage-plan tri-card", "aria-label": "Generated triage" },
+      el("div", { class: "tri-head" },
+        el("span", { class: "tri-kind tri-kind-" + recommendation.mode, text: recommendation.mode }),
+        el("strong", { class: "triage-outcome", text: recommendation.headline }),
+        el("span", { class: "tri-live tri-live-" + live.tone },
+          el("i", { "aria-hidden": "true" }), live.label)),
+      band.childElementCount ? band : null,
+      el("ol", { class: "tri-spine" + (qState === "completed" ? " is-done" : "") },
+        recommendation.steps.map((step, index) => el("li", { class: "tri-step" },
+          el("span", { class: "tri-dot", "aria-hidden": "true", text: qState === "completed" ? "✓" : String(index + 1) }),
+          el("strong", { text: step.title }),
+          el("span", { text: step.detail })))),
+      el("p", { class: "triage-rationale", text: recommendation.rationale }));
 
     if (recommendation.queueRecommended) {
       plan.append(el("div", { class: "triage-queue-row" },
@@ -1944,7 +2030,8 @@ function renderTriage(issue) {
             : "Queued and ready for explicit launch"
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
-        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed", { issueId: issue.id }));
+        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed",
+          { issueId: issue.id, startedAt: queueItem.startedAt, completedAt: queueItem.completedAt }));
       }
     }
     wrap.append(plan);
@@ -2001,11 +2088,11 @@ function issueProgress(issue) {
 
 /* Plain-language impact line for a row — server-owned issue.impactSummary wins;
    otherwise the local affectedImpact rollup sentence. Never "Affects (N)". */
-function issueImpactLine(issue) {
+function issueImpactLine(issue, snap = state.snap) {
   if (issue && typeof issue.impactSummary === "string" && issue.impactSummary.trim()) {
     return issue.impactSummary.trim();
   }
-  return affectedImpact(issue).plain;
+  return affectedImpact(issue, snap).plain;
 }
 
 const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
@@ -2017,7 +2104,7 @@ const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating"
 function pulseFindings(snap, queueItems = state.queueItems) {
   const issues = issuesOf(snap);
   const issueFindings = issues.map((issue) =>
-    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory"));
+    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory", snap));
   const issueIds = new Set(issues.map((issue) => issue.id));
   const resolvedIds = new Set(recentlyResolvedOf(snap).map((issue) => issue.id));
   const items = Array.isArray(queueItems) ? queueItems : [];
@@ -2053,14 +2140,19 @@ function pulseStripModel(snap, conn = "live", queueItems = []) {
   return { calm, cells, findings: pulseFindings(snap, queueItems) };
 }
 
-function findingFromIssue(issue, kind) {
+function findingFromIssue(issue, kind, snap = state.snap) {
   const work = issueWorkState(issue);
+  const rollup = affectedImpact(issue, snap);
+  const life = issue.lifecycle;
   return {
     kind,
     id: issue.id,
     title: issue.title,
     work,
-    impact: issueImpactLine(issue),
+    impact: issueImpactLine(issue, snap),
+    summary: issue.summary || issueImpactLine(issue, snap),
+    evidence: rollup.programs.map((program) => program.name + " · " + program.count),
+    since: life && (life.verificationStartedAt || life.openedAt) || null,
     progress: issueProgress(issue),
     pin: kind === "intervention" && work.key === "needs",
   };
@@ -2075,17 +2167,26 @@ function findingFromQueueItem(item) {
     : workKey === "verifying" ? "verifying"
     : workKey === "blocked" ? "blocked"
     : "queued"];
+  const scope = Number.isFinite(item.affectedAgents) && Number.isFinite(item.affectedPrograms)
+    ? item.affectedAgents + " agents · " + item.affectedPrograms + " programs" : "";
   return {
     kind: "investigation",
     id: item.issueId,
     title: item.headline,
     work,
     impact: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
+    summary: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
+    evidence: [scope, item.runModel || ""].filter(Boolean),
+    since: item.startedAt || item.createdAt || null,
     progress: PROGRESS_BY_WORK[work.key] ?? 50,
     pin: false,
   };
 }
 
+/* Two-line ledger row (mockup A2): full title + live summary on the first
+   line, a mono evidence line under it, and a right-aligned instrument
+   cluster — compact stage rail, state word, age. Every pixel of strip width
+   carries information; nothing stretches to fill. */
 function renderFindingRow(finding) {
   const visual = FINDING_VISUAL[finding.work.key] || FINDING_VISUAL.watching;
   const selected = state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id;
@@ -2093,6 +2194,9 @@ function renderFindingRow(finding) {
   const stage = issueStage(finding.work.key);
   const stageName = STAGE_LABELS[stage - 1] || finding.work.label;
   const railClass = "stage-rail" + (visual.rail ? " " + visual.rail : "");
+  const evidence = (Array.isArray(finding.evidence) ? finding.evidence : []).filter(Boolean);
+  const sinceMs = finding.since ? Date.parse(finding.since) : NaN;
+  const age = Number.isFinite(sinceMs) ? fmtElapsed(Math.max(0, Date.now() - sinceMs)) : "";
   return el("button", {
     type: "button",
     class: "finding" + (finding.pin ? " pin" : "") + (selected ? " is-selected" : ""),
@@ -2102,13 +2206,19 @@ function renderFindingRow(finding) {
   },
     el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
     el("span", { class: "copy" },
-      el("span", { class: "title", text: finding.title }),
-      el("span", { class: "impact", text: finding.impact })),
-    el("span", {
-      class: railClass,
-      "aria-label": "Stage: " + stageName + " (" + stage + " of 4)",
-      "data-stage": String(stage),
-    }, el("i"), el("i"), el("i"), el("i")));
+      el("span", { class: "lede" },
+        el("span", { class: "title", text: finding.title }),
+        el("span", { class: "gist", text: finding.summary || finding.impact })),
+      evidence.length ? el("span", { class: "trace" },
+        evidence.map((token) => el("i", { text: token }))) : null),
+    el("span", { class: "meta" },
+      el("span", {
+        class: railClass,
+        "aria-label": "Stage: " + stageName + " (" + stage + " of 4)",
+        "data-stage": String(stage),
+      }, el("i"), el("i"), el("i"), el("i")),
+      el("span", { class: "state st-" + (visual.st || "cool"), text: finding.work.label }),
+      age ? el("span", { class: "age", text: age }) : null));
 }
 
 function togglePulseFindings() {
@@ -2937,8 +3047,8 @@ function missingDrawer() {
   ];
 }
 
-function agentsById() {
-  return new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+function agentsById(snap = state.snap) {
+  return new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
 }
 
 function drawerAccent(pane, kind) {
@@ -2959,9 +3069,9 @@ const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying",
 
 /* Impact summary — never dump hundreds of anonymous chips as "Affects (160)".
    Plain language first, program rollup second, optional short sample third. */
-function affectedImpact(issue) {
+function affectedImpact(issue, snap = state.snap) {
   const ids = issue.affectedAgentIds || [];
-  const byId = agentsById();
+  const byId = agentsById(snap);
   const resolved = ids.map((id) => byId.get(id)).filter(Boolean);
   const byProgram = new Map();
   for (const row of resolved) {
@@ -3117,7 +3227,8 @@ function renderInvestigationDrawer(pane, view) {
   }
 
   if (item.result) {
-    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed", { issueId: item.issueId }));
+    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed",
+      { issueId: item.issueId, startedAt: item.startedAt, completedAt: item.completedAt }));
   }
 
   const issue = issuesOf(state.snap).find((i) => i.id === item.issueId);
