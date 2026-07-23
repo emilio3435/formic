@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
-import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
+import {
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  type HumanMessageCandidate,
+} from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 
@@ -173,9 +177,14 @@ function makeAgent(input: {
     input.meta.nowMs ?? Date.now(),
   );
   const statusReason = input.statusReason ?? status.reason;
-  const cwdName = input.cwd && input.cwd.replace(/\/+$/, "") !== homedir().replace(/\/+$/, "")
-    ? basename(input.cwd)
-    : undefined;
+  const normalizedCwd = input.cwd?.replace(/\/+$/, "");
+  const atHome = Boolean(normalizedCwd && normalizedCwd === homedir().replace(/\/+$/, ""));
+  const cwdName = normalizedCwd && !atHome ? basename(normalizedCwd) : undefined;
+  const cwdIdentity = cwdName
+    ? `${PROVIDER_NAMES[input.provider]} · ${cwdName}`
+    : atHome
+      ? `${PROVIDER_NAMES[input.provider]} · Home`
+      : undefined;
   const explicitName = input.displayName?.trim();
   const usefulExplicitName = explicitName &&
     !/^Session update(?:\s*\[.*\])?$/i.test(explicitName) &&
@@ -186,10 +195,13 @@ function makeAgent(input: {
     id: `${input.provider}:${input.sourceSessionId}`,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
+    // Identity first (folder / Home), task second. The prompt belongs in the
+    // message lane — not as the agent/terminal name operators hunt for in cmux.
     displayName:
       usefulExplicitName ||
+      cwdIdentity ||
       taskDisplayName(input.task) ||
-      (cwdName ? `${PROVIDER_NAMES[input.provider]} · ${cwdName}` : `${PROVIDER_NAMES[input.provider]} session`),
+      `${PROVIDER_NAMES[input.provider]} session`,
     cwd: input.cwd,
     model: input.model,
     effort: input.effort,
@@ -202,6 +214,8 @@ function makeAgent(input: {
       input.task,
       statusReason,
     ),
+    lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
+    lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,
@@ -310,7 +324,9 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
   const threadSpawn = session?.source?.subagent?.thread_spawn;
   const parentSourceSessionId = typeof threadSpawn?.parent_thread_id === "string"
     ? threadSpawn.parent_thread_id
-    : undefined;
+    : typeof session?.parent_thread_id === "string"
+      ? session.parent_thread_id
+      : undefined;
   const threadDepth = Number.isInteger(threadSpawn?.depth) && threadSpawn.depth >= 0
     ? threadSpawn.depth
     : undefined;
@@ -380,15 +396,21 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
 // exposes `model_context_window`. Derive it from the model id for models whose
 // window is known in this deployment; leave undefined otherwise so the UI falls
 // back to an honest observed-token count instead of a fabricated percentage.
-// Opus 4.8 and Sonnet 5 run the 1M-token context here.
+// Opus 4.8, Sonnet 5, and Fable 5 run the 1M-token context here.
 const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
   ["opus-4-8", 1_000_000],
   ["sonnet-5", 1_000_000],
+  ["fable-5", 1_000_000],
 ];
 
 function claudeContextWindow(model: string | undefined): number | undefined {
   if (!model) return undefined;
   const id = model.toLowerCase();
+  // Ground truth first: if the model id ever carries an explicit 1M-context
+  // marker (e.g. "claude-opus-4-8[1m]"), honor it directly regardless of the
+  // table. This is absent from transcripts today, but costs nothing and gives
+  // free per-session accuracy if Anthropic ever stamps the beta into message.model.
+  if (id.includes("[1m]")) return 1_000_000;
   for (const [needle, window] of CLAUDE_CONTEXT_WINDOWS) {
     if (id.includes(needle)) return window;
   }

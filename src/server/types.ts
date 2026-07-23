@@ -28,6 +28,8 @@ export interface CollectedAgent {
   threadDepth?: number;
   nickname?: string;
   lastHumanMessage?: string | null;
+  lastUserMessage?: string | null;
+  lastAgentMessage?: string | null;
   transcriptTail?: string;
   artifacts: Artifact[];
   gates: string[];
@@ -45,10 +47,12 @@ export interface CmuxSurface {
   paneId?: string;
   cwd?: string;
   workspaceTitle?: string;
+  title?: string;
   branch?: string;
   dirty?: boolean;
   head?: string;
   tty?: string;
+  runtimeSurfaceReady?: boolean;
   sourceSessionIds: string[];
   identityConflict?: string;
 }

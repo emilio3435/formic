@@ -1,10 +1,23 @@
+import { cmuxCommand } from "./cmux-auth";
 import type { CmuxNotification, CollectionResult, CmuxSurface, CommandRunner } from "./types";
 
 export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
 
+export { cmuxCommand, cmuxSocketPassword, loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
+
 function stringValue(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+// cmux prefixes a surface title with a live status glyph/spinner (braille frames
+// like ⠂, or ▪/●) while the terminal is active. That glyph is machinery, not the
+// operator's rename — strip any leading non-alphanumeric run before the name.
+function cleanSurfaceTitle(...values: unknown[]): string | undefined {
+  const raw = stringValue(...values);
+  if (!raw) return undefined;
+  const cleaned = raw.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 export function parseCmuxTerminals(output: string): CmuxSurface[] {
@@ -34,10 +47,14 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
       paneId: stringValue(terminal.pane_id, terminal.paneId),
       cwd: stringValue(terminal.current_directory, terminal.cwd),
       workspaceTitle: stringValue(terminal.workspace_title, terminal.workspaceTitle),
+      title: cleanSurfaceTitle(terminal.surface_title, terminal.surfaceTitle),
       branch: stringValue(terminal.git_branch, terminal.branch),
       dirty: typeof terminal.git_dirty === "boolean" ? terminal.git_dirty : undefined,
       head: stringValue(terminal.git_head, terminal.head),
       tty: stringValue(terminal.tty, terminal.terminal_tty),
+      runtimeSurfaceReady: typeof terminal.runtime_surface_ready === "boolean"
+        ? terminal.runtime_surface_ready
+        : undefined,
       sourceSessionIds: [...new Set(sourceSessionIds)],
     }];
   });
@@ -47,7 +64,7 @@ export async function collectCmux(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxSurface[]>> {
-  const result = await runner.run([executable, "rpc", "debug.terminals", "{}"], 10_000);
+  const result = await runner.run(cmuxCommand(executable, ["rpc", "debug.terminals", "{}"]), 10_000);
   if (result.timedOut) return { value: [], errors: ["cmux terminal discovery timed out"] };
   if (result.exitCode !== 0) {
     return {
@@ -92,7 +109,7 @@ export async function collectCmuxNotifications(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxNotification[]>> {
-  const result = await runner.run([executable, "list-notifications", "--json"], 10_000);
+  const result = await runner.run(cmuxCommand(executable, ["list-notifications", "--json"]), 10_000);
   if (result.timedOut) return { value: [], errors: ["cmux notification discovery timed out"] };
   if (result.exitCode !== 0) {
     return {

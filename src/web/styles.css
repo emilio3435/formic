@@ -78,7 +78,7 @@ body {
   font-size: 16px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;   /* the full-width band spans a flex row; guard against a stray scrollbar */
+  overflow-x: hidden;   /* the full-width pulse strip wraps a flex row; guard against a stray scrollbar */
 }
 
 /* ---------- utilities ---------- */
@@ -216,6 +216,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   flex: none;
   border-bottom: 1px solid var(--line-strong);
   background: var(--surface);
+  /* The strip changes height as it collapses to one calm line or opens the
+     inline panel; ease those transitions (killed by prefers-reduced-motion). */
+  transition: height 150ms ease, opacity 150ms ease;
 }
 .rail-header {
   max-width: var(--frame);
@@ -246,14 +249,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   max-width: var(--frame);
   margin: 0 auto;
   padding: 0.5rem 1.1rem 0.6rem;
-  display: grid;
-  grid-template-columns: minmax(13rem, 1.3fr) repeat(4, minmax(9rem, 1fr));
+  /* Left→right priority strip: cells flow in fixed order and re-weight by
+     urgency (.cell-hot grows, .cell-micro shrinks) instead of sitting in a
+     rigid 5-column grid. Stretch keeps the dividers full-height. */
+  display: flex;
+  flex-wrap: wrap;
   gap: 0 1.1rem;
-  /* Top-align so every reading's label sits on one line and the dividers run
-     the full height of the tallest column (the Degraded verdict). */
   align-items: stretch;
 }
 .reading {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 0.12rem;
@@ -316,7 +321,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
 
-/* the System widget is the anchor */
+/* the Health verdict chip (full cell when degraded, micro-chip when OK) */
 .verdict-chip {
   display: inline-flex;
   align-items: center;
@@ -399,14 +404,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   scrollbar-gutter: stable;
 }
 
-/* The active-intervention band spans the full canvas frame above the split. */
-.signal-band {
-  width: 100%;
-  max-width: var(--frame);
-  margin: 0 auto;
-  padding: 0.7rem 0 0.15rem;
-}
-
 .section-title {
   margin: 0 0 0.55rem;
   font-size: 11.5px;
@@ -416,139 +413,88 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--muted);
 }
 
-/* ---------- attention board: conductor + two inbox lanes ---------- */
+#programs { contain: layout paint; }
 
-.attention-board {
-  display: grid;
-  gap: 0.65rem;
-  margin-bottom: 0.55rem;
-}
-.attention-board[hidden] { display: none; }
+/* ---------- pulse strip: urgency-weighted cells + inline expansion ---------- */
 
-.conductor {
-  border: 1px solid var(--line-strong);
-  border-radius: 7px;
-  background: var(--raise);
-  padding: 0.55rem;
+/* Cells re-weight by urgency inside the flex rail: a hot cell grows, takes
+   ember ink and a larger value; a micro cell collapses to a trailing chip. */
+.reading.cell-hot { flex-grow: 2.4; }
+.cell-hot .reading-label { color: var(--ember); }
+.cell-hot .reading-value { font-size: 1.7rem; color: var(--ember); }
+.reading.cell-micro {
+  flex: 0 0 auto;
+  border-right: 0;
+  padding-right: 0;
 }
-.score {
-  display: flex;
-  gap: 3px;
-  min-height: 2.15rem;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.score-legend {
-  margin: 0.45rem 0.1rem 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-.score-legend[hidden] { display: none; }
-body.is-all-clear .score-legend,
-.attention-board.is-all-clear .score-legend { display: none; }
-.attention-board,
-.lane-body,
-#programs {
-  contain: layout paint;
-}
-.score .seg {
+.cell-micro .reading-value { font-size: 0.95rem; }
+/* The micro health cell and the calm line render a bare .verdict-chip (no
+   .reading-value wrapper), so the chip itself takes the micro scale. */
+.cell-micro .verdict-chip,
+.pulse-calm .verdict-chip { font-size: 0.95rem; }
+.cell-micro .verdict-chip .ico,
+.pulse-calm .verdict-chip .ico { width: 1em; height: 1em; }
+
+/* Calm collapse: the whole cell row folds to one moss line. The pulse-cleared
+   class washes moss in once, then transitions back out when it is dropped on
+   the next paint — a one-shot delight, no keyframe loop. */
+.pulse-calm {
+  /* The line renders inside .rail-inner (a flex row); fill the row and carry
+     the frame gutter itself so calm and stressed states share one left edge. */
+  flex: 1 1 100%;
+  padding: 0.5rem 1.1rem 0.6rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  padding: 0 0.65rem;
-  color: #fff;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  min-width: 0;
-  flex: 1 1 0;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  color: var(--moss);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 320ms ease;
 }
-.score .seg > span { flex: none; }
-.score .seg span { font-variant-numeric: tabular-nums; }
-.score .seg.ember { background: var(--ember); }
-.score .seg.amber { background: var(--amber); }
-.score .seg.slate { background: var(--slate); }
-.score .seg.moss { background: var(--moss); }
-.score .seg.zero { opacity: 0.35; }
-.score .seg.grow-0 { flex: 0.35 1 0; }
-.score .seg.grow-1 { flex: 1 1 0; }
-.score .seg.grow-2 { flex: 2 1 0; }
-.score .seg.grow-3 { flex: 3 1 0; }
-.score .seg.grow-4 { flex: 4 1 0; }
-.score .seg.grow-5 { flex: 5 1 0; }
-.score .seg.grow-6 { flex: 6 1 0; }
-.score .seg.grow-7 { flex: 7 1 0; }
-.score .seg.grow-8 { flex: 8 1 0; }
-.score .seg.grow-9 { flex: 9 1 0; }
-.score .seg.grow-10 { flex: 10 1 0; }
-.score .seg.grow-11 { flex: 11 1 0; }
-.score .seg.grow-12 { flex: 12 1 0; }
-.score .seg.clear-banner {
-  display: none;
-  justify-content: center;
-  gap: 0.55rem;
-  letter-spacing: 0.14em;
-  flex: 1 1 auto;
-}
-.score .seg.clear-banner .mark {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: #fff;
-  opacity: 0.9;
-}
-body.is-all-clear .score .seg:not(.clear-banner),
-.attention-board.is-all-clear .score .seg:not(.clear-banner) { display: none; }
-body.is-all-clear .score .seg.clear-banner,
-.attention-board.is-all-clear .score .seg.clear-banner,
-.score.score-clear .seg.clear-banner { display: flex; }
-body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
+/* app.js drops the one-shot class on the rail (the calm line is rebuilt each
+   paint), so the wash targets the calm line through the rail. */
+.health-rail.pulse-cleared .pulse-calm { background-color: var(--moss-soft); }
+/* Calm: the rail-inner gutter yields to the calm line's own padding, so the
+   moss wash spans the full strip line. */
+.health-rail.is-calm .rail-inner { padding: 0; }
 
-.lanes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.65rem;
-}
-.lanes[hidden] { display: none; }
-.lane {
+/* Activity sparkline on the calm line — sized here (the SVG carries only a
+   viewBox; an unsized inline SVG would fall back to the 300×150 default). */
+.pulse-spark { flex: none; width: 6rem; height: 1.1rem; }
+
+/* Inline expansion: a bordered panel of finding rows, matching the old lane.
+   The element carries only the id (index.html markup is a fixed contract). */
+#pulse-findings {
+  max-width: var(--frame);
+  margin: 0 auto 0.15rem;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--raise);
-  min-height: 11rem;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
+  contain: layout paint;
 }
-.lane-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem 0.5rem;
-  border-bottom: 1px solid var(--line);
+.pulse-more {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.65rem 0.75rem;
+  cursor: pointer;
+  text-align: left;
+  min-height: 44px;
 }
-.lane-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  text-transform: none;
-  color: var(--ink);
-}
-.lane-head .n {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--faint);
-  letter-spacing: 0.04em;
-}
-.lane-body { display: flex; flex-direction: column; flex: 1; }
+.pulse-more:hover { color: var(--ink); background: var(--surface); }
 
+/* Finding row — title first; the work state rides as a quiet chip on the right.
+   The pin is a firm ember left rail (an instrument mark), not a pastel wash. */
 .finding {
   display: grid;
   grid-template-columns: 0.85rem 6.8rem minmax(0, 1fr) 5.4rem;
@@ -568,12 +514,13 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .finding:last-child { border-bottom: 0; }
 .finding:hover { background: var(--surface); }
 .finding:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.finding.pin { background: color-mix(in srgb, var(--ember) 4%, var(--raise)); }
+.finding.pin { box-shadow: inset 3px 0 var(--ember); }
 .finding.is-selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
+.finding.pin.is-selected { box-shadow: inset 3px 0 var(--ember), inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
 .finding .copy { min-width: 0; }
 .finding .title {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -609,17 +556,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   background: var(--moss);
   border-radius: 50%;
 }
-.st {
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.st.hot { color: var(--ember); }
-.st.warm { color: var(--amber); }
-.st.cool { color: var(--slate); }
-.st.ok { color: var(--moss); }
 /* Four-tick workflow rail: Watch → Triage → Verify → Cleared. Active ticks
    fill left-to-right from the finding's work stage; tone follows work key. */
 .stage-rail {
@@ -651,98 +587,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .stage-rail.ok[data-stage="2"] > i:nth-child(-n+2),
 .stage-rail.ok[data-stage="3"] > i:nth-child(-n+3),
 .stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
-
-.lane-empty {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  text-align: center;
-  padding: 1.4rem 1rem;
-  color: var(--faint);
-  font-size: 12px;
-}
-.lane-empty strong {
-  display: block;
-  font-family: var(--font-display);
-  font-size: 1.05rem;
-  color: var(--moss);
-  margin-bottom: 0.25rem;
-  letter-spacing: -0.01em;
-}
-.lane-more {
-  appearance: none;
-  border: 0;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  font: 650 11px/1 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 0.65rem 0.75rem;
-  cursor: pointer;
-  text-align: left;
-  min-height: 44px;
-}
-.lane-more:hover { color: var(--ink); background: var(--surface); }
-
-.allclear {
-  display: flex;
-  border: 1px solid color-mix(in srgb, var(--moss) 35%, var(--line-strong));
-  border-radius: 8px;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--moss) 8%, transparent), transparent 40%),
-    var(--raise);
-  padding: 1.15rem 1.2rem;
-  align-items: center;
-  gap: 1rem;
-}
-.allclear[hidden] { display: none; }
-.allclear-mark {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  border: 2px solid var(--moss);
-  color: var(--moss);
-  display: grid;
-  place-items: center;
-  font-size: 1rem;
-  font-weight: 700;
-  flex: none;
-}
-.allclear-copy h2 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-weight: 800;
-  letter-spacing: -0.015em;
-  color: var(--moss);
-}
-.allclear-copy p {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-@media (max-width: 860px) {
-  .lanes { grid-template-columns: 1fr; }
-  .finding { grid-template-columns: 0.85rem 6.2rem minmax(0, 1fr); }
-  .finding .stage-rail { display: none; }
-  body.is-all-clear .allclear { flex-direction: column; text-align: center; }
-  /* Narrow conductor: 2×2 so labels never clip (IN MOTION / CLEARED). */
-  .score:not(.score-clear) {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-auto-rows: minmax(2rem, auto);
-    min-height: 0;
-  }
-  .score:not(.score-clear) .seg {
-    flex: none;
-    letter-spacing: 0.06em;
-    font-size: 10px;
-    padding: 0.35rem 0.55rem;
-  }
-  .score:not(.score-clear) .seg.clear-banner { display: none; }
-}
 
 /* Drawer-shared signal helpers (Impact / Technical) */
 .affected-disclosure summary, .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
@@ -826,6 +670,11 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   line-height: 1.3;
   color: var(--ink);
   overflow-wrap: anywhere;
+  /* One-line headline — the full text always lives in Raw output. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
 }
 .triage-briefing-summary {
   margin: 0.4rem 0 0;
@@ -853,10 +702,12 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   line-height: 1.45;
 }
 .triage-briefing-list li { margin: 0.2rem 0; overflow-wrap: anywhere; }
+.triage-briefing-cta { margin-bottom: 0.45rem; }
 .triage-briefing-list--next {
   color: var(--ink);
   font-weight: 600;
 }
+.triage-briefing-cta + .triage-briefing-list--next { color: var(--muted); font-weight: 500; font-size: 12.5px; }
 .triage-briefing-list--next li::marker { color: var(--moss); }
 .triage-briefing--blocked .triage-briefing-list--next li::marker { color: var(--ember); }
 .triage-briefing-raw {
@@ -912,9 +763,12 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 }
 .views { gap: 0; align-items: stretch; border-bottom: 1px solid var(--line-strong); }
 .view-tab:hover { color: var(--ink); background: var(--sand); border-color: var(--line); border-bottom-color: var(--line-strong); }
-.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface); border-color: var(--line-strong); border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--surface); }
-.view-tab .count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
-.view-tab[aria-pressed="true"] .count { color: var(--muted); }
+.view-tab.is-current { color: var(--ink); background: transparent; border-color: transparent; border-bottom: var(--signal-rail) solid var(--ink); }
+.view-tab .count { font-size: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--faint); }
+.view-tab.is-current .count { color: var(--muted); }
+/* Alerts tab count when there is something to act on: ember ink, no fill. Placed
+   after the is-current rule so it wins by source order on the active Alerts tab. */
+.view-tab .count.is-alerting { color: var(--ember); }
 .view-tab .count:empty { display: none; }
 
 /* filter chips (above search) — single scrolling row to spare vertical space */
@@ -966,7 +820,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 #search:focus-visible { outline-offset: 0; }
 
 .select-toggle { flex: none; }
-.select-toggle[aria-pressed="true"] { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.select-toggle[aria-pressed="true"] { color: var(--ink); background: var(--sand); border-color: var(--ink); }
 
 .scope-note {
   margin: 0;
@@ -1003,7 +857,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
 .program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
-.program-alias-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
+.program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
   display: inline-grid;
@@ -1018,8 +872,11 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.program-rollup .hot { color: var(--ember); font-weight: 700; }
+.program-rollup { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
+.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.program-rollup-label { font-size: 11px; color: var(--faint); }
+.program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
 .rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; width: 100%; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--raise); }
@@ -1056,11 +913,19 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   text-align: left;
   border-bottom: 1px solid var(--line);
   border-left: 4px solid transparent;
+  cursor: pointer;
+  box-sizing: border-box;
 }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
+.agent-row:focus { outline: none; }
+.agent-row:focus-visible { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .agent-row.is-selected { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border-left-color: var(--ink); }
 .agent-row.is-selecting { cursor: default; }
+.agent-row.is-renaming { border-bottom-color: transparent; }
+.agent-row[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.agent-row-edit-wrap { border-bottom: 1px solid var(--line); }
+.agent-row-edit-wrap .rename-form { border-bottom: 0; }
 
 .agent-row.provider-claude:not(.is-selected) { border-left-color: color-mix(in srgb, var(--claude) 50%, transparent); }
 .agent-row.provider-codex:not(.is-selected) { border-left-color: color-mix(in srgb, var(--codex) 50%, transparent); }
@@ -1086,14 +951,33 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .agent-row.role-tester,
 .agent-row.role-automation { box-shadow: inset 3px 0 var(--role-color); }
 
+/* Alert washes must ride WITH a status-colored edge mark, never a standalone
+   flood (Rule 1 — indicator inks, not flood fills; codified soft-wash threshold:
+   a ≤10% tint always paired with an edge rail). The provider/role left border is
+   orthogonal to the alert, so the alert gets its own inset rail; selection keeps
+   its ink treatment, so the rail defers there. */
 .agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
 .agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
+.agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
+.agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
+.agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
+/* The alert rails above ride the same box-shadow property as the :focus-visible
+   ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
+   on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
+   colour AND the focus ring shows. */
+.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 1px var(--line-strong); }
 .agent-row.is-ended { opacity: 0.66; }
 .agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
+/* One shared 5-track template — identity (wide, left) + the right-aligned
+   instrument cluster: status, model+ctx%, tokens, elapsed. Both the header and
+   every row use it, so instrument values line up in scannable columns and the
+   header labels sit exactly above them (fr tracks resolve identically per row). */
 .agent-column-header {
-  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
+  grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
   padding: 0.45rem 0.85rem 0.35rem 0.8rem;
   border-bottom: 1px solid var(--line);
   background: var(--sand);
@@ -1105,19 +989,75 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+/* Instrument-column labels sit right-aligned over their (right-aligned) values. */
+.ri-col-label { justify-self: end; text-align: right; }
 
 .agent-grid {
   display: grid;
-  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
-  align-items: center;
-  gap: 0.5rem;
+  grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
+  /* Instruments ride the name line; identity's tags + summary drop below it. */
+  align-items: start;
+  gap: 0.15rem 0.5rem;
   min-width: 0;
 }
-.row-state { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.act-glyph { flex: none; width: 0.65rem; height: 0.65rem; border-radius: 50%; background: var(--line-strong); }
+/* Identity holds column 1; the instrument cluster (a display:contents wrapper,
+   so its cells are direct grid items) claims columns 2–5 by explicit placement,
+   which keeps every cell in its column even when a neighbour is omitted. */
+.agent-grid > .row-identity { grid-column: 1; }
+.row-instruments { display: contents; }
+.agent-grid .row-state { grid-column: 2; justify-self: end; padding-top: 0.08rem; }
+.agent-grid .ri-model { grid-column: 3; }
+.agent-grid .ri-tokens { grid-column: 4; }
+.agent-grid .ri-elapsed { grid-column: 5; }
+
+/* Right-aligned mono instrument cells. Values carry tabular-nums so digits align
+   down the column; unknown cells are omitted in JS (never a fabricated number). */
+.ri-cell { min-width: 0; overflow: hidden; justify-self: end; padding-top: 0.08rem; }
+.ri-value {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font: 600 12.5px/1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ri-model .ri-value { font-weight: 650; }
+.ri-tokens .ri-value { font-weight: 700; font-size: 13px; }
+.ri-cell.is-unknown .ri-value { color: var(--faint); font-weight: 500; font-size: 11px; }
+
+/* De-noise: the terminal / source naming tags left the row. Only a cwd mismatch
+   keeps a mark — a small ember dot (role="img" + aria-label); the full sentence
+   rides the row title + aria-label and the drawer. Indicator ink, no flood. */
+.source-mismatch-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 22%, transparent);
+}
+/* Status column shows the activity word, colored by state (no separate dot). */
+.row-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-glyph { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--line-strong); }
 .act-working { color: var(--working); } .act-working.act-glyph { background: var(--working); box-shadow: 0 0 0 3px color-mix(in srgb, var(--working) 22%, transparent); }
 .act-idle { color: var(--idle); } .act-idle.act-glyph { background: var(--idle); }
 .act-ended, .act-unknown { color: var(--ended); } .act-ended.act-glyph, .act-unknown.act-glyph { background: var(--ended); }
+.act-glyph.outcome-needs-you { background: var(--needs); box-shadow: 0 0 0 3px color-mix(in srgb, var(--needs) 28%, transparent); }
+.act-glyph.outcome-blocked { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 28%, transparent); }
+.act-glyph.outcome-failed { background: var(--failed); box-shadow: 0 0 0 3px color-mix(in srgb, var(--failed) 28%, transparent); }
+.row-state-alert { color: var(--needs); }
 
 .row-identity { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); column-gap: 0.5rem; align-items: center; min-width: 0; }
 /* Provider marks ride in a subtle brand badge so the real OpenAI knot / Claude /
@@ -1136,8 +1076,53 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
    full-bleed as a rounded square instead of inside the neutral circle badge. */
 .provider-mark-raster { padding: 0; border: 0; background: none; border-radius: 6px; }
 .provider-mark-text { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--raise); font: 700 10px var(--font-mono); }
-.agent-name { display: block; font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.agent-name {
+  display: block;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .agent-row.is-parent .agent-name { font-weight: 800; }
+.agent-rename {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.agent-row:hover .agent-rename,
+.agent-row:focus-within .agent-rename,
+.agent-row.is-selected .agent-rename,
+.agent-rename:focus-visible {
+  opacity: 1;
+}
+.agent-rename:hover,
+.agent-rename:focus-visible {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--raise);
+}
+.agent-rename .ico { width: 0.9rem; height: 0.9rem; }
 .row-identity-tags { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.12rem; }
 .role-chip {
   display: inline-flex;
@@ -1156,11 +1141,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 
-.row-fact { min-width: 0; overflow: hidden; }
-.row-fact-value { display: block; overflow: hidden; color: var(--ink); font: 600 12.5px/1.35 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.fact-tokens .row-fact-value { font-size: 13.5px; font-weight: 700; }
-.row-fact.is-unknown .row-fact-value { color: var(--faint); font-size: 11px; font-weight: 500; }
-
 .token-fact-value { display: flex; align-items: center; gap: 0.4rem; }
 /* Compatibility: token text remains the readable source of truth; the old
    green bar was decorative and made the primary row noisy. */
@@ -1169,19 +1149,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
 .tm-fill.hot { fill: var(--ember); }
-
-.fact-control { display: grid; justify-items: start; }
-/* ACCESS: icon + explicit state word (Ready / View only / Quarantined). */
-.control-access { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; }
-.control-icon { display: inline-grid; width: 1.35rem; height: 1.35rem; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); flex: none; }
-.control-icon .ico { width: 0.85rem; height: 0.85rem; }
-.control-access-text { font: 650 11.5px/1.2 var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.control-linked .control-icon { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 40%, var(--line-strong)); }
-.control-linked .control-access-text { color: var(--moss); }
-.control-observed-only .control-icon { color: var(--faint); border-style: dashed; }
-.control-observed-only .control-access-text { color: var(--faint); }
-.control-quarantined .control-icon { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--line)); background: color-mix(in srgb, var(--failed) 7%, var(--raise)); }
-.control-quarantined .control-access-text { color: var(--failed); font-weight: 750; }
 
 .row-update { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; margin: 0.3rem 0 0 8.5rem; }
 .row-summary {
@@ -1280,11 +1247,172 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .pane-inspector[hidden] { display: none; }
 @keyframes drawer-in { from { transform: translateX(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* Overview + Technical: a tabbed single column at every desktop width, so the
-   drawer holds a calm 480–520px without cramming two panels together. */
-.inspector-body { display: block; }
-.inspector-body[data-active-tab="overview"] > [data-tab="technical"],
-.inspector-body[data-active-tab="technical"] > [data-tab="overview"] { display: none; }
+/* ---------- widescreen: reading-focused 40/60 split ----------
+   With an agent open, the roster keeps ~40% as a scannable rail (trees of
+   agent/workspace/program) and the drawer takes ~60% — the reading surface.
+   the model/tokens/elapsed instruments fold away; they live in full in the drawer. */
+@media (min-width: 1180px) {
+  body.inspector-open .pane-list {
+    flex: 0 0 clamp(380px, 40%, 760px);
+  }
+  body.inspector-open .pane-inspector {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+  }
+  body.inspector-open .agent-grid,
+  body.inspector-open .agent-column-header {
+    grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
+  }
+  /* Keep identity + status; drop the model/tokens/elapsed instruments and their
+     header labels (columns 3–5). */
+  body.inspector-open .agent-grid .ri-model,
+  body.inspector-open .agent-grid .ri-tokens,
+  body.inspector-open .agent-grid .ri-elapsed,
+  body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
+}
+
+/* ---------- horizontal bookshelf: Operate | Chat | Evidence rail/column ----------
+   Operate and Chat stay open side by side (the showcase); Evidence — vitals,
+   paths, routing, transcript — collapses to a caterpillar/cog rail that
+   progressively reveals as a third column. */
+.drawer-shelf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) 2.75rem;
+  gap: 0.65rem;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 14rem;
+  flex: 1 1 auto;
+}
+.drawer-shelf.is-evidence-open {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(12rem, 0.95fr);
+}
+.shelf-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.shelf-title {
+  margin: 0;
+  padding: 0.55rem 0.75rem 0.35rem;
+  font: 750 10px/1.3 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--faint);
+  flex: none;
+}
+.shelf-body {
+  padding: 0.15rem 0.75rem 0.75rem;
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* Whimsical Evidence caterpillar rail — collapsed third column. */
+.shelf-evidence-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 100%;
+  padding: 0.7rem 0.25rem 0.85rem;
+  border: 1px dashed color-mix(in oklab, var(--ember) 35%, var(--line-strong));
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in oklab, var(--ember) 12%, transparent), transparent 55%),
+    var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+.shelf-evidence-rail:hover,
+.shelf-evidence-rail:focus-visible {
+  color: var(--ink);
+  border-color: var(--ember);
+  border-style: solid;
+  transform: translateY(-1px);
+  outline: none;
+}
+.shelf-evidence-rail .ico { width: 1.05rem; height: 1.05rem; flex: none; }
+.shelf-rail-spine {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.15rem 0 0.1rem;
+}
+.shelf-rail-bead {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ember) 55%, var(--sand));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--ember) 20%, transparent);
+}
+.shelf-rail-bead:nth-child(2) { width: 0.5rem; height: 0.5rem; opacity: 0.9; }
+.shelf-rail-bead:nth-child(3) { width: 0.58rem; height: 0.58rem; opacity: 0.8; }
+.shelf-rail-bead:nth-child(4) { width: 0.42rem; height: 0.42rem; opacity: 0.65; }
+.shelf-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font: 750 10px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.shelf-cog {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 32px;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.shelf-cog:hover { color: var(--ink); border-color: var(--ink); }
+.shelf-cog.is-active { color: var(--ink); background: var(--sand); }
+.shelf-cog .ico { width: 1rem; height: 1rem; }
+.shelf-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-right: 0.45rem;
+  flex: none;
+}
+
+/* Below the widescreen split the shelf stacks; the rail becomes a horizontal pill. */
+@media (max-width: 1179px) {
+  .drawer-shelf,
+  .drawer-shelf.is-evidence-open {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .shelf-evidence-rail {
+    flex-direction: row;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    min-height: 44px;
+    padding: 0.45rem 0.85rem;
+  }
+  .shelf-rail-spine { flex-direction: row; padding: 0; }
+  .shelf-rail-label {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+}
 
 /* ---------- inspector: per-type drawer states ----------
    One shared chassis; each entity type differs only by a single accent channel
@@ -1311,6 +1439,22 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .dw-eyebrow--amber { color: var(--amber); }
 .dw-eyebrow--moss  { color: var(--moss); }
 .dw-eyebrow--slate { color: var(--slate); }
+
+/* Entity-drawer head action (B4) — the promoted primary lever in the verdict
+   side. Compact, matching the agent drawer's .verdict-action .dock-tool sizing so
+   every drawer's head reads the same. Scoped under .verdict-action so it wins the
+   compact size over the base .btn (which is later in source); inherits .btn
+   colours/border/radius. Touch-swept to 44px below 1024px in the responsive block. */
+.verdict-action .dw-head-action { min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; white-space: nowrap; }
+
+/* Program head rollup (B4) — the swarm at a glance: mono values with quiet ui
+   unit words, hairline-gapped. Values mono per rule 2; unit labels stay
+   ui/--faint; an alert count earns ember ink (urgency earns weight, calm does not). */
+.dw-rollup { display: flex; flex-wrap: wrap; gap: 0.1rem 0.85rem; margin: 0.15rem 0 0; }
+.dw-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.dw-rollup-value { font: 650 14px/1.05 var(--font-mono); color: var(--ink); }
+.dw-rollup-label { font-size: 11.5px; color: var(--faint); }
+.dw-rollup-cell.is-alert .dw-rollup-value { color: var(--ember); }
 
 .dw-lead { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
 .dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
@@ -1478,20 +1622,53 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
-/* Legacy pill styles kept for any residual list surfaces; agent drawer uses .status-line. */
-.inspector-state { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--sand); }
-.state-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.6rem; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 12px; font-weight: 650; color: var(--muted); background: var(--raise); }
-.state-pill .ico { width: 0.85rem; height: 0.85rem; }
-.state-pill.act-working { color: var(--working); border-color: color-mix(in srgb, var(--working) 45%, transparent); }
-.state-pill.act-idle { color: var(--idle); border-color: color-mix(in srgb, var(--idle) 45%, transparent); }
-.state-pill.outcome-needs-you { color: var(--needs); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
-.state-pill.outcome-blocked { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 45%, transparent); }
-.state-pill.outcome-failed { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-quarantined { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-linked { color: var(--moss); }
-.state-pill.policy-compliant { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.state-pill.policy-unreported { color: var(--faint); border-style: dashed; }
-.state-pill.policy-mismatch { color: #fff; background: var(--failed); border-color: var(--failed); }
+/* Verdict head (B2): the head carries the verdict — name, status words, the
+   ember-outline gate when blocked — plus the one most-relevant action, so the
+   operator can act from the top. Close and the head action stack on the right. */
+.inspector-verdict .verdict-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  flex: none;
+}
+.verdict-action .dock-tool {
+  min-height: 32px;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--raise);
+}
+.verdict-action .dock-tool:hover:not(:disabled) { border-color: var(--ink); background: var(--sand); }
+.verdict-gate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  padding: 0.16rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 55%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--ember);
+  background: none; /* indicator ink + outline, never a fill */
+}
+.verdict-gate .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+/* De-noised mismatch: the quiet line keeps a visible ember dot; the full
+   sentence lives in the title tooltip. */
+.inspector-source-name.is-mismatch::before {
+  content: "";
+  display: inline-block;
+  width: 0.38rem;
+  height: 0.38rem;
+  margin-right: 0.32rem;
+  border-radius: 50%;
+  background: var(--ember);
+}
+/* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
+   holds DOM order without spending a flex gap. */
+.inspector-vitals:empty { display: none; }
 
 /* Agent drawer status — one sentence under the title, not a pill cluster. */
 .status-line {
@@ -1534,8 +1711,10 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .control-banner-copy { min-width: 0; overflow-wrap: anywhere; }
 .control-banner-copy strong { color: var(--ink); font-weight: 650; }
 .control-banner-link {
+  /* One red ink for the whole banner: --failed (settled ruling — border/icon/link
+     are --failed ink over the sanctioned --ember-soft tint; never two red inks). */
   display: inline; padding: 0; border: 0; background: none; cursor: pointer;
-  color: var(--ember); font: inherit; font-weight: 650;
+  color: var(--failed); font: inherit; font-weight: 650;
 }
 .control-banner-link:hover { text-decoration: underline; }
 
@@ -1557,6 +1736,9 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   box-shadow: 0 -12px 28px -22px rgba(18, 24, 32, 0.4);
   display: flex; flex-direction: column; gap: 0.45rem;
 }
+/* Linked dock: a moss hairline marks the live control link; the lock story
+   stays with the control banner, so the dock never repeats it. */
+.command-dock--linked { border-top-color: color-mix(in srgb, var(--moss) 55%, var(--line)); }
 .command-dock-meta {
   display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
   font-size: 11.5px; color: var(--faint);
@@ -1591,27 +1773,59 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .dock-tool:disabled { color: var(--faint); cursor: not-allowed; }
 .dock-tool-warn:hover:not(:disabled) { color: var(--bad); background: var(--ember-soft); }
 .command-confirm { flex: 1 1 100%; }
+.command-dock-more {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+}
+.command-dock-more > summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--faint);
+  list-style: none;
+}
+.command-dock-more > summary::-webkit-details-marker { display: none; }
+.command-dock-more > summary:hover { color: var(--muted); }
+.command-dock-more[open] > summary { margin-bottom: 0.35rem; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
 .primary-actions { padding: 0.85rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); display: flex; flex-direction: column; gap: 0.5rem; }
 .next-action { margin: 0; font-size: 13.5px; color: var(--muted); }
 .next-key { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.25rem; }
 
-.inspector-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line-strong); }
-.inspector-tab { padding: 0.4rem 0.7rem; min-height: 34px; font-size: 12.5px; font-weight: 650; color: var(--faint); border-bottom: 2px solid transparent; }
-.inspector-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ember); }
-
 .inspector-panel { display: flex; flex-direction: column; gap: 0.85rem; }
-.presentation-labels { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.75rem 0.85rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); }
-.presentation-labels .section-title { margin: 0 0 0.1rem; }
+.names-disclosure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  padding: 0.45rem 0.75rem 0.55rem;
+}
+.names-disclosure > summary {
+  cursor: pointer;
+  color: var(--faint);
+  font: 650 11.5px/1.3 var(--font-mono);
+  letter-spacing: 0.04em;
+  list-style: none;
+}
+.names-disclosure > summary::-webkit-details-marker { display: none; }
+.names-disclosure > summary:hover { color: var(--ink); }
+.names-disclosure[open] > summary { margin-bottom: 0.45rem; color: var(--ink); }
+.presentation-labels { display: flex; flex-direction: column; gap: 0.45rem; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; min-width: 0; padding: 0.35rem 0; }
 .label-copy { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
 .label-value { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .label-source, .source-label { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
+.source-label.is-mismatch,
+.inspector-source-name.is-mismatch {
+  color: color-mix(in srgb, var(--ember) 75%, var(--ink));
+  font-weight: 650;
+}
 .label-status { margin: 0; color: var(--faint); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }
-.last-human-message {
+.last-human-message,
+.operate-task,
+.chat-turn-body {
   margin: -0.2rem 0 0;
   padding: 0.7rem 0.8rem;
   border: 1px solid var(--line);
@@ -1620,6 +1834,85 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.operate-task { margin-top: 0; color: var(--muted); font-size: 13.5px; }
+.operate-outcome-note { margin: 0; font-size: 13px; color: var(--muted); }
+.operate-outcome-note.outcome-failed,
+.operate-outcome-note.outcome-blocked { color: var(--ember); font-weight: 650; }
+.operate-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+}
+.operate-meta-item { display: inline-flex; align-items: baseline; gap: 0.35rem; min-width: 0; font-size: 13px; }
+.operate-meta-label {
+  font: 700 10px/1.4 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ---------- vitals band: the instrument tiles ----------
+   The numbers an operator acts on (context ring, session tokens + cache, uptime)
+   rendered as instruments in a compact row directly under the verdict head — the
+   band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
+   absent tiles are never rendered, so the band flexes to whatever the source
+   reports; when the source reports nothing the mount's :empty rule collapses it. */
+.inspector-vitals { min-width: 0; }
+.vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.vital {
+  flex: 1 1 8.5rem;
+  min-width: 0;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem;
+}
+.vital-label {
+  display: block;
+  font: 700 9.5px/1.2 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.4rem;
+}
+.vital-big { font-size: 1.45rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1; color: var(--ink); }
+.vital-big small { font-size: 0.7rem; font-weight: 500; color: var(--faint); letter-spacing: 0; }
+.vital-sub { font: 500 10.5px/1.3 var(--font-mono); color: var(--faint); margin-top: 0.35rem; }
+.vital-ring-wrap { display: flex; align-items: center; gap: 0.6rem; }
+.vital-figure { min-width: 0; }
+.vital-bar { display: block; width: 100%; height: 6px; margin-top: 0.5rem; }
+
+/* SVG donut ring — arc via stroke-dasharray geometry (CSP-safe), tone by severity. */
+.vital-ring { width: 44px; height: 44px; flex: none; }
+.ring-track { fill: none; stroke: var(--sand); stroke-width: 3.4; }
+.ring-fill {
+  fill: none; stroke: var(--moss); stroke-width: 3.4; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 18px 18px;
+}
+.ring-fill.warn { stroke: var(--amber); }
+.ring-fill.hot { stroke: var(--ember); }
+.ring-pct { text-anchor: middle; dominant-baseline: central; font: 700 9px var(--font-mono); fill: var(--ink); }
+.vital-bar .tm-track { fill: var(--sand); }
+.vital-bar .tm-fill { fill: var(--moss); }
+.chat-turn { display: flex; flex-direction: column; gap: 0.3rem; }
+.chat-turn-role {
+  font: 700 10px/1.3 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.chat-turn--assistant .chat-turn-body {
+  border-left: 2px solid color-mix(in srgb, var(--moss) 45%, var(--line));
+}
+.chat-transcript-link { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.evidence-control-link { display: flex; flex-direction: column; gap: 0.4rem; }
+.evidence-control-sentence { margin: 0; font-size: 13.5px; line-height: 1.4; }
+.evidence-ids { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.evidence-copy-id { min-height: 30px; font-size: 11.5px; }
 .detail-grid { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem 0.8rem; margin: 0; }
 .detail-grid dt { font: 700 10px/1.4 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
@@ -1775,16 +2068,29 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   transition: opacity 180ms ease, transform 180ms ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { border-color: var(--bad); color: #f4c9bd; }
+.toast.err { border-color: var(--bad); color: color-mix(in srgb, var(--ember) 25%, var(--surface)); }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 60%, var(--ink)); }
 
 /* ---------- responsive ---------- */
 
+/* Density at width: from 1440px up the canvas is wide enough that agent rows can
+   afford less vertical breathing room. Tighten ONLY the row's vertical padding —
+   0.45rem → 0.35rem, one step down this section's own spacing scale (it is the
+   .agent-column-header's bottom padding), so the dense row rhythm matches the
+   header it sits under — and a full swarm fits more rows per screen. Structure is
+   untouched: min-height, the instrument cluster, and the summary line keep their
+   sizes; horizontal padding is inherited from the base rule; and the <1024px 44px
+   touch sweep (a max-width rule below) never sees this min-width override. */
+@media (min-width: 1440px) {
+  .agent-row { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+}
+
 @media (max-width: 1180px) {
-  .rail-inner { grid-template-columns: repeat(3, 1fr); gap: 0.55rem 1.1rem; }
-  .rail-inner .reading:nth-child(3n) { border-right: 0; }
+  /* Wrap the strip to two rows; drop dividers so wrapped cells don't stray. */
+  .rail-inner { gap: 0.55rem 1.1rem; }
+  .rail-inner .reading { flex: 1 1 calc(33.333% - 0.74rem); border-right: 0; }
   .agent-column-header,
-  .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
+  .agent-grid { grid-template-columns: minmax(8rem, 2.4fr) minmax(4rem, 0.68fr) minmax(5.25rem, 0.9fr) minmax(3.5rem, 0.52fr) minmax(2.75rem, 0.42fr); }
   .triage-steps { grid-template-columns: repeat(2, minmax(11rem, 1fr)); }
 }
 
@@ -1817,9 +2123,11 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
-  .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename,
+  .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
-  .reading-repair { min-height: 44px; }
+  .verdict-action .dock-tool, .verdict-action .dw-head-action,
+  .reading-repair, .filter-chip, .program-details,
+  .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -1829,9 +2137,10 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .conn { align-self: flex-start; margin: 0 0 0.6rem 1rem; }
   .rail-header { padding: 0.35rem 0.8rem 0; }
   .rail-action { min-height: 44px; }
-  .rail-inner { grid-template-columns: 1fr 1fr; gap: 0.5rem; padding: 0.6rem 0.8rem; }
-  .reading { border-right: 0; padding-right: 0.5rem; }
-  .widget-system { grid-column: 1 / -1; padding-left: 0; }
+  /* Stack the strip: one cell per row; the calm line matches the gutter. */
+  .rail-inner { gap: 0.5rem; padding: 0.6rem 0.8rem; }
+  .rail-inner .reading { flex: 1 1 100%; border-right: 0; padding-right: 0; }
+  .pulse-calm { padding: 0.55rem 0.8rem; }
   .reading-value { font-size: 1.2rem; }
   .widget-customizer-inner { padding: 0.7rem 0.8rem 0.8rem; }
   .widget-options { grid-template-columns: 1fr; }
@@ -1839,28 +2148,31 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .widget-move { width: 2.75rem; height: 2.75rem; }
   .pane-list { padding: 0.85rem 0.65rem 5rem; }
   .program-head { min-height: 44px; }
-  .program-rename { width: 2.75rem; height: 2.75rem; }
+  .program-rename,
+  .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }
   .agent-column-header,
   .agent-grid {
-    grid-template-columns: minmax(5.2rem, 6.5rem) minmax(0, 1fr) minmax(5.2rem, 6.4rem);
-    gap: 0.35rem 0.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(5.2rem, auto);
+    gap: 0.25rem 0.5rem;
+    align-items: center;
   }
   .agent-column-header {
-    grid-template-areas: "status agent model" "context access access";
+    grid-template-areas: "agent agent" "status model";
     padding: 0.4rem 0.45rem;
   }
-  .agent-column-header > :nth-child(1) { grid-area: status; }
-  .agent-column-header > :nth-child(2) { grid-area: agent; }
-  .agent-column-header > :nth-child(3) { grid-area: model; }
-  .agent-column-header > :nth-child(4) { grid-area: context; }
-  .agent-column-header > :nth-child(5) { grid-area: access; }
+  .agent-column-header > :nth-child(1) { grid-area: agent; justify-self: start; text-align: left; }
+  .agent-column-header > :nth-child(2) { grid-area: status; justify-self: start; text-align: left; }
+  .agent-column-header > :nth-child(3) { grid-area: model; justify-self: end; text-align: right; }
+  /* Tokens + Elapsed columns collapse away on narrow — the cluster keeps status + model. */
+  .agent-column-header > :nth-child(4),
+  .agent-column-header > :nth-child(5) { display: none; }
   .agent-column-label { font-size: 8px; letter-spacing: 0.05em; }
-  .agent-row .row-state { grid-area: status; }
+  .agent-row .agent-grid { grid-template-areas: "identity identity" "status model"; }
   .agent-row .row-identity { grid-area: identity; }
-  .agent-row .fact-model { grid-area: model; }
-  .agent-row .fact-context { grid-area: context; }
-  .agent-row .fact-control { grid-area: access; justify-items: start; }
-  .agent-row .agent-grid { grid-template-areas: "status identity identity" "model model model" "context access access"; }
+  .agent-row .row-state { grid-area: status; justify-self: start; padding-top: 0; }
+  .agent-row .ri-model { grid-area: model; justify-self: end; }
+  .agent-row .ri-tokens,
+  .agent-row .ri-elapsed { display: none; }
   .agent-row .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
   .agent-row:hover .row-summary,
   .agent-row:focus .row-summary,
@@ -1879,8 +2191,9 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .triage-steps { grid-template-columns: 1fr; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
-  /* Per-type drawer controls stay comfortably tappable on touch. */
-  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
+  /* Per-type drawer controls stay comfortably tappable on touch.
+     (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
+  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
@@ -1967,6 +2280,10 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   text-transform: uppercase;
   color: var(--faint);
 }
+/* Rule 2 — mono for values: the Tokens/Cost/Session cells carry token/cost
+   values and an identifier, so they render in mono like .row-fact-value; the
+   session cell's .linkish button inherits it. When/Provider/Model stay prose. */
+.usage-table td.usage-val { font-family: var(--font-mono); }
 .linkish {
   border: 0;
   background: none;

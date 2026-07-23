@@ -38,6 +38,15 @@ export interface CmuxTarget {
   workspaceTitle?: string;
   surfaceId?: string;
   paneId?: string;
+  /** Live cmux pane cwd when known — may differ from the provider session cwd. */
+  surfaceCwd?: string;
+  /**
+   * True when an exact session/process link points at a cmux pane whose cwd
+   * disagrees with the provider session cwd (common for home-cwd orchestrators
+   * sitting inside a project-titled workspace). Controls may still be linked;
+   * display must not pretend the agent "lives" in the pane folder.
+   */
+  cwdMismatch?: boolean;
   resolution: TargetResolution;
   reason?: string;
 }
@@ -83,6 +92,10 @@ export interface AgentSnapshot {
   nickname?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
+  /** Latest sanitized human-legible USER request; null when none survived cleaning. */
+  lastUserMessage?: string | null;
+  /** Latest sanitized human-legible AGENT reply; null when none survived cleaning. */
+  lastAgentMessage?: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;
@@ -194,18 +207,53 @@ export interface TriageQueueSummary {
   state: TriageQueueState;
 }
 
-export interface AttentionBoard {
-  actNow: number;
-  watch: number;
-  inMotion: number;
-  cleared: number;
-  allClear: boolean;
+export interface PulseMomentum {
+  working: number;
+  completionsLastHour: number;
+  observedWindowMs: number;
+  stalled: number;
+  stalledAgentIds: string[];
+  stallThresholdMs: number;
+}
+
+export interface PulseBurn {
+  tokensPerMin: number | null;
+  windowMs: number;
+  coverage: { reporting: number; eligible: number; unknown: number };
+  costLastHourUsd: number | null;
+  costProvenance: "burnbar" | "unavailable";
+  costAsOf?: string;
+  costNote?: string;
+}
+
+export interface PulseActivityBucket {
+  start: string;
+  activeSessions: number;
+  completions: number;
+  tokens: number | null;
+}
+
+export interface HubPulse {
+  momentum: PulseMomentum;
+  burn: PulseBurn;
+  activity: {
+    bucketMinutes: 5;
+    windowMinutes: 60;
+    observedSince: string;
+    buckets: PulseActivityBucket[];
+  };
+}
+
+export interface SourceHealth {
+  healthy: boolean;
+  lastHealthyAt: string | null;
 }
 
 export interface SourceHealthSummary {
   healthy: number;
   degraded: number;
   total: number;
+  byProvider?: Record<Provider, SourceHealth>;
 }
 
 export interface ControlHealth {
@@ -246,8 +294,8 @@ export interface HubSnapshot {
   };
   issues?: OperatorIssue[];
   recentlyResolved?: OperatorIssue[];
-  attentionBoard?: AttentionBoard;
   triageSummaries?: TriageQueueSummary[];
+  pulse?: HubPulse;
   programs: ProgramSnapshot[];
 }
 

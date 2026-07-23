@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
-import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
+import {
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  type HumanMessageCandidate,
+} from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
@@ -168,8 +172,12 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     ?.replace(/^(?:goal|mission|task|objective):\s*/i, "")
     .trim()
     .slice(0, 100);
+  const cwdBase = meta.cwd ? basename(meta.cwd.replace(/\/+$/, "")) : "";
+  const cwdIdentity = cwdBase ? `Cursor · ${cwdBase}` : "Cursor session";
+  // Prefer folder identity over prompt-as-title so the agent lane matches a
+  // hunt-able terminal/project name; the task stays in the message lane.
   const displayName = genericCursorName(input.store?.name)
-    ? taskName || (basename(meta.cwd) ? `Cursor · ${basename(meta.cwd)}` : "Cursor session")
+    ? cwdIdentity || taskName || "Cursor session"
     : input.store!.name!.trim();
   return {
     id: `cursor:${input.sessionId}`,
@@ -187,6 +195,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     cost: null,
     subagentCount: input.subagentCount,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
+    lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: input.transcriptPath
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
@@ -240,12 +250,14 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     ?.replace(/^(?:goal|mission|task|objective):\s*/i, "")
     .trim()
     .slice(0, 100);
+  const childCwdBase = input.cwd ? basename(input.cwd.replace(/\/+$/, "")) : "";
+  const childIdentity = childCwdBase ? `Cursor · ${childCwdBase}` : "Cursor child agent";
 
   return {
     id: `cursor:${input.sessionId}`,
     provider: "cursor",
     sourceSessionId: input.sessionId,
-    displayName: taskName || "Cursor child agent",
+    displayName: childIdentity || taskName || "Cursor child agent",
     cwd: input.cwd,
     model: input.model,
     task,
@@ -257,6 +269,8 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     parentSourceSessionId: input.parentSessionId,
     threadDepth: 1,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
+    lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],

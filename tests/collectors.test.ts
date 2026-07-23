@@ -112,7 +112,7 @@ describe("collector identity and usage truth", () => {
     expect(agent?.task).toBe(
       "Goal: Verify the immutable Lane 0 candidate.\n\nSuccess means: the gate is honest.",
     );
-    expect(agent?.displayName).toBe("Verify the immutable Lane 0 candidate.");
+    expect(agent?.displayName).toBe("OMP · hd-master-health-20260721");
     expect(agent?.status).toBe("archived");
     expect(agent?.lastHumanMessage).toBe("Goal: Verify the immutable Lane 0 candidate. Success means: the gate is honest.");
   });
@@ -228,7 +228,7 @@ describe("collector identity and usage truth", () => {
     expect(agent?.task).toBe(
       "Goal: Restore the Hormiga settings cockpit safely.\n\nSuccess means: all focused tests pass.",
     );
-    expect(agent?.displayName).toBe("Restore the Hormiga settings cockpit safely.");
+    expect(agent?.displayName).toBe("Codex · Home");
   });
 
   test("Codex preserves native parent-thread evidence for swarm hierarchy", () => {
@@ -263,6 +263,21 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("Codex preserves a native top-level parent_thread_id for inherited guardian sessions", () => {
+    const agent = parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      payload: {
+        id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
+        parent_thread_id: "019f8650-960c-7dc0-b75a-68dda4a57a1b",
+        cwd: "/Users/emilionunezgarcia",
+        source: { subagent: { other: "guardian" } },
+      },
+    }), { nowMs });
+
+    expect(agent?.parentSourceSessionId).toBe("019f8650-960c-7dc0-b75a-68dda4a57a1b");
+  });
+
   test("taskless home sessions use a readable provider label instead of a UUID fragment", () => {
     const agent = parseCodexJsonl(JSON.stringify({
       type: "session_meta",
@@ -273,7 +288,7 @@ describe("collector identity and usage truth", () => {
       },
     }), { nowMs });
 
-    expect(agent?.displayName).toBe("Codex session");
+    expect(agent?.displayName).toBe("Codex · Home");
     expect(agent?.displayName).not.toContain("019f87f0");
   });
 
@@ -293,7 +308,8 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toStartWith("/Users/me/handoff.md <--");
-    expect(agent?.displayName).toBe("help me revamp The Mountain control hub.");
+    expect(agent?.displayName).toBe("Codex · Home");
+    expect(agent?.displayName).not.toContain("help me revamp");
   });
 
   test("Claude preserves the source session, cwd, model, task, and observed token provenance", () => {
@@ -317,6 +333,7 @@ describe("collector identity and usage truth", () => {
       cachedInput: 0,
       total: 50_790,
       sessionTotal: 50_790,
+      contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -344,6 +361,32 @@ describe("collector identity and usage truth", () => {
     // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
     expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
     expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
+  });
+
+  test("Claude derives the 1M context window for Opus 4.8, Sonnet 5, and Fable 5, undefined otherwise", () => {
+    const row = (model: string) => JSON.stringify({
+      type: "assistant",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      timestamp: "2026-07-21T23:30:02.000Z",
+      message: {
+        id: "msg-ctx",
+        role: "assistant",
+        model,
+        content: [{ type: "text", text: "Working." }],
+        usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 40 },
+      },
+    });
+
+    expect(parseClaudeJsonl(row("claude-opus-4-8"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-opus-4-8[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-sonnet-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    // An explicit [1m] marker is honored even for a model not in the table (ground truth).
+    expect(parseClaudeJsonl(row("claude-haiku-5[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
+    expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
+    expect(parseClaudeJsonl(row("claude-haiku-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
   });
 
   test("Claude counts repeated rows for one message ID once and exposes the latest request", () => {
@@ -390,6 +433,7 @@ describe("collector identity and usage truth", () => {
       cachedInput: 7,
       total: 26,
       sessionTotal: 126,
+      contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -426,7 +470,7 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toBe("Mission: Redesign the Platforms operating room.");
-    expect(agent?.displayName).toBe("Redesign the Platforms operating room.");
+    expect(agent?.displayName).toBe("Claude · Home");
   });
 
   test("partially written trailing records do not erase a valid live session", () => {

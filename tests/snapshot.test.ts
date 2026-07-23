@@ -4,10 +4,12 @@ import {
   impactSummaryFor,
   issueWorkStateFor,
   snapshotFingerprint,
-  withAttentionBoard,
+  withIssueDecoration,
+  withPulse,
 } from "../src/server/snapshot";
+import { PulseTracker } from "../src/server/pulse";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
-import type { IssueLifecycle, OperatorIssue } from "../src/shared/types";
+import type { HubPulse, IssueLifecycle, OperatorIssue } from "../src/shared/types";
 
 const archiveStore: ArchiveStore = {
   has: () => false,
@@ -184,7 +186,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
   });
 
-  test("exact cmux project metadata groups a home-cwd source without rewriting source truth", () => {
+  test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",
       task: "Continue the platform review.",
@@ -207,9 +209,16 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const agent = snapshot.programs[0]?.agents[0];
 
-    expect(snapshot.programs[0]?.name).toBe("Hormiga");
+    // Session still lives at ~ — do not file it under Hormiga just because the
+    // cmux pane title/folder says so.
+    expect(snapshot.programs[0]?.name).toBe("Home");
     expect(agent?.cwd).toBe("/Users/emilionunezgarcia");
-    expect(agent?.target.resolution).toBe("exact");
+    expect(agent?.target).toMatchObject({
+      resolution: "exact",
+      cwdMismatch: true,
+      workspaceTitle: "CODEX - Platform UX",
+      surfaceCwd: "/Users/emilionunezgarcia/Developer/LaHormigaDormida",
+    });
   });
 
   test("a configured HD task hint groups a home-cwd source while unrelated home work stays unassigned", () => {
@@ -241,7 +250,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs.find(({ id }) => id === "hormiga")?.agents.map(({ id }) => id)).toEqual([
       "codex:hd-task",
     ]);
-    expect(snapshot.programs.find(({ name }) => name === "Home / Unassigned")?.agents.map(({ id }) => id)).toEqual([
+    expect(snapshot.programs.find(({ name }) => name === "Home")?.agents.map(({ id }) => id)).toEqual([
       "codex:personal-task",
     ]);
   });
@@ -457,7 +466,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(program.rollup).toMatchObject({ total: 2, live: 2, working: 2, linked: 0 });
   });
 
-  test("stressed snapshots roll up open, watched, and persisted in-motion work", () => {
+  test("stressed snapshots retain issue decoration and triage summaries", () => {
     const snapshot = buildSnapshot({
       agents: [collected()],
       surfaces: [],
@@ -476,13 +485,6 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
 
-    expect(snapshot.attentionBoard).toEqual({
-      actNow: 1,
-      watch: 1,
-      inMotion: 3,
-      cleared: 0,
-      allClear: false,
-    });
     expect(snapshot.triageSummaries).toEqual([
       { issueId: "system:codex-collector", state: "running" },
       { issueId: "queue:detached", state: "queued" },
@@ -504,7 +506,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
   });
 
-  test("an empty active board stays all-clear while resolved findings remain in the TTL window", () => {
+  test("an empty active snapshot retains resolved findings during the TTL window", () => {
     const previousIssue: OperatorIssue = {
       id: "system:previous",
       kind: "system",
@@ -524,13 +526,6 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
 
     expect(snapshot.issues).toEqual([]);
-    expect(snapshot.attentionBoard).toEqual({
-      actNow: 0,
-      watch: 0,
-      inMotion: 0,
-      cleared: 1,
-      allClear: true,
-    });
     expect(snapshot.recentlyResolved).toMatchObject([{
       id: previousIssue.id,
       workState: "cleared",
@@ -581,7 +576,6 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const issue = opened.issues?.[0]!;
     expect(issue.lifecycle).toMatchObject({ state: "open", openedAt: "2026-07-21T23:00:00.000Z" });
-    expect(opened.attentionBoard).toMatchObject({ actNow: 1, inMotion: 0, cleared: 0, allClear: false });
 
     const verifyingLifecycle: IssueLifecycle = {
       state: "verifying",
@@ -600,7 +594,6 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     expect(verifying.issues?.[0]?.lifecycle).toEqual(verifyingLifecycle);
     expect(verifying.issues?.[0]).toMatchObject({ workState: "verifying", progress: 85 });
-    expect(verifying.attentionBoard).toMatchObject({ actNow: 1, inMotion: 1, cleared: 0, allClear: false });
     expect(verifying.recentlyResolved).toEqual([]);
 
     const stillReported = buildSnapshot({
@@ -626,7 +619,6 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:04:00.000Z"),
     });
     expect(cleared.issues).toEqual([]);
-    expect(cleared.attentionBoard).toEqual({ actNow: 0, watch: 0, inMotion: 0, cleared: 1, allClear: true });
     expect(cleared.recentlyResolved).toMatchObject([{
       id: issue.id,
       workState: "cleared",
@@ -686,7 +678,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(issueWorkStateFor(issue, { issueId: issue.id, state: "blocked" })).toBe("cleared");
   });
 
-  test("orphan blocked triage summaries do not inflate Watch or block all-clear", () => {
+  test("orphan blocked triage summaries do not alter lifecycle decoration", () => {
     const cleared: OperatorIssue = {
       id: "system:previous",
       kind: "system",
@@ -700,7 +692,7 @@ describe("snapshot control safety and SSE deduplication", () => {
         resolvedAt: "2026-07-21T23:00:00.000Z",
       },
     };
-    const board = withAttentionBoard(
+    const decorated = withIssueDecoration(
       {
         schemaVersion: 1,
         generatedAt: "2026-07-21T23:00:00.000Z",
@@ -719,17 +711,18 @@ describe("snapshot control safety and SSE deduplication", () => {
       ],
     );
 
-    expect(board.attentionBoard).toEqual({
-      actNow: 0,
-      watch: 0,
-      inMotion: 0,
-      cleared: 1,
-      allClear: true,
+    expect(decorated.triageSummaries).toEqual([
+      { issueId: cleared.id, state: "blocked" },
+      { issueId: "queue:orphan-blocked", state: "blocked" },
+    ]);
+    expect(decorated.recentlyResolved?.[0]).toMatchObject({
+      workState: "cleared",
+      progress: 100,
+      impactSummary: "System-wide — not tied to a specific agent",
     });
-    expect(board.recentlyResolved?.[0]?.workState).toBe("cleared");
+    expect(issueWorkStateFor(cleared, { issueId: cleared.id, state: "blocked" })).toBe("cleared");
   });
-
-  test("live blocked findings still count toward Watch", () => {
+  test("live blocked findings retain blocked lifecycle decoration", () => {
     const liveBlocked: OperatorIssue = {
       id: "system:live-blocked",
       kind: "system",
@@ -739,7 +732,7 @@ describe("snapshot control safety and SSE deduplication", () => {
       affectedAgentIds: [],
       lifecycle: { state: "open", openedAt: "2026-07-21T22:58:00.000Z" },
     };
-    const board = withAttentionBoard(
+    const decorated = withIssueDecoration(
       {
         schemaVersion: 1,
         generatedAt: "2026-07-21T23:00:00.000Z",
@@ -755,13 +748,80 @@ describe("snapshot control safety and SSE deduplication", () => {
       [{ issueId: liveBlocked.id, state: "blocked" }],
     );
 
-    expect(board.issues?.[0]?.workState).toBe("blocked");
-    expect(board.attentionBoard).toMatchObject({
-      actNow: 0,
-      watch: 1,
-      inMotion: 0,
-      cleared: 0,
-      allClear: false,
+    expect(decorated.issues?.[0]).toMatchObject({
+      workState: "blocked",
+      progress: 70,
+      impactSummary: "System-wide — not tied to a specific agent",
     });
+    expect(issueWorkStateFor(liveBlocked, { issueId: liveBlocked.id, state: "blocked" })).toBe("blocked");
   });
+  test("pulse is optional and contributes stable data to the fingerprint", () => {
+    const first = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const later = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:34.000Z"),
+    });
+    const pulse: HubPulse = {
+      momentum: {
+        working: 1,
+        completionsLastHour: 0,
+        observedWindowMs: 0,
+        stalled: 0,
+        stalledAgentIds: [],
+        stallThresholdMs: 900_000,
+      },
+      burn: {
+        tokensPerMin: null,
+        windowMs: 0,
+        coverage: { reporting: 0, eligible: 0, unknown: 0 },
+        costLastHourUsd: null,
+        costProvenance: "unavailable",
+      },
+      activity: {
+        bucketMinutes: 5,
+        windowMinutes: 60,
+        observedSince: "2026-07-21T23:00:00.000Z",
+        buckets: [],
+      },
+    };
+
+    expect(first.pulse).toBeUndefined();
+    const withFirstPulse = withPulse(first, pulse);
+    const withLaterPulse = withPulse(later, pulse);
+    expect(withLaterPulse.pulse).toEqual(pulse);
+    expect(snapshotFingerprint(withLaterPulse)).toBe(snapshotFingerprint(withFirstPulse));
+  });
+  test("calm refreshes inside one bucket keep the pulse fingerprint stable", () => {
+    const bucketMs = 5 * 60_000;
+    const start = Math.floor(Date.now() / bucketMs) * bucketMs;
+    const tracker = new PulseTracker(undefined, start);
+    const first = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date(start + 1_000),
+    });
+    tracker.observe(first, start + 1_000);
+    const firstWithPulse = withPulse(first, tracker.report(start + 1_000));
+
+    const later = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date(start + 4 * 60_000),
+    });
+    tracker.observe(later, start + 4 * 60_000);
+    const laterWithPulse = withPulse(later, tracker.report(start + 4 * 60_000));
+
+    expect(laterWithPulse.pulse?.momentum.working).toBe(later.totals.working);
+    expect(snapshotFingerprint(laterWithPulse)).toBe(snapshotFingerprint(firstWithPulse));
+  });
+
 });

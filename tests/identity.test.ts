@@ -168,4 +168,57 @@ describe("TTY and open-session identity evidence", () => {
       reason: expect.stringContaining("quarantined"),
     });
   });
+
+  test("a parent rollout and its open guardian child resolve to the root identity", async () => {
+    const parent: CollectedAgent = {
+      ...agent,
+      provider: "codex",
+      id: "codex:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    };
+    const child: CollectedAgent = {
+      ...parent,
+      id: "codex:11111111-2222-3333-4444-555555555555",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+      parentSourceSessionId: parent.sourceSessionId,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/codex",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-00-00-019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-01-00-11111111-2222-3333-4444-555555555555.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [parent, child], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([parent.sourceSessionId]);
+    expect(enriched.value[0]?.identityConflict).toBeUndefined();
+  });
+
+  test("stale CMUX surfaces are cleared without becoming identity conflicts", async () => {
+    const runner = new SequenceRunner([]);
+    const enriched = await enrichCmuxIdentity(
+      [{ ...surface, runtimeSurfaceReady: false, sourceSessionIds: [agent.sourceSessionId] }],
+      [agent],
+      runner,
+    );
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+    expect(enriched.value[0]?.identityConflict).toBeUndefined();
+    expect(runner.commands).toEqual([]);
+  });
 });

@@ -111,3 +111,16 @@ export function extractLastHumanMessage(
   }
   return null;
 }
+
+export function extractLastMessageByRole(
+  provider: Provider,
+  candidates: readonly HumanMessageCandidate[],
+  role: "assistant" | "user",
+): string | null {
+  for (const candidate of [...candidates].reverse()) {
+    if (candidate.isMeta || candidate.role !== role) continue;
+    const message = readableHumanMessage(provider, candidate.content);
+    if (message) return message;
+  }
+  return null;
+}

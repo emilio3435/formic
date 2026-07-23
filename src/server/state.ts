@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, TriageQueueSummary } from "../shared/types";
+import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { collectCmux, collectCmuxNotifications } from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
-import { buildSnapshot, type ProgramHint, withAttentionBoard } from "./snapshot";
+import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
+import { PulseTracker } from "./pulse";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
+import type { UsageSummary } from "./burnbar";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -24,6 +26,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 
 export class HubState {
   #snapshot: HubSnapshot;
+  #pulse: PulseTracker;
   #surfaces: CmuxSurface[] = [];
   #notifications: CmuxNotification[] = [];
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
@@ -36,6 +39,12 @@ export class HubState {
   #issueLifecycle = new Map<string, IssueLifecycle>();
   #recentlyResolved: OperatorIssue[] = [];
   #hasSourceSnapshot = false;
+  #sourceHealth: Record<Provider, SourceHealth> = {
+    omp: { healthy: false, lastHealthyAt: null },
+    codex: { healthy: false, lastHealthyAt: null },
+    claude: { healthy: false, lastHealthyAt: null },
+    cursor: { healthy: false, lastHealthyAt: null },
+  };
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
 
@@ -46,9 +55,11 @@ export class HubState {
     private readonly collectors: HubCollectors = DEFAULT_COLLECTORS,
     private readonly settingsReader?: () => HubSettings,
     private readonly triageReader?: () => readonly TriageQueueSummary[],
+    private readonly burnReader?: () => Promise<UsageSummary>,
   ) {
+    this.#pulse = new PulseTracker(this.burnReader);
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
-    this.#snapshot = buildSnapshot({
+    this.#snapshot = this.#withSourceHealth(buildSnapshot({
       agents: [],
       surfaces: [],
       archiveStore,
@@ -60,7 +71,7 @@ export class HubState {
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
-    });
+    }));
   }
 
   get(): HubSnapshot {
@@ -98,11 +109,23 @@ export class HubState {
       issue.id === issueId ? { ...issue, lifecycle } : issue,
     );
     if (issues.every((issue, index) => issue === this.#snapshot.issues?.[index])) return;
-    this.#snapshot = withAttentionBoard(
+    this.#snapshot = withIssueDecoration(
       { ...this.#snapshot, issues },
       this.triageReader?.() ?? this.#snapshot.triageSummaries,
     );
     for (const listener of this.#listeners) listener(this.#snapshot);
+  }
+
+  #withSourceHealth(snapshot: HubSnapshot): HubSnapshot {
+    const sourceHealth = snapshot.totals.sourceHealth;
+    if (!sourceHealth) return snapshot;
+    return {
+      ...snapshot,
+      totals: {
+        ...snapshot.totals,
+        sourceHealth: { ...sourceHealth, byProvider: { ...this.#sourceHealth } },
+      },
+    };
   }
 
   async refresh(options: { cmux?: boolean } = {}): Promise<HubSnapshot> {
@@ -139,6 +162,13 @@ export class HubState {
       options.cmux ? this.collectors.cmux(this.runner) : Promise.resolve(undefined),
       options.cmux ? this.collectors.notifications(this.runner) : Promise.resolve(undefined),
     ]);
+    const collectedAt = new Date().toISOString();
+    for (const provider of providers) {
+      const source = sessions[provider];
+      this.#sourceHealth[provider] = source.errors.length === 0
+        ? { healthy: true, lastHealthyAt: collectedAt }
+        : { healthy: false, lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt };
+    }
     if (cmux) {
       this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
       const collectedAgents = providers.flatMap(
@@ -153,7 +183,7 @@ export class HubState {
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].errors]),
     ) as Record<Provider, string[]>;
-    this.#snapshot = buildSnapshot({
+    const built = this.#withSourceHealth(buildSnapshot({
       agents: providers.flatMap((provider) => sessions[provider].value),
       surfaces: this.#surfaces,
       notifications: this.#notifications,
@@ -168,14 +198,18 @@ export class HubState {
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
-    });
+    }));
     this.#hasSourceSnapshot = true;
-    this.#recentlyResolved = [...(this.#snapshot.recentlyResolved ?? [])];
+    this.#recentlyResolved = [...(built.recentlyResolved ?? [])];
     const nextLifecycle = new Map<string, IssueLifecycle>();
-    for (const issue of [...(this.#snapshot.issues ?? []), ...this.#recentlyResolved]) {
+    for (const issue of [...(built.issues ?? []), ...this.#recentlyResolved]) {
       if (issue.lifecycle) nextLifecycle.set(issue.id, issue.lifecycle);
     }
     this.#issueLifecycle = nextLifecycle;
+    const pulseNowMs = Date.now();
+    this.#pulse.observe(built, pulseNowMs);
+    this.#pulse.maybeRefreshBurnCost();
+    this.#snapshot = withPulse(built, this.#pulse.report(pulseNowMs));
     for (const listener of this.#listeners) listener(this.#snapshot);
     return this.#snapshot;
   }

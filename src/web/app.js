@@ -57,6 +57,11 @@ const ICON_PATHS = {
   intervention: [["line", { x1: 12, y1: 4.5, x2: 12, y2: 13.5, "stroke-width": 2.6 }], ["rect", { x: 10.7, y: 16.6, width: 2.6, height: 2.6, fill: "currentColor", stroke: "none" }]],
   // advisory: caution diamond (no clinical triangle) with peak stem + LED
   warning: [["path", { d: "M12 2.8 21.2 12 12 21.2 2.8 12z", "stroke-linejoin": "miter" }], ["line", { x1: 12, y1: 7.6, x2: 12, y2: 12.8, "stroke-width": 2 }], ["rect", { x: 11, y: 15, width: 2, height: 2, fill: "currentColor", stroke: "none" }]],
+  // cog for the Evidence disclosure — a settings-flavored "more machinery" mark
+  gear: [
+    ["circle", { cx: 12, cy: 12, r: 3 }],
+    ["path", { d: "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.1 5.1l1.6 1.6M17.3 17.3l1.6 1.6M5.1 18.9l1.6-1.6M17.3 6.7l1.6-1.6" }],
+  ],
   // resolved: crisp confirm tick
   check: [["polyline", { points: "4.5 12.5 9.5 17.5 19.5 6.5", "stroke-linejoin": "miter" }]],
   // rename: nib + trim edge
@@ -110,6 +115,32 @@ function svgMeter(pct, cls, opts = {}) {
   return svg;
 }
 
+/* SVG sparkline — one <polyline> whose points are geometry attributes, never
+   inline style, so the strict CSP (style-src 'self') permits it. Returns null
+   below two points — a single dot is not a trend and would only fake one. */
+function svgSparkline(values, opts = {}) {
+  const points = (Array.isArray(values) ? values : []).filter((v) => Number.isFinite(v));
+  if (points.length < 2) return null;
+  const width = 100;
+  const height = 24;
+  const max = Math.max(...points, 1);
+  const step = width / (points.length - 1);
+  const coords = points.map((v, i) =>
+    (i * step).toFixed(1) + "," + (height - 2 - (Math.max(0, v) / max) * (height - 4)).toFixed(1),
+  ).join(" ");
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", opts.class || "pulse-spark");
+  if (opts.label) { svg.setAttribute("role", "img"); svg.setAttribute("aria-label", opts.label); }
+  else svg.setAttribute("aria-hidden", "true");
+  svg.append(svgChild(["polyline", {
+    points: coords, fill: "none", stroke: "currentColor",
+    "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round",
+  }]));
+  return svg;
+}
+
 /* Segmented SVG meter — one contiguous bar split into proportional bands, each a
    rect whose width is a geometry attribute (never inline style, so the strict
    CSP holds). segments = [{ cls, value }]; zero-value bands are skipped. */
@@ -130,6 +161,34 @@ function svgSegmentMeter(segments, opts = {}) {
       x += w;
     }
   }
+  return svg;
+}
+
+/* SVG donut ring — filled arc length is a geometry attribute (stroke-dasharray
+   on a circle whose circumference is 100), never inline style, so the strict CSP
+   (style-src 'self') holds. Center % is an SVG <text>. */
+function svgRing(pct, opts = {}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "vital-ring");
+  svg.setAttribute("role", "progressbar");
+  svg.setAttribute("aria-valuemin", "0");
+  svg.setAttribute("aria-valuemax", "100");
+  svg.setAttribute("aria-valuenow", String(clamped));
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+  svg.append(svgChild(["circle", { cx: 18, cy: 18, r: 15.915, class: "ring-track" }]));
+  svg.append(svgChild(["circle", {
+    cx: 18, cy: 18, r: 15.915, class: "ring-fill" + tone,
+    "stroke-dasharray": clamped + " " + (100 - clamped),
+  }]));
+  const label = document.createElementNS(SVGNS, "text");
+  label.setAttribute("x", "18");
+  label.setAttribute("y", "18");
+  label.setAttribute("class", "ring-pct");
+  label.textContent = clamped + "%";
+  svg.append(label);
   return svg;
 }
 
@@ -158,11 +217,20 @@ function agoText(iso) {
 
 const MODEL_SHORT = [
   ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"], ["grok", "grok"],
-  ["opus", "opus"], ["sonnet", "sonnet"], ["haiku", "haiku"],
 ];
+// Anthropic families whose transcript id carries a version we want to keep
+// (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
+const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku"];
 function modelShort(m) {
   if (!m) return null;
   const low = m.toLowerCase();
+  for (const fam of ANTHROPIC_VERSIONED) {
+    const at = low.indexOf(fam);
+    if (at === -1) continue;
+    // Trailing version group right after the family (e.g. "-4-8" → "4.8").
+    const ver = low.slice(at + fam.length).match(/^[-_](\d+(?:[-_]\d+)*)/);
+    return ver ? fam + " " + ver[1].replace(/[-_]/g, ".") : fam;
+  }
   for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
   return m.length > 18 ? m.slice(0, 17) + "…" : m;
 }
@@ -183,31 +251,27 @@ const CONTROL_HINTS = {
 
 /* Plain-language glossary. dtdd() looks up a row's term here and, when found,
    renders it with a dotted underline + explainer tooltip (hover or keyboard
-   focus). Definitions stay jargon-free — this is the human layer over the raw
-   Technical evidence, so a first-time operator can read the drawer unaided. */
-const TOKENS_HINT = "Token counts for the most recent model call. “measured” = reported by the provider; “estimated” = inferred.";
+   focus). Learn-style one-liners stay contextual — only fields that render. */
+const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
+const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
+const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
+const CWD_MISMATCH_HINT = "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).";
 const GLOSSARY = {
-  // Overview
+  // Operate
   "running for": "Wall-clock time since this agent started running.",
-  context: "How big the latest model call is against the model's context window.",
-  cost: "Estimated spend on this agent so far. “measured” = billed by the provider; “estimated” = inferred.",
-  // Technical
-  "session id": "The provider's own ID for this session, prefixed by the provider name.",
-  "working directory": "The folder on disk this agent is running in.",
-  status: "The raw run status reported by the provider, with its reason.",
+  "last update": "When this session last reported activity.",
+  role: "Operator role assigned to this agent in the swarm (orchestrator, verifier, etc.).",
   model: "The model this agent is currently running on.",
-  "reasoning effort": "How hard the model is set to think per step — higher effort means more reasoning.",
-  "nesting level": "How deep this agent sits in the orchestrator → subagent tree. 0 is top-level.",
-  "orchestrator id": "ID of the agent that spawned this one, if any.",
-  subagents: "How many child agents this one has spawned.",
-  "session total": "Total tokens used across this whole session so far.",
-  "context window": "The model's maximum context size — how much it can hold at once.",
-  "model policy": "Whether the running model matches the model this lane is supposed to use.",
+  context: "How big the latest model call is against the model's context window.",
+  // Evidence
+  "session cwd": "The folder on disk the provider session reports as its working directory.",
+  "terminal folder": CWD_MISMATCH_HINT,
+  "session id": "The provider's own ID for this session, prefixed by the provider name.",
   git: "The branch and commit the agent's working copy is on; flags uncommitted changes.",
-  tests: "The latest test-run result this agent reported.",
-  checks: "Named pre-ship gates this agent must pass — e.g. typecheck or lint.",
-  "control link": "Which cmux workspace/pane this session is wired to for Focus and Send, and how confidently it was matched.",
-  "available controls": "Which operator actions are turned on for this agent, and why any are off.",
+  "control link": "Which cmux terminal this session is wired to for Focus and Send, and how confidently it was matched.",
+  "latest call": LATEST_CALL_HINT,
+  "session total": SESSION_TOTAL_HINT,
+  "Ready · linked": READY_LINKED_HINT,
 };
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -263,9 +327,29 @@ function deriveRollup(agents) {
 
 const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
-/* Plain-language control explanation for the Overview. Never echoes capability
-   reasons here — live reasons carry raw cmux/session IDs, which belong only in
-   the Technical routing evidence. */
+/* At-a-glance rollup cells — the ONE aggregation source shared by the program
+   drawer head (programRollupLine) and the left-tree program header
+   (programHeadRollup). Counts are always client-derivable, so they always
+   render; the token aggregate is omitted honestly when no agent reports a
+   session total (never faked). Alert cells flag themselves for ink gating. */
+function programRollupCells(agents) {
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return cells;
+}
+
+/* Plain-language control explanation for the Operate chrome. Never echoes
+   capability reasons here — live reasons carry raw cmux/session IDs, which
+   belong only in Evidence. */
 function controlUnavailableText(controlState) {
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
@@ -287,7 +371,30 @@ function formatLastHumanMessage(agent, limit = 120) {
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
-const sourceAgentName = (agent) => conciseText(agent.nickname || agent.displayName || agent.task || providerLabel(agent.provider) + " agent");
+/* Short folder/Home identity for when cmux titles are unavailable. */
+function cwdIdentityName(agent) {
+  if (!agent || typeof agent.cwd !== "string" || !agent.cwd.trim()) return "";
+  const normalized = agent.cwd.replace(/\/+$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  const provider = providerLabel(agent.provider);
+  if (parts.length <= 2 && (parts[0] === "Users" || parts[0] === "home")) {
+    return provider + " · Home";
+  }
+  const base = parts[parts.length - 1];
+  return base ? provider + " · " + base : provider + " · Home";
+}
+
+function sourceAgentName(agent) {
+  if (!agent) return "";
+  if (agent.nickname) return conciseText(agent.nickname);
+  const identity = cwdIdentityName(agent);
+  const display = typeof agent.displayName === "string" ? agent.displayName.trim() : "";
+  // Keep short provider·folder identities; replace prompt-as-title blobs.
+  const shortIdentity = display.length > 0 && display.length <= 56 && display.includes("·");
+  if (shortIdentity) return conciseText(display);
+  if (identity) return conciseText(identity);
+  return conciseText(display || agent.task || providerLabel(agent.provider) + " agent");
+}
 
 function presentationLabelKey(target) {
   if (!target) return "";
@@ -302,11 +409,40 @@ const programLabelTarget = (program) => ({ kind: "program", programId: program.i
 const workspaceLabelTarget = (workspaceId) => ({ kind: "workspace", workspaceId });
 const roomLabelTarget = (surfaceId) => ({ kind: "room", surfaceId });
 const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id });
-const agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname);
+/* Every live agent can take a presentation label. Prefer editing the linked
+   cmux workspace when present so Ant Hill names stay hunt-able in the wild. */
+const agentLabelEligible = (agent) => Boolean(agent && agent.id);
+
+/* Live cmux / terminal title for this session, when routing knows one. */
+function terminalSourceName(agent) {
+  const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
+    ? agent.target.workspaceTitle.trim()
+    : "";
+  return title ? conciseText(title) : "";
+}
+
+/* Rename target: workspace first (shared terminal identity), else the agent. */
+function preferredRenameTarget(agent) {
+  if (agent && agent.target && agent.target.workspaceId) {
+    return workspaceLabelTarget(agent.target.workspaceId);
+  }
+  return agentLabelTarget(agent);
+}
 
 function agentName(agent) {
-  const label = agent && state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
-  return label && agentLabelEligible(agent) ? label : sourceAgentName(agent);
+  if (!agent) return "";
+  const agentLabel = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
+  if (agentLabel) return agentLabel;
+  if (agent.target && agent.target.workspaceId) {
+    const workspaceLabel = state.aliases.get(presentationLabelKey(workspaceLabelTarget(agent.target.workspaceId)));
+    if (workspaceLabel) return workspaceLabel;
+  }
+  // Prefer the cmux terminal title only when the session cwd agrees with the
+  // pane. A home-cwd orch parked in a project-titled workspace must stay
+  // "Codex · Home" — not borrow the workspace name.
+  const terminal = terminalSourceName(agent);
+  if (terminal && !agent.target?.cwdMismatch) return terminal;
+  return sourceAgentName(agent);
 }
 
 /* Presentation-only labels. Source identities stay stable; the label is a
@@ -468,8 +604,9 @@ function buildClusters(agents) {
 /* ---------- token honesty ----------
    When tokens.scope === "latest-turn", total/input/output/cachedInput describe
    the latest invocation — that is the primary number everywhere, labeled as
-   such. Cumulative session usage (tokens.sessionTotal) belongs only in
-   Technical details. Sources that report nothing stay "not reported". */
+   such. Cumulative session usage (tokens.sessionTotal) belongs in Evidence.
+   Dense list widgets may still say "not reported"; the agent drawer omits
+   empty fields entirely (Take C). */
 
 function tokenSummary(tokens) {
   const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
@@ -508,12 +645,23 @@ function contextDisplayLabel() {
   return CONTEXT_DISPLAY_LABELS[state.contextDisplay] || CONTEXT_DISPLAY_LABELS.percent;
 }
 
+// Claude transcripts carry observed token totals but no context-window size, so
+// a truthful "% used" is impossible (a fabricated denominator would misreport
+// 1M-context sessions ~5x). When the window is unknown but we have an observed
+// total, show the absolute token count instead of "not reported".
+function hasObservedTotal(tokens) {
+  return Boolean(tokens && Number.isFinite(tokens.total) && tokens.total > 0);
+}
+
 function contextDisplayValue(tokens, display = state.contextDisplay) {
   const usage = contextUsage(tokens);
-  if (!usage) return "not reported";
-  return display === "tokens"
-    ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
-    : usage.pct + "%";
+  if (usage) {
+    return display === "tokens"
+      ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
+      : usage.pct + "%";
+  }
+  if (hasObservedTotal(tokens)) return fmtTok(tokens.total) + " tokens";
+  return "not reported";
 }
 
 const ROLE_LABELS = {
@@ -654,19 +802,14 @@ function liveElapsedText(agent, generatedAt) {
 
 const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 const DEFAULT_WIDGET_IDS = Object.freeze([
-  "system", "active-work", "attention", "context-peak", "source-health",
+  "needs-you", "momentum", "burn", "context-peak", "health",
 ]);
 const WIDGET_CATALOG = Object.freeze([
-  { id: "system", label: "System", required: true },
-  { id: "active-work", label: "Active work" },
-  { id: "attention", label: "Attention" },
+  { id: "needs-you", label: "Needs you", required: true },
+  { id: "momentum", label: "Momentum" },
+  { id: "burn", label: "Burn" },
   { id: "context-peak", label: "Context peak" },
-  { id: "source-health", label: "Source health" },
-  { id: "waiting", label: "Waiting" },
-  { id: "history", label: "History" },
-  { id: "model-policy", label: "Model policy" },
-  { id: "routing-health", label: "Routing health" },
-  { id: "context-reporting", label: "Context reporting" },
+  { id: "health", label: "Health" },
 ]);
 const WIDGET_IDS = new Set(WIDGET_CATALOG.map((widget) => widget.id));
 
@@ -677,7 +820,7 @@ function defaultWidgetIds() {
 function normalizeWidgetIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return defaultWidgetIds();
   const unique = new Set(ids);
-  if (ids[0] !== "system" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
+  if (ids[0] !== "needs-you" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
     return defaultWidgetIds();
   }
   return [...ids];
@@ -727,21 +870,53 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
+   source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
+   agoText. A source that has never been healthy (lastHealthyAt null) contributes
+   nothing — claiming "never seen healthy" would be a lie — so an all-null or
+   sourceless snapshot yields no suffix at all. */
+function degradedSinceText(snap) {
+  const byProvider = snap && snap.totals && snap.totals.sourceHealth && snap.totals.sourceHealth.byProvider;
+  if (!byProvider) return "";
+  let latest = null;
+  for (const health of Object.values(byProvider)) {
+    if (!health || health.healthy !== false || !health.lastHealthyAt) continue;
+    const t = Date.parse(health.lastHealthyAt);
+    if (Number.isNaN(t)) continue;
+    if (latest === null || t > latest) latest = t;
+  }
+  if (latest === null) return "";
+  return " · last healthy " + agoText(new Date(latest).toISOString());
+}
+
 function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
-function summaryWidgetData(id, snap, conn = "live", display = "percent") {
-  if (id === "system") {
+function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems) {
+  if (id === "health") {
+    // Merged system + source-health + routing-health verdict. OK renders as a
+    // trailing micro-chip; degraded promotes to a full cell with its reason.
     const status = systemStatus(snap, conn);
+    const control = snap && snap.controlHealth;
+    const source = snap && snap.totals && snap.totals.sourceHealth;
+    const stale = (control && control.staleSources && control.staleSources.length) || 0;
+    const errors = (control && control.errors && control.errors.length) || 0;
     return {
       value: status.label,
       unit: "",
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
-        : status.key === "operational" ? "Sources and controls healthy."
+        : status.key === "operational"
+          ? (source && source.total > 0
+            ? `${source.healthy}/${source.total} sources healthy · controls reachable.`
+            : "Sources and controls healthy.")
           : conn !== "live" ? "Live snapshot feed is not healthy."
-            : "Source or control evidence needs review.",
+            : control && control.cmuxReachable !== true
+              ? "cmux unreachable — terminal titles and Focus/Send stay offline."
+              : source && source.degraded > 0
+                ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
+                : "Source or control evidence needs review.",
       tone: status.tone,
       icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
     };
@@ -749,18 +924,50 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
   if (!snap) return noDataWidget("Waiting for the first snapshot.");
 
   const totals = totalsOf(snap);
-  if (id === "active-work") {
-    return { value: String(totals.working), unit: "working", sublabel: `${totals.live} live · ${totals.tracked} tracked`, tone: "ok" };
-  }
-  if (id === "attention") {
+  if (id === "needs-you") {
     const attention = attentionSummary(snap);
+    const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
     return {
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
-      sublabel: attention.count
-        ? `${attention.interventions} intervention${attention.interventions === 1 ? "" : "s"} · ${attention.advisories} advis${attention.advisories === 1 ? "ory" : "ories"}`
-        : "No active findings.",
+      sublabel: attention.count && top ? top : "No active findings.",
       tone: attention.count ? "hot" : "ok",
+    };
+  }
+  if (id === "momentum") {
+    const momentum = snap.pulse && snap.pulse.momentum;
+    let sublabel = "No completion data yet.";
+    if (momentum) {
+      // Window honesty: a freshly restarted tracker says how long it has
+      // actually watched, never a fabricated "this hour". Below one full
+      // 5-min bucket there is no completion window to report at all; stall
+      // detection reads updatedAt directly, so it stays valid immediately.
+      const parts = [];
+      if (momentum.observedWindowMs > 0) {
+        const windowText = momentum.observedWindowMs < 3_600_000
+          ? "in " + fmtElapsed(momentum.observedWindowMs) + " observed"
+          : "this hour";
+        parts.push("↑" + momentum.completionsLastHour + " done " + windowText);
+      }
+      if (momentum.stalled) parts.push(`${momentum.stalled} quiet 15m+`);
+      if (parts.length) sublabel = parts.join(" · ");
+    }
+    return { value: String(totals.working), unit: "shipping", sublabel, tone: "ok" };
+  }
+  if (id === "burn") {
+    const burn = snap.pulse && snap.pulse.burn;
+    if (!burn) return noDataWidget("No burn data yet.");
+    // Null cost stays "cost unavailable" — never rendered as $0.
+    const cost = burn.costLastHourUsd != null
+      ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
+      : "cost unavailable";
+    const coverage = burn.coverage
+      ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
+    return {
+      value: burn.tokensPerMin != null ? fmtTok(burn.tokensPerMin) : "No data",
+      unit: burn.tokensPerMin != null ? "/min" : "",
+      sublabel: cost + coverage + (burn.costNote ? " · " + burn.costNote : ""),
+      tone: burn.tokensPerMin != null ? "ok" : "missing",
     };
   }
   if (id === "context-peak") {
@@ -776,64 +983,13 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
       meterPct: peak.pct,
     };
   }
-  if (id === "source-health") {
-    const source = totals.sourceHealth;
-    if (!source || source.total <= 0) return noDataWidget("Source health is not reported.");
-    return {
-      value: `${source.healthy}/${source.total}`,
-      unit: "healthy",
-      sublabel: `${source.degraded} degraded · ${source.total} total`,
-      tone: source.degraded ? "warn" : "ok",
-    };
-  }
-  if (id === "waiting") {
-    return { value: String(totals.idle), unit: "waiting", sublabel: "Idle sessions awaiting work.", tone: "ok" };
-  }
-  if (id === "history") {
-    return { value: String(totals.history), unit: "done", sublabel: "Completed or archived sessions.", tone: "ok" };
-  }
-  if (id === "model-policy") {
-    const policy = totals.cursorModelHealth;
-    if (!policy || policy.total <= 0) return noDataWidget("Model policy is not reported.");
-    const mismatch = Number(policy.mismatch) || 0;
-    return {
-      value: mismatch ? String(mismatch) : "OK",
-      unit: mismatch ? (mismatch === 1 ? "mismatch" : "mismatches") : "",
-      sublabel: `${policy.compliant} compliant · ${policy.unreported} unreported`,
-      tone: mismatch ? "hot" : "ok",
-    };
-  }
-  if (id === "routing-health") {
-    const control = snap.controlHealth;
-    if (!control) return noDataWidget("Routing health is not reported.");
-    const stale = control.staleSources?.length || 0;
-    const errors = control.errors?.length || 0;
-    const degraded = control.cmuxReachable !== true || stale > 0 || errors > 0;
-    return {
-      value: degraded ? "Degraded" : "Ready",
-      unit: "",
-      sublabel: degraded ? `${stale} stale source${stale === 1 ? "" : "s"} · ${errors} error${errors === 1 ? "" : "s"}` : "Controls reachable.",
-      tone: degraded ? "warn" : "ok",
-    };
-  }
-  if (id === "context-reporting") {
-    if (totals.tokenReporting == null || totals.tokenEligible == null) {
-      return noDataWidget("Context reporting is not reported.");
-    }
-    return {
-      value: `${totals.tokenReporting}/${totals.tokenEligible}`,
-      unit: "reporting",
-      sublabel: totals.tokenEligible ? "Live sessions reporting context." : "No sessions eligible to report context.",
-      tone: "ok",
-    };
-  }
   return noDataWidget("Widget evidence is not available.");
 }
 
 const AFFECTS_SAMPLE_LIMIT = 6;
-// At most five rows per lane before a "+N more" control expands the lane in
-// place — dense but never an unbounded wall.
-const MAX_LANE_ROWS = 5;
+// At most five rows in the inline pulse expansion before a "+N more" control
+// reveals the rest in place — dense but never an unbounded wall.
+const MAX_PULSE_ROWS = 5;
 
 // Server-owned work state → the single row vocabulary (label + visual key +
 // tone). issueWorkState prefers live optimistic signals, then this map, then a
@@ -891,14 +1047,18 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
+  preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
+  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  renderAgentRow, renderAgentColumnHeader,
+  renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
-  attentionBoardOf, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
-  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
+  pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
+  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult,
 };
 
@@ -950,22 +1110,23 @@ const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  inspectorTab: "overview", // overview | technical
+  evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   drafts: new Map(),      // agentId -> instruct draft text
-  confirming: null,       // `${agentId}:${action}`
+  confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
-  // Per-lane "show all" toggle. Each lane caps at MAX_LANE_ROWS; the "+N more"
-  // control expands that lane in place (no route change). Reset is transient —
-  // it is not persisted, so a reload returns to the dense five-row view.
-  laneExpanded: { act: false, aware: false },
+  // Inline pulse expansion. The needs-you verdict button opens a capped
+  // findings panel in place; "+N more" reveals the rest. Both are transient —
+  // not persisted, so a reload returns to the collapsed strip.
+  pulseExpanded: false,
+  pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { attention: "", programs: "", inspector: "", widgets: "" },
+  paintSig: { programs: "", inspector: "", widgets: "" },
 };
 state.aliases = state.labels;
 
@@ -1035,11 +1196,6 @@ async function postScanWindow(hours) {
   }
 }
 
-function toggleLane(lane) {
-  state.laneExpanded[lane] = !state.laneExpanded[lane];
-  renderAttentionBoard();
-}
-
 function loadOverrides() {
   try {
     const raw = localStorage.getItem("mtn3-programs");
@@ -1067,18 +1223,24 @@ function saveWidgetPreferences() {
 
 /* ---------- data flow ---------- */
 
+/* The one apply path a validated snapshot takes into the UI: shape-guard, adopt
+   it, sync the scan window, clear the failure flag, re-render. Both the GET poll
+   (fetchSnapshot) and the POST recollect feed through here so neither can drift. */
+function applySnapshot(snap) {
+  if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
+    throw new Error("unexpected snapshot shape");
+  }
+  state.snap = snap;
+  if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
+  state.fetchFailed = false;
+  render();
+}
+
 async function fetchSnapshot() {
   try {
     const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const snap = await res.json();
-    if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
-      throw new Error("unexpected snapshot shape");
-    }
-    state.snap = snap;
-    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
-    state.fetchFailed = false;
-    render();
+    applySnapshot(await res.json());
   } catch (err) {
     state.fetchFailed = true;
     if (!state.snap) {
@@ -1086,6 +1248,21 @@ async function fetchSnapshot() {
       render();
     }
     console.warn("snapshot fetch failed:", err);
+  }
+}
+
+/* The Degraded verdict's Refresh forces a fresh server-side collection rather than
+   re-serving cache: POST /api/recollect (no body, same-origin — the browser sends
+   the Origin header the server guard requires). Apply the returned snapshot through
+   the shared path; any non-OK envelope ({ ok:false, ... }, e.g. 500 RECOLLECT_FAILED)
+   or a network error falls back to fetchSnapshot so Refresh is never a dead button. */
+async function recollectSnapshot() {
+  try {
+    const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
+    if (!res.ok) { await fetchSnapshot(); return; }
+    applySnapshot(await res.json());
+  } catch {
+    await fetchSnapshot();
   }
 }
 
@@ -1185,7 +1362,6 @@ function render() {
 
   renderConn();
   renderHealthRail();
-  renderAttentionBoard();
   renderTabs();
   renderFilterBar();
   renderPrograms();
@@ -1244,15 +1420,41 @@ function widgetLabelNode(id, label) {
   }, label);
 }
 
-function renderSummaryWidget(id) {
+/* Compact verdict chip — the health cell's OK form (trailing micro-chip on
+   both the stressed grid and the calm line). */
+function healthMicroChip(data) {
+  return el("span", { class: "verdict-chip verdict-" + data.tone, title: data.sublabel },
+    icon(data.icon), data.value);
+}
+
+function renderSummaryWidget(id, weight = "normal") {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
   const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+  const cellClass = "reading-widget widget-" + id
+    + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
+  // A healthy control plane stays a trailing micro-chip; any degradation
+  // promotes the cell back to full width below.
+  if (id === "health" && weight === "micro") {
+    return el("div", { class: "reading " + cellClass }, healthMicroChip(data));
+  }
   const valueClass = ["reading-value", data.tone === "hot" ? "is-hot" : "", data.tone === "ok" ? "is-ok" : "", data.tone === "missing" ? "reading-no-data" : ""]
     .filter(Boolean).join(" ");
   let valueNode;
-  if (id === "system") {
+  if (id === "health") {
     valueNode = el("span", { class: valueClass },
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
+  } else if (id === "needs-you") {
+    // The verdict count is the strip's one expansion control: it toggles the
+    // inline findings panel in place (rows open the drawer; no triage here).
+    valueNode = el("button", {
+      type: "button",
+      class: valueClass + " pulse-verdict",
+      "aria-expanded": String(state.pulseExpanded),
+      "aria-controls": "pulse-findings",
+      dataset: { fkey: "pulse-verdict" },
+      onclick: togglePulseFindings,
+    }, data.value,
+      data.unit ? el("span", { class: "unit", text: data.unit }) : null);
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -1265,10 +1467,11 @@ function renderSummaryWidget(id) {
   }
   // A Degraded verdict names its reason (the top live finding) beside the chip
   // and exposes the existing refresh control right there.
-  const degraded = id === "system" && data.tone === "degraded";
+  const degraded = id === "health" && data.tone === "degraded";
   const reason = degraded ? topSourceIssue(state.snap) : null;
-  const snapNote = id === "system" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
+  const sinceNote = degraded ? degradedSinceText(state.snap) : "";
+  const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
+  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + sinceNote + snapNote }));
   if (degraded) {
     subNode.append(el("button", {
       type: "button",
@@ -1276,10 +1479,10 @@ function renderSummaryWidget(id) {
       title: "Re-pull the latest snapshot evidence",
       "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
       dataset: { fkey: "degraded-refresh" },
-      onclick: () => fetchSnapshot(),
+      onclick: () => recollectSnapshot(),
     }, "Refresh"));
   }
-  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, "reading-widget widget-" + id);
+  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -1350,24 +1553,81 @@ function renderWidgetCustomizer() {
   }
 }
 
-/* One status verdict and one configurable, scan-ordered widget rail. */
+/* Calm collapse — the whole strip is one moss line: verdict, shipping count,
+   pulse numbers when the server reports them (graceful without them), a small
+   activity sparkline, and the trailing health micro-chip. */
+function renderPulseCalm() {
+  const snap = state.snap;
+  const totals = totalsOf(snap);
+  const pulse = snap && snap.pulse;
+  const parts = ["All clear", totals.working + " shipping"];
+  if (pulse) {
+    parts.push("↑" + pulse.momentum.completionsLastHour + " done this hour");
+    if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
+  }
+  const line = el("div", { class: "pulse-calm", role: "status" },
+    el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
+    el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+  const spark = pulse
+    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
+    : null;
+  if (spark) line.append(spark);
+  line.append(healthMicroChip(summaryWidgetData("health", snap, state.conn)));
+  return line;
+}
+
+// Last painted needs-you count — detects the >0 → 0 clear so the strip can
+// fire its one-shot moss transition (CSS transition only, no keyframe loops).
+let pulseNeedsYouWas = 0;
+
+/* The Pulse strip — one verdict-first surface. Calm collapses to a single
+   line; anything urgent re-weights the fixed-order cells instead of
+   reordering them. */
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const verdict = systemStatus(state.snap, state.conn);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems);
+  const attention = attentionSummary(state.snap);
+  const needsYou = attention ? attention.count : 0;
+  const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
   const sig = [
     state.conn,
-    verdict.label,
+    model.calm ? "calm" : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
-    state.widgetIds.map((id) => {
+    state.pulseExpanded ? "1" : "0",
+    state.pulseShowAll ? "1" : "0",
+    buckets.map((b) => b.activeSessions).join(","),
+    model.findings.map(findingPaintKey).join("|"),
+    // The calm line renders momentum/burn/health regardless of which widgets
+    // are enabled, so sign its actual inputs — not the customized cell list.
+    (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
       const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
   ].join("\u001f");
   if (paintUnchanged("widgets", sig)) return;
+
+  const rail = $("health-rail");
+  if (rail) {
+    if (needsYou === 0 && pulseNeedsYouWas > 0) {
+      rail.classList.add("pulse-cleared");
+      setTimeout(() => rail.classList.remove("pulse-cleared"), 1400);
+    }
+    rail.classList.toggle("is-calm", model.calm);
+  }
+  pulseNeedsYouWas = needsYou;
+
   widgets.textContent = "";
-  for (const id of state.widgetIds) widgets.append(renderSummaryWidget(id));
+  if (model.calm) {
+    widgets.append(renderPulseCalm());
+  } else {
+    for (const id of state.widgetIds) {
+      const cell = model.cells.find((c) => c.id === id);
+      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal"));
+    }
+  }
+  renderPulseFindings(model);
   renderWidgetCustomizer();
 }
 
@@ -1417,7 +1677,6 @@ async function fetchTriageQueue() {
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
     renderHealthRail();
-    renderAttentionBoard();
   } catch (err) {
     console.warn("triage queue fetch failed:", err);
   }
@@ -1428,7 +1687,7 @@ async function triageIssue(issueId, action) {
   if (state.triagePending.has(key)) return;
   state.triagePending.add(key);
   state.triageErrors.delete(issueId);
-  renderAttentionBoard();
+  renderHealthRail();
   try {
     const res = await fetch("/api/triage/" + action, {
       method: "POST",
@@ -1449,6 +1708,13 @@ async function triageIssue(issueId, action) {
     if (action === "queue" || action === "run") {
       await fetchSnapshot();
       await fetchTriageQueue();
+    }
+    // Compress Triage→Queue into one beat when the plan is investigation-shaped:
+    // queueing is bounded and persistent, and launch stays a separate explicit
+    // operator action, so the extra click was a dead stop, not a safety gate.
+    if (action === "generate" && recommendation && recommendation.queueRecommended
+      && !state.queueItems.some((item) => item.issueId === issueId)) {
+      await triageIssue(issueId, "queue");
     }
   } catch (err) {
     state.triageErrors.set(issueId, err && err.message ? err.message : "Triage request failed");
@@ -1583,17 +1849,47 @@ function investigationResultNextSteps(parsed, outcome) {
   return ["Wait for the next source snapshot — this finding clears when evidence is gone."];
 }
 
+/* One primary, wired action for a finished investigation. Blocked results
+   regenerate a fresh plan from the current issue evidence (the server queue
+   holds one item per finding, so a true requeue is not available); verifying
+   results re-pull the source snapshot that clears the finding. */
+function investigationResultCta(outcome, issueId) {
+  if (!issueId) return null;
+  if (outcome === "blocked") {
+    const busy = state.triagePending.has("generate:" + issueId);
+    return el("button", {
+      type: "button",
+      class: "btn primary triage-briefing-cta",
+      disabled: busy ? "" : null,
+      "aria-busy": busy ? "true" : null,
+      dataset: { fkey: "briefing-cta:" + issueId },
+      onclick: () => triageIssue(issueId, "generate"),
+    }, busy ? "Retriaging…" : "Retriage from evidence");
+  }
+  return el("button", {
+    type: "button",
+    class: "btn primary triage-briefing-cta",
+    dataset: { fkey: "briefing-cta:" + issueId },
+    onclick: () => { void fetchSnapshot(); void fetchTriageQueue(); },
+  }, "Check source now");
+}
+
 // Fix briefing for investigation results — headline, what happened, what to do,
 // with raw output collapsed. Used by intervention/advisory triage and the
-// investigation drawer. `outcome` is "completed" or "blocked".
-function renderInvestigationResult(resultText, outcome) {
+// investigation drawer. `outcome` is "completed" or "blocked"; `opts.issueId`
+// wires the one primary follow-up action.
+const BRIEFING_MAX_BULLETS = 3;
+function renderInvestigationResult(resultText, outcome, opts = {}) {
   const blocked = outcome === "blocked";
   const parsed = parseInvestigationResult(resultText);
   const headline = parsed.headline || (blocked ? "Investigation blocked" : "Investigation complete");
   const nextSteps = investigationResultNextSteps(parsed, blocked ? "blocked" : "completed");
   const seen = new Set([headline, parsed.headline].filter(Boolean));
-  const findings = parsed.findings.filter((item) => !seen.has(item));
-  const blockers = parsed.blockers.filter((item) => !seen.has(item));
+  // Body cap: blockers first, then findings, at most three bullets total —
+  // everything else stays in the collapsed Raw output.
+  const blockers = parsed.blockers.filter((item) => !seen.has(item)).slice(0, BRIEFING_MAX_BULLETS);
+  const findings = parsed.findings.filter((item) => !seen.has(item))
+    .slice(0, Math.max(0, BRIEFING_MAX_BULLETS - blockers.length));
   const summary = parsed.summary && parsed.summary !== headline ? parsed.summary : "";
   let bodyShown = false;
 
@@ -1605,10 +1901,10 @@ function renderInvestigationResult(resultText, outcome) {
       el("span", { class: "triage-briefing-status", text: blocked ? "Blocked" : "Complete" }),
       el("span", { class: "triage-briefing-kicker-note", text: blocked
         ? "Operator review needed"
-        : "Source confirmation pending" })),
+        : "Waiting for fresh data" })),
     el("p", { class: "triage-briefing-headline", text: headline }));
 
-  if (summary) {
+  if (summary && !blockers.length && !findings.length) {
     briefing.append(el("p", { class: "triage-briefing-summary", text: summary }));
     bodyShown = true;
   } else if (findings.length === 0 && blockers.length === 0 && !parsed.structured && parsed.raw && parsed.raw !== headline) {
@@ -1639,10 +1935,13 @@ function renderInvestigationResult(resultText, outcome) {
       : "The investigation finished and is waiting on fresh source evidence." }));
   }
 
+  // One primary button first; short supporting prose after (never prose-only).
+  const cta = investigationResultCta(blocked ? "blocked" : "completed", opts.issueId);
   briefing.append(el("div", { class: "triage-briefing-section triage-briefing-next" },
     el("h4", { class: "triage-briefing-label", text: "What to do next" }),
+    cta,
     el("ul", { class: "triage-briefing-list triage-briefing-list--next" },
-      nextSteps.map((item) => el("li", { text: item })))));
+      nextSteps.slice(0, 2).map((item) => el("li", { text: item })))));
 
   briefing.append(el("details", { class: "triage-briefing-raw" },
     el("summary", { text: "Raw output" }),
@@ -1669,7 +1968,7 @@ function renderTriage(issue) {
       "aria-busy": generating ? "true" : null,
       dataset: { fkey: "triage:" + issue.id },
       onclick: () => triageIssue(issue.id, "generate"),
-    }, generating ? "Analyzing…" : "Generate triage"));
+    }, generating ? "Triaging…" : "Triage this finding"));
   } else {
     const plan = el("section", { class: "triage-plan", "aria-label": "Generated triage" },
       el("div", { class: "triage-plan-head" },
@@ -1704,12 +2003,12 @@ function renderTriage(issue) {
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
           ? queueItem.state === "running" ? "Investigation running · " + (queueItem.runModel || "native Luna")
-            : queueItem.state === "completed" ? "Investigation complete · source confirmation pending"
+            : queueItem.state === "completed" ? "Investigation complete · waiting for fresh data"
             : queueItem.state === "blocked" ? "Investigation blocked · review result"
             : "Queued and ready for explicit launch"
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
-        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed"));
+        plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed", { issueId: issue.id }));
       }
     }
     wrap.append(plan);
@@ -1775,59 +2074,47 @@ function issueImpactLine(issue) {
 
 const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
 
-/* Snap rollup for the conductor. Prefer server attentionBoard; otherwise derive
-   from issues + recentlyResolved + live queue so older servers still paint. */
-function attentionBoardOf(snap, queueItems = []) {
-  const board = snap && snap.attentionBoard;
-  if (board && typeof board.actNow === "number" && typeof board.allClear === "boolean") {
-    return {
-      actNow: board.actNow | 0,
-      watch: board.watch | 0,
-      inMotion: board.inMotion | 0,
-      cleared: board.cleared | 0,
-      allClear: !!board.allClear,
-    };
-  }
+/* Ordered, flattened finding list for the pulse strip's inline expansion — the
+   same set the old lanes rendered, minus resolved (those live in the drawer
+   and History): interventions that still need a human first, then advisories,
+   in-motion work, and orphan queue rows whose issue has left the snapshot. */
+function pulseFindings(snap, queueItems = state.queueItems) {
   const issues = issuesOf(snap);
-  const resolved = recentlyResolvedOf(snap);
-  const liveIssueIds = new Set(issues.map((issue) => issue.id));
-  const resolvedIds = new Set(resolved.map((issue) => issue.id));
-  const triageByIssue = new Map(
-    (snap && Array.isArray(snap.triageSummaries) ? snap.triageSummaries : [])
-      .map((row) => [row.issueId, row.state]),
-  );
-  for (const item of queueItems) triageByIssue.set(item.issueId, item.state);
-
-  const actNowIds = new Set();
-  const watchIds = new Set();
-  const inMotionIds = new Set();
-  for (const issue of issues) {
-    const work = issueWorkState(issue, queueItems);
-    if (IN_MOTION_KEYS.has(work.key)) inMotionIds.add(issue.id);
-    if (issue.severity === "error") actNowIds.add(issue.id);
-    else if (!IN_MOTION_KEYS.has(work.key)) watchIds.add(issue.id);
-  }
-  for (const [issueId, qState] of triageByIssue) {
-    if (qState === "queued" || qState === "running" || qState === "completed") inMotionIds.add(issueId);
-    // Orphan blocked queue rows for cleared/non-live issues must not inflate Watch.
-    if (
-      qState === "blocked"
-      && liveIssueIds.has(issueId)
-      && !resolvedIds.has(issueId)
-      && !actNowIds.has(issueId)
-    ) {
-      watchIds.add(issueId);
-    }
-  }
-  const actNow = actNowIds.size;
-  const watch = watchIds.size;
-  const inMotion = inMotionIds.size;
-  const cleared = resolved.length;
-  return { actNow, watch, inMotion, cleared, allClear: actNow + watch + inMotion === 0 };
+  const issueFindings = issues.map((issue) =>
+    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory"));
+  const issueIds = new Set(issues.map((issue) => issue.id));
+  const resolvedIds = new Set(recentlyResolvedOf(snap).map((issue) => issue.id));
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const orphanQueueFindings = items
+    .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
+    .map(findingFromQueueItem);
+  return [
+    ...issueFindings.filter((f) => f.kind === "intervention" && !IN_MOTION_KEYS.has(f.work.key)),
+    ...issueFindings.filter((f) => f.kind === "advisory" && !IN_MOTION_KEYS.has(f.work.key)),
+    ...issueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key)),
+    ...orphanQueueFindings,
+  ];
 }
 
-function growClass(count) {
-  return "grow-" + Math.min(12, Math.max(0, count | 0));
+/* Pure strip model — the renderer and tests share one derivation. calm means
+   nothing needs the operator: zero live findings, an operational system, and
+   no session near its context ceiling. cells carry the fixed-order weighting
+   (urgency changes weight via cell-hot/cell-micro, never order); findings is
+   the ordered inline-expansion list. */
+function pulseStripModel(snap, conn = "live", queueItems = []) {
+  const attention = attentionSummary(snap);
+  const status = systemStatus(snap, conn);
+  const peak = peakContext(snap);
+  const calm = !!snap && !!attention && attention.count === 0
+    && status.key === "operational" && !(peak && peak.pct >= 85);
+  const cells = DEFAULT_WIDGET_IDS.map((id) => {
+    const data = summaryWidgetData(id, snap, conn, "percent", queueItems);
+    const weight = id === "health"
+      ? (data.tone === "ok" ? "micro" : "normal")
+      : data.tone === "hot" ? "hot" : "normal";
+    return { id, weight, data };
+  });
+  return { calm, cells, findings: pulseFindings(snap, queueItems) };
 }
 
 function findingFromIssue(issue, kind) {
@@ -1878,7 +2165,6 @@ function renderFindingRow(finding) {
     onclick: open,
   },
     el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
-    el("span", { class: "st " + visual.st, text: finding.work.label }),
     el("span", { class: "copy" },
       el("span", { class: "title", text: finding.title }),
       el("span", { class: "impact", text: finding.impact })),
@@ -1889,124 +2175,33 @@ function renderFindingRow(finding) {
     }, el("i"), el("i"), el("i"), el("i")));
 }
 
-function renderLaneBody(body, findings, laneKey, emptyCopy) {
-  body.textContent = "";
-  if (!findings.length) {
-    body.append(el("div", { class: "lane-empty" },
-      el("strong", { text: emptyCopy.title }),
-      emptyCopy.sub));
-    return;
-  }
-  const expanded = !!state.laneExpanded[laneKey];
-  const visible = expanded ? findings : findings.slice(0, MAX_LANE_ROWS);
-  for (const finding of visible) body.append(renderFindingRow(finding));
-  const more = findings.length - MAX_LANE_ROWS;
-  if (more > 0) {
-    body.append(el("button", {
-      type: "button",
-      class: "lane-more",
-      dataset: { fkey: "lane-more:" + laneKey },
-      onclick: () => toggleLane(laneKey),
-      text: expanded ? "Show less" : ("+" + more + " more"),
-    }));
-  }
+function togglePulseFindings() {
+  state.pulseExpanded = !state.pulseExpanded;
+  if (!state.pulseExpanded) state.pulseShowAll = false;
+  renderHealthRail();
 }
 
-function renderAttentionBoard() {
-  const board = $("attention-board");
-  if (!board) return;
-
-  const showHere = state.view === "now" || state.view === "needs-you";
-  if (!showHere || !state.snap) {
-    board.hidden = true;
-    document.body.classList.remove("is-all-clear");
-    board.classList.remove("is-all-clear");
-    state.paintSig.attention = "hidden:" + state.view;
-    return;
-  }
-
-  const issues = issuesOf(state.snap);
-  const actFindings = issues
-    .filter((issue) => issue.severity === "error")
-    .map((issue) => findingFromIssue(issue, "intervention"));
-  const recentlyResolved = recentlyResolvedOf(state.snap);
-  const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
-  const issueIds = new Set(issues.map((issue) => issue.id));
-  const awareFindings = [
-    ...issues.filter((issue) => issue.severity !== "error").map((issue) => findingFromIssue(issue, "advisory")),
-    ...state.queueItems
-      .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
-      .map(findingFromQueueItem),
-    ...recentlyResolved.map((issue) => findingFromIssue(issue, "resolved")),
-  ];
-
-  const counts = attentionBoardOf(state.snap, state.queueItems);
-  const allClear = counts.allClear;
-  const sig = [
-    allClear ? "1" : "0",
-    counts.actNow, counts.watch, counts.inMotion, counts.cleared,
-    state.laneExpanded.act ? "1" : "0",
-    state.laneExpanded.aware ? "1" : "0",
-    actFindings.map(findingPaintKey).join("|"),
-    awareFindings.map(findingPaintKey).join("|"),
-  ].join("\u001f");
-  if (paintUnchanged("attention", sig)) return;
-
-  board.hidden = false;
-  document.body.classList.toggle("is-all-clear", allClear);
-  board.classList.toggle("is-all-clear", allClear);
-
-  const score = $("score");
-  const setSeg = (id, n) => {
-    const seg = $(id);
-    const label = $(id + "-n");
-    const next = String(n);
-    if (label && label.textContent !== next) label.textContent = next;
-    if (!seg) return;
-    seg.classList.toggle("zero", n === 0);
-    const nextGrow = growClass(n === 0 ? 0 : Math.max(1, n));
-    if (!seg.classList.contains(nextGrow)) {
-      seg.classList.remove("grow-0", "grow-1", "grow-2", "grow-3", "grow-4", "grow-5", "grow-6", "grow-7", "grow-8", "grow-9", "grow-10", "grow-11", "grow-12");
-      seg.classList.add(nextGrow);
-    }
-  };
-  setSeg("seg-act", counts.actNow);
-  setSeg("seg-watch", counts.watch);
-  setSeg("seg-motion", counts.inMotion);
-  setSeg("seg-clear", counts.cleared);
-  if (score) score.classList.toggle("score-clear", allClear);
-
-  const legend = $("score-legend");
-  if (legend) {
-    const needYou = counts.actNow === 1 ? "1 need you" : (counts.actNow + " need you");
-    const watching = counts.watch === 1 ? "1 watching" : (counts.watch + " watching");
-    const motion = counts.inMotion === 1 ? "1 in motion" : (counts.inMotion + " in motion");
-    const cleared = counts.cleared === 1 ? "1 cleared" : (counts.cleared + " cleared");
-    const nextLegend = needYou + " · " + watching + " · " + motion + " · " + cleared;
-    if (legend.textContent !== nextLegend) legend.textContent = nextLegend;
-    legend.hidden = allClear;
-  }
-
-  const lanes = $("lanes");
-  const allclear = $("allclear");
-  if (lanes) lanes.hidden = allClear;
-  if (allclear) allclear.hidden = !allClear;
-
-  if (!allClear) {
-    const actCount = $("act-count");
-    const awareCount = $("aware-count");
-    if (actCount) actCount.textContent = actFindings.length ? (actFindings.length + " open") : "clear";
-    if (awareCount) awareCount.textContent = awareFindings.length
-      ? (awareFindings.length + (awareFindings.length === 1 ? " item" : " items"))
-      : "clear";
-    renderLaneBody($("act-body"), actFindings, "act", {
-      title: "Nothing to act on",
-      sub: "Errors that need you land here.",
-    });
-    renderLaneBody($("aware-body"), awareFindings, "aware", {
-      title: "Quiet watch",
-      sub: "Advisories, in-motion work, and recent clears.",
-    });
+/* Inline expansion under the strip — at most MAX_PULSE_ROWS finding rows plus
+   an in-place "+N more"/"Show less" control. Rows open the drawer; triage and
+   queue actions stay drawer-only. */
+function renderPulseFindings(model) {
+  const panel = $("pulse-findings");
+  if (!panel) return;
+  const open = !model.calm && state.pulseExpanded && model.findings.length > 0;
+  panel.hidden = !open;
+  panel.textContent = "";
+  if (!open) return;
+  const visible = state.pulseShowAll ? model.findings : model.findings.slice(0, MAX_PULSE_ROWS);
+  for (const finding of visible) panel.append(renderFindingRow(finding));
+  const more = model.findings.length - MAX_PULSE_ROWS;
+  if (more > 0) {
+    panel.append(el("button", {
+      type: "button",
+      class: "pulse-more",
+      dataset: { fkey: "pulse-more" },
+      onclick: () => { state.pulseShowAll = !state.pulseShowAll; renderHealthRail(); },
+      text: state.pulseShowAll ? "Show less" : ("+" + more + " more"),
+    }));
   }
 }
 
@@ -2026,14 +2221,20 @@ function renderTabs() {
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    countNode.textContent = state.snap
-      ? String(agents.filter((a) =>
+    const count = state.snap
+      ? agents.filter((a) =>
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
-        ).length)
-      : "";
+        ).length
+      : null;
+    countNode.textContent = count == null ? "" : String(count);
+    // The Alerts (needs-you) tab count takes ember ink when there is anything to
+    // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
+    if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
-    btn.setAttribute("aria-pressed", String(btn.dataset.view === state.view));
+    const isCurrent = btn.dataset.view === state.view;
+    btn.setAttribute("aria-pressed", String(isCurrent));
+    btn.classList.toggle("is-current", isCurrent);
   }
   const toggle = $("select-toggle");
   if (toggle) {
@@ -2267,26 +2468,24 @@ function renderPrograms() {
   }
 }
 
-function rollupParts(r) {
-  const parts = [];
-  if (r.needsYou) parts.push({ text: r.needsYou + (r.needsYou === 1 ? " alert" : " alerts"), hot: true });
-  if (r.working) parts.push({ text: r.working + " working" });
-  if (r.idle) parts.push({ text: r.idle + " idle" });
-  if (r.ended) parts.push({ text: r.ended + " done" });
-  if (!parts.length) parts.push({ text: r.total + " tracked" });
-  return parts;
+/* Left-tree program header rollup — the same at-a-glance data as the drawer head
+   (programRollupCells is the single aggregation source), rendered as the mono
+   .program-rollup cluster A4 established. The alert count takes ember ink
+   (is-alerting → --ember) only when alerts exist; calm earns no color. The
+   accessible name carries the data itself, extending the drawer's aria pattern. */
+function programHeadRollup(agents) {
+  const cells = programRollupCells(agents);
+  const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
+  return el("span", { class: "program-rollup", "aria-label": label },
+    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") },
+      el("span", { class: "program-rollup-value mono", text: c.value }),
+      el("span", { class: "program-rollup-label", text: c.label }))));
 }
 
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const r = deriveRollup(agents);
-
-  const rollup = el("span", { class: "program-rollup" });
-  rollupParts(r).forEach((part, i) => {
-    if (i) rollup.append(" · ");
-    rollup.append(part.hot ? el("span", { class: "hot", text: part.text }) : part.text);
-  });
+  const rollup = programHeadRollup(agents);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -2417,15 +2616,18 @@ function renderAgentRows(program, agents) {
 }
 
 function renderAgentColumnHeader() {
+  // Identity on the left, the right-aligned instrument cluster on the right:
+  // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
+  // aria-label; the terminal/source naming tags fold into the tooltip + drawer.)
   return el("div", {
     class: "agent-grid agent-column-header",
     "aria-label": "Agent list columns",
   },
-    el("span", { class: "agent-column-label", text: "Status" }),
     el("span", { class: "agent-column-label", text: "Agent/message" }),
-    el("span", { class: "agent-column-label", text: "Model" }),
-    el("span", { class: "agent-column-label", text: "Context" }),
-    el("span", { class: "agent-column-label", text: "Access" }));
+    el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -2450,11 +2652,6 @@ function rowSummary(agent) {
   return NO_READABLE_MESSAGE;
 }
 
-function rowFact(label, value, className = "") {
-  return el("span", { class: "row-fact " + className, "aria-label": `${label}: ${value}`, title: String(value) },
-    el("span", { class: "row-fact-value", text: value }));
-}
-
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
@@ -2475,33 +2672,11 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-function contextFact(agent) {
-  const usage = contextUsage(agent.tokens);
-  const value = contextDisplayValue(agent.tokens);
-  return el("span", {
-    class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
-    "aria-label": `${contextDisplayLabel()}: ${value}`,
-  },
-    el("span", {
-      class: "row-fact-value context-fact-value",
-      title: usage ? usage.text : "This source does not report observed context usage.",
-      text: value,
-    }));
-}
-
+// Shared control vocabulary — the icon key + human state word for each access
+// state. The agent row folds Access into its aria-label; the drawer status line
+// renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
-
-function controlFact(control) {
-  const stateText = CONTROL_STATE_TEXT[control] || "View only";
-  return el("span", {
-    class: "row-fact fact-control control-" + control,
-    "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control],
-  },
-    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control] },
-      el("span", { class: "control-icon" }, icon(CONTROL_ICONS[control] || "observed")),
-      el("span", { class: "control-access-text", text: stateText })));
-}
 
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
@@ -2513,31 +2688,108 @@ function renderAgentRow(agent, program, opts = {}) {
   const clusterNote = swarmNote(agent, opts);
   const summary = rowSummary(agent);
   const description = [clusterNote, summary].filter(Boolean).join(" · ");
+  // Status column shows the activity word colored by state (the color already
+  // encodes working/idle/ended, so no separate dot), with any alert suffix on
+  // its own red span. Full state stays in the tooltip + row aria-label.
   const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
 
   const eligible = broadcastEligible(agent);
   const checked = state.selection.has(agent.id);
-  const hasLabel = agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  const nameTarget = preferredRenameTarget(agent);
+  const nameKey = presentationLabelKey(nameTarget);
+  const editing = state.renaming === nameKey;
+  const displayName = agentName(agent);
+  const terminal = terminalSourceName(agent);
   const sourceName = sourceAgentName(agent);
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  // The terminal / source / cwd-mismatch naming detail leaves the visible row.
+  // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
+  // sentence into the row tooltip + aria-label; the drawer still carries it too.
+  const sourceDetail = fullSourceDetail(agent);
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
+
+  const activate = () => {
+    if (state.selecting) {
+      if (eligible) toggleSelect(agent.id);
+      return;
+    }
+    selectAgent(agent.id);
+  };
 
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
-    el("span", { class: "agent-name", text: agentName(agent) }),
+    el("span", { class: "agent-name-wrap" },
+      el("span", { class: "agent-name", text: displayName }),
+      state.selecting ? null : el("button", {
+        type: "button",
+        class: "agent-rename",
+        "aria-label": "Rename " + displayName,
+        title: terminal
+          ? "Edit display name (defaults from terminal: " + terminal + ")"
+          : "Edit display name",
+        dataset: { fkey: "agent-rename:" + agent.id },
+        onclick: (e) => {
+          e.stopPropagation();
+          startRename(nameTarget, { draft: displayName });
+        },
+      }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
-      hasLabel ? el("span", { class: "source-label", title: "Source-backed agent label", text: "source: " + sourceName }) : null,
+      // De-noised: only the cwd-mismatch state keeps a visible mark — a small
+      // ember dot with an accessible label. The full sentence rides the row
+      // tooltip + aria-label and the drawer; no naming prose on the row.
+      cwdMismatch
+        ? el("span", {
+          class: "source-mismatch-dot",
+          role: "img",
+          "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
+          title: sourceDetail || CWD_MISMATCH_HINT,
+        })
+        : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
-  const line1 = el("span", { class: "agent-grid" },
-    el("span", { class: "row-state state-" + activity },
-      el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }),
-      el("span", { text: stateText })),
-    identity,
-    rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
-    contextFact(agent),
-    controlFact(control));
+  // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
+  // elapsed. Values ride --font-mono with tabular-nums; each cell is omitted
+  // honestly when its number is unknown (never fabricated), matching the
+  // vitals-band precedent. Access + the naming detail fold into the aria-label.
+  const ctxUsage = contextUsage(agent.tokens);
+  const modelText = modelShort(agent.model) || "not reported";
+  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const tokens = tokenSummary(agent.tokens);
+
+  const instruments = el("span", { class: "row-instruments" },
+    el("span", {
+      class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+      title: stateText,
+      "aria-label": "Status: " + stateText,
+    },
+      el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
+      outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
+    el("span", {
+      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
+      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
+      title: ctxUsage ? ctxUsage.text : modelText,
+    },
+      el("span", { class: "ri-value mono", text: modelCtx })),
+    tokens.known
+      ? el("span", {
+        class: "ri-cell ri-tokens",
+        "aria-label": "Tokens: " + tokens.text,
+        title: tokens.title,
+      },
+        el("span", { class: "ri-value mono", text: tokens.text }))
+      : null,
+    elapsed && elapsed !== "—"
+      ? el("span", {
+        class: "ri-cell ri-elapsed",
+        "aria-label": "Elapsed: " + elapsed,
+      },
+        el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
+      : null);
+
+  const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
   const rowClass = "agent-row provider-" + agent.provider +
     " role-" + role.key +
@@ -2547,7 +2799,8 @@ function renderAgentRow(agent, program, opts = {}) {
     (outcome !== "healthy" ? " is-" + outcome : "") +
     (activity === "ended" ? " is-ended" : "") +
     (state.selecting ? " is-selecting" : "") +
-    (checked ? " is-checked" : "");
+    (checked ? " is-checked" : "") +
+    (editing ? " is-renaming" : "");
 
   const children = [];
   if (state.selecting) {
@@ -2558,17 +2811,48 @@ function renderAgentRow(agent, program, opts = {}) {
   }
   children.push(line1);
 
-  return el("button", {
-    type: "button",
+  const row = el("div", {
     class: rowClass,
     id: "agent-" + agent.id,
+    role: "button",
+    tabindex: state.selecting && !eligible ? "-1" : "0",
+    // The de-noised naming detail rides the tooltip for sighted hover; screen
+    // readers get it (plus tokens/elapsed/access) in the aria-label below.
+    title: sourceDetail || null,
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
-    disabled: state.selecting && !eligible ? "" : null,
-    "aria-label": `${agentName(agent)}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-disabled": state.selecting && !eligible ? "true" : null,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
-    onclick: () => state.selecting ? (eligible && toggleSelect(agent.id)) : selectAgent(agent.id),
+    onclick: (e) => {
+      if (e.target.closest(".agent-rename, .rename-form")) return;
+      if (state.selecting && !eligible) return;
+      activate();
+    },
+    onkeydown: (e) => {
+      if (e.target.closest(".agent-rename, .rename-form, input, button")) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      if (state.selecting && !eligible) return;
+      activate();
+    },
   }, children);
+
+  if (!editing) return row;
+
+  const kind = nameTarget.kind;
+  return el("div", { class: "agent-row-edit-wrap" },
+    row,
+    renderLabelForm(nameTarget, {
+      inputKey: "label-input:" + nameKey,
+      placeholder: kind === "workspace" ? "Name that matches the cmux terminal" : "Display name for this agent",
+      ariaLabel: "New display name for " + displayName,
+      source: kind === "workspace"
+        ? (terminal
+          ? "Terminal title: " + terminal + " · workspace id stays " + nameTarget.workspaceId
+          : "Workspace id stays " + nameTarget.workspaceId)
+        : "Source agent: " + sourceName + " · id stays " + agent.id,
+    }));
 }
 
 function swarmNote(agent, opts) {
@@ -2590,6 +2874,7 @@ function selectEntity(sel) {
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
+  state.evidenceOpen = false;
   render();
   // On explicit open (not on background SSE re-renders), move focus to the
   // drawer's lead element per kind — the differentiator band, or the title.
@@ -2610,6 +2895,7 @@ function closeInspector() {
   state.selected = null;
   state.selectedId = null;
   state.confirming = null;
+  state.evidenceOpen = false;
   render();
   if (id) {
     const row = document.getElementById("agent-" + id);
@@ -2656,7 +2942,7 @@ function renderInspector() {
     queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
     triage ? triage.generatedAt + ":" + triage.headline : "",
     pending,
-    state.inspectorTab,
+    state.evidenceOpen ? "1" : "0",
   ].join("\u001f");
   if (paintUnchanged("inspector", sig)) {
     pane.hidden = false;
@@ -2734,10 +3020,80 @@ function dwEyebrow(kindClass, iconName, text) {
   return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
 }
 
-function drawerHead(eyebrowNode, titleText) {
-  return el("div", { class: "inspector-head" },
-    el("div", { class: "inspector-id" }, eyebrowNode, el("h2", { class: "inspector-title", text: titleText })),
-    closeButton());
+/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
+   the agent drawer: the status kicker + title (+ an optional sub line) on the
+   left, Close and the one promoted action stacked on the right. The agent drawer
+   keeps its own richer head (provider rail, status line, gate); the entity
+   drawers share this so the five near-identical heads are not hand-rolled. */
+function drawerVerdictHead({ eyebrow, title, sub, action }) {
+  return el("div", { class: "inspector-head inspector-verdict" },
+    el("div", { class: "inspector-id" },
+      eyebrow || null,
+      el("h2", { class: "inspector-title", text: title }),
+      sub || null),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      action ? el("div", { class: "verdict-action" }, action) : null));
+}
+
+/* Compact promoted lever for an issue drawer's head — the single most-relevant
+   action, so an operator can act from the top without scrolling to the Fix
+   block. Reuses the same triageIssue(...) calls the body controls use; the
+   head: fkey prefix (B2 convention) keeps the key distinct from the body twin.
+   A queued investigation → Launch; a not-yet-triaged finding → Triage; anything
+   in flight → null (the Fix/Triage block owns the plan/queue story). */
+function issueHeadAction(issue) {
+  const id = issue.id;
+  const queueItem = state.queueItems.find((it) => it.issueId === id);
+  if (queueItem && queueItem.state === "queued") {
+    const launching = state.triagePending.has("run:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: launching ? "" : null,
+      "aria-busy": launching ? "true" : null,
+      dataset: { fkey: "head:run:" + id },
+      onclick: () => triageIssue(id, "run"),
+    }, launching ? "Launching…" : "Launch");
+  }
+  if (!state.triage.get(id)) {
+    const generating = state.triagePending.has("generate:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: generating ? "" : null,
+      "aria-busy": generating ? "true" : null,
+      dataset: { fkey: "head:triage:" + id },
+      onclick: () => triageIssue(id, "generate"),
+    }, generating ? "Triaging…" : "Triage");
+  }
+  return null;
+}
+
+/* The investigation head's promoted lever — the queued run's Launch button, the
+   drawer's one existing primary control. Head: prefix keeps it distinct from the
+   full-width Launch that stays in the body. Null unless the run is queued. */
+function investigationHeadAction(item) {
+  if (item.state !== "queued") return null;
+  const launching = state.triagePending.has("run:" + item.issueId);
+  return el("button", {
+    type: "button", class: "btn dw-head-action",
+    disabled: launching ? "" : null,
+    "aria-busy": launching ? "true" : null,
+    dataset: { fkey: "head:run:" + item.issueId },
+    onclick: () => triageIssue(item.issueId, "run"),
+  }, launching ? "Launching…" : "Launch");
+}
+
+/* Program head rollup — the swarm at a glance: agent count, working, alerts, and
+   aggregate session tokens, aggregated client-side over the program's agents.
+   Values ride the mono convention; unit words stay ui/--faint. The token cell is
+   omitted when no agent on the client reports session usage — an aggregate we
+   cannot derive is never faked to zero. */
+function programRollupLine(program) {
+  const cells = programRollupCells(program.agents || []);
+  return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
+    cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
+      el("span", { class: "dw-rollup-value mono", text: c.value }),
+      el("span", { class: "dw-rollup-label", text: c.label }))));
 }
 
 const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
@@ -2820,9 +3176,11 @@ function renderInterventionDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "ember");
-  pane.append(drawerHead(
-    dwEyebrow("ember", "intervention", work.label),
-    issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ember", "intervention", work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -2843,7 +3201,11 @@ function renderAdvisoryDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "amber");
-  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory · " + work.label), issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("amber", "warning", "Advisory · " + work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -2853,7 +3215,7 @@ function renderAdvisoryDrawer(pane, view) {
       el("button", {
         type: "button", class: "btn dw-ghost", dataset: { fkey: "escalate:" + issue.id },
         onclick: () => triageIssue(issue.id, "generate"),
-      }, "Escalate to triage")));
+      }, "Triage this advisory")));
   } else if (work.key === "planned" || work.key === "queued" || work.key === "investigating" || work.key === "verifying" || work.key === "blocked" || work.key === "triaging") {
     pane.append(el("div", { class: "dw-block dw-block--fix" },
       el("div", { class: "dw-block-label", text: "Triage" }),
@@ -2869,15 +3231,17 @@ function renderInvestigationDrawer(pane, view) {
   const running = item.state === "running";
   const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
   drawerAccent(pane, "slate");
-  pane.append(drawerHead(
-    dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
-    item.headline));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    title: item.headline,
+    action: investigationHeadAction(item),
+  }));
 
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
   status.append(el("span", { text:
     item.state === "running" ? "running · " + (item.runModel || "native Luna")
-    : item.state === "completed" ? "complete · source confirmation pending"
+    : item.state === "completed" ? "complete · waiting for fresh data"
     : item.state === "blocked" ? "blocked · review result"
     : "queued and ready for explicit launch" }));
   pane.append(status);
@@ -2902,7 +3266,7 @@ function renderInvestigationDrawer(pane, view) {
   }
 
   if (item.result) {
-    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed"));
+    pane.append(renderInvestigationResult(item.result, item.state === "blocked" ? "blocked" : "completed", { issueId: item.issueId }));
   }
 
   const issue = issuesOf(state.snap).find((i) => i.id === item.issueId);
@@ -2924,7 +3288,12 @@ function renderResolvedDrawer(pane, view) {
   const result = lifecycle.result || "Source confirmation cleared the finding.";
   pane.classList.add("dw-past");
   drawerAccent(pane, "moss");
-  pane.append(drawerHead(dwEyebrow("moss", "check", "Resolved"), issue.title));
+  // Resolved is the only past-tense drawer — no reopen/inspect control exists, so
+  // the head renders verdict-only; no action is invented.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("moss", "check", "Resolved"),
+    title: issue.title,
+  }));
   pane.append(el("p", { class: "dw-lead dw-lead--past", text: "Cleared " + issueTimestamp(lifecycle.resolvedAt) }));
 
   const grid = el("dl", { class: "detail-grid" });
@@ -2984,14 +3353,19 @@ function programRosterRow(agent) {
 function renderProgramDrawer(pane, view) {
   const program = view.program;
   const agents = program.agents;
-  const r = deriveRollup(agents);
   drawerAccent(pane, "ink");
-  pane.append(drawerHead(dwEyebrow("ink", null, "Program"), programName(program)));
+  // Program head leads with the rollup glance (counts + aggregate tokens); the
+  // segmented meter below stays as the visual breakdown, no longer restating the
+  // same numbers in a caption.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ink", null, "Program"),
+    title: programName(program),
+    sub: programRollupLine(program),
+  }));
 
   pane.append(el("div", { class: "dw-block" },
     el("div", { class: "dw-block-label", text: agents.length + (agents.length === 1 ? " agent" : " agents") }),
-    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" }),
-    el("p", { class: "dw-impact", text: rollupParts(r).map((p) => p.text).join(" · ") })));
+    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" })));
 
   if (program.purpose || program.path) {
     const grid = el("dl", { class: "detail-grid" });
@@ -3024,6 +3398,59 @@ function renderProgramDrawer(pane, view) {
     roster));
 }
 
+/* Head de-noising (B2): the three-way naming ternaries collapse into one quiet
+   line. quietSourceLine returns one short line of text — or null when the
+   terminal name already matches the display name — and fullSourceDetail returns
+   the complete sentence for the title tooltip (mismatch explanation included).
+   B4 reuses both for the other drawer types' heads. */
+function quietSourceLine(agent) {
+  const terminal = terminalSourceName(agent);
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  if (terminal) {
+    // A cwd mismatch must keep its mark even when the shown name happens to
+    // equal the terminal title — only calm matching identities go quiet.
+    if (terminal === agentName(agent) && !mismatch) return null;
+    return "Terminal: " + terminal;
+  }
+  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  return hasCustomName ? "Source agent: " + sourceAgentName(agent) : null;
+}
+
+function fullSourceDetail(agent) {
+  const quiet = quietSourceLine(agent);
+  if (!quiet) return null;
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  return mismatch ? quiet + " · " + CWD_MISMATCH_HINT : quiet;
+}
+
+/* Ember-outline gate chip for the verdict head — names the blocker when the
+   outcome is blocked. Indicator ink + outline, never a filled banner. */
+function verdictGate(agent, outcome) {
+  if (outcome !== "blocked") return null;
+  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
+  const text = gate ? conciseText(gate, 64)
+    : agent.statusReason ? conciseText(agent.statusReason, 64)
+      : OUTCOME_LABELS.blocked;
+  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
+    icon("warning"), text);
+}
+
+/* The single most-relevant action control for the verdict head. Reuses the
+   dock's derivation (capability + renderDockTool) so head and dock behave
+   identically. Focus (jump to the pane) leads; Interrupt only when it is the
+   sole enabled lever. When safe controls are locked the head stays empty —
+   the control banner owns that story. */
+function headPrimaryAction(agent) {
+  const focusCap = capability(agent, "focus");
+  const instructCap = capability(agent, "instruct");
+  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
+  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
+  const interruptCap = capability(agent, "interrupt");
+  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
+  return null;
+}
+
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
 function renderAgentDrawer(pane, view) {
@@ -3037,55 +3464,141 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  pane.append(el("div", { class: "inspector-head" },
+  // Verdict head — name, status words, the gate when blocked, and the one
+  // most-relevant action: verdict first, act from the top.
+  const sourceLine = quietSourceLine(agent);
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  const headAction = headPrimaryAction(agent);
+  pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
-      agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)))
-        ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
+      sourceLine
+        ? el("p", {
+          class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
+          title: fullSourceDetail(agent),
+          text: sourceLine,
+        })
         : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
         el("span", { class: "chip provider-" + agent.provider },
           providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
-      renderStatusLine(agent, activity, outcome, control, policy)),
-    closeButton()));
+      renderStatusLine(agent, activity, outcome, control, policy),
+      verdictGate(agent, outcome)),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
 
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
-
-  pane.append(renderPresentationLabels(agent));
-  pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
-  pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
-    inspectorTabButton("overview", "Overview"),
-    inspectorTabButton("technical", "Technical")));
+  // Vitals promoted to an instrument band directly under the verdict head —
+  // the numbers an operator acts on, no longer buried in the Evidence shelf.
+  // The mount always holds this DOM position (after next-action, before the
+  // shelf); renderVitalsBand omit-empties, and :empty hides the mount when the
+  // source reports nothing, so no flex gap is spent on a blank band.
+  const vitalsMount = el("div", { class: "inspector-vitals" });
+  const vitalsBand = renderVitalsBand(agent);
+  if (vitalsBand) vitalsMount.append(vitalsBand);
+  pane.append(vitalsMount);
 
-  // Both panels always render. In the narrow drawer CSS shows only the active
-  // tab; once the drawer is wide enough the tabs hide and both sit side-by-side
-  // (Option 2 — use the horizontal room instead of forcing a tab dance).
-  const overviewPanel = renderOverview(agent, program);
-  overviewPanel.dataset.tab = "overview";
-  const technicalPanel = renderTechnical(agent);
-  technicalPanel.dataset.tab = "technical";
-  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: state.inspectorTab } },
-    overviewPanel, technicalPanel));
+  // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
+  // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
+  // rail that progressively reveals as a third column.
+  pane.append(el("div", {
+    class: "drawer-shelf" + (state.evidenceOpen ? " is-evidence-open" : ""),
+    "aria-label": "Agent sections",
+  },
+    renderShelfSection({
+      key: "operate",
+      title: "Operate",
+      open: true,
+      body: renderOperate(agent, program),
+    }),
+    renderShelfSection({
+      key: "chat",
+      title: "Chat",
+      open: true,
+      body: renderChat(agent),
+    }),
+    renderEvidenceShelf(agent)));
 
+  // Lineage spine demoted below the shelf — context, not action.
+  pane.append(renderLineageSpine(agent));
+
+  // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));
+}
 
-  const fb = state.feedback.get(agent.id);
-  if (fb) {
-    pane.append(el("p", {
-      class: "control-feedback " + (fb.ok ? "ok" : "err"),
-      role: "status",
-      text: fb.message,
-    }));
+/* Bookshelf section — Operate/Chat stay open; Evidence uses the cog variant. */
+function renderShelfSection({ key, title, open, body }) {
+  const section = el("section", {
+    class: "shelf-section" + (open ? " is-open" : ""),
+    dataset: { shelf: key },
+  });
+  section.append(el("h3", { class: "shelf-title", text: title }));
+  const panel = el("div", {
+    class: "shelf-body inspector-panel",
+    id: "shelf-" + key,
+  });
+  if (body) {
+    if (body.nodeType) panel.append(body);
+    else for (const child of body) if (child) panel.append(child);
   }
+  section.append(panel);
+  return section;
+}
+
+function renderEvidenceShelf(agent) {
+  if (!state.evidenceOpen) {
+    // Whimsical collapsed rail — third column as a caterpillar/cog strip.
+    return el("button", {
+      type: "button",
+      class: "shelf-evidence-rail",
+      "aria-expanded": "false",
+      "aria-controls": "shelf-evidence",
+      title: "Open evidence — vitals, paths, routing, transcript",
+      dataset: { fkey: "shelf:evidence:open" },
+      onclick: () => { state.evidenceOpen = true; render(); },
+    },
+      el("span", { class: "shelf-rail-spine", "aria-hidden": "true" },
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" })),
+      icon("gear", { label: "Open evidence" }),
+      el("span", { class: "shelf-rail-label", text: "Evidence" }));
+  }
+
+  // Evidence holds paths, routing, and the transcript tail. The vitals
+  // instrument band moved out to lead the drawer under the verdict head
+  // (renderVitalsBand); Evidence no longer carries the metrics tiles.
+  const body = renderEvidence(agent);
+  const section = el("section", {
+    class: "shelf-section shelf-evidence is-open",
+    dataset: { shelf: "evidence" },
+  });
+  section.append(el("div", { class: "shelf-evidence-head" },
+    el("h3", { class: "shelf-title", text: "Evidence" }),
+    el("button", {
+      type: "button",
+      class: "shelf-cog is-active",
+      "aria-expanded": "true",
+      "aria-controls": "shelf-evidence",
+      title: "Tuck evidence away",
+      dataset: { fkey: "shelf:evidence:close" },
+      onclick: () => { state.evidenceOpen = false; render(); },
+    }, icon("gear", { label: "Hide evidence" }))));
+  body.id = "shelf-evidence";
+  body.classList.add("shelf-body");
+  section.append(body);
+  return section;
 }
 
 /* One calm status sentence under the title — replaces the pill cluster. */
@@ -3147,7 +3660,7 @@ function renderControlBanner(agent, control) {
       el("button", {
         type: "button",
         class: "control-banner-link",
-        onclick: () => { state.inspectorTab = "technical"; render(); },
+        onclick: () => { state.evidenceOpen = true; render(); },
       }, "See routing evidence →")));
 }
 
@@ -3158,17 +3671,6 @@ function closeButton() {
     dataset: { fkey: "inspector-close" },
     onclick: () => closeInspector(),
   }, icon("close"), "Close");
-}
-
-function inspectorTabButton(tab, label) {
-  return el("button", {
-    type: "button",
-    class: "inspector-tab",
-    role: "tab",
-    "aria-selected": String(state.inspectorTab === tab),
-    dataset: { fkey: "itab:" + tab },
-    onclick: () => { state.inspectorTab = tab; render(); },
-  }, label);
 }
 
 /* ---------- inspector: command dock ---------- */
@@ -3190,24 +3692,33 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
     return el("span", { hidden: "" });
   }
 
-  const dock = el("div", { class: "command-dock", "aria-label": "Session controls" });
   const safeLocked = [focusCap, instructCap].some((c) => c && !c.enabled);
+  const linkedReady = !safeLocked && control === "linked";
+  const dock = el("div", {
+    class: "command-dock" + (linkedReady ? " command-dock--linked" : ""),
+    "aria-label": "Session controls",
+  });
 
-  const meta = el("div", { class: "command-dock-meta" });
-  if (safeLocked) {
-    meta.append(el("span", {
-      class: "command-dock-why",
-      text: control === "quarantined" ? "Send disabled · quarantined"
-        : control === "observed-only" ? "Send disabled · view only"
-        : "Send disabled",
-    }));
-  } else if (control === "linked") {
-    meta.append(el("span", { class: "command-dock-ready", text: "Ready · linked to cmux pane" }));
-  } else {
-    meta.append(el("span", { text: "Session controls" }));
+  // One lock narrative: the control banner owns the reason. The dock meta only
+  // speaks when the link is live, and the send hint only when Send can send.
+  const showHint = Boolean(instructCap && instructCap.enabled);
+  if (linkedReady || showHint) {
+    const meta = el("div", { class: "command-dock-meta" });
+    meta.append(linkedReady
+      ? el("span", { class: "command-dock-ready", text: "Ready · linked" })
+      : el("span", { "aria-hidden": "true" }));
+    if (showHint) meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
+    dock.append(meta);
   }
-  meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
-  dock.append(meta);
+
+  const fb = state.feedback.get(agent.id);
+  if (fb) {
+    dock.append(el("p", {
+      class: "control-feedback " + (fb.ok ? "ok" : "err"),
+      role: "status",
+      text: fb.message,
+    }));
+  }
 
   // Composer is the primary interaction — Focus no longer sits above a dead input.
   if (instructCap) {
@@ -3255,8 +3766,15 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus"));
   if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt"));
   tools.append(el("span", { class: "command-dock-spacer" }));
-  if (archiveCap) tools.append(renderDockTool(agent, archiveCap, "archive"));
+  // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
+  // the dock does not offer a destructive peer next to dead controls.
+  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive"));
   dock.append(tools);
+  if (archiveCap && safeLocked) {
+    dock.append(el("details", { class: "command-dock-more" },
+      el("summary", { text: "More" }),
+      renderDockTool(agent, archiveCap, "archive")));
+  }
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
   // Tests assert controlUnavailableText is used for unavailable safe controls.
@@ -3268,19 +3786,24 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   return dock;
 }
 
-function renderDockTool(agent, cap, action) {
+function renderDockTool(agent, cap, action, opts = {}) {
   const key = agent.id + ":" + action;
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
+  // focus restore and the confirm strip must bind to the clicked instance —
+  // never both surfaces at once. Busy/sendControl state stays shared via key.
+  const fkey = (opts.fkeyPrefix || "") + "act:" + key;
+  const confirmKey = (opts.fkeyPrefix || "") + "confirm:" + key;
 
-  if (state.confirming === key) {
+  if (state.confirming === fkey) {
     return el("span", { class: "confirm-strip command-confirm", role: "group",
       "aria-label": label + " " + agentName(agent) + "?" },
       el("span", { text: label + "?" }),
       el("button", {
         type: "button", class: "btn confirm-yes",
-        dataset: { fkey: "confirm:" + key },
+        dataset: { fkey: confirmKey },
         onclick: () => { state.confirming = null; sendControl(agent, action); },
       }, "Confirm"),
       el("button", {
@@ -3294,13 +3817,13 @@ function renderDockTool(agent, cap, action) {
     class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
-    title: cap.enabled ? (CONTROL_HINTS[deriveControlState(agent)] && action === "focus" ? "Jump to cmux pane" : label) : "Unavailable",
-    dataset: { fkey: "act:" + key },
+    title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
+    dataset: { fkey },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
-        state.confirming = key;
+        state.confirming = fkey;
         render();
-        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
+        const btn = document.querySelector(`[data-fkey="${CSS.escape(confirmKey)}"]`);
         if (btn) btn.focus();
         return;
       }
@@ -3318,21 +3841,22 @@ function renderPrimaryActions(agent) {
 }
 
 function sourceWorkspaceLabel(target) {
-  return target.workspaceTitle || "cmux workspace " + target.workspaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal workspace";
 }
 
 function sourceRoomLabel(target) {
-  return "cmux room " + target.surfaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal";
 }
 
-function renderPresentationLabels(agent) {
+function presentationLabelTargets(agent) {
   const targets = [];
   if (agent.target && agent.target.workspaceId) {
+    const terminal = terminalSourceName(agent) || sourceWorkspaceLabel(agent.target);
     targets.push({
       target: workspaceLabelTarget(agent.target.workspaceId),
       kind: "workspace",
-      source: sourceWorkspaceLabel(agent.target),
-      sourceEvidence: "Source workspace: " + sourceWorkspaceLabel(agent.target) + " · id stays " + agent.target.workspaceId,
+      source: terminal.startsWith("terminal:") ? terminal : "terminal: " + terminal,
+      sourceEvidence: "Terminal / workspace: " + terminal + " · id stays " + agent.target.workspaceId,
     });
   }
   if (agent.target && agent.target.surfaceId) {
@@ -3340,7 +3864,7 @@ function renderPresentationLabels(agent) {
       target: roomLabelTarget(agent.target.surfaceId),
       kind: "room",
       source: sourceRoomLabel(agent.target),
-      sourceEvidence: "Source room surface id stays " + agent.target.surfaceId,
+      sourceEvidence: "Terminal surface id stays " + agent.target.surfaceId,
     });
   }
   if (agentLabelEligible(agent)) {
@@ -3351,12 +3875,22 @@ function renderPresentationLabels(agent) {
       sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
     });
   }
-  if (!targets.length) return el("span", { hidden: "" });
+  return targets;
+}
 
-  const wrap = el("div", { class: "presentation-labels" },
-    el("h3", { class: "section-title", text: "Presentation labels" }));
-  if (state.labelsLoading) wrap.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
-  if (state.labelLoadError) wrap.append(el("p", { class: "label-status err", role: "status", text: "Saved labels unavailable: " + state.labelLoadError }));
+/* Names (presentation labels) stay collapsed — rare rename UI, not chrome. */
+function renderNamesDisclosure(agent) {
+  const targets = presentationLabelTargets(agent);
+  if (!targets.length && !state.labelsLoading && !state.labelLoadError) return null;
+
+  const body = el("div", { class: "presentation-labels" });
+  if (state.labelsLoading) body.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
+  if (state.labelLoadError) {
+    body.append(el("p", {
+      class: "label-status err", role: "status",
+      text: "Saved labels unavailable: " + state.labelLoadError,
+    }));
+  }
   for (const item of targets) {
     const key = presentationLabelKey(item.target);
     const label = state.aliases.get(key);
@@ -3372,9 +3906,9 @@ function renderPresentationLabels(agent) {
         dataset: { fkey: "label-edit:" + key },
         onclick: () => startRename(item.target),
       }, actionText));
-    wrap.append(row);
+    body.append(row);
     if (editing) {
-      wrap.append(renderLabelForm(item.target, {
+      body.append(renderLabelForm(item.target, {
         inputKey: "label-input:" + key,
         placeholder: "Display label for this " + item.kind,
         ariaLabel: "New display label for " + item.kind,
@@ -3382,12 +3916,27 @@ function renderPresentationLabels(agent) {
       }));
     }
   }
-  return wrap;
+
+  const editingHere = targets.some((item) => state.renaming === presentationLabelKey(item.target));
+  return el("details", {
+    class: "names-disclosure",
+    // Stay open while a rename form is live so re-render does not tuck it away.
+    open: editingHere || state.labelsLoading || state.labelLoadError ? "" : null,
+  },
+    el("summary", { text: "Names" }),
+    body);
 }
 
-/* ---------- inspector: overview ---------- */
+/* Kept as a thin alias so source-level rename contracts still resolve. */
+function renderPresentationLabels(agent) {
+  return renderNamesDisclosure(agent) || el("span", { hidden: "" });
+}
+
+/* ---------- inspector: Operate · Chat · Evidence ---------- */
 
 function dtdd(grid, label, value, opts = {}) {
+  // Take C hard rule: if a value isn’t there, the field isn’t rendered.
+  if (value == null || value === "") return;
   const hint = opts.hint ?? GLOSSARY[label];
   grid.append(hint
     ? el("dt", {}, el("span", {
@@ -3396,60 +3945,167 @@ function dtdd(grid, label, value, opts = {}) {
       }))
     : el("dt", { text: label }));
   const dd = el("dd", {});
-  if (value == null || value === "") {
-    dd.append(el("span", { class: "absent", text: opts.absent || "not reported" }));
-  } else if (value.nodeType) {
-    dd.append(value);
-  } else {
-    dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
-  }
+  if (value.nodeType) dd.append(value);
+  else dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
   grid.append(dd);
 }
 
-function renderOverview(agent, program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const grid = el("dl", { class: "detail-grid" });
-  const outcome = deriveOutcome(agent);
+function normalizeCompareText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
 
-  if (typeof agent.lastHumanMessage === "string" && agent.lastHumanMessage.trim()) {
+function taskMeaningfullyDifferent(agent) {
+  const task = typeof agent?.task === "string" ? agent.task.trim() : "";
+  if (!task) return false;
+  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (!message) return true;
+  const a = normalizeCompareText(task);
+  const b = normalizeCompareText(message);
+  if (!a || a === b) return false;
+  if (a.length >= 12 && b.includes(a)) return false;
+  if (b.length >= 12 && a.includes(b)) return false;
+  return true;
+}
+
+function transcriptArtifact(agent) {
+  return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
+}
+
+/* One instrument tile: label + figure. Callers only pass real data — the band
+   omits absent tiles entirely (no "not reported" face), matching the drawer's
+   omit-empty rule. */
+function vitalTile(label, figure) {
+  return el("div", { class: "vital" },
+    el("span", { class: "vital-label", text: label }),
+    figure);
+}
+
+/* Vitals band — the numbers an operator acts on, rendered as instruments (a
+   context ring, session tokens + cache efficiency, uptime) directly under the
+   verdict head instead of buried in the Evidence shelf. Every tile self-guards;
+   if nothing has data the band renders nothing (omit-empty), so the mount's
+   :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
+   the type but is never populated — real cost is program/pulse-level only, and
+   program cost has no place inside a single agent's band. */
+function renderVitalsBand(agent) {
+  const t = agent.tokens || {};
+  const tiles = [];
+
+  // Context pressure — a ring when we have an observed window, else the raw token
+  // summary so any source with tokens still gets a tile.
+  const ctx = contextUsage(t);
+  if (ctx) {
+    tiles.push(vitalTile("Context",
+      el("div", { class: "vital-ring-wrap" },
+        svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
+        el("div", { class: "vital-figure" },
+          el("div", { class: "vital-big mono" },
+            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))))));
+  } else {
+    const tok = tokenSummary(t);
+    if (tok.known) {
+      tiles.push(vitalTile(tok.label === "latest call" ? "Latest call" : "Tokens",
+        el("div", { class: "vital-big mono", title: tok.title, text: tok.text })));
+    }
+  }
+
+  // Session spend + cache-hit efficiency (computed, not raw).
+  const cacheHit = (t.cachedInput != null && t.input) ? Math.min(100, Math.round((t.cachedInput / t.input) * 100)) : null;
+  if (t.sessionTotal != null) {
+    tiles.push(vitalTile("Session tokens",
+      el("div", {},
+        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
+        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
+        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)));
+  }
+
+  // Uptime.
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
+  if (elapsed && elapsed !== "—") {
+    tiles.push(vitalTile("Uptime",
+      el("div", { class: "vital-big mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed })));
+  } else if (agent.updatedAt) {
+    tiles.push(vitalTile("Last update",
+      el("div", { class: "vital-big mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })));
+  }
+
+  if (!tiles.length) return null;
+  const band = el("div", { class: "vitals" });
+  for (const tile of tiles) band.append(tile);
+  return band;
+}
+
+function renderOperateMeta(agent) {
+  const items = [];
+  if (agent.role && agent.role !== "agent") {
+    items.push({
+      label: "role",
+      hint: GLOSSARY.role,
+      node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
+    });
+  }
+  if (agent.model) {
+    items.push({
+      label: "model",
+      hint: GLOSSARY.model,
+      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
+    });
+  }
+  // Uptime, token, and context figures now lead the drawer in the vitals
+  // instrument band under the verdict head. This meta row stays identity-only.
+  if (!items.length) return null;
+
+  const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
+  for (const item of items) {
+    row.append(el("span", { class: "operate-meta-item" },
+      el("span", {
+        class: "operate-meta-label term-hint",
+        tabindex: "0",
+        title: item.hint || null,
+        "aria-label": item.hint ? `${item.label}: ${item.hint}` : item.label,
+        text: item.label,
+      }),
+      item.node));
+  }
+  return row;
+}
+
+function renderOperate(agent, _program) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (message) {
     panel.append(
       el("h3", { class: "section-title", text: "Last human message" }),
       el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
   }
 
-  dtdd(grid, "task", agent.task);
-  if (outcome !== "healthy") {
-    dtdd(grid, OUTCOME_LABELS[outcome].toLowerCase(), agent.statusReason);
+  if (taskMeaningfullyDifferent(agent)) {
+    panel.append(
+      el("h3", { class: "section-title", text: "Task" }),
+      el("p", { class: "operate-task", text: agent.task.trim() }));
   }
-  dtdd(grid, "last update", el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }));
-  dtdd(grid, "running for", el("span", {
-    class: "mono",
-    dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
-    text: liveElapsedText(agent, state.snap && state.snap.generatedAt),
-  }));
-  dtdd(grid, "role", agent.role && agent.role !== "agent" ? agent.role : null, { absent: "general agent" });
 
-  const tok = tokenSummary(agent.tokens);
-  dtdd(grid, tok.label, el("span", { title: tok.title, class: tok.known ? "mono" : "absent", text: tok.text }), { hint: TOKENS_HINT });
-  const ctx = contextUsage(agent.tokens);
-  if (ctx) {
-    dtdd(grid, "context", el("span", {
-      class: "mono",
-      title: "Latest call size against the model's context window.",
-      text: ctx.text,
+  const outcome = deriveOutcome(agent);
+  if (outcome !== "healthy" && agent.statusReason) {
+    panel.append(el("p", {
+      class: "operate-outcome-note outcome-" + outcome,
+      text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
     }));
   }
-  dtdd(grid, "cost", agent.cost
-    ? `${agent.cost.currency} ${Number(agent.cost.amount).toFixed(4)} · ${provenanceLabel(agent.cost.provenance)}${agent.cost.note ? " · " + agent.cost.note : ""}`
-    : null, { absent: "not reported" });
 
-  panel.append(grid);
+  // Vitals lead the drawer as an instrument band under the verdict head — Operate
+  // stays a calm digest so Chat + Operate can showcase side by side.
+  const meta = renderOperateMeta(agent);
+  if (meta) panel.append(meta);
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
+  }
   return panel;
 }
 
 /* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
-   (P4), but it MUST stay defined immediately after renderOverview: a test
-   asserts the renderOverview…renderSwarmSection source adjacency. Do not
+   (P4), but it MUST stay defined immediately after renderOperate: a test
+   asserts the renderOperate…renderSwarmSection source adjacency. Do not
    reorder or delete it. */
 function renderSwarmSection(agent, program) {
   const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
@@ -3481,6 +4137,40 @@ function renderSwarmSection(agent, program) {
       agentName(child) + " — " + ACTIVITY_LABELS[act]));
   }
   return wrap;
+}
+
+function renderChatTurn(role, text) {
+  return el("div", { class: "chat-turn chat-turn--" + role },
+    el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
+    el("p", { class: "chat-turn-body", tabindex: "0", text }));
+}
+
+function renderChat(agent) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  // Readable You/Agent turns only — the raw transcript tail lives in Evidence.
+  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
+  const user = typeof userRaw === "string" ? userRaw.trim() : "";
+  const assistant = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
+  if (user) panel.append(renderChatTurn("user", userRaw));
+  if (assistant) panel.append(renderChatTurn("assistant", agent.lastAgentMessage));
+
+  const artifact = transcriptArtifact(agent);
+  if (artifact && artifact.path) {
+    panel.append(el("p", { class: "chat-transcript-link" },
+      el("span", { text: "Transcript: " }),
+      el("code", { text: artifact.path }),
+      " ",
+      el("button", {
+        type: "button", class: "btn sm",
+        dataset: { fkey: `copy-transcript:${agent.id}` },
+        onclick: () => copyText(artifact.path),
+      }, "Copy path")));
+  }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
+  }
+  return panel;
 }
 
 /* Lineage spine — the signature nesting element. Ancestors climb a single thin
@@ -3561,49 +4251,75 @@ function renderLineageSpine(agent) {
   return spine;
 }
 
-/* ---------- inspector: technical ---------- */
+/* ---------- inspector: Evidence ---------- */
 
-function renderTechnical(agent) {
+function copyIdButton(label, value, key) {
+  if (!value) return null;
+  return el("button", {
+    type: "button",
+    class: "btn sm evidence-copy-id",
+    title: value,
+    dataset: { fkey: key },
+    onclick: () => copyText(value),
+  }, "Copy " + label);
+}
+
+function controlLinkSentence(target) {
+  if (!target) return null;
+  const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
+  const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
+  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+    return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
+      + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  if (target.resolution === "ambiguous") {
+    return "Control routing is quarantined — identity evidence is ambiguous"
+      + (terminal ? " for " + terminal : "")
+      + ".";
+  }
+  return "No safe control link"
+    + (terminal ? " for " + terminal : "")
+    + (resolution ? " · " + resolution : "")
+    + ".";
+}
+
+function renderControlLink(target) {
+  if (!target) return null;
+  const wrap = el("div", { class: "evidence-control-link" });
+  const sentence = controlLinkSentence(target);
+  wrap.append(el("p", {
+    class: "evidence-control-sentence",
+    title: target.cwdMismatch ? CWD_MISMATCH_HINT : READY_LINKED_HINT,
+    text: sentence,
+  }));
+  const ids = el("div", { class: "evidence-ids" });
+  const buttons = [
+    copyIdButton("workspace", target.workspaceId, "copy-ws:" + (target.workspaceId || "")),
+    copyIdButton("surface", target.surfaceId, "copy-surface:" + (target.surfaceId || "")),
+    copyIdButton("pane", target.paneId, "copy-pane:" + (target.paneId || "")),
+  ].filter(Boolean);
+  for (const btn of buttons) ids.append(btn);
+  if (buttons.length) wrap.append(ids);
+  return wrap;
+}
+
+function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  panel.append(el("p", { class: "inspector-note tech-caption",
-    text: "The raw evidence behind the Overview — hover any underlined term for what it means." }));
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session id", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
-  dtdd(grid, "working directory", agent.cwd, { code: true });
-  dtdd(grid, "status", `${agent.status} — ${agent.statusReason}`);
-  dtdd(grid, "model", agent.model);
-  dtdd(grid, "reasoning effort", agent.effort);
-  dtdd(grid, "started", agent.startedAt
-    ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
-    : null);
-  dtdd(grid, "nesting level", agent.threadDepth != null ? String(agent.threadDepth) : null);
-  dtdd(grid, "orchestrator id", agent.parentAgentId, { code: true, absent: "none" });
-  dtdd(grid, "subagents", agent.subagentCount != null ? String(agent.subagentCount) : null);
-
-  const t = agent.tokens || { provenance: "unknown" };
-  const tokParts = [];
-  if (t.input != null) tokParts.push("in " + fmtTok(t.input));
-  if (t.output != null) tokParts.push("out " + fmtTok(t.output));
-  if (t.cachedInput != null) tokParts.push("cached " + fmtTok(t.cachedInput));
-  if (t.total != null) tokParts.push("total " + fmtTok(t.total));
-  const tokLabel = t.scope === "latest-turn" ? "latest call" : "tokens";
-  dtdd(grid, tokLabel, tokParts.length
-    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: provenanceLabel(t.provenance) }))
-    : el("span", { class: "absent", text: "none reported (" + provenanceLabel(t.provenance) + ")" }), { hint: TOKENS_HINT });
-  dtdd(grid, "session total", t.sessionTotal != null
-    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
-    : null);
-  dtdd(grid, "context window", t.contextWindow != null
-    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tokens" })
-    : null);
-
-  const policy = modelPolicyView(agent);
-  dtdd(grid, "model policy", policy
-    ? el("span", { class: "policy-" + policy.state },
-        policy.label + (policy.expected ? " — expected " + policy.expected : ""),
-        el("span", { class: "absent", text: " · " + policy.summary }))
-    : null, { absent: "not evaluated" });
+  dtdd(grid, "session cwd", agent.cwd, { code: true });
+  const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
+  const surfaceCwd = agent.target && agent.target.surfaceCwd
+    ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
+    : "";
+  if (surfaceCwd && surfaceCwd !== sessionCwd) {
+    dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
+      code: true,
+      hint: CWD_MISMATCH_HINT,
+    });
+  }
 
   dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
     ? el("span", {},
@@ -3612,29 +4328,32 @@ function renderTechnical(agent) {
         agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
     : null);
 
-  dtdd(grid, "tests", agent.tests
-    ? el("span", { class: "tests-" + agent.tests.state },
-        agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : ""))
-    : null);
-
-  dtdd(grid, "checks", agent.gates && agent.gates.length
-    ? el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g })))
-    : el("span", { class: "absent", text: "none" }));
-
-  dtdd(grid, "control link", renderTarget(agent.target));
-
-  const routing = el("ul", { class: "routing-list" });
-  for (const cap of agent.controls || []) {
-    routing.append(el("li", {},
-      el("span", { class: "mono", text: cap.action }),
-      " — ",
-      cap.enabled
-        ? el("span", { class: "ok", text: "enabled" })
-        : el("span", { class: "absent", text: "disabled: " + (cap.reason || "no reason reported") })));
+  const t = agent.tokens || {};
+  if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
+    const parts = [];
+    if (t.input != null) parts.push("in " + fmtTok(t.input));
+    if (t.output != null) parts.push("out " + fmtTok(t.output));
+    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
+    if (t.total != null) parts.push("total " + fmtTok(t.total));
+    dtdd(grid, "latest call", el("span", {
+      class: "mono",
+      text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
+    }), { hint: LATEST_CALL_HINT });
   }
-  dtdd(grid, "available controls", routing);
+  if (t.sessionTotal != null) {
+    dtdd(grid, "session total", el("span", {
+      class: "mono",
+      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
+    }), { hint: SESSION_TOTAL_HINT });
+  }
 
-  panel.append(grid);
+  const link = renderControlLink(agent.target);
+  if (link) dtdd(grid, "control link", link);
+
+  if (grid.childNodes.length) panel.append(grid);
+
+  const names = renderNamesDisclosure(agent);
+  if (names) panel.append(names);
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
@@ -3645,7 +4364,7 @@ function renderTechnical(agent) {
           el("span", { text: a.label }),
           el("span", { class: "artifact-path", text: a.path }),
           el("button", {
-            type: "button", class: "btn",
+            type: "button", class: "btn sm",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
           }, "Copy path")))));
@@ -3656,22 +4375,20 @@ function renderTechnical(agent) {
       el("h3", { class: "section-title", text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+  }
   return panel;
 }
 
+/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
+function renderTechnical(agent) {
+  return renderEvidence(agent);
+}
+
 function renderTarget(target) {
-  if (!target) return null;
-  const wrap = el("span", {},
-    el("span", { class: "target-chip target-" + target.resolution, text: RESOLUTION_LABELS[target.resolution] || target.resolution }));
-  const ids = [
-    target.workspaceId && "ws " + target.workspaceId,
-    target.surfaceId && "surface " + target.surfaceId,
-    target.paneId && "pane " + target.paneId,
-  ].filter(Boolean);
-  if (ids.length) wrap.append(" ", el("code", { text: ids.join(" · ") }));
-  if (target.workspaceTitle) wrap.append(" ", el("span", { class: "source-label", text: "· source title: " + target.workspaceTitle }));
-  if (target.reason) wrap.append(" ", el("span", { class: "absent", text: "— " + target.reason }));
-  return wrap;
+  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */
@@ -3746,10 +4463,12 @@ async function fetchLabels() {
   }
 }
 
-function startRename(target) {
+function startRename(target, opts = {}) {
   const key = presentationLabelKey(target);
   state.renaming = key;
-  state.renameDraft = state.aliases.get(key) || "";
+  // Prefer a saved alias; otherwise seed from the live display name (often the
+  // cmux terminal title) so edits feel like renaming what you already see.
+  state.renameDraft = state.aliases.get(key) || (typeof opts.draft === "string" ? opts.draft : "") || "";
   state.renameError = "";
   render();
   const inputKey = target.kind === "program" ? "rename-input:" + target.programId : "label-input:" + key;
@@ -4185,9 +4904,9 @@ function renderUsagePanel() {
         el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
-        el("td", { text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
-        el("td", { text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
-        el("td", {}, sessionCell)));
+        el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
+        el("td", { class: "usage-val", text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
+        el("td", { class: "usage-val" }, sessionCell)));
     }
   }
   table.append(body);
@@ -4273,10 +4992,12 @@ function boot() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (state.confirming) {
+      // state.confirming holds the full instance fkey ("[head:]act:<id>:<action>"),
+      // so Escape restores focus to the exact instance that opened the strip.
       const key = state.confirming;
       state.confirming = null;
       render();
-      const origin = document.querySelector(`[data-fkey="${CSS.escape("act:" + key)}"]`);
+      const origin = document.querySelector(`[data-fkey="${CSS.escape(key)}"]`);
       if (origin) origin.focus();
     } else if (state.renaming) {
       cancelRename();

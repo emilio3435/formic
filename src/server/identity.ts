@@ -90,6 +90,42 @@ function uniqueIdentity(hints: readonly IdentityHint[]): string | undefined {
   return identities.length === 1 ? identities[0].split(":", 2)[1] : undefined;
 }
 
+function identityKey(hint: IdentityHint): string {
+  return `${hint.provider}:${hint.value.toLowerCase()}`;
+}
+
+function hasOpenAncestor(
+  hint: IdentityHint,
+  openKeys: ReadonlySet<string>,
+  agentsByIdentity: ReadonlyMap<string, CollectedAgent>,
+): boolean {
+  let current = agentsByIdentity.get(identityKey(hint));
+  const visited = new Set<string>();
+  while (current?.parentSourceSessionId) {
+    const parentKey = `${current.provider}:${current.parentSourceSessionId.toLowerCase()}`;
+    if (openKeys.has(parentKey)) return true;
+    if (visited.has(parentKey)) return false;
+    visited.add(parentKey);
+    current = agentsByIdentity.get(parentKey);
+  }
+  return false;
+}
+
+function primaryOpenIdentity(
+  hints: readonly IdentityHint[],
+  agents: readonly CollectedAgent[],
+): IdentityHint | undefined {
+  const uniqueHints = [...new Map(hints.map((hint) => [identityKey(hint), hint])).values()];
+  const openKeys = new Set(uniqueHints.map(identityKey));
+  const agentsByIdentity = new Map(
+    agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
+  );
+  const roots = uniqueHints.filter(
+    (hint) => !hasOpenAncestor(hint, openKeys, agentsByIdentity),
+  );
+  return roots.length === 1 ? roots[0] : undefined;
+}
+
 function resolveCommandHint(hint: IdentityHint, agents: readonly CollectedAgent[]): IdentityHint | null {
   if (hint.full) return hint;
   const matches = agents.filter(
@@ -105,8 +141,25 @@ export async function enrichCmuxIdentity(
   runner: CommandRunner,
 ): Promise<CollectionResult<CmuxSurface[]>> {
   const errors: string[] = [];
-  const ttyNames = new Set(surfaces.map((surface) => surface.tty).filter((tty): tty is string => Boolean(tty)));
-  if (ttyNames.size === 0) return { value: [...surfaces], errors };
+  const ttyNames = new Set(
+    surfaces
+      .filter((surface) => surface.runtimeSurfaceReady !== false)
+      .map((surface) => surface.tty)
+      .filter((tty): tty is string => Boolean(tty)),
+  );
+  if (ttyNames.size === 0) {
+    // No runtime-ready surfaces to probe — but stale surfaces still need their
+    // bindings cleared, not left intact. Skipping the map here left a lone stale
+    // surface holding its old sourceSessionIds and reading as a phantom identity.
+    return {
+      value: surfaces.map((surface) =>
+        surface.runtimeSurfaceReady === false
+          ? { ...surface, sourceSessionIds: [], identityConflict: undefined }
+          : surface,
+      ),
+      errors,
+    };
+  }
 
   const processResult = await runner.run(["ps", "-axo", "pid=,tty=,command="], 8_000);
   if (processResult.timedOut || processResult.exitCode !== 0) {
@@ -149,20 +202,23 @@ export async function enrichCmuxIdentity(
 
   return {
     value: surfaces.map((surface) => {
+      if (surface.runtimeSurfaceReady === false) {
+        return { ...surface, sourceSessionIds: [], identityConflict: undefined };
+      }
       if (!surface.tty) return surface;
       const tty = surface.tty.replace(/^\/dev\//, "");
       const ttyProcesses = processes.filter((process) => process.tty === tty);
       const openHints = ttyProcesses.flatMap((process) =>
         (openFiles.get(process.pid) ?? []).map(identityFromSessionPath).filter((hint): hint is IdentityHint => hint !== null),
       );
-      const openIdentity = uniqueIdentity(openHints);
+      const openIdentity = primaryOpenIdentity(openHints, agents);
       if (openHints.length > 0 && !openIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files on ${tty}`;
         errors.push(identityConflict);
         return { ...surface, sourceSessionIds: [], identityConflict };
       }
       if (openIdentity) {
-        return { ...surface, sourceSessionIds: [openIdentity], identityConflict: undefined };
+        return { ...surface, sourceSessionIds: [openIdentity.value], identityConflict: undefined };
       }
 
       const commandHints = ttyProcesses
