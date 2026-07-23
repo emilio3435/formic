@@ -854,7 +854,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
 .program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
-.program-alias-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
+.program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
   display: inline-grid;
@@ -869,7 +869,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.program-rollup { margin-left: auto; font-size: 12.5px; font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup .hot { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */

@@ -1117,3 +1117,45 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background: var(--ink)");
   });
 });
+
+describe("masthead + program headers share the frame + quiet header language (A4)", () => {
+  // Rule 3 — shared frame: the masthead full-width band caps its content at
+  // --frame, the same alignment contract the pulse strip and toolbar follow.
+  test("masthead aligns its content to the shared --frame (Rule 3)", () => {
+    const innerRule = styles.match(/\.masthead-inner\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(innerRule).toContain("max-width: var(--frame)");
+    expect(innerRule).toContain("margin: 0 auto");
+  });
+
+  // The programs band aligns to --frame through its container: #programs lives
+  // inside .app-body, the one centered canvas the masthead, summary, and
+  // toolbar all share — not its own full-width strip.
+  test("the programs band aligns to --frame through its .app-body container (Rule 3)", () => {
+    const bodyRule = styles.match(/\.app-body\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(bodyRule).toContain("max-width: var(--frame)");
+    expect(bodyRule).toContain("margin: 0 auto");
+    expect(html).toContain('<section id="programs" class="programs"');
+  });
+
+  // Rule 2 — mono for values: the program-header rollup renders counts (data),
+  // so it carries --font-mono, like the view-tab count badges (A3).
+  test("program-header rollup counts render in mono (Rule 2: mono for values)", () => {
+    const rollupRule = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rollupRule).toContain("font-family: var(--font-mono)");
+  });
+
+  // A4 audit finding: .program-alias-tag is a 9px uppercase tracked micro-label
+  // exactly like .eyebrow / .agent-column-label / .vital-label — the ratified
+  // mono micro-label idiom — but was the one outlier missing --font-mono.
+  test("program-alias-tag joins the mono micro-label idiom (Rule 2, A4 finding)", () => {
+    const tagRule = styles.match(/\.program-alias-tag\s*\{[^}]*\}/)?.[0] ?? "";
+    // Replacement rule: the alias tag now carries mono like every other label.
+    expect(tagRule).toContain("font-family: var(--font-mono)");
+    // Absence: the old rule that opened straight into font-size, with no
+    // font-family, is gone.
+    expect(styles).not.toContain(".program-alias-tag { font-size: 9px");
+    // It keeps its micro-label furniture (uppercase, tracked, faint ink).
+    expect(tagRule).toContain("text-transform: uppercase");
+    expect(tagRule).toContain("color: var(--faint)");
+  });
+});
