@@ -2180,6 +2180,13 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     // The old ink flood fill (ink background, surface text) is gone.
     expect(rule).not.toContain("background: var(--ink)");
   });
+
+  test("index.html seeds is-current on the default Now tab (honest guard — the markup already does)", () => {
+    // renderTabs re-derives the active marker on every render, but the first paint
+    // before JS runs must already present Now as current. This locks the seed markup
+    // so a future edit to the tab list can't ship a currentless first frame.
+    expect(html).toContain('class="view-tab is-current" data-view="now" aria-pressed="true"');
+  });
 });
 
 describe("masthead + program headers share the frame + quiet header language (A4)", () => {
@@ -2303,6 +2310,7 @@ describe("peripheral surfaces conform to the design language (A5)", () => {
     expect(source).toContain('el("td", { class: "usage-val" }, sessionCell)');
     // ...and leaves the prose columns (When / Provider / Model) in --font-ui, so
     // the test fails if mono is over-applied to non-value cells.
+    expect(source).not.toContain('class: "usage-val", text: row.startTime');
     expect(source).not.toContain('class: "usage-val", text: row.provider');
     expect(source).not.toContain('class: "usage-val", text: modelShort');
   });
