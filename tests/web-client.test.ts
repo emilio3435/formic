@@ -1160,6 +1160,67 @@ describe("masthead + program headers share the frame + quiet header language (A4
   });
 });
 
+describe("motion + responsive conformance for the restyled body (A6)", () => {
+  // The single 44px touch-sweep rule inside the <1024px block: the selector list
+  // that terminates in `{ min-height: 44px; }`. This is the rule the audit says
+  // must grow to close the touch-target gaps.
+  function touchSweep1024() {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    return block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+  }
+
+  // A6 finding 1: .filter-chip (toolbar, 30px min-height) was never swept to 44px
+  // at any breakpoint — absent from both the 1024px and 720px sweep lists.
+  // Binding constraint: 44px touch targets below 1024px.
+  test("the <1024px touch sweep now covers the filter chip (A6 finding)", () => {
+    expect(touchSweep1024()).toContain(".filter-chip");
+  });
+
+  // A6 finding 1: .program-details (programs, 30px) was swept only at ≤720px, so it
+  // stayed 30px through the 721–1024px tablet range where the constraint already
+  // requires 44px. It graduates into the <1024px sweep.
+  test("program-details gets its 44px treatment at <1024px, not just <720px (A6 finding)", () => {
+    // Replacement: .program-details is now in the <1024px sweep.
+    expect(touchSweep1024()).toContain(".program-details");
+    // Absence: the old <720px-only pattern that carried .program-details is gone;
+    // the 720px list keeps only the drawer-scoped controls.
+    expect(styles).not.toContain(".dw-lin-name, .program-details { min-height: 44px; }");
+    expect(styles).toContain(
+      ".signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
+    );
+  });
+
+  // A6 finding 1: three text inputs were never swept at any breakpoint —
+  // .command-composer input (40px), .instruct-form input (38px),
+  // .rename-form input (36px) — while #search (a sibling input) already was.
+  test("the three text inputs clear 44px below 1024px (A6 finding)", () => {
+    const sweep = touchSweep1024();
+    expect(sweep).toContain(".command-composer input");
+    expect(sweep).toContain(".instruct-form input");
+    expect(sweep).toContain(".rename-form input");
+  });
+
+  // A6 finding 2 — Rule 6 (motion respects prefers-reduced-motion). Honest
+  // regression guard, not a fresh RED: WS-A (b4f9d80..d516ad7) added and removed
+  // no @keyframes or `animation:` declarations, so the pre-existing universal
+  // guard already disables the full animation set. This locks that guarantee.
+  test("reduced-motion universally disables the full WS-A animation set (A6 regression guard)", () => {
+    const reduced = styles.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    // Universal selector + !important: disables ANY animation/transition regardless
+    // of specificity — every current keyframe and any a later task might add.
+    expect(reduced).toContain("*, *::before, *::after");
+    expect(reduced).toContain("animation: none !important");
+    expect(reduced).toContain("transition: none !important");
+    // The full existing animation set the guard covers.
+    const keyframes = [...styles.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "status-pulse", "sun-pulse"]);
+    // Every live `animation:` usage keys off one of those keyframes — none escapes.
+    const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
+    expect(new Set(animated)).toEqual(new Set(keyframes));
+  });
+});
+
 describe("peripheral surfaces conform to the design language (A5)", () => {
   // A5 audit finding: the .usage-table "Recent invocations" rows render Tokens,
   // Cost, and Session-ID cells — token/cost values and a literal identifier, the

@@ -2007,7 +2007,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
-  .reading-repair { min-height: 44px; }
+  .reading-repair, .filter-chip, .program-details,
+  .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -2069,8 +2070,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .triage-steps { grid-template-columns: 1fr; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
-  /* Per-type drawer controls stay comfortably tappable on touch. */
-  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
+  /* Per-type drawer controls stay comfortably tappable on touch.
+     (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
+  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
