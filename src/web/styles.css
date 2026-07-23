@@ -1748,6 +1748,47 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   text-transform: uppercase;
   color: var(--faint);
 }
+
+/* ---------- vitals band: the instrument tiles ----------
+   The numbers an operator acts on (context ring, session tokens + cache, uptime)
+   rendered as instruments above the identity meta. Omit-empty: absent tiles are
+   never rendered, so the band flexes to whatever the source reports. */
+.vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.vital {
+  flex: 1 1 8.5rem;
+  min-width: 0;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem;
+}
+.vital-label {
+  display: block;
+  font: 700 9.5px/1.2 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.4rem;
+}
+.vital-big { font-size: 1.45rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1; color: var(--ink); }
+.vital-big small { font-size: 0.7rem; font-weight: 500; color: var(--faint); letter-spacing: 0; }
+.vital-sub { font: 500 10.5px/1.3 var(--font-mono); color: var(--faint); margin-top: 0.35rem; }
+.vital-ring-wrap { display: flex; align-items: center; gap: 0.6rem; }
+.vital-figure { min-width: 0; }
+.vital-bar { display: block; width: 100%; height: 6px; margin-top: 0.5rem; }
+
+/* SVG donut ring — arc via stroke-dasharray geometry (CSP-safe), tone by severity. */
+.vital-ring { width: 44px; height: 44px; flex: none; }
+.ring-track { fill: none; stroke: var(--sand); stroke-width: 3.4; }
+.ring-fill {
+  fill: none; stroke: var(--moss); stroke-width: 3.4; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 18px 18px;
+}
+.ring-fill.warn { stroke: var(--amber); }
+.ring-fill.hot { stroke: var(--ember); }
+.ring-pct { text-anchor: middle; dominant-baseline: central; font: 700 9px var(--font-mono); fill: var(--ink); }
+.vital-bar .tm-track { fill: var(--sand); }
+.vital-bar .tm-fill { fill: var(--moss); }
 .chat-turn { display: flex; flex-direction: column; gap: 0.3rem; }
 .chat-turn-role {
   font: 700 10px/1.3 var(--font-mono);

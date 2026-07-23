@@ -133,6 +133,34 @@ function svgSegmentMeter(segments, opts = {}) {
   return svg;
 }
 
+/* SVG donut ring — filled arc length is a geometry attribute (stroke-dasharray
+   on a circle whose circumference is 100), never inline style, so the strict CSP
+   (style-src 'self') holds. Center % is an SVG <text>. */
+function svgRing(pct, opts = {}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "vital-ring");
+  svg.setAttribute("role", "progressbar");
+  svg.setAttribute("aria-valuemin", "0");
+  svg.setAttribute("aria-valuemax", "100");
+  svg.setAttribute("aria-valuenow", String(clamped));
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+  svg.append(svgChild(["circle", { cx: 18, cy: 18, r: 15.915, class: "ring-track" }]));
+  svg.append(svgChild(["circle", {
+    cx: 18, cy: 18, r: 15.915, class: "ring-fill" + tone,
+    "stroke-dasharray": clamped + " " + (100 - clamped),
+  }]));
+  const label = document.createElementNS(SVGNS, "text");
+  label.setAttribute("x", "18");
+  label.setAttribute("y", "18");
+  label.setAttribute("class", "ring-pct");
+  label.textContent = clamped + "%";
+  svg.append(label);
+  return svg;
+}
+
 /* ---------- formatting ---------- */
 
 const fmtTok = (n) =>
@@ -184,7 +212,6 @@ const CONTROL_HINTS = {
 /* Plain-language glossary. dtdd() looks up a row's term here and, when found,
    renders it with a dotted underline + explainer tooltip (hover or keyboard
    focus). Learn-style one-liners stay contextual — only fields that render. */
-const TOKENS_HINT = "Token counts for the most recent model call. “measured” = reported by the provider; “estimated” = inferred.";
 const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
 const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
 const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
@@ -3636,6 +3663,66 @@ function transcriptArtifact(agent) {
   return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
 }
 
+/* One instrument tile: label + figure. Callers only pass real data — the band
+   omits absent tiles entirely (no "not reported" face), matching the drawer's
+   omit-empty rule. */
+function vitalTile(label, figure) {
+  return el("div", { class: "vital" },
+    el("span", { class: "vital-label", text: label }),
+    figure);
+}
+
+/* Vitals band — the numbers an operator acts on, rendered as instruments (a
+   context ring, session spend + cache efficiency, uptime) instead of a grey meta
+   row. Every tile self-guards; if nothing has data the band renders nothing. */
+function renderVitals(agent) {
+  const t = agent.tokens || {};
+  const tiles = [];
+
+  // Context pressure — a ring when we have an observed window, else the raw token
+  // summary so any source with tokens still gets a tile.
+  const ctx = contextUsage(t);
+  if (ctx) {
+    tiles.push(vitalTile("Context",
+      el("div", { class: "vital-ring-wrap" },
+        svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
+        el("div", { class: "vital-figure" },
+          el("div", { class: "vital-big mono" },
+            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))))));
+  } else {
+    const tok = tokenSummary(t);
+    if (tok.known) {
+      tiles.push(vitalTile(tok.label === "latest call" ? "Latest call" : "Tokens",
+        el("div", { class: "vital-big mono", title: tok.title, text: tok.text })));
+    }
+  }
+
+  // Session spend + cache-hit efficiency (computed, not raw).
+  const cacheHit = (t.cachedInput != null && t.input) ? Math.round((t.cachedInput / t.input) * 100) : null;
+  if (t.sessionTotal != null) {
+    tiles.push(vitalTile("Session tokens",
+      el("div", {},
+        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
+        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
+        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)));
+  }
+
+  // Uptime.
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
+  if (elapsed && elapsed !== "—") {
+    tiles.push(vitalTile("Uptime",
+      el("div", { class: "vital-big mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed })));
+  } else if (agent.updatedAt) {
+    tiles.push(vitalTile("Last update",
+      el("div", { class: "vital-big mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })));
+  }
+
+  if (!tiles.length) return null;
+  const band = el("div", { class: "vitals" });
+  for (const tile of tiles) band.append(tile);
+  return band;
+}
+
 function renderOperateMeta(agent) {
   const items = [];
   if (agent.role && agent.role !== "agent") {
@@ -3652,40 +3739,8 @@ function renderOperateMeta(agent) {
       node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
     });
   }
-  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
-  if (elapsed && elapsed !== "—") {
-    items.push({
-      label: "running for",
-      hint: GLOSSARY["running for"],
-      node: el("span", {
-        class: "mono",
-        dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
-        text: elapsed,
-      }),
-    });
-  } else if (agent.updatedAt) {
-    items.push({
-      label: "last update",
-      hint: GLOSSARY["last update"],
-      node: el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }),
-    });
-  }
-  const tok = tokenSummary(agent.tokens);
-  if (tok.known) {
-    items.push({
-      label: tok.label,
-      hint: tok.label === "latest call" ? LATEST_CALL_HINT : TOKENS_HINT,
-      node: el("span", { title: tok.title, class: "mono", text: tok.text }),
-    });
-  }
-  const ctx = contextUsage(agent.tokens);
-  if (ctx) {
-    items.push({
-      label: "context",
-      hint: GLOSSARY.context,
-      node: el("span", { class: "mono", text: ctx.text }),
-    });
-  }
+  // Uptime, token, and context figures now lead the Operate tab in the vitals
+  // instrument band (renderVitals). This meta row stays identity-only.
   if (!items.length) return null;
 
   const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
@@ -3725,6 +3780,9 @@ function renderOperate(agent, _program) {
       text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
     }));
   }
+
+  const vitals = renderVitals(agent);
+  if (vitals) panel.append(vitals);
 
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);
