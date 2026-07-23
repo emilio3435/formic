@@ -3,12 +3,13 @@ import { extname, join, resolve, sep } from "node:path";
 import type { HubSnapshot, TriageQueueItem } from "../shared/types";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
+import { identityDebugResponse } from "./debug-identity";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
-import type { ArchiveStore, CommandRunner } from "./types";
+import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
 
 export interface MountainAppState {
   get(): HubSnapshot;
@@ -16,6 +17,8 @@ export interface MountainAppState {
   refresh(options?: { cmux?: boolean }): Promise<HubSnapshot>;
   markIssueVerifying?(issueId: string, result?: string): void | Promise<void>;
   markIssueBlocked?(issueId: string, result?: string): void | Promise<void>;
+  /** Latest enriched cmux surfaces, for read-only identity debugging. */
+  surfaces?(): readonly CmuxSurface[];
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -154,6 +157,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           { status: 500, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
         );
       }
+    }
+    if (request.method === "GET" && url.pathname === "/api/debug/identity") {
+      return identityDebugResponse(url, dependencies.state.get(), dependencies.state.surfaces?.() ?? [], SECURITY_HEADERS);
     }
     if (request.method === "GET" && url.pathname === "/api/snapshot") {
       return Response.json(dependencies.state.get(), {

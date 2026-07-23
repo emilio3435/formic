@@ -1,0 +1,290 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import type { Provider } from "../shared/types";
+import type { CmuxSurface, CollectedAgent } from "./types";
+
+/** Bindings not reconfirmed by live evidence for this long age out. */
+export const IDENTITY_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+/** Consecutive scans that must agree before a binding moves surfaces. */
+export const REASSIGNMENT_CONFIRMATION_SCANS = 2;
+export const BINDING_BRIDGE_REASON = "Recorded binding, live evidence absent this scan.";
+
+export interface IdentityBindingTarget {
+  surfaceId: string;
+  workspaceId?: string;
+  paneId?: string;
+}
+
+export interface IdentityBinding {
+  sessionId: string;
+  provider?: Provider;
+  target: IdentityBindingTarget;
+  firstConfirmedAt: string;
+  confirmedAt: string;
+  /** A candidate new surface observed while the current target still stands. */
+  pendingReassignment?: {
+    target: IdentityBindingTarget;
+    scansAgreed: number;
+    firstSeenAt: string;
+  };
+}
+
+export interface IdentityBindingStore {
+  get(sessionId: string): IdentityBinding | undefined;
+  list(): readonly IdentityBinding[];
+  put(binding: IdentityBinding): Promise<void>;
+}
+
+export interface BindingFileOperations {
+  readText(path: string): Promise<string>;
+  makeDirectory(path: string): Promise<void>;
+  writeText(path: string, contents: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+}
+
+const nodeFileOperations: BindingFileOperations = {
+  readText: (path) => readFile(path, "utf8"),
+  makeDirectory: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
+  writeText: async (path, contents) => {
+    await writeFile(path, contents, "utf8");
+  },
+  rename,
+};
+
+const PROVIDERS: readonly Provider[] = ["codex", "omp", "claude", "cursor"];
+
+function isBindingTarget(value: unknown): value is IdentityBindingTarget {
+  if (!value || typeof value !== "object") return false;
+  const target = value as Partial<IdentityBindingTarget>;
+  return (
+    typeof target.surfaceId === "string" &&
+    (target.workspaceId === undefined || typeof target.workspaceId === "string") &&
+    (target.paneId === undefined || typeof target.paneId === "string")
+  );
+}
+
+function isIdentityBinding(value: unknown): value is IdentityBinding {
+  if (!value || typeof value !== "object") return false;
+  const binding = value as Partial<IdentityBinding>;
+  return (
+    typeof binding.sessionId === "string" &&
+    (binding.provider === undefined || PROVIDERS.includes(binding.provider)) &&
+    isBindingTarget(binding.target) &&
+    typeof binding.firstConfirmedAt === "string" &&
+    typeof binding.confirmedAt === "string" &&
+    (binding.pendingReassignment === undefined ||
+      (typeof binding.pendingReassignment === "object" &&
+        binding.pendingReassignment !== null &&
+        isBindingTarget(binding.pendingReassignment.target) &&
+        typeof binding.pendingReassignment.scansAgreed === "number" &&
+        typeof binding.pendingReassignment.firstSeenAt === "string"))
+  );
+}
+
+function isFresh(binding: IdentityBinding, nowMs: number): boolean {
+  const confirmedAtMs = Date.parse(binding.confirmedAt);
+  return Number.isFinite(confirmedAtMs) && nowMs - confirmedAtMs <= IDENTITY_BINDING_TTL_MS;
+}
+
+export class JsonIdentityBindingStore implements IdentityBindingStore {
+  readonly #bindings = new Map<string, IdentityBinding>();
+  #writeQueue: Promise<void> = Promise.resolve();
+  #writeNumber = 0;
+
+  private constructor(
+    private readonly path: string,
+    private readonly files: BindingFileOperations,
+    private readonly now: () => number,
+  ) {}
+
+  static async open(
+    path: string,
+    files: BindingFileOperations = nodeFileOperations,
+    now: () => number = Date.now,
+  ): Promise<JsonIdentityBindingStore> {
+    const store = new JsonIdentityBindingStore(path, files, now);
+    try {
+      const parsed = JSON.parse(await files.readText(path));
+      if (Array.isArray(parsed)) {
+        for (const value of parsed) {
+          if (!isIdentityBinding(value)) {
+            throw new Error("identity bindings file contains an invalid binding record");
+          }
+          // Prune on load: sessions that left the scan window age out here.
+          if (isFresh(value, now())) store.#bindings.set(value.sessionId.toLowerCase(), value);
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return store;
+  }
+
+  get(sessionId: string): IdentityBinding | undefined {
+    return this.#bindings.get(sessionId.toLowerCase());
+  }
+
+  list(): readonly IdentityBinding[] {
+    return [...this.#bindings.values()];
+  }
+
+  put(binding: IdentityBinding): Promise<void> {
+    const write = this.#writeQueue.then(() => this.#persist(binding));
+    // A failed write rejects its caller but does not poison later queued writes.
+    this.#writeQueue = write.catch(() => {});
+    return write;
+  }
+
+  async #persist(binding: IdentityBinding): Promise<void> {
+    const nowMs = this.now();
+    const next = new Map(this.#bindings);
+    next.set(binding.sessionId.toLowerCase(), binding);
+    // Prune on save so the file never accumulates departed sessions.
+    for (const [key, value] of next) {
+      if (!isFresh(value, nowMs)) next.delete(key);
+    }
+    const persisted = [...next.values()].sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+    await this.files.makeDirectory(dirname(this.path));
+    this.#writeNumber += 1;
+    const temporaryPath = `${this.path}.${process.pid}.${this.#writeNumber}.tmp`;
+    await this.files.writeText(temporaryPath, `${JSON.stringify(persisted, null, 2)}\n`);
+    await this.files.rename(temporaryPath, this.path);
+    // The in-memory state becomes visible only after the atomic rename commits.
+    this.#bindings.clear();
+    for (const [key, value] of next) this.#bindings.set(key, value);
+  }
+}
+
+export class MemoryIdentityBindingStore implements IdentityBindingStore {
+  readonly #bindings = new Map<string, IdentityBinding>();
+
+  get(sessionId: string): IdentityBinding | undefined {
+    return this.#bindings.get(sessionId.toLowerCase());
+  }
+
+  list(): readonly IdentityBinding[] {
+    return [...this.#bindings.values()];
+  }
+
+  async put(binding: IdentityBinding): Promise<void> {
+    this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+  }
+}
+
+/**
+ * Record/refresh bindings from one completed identity scan. Only surfaces the
+ * scan linked through open session files (lsof) count as confirmation —
+ * command hints and carried-over cmux metadata never move a binding.
+ */
+export async function updateBindingsFromScan(
+  store: IdentityBindingStore,
+  surfaces: readonly CmuxSurface[],
+  nowIso: string,
+): Promise<{ errors: string[] }> {
+  const errors: string[] = [];
+  const confirmed = new Map<string, { surface: CmuxSurface; provider?: Provider }>();
+  const contested = new Set<string>();
+  for (const surface of surfaces) {
+    const trace = surface.identityTrace;
+    if (!trace || trace.outcome !== "open-file-match") continue;
+    if (surface.identityConflict || surface.sourceSessionIds.length !== 1) continue;
+    const sessionId = surface.sourceSessionIds[0].toLowerCase();
+    const existing = confirmed.get(sessionId);
+    if (existing && existing.surface.surfaceId !== surface.surfaceId) {
+      // One session confirmed on two surfaces in one scan is not evidence to
+      // bind on — leave whatever binding exists untouched.
+      contested.add(sessionId);
+      continue;
+    }
+    confirmed.set(sessionId, {
+      surface,
+      provider: trace.openFileMatches.find((match) => match.sessionId.toLowerCase() === sessionId)?.provider,
+    });
+  }
+  for (const [sessionId, { surface, provider }] of confirmed) {
+    if (contested.has(sessionId)) continue;
+    const observed: IdentityBindingTarget = {
+      surfaceId: surface.surfaceId,
+      workspaceId: surface.workspaceId,
+      paneId: surface.paneId,
+    };
+    const existing = store.get(sessionId);
+    let next: IdentityBinding;
+    if (!existing) {
+      next = { sessionId, provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso };
+    } else if (existing.target.surfaceId === observed.surfaceId) {
+      next = {
+        ...existing,
+        provider: provider ?? existing.provider,
+        target: observed,
+        confirmedAt: nowIso,
+        pendingReassignment: undefined,
+      };
+    } else {
+      const pending = existing.pendingReassignment?.target.surfaceId === observed.surfaceId
+        ? existing.pendingReassignment
+        : undefined;
+      const scansAgreed = pending ? pending.scansAgreed + 1 : 1;
+      next = scansAgreed >= REASSIGNMENT_CONFIRMATION_SCANS
+        ? { sessionId, provider: provider ?? existing.provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso }
+        : {
+            ...existing,
+            pendingReassignment: {
+              target: observed,
+              scansAgreed,
+              firstSeenAt: pending ? pending.firstSeenAt : nowIso,
+            },
+          };
+    }
+    try {
+      await store.put(next);
+    } catch (error) {
+      errors.push(
+        `identity binding write failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return { errors };
+}
+
+/**
+ * Bridge lsof race gaps: when a scan produced no live evidence for a known
+ * session, its persisted binding becomes the agent's recordedTarget so
+ * targets.ts tier 1 keeps resolution exact. Bindings only fill evidence gaps —
+ * live evidence (including a conflict, which tier 1 quarantines fail-closed)
+ * always outranks them.
+ */
+export function bridgeAgentsWithBindings(
+  store: IdentityBindingStore,
+  agents: readonly CollectedAgent[],
+  surfaces: readonly CmuxSurface[],
+): CollectedAgent[] {
+  const liveSessionIds = new Set(
+    surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
+  );
+  const surfacesById = new Map(surfaces.map((surface) => [surface.surfaceId, surface]));
+  return agents.map((agent) => {
+    if (agent.recordedTarget) return agent;
+    if (agent.status !== "running" && agent.status !== "waiting") return agent;
+    const sessionId = agent.sourceSessionId.toLowerCase();
+    if (liveSessionIds.has(sessionId)) return agent;
+    const binding = store.get(sessionId);
+    if (!binding) return agent;
+    const bound = surfacesById.get(binding.target.surfaceId);
+    // The bound surface carrying exact evidence for a DIFFERENT session is a
+    // contradiction, not a gap — never bridge over it. A conflicted surface
+    // still gets the bridge so tier 1 quarantines it visibly.
+    if (bound && !bound.identityConflict && bound.sourceSessionIds.length > 0) return agent;
+    return {
+      ...agent,
+      recordedTarget: {
+        ...binding.target,
+        reason: BINDING_BRIDGE_REASON,
+        source: "binding",
+        confirmedAt: binding.confirmedAt,
+      },
+    };
+  });
+}

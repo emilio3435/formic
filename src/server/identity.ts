@@ -1,4 +1,10 @@
-import type { Provider } from "../shared/types";
+import type {
+  Provider,
+  SurfaceCommandHintEvidence,
+  SurfaceIdentityTrace,
+  SurfaceOpenFileEvidence,
+  SurfaceProcessEvidence,
+} from "../shared/types";
 import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } from "./types";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -135,6 +141,24 @@ function resolveCommandHint(hint: IdentityHint, agents: readonly CollectedAgent[
   return { provider: hint.provider, value: matches[0].sourceSessionId.toLowerCase(), full: true };
 }
 
+function baseTrace(
+  surface: CmuxSurface,
+  outcome: SurfaceIdentityTrace["outcome"],
+  notes?: string[],
+): SurfaceIdentityTrace {
+  return {
+    surfaceId: surface.surfaceId,
+    tty: surface.tty?.replace(/^\/dev\//, ""),
+    processes: [],
+    openFileMatches: [],
+    commandHints: [],
+    outcome,
+    sourceSessionIds: [...surface.sourceSessionIds],
+    identityConflict: surface.identityConflict,
+    notes,
+  };
+}
+
 export async function enrichCmuxIdentity(
   surfaces: readonly CmuxSurface[],
   agents: readonly CollectedAgent[],
@@ -154,8 +178,13 @@ export async function enrichCmuxIdentity(
     return {
       value: surfaces.map((surface) =>
         surface.runtimeSurfaceReady === false
-          ? { ...surface, sourceSessionIds: [], identityConflict: undefined }
-          : surface,
+          ? {
+              ...surface,
+              sourceSessionIds: [],
+              identityConflict: undefined,
+              identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
+            }
+          : { ...surface, identityTrace: baseTrace(surface, "no-tty") },
       ),
       errors,
     };
@@ -163,12 +192,14 @@ export async function enrichCmuxIdentity(
 
   const processResult = await runner.run(["ps", "-axo", "pid=,tty=,command="], 8_000);
   if (processResult.timedOut || processResult.exitCode !== 0) {
-    errors.push(
-      processResult.timedOut
-        ? "process identity lookup timed out"
-        : `process identity lookup exited ${processResult.exitCode}: ${processResult.stderr.trim() || "no stderr"}`,
-    );
-    return { value: [...surfaces], errors };
+    const error = processResult.timedOut
+      ? "process identity lookup timed out"
+      : `process identity lookup exited ${processResult.exitCode}: ${processResult.stderr.trim() || "no stderr"}`;
+    errors.push(error);
+    return {
+      value: surfaces.map((surface) => ({ ...surface, identityTrace: baseTrace(surface, "probe-failed", [error]) })),
+      errors,
+    };
   }
   const processes = parseProcessTable(processResult.stdout).filter((process) => ttyNames.has(process.tty));
   const pids = [
@@ -203,37 +234,110 @@ export async function enrichCmuxIdentity(
   return {
     value: surfaces.map((surface) => {
       if (surface.runtimeSurfaceReady === false) {
-        return { ...surface, sourceSessionIds: [], identityConflict: undefined };
+        return {
+          ...surface,
+          sourceSessionIds: [],
+          identityConflict: undefined,
+          identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
+        };
       }
-      if (!surface.tty) return surface;
+      if (!surface.tty) return { ...surface, identityTrace: baseTrace(surface, "no-tty") };
       const tty = surface.tty.replace(/^\/dev\//, "");
       const ttyProcesses = processes.filter((process) => process.tty === tty);
-      const openHints = ttyProcesses.flatMap((process) =>
-        (openFiles.get(process.pid) ?? []).map(identityFromSessionPath).filter((hint): hint is IdentityHint => hint !== null),
+      const processEvidence: SurfaceProcessEvidence[] = ttyProcesses.map((process) => ({
+        pid: process.pid,
+        command: process.command,
+        recognizedAgentProcess: isRecognizedAgentProcess(process.command),
+      }));
+      const openFileMatches: SurfaceOpenFileEvidence[] = ttyProcesses.flatMap((process) =>
+        (openFiles.get(process.pid) ?? []).flatMap((path) => {
+          const hint = identityFromSessionPath(path);
+          return hint ? [{ pid: process.pid, path, provider: hint.provider, sessionId: hint.value }] : [];
+        }),
       );
+      const commandHintEvidence: SurfaceCommandHintEvidence[] = ttyProcesses.flatMap((process) =>
+        identitiesFromCommand(process.command).map((hint) => ({
+          pid: process.pid,
+          provider: hint.provider,
+          value: hint.value,
+          full: hint.full,
+          resolvedSessionId: resolveCommandHint(hint, agents)?.value,
+        })),
+      );
+      const trace = (
+        outcome: SurfaceIdentityTrace["outcome"],
+        sourceSessionIds: string[],
+        identityConflict?: string,
+        notes?: string[],
+      ): SurfaceIdentityTrace => ({
+        surfaceId: surface.surfaceId,
+        tty,
+        processes: processEvidence,
+        openFileMatches,
+        commandHints: commandHintEvidence,
+        outcome,
+        sourceSessionIds,
+        identityConflict,
+        notes,
+      });
+      const openHints: IdentityHint[] = openFileMatches.map((match) => ({
+        provider: match.provider,
+        value: match.sessionId,
+        full: true,
+      }));
       const openIdentity = primaryOpenIdentity(openHints, agents);
       if (openHints.length > 0 && !openIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files on ${tty}`;
         errors.push(identityConflict);
-        return { ...surface, sourceSessionIds: [], identityConflict };
+        return {
+          ...surface,
+          sourceSessionIds: [],
+          identityConflict,
+          identityTrace: trace("open-file-conflict", [], identityConflict),
+        };
       }
       if (openIdentity) {
-        return { ...surface, sourceSessionIds: [openIdentity.value], identityConflict: undefined };
+        const distinctIdentities = new Set(openHints.map((hint) => `${hint.provider}:${hint.value}`)).size;
+        return {
+          ...surface,
+          sourceSessionIds: [openIdentity.value],
+          identityConflict: undefined,
+          identityTrace: trace(
+            "open-file-match",
+            [openIdentity.value],
+            undefined,
+            distinctIdentities > 1
+              ? [`${distinctIdentities} open session files reduce to root identity ${openIdentity.value} via parent links`]
+              : undefined,
+          ),
+        };
       }
 
-      const commandHints = ttyProcesses
-        .flatMap((process) => identitiesFromCommand(process.command))
-        .map((hint) => resolveCommandHint(hint, agents))
-        .filter((hint): hint is IdentityHint => hint !== null);
+      const commandHints = commandHintEvidence.flatMap((hint): IdentityHint[] =>
+        hint.resolvedSessionId ? [{ provider: hint.provider, value: hint.resolvedSessionId, full: true }] : [],
+      );
       const commandIdentity = uniqueIdentity(commandHints);
       if (commandHints.length > 0 && !commandIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting recognized agent commands on ${tty}`;
         errors.push(identityConflict);
-        return { ...surface, sourceSessionIds: [], identityConflict };
+        return {
+          ...surface,
+          sourceSessionIds: [],
+          identityConflict,
+          identityTrace: trace("command-hint-conflict", [], identityConflict),
+        };
       }
       return commandIdentity
-        ? { ...surface, sourceSessionIds: [commandIdentity], identityConflict: undefined }
-        : surface;
+        ? {
+            ...surface,
+            sourceSessionIds: [commandIdentity],
+            identityConflict: undefined,
+            identityTrace: trace("command-hint-match", [commandIdentity]),
+          }
+        : {
+            ...surface,
+            identityTrace: trace("no-evidence", [...surface.sourceSessionIds], surface.identityConflict),
+          };
     }),
     errors,
   };

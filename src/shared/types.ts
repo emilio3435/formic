@@ -51,6 +51,83 @@ export interface CmuxTarget {
   reason?: string;
 }
 
+export type IdentityTraceTier = "recorded" | "session" | "cwd";
+
+export interface IdentityTraceStep {
+  tier: IdentityTraceTier;
+  outcome: "matched" | "quarantined" | "ambiguous" | "no-match" | "skipped" | "rejected";
+  detail: string;
+}
+
+export interface IdentityBindingBridge {
+  surfaceId: string;
+  workspaceId?: string;
+  paneId?: string;
+  /** When the persisted binding was last confirmed by live lsof evidence. */
+  confirmedAt?: string;
+}
+
+/**
+ * Why one agent resolved (or failed to resolve) to a cmux target: which tier
+ * fired and the concrete reason each earlier tier passed. Debug data — kept
+ * out of the snapshot fingerprint so evidence detail never churns SSE pushes.
+ */
+export interface IdentityTrace {
+  steps: IdentityTraceStep[];
+  /** Tier that produced the final target when the resolution routed. */
+  matchedTier?: IdentityTraceTier;
+  resolution: TargetResolution;
+  reason?: string;
+  surfaceId?: string;
+  /** Present when a persisted binding bridged an lsof evidence gap this scan. */
+  bindingBridge?: IdentityBindingBridge;
+}
+
+export interface SurfaceProcessEvidence {
+  pid: number;
+  command: string;
+  recognizedAgentProcess: boolean;
+}
+
+export interface SurfaceOpenFileEvidence {
+  pid: number;
+  path: string;
+  provider: Provider;
+  sessionId: string;
+}
+
+export interface SurfaceCommandHintEvidence {
+  pid: number;
+  provider: Provider;
+  value: string;
+  full: boolean;
+  /** Full session ID after prefix resolution; absent when no unique source matched. */
+  resolvedSessionId?: string;
+}
+
+export type SurfaceIdentityOutcome =
+  | "open-file-match"
+  | "command-hint-match"
+  | "open-file-conflict"
+  | "command-hint-conflict"
+  | "no-evidence"
+  | "stale-surface"
+  | "no-tty"
+  | "probe-failed";
+
+/** Per-surface record of the ps/lsof evidence one identity scan observed. */
+export interface SurfaceIdentityTrace {
+  surfaceId: string;
+  tty?: string;
+  processes: SurfaceProcessEvidence[];
+  openFileMatches: SurfaceOpenFileEvidence[];
+  commandHints: SurfaceCommandHintEvidence[];
+  outcome: SurfaceIdentityOutcome;
+  sourceSessionIds: string[];
+  identityConflict?: string;
+  notes?: string[];
+}
+
 export type PresentationLabelTarget =
   | { kind: "program"; programId: string }
   | { kind: "workspace"; workspaceId: string }
@@ -108,6 +185,8 @@ export interface AgentSnapshot {
   tests?: { state: "passing" | "failing" | "running" | "unknown"; summary?: string };
   gates: string[];
   target: CmuxTarget;
+  /** Evidence trail behind `target`; excluded from the snapshot fingerprint. */
+  identityTrace?: IdentityTrace;
   controls: ControlCapability[];
 }
 

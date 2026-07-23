@@ -10,7 +10,7 @@ A local-first, light-mode command center for direct Codex, Claude, and Cursor Ag
 bun start
 ```
 
-That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). Open <http://127.0.0.1:4702>.
+That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). Open <http://127.0.0.1:4701>.
 
 **Once per machine** (already done on this Mac if `data/cmux-socket.env` exists):
 
