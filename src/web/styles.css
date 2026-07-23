@@ -1258,6 +1258,26 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   white-space: nowrap;
 }
 .swarm-chip { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 999px; padding: 0.02rem 0.4rem; white-space: nowrap; }
+/* Terminal breadcrumb: the linked pane this row routes to. Mono because it
+   carries identifiers/paths (Rule 2 — mono for values); dim and borderless so
+   it reads as a quiet fact, not a status chip. Truncates to protect density. */
+.row-terminal {
+  min-width: 0;
+  max-width: 18rem;
+  overflow: hidden;
+  font: 500 10px/1.4 var(--font-mono);
+  color: var(--faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Staleness fact: a live-looking row that has gone quiet. Dim mono (it carries a
+   relative timestamp — Rule 2), deliberately NOT ember; staleness is a nudge,
+   not an alert, so it never competes with the status rails. */
+.row-stale {
+  font: 500 10px/1.4 var(--font-mono);
+  color: var(--faint);
+  white-space: nowrap;
+}
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 

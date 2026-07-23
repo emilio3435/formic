@@ -421,6 +421,52 @@ function terminalSourceName(agent) {
   return title ? conciseText(title) : "";
 }
 
+/* Human-readable terminal destination for a LINKED pane, built only from fields
+   the client target actually carries: the workspace/terminal title and the live
+   pane cwd (surfaceCwd). Only exact / unique-cwd links resolve a safe target, so
+   ambiguous / missing / ended-observed rows return null and stay silent. Note:
+   the client target exposes no discrete "surface title" — the pane's folder (the
+   tail of surfaceCwd) is the closest identity we can honestly show. */
+function terminalIdentity(agent) {
+  const t = agent && agent.target;
+  if (!t || (t.resolution !== "exact" && t.resolution !== "unique-cwd")) return null;
+  const title = typeof t.workspaceTitle === "string" ? conciseText(t.workspaceTitle.trim(), 40) : "";
+  const paneCwd = typeof t.surfaceCwd === "string" ? t.surfaceCwd.trim() : "";
+  const parts = paneCwd.replace(/\/+$/, "").split("/").filter(Boolean);
+  const paneFolder = parts.length ? parts[parts.length - 1] : "";
+  if (!title && !paneCwd) return null;
+  return { title, paneCwd, paneFolder };
+}
+
+/* Compact terminal breadcrumb for the row identity tags: workspace title · pane
+   folder, with any segment that merely repeats the display name dropped (the
+   name often already IS the terminal title). Returns "" when nothing new
+   survives, so the tag never echoes the name back at the operator. */
+function terminalBreadcrumb(agent, displayName) {
+  const id = terminalIdentity(agent);
+  if (!id) return "";
+  const name = String(displayName || "").trim().toLowerCase();
+  const seen = new Set();
+  const parts = [];
+  for (const seg of [id.title, id.paneFolder]) {
+    const key = seg.toLowerCase();
+    if (!seg || key === name || seen.has(key)) continue;
+    seen.add(key);
+    parts.push(seg);
+  }
+  return parts.join(" · ");
+}
+
+/* Focus jumps to the linked pane — preview WHERE it lands (terminal title + pane
+   cwd) so the operator sees the destination before clicking. Falls back to the
+   generic label when no destination resolves. */
+function focusDestinationHint(agent) {
+  const id = terminalIdentity(agent);
+  if (!id) return "Jump to terminal pane";
+  const dest = [id.title, id.paneCwd].filter(Boolean).join(" · ");
+  return dest ? "Jump to " + dest : "Jump to terminal pane";
+}
+
 /* Rename target: workspace first (shared terminal identity), else the agent. */
 function preferredRenameTarget(agent) {
   if (agent && agent.target && agent.target.workspaceId) {
@@ -566,6 +612,21 @@ function withinLookback(agent, lookbackHours, nowMs = Date.now()) {
 
 function lookbackApplies(view) {
   return view === "idle" || view === "history";
+}
+
+const ROW_STALE_AFTER_MS = 10 * 60_000;
+/* A running / waiting row whose last update is older than 10 minutes earns a
+   dim "updated Nm ago" fact — a quiet nudge that a live-looking session has gone
+   quiet. Fresh rows and ended rows return "" and render exactly as before.
+   nowMs is injectable so the threshold is testable without wall-clock flake. */
+function rowStalenessText(agent, nowMs = Date.now()) {
+  const act = deriveActivity(agent);
+  if (act !== "working" && act !== "idle") return "";
+  const updated = Date.parse(agent && agent.updatedAt);
+  if (!Number.isFinite(updated)) return "";
+  const ageMs = nowMs - updated;
+  if (ageMs < ROW_STALE_AFTER_MS) return "";
+  return "updated " + fmtElapsed(ageMs) + " ago";
 }
 
 function lookbackLabel(hours) {
@@ -1047,14 +1108,14 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
-  preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
-  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
+  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
-  broadcastEligible,
+  broadcastEligible, broadcastIneligibleReason,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
@@ -2810,6 +2871,8 @@ function renderAgentRow(agent, program, opts = {}) {
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
   const terminal = terminalSourceName(agent);
+  const terminalCrumb = terminalBreadcrumb(agent, displayName);
+  const staleFact = rowStalenessText(agent);
   const sourceName = sourceAgentName(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   // The terminal / source / cwd-mismatch naming detail leaves the visible row.
@@ -2857,6 +2920,13 @@ function renderAgentRow(agent, program, opts = {}) {
         : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
+      // Terminal breadcrumb: which linked pane this row routes to, deduped
+      // against the display name. Identity info (distinct from control state) —
+      // an operator can read the destination without opening the drawer.
+      terminalCrumb ? el("span", { class: "row-terminal", title: focusDestinationHint(agent), text: terminalCrumb }) : null,
+      // A live-looking row that has gone quiet for >10min names how long — a dim
+      // fact, never an alert (staleness is a nudge, not a status change).
+      staleFact ? el("span", { class: "row-stale", title: "Last update " + agoText(agent.updatedAt), text: staleFact }) : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
@@ -3928,7 +3998,7 @@ function renderDockTool(agent, cap, action, opts = {}) {
     class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
-    title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
+    title: cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
     dataset: { fkey },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
@@ -4631,6 +4701,17 @@ function broadcastEligible(agent) {
   return deriveActivity(agent) !== "ended" && !!cap && cap.enabled === true;
 }
 
+/* Why an ineligible recipient can't receive a broadcast, in one operator word —
+   read from the SAME state broadcastEligible checks so the chip label and the
+   eligibility gate never disagree. Ended sessions split archived vs ended;
+   live-but-locked sessions read their control state (quarantined vs view only). */
+function broadcastIneligibleReason(agent) {
+  if (deriveActivity(agent) === "ended") {
+    return (agent.status === "archived" || agent.activity === "archived") ? "archived" : "ended";
+  }
+  return deriveControlState(agent) === "quarantined" ? "quarantined" : "view only";
+}
+
 function toggleSelect(agentId) {
   if (state.selection.has(agentId)) state.selection.delete(agentId);
   else state.selection.add(agentId);
@@ -4751,7 +4832,7 @@ function renderBroadcastBar() {
         el("span", { text: agentName(agent) }),
         result
           ? el("span", { class: "recipient-result " + (result.ok ? "ok" : "err"), text: result.ok ? "sent" : (result.error && result.error.code === "AGENT_NOT_FOUND" ? "gone" : "failed") })
-          : el("span", { class: "rc-state", text: ok ? "ready" : "unavailable" })));
+          : el("span", { class: "rc-state", text: ok ? "ready" : broadcastIneligibleReason(agent) })));
     }
     bar.append(list);
   } else {

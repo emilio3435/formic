@@ -474,6 +474,29 @@ describe("search", () => {
     }
     expect(M.matchesQuery(a, program, "zzz-nope")).toBe(false);
   });
+
+  test("the search affordance advertises exactly the fields matchesQuery covers", () => {
+    const input = html.match(/<input id="search"[^>]*>/)?.[0];
+    expect(input).toBeDefined();
+    const placeholder = input!.match(/placeholder="([^"]*)"/)?.[1] ?? "";
+    const title = input!.match(/title="([^"]*)"/)?.[1] ?? "";
+    // Both surfaces name the same searchable fields; every advertised field is
+    // one matchesQuery actually indexes — no promise the search can't keep.
+    const program = { id: "p", name: "Prog" };
+    const probes: Array<[string, string]> = [
+      ["name", "ridge-scout"], ["model", "gpt-5.6-sol"], ["cwd", "/Users/emilio/Developer/deep-ridge"],
+      ["provider", "codex"], ["role", "verifier"], ["status", "running"], ["session id", "sess-ridge-9"],
+    ];
+    const a = agent({
+      displayName: "ridge-scout", model: "gpt-5.6-sol", cwd: "/Users/emilio/Developer/deep-ridge",
+      provider: "codex", role: "verifier", status: "running", sourceSessionId: "sess-ridge-9",
+    });
+    for (const [field, sample] of probes) {
+      expect(placeholder.toLowerCase()).toContain(field);
+      expect(title.toLowerCase()).toContain(field);
+      expect(M.matchesQuery(a, program, sample.toLowerCase())).toBe(true);
+    }
+  });
 });
 
 describe("stable-feed elapsed clocks", () => {
@@ -529,6 +552,30 @@ describe("broadcast recipient eligibility", () => {
     expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "instruct", enabled: false, reason: "Observed only." }] }))).toBe(false);
     expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "focus", enabled: true }] }))).toBe(false);
     expect(M.broadcastEligible(agent({ status: "running", controls: [] }))).toBe(false);
+  });
+
+  test("ineligible recipients name their reason from the same state the gate reads", () => {
+    // Ended splits archived (explicit) vs ended (stale / other non-live).
+    expect(M.broadcastIneligibleReason(agent({ status: "archived" }))).toBe("archived");
+    expect(M.broadcastIneligibleReason(agent({ status: "stale" }))).toBe("ended");
+    expect(M.broadcastIneligibleReason(agent({ activity: "ended", status: "running" }))).toBe("ended");
+    // Live-but-locked reads its control state: ambiguous target → quarantined,
+    // everything else → view only. Same fields deriveControlState consumes.
+    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
+    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
+    expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
+    // Never the bare "unavailable" placeholder.
+    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } })]) {
+      expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
+    }
+  });
+
+  test("the broadcast dock chip renders the reason word, not a bare 'unavailable'", () => {
+    const barSrc = source.match(/function renderBroadcastBar\(\) \{[\s\S]*?\n\}/)?.[0];
+    expect(barSrc).toBeDefined();
+    // The chip's resting state label is derived, never the old hard-coded string.
+    expect(barSrc).toContain('text: ok ? "ready" : broadcastIneligibleReason(agent)');
+    expect(barSrc).not.toContain('"unavailable"');
   });
 });
 
@@ -828,6 +875,104 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       expect(rule).toContain(`inset 4px 0 var(${ink})`);
       expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
     }
+  });
+
+  test("(h) linked rows carry a terminal breadcrumb in the identity tags, deduped against the name", () => {
+    // exact / unique-cwd links resolve a destination; the breadcrumb rides the
+    // existing .row-identity-tags row, not a new line, and never repeats the name.
+    const linked = agent({
+      displayName: "ridge-term",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-term", surfaceCwd: "/Users/emilio/Developer/deep-ridge" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(linked, program));
+    const crumb = findByClass(row, "row-terminal");
+    expect(crumb).not.toBeNull();
+    // The breadcrumb lives inside the identity tag row (not a fabricated line).
+    expect(findByClass(findByClass(row, "row-identity-tags"), "row-terminal")).not.toBeNull();
+    // Workspace title equals the display name, so it is deduped OUT; the pane
+    // folder is the surviving, non-redundant segment.
+    expect(textOf(crumb)).toBe("deep-ridge");
+    // The breadcrumb tag previews the same destination the Focus button does.
+    expect(crumb.attributes["title"]).toContain("/Users/emilio/Developer/deep-ridge");
+
+    // When the shown name is NOT the terminal title (here a home-cwd orch parked
+    // in a project-titled pane, so agentName keeps its own identity), both the
+    // workspace title and the pane folder survive as distinct destination info.
+    const twoPart = agent({
+      nickname: "Scout",
+      cwd: "/Users/emilio",
+      target: { resolution: "unique-cwd", surfaceId: "s2", workspaceId: "w2", workspaceTitle: "CODEX · platform", surfaceCwd: "/srv/app/web", cwdMismatch: true },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const two: any = withDom(() => M.renderAgentRow(twoPart, program));
+    expect(textOf(findByClass(two, "row-terminal"))).toBe("CODEX · platform · web");
+
+    // Ambiguous / missing targets resolve no safe destination — no breadcrumb.
+    for (const res of ["ambiguous", "missing"]) {
+      const unlinked = agent({ target: { resolution: res, workspaceTitle: "ghost", surfaceCwd: "/x/y" } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r: any = withDom(() => M.renderAgentRow(unlinked, program));
+      expect(findByClass(r, "row-terminal")).toBeNull();
+    }
+  });
+
+  test("(i) the Focus dock button title previews the destination (terminal + pane cwd)", () => {
+    const linked = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-term", surfaceCwd: "/Users/emilio/Developer/deep-ridge" },
+    });
+    expect(M.focusDestinationHint(linked)).toBe("Jump to ridge-term · /Users/emilio/Developer/deep-ridge");
+    // No resolved destination falls back to the generic label, never a broken one.
+    expect(M.focusDestinationHint(agent({ target: { resolution: "missing" } }))).toBe("Jump to terminal pane");
+    // The dock tool wires the hint through for the focus action only.
+    const toolSrc = source.match(/function renderDockTool\([\s\S]*?\n\}/)?.[0];
+    expect(toolSrc).toContain('action === "focus" ? focusDestinationHint(agent) : label');
+  });
+
+  test("(j) the terminal breadcrumb stays compact and mono to protect row density", () => {
+    const rule = styles.match(/\.row-terminal\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toContain("var(--font-mono)"); // Rule 2 — identifiers/paths in mono
+    expect(rule).toContain("var(--faint)");     // dim quiet fact, not a status chip
+    expect(rule).toContain("white-space: nowrap");
+    expect(rule).toContain("text-overflow: ellipsis"); // truncates, never wraps a new line
+  });
+
+  test("(k) a live row gone quiet >10min shows a dim staleness fact; fresh rows don't", () => {
+    // Threshold is exact: 10 min. Only running/waiting (working/idle) rows qualify.
+    const now = Date.parse("2026-07-22T03:00:00.000Z");
+    const at = (min: number) => new Date(now - min * 60_000).toISOString();
+    // Pure-function contract (nowMs injected so no wall-clock flake).
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(9) }), now)).toBe("");
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(15) }), now)).toBe("updated 15m ago");
+    expect(M.rowStalenessText(agent({ status: "waiting", updatedAt: at(42) }), now)).toBe("updated 42m ago");
+    // Ended rows never go "stale" — they are done, not quiet.
+    expect(M.rowStalenessText(agent({ status: "archived", updatedAt: at(120) }), now)).toBe("");
+    // Missing timestamp is honestly silent, never a fabricated age.
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: undefined }), now)).toBe("");
+
+    // Executed: a stale running row renders a .row-stale fact inside the tag row,
+    // and it is NOT an ember/alert element (staleness is a nudge, not a status).
+    const stale = agent({ status: "running", updatedAt: new Date(Date.now() - 20 * 60_000).toISOString() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(stale, program));
+    const fact = findByClass(row, "row-stale");
+    expect(fact).not.toBeNull();
+    expect(textOf(fact)).toContain("ago");
+    expect(findByClass(findByClass(row, "row-identity-tags"), "row-stale")).not.toBeNull();
+    // A fresh running row renders exactly as today — no staleness fact.
+    const fresh = agent({ status: "running", updatedAt: new Date().toISOString() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const freshRow: any = withDom(() => M.renderAgentRow(fresh, program));
+    expect(findByClass(freshRow, "row-stale")).toBeNull();
+  });
+
+  test("(l) the staleness fact is dim, not an alert ink", () => {
+    const rule = styles.match(/\.row-stale\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toContain("var(--faint)");        // dim
+    expect(rule).toContain("var(--font-mono)");    // relative timestamp → mono (Rule 2)
+    expect(rule).not.toContain("--ember");         // never an alert
   });
 });
 
