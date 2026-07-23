@@ -33,6 +33,7 @@
       <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
     </div>
     <div id="health-widgets" class="rail-inner"></div>
+    <div id="pulse-findings" hidden></div>
     <div id="widget-customizer" class="widget-customizer" hidden>
       <div class="widget-customizer-inner">
         <div>
@@ -41,51 +42,6 @@
         </div>
         <div id="widget-options" class="widget-options" role="list" aria-labelledby="widget-customizer-title"></div>
         <button type="button" class="btn widget-reset" id="widget-reset">Reset defaults</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- Attention board: a conductor score plus two inbox-dense lanes, spanning
-       the full canvas above the workboard/inspector split. When nothing needs
-       the operator the score collapses to a full-moss all-clear banner and the
-       lanes are replaced by the calm "Colony is clear" panel. -->
-  <section id="attention-board" class="attention-board signal-band" aria-label="Attention" hidden>
-    <div class="conductor" aria-label="Attention score">
-      <div class="score" id="score">
-        <div class="seg ember" id="seg-act" title="Act now: errors that need you"><span class="seg-label">Act now</span> <span id="seg-act-n">0</span></div>
-        <div class="seg amber" id="seg-watch" title="Watch: advisories or blocked work awaiting a decision"><span class="seg-label">Watch</span> <span id="seg-watch-n">0</span></div>
-        <div class="seg slate" id="seg-motion" title="In motion: triage or verification is running"><span class="seg-label">In motion</span> <span id="seg-motion-n">0</span></div>
-        <div class="seg moss" id="seg-clear" title="Cleared: recently confirmed gone"><span class="seg-label">Cleared</span> <span id="seg-clear-n">0</span></div>
-        <div class="seg moss clear-banner" aria-live="polite">
-          <span class="mark" aria-hidden="true"></span>
-          All clear · nothing needs you
-        </div>
-      </div>
-      <p class="score-legend" id="score-legend" aria-live="polite"></p>
-    </div>
-
-    <div class="lanes" id="lanes">
-      <section class="lane" aria-labelledby="act-title">
-        <div class="lane-head">
-          <h2 id="act-title" class="lane-title">Act now</h2>
-          <span class="n" id="act-count" aria-live="polite"></span>
-        </div>
-        <div class="lane-body" id="act-body"></div>
-      </section>
-      <section class="lane" aria-labelledby="aware-title">
-        <div class="lane-head">
-          <h2 id="aware-title" class="lane-title">Be aware</h2>
-          <span class="n" id="aware-count" aria-live="polite"></span>
-        </div>
-        <div class="lane-body" id="aware-body"></div>
-      </section>
-    </div>
-
-    <div class="allclear" id="allclear" aria-live="polite" hidden>
-      <div class="allclear-mark" aria-hidden="true">✓</div>
-      <div class="allclear-copy">
-        <h2>Colony is clear</h2>
-        <p>No interventions or advisories. The conductor is full green — the workboard is the only stage.</p>
       </div>
     </div>
   </section>

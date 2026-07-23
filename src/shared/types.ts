@@ -207,12 +207,41 @@ export interface TriageQueueSummary {
   state: TriageQueueState;
 }
 
-export interface AttentionBoard {
-  actNow: number;
-  watch: number;
-  inMotion: number;
-  cleared: number;
-  allClear: boolean;
+export interface PulseMomentum {
+  working: number;
+  completionsLastHour: number;
+  observedWindowMs: number;
+  stalled: number;
+  stalledAgentIds: string[];
+  stallThresholdMs: number;
+}
+
+export interface PulseBurn {
+  tokensPerMin: number | null;
+  windowMs: number;
+  coverage: { reporting: number; eligible: number; unknown: number };
+  costLastHourUsd: number | null;
+  costProvenance: "burnbar" | "unavailable";
+  costAsOf?: string;
+  costNote?: string;
+}
+
+export interface PulseActivityBucket {
+  start: string;
+  activeSessions: number;
+  completions: number;
+  tokens: number | null;
+}
+
+export interface HubPulse {
+  momentum: PulseMomentum;
+  burn: PulseBurn;
+  activity: {
+    bucketMinutes: 5;
+    windowMinutes: 60;
+    observedSince: string;
+    buckets: PulseActivityBucket[];
+  };
 }
 
 export interface SourceHealthSummary {
@@ -259,8 +288,8 @@ export interface HubSnapshot {
   };
   issues?: OperatorIssue[];
   recentlyResolved?: OperatorIssue[];
-  attentionBoard?: AttentionBoard;
   triageSummaries?: TriageQueueSummary[];
+  pulse?: HubPulse;
   programs: ProgramSnapshot[];
 }
 

@@ -115,6 +115,32 @@ function svgMeter(pct, cls, opts = {}) {
   return svg;
 }
 
+/* SVG sparkline — one <polyline> whose points are geometry attributes, never
+   inline style, so the strict CSP (style-src 'self') permits it. Returns null
+   below two points — a single dot is not a trend and would only fake one. */
+function svgSparkline(values, opts = {}) {
+  const points = (Array.isArray(values) ? values : []).filter((v) => Number.isFinite(v));
+  if (points.length < 2) return null;
+  const width = 100;
+  const height = 24;
+  const max = Math.max(...points, 1);
+  const step = width / (points.length - 1);
+  const coords = points.map((v, i) =>
+    (i * step).toFixed(1) + "," + (height - 2 - (Math.max(0, v) / max) * (height - 4)).toFixed(1),
+  ).join(" ");
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", opts.class || "pulse-spark");
+  if (opts.label) { svg.setAttribute("role", "img"); svg.setAttribute("aria-label", opts.label); }
+  else svg.setAttribute("aria-hidden", "true");
+  svg.append(svgChild(["polyline", {
+    points: coords, fill: "none", stroke: "currentColor",
+    "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round",
+  }]));
+  return svg;
+}
+
 /* Segmented SVG meter — one contiguous bar split into proportional bands, each a
    rect whose width is a geometry attribute (never inline style, so the strict
    CSP holds). segments = [{ cls, value }]; zero-value bands are skipped. */
@@ -756,19 +782,14 @@ function liveElapsedText(agent, generatedAt) {
 
 const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 const DEFAULT_WIDGET_IDS = Object.freeze([
-  "system", "active-work", "attention", "context-peak", "source-health",
+  "needs-you", "momentum", "burn", "context-peak", "health",
 ]);
 const WIDGET_CATALOG = Object.freeze([
-  { id: "system", label: "System", required: true },
-  { id: "active-work", label: "Active work" },
-  { id: "attention", label: "Attention" },
+  { id: "needs-you", label: "Needs you", required: true },
+  { id: "momentum", label: "Momentum" },
+  { id: "burn", label: "Burn" },
   { id: "context-peak", label: "Context peak" },
-  { id: "source-health", label: "Source health" },
-  { id: "waiting", label: "Waiting" },
-  { id: "history", label: "History" },
-  { id: "model-policy", label: "Model policy" },
-  { id: "routing-health", label: "Routing health" },
-  { id: "context-reporting", label: "Context reporting" },
+  { id: "health", label: "Health" },
 ]);
 const WIDGET_IDS = new Set(WIDGET_CATALOG.map((widget) => widget.id));
 
@@ -779,7 +800,7 @@ function defaultWidgetIds() {
 function normalizeWidgetIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return defaultWidgetIds();
   const unique = new Set(ids);
-  if (ids[0] !== "system" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
+  if (ids[0] !== "needs-you" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
     return defaultWidgetIds();
   }
   return [...ids];
@@ -833,20 +854,30 @@ function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
-function summaryWidgetData(id, snap, conn = "live", display = "percent") {
-  if (id === "system") {
+function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems) {
+  if (id === "health") {
+    // Merged system + source-health + routing-health verdict. OK renders as a
+    // trailing micro-chip; degraded promotes to a full cell with its reason.
     const status = systemStatus(snap, conn);
     const control = snap && snap.controlHealth;
+    const source = snap && snap.totals && snap.totals.sourceHealth;
+    const stale = (control && control.staleSources && control.staleSources.length) || 0;
+    const errors = (control && control.errors && control.errors.length) || 0;
     return {
       value: status.label,
       unit: "",
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
-        : status.key === "operational" ? "Sources and controls healthy."
+        : status.key === "operational"
+          ? (source && source.total > 0
+            ? `${source.healthy}/${source.total} sources healthy · controls reachable.`
+            : "Sources and controls healthy.")
           : conn !== "live" ? "Live snapshot feed is not healthy."
             : control && control.cmuxReachable !== true
               ? "cmux unreachable — terminal titles and Focus/Send stay offline."
-              : "Source or control evidence needs review.",
+              : source && source.degraded > 0
+                ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
+                : "Source or control evidence needs review.",
       tone: status.tone,
       icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
     };
@@ -854,18 +885,50 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
   if (!snap) return noDataWidget("Waiting for the first snapshot.");
 
   const totals = totalsOf(snap);
-  if (id === "active-work") {
-    return { value: String(totals.working), unit: "working", sublabel: `${totals.live} live · ${totals.tracked} tracked`, tone: "ok" };
-  }
-  if (id === "attention") {
+  if (id === "needs-you") {
     const attention = attentionSummary(snap);
+    const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
     return {
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
-      sublabel: attention.count
-        ? `${attention.interventions} intervention${attention.interventions === 1 ? "" : "s"} · ${attention.advisories} advis${attention.advisories === 1 ? "ory" : "ories"}`
-        : "No active findings.",
+      sublabel: attention.count && top ? top : "No active findings.",
       tone: attention.count ? "hot" : "ok",
+    };
+  }
+  if (id === "momentum") {
+    const momentum = snap.pulse && snap.pulse.momentum;
+    let sublabel = "No completion data yet.";
+    if (momentum) {
+      // Window honesty: a freshly restarted tracker says how long it has
+      // actually watched, never a fabricated "this hour". Below one full
+      // 5-min bucket there is no completion window to report at all; stall
+      // detection reads updatedAt directly, so it stays valid immediately.
+      const parts = [];
+      if (momentum.observedWindowMs > 0) {
+        const windowText = momentum.observedWindowMs < 3_600_000
+          ? "in " + fmtElapsed(momentum.observedWindowMs) + " observed"
+          : "this hour";
+        parts.push("↑" + momentum.completionsLastHour + " done " + windowText);
+      }
+      if (momentum.stalled) parts.push(`${momentum.stalled} quiet 15m+`);
+      if (parts.length) sublabel = parts.join(" · ");
+    }
+    return { value: String(totals.working), unit: "shipping", sublabel, tone: "ok" };
+  }
+  if (id === "burn") {
+    const burn = snap.pulse && snap.pulse.burn;
+    if (!burn) return noDataWidget("No burn data yet.");
+    // Null cost stays "cost unavailable" — never rendered as $0.
+    const cost = burn.costLastHourUsd != null
+      ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
+      : "cost unavailable";
+    const coverage = burn.coverage
+      ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
+    return {
+      value: burn.tokensPerMin != null ? fmtTok(burn.tokensPerMin) : "No data",
+      unit: burn.tokensPerMin != null ? "/min" : "",
+      sublabel: cost + coverage + (burn.costNote ? " · " + burn.costNote : ""),
+      tone: burn.tokensPerMin != null ? "ok" : "missing",
     };
   }
   if (id === "context-peak") {
@@ -881,64 +944,13 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent") {
       meterPct: peak.pct,
     };
   }
-  if (id === "source-health") {
-    const source = totals.sourceHealth;
-    if (!source || source.total <= 0) return noDataWidget("Source health is not reported.");
-    return {
-      value: `${source.healthy}/${source.total}`,
-      unit: "healthy",
-      sublabel: `${source.degraded} degraded · ${source.total} total`,
-      tone: source.degraded ? "warn" : "ok",
-    };
-  }
-  if (id === "waiting") {
-    return { value: String(totals.idle), unit: "waiting", sublabel: "Idle sessions awaiting work.", tone: "ok" };
-  }
-  if (id === "history") {
-    return { value: String(totals.history), unit: "done", sublabel: "Completed or archived sessions.", tone: "ok" };
-  }
-  if (id === "model-policy") {
-    const policy = totals.cursorModelHealth;
-    if (!policy || policy.total <= 0) return noDataWidget("Model policy is not reported.");
-    const mismatch = Number(policy.mismatch) || 0;
-    return {
-      value: mismatch ? String(mismatch) : "OK",
-      unit: mismatch ? (mismatch === 1 ? "mismatch" : "mismatches") : "",
-      sublabel: `${policy.compliant} compliant · ${policy.unreported} unreported`,
-      tone: mismatch ? "hot" : "ok",
-    };
-  }
-  if (id === "routing-health") {
-    const control = snap.controlHealth;
-    if (!control) return noDataWidget("Routing health is not reported.");
-    const stale = control.staleSources?.length || 0;
-    const errors = control.errors?.length || 0;
-    const degraded = control.cmuxReachable !== true || stale > 0 || errors > 0;
-    return {
-      value: degraded ? "Degraded" : "Ready",
-      unit: "",
-      sublabel: degraded ? `${stale} stale source${stale === 1 ? "" : "s"} · ${errors} error${errors === 1 ? "" : "s"}` : "Controls reachable.",
-      tone: degraded ? "warn" : "ok",
-    };
-  }
-  if (id === "context-reporting") {
-    if (totals.tokenReporting == null || totals.tokenEligible == null) {
-      return noDataWidget("Context reporting is not reported.");
-    }
-    return {
-      value: `${totals.tokenReporting}/${totals.tokenEligible}`,
-      unit: "reporting",
-      sublabel: totals.tokenEligible ? "Live sessions reporting context." : "No sessions eligible to report context.",
-      tone: "ok",
-    };
-  }
   return noDataWidget("Widget evidence is not available.");
 }
 
 const AFFECTS_SAMPLE_LIMIT = 6;
-// At most five rows per lane before a "+N more" control expands the lane in
-// place — dense but never an unbounded wall.
-const MAX_LANE_ROWS = 5;
+// At most five rows in the inline pulse expansion before a "+N more" control
+// reveals the rest in place — dense but never an unbounded wall.
+const MAX_PULSE_ROWS = 5;
 
 // Server-owned work state → the single row vocabulary (label + visual key +
 // tone). issueWorkState prefers live optimistic signals, then this map, then a
@@ -1003,7 +1015,7 @@ globalThis.TheAntHill = {
   broadcastEligible,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
-  attentionBoardOf, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
+  pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
   parseInvestigationResult,
 };
@@ -1065,13 +1077,14 @@ const state = {
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
-  // Per-lane "show all" toggle. Each lane caps at MAX_LANE_ROWS; the "+N more"
-  // control expands that lane in place (no route change). Reset is transient —
-  // it is not persisted, so a reload returns to the dense five-row view.
-  laneExpanded: { act: false, aware: false },
+  // Inline pulse expansion. The needs-you verdict button opens a capped
+  // findings panel in place; "+N more" reveals the rest. Both are transient —
+  // not persisted, so a reload returns to the collapsed strip.
+  pulseExpanded: false,
+  pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { attention: "", programs: "", inspector: "", widgets: "" },
+  paintSig: { programs: "", inspector: "", widgets: "" },
 };
 state.aliases = state.labels;
 
@@ -1139,11 +1152,6 @@ async function postScanWindow(hours) {
     state.settingsPending = false;
     render();
   }
-}
-
-function toggleLane(lane) {
-  state.laneExpanded[lane] = !state.laneExpanded[lane];
-  renderAttentionBoard();
 }
 
 function loadOverrides() {
@@ -1291,7 +1299,6 @@ function render() {
 
   renderConn();
   renderHealthRail();
-  renderAttentionBoard();
   renderTabs();
   renderFilterBar();
   renderPrograms();
@@ -1350,15 +1357,41 @@ function widgetLabelNode(id, label) {
   }, label);
 }
 
-function renderSummaryWidget(id) {
+/* Compact verdict chip — the health cell's OK form (trailing micro-chip on
+   both the stressed grid and the calm line). */
+function healthMicroChip(data) {
+  return el("span", { class: "verdict-chip verdict-" + data.tone, title: data.sublabel },
+    icon(data.icon), data.value);
+}
+
+function renderSummaryWidget(id, weight = "normal") {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
   const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+  const cellClass = "reading-widget widget-" + id
+    + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
+  // A healthy control plane stays a trailing micro-chip; any degradation
+  // promotes the cell back to full width below.
+  if (id === "health" && weight === "micro") {
+    return el("div", { class: "reading " + cellClass }, healthMicroChip(data));
+  }
   const valueClass = ["reading-value", data.tone === "hot" ? "is-hot" : "", data.tone === "ok" ? "is-ok" : "", data.tone === "missing" ? "reading-no-data" : ""]
     .filter(Boolean).join(" ");
   let valueNode;
-  if (id === "system") {
+  if (id === "health") {
     valueNode = el("span", { class: valueClass },
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
+  } else if (id === "needs-you") {
+    // The verdict count is the strip's one expansion control: it toggles the
+    // inline findings panel in place (rows open the drawer; no triage here).
+    valueNode = el("button", {
+      type: "button",
+      class: valueClass + " pulse-verdict",
+      "aria-expanded": String(state.pulseExpanded),
+      "aria-controls": "pulse-findings",
+      dataset: { fkey: "pulse-verdict" },
+      onclick: togglePulseFindings,
+    }, data.value,
+      data.unit ? el("span", { class: "unit", text: data.unit }) : null);
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -1371,9 +1404,9 @@ function renderSummaryWidget(id) {
   }
   // A Degraded verdict names its reason (the top live finding) beside the chip
   // and exposes the existing refresh control right there.
-  const degraded = id === "system" && data.tone === "degraded";
+  const degraded = id === "health" && data.tone === "degraded";
   const reason = degraded ? topSourceIssue(state.snap) : null;
-  const snapNote = id === "system" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
+  const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
   subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
   if (degraded) {
     subNode.append(el("button", {
@@ -1385,7 +1418,7 @@ function renderSummaryWidget(id) {
       onclick: () => fetchSnapshot(),
     }, "Refresh"));
   }
-  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, "reading-widget widget-" + id);
+  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -1456,24 +1489,81 @@ function renderWidgetCustomizer() {
   }
 }
 
-/* One status verdict and one configurable, scan-ordered widget rail. */
+/* Calm collapse — the whole strip is one moss line: verdict, shipping count,
+   pulse numbers when the server reports them (graceful without them), a small
+   activity sparkline, and the trailing health micro-chip. */
+function renderPulseCalm() {
+  const snap = state.snap;
+  const totals = totalsOf(snap);
+  const pulse = snap && snap.pulse;
+  const parts = ["All clear", totals.working + " shipping"];
+  if (pulse) {
+    parts.push("↑" + pulse.momentum.completionsLastHour + " done this hour");
+    if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
+  }
+  const line = el("div", { class: "pulse-calm", role: "status" },
+    el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
+    el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+  const spark = pulse
+    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
+    : null;
+  if (spark) line.append(spark);
+  line.append(healthMicroChip(summaryWidgetData("health", snap, state.conn)));
+  return line;
+}
+
+// Last painted needs-you count — detects the >0 → 0 clear so the strip can
+// fire its one-shot moss transition (CSS transition only, no keyframe loops).
+let pulseNeedsYouWas = 0;
+
+/* The Pulse strip — one verdict-first surface. Calm collapses to a single
+   line; anything urgent re-weights the fixed-order cells instead of
+   reordering them. */
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const verdict = systemStatus(state.snap, state.conn);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems);
+  const attention = attentionSummary(state.snap);
+  const needsYou = attention ? attention.count : 0;
+  const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
   const sig = [
     state.conn,
-    verdict.label,
+    model.calm ? "calm" : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
-    state.widgetIds.map((id) => {
+    state.pulseExpanded ? "1" : "0",
+    state.pulseShowAll ? "1" : "0",
+    buckets.map((b) => b.activeSessions).join(","),
+    model.findings.map(findingPaintKey).join("|"),
+    // The calm line renders momentum/burn/health regardless of which widgets
+    // are enabled, so sign its actual inputs — not the customized cell list.
+    (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
       const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
   ].join("\u001f");
   if (paintUnchanged("widgets", sig)) return;
+
+  const rail = $("health-rail");
+  if (rail) {
+    if (needsYou === 0 && pulseNeedsYouWas > 0) {
+      rail.classList.add("pulse-cleared");
+      setTimeout(() => rail.classList.remove("pulse-cleared"), 1400);
+    }
+    rail.classList.toggle("is-calm", model.calm);
+  }
+  pulseNeedsYouWas = needsYou;
+
   widgets.textContent = "";
-  for (const id of state.widgetIds) widgets.append(renderSummaryWidget(id));
+  if (model.calm) {
+    widgets.append(renderPulseCalm());
+  } else {
+    for (const id of state.widgetIds) {
+      const cell = model.cells.find((c) => c.id === id);
+      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal"));
+    }
+  }
+  renderPulseFindings(model);
   renderWidgetCustomizer();
 }
 
@@ -1523,7 +1613,6 @@ async function fetchTriageQueue() {
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
     renderHealthRail();
-    renderAttentionBoard();
   } catch (err) {
     console.warn("triage queue fetch failed:", err);
   }
@@ -1534,7 +1623,7 @@ async function triageIssue(issueId, action) {
   if (state.triagePending.has(key)) return;
   state.triagePending.add(key);
   state.triageErrors.delete(issueId);
-  renderAttentionBoard();
+  renderHealthRail();
   try {
     const res = await fetch("/api/triage/" + action, {
       method: "POST",
@@ -1921,69 +2010,47 @@ function issueImpactLine(issue) {
 
 const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
 
-/* Snap rollup for the conductor. Prefer server attentionBoard; otherwise derive
-   from issues + recentlyResolved + live queue so older servers still paint. */
-function attentionBoardOf(snap, queueItems = []) {
-  const board = snap && snap.attentionBoard;
-  if (board && typeof board.actNow === "number" && typeof board.allClear === "boolean") {
-    return {
-      actNow: board.actNow | 0,
-      watch: board.watch | 0,
-      inMotion: board.inMotion | 0,
-      cleared: board.cleared | 0,
-      allClear: !!board.allClear,
-    };
-  }
+/* Ordered, flattened finding list for the pulse strip's inline expansion — the
+   same set the old lanes rendered, minus resolved (those live in the drawer
+   and History): interventions that still need a human first, then advisories,
+   in-motion work, and orphan queue rows whose issue has left the snapshot. */
+function pulseFindings(snap, queueItems = state.queueItems) {
   const issues = issuesOf(snap);
-  const resolved = recentlyResolvedOf(snap);
-  const liveIssueIds = new Set(issues.map((issue) => issue.id));
-  const resolvedIds = new Set(resolved.map((issue) => issue.id));
-  const triageByIssue = new Map(
-    (snap && Array.isArray(snap.triageSummaries) ? snap.triageSummaries : [])
-      .map((row) => [row.issueId, row.state]),
-  );
-  for (const item of queueItems) triageByIssue.set(item.issueId, item.state);
-
-  // Lanes are mutually exclusive: a finding that is in motion is never also
-  // "act now" — Act means a human decision is needed right now.
-  const actNowIds = new Set();
-  const watchIds = new Set();
-  const inMotionIds = new Set();
-  for (const issue of issues) {
-    const work = issueWorkState(issue, queueItems);
-    if (IN_MOTION_KEYS.has(work.key)) inMotionIds.add(issue.id);
-    else if (issue.severity === "error") actNowIds.add(issue.id);
-    else watchIds.add(issue.id);
-  }
-  for (const [issueId, qState] of triageByIssue) {
-    // In-motion is mutually exclusive with Act now / Watch: an issue being
-    // worked never also nags in another lane (merge of the lane's exclusivity
-    // with main's orphan-blocked guard).
-    if (qState === "queued" || qState === "running" || qState === "completed") {
-      inMotionIds.add(issueId);
-      actNowIds.delete(issueId);
-      watchIds.delete(issueId);
-    }
-    // Orphan blocked queue rows for cleared/non-live issues must not inflate Watch.
-    if (
-      qState === "blocked"
-      && liveIssueIds.has(issueId)
-      && !resolvedIds.has(issueId)
-      && !actNowIds.has(issueId)
-      && !inMotionIds.has(issueId)
-    ) {
-      watchIds.add(issueId);
-    }
-  }
-  const actNow = actNowIds.size;
-  const watch = watchIds.size;
-  const inMotion = inMotionIds.size;
-  const cleared = resolved.length;
-  return { actNow, watch, inMotion, cleared, allClear: actNow + watch + inMotion === 0 };
+  const issueFindings = issues.map((issue) =>
+    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory"));
+  const issueIds = new Set(issues.map((issue) => issue.id));
+  const resolvedIds = new Set(recentlyResolvedOf(snap).map((issue) => issue.id));
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const orphanQueueFindings = items
+    .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
+    .map(findingFromQueueItem);
+  return [
+    ...issueFindings.filter((f) => f.kind === "intervention" && !IN_MOTION_KEYS.has(f.work.key)),
+    ...issueFindings.filter((f) => f.kind === "advisory" && !IN_MOTION_KEYS.has(f.work.key)),
+    ...issueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key)),
+    ...orphanQueueFindings,
+  ];
 }
 
-function growClass(count) {
-  return "grow-" + Math.min(12, Math.max(0, count | 0));
+/* Pure strip model — the renderer and tests share one derivation. calm means
+   nothing needs the operator: zero live findings, an operational system, and
+   no session near its context ceiling. cells carry the fixed-order weighting
+   (urgency changes weight via cell-hot/cell-micro, never order); findings is
+   the ordered inline-expansion list. */
+function pulseStripModel(snap, conn = "live", queueItems = []) {
+  const attention = attentionSummary(snap);
+  const status = systemStatus(snap, conn);
+  const peak = peakContext(snap);
+  const calm = !!snap && !!attention && attention.count === 0
+    && status.key === "operational" && !(peak && peak.pct >= 85);
+  const cells = DEFAULT_WIDGET_IDS.map((id) => {
+    const data = summaryWidgetData(id, snap, conn, "percent", queueItems);
+    const weight = id === "health"
+      ? (data.tone === "ok" ? "micro" : "normal")
+      : data.tone === "hot" ? "hot" : "normal";
+    return { id, weight, data };
+  });
+  return { calm, cells, findings: pulseFindings(snap, queueItems) };
 }
 
 function findingFromIssue(issue, kind) {
@@ -2044,147 +2111,33 @@ function renderFindingRow(finding) {
     }, el("i"), el("i"), el("i"), el("i")));
 }
 
-function renderLaneBody(body, findings, laneKey, emptyCopy) {
-  body.textContent = "";
-  if (!findings.length) {
-    body.append(el("div", { class: "lane-empty" },
-      el("strong", { text: emptyCopy.title }),
-      emptyCopy.sub));
-    return;
-  }
-  const expanded = !!state.laneExpanded[laneKey];
-  const visible = expanded ? findings : findings.slice(0, MAX_LANE_ROWS);
-  for (const finding of visible) body.append(renderFindingRow(finding));
-  const more = findings.length - MAX_LANE_ROWS;
-  if (more > 0) {
-    body.append(el("button", {
-      type: "button",
-      class: "lane-more",
-      dataset: { fkey: "lane-more:" + laneKey },
-      onclick: () => toggleLane(laneKey),
-      text: expanded ? "Show less" : ("+" + more + " more"),
-    }));
-  }
+function togglePulseFindings() {
+  state.pulseExpanded = !state.pulseExpanded;
+  if (!state.pulseExpanded) state.pulseShowAll = false;
+  renderHealthRail();
 }
 
-function renderAttentionBoard() {
-  const board = $("attention-board");
-  if (!board) return;
-
-  const showHere = state.view === "now" || state.view === "needs-you";
-  if (!showHere || !state.snap) {
-    board.hidden = true;
-    document.body.classList.remove("is-all-clear");
-    board.classList.remove("is-all-clear");
-    state.paintSig.attention = "hidden:" + state.view;
-    return;
-  }
-
-  const issues = issuesOf(state.snap);
-  // Act now = needs a human decision right now. In-motion findings (triage,
-  // queue, investigation, verification underway) move to Be aware so the lane
-  // never contradicts its own work-state chip ("Act now" + "Verifying").
-  const issueFindings = issues.map((issue) =>
-    findingFromIssue(issue, issue.severity === "error" ? "intervention" : "advisory"));
-  const actFindings = issueFindings.filter((f) => f.kind === "intervention" && !IN_MOTION_KEYS.has(f.work.key));
-  const inFlightFindings = issueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key));
-  const watchFindings = issueFindings.filter((f) => f.kind === "advisory" && !IN_MOTION_KEYS.has(f.work.key));
-  const recentlyResolved = recentlyResolvedOf(state.snap);
-  const resolvedIds = new Set(recentlyResolved.map((issue) => issue.id));
-  const issueIds = new Set(issues.map((issue) => issue.id));
-  const orphanQueueFindings = state.queueItems
-    .filter((item) => !issueIds.has(item.issueId) && !resolvedIds.has(item.issueId))
-    .map(findingFromQueueItem);
-  const awareFindings = [
-    ...watchFindings,
-    ...orphanQueueFindings.filter((f) => !IN_MOTION_KEYS.has(f.work.key)),
-    ...inFlightFindings,
-    ...orphanQueueFindings.filter((f) => IN_MOTION_KEYS.has(f.work.key)),
-    ...recentlyResolved.map((issue) => findingFromIssue(issue, "resolved")),
-  ];
-
-  // Segments mirror lane membership exactly — the score is derived from what
-  // the lanes actually render, so the conductor can never contradict them.
-  let watchCount = 0;
-  let inMotionCount = 0;
-  for (const f of awareFindings) {
-    if (f.kind === "resolved") continue;
-    if (IN_MOTION_KEYS.has(f.work.key)) inMotionCount += 1;
-    else watchCount += 1;
-  }
-  const counts = {
-    actNow: actFindings.length,
-    watch: watchCount,
-    inMotion: inMotionCount,
-    cleared: recentlyResolved.length,
-    allClear: actFindings.length + watchCount + inMotionCount === 0,
-  };
-  const allClear = counts.allClear;
-  const sig = [
-    allClear ? "1" : "0",
-    counts.actNow, counts.watch, counts.inMotion, counts.cleared,
-    state.laneExpanded.act ? "1" : "0",
-    state.laneExpanded.aware ? "1" : "0",
-    actFindings.map(findingPaintKey).join("|"),
-    awareFindings.map(findingPaintKey).join("|"),
-  ].join("\u001f");
-  if (paintUnchanged("attention", sig)) return;
-
-  board.hidden = false;
-  document.body.classList.toggle("is-all-clear", allClear);
-  board.classList.toggle("is-all-clear", allClear);
-
-  const score = $("score");
-  const setSeg = (id, n) => {
-    const seg = $(id);
-    const label = $(id + "-n");
-    const next = String(n);
-    if (label && label.textContent !== next) label.textContent = next;
-    if (!seg) return;
-    seg.classList.toggle("zero", n === 0);
-    const nextGrow = growClass(n === 0 ? 0 : Math.max(1, n));
-    if (!seg.classList.contains(nextGrow)) {
-      seg.classList.remove("grow-0", "grow-1", "grow-2", "grow-3", "grow-4", "grow-5", "grow-6", "grow-7", "grow-8", "grow-9", "grow-10", "grow-11", "grow-12");
-      seg.classList.add(nextGrow);
-    }
-  };
-  setSeg("seg-act", counts.actNow);
-  setSeg("seg-watch", counts.watch);
-  setSeg("seg-motion", counts.inMotion);
-  setSeg("seg-clear", counts.cleared);
-  if (score) score.classList.toggle("score-clear", allClear);
-
-  const legend = $("score-legend");
-  if (legend) {
-    const needYou = counts.actNow === 1 ? "1 need you" : (counts.actNow + " need you");
-    const watching = counts.watch === 1 ? "1 watching" : (counts.watch + " watching");
-    const motion = counts.inMotion === 1 ? "1 in motion" : (counts.inMotion + " in motion");
-    const cleared = counts.cleared === 1 ? "1 cleared" : (counts.cleared + " cleared");
-    const nextLegend = needYou + " · " + watching + " · " + motion + " · " + cleared;
-    if (legend.textContent !== nextLegend) legend.textContent = nextLegend;
-    legend.hidden = allClear;
-  }
-
-  const lanes = $("lanes");
-  const allclear = $("allclear");
-  if (lanes) lanes.hidden = allClear;
-  if (allclear) allclear.hidden = !allClear;
-
-  if (!allClear) {
-    const actCount = $("act-count");
-    const awareCount = $("aware-count");
-    if (actCount) actCount.textContent = actFindings.length ? (actFindings.length + " open") : "clear";
-    if (awareCount) awareCount.textContent = awareFindings.length
-      ? (awareFindings.length + (awareFindings.length === 1 ? " item" : " items"))
-      : "clear";
-    renderLaneBody($("act-body"), actFindings, "act", {
-      title: "Nothing to act on",
-      sub: "Errors that need you land here.",
-    });
-    renderLaneBody($("aware-body"), awareFindings, "aware", {
-      title: "Quiet watch",
-      sub: "Advisories, in-motion work, and recent clears.",
-    });
+/* Inline expansion under the strip — at most MAX_PULSE_ROWS finding rows plus
+   an in-place "+N more"/"Show less" control. Rows open the drawer; triage and
+   queue actions stay drawer-only. */
+function renderPulseFindings(model) {
+  const panel = $("pulse-findings");
+  if (!panel) return;
+  const open = !model.calm && state.pulseExpanded && model.findings.length > 0;
+  panel.hidden = !open;
+  panel.textContent = "";
+  if (!open) return;
+  const visible = state.pulseShowAll ? model.findings : model.findings.slice(0, MAX_PULSE_ROWS);
+  for (const finding of visible) panel.append(renderFindingRow(finding));
+  const more = model.findings.length - MAX_PULSE_ROWS;
+  if (more > 0) {
+    panel.append(el("button", {
+      type: "button",
+      class: "pulse-more",
+      dataset: { fkey: "pulse-more" },
+      onclick: () => { state.pulseShowAll = !state.pulseShowAll; renderHealthRail(); },
+      text: state.pulseShowAll ? "Show less" : ("+" + more + " more"),
+    }));
   }
 }
 
