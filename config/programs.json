@@ -16,19 +16,51 @@
       "id": "settings-baseline",
       "name": "Settings & Baseline UX",
       "purpose": "Improve cockpit settings and baseline experience.",
-      "match": ["hd-cmux-master-integration", "hd-settings-cockpit", "cockpit-settings", "settings page", "signal settings", "settings boundary"]
+      "match": [
+        "hd-cmux-master-integration",
+        "hd-settings-cockpit",
+        "cockpit-settings",
+        "settings page",
+        "signal settings",
+        "settings boundary"
+      ]
+    },
+    {
+      "id": "hd-inbox",
+      "name": "Hormiga · Inbox",
+      "purpose": "Inbox / dual-view / cast lanes for LaHormigaDormida.",
+      "match": ["hd-inbox", "hd-dualview", "hd-pr-inbox"]
+    },
+    {
+      "id": "hd-sem",
+      "name": "Hormiga · SEM",
+      "purpose": "SEM contract, builder, audit, and resilience lanes.",
+      "match": ["hd-sem-", "hd-sem/", "sem-hormiga", "sem-audit"]
     },
     {
       "id": "hormiga",
       "name": "Hormiga",
       "purpose": "Operate LaHormigaDormida safely across live and isolated checkouts.",
-      "match": ["LaHormigaDormida", "HormigaDormida", "/Developer/hd-"]
+      "match": [
+        "LaHormigaDormida",
+        "HormigaDormida",
+        "/Developer/hd-",
+        "/Developer/.worktrees/hd-",
+        "/.worktrees/hd-",
+        "elio-worktrees/hd-"
+      ]
     },
     {
       "id": "elio-suite",
       "name": "Elio Suite",
       "purpose": "Build the Elio intelligence suite and supporting products.",
-      "match": ["elio-intelligence-suite", "elioai", "elio-pocket"]
+      "match": [
+        "elio-intelligence-suite",
+        "elioai",
+        "elio-pocket",
+        "elio-worktrees",
+        "elio-sem-"
+      ]
     },
     {
       "id": "job-bored",

@@ -133,6 +133,34 @@ function svgSegmentMeter(segments, opts = {}) {
   return svg;
 }
 
+/* SVG donut ring — the filled arc length is a geometry attribute
+   (stroke-dasharray on a circle whose circumference is 100), never inline style,
+   so the strict CSP (style-src 'self') holds. Center % is an SVG <text>. */
+function svgRing(pct, opts = {}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "vital-ring");
+  svg.setAttribute("role", "progressbar");
+  svg.setAttribute("aria-valuemin", "0");
+  svg.setAttribute("aria-valuemax", "100");
+  svg.setAttribute("aria-valuenow", String(clamped));
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+  svg.append(svgChild(["circle", { cx: 18, cy: 18, r: 15.915, class: "ring-track" }]));
+  svg.append(svgChild(["circle", {
+    cx: 18, cy: 18, r: 15.915, class: "ring-fill" + tone,
+    "stroke-dasharray": clamped + " " + (100 - clamped),
+  }]));
+  const label = document.createElementNS(SVGNS, "text");
+  label.setAttribute("x", "18");
+  label.setAttribute("y", "18");
+  label.setAttribute("class", "ring-pct");
+  label.textContent = clamped + "%";
+  svg.append(label);
+  return svg;
+}
+
 /* ---------- formatting ---------- */
 
 const fmtTok = (n) =>
@@ -183,31 +211,28 @@ const CONTROL_HINTS = {
 
 /* Plain-language glossary. dtdd() looks up a row's term here and, when found,
    renders it with a dotted underline + explainer tooltip (hover or keyboard
-   focus). Definitions stay jargon-free — this is the human layer over the raw
-   Technical evidence, so a first-time operator can read the drawer unaided. */
+   focus). Learn-style one-liners stay contextual — only fields that render. */
 const TOKENS_HINT = "Token counts for the most recent model call. “measured” = reported by the provider; “estimated” = inferred.";
+const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
+const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
+const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
+const CWD_MISMATCH_HINT = "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).";
 const GLOSSARY = {
-  // Overview
+  // Operate
   "running for": "Wall-clock time since this agent started running.",
-  context: "How big the latest model call is against the model's context window.",
-  cost: "Estimated spend on this agent so far. “measured” = billed by the provider; “estimated” = inferred.",
-  // Technical
-  "session id": "The provider's own ID for this session, prefixed by the provider name.",
-  "working directory": "The folder on disk this agent is running in.",
-  status: "The raw run status reported by the provider, with its reason.",
+  "last update": "When this session last reported activity.",
+  role: "Operator role assigned to this agent in the swarm (orchestrator, verifier, etc.).",
   model: "The model this agent is currently running on.",
-  "reasoning effort": "How hard the model is set to think per step — higher effort means more reasoning.",
-  "nesting level": "How deep this agent sits in the orchestrator → subagent tree. 0 is top-level.",
-  "orchestrator id": "ID of the agent that spawned this one, if any.",
-  subagents: "How many child agents this one has spawned.",
-  "session total": "Total tokens used across this whole session so far.",
-  "context window": "The model's maximum context size — how much it can hold at once.",
-  "model policy": "Whether the running model matches the model this lane is supposed to use.",
+  context: "How big the latest model call is against the model's context window.",
+  // Evidence
+  "session cwd": "The folder on disk the provider session reports as its working directory.",
+  "terminal folder": CWD_MISMATCH_HINT,
+  "session id": "The provider's own ID for this session, prefixed by the provider name.",
   git: "The branch and commit the agent's working copy is on; flags uncommitted changes.",
-  tests: "The latest test-run result this agent reported.",
-  checks: "Named pre-ship gates this agent must pass — e.g. typecheck or lint.",
-  "control link": "Which cmux workspace/pane this session is wired to for Focus and Send, and how confidently it was matched.",
-  "available controls": "Which operator actions are turned on for this agent, and why any are off.",
+  "control link": "Which cmux terminal this session is wired to for Focus and Send, and how confidently it was matched.",
+  "latest call": LATEST_CALL_HINT,
+  "session total": SESSION_TOTAL_HINT,
+  "Ready · linked": READY_LINKED_HINT,
 };
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -305,8 +330,13 @@ const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id });
 const agentLabelEligible = (agent) => Boolean(agent && agent.parentAgentId && !agent.nickname);
 
 function agentName(agent) {
-  const label = agent && state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
-  return label && agentLabelEligible(agent) ? label : sourceAgentName(agent);
+  if (!agent) return "";
+  const label = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
+  if (label && agentLabelEligible(agent)) return label;
+  // Prefer the cmux terminal title only when session cwd agrees with the pane.
+  const terminal = terminalSourceName(agent);
+  if (terminal && !agent.target?.cwdMismatch) return terminal;
+  return sourceAgentName(agent);
 }
 
 /* Presentation-only labels. Source identities stay stable; the label is a
@@ -950,7 +980,7 @@ const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  inspectorTab: "overview", // overview | technical
+  inspectorTab: "operate", // operate | chat | evidence
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // `${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -2519,12 +2549,21 @@ function renderAgentRow(agent, program, opts = {}) {
   const checked = state.selection.has(agent.id);
   const hasLabel = agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   const sourceName = sourceAgentName(agent);
+  const terminal = terminalSourceName(agent);
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
 
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
     el("span", { class: "agent-name", text: agentName(agent) }),
     el("span", { class: "row-identity-tags" },
       hasLabel ? el("span", { class: "source-label", title: "Source-backed agent label", text: "source: " + sourceName }) : null,
+      cwdMismatch && terminal
+        ? el("span", {
+            class: "source-label cwd-mismatch",
+            title: "This agent session cwd differs from the cmux pane folder. Title is the terminal; identity stays the session.",
+            text: "terminal: " + terminal + " · cwd differs",
+          })
+        : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
@@ -3037,9 +3076,18 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
+  const terminal = terminalSourceName(agent);
+  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   pane.append(el("div", { class: "inspector-head" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
+      cwdMismatch && terminal
+        ? el("p", {
+            class: "inspector-source-name cwd-mismatch",
+            title: "Linked pane folder differs from the agent session cwd.",
+            text: "terminal: " + terminal + " · cwd differs",
+          })
+        : null,
       agentLabelEligible(agent) && state.aliases.has(presentationLabelKey(agentLabelTarget(agent)))
         ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
         : null,
@@ -3054,7 +3102,6 @@ function renderAgentDrawer(pane, view) {
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
 
-  pane.append(renderPresentationLabels(agent));
   pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
@@ -3062,19 +3109,27 @@ function renderAgentDrawer(pane, view) {
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
-  pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
-    inspectorTabButton("overview", "Overview"),
-    inspectorTabButton("technical", "Technical")));
+  // Home instrument band — keep above the Take A tabs.
+  pane.append(renderVitals(agent));
 
-  // Both panels always render. In the narrow drawer CSS shows only the active
-  // tab; once the drawer is wide enough the tabs hide and both sit side-by-side
-  // (Option 2 — use the horizontal room instead of forcing a tab dance).
-  const overviewPanel = renderOverview(agent, program);
-  overviewPanel.dataset.tab = "overview";
-  const technicalPanel = renderTechnical(agent);
-  technicalPanel.dataset.tab = "technical";
-  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: state.inspectorTab } },
-    overviewPanel, technicalPanel));
+  const tab = ["operate", "chat", "evidence"].includes(state.inspectorTab)
+    ? state.inspectorTab
+    : "operate";
+  if (tab !== state.inspectorTab) state.inspectorTab = tab;
+
+  pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
+    inspectorTabButton("operate", "Operate"),
+    inspectorTabButton("chat", "Chat"),
+    inspectorTabButton("evidence", "Evidence")));
+
+  const operatePanel = renderOperate(agent, program);
+  operatePanel.dataset.tab = "operate";
+  const chatPanel = renderChat(agent);
+  chatPanel.dataset.tab = "chat";
+  const evidencePanel = renderEvidence(agent);
+  evidencePanel.dataset.tab = "evidence";
+  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: tab } },
+    operatePanel, chatPanel, evidencePanel));
 
   pane.append(renderCommandDock(agent, control));
 
@@ -3147,7 +3202,7 @@ function renderControlBanner(agent, control) {
       el("button", {
         type: "button",
         class: "control-banner-link",
-        onclick: () => { state.inspectorTab = "technical"; render(); },
+        onclick: () => { state.inspectorTab = "evidence"; render(); },
       }, "See routing evidence →")));
 }
 
@@ -3318,21 +3373,22 @@ function renderPrimaryActions(agent) {
 }
 
 function sourceWorkspaceLabel(target) {
-  return target.workspaceTitle || "cmux workspace " + target.workspaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal workspace";
 }
 
 function sourceRoomLabel(target) {
-  return "cmux room " + target.surfaceId;
+  return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal";
 }
 
-function renderPresentationLabels(agent) {
+function presentationLabelTargets(agent) {
   const targets = [];
   if (agent.target && agent.target.workspaceId) {
+    const terminal = terminalSourceName(agent) || sourceWorkspaceLabel(agent.target);
     targets.push({
       target: workspaceLabelTarget(agent.target.workspaceId),
       kind: "workspace",
-      source: sourceWorkspaceLabel(agent.target),
-      sourceEvidence: "Source workspace: " + sourceWorkspaceLabel(agent.target) + " · id stays " + agent.target.workspaceId,
+      source: terminal.startsWith("terminal:") ? terminal : "terminal: " + terminal,
+      sourceEvidence: "Terminal / workspace: " + terminal + " · id stays " + agent.target.workspaceId,
     });
   }
   if (agent.target && agent.target.surfaceId) {
@@ -3340,7 +3396,7 @@ function renderPresentationLabels(agent) {
       target: roomLabelTarget(agent.target.surfaceId),
       kind: "room",
       source: sourceRoomLabel(agent.target),
-      sourceEvidence: "Source room surface id stays " + agent.target.surfaceId,
+      sourceEvidence: "Terminal surface id stays " + agent.target.surfaceId,
     });
   }
   if (agentLabelEligible(agent)) {
@@ -3351,12 +3407,22 @@ function renderPresentationLabels(agent) {
       sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
     });
   }
-  if (!targets.length) return el("span", { hidden: "" });
+  return targets;
+}
 
-  const wrap = el("div", { class: "presentation-labels" },
-    el("h3", { class: "section-title", text: "Presentation labels" }));
-  if (state.labelsLoading) wrap.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
-  if (state.labelLoadError) wrap.append(el("p", { class: "label-status err", role: "status", text: "Saved labels unavailable: " + state.labelLoadError }));
+/* Names (presentation labels) stay collapsed — rare rename UI, not chrome. */
+function renderNamesDisclosure(agent) {
+  const targets = presentationLabelTargets(agent);
+  if (!targets.length && !state.labelsLoading && !state.labelLoadError) return null;
+
+  const body = el("div", { class: "presentation-labels" });
+  if (state.labelsLoading) body.append(el("p", { class: "label-status", text: "Loading saved labels…" }));
+  if (state.labelLoadError) {
+    body.append(el("p", {
+      class: "label-status err", role: "status",
+      text: "Saved labels unavailable: " + state.labelLoadError,
+    }));
+  }
   for (const item of targets) {
     const key = presentationLabelKey(item.target);
     const label = state.aliases.get(key);
@@ -3372,9 +3438,9 @@ function renderPresentationLabels(agent) {
         dataset: { fkey: "label-edit:" + key },
         onclick: () => startRename(item.target),
       }, actionText));
-    wrap.append(row);
+    body.append(row);
     if (editing) {
-      wrap.append(renderLabelForm(item.target, {
+      body.append(renderLabelForm(item.target, {
         inputKey: "label-input:" + key,
         placeholder: "Display label for this " + item.kind,
         ariaLabel: "New display label for " + item.kind,
@@ -3382,12 +3448,27 @@ function renderPresentationLabels(agent) {
       }));
     }
   }
-  return wrap;
+
+  const editingHere = targets.some((item) => state.renaming === presentationLabelKey(item.target));
+  return el("details", {
+    class: "names-disclosure",
+    // Stay open while a rename form is live so re-render does not tuck it away.
+    open: editingHere || state.labelsLoading || state.labelLoadError ? "" : null,
+  },
+    el("summary", { text: "Names" }),
+    body);
 }
 
-/* ---------- inspector: overview ---------- */
+/* Kept as a thin alias so source-level rename contracts still resolve. */
+function renderPresentationLabels(agent) {
+  return renderNamesDisclosure(agent) || el("span", { hidden: "" });
+}
+
+/* ---------- inspector: Operate · Chat · Evidence ---------- */
 
 function dtdd(grid, label, value, opts = {}) {
+  // Take A hard rule: if a value isn’t there, the field isn’t rendered.
+  if (value == null || value === "") return;
   const hint = opts.hint ?? GLOSSARY[label];
   grid.append(hint
     ? el("dt", {}, el("span", {
@@ -3396,60 +3477,133 @@ function dtdd(grid, label, value, opts = {}) {
       }))
     : el("dt", { text: label }));
   const dd = el("dd", {});
-  if (value == null || value === "") {
-    dd.append(el("span", { class: "absent", text: opts.absent || "not reported" }));
-  } else if (value.nodeType) {
-    dd.append(value);
-  } else {
-    dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
-  }
+  if (value.nodeType) dd.append(value);
+  else dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
   grid.append(dd);
 }
 
-function renderOverview(agent, program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const grid = el("dl", { class: "detail-grid" });
-  const outcome = deriveOutcome(agent);
+function normalizeCompareText(value) {
+  return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
 
-  if (typeof agent.lastHumanMessage === "string" && agent.lastHumanMessage.trim()) {
+function taskMeaningfullyDifferent(agent) {
+  const task = typeof agent?.task === "string" ? agent.task.trim() : "";
+  if (!task) return false;
+  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (!message) return true;
+  const a = normalizeCompareText(task);
+  const b = normalizeCompareText(message);
+  if (!a || a === b) return false;
+  if (a.length >= 12 && b.includes(a)) return false;
+  if (b.length >= 12 && a.includes(b)) return false;
+  return true;
+}
+
+function transcriptArtifact(agent) {
+  return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
+}
+
+function renderOperateMeta(agent) {
+  const items = [];
+  if (agent.role && agent.role !== "agent") {
+    items.push({
+      label: "role",
+      hint: GLOSSARY.role,
+      node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
+    });
+  }
+  if (agent.model) {
+    items.push({
+      label: "model",
+      hint: GLOSSARY.model,
+      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
+    });
+  }
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
+  if (elapsed && elapsed !== "—") {
+    items.push({
+      label: "running for",
+      hint: GLOSSARY["running for"],
+      node: el("span", {
+        class: "mono",
+        dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
+        text: elapsed,
+      }),
+    });
+  } else if (agent.updatedAt) {
+    items.push({
+      label: "last update",
+      hint: GLOSSARY["last update"],
+      node: el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }),
+    });
+  }
+  const tok = tokenSummary(agent.tokens);
+  if (tok.known) {
+    items.push({
+      label: tok.label,
+      hint: tok.label === "latest call" ? LATEST_CALL_HINT : TOKENS_HINT,
+      node: el("span", { title: tok.title, class: "mono", text: tok.text }),
+    });
+  }
+  const ctx = contextUsage(agent.tokens);
+  if (ctx) {
+    items.push({
+      label: "context",
+      hint: GLOSSARY.context,
+      node: el("span", { class: "mono", text: ctx.text }),
+    });
+  }
+  if (!items.length) return null;
+
+  const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
+  for (const item of items) {
+    row.append(el("span", { class: "operate-meta-item" },
+      el("span", {
+        class: "operate-meta-label term-hint",
+        tabindex: "0",
+        title: item.hint || null,
+        "aria-label": item.hint ? `${item.label}: ${item.hint}` : item.label,
+        text: item.label,
+      }),
+      item.node));
+  }
+  return row;
+}
+
+function renderOperate(agent, _program) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  if (message) {
     panel.append(
       el("h3", { class: "section-title", text: "Last human message" }),
       el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
   }
 
-  dtdd(grid, "task", agent.task);
-  if (outcome !== "healthy") {
-    dtdd(grid, OUTCOME_LABELS[outcome].toLowerCase(), agent.statusReason);
+  if (taskMeaningfullyDifferent(agent)) {
+    panel.append(
+      el("h3", { class: "section-title", text: "Task" }),
+      el("p", { class: "operate-task", text: agent.task.trim() }));
   }
-  dtdd(grid, "last update", el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }));
-  dtdd(grid, "running for", el("span", {
-    class: "mono",
-    dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
-    text: liveElapsedText(agent, state.snap && state.snap.generatedAt),
-  }));
-  dtdd(grid, "role", agent.role && agent.role !== "agent" ? agent.role : null, { absent: "general agent" });
 
-  const tok = tokenSummary(agent.tokens);
-  dtdd(grid, tok.label, el("span", { title: tok.title, class: tok.known ? "mono" : "absent", text: tok.text }), { hint: TOKENS_HINT });
-  const ctx = contextUsage(agent.tokens);
-  if (ctx) {
-    dtdd(grid, "context", el("span", {
-      class: "mono",
-      title: "Latest call size against the model's context window.",
-      text: ctx.text,
+  const outcome = deriveOutcome(agent);
+  if (outcome !== "healthy" && agent.statusReason) {
+    panel.append(el("p", {
+      class: "operate-outcome-note outcome-" + outcome,
+      text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
     }));
   }
-  dtdd(grid, "cost", agent.cost
-    ? `${agent.cost.currency} ${Number(agent.cost.amount).toFixed(4)} · ${provenanceLabel(agent.cost.provenance)}${agent.cost.note ? " · " + agent.cost.note : ""}`
-    : null, { absent: "not reported" });
 
-  panel.append(grid);
+  const meta = renderOperateMeta(agent);
+  if (meta) panel.append(meta);
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
+  }
   return panel;
 }
 
 /* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
-   (P4), but it MUST stay defined immediately after renderOverview: a test
-   asserts the renderOverview…renderSwarmSection source adjacency. Do not
+   (P4), but it MUST stay defined immediately after renderOperate: a test
+   asserts the renderOperate…renderSwarmSection source adjacency. Do not
    reorder or delete it. */
 function renderSwarmSection(agent, program) {
   const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
@@ -3481,6 +3635,38 @@ function renderSwarmSection(agent, program) {
       agentName(child) + " — " + ACTIVITY_LABELS[act]));
   }
   return wrap;
+}
+
+function renderChatTurn(role, text) {
+  return el("div", { class: "chat-turn chat-turn--" + role },
+    el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
+    el("p", { class: "chat-turn-body", tabindex: "0", text }));
+}
+
+function renderChat(agent) {
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const user = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  const assistant = typeof agent.transcriptTail === "string" ? agent.transcriptTail.trim() : "";
+  if (user) panel.append(renderChatTurn("user", agent.lastHumanMessage));
+  if (assistant) panel.append(renderChatTurn("assistant", agent.transcriptTail));
+
+  const artifact = transcriptArtifact(agent);
+  if (artifact && artifact.path) {
+    panel.append(el("p", { class: "chat-transcript-link" },
+      el("span", { text: "Transcript: " }),
+      el("code", { text: artifact.path }),
+      " ",
+      el("button", {
+        type: "button", class: "btn sm",
+        dataset: { fkey: `copy-transcript:${agent.id}` },
+        onclick: () => copyText(artifact.path),
+      }, "Copy path")));
+  }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
+  }
+  return panel;
 }
 
 /* Lineage spine — the signature nesting element. Ancestors climb a single thin
@@ -3561,49 +3747,136 @@ function renderLineageSpine(agent) {
   return spine;
 }
 
-/* ---------- inspector: technical ---------- */
+/* ---------- vitals band (home instrument panel) ---------- */
 
-function renderTechnical(agent) {
+/* One instrument tile: label + figure, or a muted "not reported" face when the
+   source gives us nothing to show. Never a broken ring. */
+function vitalTile(label, figure) {
+  return el("div", { class: "vital" },
+    el("span", { class: "vital-label", text: label }),
+    figure || el("div", { class: "vital-absent", text: "not reported" }));
+}
+
+/* Vitals band — the 2–3 numbers an operator acts on, as instruments rather than
+   another run of grey key/value lines. Context pressure, cumulative spend + cache
+   efficiency, and uptime. Each tile degrades on missing data. */
+function renderVitals(agent) {
+  const t = agent.tokens || {};
+  const band = el("div", { class: "vitals" });
+
+  // Context pressure — a donut when we have an observed latest-turn window,
+  // otherwise fall back to the raw token parts so non-observed sources still
+  // surface a number instead of an empty tile.
+  const ctx = contextUsage(t);
+  let ctxLabel = "Context", ctxFigure = null;
+  if (ctx) {
+    ctxFigure = el("div", { class: "vital-ring-wrap" },
+      svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
+      el("div", { class: "vital-figure" },
+        el("div", { class: "vital-big mono" },
+          fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))));
+  } else {
+    const parts = [];
+    if (t.input != null) parts.push("in " + fmtTok(t.input));
+    if (t.output != null) parts.push("out " + fmtTok(t.output));
+    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
+    if (parts.length) {
+      ctxLabel = "Tokens";
+      ctxFigure = el("div", {},
+        el("div", { class: "vital-big mono", text: parts.shift().replace(/^in /, "") }),
+        parts.length ? el("div", { class: "vital-sub", text: parts.join(" · ") }) : null);
+    }
+  }
+  band.append(vitalTile(ctxLabel, ctxFigure));
+
+  // Session spend + cache-hit efficiency (computed, not raw).
+  const cacheHit = (t.cachedInput != null && t.input) ? Math.round((t.cachedInput / t.input) * 100) : null;
+  band.append(vitalTile("Session tokens", t.sessionTotal != null
+    ? el("div", {},
+        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
+        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
+        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)
+    : null));
+
+  // Uptime.
+  band.append(vitalTile("Uptime", agent.startedAt
+    ? el("div", {},
+        el("div", { class: "vital-big mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt).replace(/\s*ago$/, "") }),
+        agent.status ? el("div", { class: "vital-sub", text: agent.status }) : null)
+    : null));
+
+  return band;
+}
+
+/* ---------- inspector: Evidence ---------- */
+
+function copyIdButton(label, value, key) {
+  if (!value) return null;
+  return el("button", {
+    type: "button",
+    class: "btn sm evidence-copy-id",
+    title: value,
+    dataset: { fkey: key },
+    onclick: () => copyText(value),
+  }, "Copy " + label);
+}
+
+function controlLinkSentence(target) {
+  if (!target) return null;
+  const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
+  const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
+  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+    return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
+      + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  if (target.resolution === "ambiguous") {
+    return "Control routing is quarantined — identity evidence is ambiguous"
+      + (terminal ? " for " + terminal : "")
+      + ".";
+  }
+  return "No safe control link"
+    + (terminal ? " for " + terminal : "")
+    + (resolution ? " · " + resolution : "")
+    + ".";
+}
+
+function renderControlLink(target) {
+  if (!target) return null;
+  const wrap = el("div", { class: "evidence-control-link" });
+  const sentence = controlLinkSentence(target);
+  wrap.append(el("p", {
+    class: "evidence-control-sentence",
+    title: target.cwdMismatch ? CWD_MISMATCH_HINT : READY_LINKED_HINT,
+    text: sentence,
+  }));
+  const ids = el("div", { class: "evidence-ids" });
+  const buttons = [
+    copyIdButton("workspace", target.workspaceId, "copy-ws:" + (target.workspaceId || "")),
+    copyIdButton("surface", target.surfaceId, "copy-surface:" + (target.surfaceId || "")),
+    copyIdButton("pane", target.paneId, "copy-pane:" + (target.paneId || "")),
+  ].filter(Boolean);
+  for (const btn of buttons) ids.append(btn);
+  if (buttons.length) wrap.append(ids);
+  return wrap;
+}
+
+function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  panel.append(el("p", { class: "inspector-note tech-caption",
-    text: "The raw evidence behind the Overview — hover any underlined term for what it means." }));
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session id", `${agent.provider}:${agent.sourceSessionId}`, { code: true });
-  dtdd(grid, "working directory", agent.cwd, { code: true });
-  dtdd(grid, "status", `${agent.status} — ${agent.statusReason}`);
-  dtdd(grid, "model", agent.model);
-  dtdd(grid, "reasoning effort", agent.effort);
-  dtdd(grid, "started", agent.startedAt
-    ? el("span", { class: "mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt) })
-    : null);
-  dtdd(grid, "nesting level", agent.threadDepth != null ? String(agent.threadDepth) : null);
-  dtdd(grid, "orchestrator id", agent.parentAgentId, { code: true, absent: "none" });
-  dtdd(grid, "subagents", agent.subagentCount != null ? String(agent.subagentCount) : null);
-
-  const t = agent.tokens || { provenance: "unknown" };
-  const tokParts = [];
-  if (t.input != null) tokParts.push("in " + fmtTok(t.input));
-  if (t.output != null) tokParts.push("out " + fmtTok(t.output));
-  if (t.cachedInput != null) tokParts.push("cached " + fmtTok(t.cachedInput));
-  if (t.total != null) tokParts.push("total " + fmtTok(t.total));
-  const tokLabel = t.scope === "latest-turn" ? "latest call" : "tokens";
-  dtdd(grid, tokLabel, tokParts.length
-    ? el("span", { class: "mono" }, tokParts.join(" · ") + " · ", el("span", { class: "absent", text: provenanceLabel(t.provenance) }))
-    : el("span", { class: "absent", text: "none reported (" + provenanceLabel(t.provenance) + ")" }), { hint: TOKENS_HINT });
-  dtdd(grid, "session total", t.sessionTotal != null
-    ? el("span", { class: "mono", text: fmtTok(t.sessionTotal) + " tokens · cumulative this session" })
-    : null);
-  dtdd(grid, "context window", t.contextWindow != null
-    ? el("span", { class: "mono", text: fmtTok(t.contextWindow) + " tokens" })
-    : null);
-
-  const policy = modelPolicyView(agent);
-  dtdd(grid, "model policy", policy
-    ? el("span", { class: "policy-" + policy.state },
-        policy.label + (policy.expected ? " — expected " + policy.expected : ""),
-        el("span", { class: "absent", text: " · " + policy.summary }))
-    : null, { absent: "not evaluated" });
+  dtdd(grid, "session cwd", agent.cwd, { code: true });
+  const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
+  const surfaceCwd = agent.target && agent.target.surfaceCwd
+    ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
+    : "";
+  if (surfaceCwd && surfaceCwd !== sessionCwd) {
+    dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
+      code: true,
+      hint: CWD_MISMATCH_HINT,
+    });
+  }
 
   dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
     ? el("span", {},
@@ -3612,29 +3885,32 @@ function renderTechnical(agent) {
         agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
     : null);
 
-  dtdd(grid, "tests", agent.tests
-    ? el("span", { class: "tests-" + agent.tests.state },
-        agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : ""))
-    : null);
-
-  dtdd(grid, "checks", agent.gates && agent.gates.length
-    ? el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g })))
-    : el("span", { class: "absent", text: "none" }));
-
-  dtdd(grid, "control link", renderTarget(agent.target));
-
-  const routing = el("ul", { class: "routing-list" });
-  for (const cap of agent.controls || []) {
-    routing.append(el("li", {},
-      el("span", { class: "mono", text: cap.action }),
-      " — ",
-      cap.enabled
-        ? el("span", { class: "ok", text: "enabled" })
-        : el("span", { class: "absent", text: "disabled: " + (cap.reason || "no reason reported") })));
+  const t = agent.tokens || {};
+  if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
+    const parts = [];
+    if (t.input != null) parts.push("in " + fmtTok(t.input));
+    if (t.output != null) parts.push("out " + fmtTok(t.output));
+    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
+    if (t.total != null) parts.push("total " + fmtTok(t.total));
+    dtdd(grid, "latest call", el("span", {
+      class: "mono",
+      text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
+    }), { hint: LATEST_CALL_HINT });
   }
-  dtdd(grid, "available controls", routing);
+  if (t.sessionTotal != null) {
+    dtdd(grid, "session total", el("span", {
+      class: "mono",
+      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
+    }), { hint: SESSION_TOTAL_HINT });
+  }
 
-  panel.append(grid);
+  const link = renderControlLink(agent.target);
+  if (link) dtdd(grid, "control link", link);
+
+  if (grid.childNodes.length) panel.append(grid);
+
+  const names = renderNamesDisclosure(agent);
+  if (names) panel.append(names);
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
@@ -3645,7 +3921,7 @@ function renderTechnical(agent) {
           el("span", { text: a.label }),
           el("span", { class: "artifact-path", text: a.path }),
           el("button", {
-            type: "button", class: "btn",
+            type: "button", class: "btn sm",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
           }, "Copy path")))));
@@ -3656,22 +3932,20 @@ function renderTechnical(agent) {
       el("h3", { class: "section-title", text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
+
+  if (!panel.childNodes.length) {
+    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+  }
   return panel;
 }
 
+/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
+function renderTechnical(agent) {
+  return renderEvidence(agent);
+}
+
 function renderTarget(target) {
-  if (!target) return null;
-  const wrap = el("span", {},
-    el("span", { class: "target-chip target-" + target.resolution, text: RESOLUTION_LABELS[target.resolution] || target.resolution }));
-  const ids = [
-    target.workspaceId && "ws " + target.workspaceId,
-    target.surfaceId && "surface " + target.surfaceId,
-    target.paneId && "pane " + target.paneId,
-  ].filter(Boolean);
-  if (ids.length) wrap.append(" ", el("code", { text: ids.join(" · ") }));
-  if (target.workspaceTitle) wrap.append(" ", el("span", { class: "source-label", text: "· source title: " + target.workspaceTitle }));
-  if (target.reason) wrap.append(" ", el("span", { class: "absent", text: "— " + target.reason }));
-  return wrap;
+  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */

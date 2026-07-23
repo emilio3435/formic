@@ -7,10 +7,40 @@ A local-first, light-mode command center for direct Codex, Claude, and Cursor Ag
 ```bash
 bun install
 bun run check
-bun run start
+bun run setup:cmux   # once per machine — password mode so AH can talk to cmux outside a pane
+bun start            # auto: reuse if up → prefer cmux workspace → else this shell + password
 ```
 
-Open <http://127.0.0.1:4701>. Override the port with `MOUNTAIN_PORT` when needed; the server always binds to loopback.
+One room: <http://127.0.0.1:4701>. Override with `MOUNTAIN_PORT` only when you mean to. The LaunchAgent and `bun run hygiene` also pin this repo to :4701.
+
+## Operator loop
+
+One control room. Orch still edits in lane folders; you operate from home.
+
+| Job | Meaning | Automated by |
+|---|---|---|
+| **Stay up** | UI from main `the-mountain` on :4701 | `bun start` + LaunchAgent + `bun run hygiene` |
+| **Talk to cmux** | Focus/Send/titles work outside a cmux pane | `bun run setup:cmux` → `data/cmux-socket.env` |
+| **Readable History** | Lanes under products, not a sea of `hd-*` | `config/programs.json` |
+| **Honest names** | Session identity ≠ pane title when folders disagree | `cwdMismatch` → “cwd differs” |
+
+**Daily:**
+
+1. From home: `bun start` → <http://127.0.0.1:4701>
+2. Swarm in one repo freely — grouping is fine.
+3. Drive agents via cmux (session stamp). Password mode covers external shells.
+4. Weird UI / wrong tree / dead port:
+
+```bash
+bun run hygiene
+```
+
+**Sticky rules:**
+
+- Same folder → OK for grouping.
+- Linked + **cwd≠** → Focus can work; name stays session/home, terminal title shown separately.
+- Same folder + no cmux stamp → View only (safe).
+- Wrong LaunchAgent / old lane on :4701 → `bun run hygiene`.
 
 ## Safety model
 
@@ -47,4 +77,4 @@ The staged implementation plan for model share, usage trends, request/response d
 
 The direct, coordinated, and investigation flow—including explicit read-only Luna launch and persisted run states—is in [TRIAGE-WORKFLOW.md](./TRIAGE-WORKFLOW.md).
 
-The live v2 launch agent, port 4700, and files under `~/mountain` remain unchanged. The local v3 process on port 4701 was refreshed to this build; no commit, push, external deployment, launchd edit, or port-4700 cutover was performed.
+The live v2 launch agent, port 4700, and files under `~/mountain` remain unchanged. Ant Hill v3 on port 4701 is kept alive by LaunchAgent `ai.imaginethat.anthill` with WorkingDirectory pinned to this repo; use `bun run hygiene` to verify or repair that wiring.

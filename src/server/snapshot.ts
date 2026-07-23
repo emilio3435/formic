@@ -592,7 +592,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       source,
       input.programHints ?? [],
       surface,
-      target.resolution === "exact",
+      // Exact link with a cwd mismatch must not borrow the pane's project for grouping.
+      target.resolution === "exact" && !target.cwdMismatch,
     );
     const notificationSummary = notification
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)

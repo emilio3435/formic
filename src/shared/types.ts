@@ -38,6 +38,10 @@ export interface CmuxTarget {
   workspaceTitle?: string;
   surfaceId?: string;
   paneId?: string;
+  /** Pane/terminal folder when known (may differ from the agent session cwd). */
+  surfaceCwd?: string;
+  /** True when linked pane cwd disagrees with the agent session cwd. */
+  cwdMismatch?: boolean;
   resolution: TargetResolution;
   reason?: string;
 }

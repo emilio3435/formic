@@ -2,12 +2,14 @@ import { join } from "node:path";
 import { JsonArchiveStore } from "./archive";
 import { createMountainFetch } from "./app";
 import { BunCommandRunner } from "./command";
+import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
 const PROJECT_ROOT = join(import.meta.dir, "../..");
+loadCmuxSocketEnv(PROJECT_ROOT);
 const HOSTNAME = "127.0.0.1";
 const configuredPort = Number(process.env.MOUNTAIN_PORT ?? 4_701);
 if (!Number.isInteger(configuredPort) || configuredPort < 1 || configuredPort > 65_535) {
@@ -65,3 +67,10 @@ process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
 
 console.log(`The Ant Hill: http://${HOSTNAME}:${server.port}`);
+if (runningInsideCmux()) {
+  console.log("cmux: running inside a cmux surface");
+} else if (process.env.CMUX_SOCKET_PASSWORD?.trim()) {
+  console.log("cmux: password mode (outside cmux)");
+} else {
+  console.log("cmux: no socket password — run `bun run setup:cmux` if Focus/Send stay degraded outside cmux");
+}

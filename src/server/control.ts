@@ -4,6 +4,7 @@ import type {
   ControlRequest,
   ControlResponse,
 } from "../shared/types";
+import { cmuxCommand } from "./cmux-auth";
 import { DEFAULT_CMUX_EXECUTABLE } from "./cmux";
 import type { ArchiveStore, CommandResult, CommandRunner } from "./types";
 
@@ -61,7 +62,7 @@ export async function runCommand(
 }
 
 function cmuxRpc(executable: string, method: string, payload: Record<string, string>): string[] {
-  return [executable, "rpc", method, JSON.stringify(payload)];
+  return cmuxCommand(executable, ["rpc", method, JSON.stringify(payload)]);
 }
 
 export async function executeControl(

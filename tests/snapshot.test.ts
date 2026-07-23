@@ -207,9 +207,68 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const agent = snapshot.programs[0]?.agents[0];
 
-    expect(snapshot.programs[0]?.name).toBe("Hormiga");
+    // Pane title/folder must not steal program grouping when cwd disagrees.
+    expect(snapshot.programs[0]?.name).toBe("Home / Unassigned");
     expect(agent?.cwd).toBe("/Users/emilionunezgarcia");
     expect(agent?.target.resolution).toBe("exact");
+    expect(agent?.target.cwdMismatch).toBe(true);
+    expect(agent?.target.surfaceCwd).toBe("/Users/emilionunezgarcia/Developer/LaHormigaDormida");
+  });
+
+  test("worktree and SEM/inbox needles regroup orphan cwd programs without rewriting source truth", async () => {
+    const { loadProgramHints } = await import("../src/server/state");
+    const { join } = await import("node:path");
+    const hints = await loadProgramHints(join(import.meta.dir, "..", "config", "programs.json"));
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          id: "omp:inbox-wt",
+          provider: "omp",
+          sourceSessionId: "inbox-wt",
+          status: "archived",
+          cwd: "/Users/emilionunezgarcia/Developer/.worktrees/hd-inbox-v2-explorer-20260722",
+          displayName: "OMP · hd-inbox-v2-explorer-20260722",
+        }),
+        collected({
+          id: "omp:sem-wt",
+          provider: "omp",
+          sourceSessionId: "sem-wt",
+          status: "archived",
+          cwd: "/Users/emilionunezgarcia/Developer/.worktrees/hd-sem-builder-rsa-review-a-815dcc-20260722",
+          displayName: "OMP · hd-sem-builder-rsa-review-a-815dcc-20260722",
+        }),
+        collected({
+          id: "omp:other-hd",
+          provider: "omp",
+          sourceSessionId: "other-hd",
+          status: "archived",
+          cwd: "/Users/emilionunezgarcia/Developer/.worktrees/hd-router-fix",
+          displayName: "OMP · hd-router-fix",
+        }),
+      ],
+      surfaces: [],
+      programHints: hints,
+      archiveStore,
+      now: new Date("2026-07-22T20:00:00.000Z"),
+    });
+
+    expect(snapshot.programs.map(({ name }) => name).sort()).toEqual([
+      "Hormiga",
+      "Hormiga · Inbox",
+      "Hormiga · SEM",
+    ]);
+    expect(snapshot.programs.find(({ id }) => id === "hd-inbox")?.agents.map(({ id }) => id)).toEqual([
+      "omp:inbox-wt",
+    ]);
+    expect(snapshot.programs.find(({ id }) => id === "hd-sem")?.agents.map(({ id }) => id)).toEqual([
+      "omp:sem-wt",
+    ]);
+    expect(snapshot.programs.find(({ id }) => id === "hormiga")?.agents.map(({ id }) => id)).toEqual([
+      "omp:other-hd",
+    ]);
+    expect(snapshot.programs.find(({ id }) => id === "hd-inbox")?.agents[0]?.cwd).toContain(
+      ".worktrees/hd-inbox-v2-explorer",
+    );
   });
 
   test("a configured HD task hint groups a home-cwd source while unrelated home work stays unassigned", () => {

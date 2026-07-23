@@ -1,3 +1,4 @@
+import { cmuxCommand } from "./cmux-auth";
 import type { CmuxNotification, CollectionResult, CmuxSurface, CommandRunner } from "./types";
 
 export const DEFAULT_CMUX_EXECUTABLE =
@@ -47,7 +48,7 @@ export async function collectCmux(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxSurface[]>> {
-  const result = await runner.run([executable, "rpc", "debug.terminals", "{}"], 10_000);
+  const result = await runner.run(cmuxCommand(executable, ["rpc", "debug.terminals", "{}"]), 10_000);
   if (result.timedOut) return { value: [], errors: ["cmux terminal discovery timed out"] };
   if (result.exitCode !== 0) {
     return {
@@ -92,7 +93,7 @@ export async function collectCmuxNotifications(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxNotification[]>> {
-  const result = await runner.run([executable, "list-notifications", "--json"], 10_000);
+  const result = await runner.run(cmuxCommand(executable, ["list-notifications", "--json"]), 10_000);
   if (result.timedOut) return { value: [], errors: ["cmux notification discovery timed out"] };
   if (result.exitCode !== 0) {
     return {

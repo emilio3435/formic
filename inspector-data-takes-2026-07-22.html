@@ -1,0 +1,351 @@
+<title>Ant Hill · Inspector Data — 3 Takes</title>
+<style>
+  :root {
+    --canvas: #f3f5f7; --surface: #fbfcfd; --raise: #ffffff; --sand: #e8edf2;
+    --ink: #121820; --muted: #445260; --faint: #5a6876;
+    --line: #d4dce4; --line-strong: #aeb9c4;
+    --ember: #c23b2e; --amber: #9a6b12; --moss: #1f6b4a; --slate: #3f5f78; --clay: #64707c;
+    --claude: #a64b2a; --codex: #2e6d58;
+    --ember-soft: color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --moss-soft:  color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --amber-soft: color-mix(in srgb, var(--amber) 11%, var(--surface));
+    --slate-soft: color-mix(in srgb, var(--slate) 12%, var(--surface));
+
+    --doc-bg: #e7ebf0; --doc-ink: #16202b; --doc-muted: #4a5a6b; --doc-line: #cbd4de; --doc-card: #fff;
+
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    --radius: 8px; --radius-sm: 5px;
+    --shadow-soft: 0 1px 2px rgba(18,24,32,0.06), 0 8px 24px rgba(18,24,32,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#10151b; --surface:#141b23; --raise:#171f28; --sand:#1d2731;
+      --ink:#eef2f6; --muted:#9fb0c0; --faint:#7e8fa0; --line:#2a343f; --line-strong:#3a4855;
+      --ember-soft: color-mix(in srgb, var(--ember) 24%, var(--surface));
+      --moss-soft:  color-mix(in srgb, var(--moss) 24%, var(--surface));
+      --amber-soft: color-mix(in srgb, var(--amber) 24%, var(--surface));
+      --slate-soft: color-mix(in srgb, var(--slate) 26%, var(--surface));
+      --doc-bg:#0b0f14; --doc-ink:#e9eef3; --doc-muted:#93a3b3; --doc-line:#232d38; --doc-card:#141b23;
+      --shadow-soft: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"]{ --canvas:#f3f5f7;--surface:#fbfcfd;--raise:#fff;--sand:#e8edf2;--ink:#121820;--muted:#445260;--faint:#5a6876;--line:#d4dce4;--line-strong:#aeb9c4;--ember-soft:color-mix(in srgb,var(--ember) 9%,var(--surface));--moss-soft:color-mix(in srgb,var(--moss) 10%,var(--surface));--amber-soft:color-mix(in srgb,var(--amber) 11%,var(--surface));--slate-soft:color-mix(in srgb,var(--slate) 12%,var(--surface));--doc-bg:#e7ebf0;--doc-ink:#16202b;--doc-muted:#4a5a6b;--doc-line:#cbd4de;--doc-card:#fff;--shadow-soft:0 1px 2px rgba(18,24,32,.06),0 8px 24px rgba(18,24,32,.06);}
+  :root[data-theme="dark"]{ --canvas:#10151b;--surface:#141b23;--raise:#171f28;--sand:#1d2731;--ink:#eef2f6;--muted:#9fb0c0;--faint:#7e8fa0;--line:#2a343f;--line-strong:#3a4855;--ember-soft:color-mix(in srgb,var(--ember) 24%,var(--surface));--moss-soft:color-mix(in srgb,var(--moss) 24%,var(--surface));--amber-soft:color-mix(in srgb,var(--amber) 24%,var(--surface));--slate-soft:color-mix(in srgb,var(--slate) 26%,var(--surface));--doc-bg:#0b0f14;--doc-ink:#e9eef3;--doc-muted:#93a3b3;--doc-line:#232d38;--doc-card:#141b23;--shadow-soft:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.45);}
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--doc-bg); color:var(--doc-ink); font-family:var(--font-ui); line-height:1.5; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width: 1140px; margin:0 auto; padding: 3rem 1.5rem 5rem; }
+  .eyebrow { font-family:var(--font-mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--doc-muted); margin:0 0 .9rem; }
+  h1 { font-size: clamp(1.8rem,3.6vw,2.6rem); line-height:1.05; margin:0 0 .55rem; font-weight:680; letter-spacing:-.02em; text-wrap:balance; max-width:22ch; }
+  .lede { max-width:66ch; font-size:1.04rem; color:var(--doc-muted); margin:.3rem 0 0; }
+  .lede strong { color:var(--doc-ink); font-weight:620; }
+
+  /* principles strip */
+  .principles { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:.7rem; margin-top:2rem; }
+  .prin { background:var(--doc-card); border:1px solid var(--doc-line); border-radius:8px; padding:.75rem .85rem; }
+  .prin b { display:block; font-size:.9rem; margin-bottom:.15rem; }
+  .prin span { font-size:.82rem; color:var(--doc-muted); }
+  .prin .k { font-family:var(--font-mono); font-size:10px; color:var(--codex); letter-spacing:.04em; text-transform:uppercase; }
+
+  section { margin-top: 3.2rem; }
+  .take-head { display:flex; align-items:baseline; gap:.8rem; margin-bottom:.25rem; }
+  .take-tag { font-family:var(--font-mono); font-size:12px; font-weight:700; letter-spacing:.05em; color:var(--codex); }
+  h2 { font-size:1.3rem; margin:0; font-weight:640; letter-spacing:-.01em; }
+  .thesis { color:var(--doc-muted); max-width:70ch; margin:.15rem 0 .2rem; font-size:.98rem; }
+  .pc { display:flex; gap:1.2rem; flex-wrap:wrap; font-size:.85rem; margin:.5rem 0 1rem; }
+  .pc .good::before { content:"+ "; color:var(--moss); font-weight:700; }
+  .pc .bad::before  { content:"− "; color:var(--ember); font-weight:700; }
+  .pc span { color:var(--doc-muted); }
+
+  /* ---------------- shared inspector shell ---------------- */
+  .insp {
+    width:100%; max-width:660px; background:var(--surface);
+    border:1px solid var(--line-strong); border-left:3px solid var(--codex);
+    border-radius:var(--radius); padding:1.05rem 1.1rem 1.15rem; box-shadow:var(--shadow-soft);
+  }
+  .insp-title { font-size:1.06rem; font-weight:620; line-height:1.2; margin:0 0 .25rem; letter-spacing:-.01em; color:var(--ink); }
+  .insp-sub { font-family:var(--font-mono); font-size:11px; color:var(--muted); margin:0 0 .6rem; }
+  .pill-row { display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.7rem; }
+  .pill { font-size:11px; font-weight:600; padding:.16rem .5rem; border-radius:999px; display:inline-flex; align-items:center; gap:.3rem; }
+  .pill::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .pill.ok   { color:var(--moss);  background:var(--moss-soft); }
+  .pill.warn { color:var(--ember); background:var(--ember-soft); }
+  .pill.idle { color:var(--slate); background:var(--slate-soft); }
+  .pill.flat::before { display:none; }
+  .pill.flat { background:var(--sand); color:var(--muted); font-family:var(--font-mono); font-weight:500; font-size:10.5px; }
+
+  .banner { background:var(--ember-soft); border:1px solid color-mix(in srgb,var(--ember) 28%,transparent); border-radius:6px; padding:.5rem .6rem; font-size:11.5px; color:var(--ember); margin-bottom:.85rem; display:flex; gap:.45rem; }
+  .banner b { font-weight:640; }
+
+  /* helpers shared across takes */
+  .lbl { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); }
+  .val { font-family:var(--font-mono); font-size:11.5px; color:var(--ink); font-variant-numeric:tabular-nums; }
+  .val.mut { color:var(--faint); font-style:normal; }         /* not-reported / none */
+  .id { font-family:var(--font-mono); font-size:11px; color:var(--ink); }
+  .copy { color:var(--faint); cursor:default; margin-left:.25rem; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  /* mini bar */
+  .bar { position:relative; height:6px; border-radius:999px; background:var(--sand); overflow:hidden; }
+  .bar > i { position:absolute; inset:0 auto 0 0; border-radius:999px; background:var(--moss); }
+  .bar.warm > i { background:var(--amber); }
+
+  /* controls row (shared, replaces the repeated-reason word soup) */
+  .controls { margin-top:.9rem; border-top:1px solid var(--line); padding-top:.75rem; }
+  .controls .lbl { display:block; margin-bottom:.4rem; }
+  .ctl-btns { display:flex; gap:.4rem; flex-wrap:wrap; }
+  .ctl { font-size:11.5px; font-weight:600; padding:.32rem .6rem; border-radius:6px; border:1px solid var(--line-strong); background:var(--raise); color:var(--ink); }
+  .ctl[disabled] { opacity:.42; border-style:dashed; }
+  .ctl.armed { border-color:var(--moss); color:var(--moss); background:var(--moss-soft); }
+  .ctl-why { margin-top:.4rem; font-size:11px; color:var(--faint); }
+  .ctl-why code { color:var(--ember); }
+
+  /* ============ TAKE A — clustered spec cards ============ */
+  .take-a .cards { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; }
+  .card { background:var(--raise); border:1px solid var(--line); border-radius:7px; padding:.6rem .7rem; }
+  .card > .lbl { display:block; margin-bottom:.45rem; padding-bottom:.35rem; border-bottom:1px solid var(--line); color:var(--muted); }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:.28rem .7rem; align-items:baseline; }
+  .kv .lbl { align-self:baseline; }
+  .kv .val, .kv .id { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card.span2 { grid-column:1 / -1; }
+  .meter-row { display:flex; align-items:center; gap:.55rem; margin-top:.15rem; }
+  .meter-row .num { font-size:11px; white-space:nowrap; }
+
+  /* ============ TAKE B — instrument panel ============ */
+  .take-b .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:.55rem; margin-bottom:.8rem; }
+  .tile { background:var(--raise); border:1px solid var(--line); border-radius:7px; padding:.6rem .7rem; }
+  .tile .lbl { display:block; margin-bottom:.35rem; }
+  .tile .big { font-size:1.5rem; font-weight:640; letter-spacing:-.02em; line-height:1; font-variant-numeric:tabular-nums; color:var(--ink); }
+  .tile .big small { font-size:.72rem; font-weight:500; color:var(--faint); letter-spacing:0; }
+  .tile .sub { font-size:10.5px; color:var(--faint); margin-top:.3rem; font-family:var(--font-mono); }
+  .tile .bar { margin-top:.5rem; }
+  .ring-wrap { display:flex; align-items:center; gap:.55rem; }
+  .ring { --p:57; width:42px; height:42px; border-radius:50%; flex:none;
+          background:conic-gradient(var(--moss) calc(var(--p)*1%), var(--sand) 0);
+          display:grid; place-items:center; }
+  .ring::after { content:""; width:30px; height:30px; border-radius:50%; background:var(--raise); }
+  .ring b { position:absolute; font-size:10.5px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .ring-cell { position:relative; }
+  .take-b .ref { border-top:1px solid var(--line); padding-top:.6rem; }
+  .take-b .ref .lbl.hd { display:block; margin-bottom:.4rem; }
+  .take-b .ref-grid { display:grid; grid-template-columns:auto 1fr auto 1fr; gap:.25rem .8rem; align-items:baseline; }
+  .take-b .ref-grid .val, .take-b .ref-grid .id { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ============ TAKE C — chip header + ledger ============ */
+  .take-c .chipbar { display:flex; flex-wrap:wrap; gap:.35rem; padding-bottom:.7rem; margin-bottom:.4rem; border-bottom:1px solid var(--line); }
+  .ledger { display:grid; grid-template-columns:auto 1fr; }
+  .ledger .grp { grid-column:1 / -1; font-family:var(--font-mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--codex); margin:.6rem 0 .1rem; }
+  .ledger .grp:first-child { margin-top:0; }
+  .ledger .lrow { grid-column:1 / -1; display:grid; grid-template-columns:9.5rem 1fr; gap:.7rem; align-items:baseline; padding:.3rem 0; border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent); }
+  .ledger .lrow:hover { background:color-mix(in srgb,var(--sand) 40%,transparent); }
+  .ledger .lrow .val, .ledger .lrow .id { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .inline-bar { display:inline-grid; grid-template-columns:1fr auto; gap:.5rem; align-items:center; width:100%; }
+  .inline-bar .bar { width:70px; }
+
+  .foot { margin-top:3.4rem; padding-top:1.4rem; border-top:1px solid var(--doc-line); color:var(--doc-muted); font-size:.86rem; max-width:72ch; }
+  .path { font-family:var(--font-mono); font-size:11px; color:var(--codex); }
+  .rec { color:var(--moss); font-weight:700; }
+
+  @media (max-width:640px){
+    .take-a .cards { grid-template-columns:1fr; }
+    .take-b .tiles { grid-template-columns:1fr; }
+    .take-b .ref-grid { grid-template-columns:auto 1fr; }
+    .ledger .lrow { grid-template-columns:7.5rem 1fr; }
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Ant Hill · Inspector Information Design · 2026-07-22</p>
+  <h1>Turning the technical dump into packets</h1>
+  <p class="lede">The right panel is <strong>word soup</strong> because ~20 fields of different <em>types</em> — IDs, paths, enums, counts, timestamps, nulls — are all rendered as identical grey key/value lines, and the controls block repeats its one reason four times. Same five moves fix it; three takes below spend them differently. All render the real "Orchestrate a CMUX swarm" session.</p>
+
+  <div class="principles">
+    <div class="prin"><span class="k">move 01</span><b>Render by type</b><span>Numbers get tabular alignment + bars; IDs truncate with copy; nulls recede instead of shouting.</span></div>
+    <div class="prin"><span class="k">move 02</span><b>Group by meaning</b><span>Identity · Runtime · Consumption · Verification · Control — not one flat list.</span></div>
+    <div class="prin"><span class="k">move 03</span><b>Rank by attention</b><span>The 2–3 numbers you act on lead; reference facts you only look up recede.</span></div>
+    <div class="prin"><span class="k">move 04</span><b>Compute the insight</b><span>"in 142k · cached 140k" → <b>98% cached</b>. "142k / 250k" → a fill bar. Show the ratio, not the raw pair.</span></div>
+    <div class="prin"><span class="k">move 05</span><b>Say it once</b><span>Four controls, one shared reason line — not the quarantine sentence pasted four times.</span></div>
+  </div>
+
+  <!-- =================== TAKE A =================== -->
+  <section class="take-a">
+    <div class="take-head"><span class="take-tag">TAKE A</span><h2>Clustered spec cards</h2></div>
+    <p class="thesis">Chunk the flat list into labeled sub-cards. The eye lands on a section header first, then scans a tight micro-grid inside it. Most encyclopedic — everything stays visible, just organized.</p>
+    <div class="pc"><span class="good">Nothing hidden, fully scannable</span><span class="good">Clear spatial memory ("tokens live bottom-left")</span><span class="bad">Tallest of the three</span><span class="bad">Cards can feel boxy if data is sparse</span></div>
+
+    <div class="insp">
+      <p class="insp-title">Orchestrate a CMUX swarm that restores a mergeable master baseline</p>
+      <p class="insp-sub">Home / Unassigned · codex · /Users/emilionunezgarcia</p>
+      <div class="pill-row">
+        <span class="pill ok">Working</span><span class="pill ok">Healthy</span>
+        <span class="pill warn">Quarantined</span><span class="pill flat">gpt-5.6-sol</span><span class="pill flat">effort MAX</span>
+      </div>
+      <div class="banner"><b>⚠ Control routing locked.</b> Identity is ambiguous — conflicting open sessions on ttys082.</div>
+
+      <div class="cards">
+        <div class="card">
+          <span class="lbl">Identity</span>
+          <div class="kv">
+            <span class="lbl">Session</span><span class="id">019f88bc…9d5c <span class="copy">⧉</span></span>
+            <span class="lbl">Orchestrator</span><span class="val mut">none</span>
+            <span class="lbl">Nesting</span><span class="val mut">—</span>
+            <span class="lbl">Subagents</span><span class="val mut">—</span>
+          </div>
+        </div>
+        <div class="card">
+          <span class="lbl">Runtime</span>
+          <div class="kv">
+            <span class="lbl">Status</span><span class="val">running</span>
+            <span class="lbl">Started</span><span class="val">24.8h ago</span>
+            <span class="lbl">Model policy</span><span class="val mut">not evaluated</span>
+            <span class="lbl">Reasoning</span><span class="val">MAX</span>
+          </div>
+        </div>
+        <div class="card span2">
+          <span class="lbl">Consumption</span>
+          <div class="kv">
+            <span class="lbl">Context</span>
+            <span class="val"><span class="meter-row" style="justify-content:flex-end">
+              <span class="num">142k / 250k</span><span class="bar" style="width:120px"><i style="width:57%"></i></span>
+            </span></span>
+            <span class="lbl">Latest call</span><span class="val">142k tok · <b>98% cached</b></span>
+            <span class="lbl">Session total</span><span class="val">852.0M tok</span>
+          </div>
+        </div>
+        <div class="card span2">
+          <span class="lbl">Verification</span>
+          <div class="kv">
+            <span class="lbl">Tests</span><span class="val mut">not reported</span>
+            <span class="lbl">Checks</span><span class="val mut">none</span>
+            <span class="lbl">Attention</span><span class="val mut">not reported</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <span class="lbl">Controls</span>
+        <div class="ctl-btns">
+          <button class="ctl" disabled>Focus</button>
+          <button class="ctl" disabled>Instruct</button>
+          <button class="ctl" disabled>Interrupt</button>
+          <button class="ctl armed">Archive</button>
+        </div>
+        <p class="ctl-why">3 disabled — <code>cmux surface quarantined: conflicting identity on ttys082</code></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================== TAKE B =================== -->
+  <section class="take-b">
+    <div class="take-head"><span class="take-tag">TAKE B</span><h2>Instrument panel</h2></div>
+    <p class="thesis">Lead with the numbers that carry signal, as visual instruments — a context ring, a token counter, uptime. Everything else demotes to a quiet reference strip. Triage-first: answers "is this session healthy and how hot is it?" in one glance.</p>
+    <div class="pc"><span class="good">Fastest read of the live metrics</span><span class="good">Shortest — reference data collapses</span><span class="bad">Buries IDs/paths a tier down</span><span class="bad">Hero tiles need real numbers or they look empty</span></div>
+
+    <div class="insp">
+      <p class="insp-title">Orchestrate a CMUX swarm that restores a mergeable master baseline</p>
+      <p class="insp-sub">Home / Unassigned · codex</p>
+      <div class="pill-row">
+        <span class="pill ok">Working</span><span class="pill ok">Healthy</span>
+        <span class="pill warn">Quarantined</span><span class="pill flat">gpt-5.6-sol · MAX</span>
+      </div>
+      <div class="banner"><b>⚠ Control routing locked.</b> Identity is ambiguous — conflicting open sessions on ttys082.</div>
+
+      <div class="tiles">
+        <div class="tile">
+          <span class="lbl">Context window</span>
+          <div class="ring-wrap">
+            <span class="ring-cell"><span class="ring" style="--p:57"></span><b>57%</b></span>
+            <div><div class="big num">142k<small>/250k</small></div></div>
+          </div>
+        </div>
+        <div class="tile">
+          <span class="lbl">Session tokens</span>
+          <div class="big num">852<small>.0M</small></div>
+          <div class="sub">98% cache hit last call</div>
+          <div class="bar"><i style="width:98%"></i></div>
+        </div>
+        <div class="tile">
+          <span class="lbl">Uptime</span>
+          <div class="big num">24.8<small>h</small></div>
+          <div class="sub">active &lt; 3 min ago</div>
+        </div>
+      </div>
+
+      <div class="ref">
+        <span class="lbl hd">Reference</span>
+        <div class="ref-grid">
+          <span class="lbl">Session</span><span class="id">019f88bc…9d5c <span class="copy">⧉</span></span>
+          <span class="lbl">Started</span><span class="val">24.8h ago</span>
+          <span class="lbl">Directory</span><span class="id">…/emilionunezgarcia</span>
+          <span class="lbl">Orchestrator</span><span class="val mut">none</span>
+          <span class="lbl">Model policy</span><span class="val mut">not evaluated</span>
+          <span class="lbl">Nesting</span><span class="val mut">—</span>
+          <span class="lbl">Tests</span><span class="val mut">not reported</span>
+          <span class="lbl">Checks</span><span class="val mut">none</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <span class="lbl">Controls</span>
+        <div class="ctl-btns">
+          <button class="ctl" disabled>Focus</button>
+          <button class="ctl" disabled>Instruct</button>
+          <button class="ctl" disabled>Interrupt</button>
+          <button class="ctl armed">Archive</button>
+        </div>
+        <p class="ctl-why">3 disabled — <code>cmux surface quarantined: conflicting identity on ttys082</code></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================== TAKE C =================== -->
+  <section class="take-c">
+    <div class="take-head"><span class="take-tag">TAKE C</span><h2>Chip header + ledger</h2></div>
+    <p class="thesis">Split "state you glance at" from "facts you look up." A dense chip strip carries every enum/status up top; below it a single tight ledger with hairline rows, grouped by subheader, values right-aligned and monospaced. Calmest and densest — alignment does the work instead of boxes.</p>
+    <div class="pc"><span class="good">Maximum density, minimum chrome</span><span class="good">Reads like a spec sheet — familiar, calm</span><span class="bad">Less visual "pop" for the hot metrics</span><span class="bad">Chip strip can crowd if states multiply</span></div>
+
+    <div class="insp">
+      <p class="insp-title">Orchestrate a CMUX swarm that restores a mergeable master baseline</p>
+      <p class="insp-sub">Home / Unassigned · codex</p>
+      <div class="chipbar">
+        <span class="pill ok">Working</span><span class="pill ok">Healthy</span><span class="pill warn">Quarantined</span>
+        <span class="pill flat">gpt-5.6-sol</span><span class="pill flat">effort MAX</span>
+        <span class="pill flat">running</span><span class="pill flat">up 24.8h</span>
+      </div>
+      <div class="banner"><b>⚠ Control routing locked.</b> Identity is ambiguous — conflicting open sessions on ttys082.</div>
+
+      <div class="ledger">
+        <div class="grp">Identity</div>
+        <div class="lrow"><span class="lbl">Session ID</span><span class="id">019f88bc-6e3c-76c0…9d5c <span class="copy">⧉</span></span></div>
+        <div class="lrow"><span class="lbl">Directory</span><span class="id">/Users/emilionunezgarcia</span></div>
+        <div class="lrow"><span class="lbl">Orchestrator</span><span class="val mut">none</span></div>
+        <div class="lrow"><span class="lbl">Nesting · subagents</span><span class="val mut">— · —</span></div>
+
+        <div class="grp">Consumption</div>
+        <div class="lrow"><span class="lbl">Context</span><span class="val"><span class="inline-bar"><span class="bar"><i style="width:57%"></i></span><span class="num">142k / 250k</span></span></span></div>
+        <div class="lrow"><span class="lbl">Latest call</span><span class="val">142k in · 284 out · <b>98% cached</b></span></div>
+        <div class="lrow"><span class="lbl">Session total</span><span class="val">852.0M tokens</span></div>
+
+        <div class="grp">Verification</div>
+        <div class="lrow"><span class="lbl">Model policy</span><span class="val mut">not evaluated</span></div>
+        <div class="lrow"><span class="lbl">Tests · checks</span><span class="val mut">not reported · none</span></div>
+      </div>
+
+      <div class="controls">
+        <span class="lbl">Controls</span>
+        <div class="ctl-btns">
+          <button class="ctl" disabled>Focus</button>
+          <button class="ctl" disabled>Instruct</button>
+          <button class="ctl" disabled>Interrupt</button>
+          <button class="ctl armed">Archive</button>
+        </div>
+        <p class="ctl-why">3 disabled — <code>cmux surface quarantined: conflicting identity on ttys082</code></p>
+      </div>
+    </div>
+  </section>
+
+  <p class="foot">
+    <b>My lean:</b> <span class="rec">Take C for the default</span>, borrowing Take&nbsp;B's context ring for the one metric worth a visual (context pressure is what makes you act). Take&nbsp;A is the fallback if you'd rather never collapse or demote a field. All three share the same five moves and the same collapsed controls row — the pieces are composable, so we can mix (C's ledger + B's hero ring + A's cards for one section) rather than pick one whole. Real tokens from <span class="path">src/web/styles.css</span>; the "98% cached" and 57% context figures are computed from the session's own numbers, not invented.
+  </p>
+</div>

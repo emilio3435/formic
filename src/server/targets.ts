@@ -1,20 +1,43 @@
 import type { CmuxTarget } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
-function target(surface: CmuxSurface, resolution: CmuxTarget["resolution"], reason: string): CmuxTarget {
+function normalizeCwd(value?: string): string {
+  return (value ?? "").replace(/\/+$/, "");
+}
+
+function sameCwd(left?: string, right?: string): boolean {
+  const a = normalizeCwd(left);
+  const b = normalizeCwd(right);
+  if (!a || !b) return false;
+  return a === b;
+}
+
+function target(
+  surface: CmuxSurface,
+  resolution: CmuxTarget["resolution"],
+  reason: string,
+  agent?: CollectedAgent,
+): CmuxTarget {
+  const surfaceCwd = surface.cwd ? normalizeCwd(surface.cwd) : undefined;
+  const agentCwd = agent?.cwd ? normalizeCwd(agent.cwd) : undefined;
+  const cwdMismatch = Boolean(
+    surfaceCwd &&
+    agentCwd &&
+    surfaceCwd !== agentCwd &&
+    (resolution === "exact" || resolution === "unique-cwd"),
+  );
   return {
     workspaceId: surface.workspaceId,
     workspaceTitle: surface.workspaceTitle,
     surfaceId: surface.surfaceId,
     paneId: surface.paneId,
+    surfaceCwd,
+    cwdMismatch: cwdMismatch || undefined,
     resolution,
-    reason,
+    reason: cwdMismatch
+      ? `${reason} Pane cwd (${surfaceCwd}) differs from session cwd (${agentCwd}) — treat the workspace title as the terminal, not the agent's project home.`
+      : reason,
   };
-}
-
-function sameCwd(left?: string, right?: string): boolean {
-  if (!left || !right) return false;
-  return left.replace(/\/+$/, "") === right.replace(/\/+$/, "");
 }
 
 function eligibleForCwdFallback(agent: CollectedAgent): boolean {
@@ -45,7 +68,9 @@ export function resolveAgentTarget(
     );
     const quarantine = quarantined(matches);
     if (quarantine) return quarantine;
-    if (matches.length === 1) return target(matches[0], "exact", "Matched recorded cmux target IDs.");
+    if (matches.length === 1) {
+      return target(matches[0], "exact", "Matched recorded cmux target IDs.", agent);
+    }
     if (matches.length > 1) {
       return { resolution: "ambiguous", reason: "Recorded cmux IDs matched multiple surfaces; controls are disabled." };
     }
@@ -57,7 +82,12 @@ export function resolveAgentTarget(
   const sessionQuarantine = quarantined(sessionMatches);
   if (sessionQuarantine) return sessionQuarantine;
   if (sessionMatches.length === 1) {
-    return target(sessionMatches[0], "exact", "Matched source session ID recorded by cmux.");
+    return target(
+      sessionMatches[0],
+      "exact",
+      "Matched source session ID recorded by cmux.",
+      agent,
+    );
   }
   if (sessionMatches.length > 1) {
     return {
@@ -106,6 +136,7 @@ export function resolveAgentTarget(
       eligibleSurfaces[0],
       "unique-cwd",
       "Matched one active source to the only unclaimed cmux surface with this exact cwd.",
+      agent,
     );
   }
   if (eligibleSurfaces.length > 1) {
