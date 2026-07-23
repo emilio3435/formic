@@ -29,6 +29,8 @@ export interface CursorSessionInput {
   metaJson: string;
   transcriptJsonl?: string;
   transcriptPath?: string;
+  transcriptMtimeMs?: number;
+  storeDbMtimeMs?: number;
   subagentCount?: number;
   store?: CursorStoreEvidence;
   archived?: boolean;
@@ -128,7 +130,13 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   const createdAtMs = Number(meta.createdAtMs);
   const updatedAtMs = Number(meta.updatedAtMs);
   const nowMs = input.nowMs ?? Date.now();
-  const validUpdatedAtMs = Number.isFinite(updatedAtMs) ? updatedAtMs : nowMs;
+  // Liveness rides the freshest available signal so a long streaming turn still
+  // reads as "working": the turn-boundary metadata write does not advance mid-turn,
+  // but the transcript JSONL and store.db mtimes do. This mirrors how Claude/Codex
+  // take max(file mtime, transcript timestamp).
+  const freshSignals = [updatedAtMs, input.transcriptMtimeMs, input.storeDbMtimeMs]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const validUpdatedAtMs = freshSignals.length ? Math.max(...freshSignals) : nowMs;
   const ageMs = Math.max(0, nowMs - validUpdatedAtMs);
   let status: CollectedAgent["status"];
   let statusReason: string;
@@ -141,12 +149,15 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   } else if (turnStatus && turnStatus !== "success") {
     status = "attention";
     statusReason = `Cursor recorded the last turn as ${turnStatus}.`;
+  } else if (ageMs < 3 * 60_000) {
+    // Freshness wins over a stale turn_ended:"success" record. That record is the
+    // last completed turn in the cumulative transcript and persists forever, so a
+    // newly streaming turn (no new turn_ended yet) must not force the session idle.
+    status = "running";
+    statusReason = "Cursor session activity is fresh within the last 3 minutes.";
   } else if (turnStatus === "success") {
     status = "waiting";
     statusReason = "Cursor recorded the last turn as successfully ended.";
-  } else if (ageMs < 3 * 60_000) {
-    status = "running";
-    statusReason = "Cursor session metadata changed within 3 minutes and no turn end is recorded.";
   } else {
     status = "waiting";
     statusReason = "Cursor session metadata is recent, with no active turn evidence.";
@@ -208,17 +219,25 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
 
   const nowMs = input.nowMs ?? Date.now();
   const ageMs = Math.max(0, nowMs - input.updatedAtMs);
-  const ended = Boolean(turnStatus);
-  const status: CollectedAgent["status"] = ended
-    ? "stale"
+  // A non-success turn (aborted/error) stays terminal regardless of freshness, but a
+  // fresh transcript (mtime advances mid-turn) wins over a stale turn_ended:"success"
+  // so a newly streaming child is not forced idle the instant its first turn ends.
+  const failed = Boolean(turnStatus) && turnStatus !== "success";
+  const status: CollectedAgent["status"] =
+    failed ? "stale"
     : ageMs >= 45 * 60_000 ? "stale"
-    : ageMs < 3 * 60_000 ? "running" : "waiting";
-  const statusReason = ended
-    ? `Cursor child recorded the last turn as ${turnStatus}.`
+    : ageMs < 3 * 60_000 ? "running"
+    : turnStatus === "success" ? "stale"
+    : "waiting";
+  const statusReason =
+    failed
+      ? `Cursor child recorded the last turn as ${turnStatus}.`
     : ageMs >= 45 * 60_000
       ? "Cursor child transcript has not changed in 45 minutes."
     : ageMs < 3 * 60_000
-      ? "Cursor child transcript changed within 3 minutes and no turn end is recorded."
+      ? "Cursor child transcript changed within the last 3 minutes."
+    : turnStatus === "success"
+      ? `Cursor child recorded the last turn as ${turnStatus}.`
       : "Cursor child transcript is recent, with no turn end recorded.";
   const taskName = task
     ?.split("\n", 1)[0]
@@ -421,16 +440,22 @@ async function cursorChildAgents(
 
 async function transcriptEvidence(
   transcriptPath: string | undefined,
-): Promise<{ transcriptJsonl?: string; subagentCount?: number }> {
+): Promise<{ transcriptJsonl?: string; subagentCount?: number; transcriptMtimeMs?: number }> {
   if (!transcriptPath) return {};
   const transcriptJsonl = await readFile(transcriptPath, "utf8");
+  let transcriptMtimeMs: number | undefined;
+  try {
+    transcriptMtimeMs = (await stat(transcriptPath)).mtimeMs;
+  } catch {
+    // A transcript we could read but not stat simply contributes no mtime signal.
+  }
   try {
     const subagentCount = (await readdir(join(transcriptPath, "../subagents"), { withFileTypes: true }))
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .length;
-    return { transcriptJsonl, subagentCount };
+    return { transcriptJsonl, subagentCount, transcriptMtimeMs };
   } catch {
-    return { transcriptJsonl, subagentCount: 0 };
+    return { transcriptJsonl, subagentCount: 0, transcriptMtimeMs };
   }
 }
 
@@ -512,6 +537,7 @@ async function collectCursorGuiSessions(
           }),
           transcriptJsonl: evidence.transcriptJsonl,
           transcriptPath,
+          transcriptMtimeMs: evidence.transcriptMtimeMs,
           subagentCount: evidence.subagentCount,
           store: {
             agentId: row.id,
@@ -584,13 +610,21 @@ export async function collectCursorSessions(
         errors.push(`cursor ${sessionId} store agentId mismatch: ${store.agentId}`);
         return;
       }
+      // store.db is rewritten on every streamed event, so its mtime is a live signal.
+      let storeDbMtimeMs: number | undefined;
+      try {
+        storeDbMtimeMs = (await stat(storePath)).mtimeMs;
+      } catch {
+        // Some retained sessions have no store.db; then it contributes no signal.
+      }
 
       const transcriptPath = await findTranscript(projectDirectories, sessionId, meta.cwd);
       let transcriptJsonl: string | undefined;
       let subagentCount: number | undefined;
+      let transcriptMtimeMs: number | undefined;
       if (transcriptPath) {
         try {
-          ({ transcriptJsonl, subagentCount } = await transcriptEvidence(transcriptPath));
+          ({ transcriptJsonl, subagentCount, transcriptMtimeMs } = await transcriptEvidence(transcriptPath));
         } catch (error) {
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -600,6 +634,8 @@ export async function collectCursorSessions(
         metaJson,
         transcriptJsonl,
         transcriptPath,
+        transcriptMtimeMs,
+        storeDbMtimeMs,
         subagentCount,
         store,
         nowMs,
