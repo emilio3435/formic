@@ -168,4 +168,48 @@ describe("TTY and open-session identity evidence", () => {
       reason: expect.stringContaining("quarantined"),
     });
   });
+
+  test("a code-mode child rollout collapses into its open parent instead of quarantining", async () => {
+    const parentId = "019f8a6d-e3af-7882-9470-c5824a40ec86";
+    const childId = "019f8a6d-f2c9-7ad0-9df4-4c1d28f04e3e";
+    const codexParent: CollectedAgent = {
+      ...agent,
+      id: `codex:${parentId}`,
+      provider: "codex",
+      sourceSessionId: parentId,
+      displayName: "Primary codex",
+    };
+    const codexChild: CollectedAgent = {
+      ...agent,
+      id: `codex:${childId}`,
+      provider: "codex",
+      sourceSessionId: childId,
+      parentSourceSessionId: parentId,
+      displayName: "Code-mode guardian",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "32645 ttys033 /Users/me/.local/bin/codex",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p32645",
+          `n/Users/me/.codex/sessions/2026/07/22/rollout-2026-07-22T10-24-45-${parentId}.jsonl`,
+          `n/Users/me/.codex/sessions/2026/07/22/rollout-2026-07-22T10-24-49-${childId}.jsonl`,
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [codexParent, codexChild], runner);
+
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([parentId]);
+    expect(enriched.value[0]?.identityConflict).toBeUndefined();
+    expect(enriched.errors).toEqual([]);
+  });
 });

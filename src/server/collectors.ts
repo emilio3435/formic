@@ -315,8 +315,16 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
   const humanMessages: HumanMessageCandidate[] = [];
   let tokens: TokenUsage = { provenance: "unknown" };
   const threadSpawn = session?.source?.subagent?.thread_spawn;
-  const parentSourceSessionId = typeof threadSpawn?.parent_thread_id === "string"
+  // Swarm subagents stamp the parent under source.subagent.thread_spawn; code-mode
+  // (multi-agent guardian) children stamp parent_thread_id at the session_meta top
+  // level instead. Honor both so every child rollout is parented, not orphaned.
+  const rawParentSessionId = typeof threadSpawn?.parent_thread_id === "string"
     ? threadSpawn.parent_thread_id
+    : typeof session?.parent_thread_id === "string"
+      ? session.parent_thread_id
+      : undefined;
+  const parentSourceSessionId = rawParentSessionId && rawParentSessionId !== sessionId
+    ? rawParentSessionId
     : undefined;
   const threadDepth = Number.isInteger(threadSpawn?.depth) && threadSpawn.depth >= 0
     ? threadSpawn.depth

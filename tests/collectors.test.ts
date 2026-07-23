@@ -211,6 +211,38 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("Codex parents a code-mode child from top-level parent_thread_id, not just thread_spawn", () => {
+    const agent = parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-07-22T15:24:49.000Z",
+      payload: {
+        id: "019f8a6d-f2c9-7ad0-9df4-4c1d28f04e3e",
+        session_id: "019f8a6d-e3af-7882-9470-c5824a40ec86",
+        parent_thread_id: "019f8a6d-e3af-7882-9470-c5824a40ec86",
+        cwd: "/Users/emilionunezgarcia",
+        source: { subagent: { other: "guardian" } },
+      },
+    }), { nowMs });
+
+    expect(agent?.sourceSessionId).toBe("019f8a6d-f2c9-7ad0-9df4-4c1d28f04e3e");
+    expect(agent?.parentSourceSessionId).toBe("019f8a6d-e3af-7882-9470-c5824a40ec86");
+  });
+
+  test("Codex never parents a session to itself when parent_thread_id equals its own id", () => {
+    const agent = parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-07-22T15:24:45.000Z",
+      payload: {
+        id: "019f8a6d-e3af-7882-9470-c5824a40ec86",
+        session_id: "019f8a6d-e3af-7882-9470-c5824a40ec86",
+        parent_thread_id: "019f8a6d-e3af-7882-9470-c5824a40ec86",
+        cwd: "/Users/emilionunezgarcia",
+      },
+    }), { nowMs });
+
+    expect(agent?.parentSourceSessionId).toBeUndefined();
+  });
+
   test("taskless home sessions use a readable provider label instead of a UUID fragment", () => {
     const agent = parseCodexJsonl(JSON.stringify({
       type: "session_meta",

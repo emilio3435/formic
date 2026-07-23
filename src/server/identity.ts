@@ -90,6 +90,28 @@ function uniqueIdentity(hints: readonly IdentityHint[]): string | undefined {
   return identities.length === 1 ? identities[0].split(":", 2)[1] : undefined;
 }
 
+// A single agent can legitimately hold several open rollout files on one tty: a
+// codex "code mode" turn spawns a guardian child session alongside the primary.
+// Those are the SAME logical agent (the child's parentSourceSessionId points at a
+// primary that is also open here), so collapse children into their parent instead
+// of reading the pair as an identity conflict and fail-closing the surface.
+function rootIdentities(
+  hints: readonly IdentityHint[],
+  agents: readonly CollectedAgent[],
+): IdentityHint[] {
+  if (hints.length < 2) return [...hints];
+  const present = new Set(hints.map((hint) => `${hint.provider}:${hint.value}`));
+  const agentByIdentity = new Map(
+    agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
+  );
+  const roots = hints.filter((hint) => {
+    const agent = agentByIdentity.get(`${hint.provider}:${hint.value}`);
+    const parent = agent?.parentSourceSessionId?.toLowerCase();
+    return !(parent && present.has(`${hint.provider}:${parent}`));
+  });
+  return roots.length > 0 ? roots : [...hints];
+}
+
 function resolveCommandHint(hint: IdentityHint, agents: readonly CollectedAgent[]): IdentityHint | null {
   if (hint.full) return hint;
   const matches = agents.filter(
@@ -155,8 +177,9 @@ export async function enrichCmuxIdentity(
       const openHints = ttyProcesses.flatMap((process) =>
         (openFiles.get(process.pid) ?? []).map(identityFromSessionPath).filter((hint): hint is IdentityHint => hint !== null),
       );
-      const openIdentity = uniqueIdentity(openHints);
-      if (openHints.length > 0 && !openIdentity) {
+      const openRootHints = rootIdentities(openHints, agents);
+      const openIdentity = uniqueIdentity(openRootHints);
+      if (openRootHints.length > 0 && !openIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files on ${tty}`;
         errors.push(identityConflict);
         return { ...surface, sourceSessionIds: [], identityConflict };
