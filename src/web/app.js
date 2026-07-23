@@ -1010,6 +1010,7 @@ globalThis.TheAntHill = {
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  renderProgramDrawer, programRollupLine,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -2956,6 +2957,93 @@ function drawerHead(eyebrowNode, titleText) {
     closeButton());
 }
 
+/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
+   the agent drawer: the status kicker + title (+ an optional sub line) on the
+   left, Close and the one promoted action stacked on the right. The agent drawer
+   keeps its own richer head (provider rail, status line, gate); the entity
+   drawers share this so the five near-identical heads are not hand-rolled. */
+function drawerVerdictHead({ eyebrow, title, sub, action }) {
+  return el("div", { class: "inspector-head inspector-verdict" },
+    el("div", { class: "inspector-id" },
+      eyebrow || null,
+      el("h2", { class: "inspector-title", text: title }),
+      sub || null),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      action ? el("div", { class: "verdict-action" }, action) : null));
+}
+
+/* Compact promoted lever for an issue drawer's head — the single most-relevant
+   action, so an operator can act from the top without scrolling to the Fix
+   block. Reuses the same triageIssue(...) calls the body controls use; the
+   head: fkey prefix (B2 convention) keeps the key distinct from the body twin.
+   A queued investigation → Launch; a not-yet-triaged finding → Triage; anything
+   in flight → null (the Fix/Triage block owns the plan/queue story). */
+function issueHeadAction(issue) {
+  const id = issue.id;
+  const queueItem = state.queueItems.find((it) => it.issueId === id);
+  if (queueItem && queueItem.state === "queued") {
+    const launching = state.triagePending.has("run:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: launching ? "" : null,
+      "aria-busy": launching ? "true" : null,
+      dataset: { fkey: "head:run:" + id },
+      onclick: () => triageIssue(id, "run"),
+    }, launching ? "Launching…" : "Launch");
+  }
+  if (!state.triage.get(id)) {
+    const generating = state.triagePending.has("generate:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: generating ? "" : null,
+      "aria-busy": generating ? "true" : null,
+      dataset: { fkey: "head:triage:" + id },
+      onclick: () => triageIssue(id, "generate"),
+    }, generating ? "Triaging…" : "Triage");
+  }
+  return null;
+}
+
+/* The investigation head's promoted lever — the queued run's Launch button, the
+   drawer's one existing primary control. Head: prefix keeps it distinct from the
+   full-width Launch that stays in the body. Null unless the run is queued. */
+function investigationHeadAction(item) {
+  if (item.state !== "queued") return null;
+  const launching = state.triagePending.has("run:" + item.issueId);
+  return el("button", {
+    type: "button", class: "btn dw-head-action",
+    disabled: launching ? "" : null,
+    "aria-busy": launching ? "true" : null,
+    dataset: { fkey: "head:run:" + item.issueId },
+    onclick: () => triageIssue(item.issueId, "run"),
+  }, launching ? "Launching…" : "Launch");
+}
+
+/* Program head rollup — the swarm at a glance: agent count, working, alerts, and
+   aggregate session tokens, aggregated client-side over the program's agents.
+   Values ride the mono convention; unit words stay ui/--faint. The token cell is
+   omitted when no agent on the client reports session usage — an aggregate we
+   cannot derive is never faked to zero. */
+function programRollupLine(program) {
+  const agents = program.agents || [];
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
+    cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
+      el("span", { class: "dw-rollup-value mono", text: c.value }),
+      el("span", { class: "dw-rollup-label", text: c.label }))));
+}
+
 const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
 
 /* Impact summary — never dump hundreds of anonymous chips as "Affects (160)".
@@ -3036,9 +3124,11 @@ function renderInterventionDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "ember");
-  pane.append(drawerHead(
-    dwEyebrow("ember", "intervention", work.label),
-    issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ember", "intervention", work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3059,7 +3149,11 @@ function renderAdvisoryDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "amber");
-  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory · " + work.label), issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("amber", "warning", "Advisory · " + work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3085,9 +3179,11 @@ function renderInvestigationDrawer(pane, view) {
   const running = item.state === "running";
   const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
   drawerAccent(pane, "slate");
-  pane.append(drawerHead(
-    dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
-    item.headline));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    title: item.headline,
+    action: investigationHeadAction(item),
+  }));
 
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
@@ -3140,7 +3236,12 @@ function renderResolvedDrawer(pane, view) {
   const result = lifecycle.result || "Source confirmation cleared the finding.";
   pane.classList.add("dw-past");
   drawerAccent(pane, "moss");
-  pane.append(drawerHead(dwEyebrow("moss", "check", "Resolved"), issue.title));
+  // Resolved is the only past-tense drawer — no reopen/inspect control exists, so
+  // the head renders verdict-only; no action is invented.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("moss", "check", "Resolved"),
+    title: issue.title,
+  }));
   pane.append(el("p", { class: "dw-lead dw-lead--past", text: "Cleared " + issueTimestamp(lifecycle.resolvedAt) }));
 
   const grid = el("dl", { class: "detail-grid" });
@@ -3200,14 +3301,19 @@ function programRosterRow(agent) {
 function renderProgramDrawer(pane, view) {
   const program = view.program;
   const agents = program.agents;
-  const r = deriveRollup(agents);
   drawerAccent(pane, "ink");
-  pane.append(drawerHead(dwEyebrow("ink", null, "Program"), programName(program)));
+  // Program head leads with the rollup glance (counts + aggregate tokens); the
+  // segmented meter below stays as the visual breakdown, no longer restating the
+  // same numbers in a caption.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ink", null, "Program"),
+    title: programName(program),
+    sub: programRollupLine(program),
+  }));
 
   pane.append(el("div", { class: "dw-block" },
     el("div", { class: "dw-block-label", text: agents.length + (agents.length === 1 ? " agent" : " agents") }),
-    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" }),
-    el("p", { class: "dw-impact", text: rollupParts(r).map((p) => p.text).join(" · ") })));
+    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" })));
 
   if (program.purpose || program.path) {
     const grid = el("dl", { class: "detail-grid" });

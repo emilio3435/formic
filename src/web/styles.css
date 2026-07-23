@@ -1388,6 +1388,22 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-eyebrow--moss  { color: var(--moss); }
 .dw-eyebrow--slate { color: var(--slate); }
 
+/* Entity-drawer head action (B4) — the promoted primary lever in the verdict
+   side. Compact, matching the agent drawer's .verdict-action .dock-tool sizing so
+   every drawer's head reads the same. Scoped under .verdict-action so it wins the
+   compact size over the base .btn (which is later in source); inherits .btn
+   colours/border/radius. Touch-swept to 44px below 1024px in the responsive block. */
+.verdict-action .dw-head-action { min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; white-space: nowrap; }
+
+/* Program head rollup (B4) — the swarm at a glance: mono values with quiet ui
+   unit words, hairline-gapped. Values mono per rule 2; unit labels stay
+   ui/--faint; an alert count earns ember ink (urgency earns weight, calm does not). */
+.dw-rollup { display: flex; flex-wrap: wrap; gap: 0.1rem 0.85rem; margin: 0.15rem 0 0; }
+.dw-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.dw-rollup-value { font: 650 14px/1.05 var(--font-mono); color: var(--ink); }
+.dw-rollup-label { font-size: 11.5px; color: var(--faint); }
+.dw-rollup-cell.is-alert .dw-rollup-value { color: var(--ember); }
+
 .dw-lead { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
 .dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
 .dw-lead--past { color: var(--moss); font-weight: 650; }
@@ -1602,21 +1618,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    holds DOM order without spending a flex gap. */
 .inspector-vitals:empty { display: none; }
 
-/* Legacy pill styles kept for any residual list surfaces; agent drawer uses .status-line. */
-.inspector-state { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--sand); }
-.state-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.6rem; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 12px; font-weight: 650; color: var(--muted); background: var(--raise); }
-.state-pill .ico { width: 0.85rem; height: 0.85rem; }
-.state-pill.act-working { color: var(--working); border-color: color-mix(in srgb, var(--working) 45%, transparent); }
-.state-pill.act-idle { color: var(--idle); border-color: color-mix(in srgb, var(--idle) 45%, transparent); }
-.state-pill.outcome-needs-you { color: var(--needs); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
-.state-pill.outcome-blocked { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 45%, transparent); }
-.state-pill.outcome-failed { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-quarantined { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-linked { color: var(--moss); }
-.state-pill.policy-compliant { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.state-pill.policy-unreported { color: var(--faint); border-style: dashed; }
-.state-pill.policy-mismatch { color: #fff; background: var(--failed); border-color: var(--failed); }
-
 /* Agent drawer status — one sentence under the title, not a pill cluster. */
 .status-line {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.55rem;
@@ -1658,8 +1659,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .control-banner-copy { min-width: 0; overflow-wrap: anywhere; }
 .control-banner-copy strong { color: var(--ink); font-weight: 650; }
 .control-banner-link {
+  /* One red ink for the whole banner: --failed (settled ruling — border/icon/link
+     are --failed ink over the sanctioned --ember-soft tint; never two red inks). */
   display: inline; padding: 0; border: 0; background: none; cursor: pointer;
-  color: var(--ember); font: inherit; font-weight: 650;
+  color: var(--failed); font: inherit; font-weight: 650;
 }
 .control-banner-link:hover { text-decoration: underline; }
 
@@ -2058,7 +2061,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
-  .verdict-action .dock-tool,
+  .verdict-action .dock-tool, .verdict-action .dw-head-action,
   .reading-repair { min-height: 44px; }
 }
 

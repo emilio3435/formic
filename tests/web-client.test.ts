@@ -1396,3 +1396,194 @@ describe("vitals instrument band (B3)", () => {
     expect(vitalsAt).toBeLessThan(shelfAt);
   });
 });
+
+describe("per-type drawers lead with verdict + action (B4)", () => {
+  /* Same DOM-less execution trick B2/B3 used, so the program-rollup test asserts
+     on the real built tree — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  const bodyOf = (name: string) =>
+    source.match(new RegExp("function " + name + "\\(pane, view\\) \\{[\\s\\S]*?\\n\\}\\n"))?.[0] ?? "";
+
+  test("(a) every entity drawer opens with a shared verdict-head block before its detail", () => {
+    // The shared head is verdict-shaped: the totem chassis + a right-side stack
+    // that carries Close and the one promoted action.
+    const helper = source.match(/function drawerVerdictHead\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(helper).toBeTruthy();
+    expect(helper).toContain("inspector-head inspector-verdict");
+    expect(helper).toContain('class: "verdict-side"');
+    expect(helper).toContain('class: "verdict-action"');
+
+    // Intervention: head → workStateBanner → impactBlock (guards stay below).
+    const iv = bodyOf("renderInterventionDrawer");
+    const ivHead = iv.indexOf("drawerVerdictHead(");
+    expect(ivHead).toBeGreaterThan(-1);
+    expect(ivHead).toBeLessThan(iv.indexOf("workStateBanner(issue)"));
+    expect(iv.indexOf("workStateBanner(issue)")).toBeLessThan(iv.indexOf("impactBlock(issue)"));
+
+    // Advisory: head → workStateBanner → impactBlock.
+    const av = bodyOf("renderAdvisoryDrawer");
+    const avHead = av.indexOf("drawerVerdictHead(");
+    expect(avHead).toBeGreaterThan(-1);
+    expect(avHead).toBeLessThan(av.indexOf("workStateBanner(issue)"));
+    expect(av.indexOf("workStateBanner(issue)")).toBeLessThan(av.indexOf("impactBlock(issue)"));
+
+    // Investigation: head → status line → steps.
+    const inv = bodyOf("renderInvestigationDrawer");
+    const invHead = inv.indexOf("drawerVerdictHead(");
+    expect(invHead).toBeGreaterThan(-1);
+    expect(invHead).toBeLessThan(inv.indexOf('class: "dw-status"'));
+
+    // Resolved: head → cleared lead → before/after grid. No invented action.
+    const rv = bodyOf("renderResolvedDrawer");
+    const rvHead = rv.indexOf("drawerVerdictHead(");
+    expect(rvHead).toBeGreaterThan(-1);
+    expect(rvHead).toBeLessThan(rv.indexOf("dw-lead--past"));
+    expect(rv.indexOf("dw-lead--past")).toBeLessThan(rv.indexOf('class: "detail-grid"'));
+    expect(rv).not.toContain("issueHeadAction"); // no action invented for a past-tense drawer
+    expect(rv).not.toContain("action:");
+
+    // Program: head (with the rollup line) → roster.
+    const pr = bodyOf("renderProgramDrawer");
+    const prHead = pr.indexOf("drawerVerdictHead(");
+    expect(prHead).toBeGreaterThan(-1);
+    expect(pr).toContain("programRollupLine(program)");
+    expect(prHead).toBeLessThan(pr.indexOf('class: "dw-roster"'));
+    // The broadcast lever stays a body control (not promoted into the head).
+    expect(pr).toContain("prog-broadcast:");
+  });
+
+  test("(b) regression guard: workStateBanner + impactBlock still render, logic byte-untouched", () => {
+    const iv = bodyOf("renderInterventionDrawer");
+    const av = bodyOf("renderAdvisoryDrawer");
+    expect(iv).toContain("pane.append(workStateBanner(issue));");
+    expect(iv).toContain("pane.append(impactBlock(issue));");
+    expect(av).toContain("pane.append(workStateBanner(issue));");
+    expect(av).toContain("pane.append(impactBlock(issue));");
+    // The two guarded functions are untouched — quote their load-bearing lines.
+    const wsb = source.match(/function workStateBanner\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const imp = source.match(/function impactBlock\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(wsb).toContain('el("div", { class: "dw-work work-" + work.key, role: "status" }');
+    expect(imp).toContain('el("h3", { class: "section-title", text: "Impact" })');
+  });
+
+  test("(c) program head carries the rollup vitals with mono values, aggregated over the swarm", () => {
+    expect(typeof M.renderProgramDrawer).toBe("function");
+    const mk = (over: Record<string, unknown>) => agent({
+      tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+    });
+    const program = {
+      id: "p1", name: "Ridge program",
+      agents: [
+        mk({ id: "codex:w1", status: "running" }),
+        mk({ id: "codex:w2", status: "running" }),
+        mk({ id: "codex:n1", status: "attention" }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const classes = classesOf(pane);
+    // Verdict-shaped head + a rollup line whose VALUES ride the mono convention.
+    expect(classes.some((c) => c.includes("inspector-head") && c.includes("inspector-verdict"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup-value") && c.includes("mono"))).toBe(true);
+    const text = textOf(pane);
+    // 3 agents · 2 working · 1 alert · aggregate session tokens (10k×3 = 30k).
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");
+    expect(text).toContain("tokens");
+  });
+
+  test("(c2) the token cell is omitted honestly when no agent reports session usage", () => {
+    const program = {
+      id: "p2", name: "Quiet program",
+      agents: [
+        agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+        agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const text = textOf(pane);
+    expect(text).toContain("2agents");   // counts are always derivable
+    expect(text).not.toContain("tokens"); // an un-derivable aggregate is never faked
+  });
+
+  test("(d1) audit closed: dead .state-pill / .inspector-state CSS (and its #fff-on-fill) removed", () => {
+    expect(styles).not.toContain(".state-pill");
+    expect(styles).not.toContain(".inspector-state");
+    // The dead policy-mismatch pill was the only #fff literal in the inspector
+    // per-type section — scope the check there (the live .policy-chip #fff lives
+    // in agent-rows, WS-C's territory, and is out of scope for this task).
+    const perType = styles.slice(
+      styles.indexOf("/* ---------- inspector: per-type drawer states"),
+      styles.indexOf("/* ---------- vitals band"),
+    );
+    expect(perType).toBeTruthy();
+    expect(perType).not.toContain("#fff");
+  });
+
+  test("(d2) audit closed: control-banner conforms to --failed ink + --ember-soft tint (settled ruling)", () => {
+    const banner = styles.match(/\.control-banner\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerIco = styles.match(/\.control-banner \.ico\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerLink = styles.match(/\.control-banner-link\s*\{[^}]*\}/)?.[0] ?? "";
+    // Sanctioned pattern: --failed ink (border + icon + link) over the one --ember-soft tint.
+    expect(banner).toContain("var(--ember-soft)");       // the sole sanctioned soft tint
+    expect(banner).toContain("var(--failed)");           // border ink from the failed family
+    expect(bannerIco).toContain("color: var(--failed)"); // icon ink
+    // The link previously reached for the OTHER red (--ember); unify it to --failed so
+    // the banner never mixes two red inks (only --failed ink + --ember-soft tint).
+    expect(bannerLink).toContain("color: var(--failed)");
+    expect(bannerLink).not.toContain("var(--ember)");
+  });
+});
