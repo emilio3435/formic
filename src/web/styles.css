@@ -1379,13 +1379,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.depth-2 { --tree-depth: 2; --tree-color: #b6794f; }
 .agent-row.depth-3 { --tree-depth: 3; --tree-color: #667c91; }
 .agent-row.depth-4 { --tree-depth: 4; --tree-color: #776b8f; }
-.agent-row.is-child { padding-left: calc(0.8rem + var(--tree-depth) * 1.3rem); border-left-color: var(--tree-color); }
-.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + var(--tree-depth) * 1.3rem); }
+/* Indent cap (N=3): full indent for the first 3 levels, then stop — 3·1.3rem +
+   0.8rem base = 4.7rem = 75px ≈ 19.8% of the 380px min drawer-open pane (25% =
+   95px), where uncapped depth-4 hit 96px and crushed the content column. Deeper
+   nesting reuses the level-3 indent; the depth colour + swarm/depth chips carry
+   the rest of the hierarchy. min(var(--tree-depth), 3) caps the multiplier. */
+.agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--tree-color); }
+.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 1.3rem); }
 .agent-row.is-child::before {
   content: "";
   position: absolute;
   top: -1px;
-  left: calc(0.55rem + (var(--tree-depth) - 1) * 1.3rem);
+  left: calc(0.55rem + (min(var(--tree-depth), 3) - 1) * 1.3rem);
   width: 0.8rem;
   height: 1.95rem;
   border-left: 1.5px solid var(--tree-color);
@@ -1410,7 +1415,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--sand) 55%, var(--raise));
 }
-.swarm-anchor.is-child { padding-left: calc(0.7rem + var(--tree-depth) * 1.3rem); }
+.swarm-anchor.is-child { padding-left: calc(0.7rem + min(var(--tree-depth), 3) * 1.3rem); }   /* matches the capped agent-row indent */
 .swarm-anchor strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .swarm-anchor > span:not(.provider-mark) { color: var(--faint); font: 10px var(--font-mono); text-transform: uppercase; }
 .swarm-anchor:hover { background: var(--sand); }
@@ -2379,8 +2384,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .agent-row:hover .row-summary,
   .agent-row:focus .row-summary,
   .agent-row.is-selected .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
-  .agent-row.is-child { padding-left: calc(0.65rem + var(--tree-depth) * 0.85rem); }
-  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + var(--tree-depth) * 0.85rem); }
+  .agent-row.is-child { padding-left: calc(0.65rem + min(var(--tree-depth), 3) * 0.85rem); }
+  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 0.85rem); }
   .swarm-note { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
   .signal-primary { grid-template-columns: 2rem minmax(0, 1fr); }
   .signal-badge { width: 2rem; height: 2rem; }

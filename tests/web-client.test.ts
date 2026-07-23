@@ -2630,4 +2630,15 @@ describe("scroll shell: sticky left-pane headers (Part 2)", () => {
     expect(row).toContain("var(--program-head-h)");
   });
 });
-
+describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
+  // (d) Deep nesting stops indenting past level 3 (N·step: 3·1.3rem + 0.8rem base
+  //     = 4.7rem = 75px ≤ 25% of the 380px min pane); depth colour + chips carry
+  //     the deeper hierarchy. The uncapped multiplier is replaced.
+  test("(d) the child indent is capped at 3 levels (min(var(--tree-depth), 3))", () => {
+    expect(styles).toContain("min(var(--tree-depth), 3)");
+    // Absence: the old uncapped desktop indent pattern is gone.
+    expect(styles).not.toContain("calc(0.8rem + var(--tree-depth) * 1.3rem)");
+    // The connector rail tracks the same cap so it stays aligned to the indent.
+    expect(styles).toMatch(/\.agent-row\.is-child::before[\s\S]*?left:\s*calc\(0\.55rem \+ \(min\(var\(--tree-depth\), 3\)/);
+  });
+});
