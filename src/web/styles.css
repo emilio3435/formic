@@ -869,8 +869,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; font-size: 12.5px; font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.program-rollup .hot { color: var(--ember); font-weight: 700; }
+.program-rollup { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
+.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.program-rollup-label { font-size: 11px; color: var(--faint); }
+.program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
 .rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; width: 100%; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--raise); }

@@ -327,6 +327,26 @@ function deriveRollup(agents) {
 
 const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
+/* At-a-glance rollup cells — the ONE aggregation source shared by the program
+   drawer head (programRollupLine) and the left-tree program header
+   (programHeadRollup). Counts are always client-derivable, so they always
+   render; the token aggregate is omitted honestly when no agent reports a
+   session total (never faked). Alert cells flag themselves for ink gating. */
+function programRollupCells(agents) {
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return cells;
+}
+
 /* Plain-language control explanation for the Operate chrome. Never echoes
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
@@ -1011,7 +1031,7 @@ globalThis.TheAntHill = {
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader,
-  renderProgramDrawer, programRollupLine,
+  renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -2403,26 +2423,24 @@ function renderPrograms() {
   }
 }
 
-function rollupParts(r) {
-  const parts = [];
-  if (r.needsYou) parts.push({ text: r.needsYou + (r.needsYou === 1 ? " alert" : " alerts"), hot: true });
-  if (r.working) parts.push({ text: r.working + " working" });
-  if (r.idle) parts.push({ text: r.idle + " idle" });
-  if (r.ended) parts.push({ text: r.ended + " done" });
-  if (!parts.length) parts.push({ text: r.total + " tracked" });
-  return parts;
+/* Left-tree program header rollup — the same at-a-glance data as the drawer head
+   (programRollupCells is the single aggregation source), rendered as the mono
+   .program-rollup cluster A4 established. The alert count takes ember ink
+   (is-alerting → --ember) only when alerts exist; calm earns no color. The
+   accessible name carries the data itself, extending the drawer's aria pattern. */
+function programHeadRollup(agents) {
+  const cells = programRollupCells(agents);
+  const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
+  return el("span", { class: "program-rollup", "aria-label": label },
+    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") },
+      el("span", { class: "program-rollup-value mono", text: c.value }),
+      el("span", { class: "program-rollup-label", text: c.label }))));
 }
 
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const r = deriveRollup(agents);
-
-  const rollup = el("span", { class: "program-rollup" });
-  rollupParts(r).forEach((part, i) => {
-    if (i) rollup.append(" · ");
-    rollup.append(part.hot ? el("span", { class: "hot", text: part.text }) : part.text);
-  });
+  const rollup = programHeadRollup(agents);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -3026,18 +3044,7 @@ function investigationHeadAction(item) {
    omitted when no agent on the client reports session usage — an aggregate we
    cannot derive is never faked to zero. */
 function programRollupLine(program) {
-  const agents = program.agents || [];
-  const r = deriveRollup(agents);
-  const cells = [
-    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
-    { value: String(r.working), label: "working" },
-    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
-  ];
-  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
-  if (withTokens.length) {
-    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
-    cells.push({ value: fmtTok(total), label: "tokens" });
-  }
+  const cells = programRollupCells(program.agents || []);
   return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
     cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
       el("span", { class: "dw-rollup-value mono", text: c.value }),

@@ -1846,7 +1846,152 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
   });
 });
 
+describe("program-header at-a-glance rollups (C2)", () => {
+  /* DOM-less execution, same idiom the drawer rollup tests (B4) use: build the
+     real .program-rollup tree in a fake document and assert on the built nodes,
+     not on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1, tagName: tag, className: "", textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // Every node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function allByClass(node: any, token: string, out: any[] = []): any[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) out.push(node);
+    for (const kid of node.children || []) allByClass(kid, token, out);
+    return out;
+  }
+  const mk = (over: Record<string, unknown>) => agent({
+    tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+  });
+
+  test("(a) header rollup renders all four cells — mono values, ember class on the alert cell", () => {
+    expect(typeof M.programHeadRollup).toBe("function");
+    // 3 agents: 2 running (working), 1 attention (alert); each reports 10k session tokens.
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    // Four cells: agents · working · alert · tokens.
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(4);
+    // Values ride the mono convention (Rule 2 — mono for values), like the drawer.
+    const monoVals = classesOf(rollup).filter((c) =>
+      /\bprogram-rollup-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBe(4);
+    const text = textOf(rollup);
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");   // 10k × 3 aggregate session tokens
+    expect(text).toContain("tokens");
+    // Alert ink is class-gated (is-alerting → --ember), never inline (strict CSP),
+    // and rides on the alert cell only.
+    const alerting = allByClass(rollup, "is-alerting");
+    expect(alerting.length).toBe(1);
+    expect(textOf(alerting[0])).toContain("1alert");
+  });
+
+  test("(b) calm earns no color: 0 alerts renders the count WITHOUT the ember class", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:w3", status: "running" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("0alerts");                       // the alert cell still renders...
+    expect(allByClass(rollup, "is-alerting").length).toBe(0); // ...but takes no ember ink at zero
+  });
+
+  test("(c) honest omission: an un-derivable token aggregate drops the token cell", () => {
+    const agents = [
+      agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+      agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("2agents");                              // counts are always derivable
+    expect(text).not.toContain("tokens");                          // no session total → no faked aggregate
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(3); // agents · working · alert only
+  });
+
+  test("(d) header and drawer rollups share ONE aggregation source — no duplicated arithmetic", () => {
+    // The aggregation core is defined exactly once.
+    expect((source.match(/function programRollupCells\(/g) ?? []).length).toBe(1);
+    // BOTH DOM builders feed off it rather than re-deriving counts/tokens.
+    const drawer = source.match(/function programRollupLine\(program\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const header = source.match(/function programHeadRollup\(agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain("programRollupCells(");
+    expect(header).toContain("programRollupCells(");
+    // The token reduce — the one bit of arithmetic that could drift — lives ONLY in
+    // the shared core: it appears exactly once in the whole file.
+    expect((source.match(/sum \+ a\.tokens\.sessionTotal/g) ?? []).length).toBe(1);
+    // renderProgram delegates its header rollup to the shared builder and keeps no
+    // parallel arithmetic; the old rollupParts text summary is gone.
+    const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(rp).toContain("programHeadRollup(agents)");
+    expect(rp).not.toContain("deriveRollup(agents)");
+    expect(source).not.toContain("rollupParts");
+  });
+
+  test("(e) rollup data rides the header's accessible text (extends the drawer aria pattern)", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const label = rollup.attributes["aria-label"] ?? "";
+    expect(label).toContain("Program rollup"); // extends the drawer's group name…
+    expect(label).toContain("3 agents");        // …and carries the data itself
+    expect(label).toContain("2 working");
+    expect(label).toContain("1 alert");
+    expect(label).toContain("30k tokens");
+  });
+});
+
 describe("toolbar on the instrument-rail language (A3)", () => {
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
   // Interface contract (later WS-C tasks reuse `is-current` unchanged):
   // the active view-tab is ink text + a 2px --signal-rail bottom rail driven
   // by the class `is-current`, never a filled/boxed tab.
@@ -1904,10 +2049,12 @@ describe("masthead + program headers share the frame + quiet header language (A4
   });
 
   // Rule 2 — mono for values: the program-header rollup renders counts (data),
-  // so it carries --font-mono, like the view-tab count badges (A3).
+  // so they carry --font-mono, like the view-tab count badges (A3). C2 decomposed
+  // the single .program-rollup text span into value/label cells (mirroring the
+  // drawer's .dw-rollup-value mono), so the mono now lives on .program-rollup-value.
   test("program-header rollup counts render in mono (Rule 2: mono for values)", () => {
-    const rollupRule = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rollupRule).toContain("font-family: var(--font-mono)");
+    const valueRule = styles.match(/\.program-rollup-value\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valueRule).toContain("font-family: var(--font-mono)");
   });
 
   // A4 audit finding: .program-alias-tag is a 9px uppercase tracked micro-label
