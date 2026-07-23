@@ -883,9 +883,12 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .views { gap: 0; align-items: stretch; border-bottom: 1px solid var(--line-strong); }
 .view-tab:hover { color: var(--ink); background: var(--sand); border-color: var(--line); border-bottom-color: var(--line-strong); }
-.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface); border-color: var(--line-strong); border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--surface); }
-.view-tab .count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
-.view-tab[aria-pressed="true"] .count { color: var(--muted); }
+.view-tab.is-current { color: var(--ink); background: transparent; border-color: transparent; border-bottom: var(--signal-rail) solid var(--ink); }
+.view-tab .count { font-size: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--faint); }
+.view-tab.is-current .count { color: var(--muted); }
+/* Alerts tab count when there is something to act on: ember ink, no fill. Placed
+   after the is-current rule so it wins by source order on the active Alerts tab. */
+.view-tab .count.is-alerting { color: var(--ember); }
 .view-tab .count:empty { display: none; }
 
 /* filter chips (above search) — single scrolling row to spare vertical space */
@@ -937,7 +940,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 #search:focus-visible { outline-offset: 0; }
 
 .select-toggle { flex: none; }
-.select-toggle[aria-pressed="true"] { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.select-toggle[aria-pressed="true"] { color: var(--ink); background: var(--sand); border-color: var(--ink); }
 
 .scope-note {
   margin: 0;
@@ -974,7 +977,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
 .program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
-.program-alias-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
+.program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
   display: inline-grid;
@@ -989,8 +992,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.program-rollup .hot { color: var(--ember); font-weight: 700; }
+.program-rollup { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
+.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.program-rollup-label { font-size: 11px; color: var(--faint); }
+.program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
 .rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; width: 100%; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--raise); }
@@ -1065,14 +1071,33 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.role-tester,
 .agent-row.role-automation { box-shadow: inset 3px 0 var(--role-color); }
 
+/* Alert washes must ride WITH a status-colored edge mark, never a standalone
+   flood (Rule 1 — indicator inks, not flood fills; codified soft-wash threshold:
+   a ≤10% tint always paired with an edge rail). The provider/role left border is
+   orthogonal to the alert, so the alert gets its own inset rail; selection keeps
+   its ink treatment, so the rail defers there. */
 .agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
 .agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
+.agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
+.agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
+.agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
+/* The alert rails above ride the same box-shadow property as the :focus-visible
+   ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
+   on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
+   colour AND the focus ring shows. */
+.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 1px var(--line-strong); }
 .agent-row.is-ended { opacity: 0.66; }
 .agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
+/* One shared 5-track template — identity (wide, left) + the right-aligned
+   instrument cluster: status, model+ctx%, tokens, elapsed. Both the header and
+   every row use it, so instrument values line up in scannable columns and the
+   header labels sit exactly above them (fr tracks resolve identically per row). */
 .agent-column-header {
-  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
+  grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
   padding: 0.45rem 0.85rem 0.35rem 0.8rem;
   border-bottom: 1px solid var(--line);
   background: var(--sand);
@@ -1084,13 +1109,54 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+/* Instrument-column labels sit right-aligned over their (right-aligned) values. */
+.ri-col-label { justify-self: end; text-align: right; }
 
 .agent-grid {
   display: grid;
-  grid-template-columns: minmax(6rem, 0.72fr) minmax(18rem, 2.8fr) minmax(6rem, 0.72fr) minmax(5rem, 0.66fr) minmax(6.5rem, 0.82fr);
-  align-items: center;
-  gap: 0.5rem;
+  grid-template-columns: minmax(10rem, 2.6fr) minmax(4.5rem, 0.72fr) minmax(6rem, 0.95fr) minmax(3.75rem, 0.55fr) minmax(3rem, 0.45fr);
+  /* Instruments ride the name line; identity's tags + summary drop below it. */
+  align-items: start;
+  gap: 0.15rem 0.5rem;
   min-width: 0;
+}
+/* Identity holds column 1; the instrument cluster (a display:contents wrapper,
+   so its cells are direct grid items) claims columns 2–5 by explicit placement,
+   which keeps every cell in its column even when a neighbour is omitted. */
+.agent-grid > .row-identity { grid-column: 1; }
+.row-instruments { display: contents; }
+.agent-grid .row-state { grid-column: 2; justify-self: end; padding-top: 0.08rem; }
+.agent-grid .ri-model { grid-column: 3; }
+.agent-grid .ri-tokens { grid-column: 4; }
+.agent-grid .ri-elapsed { grid-column: 5; }
+
+/* Right-aligned mono instrument cells. Values carry tabular-nums so digits align
+   down the column; unknown cells are omitted in JS (never a fabricated number). */
+.ri-cell { min-width: 0; overflow: hidden; justify-self: end; padding-top: 0.08rem; }
+.ri-value {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font: 600 12.5px/1.35 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ri-model .ri-value { font-weight: 650; }
+.ri-tokens .ri-value { font-weight: 700; font-size: 13px; }
+.ri-cell.is-unknown .ri-value { color: var(--faint); font-weight: 500; font-size: 11px; }
+
+/* De-noise: the terminal / source naming tags left the row. Only a cwd mismatch
+   keeps a mark — a small ember dot (role="img" + aria-label); the full sentence
+   rides the row title + aria-label and the drawer. Indicator ink, no flood. */
+.source-mismatch-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 22%, transparent);
 }
 /* Status column shows the activity word, colored by state (no separate dot). */
 .row-state {
@@ -1195,11 +1261,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 
-.row-fact { min-width: 0; overflow: hidden; }
-.row-fact-value { display: block; overflow: hidden; color: var(--ink); font: 600 12.5px/1.35 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.fact-tokens .row-fact-value { font-size: 13.5px; font-weight: 700; }
-.row-fact.is-unknown .row-fact-value { color: var(--faint); font-size: 11px; font-weight: 500; }
-
 .token-fact-value { display: flex; align-items: center; gap: 0.4rem; }
 /* Compatibility: token text remains the readable source of truth; the old
    green bar was decorative and made the primary row noisy. */
@@ -1208,19 +1269,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
 .tm-fill.hot { fill: var(--ember); }
-
-.fact-control { display: grid; justify-items: start; }
-/* ACCESS: icon + explicit state word (Ready / View only / Quarantined). */
-.control-access { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; }
-.control-icon { display: inline-grid; width: 1.35rem; height: 1.35rem; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); flex: none; }
-.control-icon .ico { width: 0.85rem; height: 0.85rem; }
-.control-access-text { font: 650 11.5px/1.2 var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.control-linked .control-icon { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 40%, var(--line-strong)); }
-.control-linked .control-access-text { color: var(--moss); }
-.control-observed-only .control-icon { color: var(--faint); border-style: dashed; }
-.control-observed-only .control-access-text { color: var(--faint); }
-.control-quarantined .control-icon { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--line)); background: color-mix(in srgb, var(--failed) 7%, var(--raise)); }
-.control-quarantined .control-access-text { color: var(--failed); font-weight: 750; }
 
 .row-update { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; margin: 0.3rem 0 0 8.5rem; }
 .row-summary {
@@ -1322,7 +1370,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* ---------- widescreen: reading-focused 40/60 split ----------
    With an agent open, the roster keeps ~40% as a scannable rail (trees of
    agent/workspace/program) and the drawer takes ~60% — the reading surface.
-   Model/Context/Access columns fold away; they live in full inside the drawer. */
+   the model/tokens/elapsed instruments fold away; they live in full in the drawer. */
 @media (min-width: 1180px) {
   body.inspector-open .pane-list {
     flex: 0 0 clamp(380px, 40%, 760px);
@@ -1334,9 +1382,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   }
   body.inspector-open .agent-grid,
   body.inspector-open .agent-column-header {
-    grid-template-columns: minmax(6rem, 0.72fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
   }
-  body.inspector-open .agent-grid > :nth-child(n + 3),
+  /* Keep identity + status; drop the model/tokens/elapsed instruments and their
+     header labels (columns 3–5). */
+  body.inspector-open .agent-grid .ri-model,
+  body.inspector-open .agent-grid .ri-tokens,
+  body.inspector-open .agent-grid .ri-elapsed,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
 }
 
@@ -1508,6 +1560,22 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-eyebrow--moss  { color: var(--moss); }
 .dw-eyebrow--slate { color: var(--slate); }
 
+/* Entity-drawer head action (B4) — the promoted primary lever in the verdict
+   side. Compact, matching the agent drawer's .verdict-action .dock-tool sizing so
+   every drawer's head reads the same. Scoped under .verdict-action so it wins the
+   compact size over the base .btn (which is later in source); inherits .btn
+   colours/border/radius. Touch-swept to 44px below 1024px in the responsive block. */
+.verdict-action .dw-head-action { min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; white-space: nowrap; }
+
+/* Program head rollup (B4) — the swarm at a glance: mono values with quiet ui
+   unit words, hairline-gapped. Values mono per rule 2; unit labels stay
+   ui/--faint; an alert count earns ember ink (urgency earns weight, calm does not). */
+.dw-rollup { display: flex; flex-wrap: wrap; gap: 0.1rem 0.85rem; margin: 0.15rem 0 0; }
+.dw-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.dw-rollup-value { font: 650 14px/1.05 var(--font-mono); color: var(--ink); }
+.dw-rollup-label { font-size: 11.5px; color: var(--faint); }
+.dw-rollup-cell.is-alert .dw-rollup-value { color: var(--ember); }
+
 .dw-lead { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
 .dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
 .dw-lead--past { color: var(--moss); font-weight: 650; }
@@ -1674,20 +1742,53 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
-/* Legacy pill styles kept for any residual list surfaces; agent drawer uses .status-line. */
-.inspector-state { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--sand); }
-.state-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.6rem; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 12px; font-weight: 650; color: var(--muted); background: var(--raise); }
-.state-pill .ico { width: 0.85rem; height: 0.85rem; }
-.state-pill.act-working { color: var(--working); border-color: color-mix(in srgb, var(--working) 45%, transparent); }
-.state-pill.act-idle { color: var(--idle); border-color: color-mix(in srgb, var(--idle) 45%, transparent); }
-.state-pill.outcome-needs-you { color: var(--needs); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
-.state-pill.outcome-blocked { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 45%, transparent); }
-.state-pill.outcome-failed { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-quarantined { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-linked { color: var(--moss); }
-.state-pill.policy-compliant { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.state-pill.policy-unreported { color: var(--faint); border-style: dashed; }
-.state-pill.policy-mismatch { color: #fff; background: var(--failed); border-color: var(--failed); }
+/* Verdict head (B2): the head carries the verdict — name, status words, the
+   ember-outline gate when blocked — plus the one most-relevant action, so the
+   operator can act from the top. Close and the head action stack on the right. */
+.inspector-verdict .verdict-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  flex: none;
+}
+.verdict-action .dock-tool {
+  min-height: 32px;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--raise);
+}
+.verdict-action .dock-tool:hover:not(:disabled) { border-color: var(--ink); background: var(--sand); }
+.verdict-gate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  padding: 0.16rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 55%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--ember);
+  background: none; /* indicator ink + outline, never a fill */
+}
+.verdict-gate .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+/* De-noised mismatch: the quiet line keeps a visible ember dot; the full
+   sentence lives in the title tooltip. */
+.inspector-source-name.is-mismatch::before {
+  content: "";
+  display: inline-block;
+  width: 0.38rem;
+  height: 0.38rem;
+  margin-right: 0.32rem;
+  border-radius: 50%;
+  background: var(--ember);
+}
+/* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
+   holds DOM order without spending a flex gap. */
+.inspector-vitals:empty { display: none; }
 
 /* Agent drawer status — one sentence under the title, not a pill cluster. */
 .status-line {
@@ -1730,8 +1831,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .control-banner-copy { min-width: 0; overflow-wrap: anywhere; }
 .control-banner-copy strong { color: var(--ink); font-weight: 650; }
 .control-banner-link {
+  /* One red ink for the whole banner: --failed (settled ruling — border/icon/link
+     are --failed ink over the sanctioned --ember-soft tint; never two red inks). */
   display: inline; padding: 0; border: 0; background: none; cursor: pointer;
-  color: var(--ember); font: inherit; font-weight: 650;
+  color: var(--failed); font: inherit; font-weight: 650;
 }
 .control-banner-link:hover { text-decoration: underline; }
 
@@ -1874,8 +1977,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- vitals band: the instrument tiles ----------
    The numbers an operator acts on (context ring, session tokens + cache, uptime)
-   rendered as instruments above the identity meta. Omit-empty: absent tiles are
-   never rendered, so the band flexes to whatever the source reports. */
+   rendered as instruments in a compact row directly under the verdict head — the
+   band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
+   absent tiles are never rendered, so the band flexes to whatever the source
+   reports; when the source reports nothing the mount's :empty rule collapses it. */
+.inspector-vitals { min-width: 0; }
 .vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .vital {
   flex: 1 1 8.5rem;
@@ -2082,17 +2188,29 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   transition: opacity 180ms ease, transform 180ms ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { border-color: var(--bad); color: #f4c9bd; }
+.toast.err { border-color: var(--bad); color: color-mix(in srgb, var(--ember) 25%, var(--surface)); }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 60%, var(--ink)); }
 
 /* ---------- responsive ---------- */
+
+/* Density at width: from 1440px up the canvas is wide enough that agent rows can
+   afford less vertical breathing room. Tighten ONLY the row's vertical padding —
+   0.45rem → 0.35rem, one step down this section's own spacing scale (it is the
+   .agent-column-header's bottom padding), so the dense row rhythm matches the
+   header it sits under — and a full swarm fits more rows per screen. Structure is
+   untouched: min-height, the instrument cluster, and the summary line keep their
+   sizes; horizontal padding is inherited from the base rule; and the <1024px 44px
+   touch sweep (a max-width rule below) never sees this min-width override. */
+@media (min-width: 1440px) {
+  .agent-row { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+}
 
 @media (max-width: 1180px) {
   /* Wrap the strip to two rows; drop dividers so wrapped cells don't stray. */
   .rail-inner { gap: 0.55rem 1.1rem; }
   .rail-inner .reading { flex: 1 1 calc(33.333% - 0.74rem); border-right: 0; }
   .agent-column-header,
-  .agent-grid { grid-template-columns: minmax(4.5rem, 0.72fr) minmax(9rem, 2.4fr) minmax(4.5rem, 0.68fr) minmax(4rem, 0.62fr) minmax(4.8rem, 0.74fr); }
+  .agent-grid { grid-template-columns: minmax(8rem, 2.4fr) minmax(4rem, 0.68fr) minmax(5.25rem, 0.9fr) minmax(3.5rem, 0.52fr) minmax(2.75rem, 0.42fr); }
   .tri-spine { flex-wrap: wrap; gap: 0.5rem 0; }
   .tri-step { flex: 1 1 46%; }
 }
@@ -2128,7 +2246,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
-  .reading-repair { min-height: 44px; }
+  .verdict-action .dock-tool, .verdict-action .dw-head-action,
+  .reading-repair, .filter-chip, .program-details,
+  .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -2153,25 +2273,27 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }
   .agent-column-header,
   .agent-grid {
-    grid-template-columns: minmax(5.2rem, 6.5rem) minmax(0, 1fr) minmax(5.2rem, 6.4rem);
-    gap: 0.35rem 0.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(5.2rem, auto);
+    gap: 0.25rem 0.5rem;
+    align-items: center;
   }
   .agent-column-header {
-    grid-template-areas: "status agent model" "context access access";
+    grid-template-areas: "agent agent" "status model";
     padding: 0.4rem 0.45rem;
   }
-  .agent-column-header > :nth-child(1) { grid-area: status; }
-  .agent-column-header > :nth-child(2) { grid-area: agent; }
-  .agent-column-header > :nth-child(3) { grid-area: model; }
-  .agent-column-header > :nth-child(4) { grid-area: context; }
-  .agent-column-header > :nth-child(5) { grid-area: access; }
+  .agent-column-header > :nth-child(1) { grid-area: agent; justify-self: start; text-align: left; }
+  .agent-column-header > :nth-child(2) { grid-area: status; justify-self: start; text-align: left; }
+  .agent-column-header > :nth-child(3) { grid-area: model; justify-self: end; text-align: right; }
+  /* Tokens + Elapsed columns collapse away on narrow — the cluster keeps status + model. */
+  .agent-column-header > :nth-child(4),
+  .agent-column-header > :nth-child(5) { display: none; }
   .agent-column-label { font-size: 8px; letter-spacing: 0.05em; }
-  .agent-row .row-state { grid-area: status; }
+  .agent-row .agent-grid { grid-template-areas: "identity identity" "status model"; }
   .agent-row .row-identity { grid-area: identity; }
-  .agent-row .fact-model { grid-area: model; }
-  .agent-row .fact-context { grid-area: context; }
-  .agent-row .fact-control { grid-area: access; justify-items: start; }
-  .agent-row .agent-grid { grid-template-areas: "status identity identity" "model model model" "context access access"; }
+  .agent-row .row-state { grid-area: status; justify-self: start; padding-top: 0; }
+  .agent-row .ri-model { grid-area: model; justify-self: end; }
+  .agent-row .ri-tokens,
+  .agent-row .ri-elapsed { display: none; }
   .agent-row .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
   .agent-row:hover .row-summary,
   .agent-row:focus .row-summary,
@@ -2193,8 +2315,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .finding .gist, .finding .trace { display: none; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
-  /* Per-type drawer controls stay comfortably tappable on touch. */
-  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
+  /* Per-type drawer controls stay comfortably tappable on touch.
+     (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
+  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
@@ -2281,6 +2404,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   text-transform: uppercase;
   color: var(--faint);
 }
+/* Rule 2 — mono for values: the Tokens/Cost/Session cells carry token/cost
+   values and an identifier, so they render in mono like .row-fact-value; the
+   session cell's .linkish button inherits it. When/Provider/Model stay prose. */
+.usage-table td.usage-val { font-family: var(--font-mono); }
 .linkish {
   border: 0;
   background: none;

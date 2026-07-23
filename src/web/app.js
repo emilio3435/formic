@@ -327,6 +327,26 @@ function deriveRollup(agents) {
 
 const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
+/* At-a-glance rollup cells — the ONE aggregation source shared by the program
+   drawer head (programRollupLine) and the left-tree program header
+   (programHeadRollup). Counts are always client-derivable, so they always
+   render; the token aggregate is omitted honestly when no agent reports a
+   session total (never faked). Alert cells flag themselves for ink gating. */
+function programRollupCells(agents) {
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return cells;
+}
+
 /* Plain-language control explanation for the Operate chrome. Never echoes
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
@@ -850,6 +870,25 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
+   source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
+   agoText. A source that has never been healthy (lastHealthyAt null) contributes
+   nothing — claiming "never seen healthy" would be a lie — so an all-null or
+   sourceless snapshot yields no suffix at all. */
+function degradedSinceText(snap) {
+  const byProvider = snap && snap.totals && snap.totals.sourceHealth && snap.totals.sourceHealth.byProvider;
+  if (!byProvider) return "";
+  let latest = null;
+  for (const health of Object.values(byProvider)) {
+    if (!health || health.healthy !== false || !health.lastHealthyAt) continue;
+    const t = Date.parse(health.lastHealthyAt);
+    if (Number.isNaN(t)) continue;
+    if (latest === null || t > latest) latest = t;
+  }
+  if (latest === null) return "";
+  return " · last healthy " + agoText(new Date(latest).toISOString());
+}
+
 function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
@@ -1009,6 +1048,9 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
+  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  renderAgentRow, renderAgentColumnHeader,
+  renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -1016,7 +1058,7 @@ globalThis.TheAntHill = {
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
-  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
+  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
 };
 
@@ -1070,7 +1112,7 @@ const state = {
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   drafts: new Map(),      // agentId -> instruct draft text
-  confirming: null,       // `${agentId}:${action}`
+  confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation
@@ -1181,18 +1223,24 @@ function saveWidgetPreferences() {
 
 /* ---------- data flow ---------- */
 
+/* The one apply path a validated snapshot takes into the UI: shape-guard, adopt
+   it, sync the scan window, clear the failure flag, re-render. Both the GET poll
+   (fetchSnapshot) and the POST recollect feed through here so neither can drift. */
+function applySnapshot(snap) {
+  if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
+    throw new Error("unexpected snapshot shape");
+  }
+  state.snap = snap;
+  if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
+  state.fetchFailed = false;
+  render();
+}
+
 async function fetchSnapshot() {
   try {
     const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const snap = await res.json();
-    if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
-      throw new Error("unexpected snapshot shape");
-    }
-    state.snap = snap;
-    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
-    state.fetchFailed = false;
-    render();
+    applySnapshot(await res.json());
   } catch (err) {
     state.fetchFailed = true;
     if (!state.snap) {
@@ -1200,6 +1248,21 @@ async function fetchSnapshot() {
       render();
     }
     console.warn("snapshot fetch failed:", err);
+  }
+}
+
+/* The Degraded verdict's Refresh forces a fresh server-side collection rather than
+   re-serving cache: POST /api/recollect (no body, same-origin — the browser sends
+   the Origin header the server guard requires). Apply the returned snapshot through
+   the shared path; any non-OK envelope ({ ok:false, ... }, e.g. 500 RECOLLECT_FAILED)
+   or a network error falls back to fetchSnapshot so Refresh is never a dead button. */
+async function recollectSnapshot() {
+  try {
+    const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
+    if (!res.ok) { await fetchSnapshot(); return; }
+    applySnapshot(await res.json());
+  } catch {
+    await fetchSnapshot();
   }
 }
 
@@ -1406,8 +1469,9 @@ function renderSummaryWidget(id, weight = "normal") {
   // and exposes the existing refresh control right there.
   const degraded = id === "health" && data.tone === "degraded";
   const reason = degraded ? topSourceIssue(state.snap) : null;
+  const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
+  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + sinceNote + snapNote }));
   if (degraded) {
     subNode.append(el("button", {
       type: "button",
@@ -1415,7 +1479,7 @@ function renderSummaryWidget(id, weight = "normal") {
       title: "Re-pull the latest snapshot evidence",
       "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
       dataset: { fkey: "degraded-refresh" },
-      onclick: () => fetchSnapshot(),
+      onclick: () => recollectSnapshot(),
     }, "Refresh"));
   }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
@@ -2267,14 +2331,20 @@ function renderTabs() {
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    countNode.textContent = state.snap
-      ? String(agents.filter((a) =>
+    const count = state.snap
+      ? agents.filter((a) =>
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
-        ).length)
-      : "";
+        ).length
+      : null;
+    countNode.textContent = count == null ? "" : String(count);
+    // The Alerts (needs-you) tab count takes ember ink when there is anything to
+    // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
+    if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
-    btn.setAttribute("aria-pressed", String(btn.dataset.view === state.view));
+    const isCurrent = btn.dataset.view === state.view;
+    btn.setAttribute("aria-pressed", String(isCurrent));
+    btn.classList.toggle("is-current", isCurrent);
   }
   const toggle = $("select-toggle");
   if (toggle) {
@@ -2508,26 +2578,24 @@ function renderPrograms() {
   }
 }
 
-function rollupParts(r) {
-  const parts = [];
-  if (r.needsYou) parts.push({ text: r.needsYou + (r.needsYou === 1 ? " alert" : " alerts"), hot: true });
-  if (r.working) parts.push({ text: r.working + " working" });
-  if (r.idle) parts.push({ text: r.idle + " idle" });
-  if (r.ended) parts.push({ text: r.ended + " done" });
-  if (!parts.length) parts.push({ text: r.total + " tracked" });
-  return parts;
+/* Left-tree program header rollup — the same at-a-glance data as the drawer head
+   (programRollupCells is the single aggregation source), rendered as the mono
+   .program-rollup cluster A4 established. The alert count takes ember ink
+   (is-alerting → --ember) only when alerts exist; calm earns no color. The
+   accessible name carries the data itself, extending the drawer's aria pattern. */
+function programHeadRollup(agents) {
+  const cells = programRollupCells(agents);
+  const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
+  return el("span", { class: "program-rollup", "aria-label": label },
+    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") },
+      el("span", { class: "program-rollup-value mono", text: c.value }),
+      el("span", { class: "program-rollup-label", text: c.label }))));
 }
 
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const r = deriveRollup(agents);
-
-  const rollup = el("span", { class: "program-rollup" });
-  rollupParts(r).forEach((part, i) => {
-    if (i) rollup.append(" · ");
-    rollup.append(part.hot ? el("span", { class: "hot", text: part.text }) : part.text);
-  });
+  const rollup = programHeadRollup(agents);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -2658,15 +2726,18 @@ function renderAgentRows(program, agents) {
 }
 
 function renderAgentColumnHeader() {
+  // Identity on the left, the right-aligned instrument cluster on the right:
+  // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
+  // aria-label; the terminal/source naming tags fold into the tooltip + drawer.)
   return el("div", {
     class: "agent-grid agent-column-header",
     "aria-label": "Agent list columns",
   },
-    el("span", { class: "agent-column-label", text: "Status" }),
     el("span", { class: "agent-column-label", text: "Agent/message" }),
-    el("span", { class: "agent-column-label", text: "Model" }),
-    el("span", { class: "agent-column-label", text: "Context" }),
-    el("span", { class: "agent-column-label", text: "Access" }));
+    el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -2691,11 +2762,6 @@ function rowSummary(agent) {
   return NO_READABLE_MESSAGE;
 }
 
-function rowFact(label, value, className = "") {
-  return el("span", { class: "row-fact " + className, "aria-label": `${label}: ${value}`, title: String(value) },
-    el("span", { class: "row-fact-value", text: value }));
-}
-
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
@@ -2716,38 +2782,11 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-function contextFact(agent) {
-  const usage = contextUsage(agent.tokens);
-  const value = contextDisplayValue(agent.tokens);
-  const title = usage
-    ? usage.text
-    : hasObservedTotal(agent.tokens)
-      ? "Context window size not reported by Claude; showing observed tokens."
-      : "This source does not report observed context usage.";
-  return el("span", {
-    class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
-    "aria-label": `${contextDisplayLabel()}: ${value}`,
-  },
-    el("span", {
-      class: "row-fact-value context-fact-value",
-      title,
-      text: value,
-    }));
-}
-
+// Shared control vocabulary — the icon key + human state word for each access
+// state. The agent row folds Access into its aria-label; the drawer status line
+// renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
-
-function controlFact(control) {
-  const stateText = CONTROL_STATE_TEXT[control] || "View only";
-  return el("span", {
-    class: "row-fact fact-control control-" + control,
-    "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control],
-  },
-    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control] },
-      el("span", { class: "control-icon" }, icon(CONTROL_ICONS[control] || "observed")),
-      el("span", { class: "control-access-text", text: stateText })));
-}
 
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
@@ -2771,10 +2810,13 @@ function renderAgentRow(agent, program, opts = {}) {
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
   const terminal = terminalSourceName(agent);
-  const customLabel = state.aliases.has(nameKey)
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   const sourceName = sourceAgentName(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  // The terminal / source / cwd-mismatch naming detail leaves the visible row.
+  // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
+  // sentence into the row tooltip + aria-label; the drawer still carries it too.
+  const sourceDetail = fullSourceDetail(agent);
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
   const activate = () => {
     if (state.selecting) {
@@ -2802,25 +2844,32 @@ function renderAgentRow(agent, program, opts = {}) {
         },
       }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
-      cwdMismatch && terminal
+      // De-noised: only the cwd-mismatch state keeps a visible mark — a small
+      // ember dot with an accessible label. The full sentence rides the row
+      // tooltip + aria-label and the drawer; no naming prose on the row.
+      cwdMismatch
         ? el("span", {
-          class: "source-label is-mismatch",
-          title: "This agent session cwd differs from the cmux pane folder. Title is the terminal; identity stays the session.",
-          text: "terminal: " + terminal + " · cwd differs",
+          class: "source-mismatch-dot",
+          role: "img",
+          "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
+          title: sourceDetail || CWD_MISMATCH_HINT,
         })
-        : customLabel && terminal
-          ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-          : customLabel
-            ? el("span", { class: "source-label", title: "Provider source name", text: "source: " + sourceName })
-            : terminal && terminal !== displayName
-              ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-              : null,
+        : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
-  const line1 = el("span", { class: "agent-grid" },
+  // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
+  // elapsed. Values ride --font-mono with tabular-nums; each cell is omitted
+  // honestly when its number is unknown (never fabricated), matching the
+  // vitals-band precedent. Access + the naming detail fold into the aria-label.
+  const ctxUsage = contextUsage(agent.tokens);
+  const modelText = modelShort(agent.model) || "not reported";
+  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const tokens = tokenSummary(agent.tokens);
+
+  const instruments = el("span", { class: "row-instruments" },
     el("span", {
       class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
       title: stateText,
@@ -2828,10 +2877,29 @@ function renderAgentRow(agent, program, opts = {}) {
     },
       el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
       outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
-    identity,
-    rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
-    contextFact(agent),
-    controlFact(control));
+    el("span", {
+      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
+      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
+      title: ctxUsage ? ctxUsage.text : modelText,
+    },
+      el("span", { class: "ri-value mono", text: modelCtx })),
+    tokens.known
+      ? el("span", {
+        class: "ri-cell ri-tokens",
+        "aria-label": "Tokens: " + tokens.text,
+        title: tokens.title,
+      },
+        el("span", { class: "ri-value mono", text: tokens.text }))
+      : null,
+    elapsed && elapsed !== "—"
+      ? el("span", {
+        class: "ri-cell ri-elapsed",
+        "aria-label": "Elapsed: " + elapsed,
+      },
+        el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
+      : null);
+
+  const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
   const rowClass = "agent-row provider-" + agent.provider +
     " role-" + role.key +
@@ -2858,10 +2926,13 @@ function renderAgentRow(agent, program, opts = {}) {
     id: "agent-" + agent.id,
     role: "button",
     tabindex: state.selecting && !eligible ? "-1" : "0",
+    // The de-noised naming detail rides the tooltip for sighted hover; screen
+    // readers get it (plus tokens/elapsed/access) in the aria-label below.
+    title: sourceDetail || null,
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;
@@ -3059,10 +3130,80 @@ function dwEyebrow(kindClass, iconName, text) {
   return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
 }
 
-function drawerHead(eyebrowNode, titleText) {
-  return el("div", { class: "inspector-head" },
-    el("div", { class: "inspector-id" }, eyebrowNode, el("h2", { class: "inspector-title", text: titleText })),
-    closeButton());
+/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
+   the agent drawer: the status kicker + title (+ an optional sub line) on the
+   left, Close and the one promoted action stacked on the right. The agent drawer
+   keeps its own richer head (provider rail, status line, gate); the entity
+   drawers share this so the five near-identical heads are not hand-rolled. */
+function drawerVerdictHead({ eyebrow, title, sub, action }) {
+  return el("div", { class: "inspector-head inspector-verdict" },
+    el("div", { class: "inspector-id" },
+      eyebrow || null,
+      el("h2", { class: "inspector-title", text: title }),
+      sub || null),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      action ? el("div", { class: "verdict-action" }, action) : null));
+}
+
+/* Compact promoted lever for an issue drawer's head — the single most-relevant
+   action, so an operator can act from the top without scrolling to the Fix
+   block. Reuses the same triageIssue(...) calls the body controls use; the
+   head: fkey prefix (B2 convention) keeps the key distinct from the body twin.
+   A queued investigation → Launch; a not-yet-triaged finding → Triage; anything
+   in flight → null (the Fix/Triage block owns the plan/queue story). */
+function issueHeadAction(issue) {
+  const id = issue.id;
+  const queueItem = state.queueItems.find((it) => it.issueId === id);
+  if (queueItem && queueItem.state === "queued") {
+    const launching = state.triagePending.has("run:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: launching ? "" : null,
+      "aria-busy": launching ? "true" : null,
+      dataset: { fkey: "head:run:" + id },
+      onclick: () => triageIssue(id, "run"),
+    }, launching ? "Launching…" : "Launch");
+  }
+  if (!state.triage.get(id)) {
+    const generating = state.triagePending.has("generate:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: generating ? "" : null,
+      "aria-busy": generating ? "true" : null,
+      dataset: { fkey: "head:triage:" + id },
+      onclick: () => triageIssue(id, "generate"),
+    }, generating ? "Triaging…" : "Triage");
+  }
+  return null;
+}
+
+/* The investigation head's promoted lever — the queued run's Launch button, the
+   drawer's one existing primary control. Head: prefix keeps it distinct from the
+   full-width Launch that stays in the body. Null unless the run is queued. */
+function investigationHeadAction(item) {
+  if (item.state !== "queued") return null;
+  const launching = state.triagePending.has("run:" + item.issueId);
+  return el("button", {
+    type: "button", class: "btn dw-head-action",
+    disabled: launching ? "" : null,
+    "aria-busy": launching ? "true" : null,
+    dataset: { fkey: "head:run:" + item.issueId },
+    onclick: () => triageIssue(item.issueId, "run"),
+  }, launching ? "Launching…" : "Launch");
+}
+
+/* Program head rollup — the swarm at a glance: agent count, working, alerts, and
+   aggregate session tokens, aggregated client-side over the program's agents.
+   Values ride the mono convention; unit words stay ui/--faint. The token cell is
+   omitted when no agent on the client reports session usage — an aggregate we
+   cannot derive is never faked to zero. */
+function programRollupLine(program) {
+  const cells = programRollupCells(program.agents || []);
+  return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
+    cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
+      el("span", { class: "dw-rollup-value mono", text: c.value }),
+      el("span", { class: "dw-rollup-label", text: c.label }))));
 }
 
 const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
@@ -3145,9 +3286,11 @@ function renderInterventionDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "ember");
-  pane.append(drawerHead(
-    dwEyebrow("ember", "intervention", work.label),
-    issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ember", "intervention", work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3168,7 +3311,11 @@ function renderAdvisoryDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "amber");
-  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory · " + work.label), issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("amber", "warning", "Advisory · " + work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3194,9 +3341,11 @@ function renderInvestigationDrawer(pane, view) {
   const running = item.state === "running";
   const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
   drawerAccent(pane, "slate");
-  pane.append(drawerHead(
-    dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
-    item.headline));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    title: item.headline,
+    action: investigationHeadAction(item),
+  }));
 
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
@@ -3250,7 +3399,12 @@ function renderResolvedDrawer(pane, view) {
   const result = lifecycle.result || "Source confirmation cleared the finding.";
   pane.classList.add("dw-past");
   drawerAccent(pane, "moss");
-  pane.append(drawerHead(dwEyebrow("moss", "check", "Resolved"), issue.title));
+  // Resolved is the only past-tense drawer — no reopen/inspect control exists, so
+  // the head renders verdict-only; no action is invented.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("moss", "check", "Resolved"),
+    title: issue.title,
+  }));
   pane.append(el("p", { class: "dw-lead dw-lead--past", text: "Cleared " + issueTimestamp(lifecycle.resolvedAt) }));
 
   const grid = el("dl", { class: "detail-grid" });
@@ -3310,14 +3464,19 @@ function programRosterRow(agent) {
 function renderProgramDrawer(pane, view) {
   const program = view.program;
   const agents = program.agents;
-  const r = deriveRollup(agents);
   drawerAccent(pane, "ink");
-  pane.append(drawerHead(dwEyebrow("ink", null, "Program"), programName(program)));
+  // Program head leads with the rollup glance (counts + aggregate tokens); the
+  // segmented meter below stays as the visual breakdown, no longer restating the
+  // same numbers in a caption.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ink", null, "Program"),
+    title: programName(program),
+    sub: programRollupLine(program),
+  }));
 
   pane.append(el("div", { class: "dw-block" },
     el("div", { class: "dw-block-label", text: agents.length + (agents.length === 1 ? " agent" : " agents") }),
-    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" }),
-    el("p", { class: "dw-impact", text: rollupParts(r).map((p) => p.text).join(" · ") })));
+    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" })));
 
   if (program.purpose || program.path) {
     const grid = el("dl", { class: "detail-grid" });
@@ -3350,6 +3509,59 @@ function renderProgramDrawer(pane, view) {
     roster));
 }
 
+/* Head de-noising (B2): the three-way naming ternaries collapse into one quiet
+   line. quietSourceLine returns one short line of text — or null when the
+   terminal name already matches the display name — and fullSourceDetail returns
+   the complete sentence for the title tooltip (mismatch explanation included).
+   B4 reuses both for the other drawer types' heads. */
+function quietSourceLine(agent) {
+  const terminal = terminalSourceName(agent);
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  if (terminal) {
+    // A cwd mismatch must keep its mark even when the shown name happens to
+    // equal the terminal title — only calm matching identities go quiet.
+    if (terminal === agentName(agent) && !mismatch) return null;
+    return "Terminal: " + terminal;
+  }
+  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  return hasCustomName ? "Source agent: " + sourceAgentName(agent) : null;
+}
+
+function fullSourceDetail(agent) {
+  const quiet = quietSourceLine(agent);
+  if (!quiet) return null;
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  return mismatch ? quiet + " · " + CWD_MISMATCH_HINT : quiet;
+}
+
+/* Ember-outline gate chip for the verdict head — names the blocker when the
+   outcome is blocked. Indicator ink + outline, never a filled banner. */
+function verdictGate(agent, outcome) {
+  if (outcome !== "blocked") return null;
+  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
+  const text = gate ? conciseText(gate, 64)
+    : agent.statusReason ? conciseText(agent.statusReason, 64)
+      : OUTCOME_LABELS.blocked;
+  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
+    icon("warning"), text);
+}
+
+/* The single most-relevant action control for the verdict head. Reuses the
+   dock's derivation (capability + renderDockTool) so head and dock behave
+   identically. Focus (jump to the pane) leads; Interrupt only when it is the
+   sole enabled lever. When safe controls are locked the head stays empty —
+   the control banner owns that story. */
+function headPrimaryAction(agent) {
+  const focusCap = capability(agent, "focus");
+  const instructCap = capability(agent, "instruct");
+  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
+  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
+  const interruptCap = capability(agent, "interrupt");
+  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
+  return null;
+}
+
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
 function renderAgentDrawer(pane, view) {
@@ -3363,43 +3575,49 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  const terminal = terminalSourceName(agent);
-  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  // Verdict head — name, status words, the gate when blocked, and the one
+  // most-relevant action: verdict first, act from the top.
+  const sourceLine = quietSourceLine(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  pane.append(el("div", { class: "inspector-head" },
+  const headAction = headPrimaryAction(agent);
+  pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
-      cwdMismatch && terminal
+      sourceLine
         ? el("p", {
-          class: "inspector-source-name is-mismatch",
-          title: CWD_MISMATCH_HINT,
-          text: "Terminal: " + terminal + " · session cwd ≠ pane folder",
+          class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
+          title: fullSourceDetail(agent),
+          text: sourceLine,
         })
-        : hasCustomName && terminal
-          ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-          : hasCustomName
-            ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
-            : terminal && terminal !== agentName(agent)
-              ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-              : null,
+        : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
         el("span", { class: "chip provider-" + agent.provider },
           providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
-      renderStatusLine(agent, activity, outcome, control, policy)),
-    closeButton()));
+      renderStatusLine(agent, activity, outcome, control, policy),
+      verdictGate(agent, outcome)),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
 
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
-
-  pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
+
+  // Vitals promoted to an instrument band directly under the verdict head —
+  // the numbers an operator acts on, no longer buried in the Evidence shelf.
+  // The mount always holds this DOM position (after next-action, before the
+  // shelf); renderVitalsBand omit-empties, and :empty hides the mount when the
+  // source reports nothing, so no flex gap is spent on a blank band.
+  const vitalsMount = el("div", { class: "inspector-vitals" });
+  const vitalsBand = renderVitalsBand(agent);
+  if (vitalsBand) vitalsMount.append(vitalsBand);
+  pane.append(vitalsMount);
 
   // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
   // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
@@ -3421,6 +3639,9 @@ function renderAgentDrawer(pane, view) {
       body: renderChat(agent),
     }),
     renderEvidenceShelf(agent)));
+
+  // Lineage spine demoted below the shelf — context, not action.
+  pane.append(renderLineageSpine(agent));
 
   // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));
@@ -3466,11 +3687,10 @@ function renderEvidenceShelf(agent) {
       el("span", { class: "shelf-rail-label", text: "Evidence" }));
   }
 
+  // Evidence holds paths, routing, and the transcript tail. The vitals
+  // instrument band moved out to lead the drawer under the verdict head
+  // (renderVitalsBand); Evidence no longer carries the metrics tiles.
   const body = renderEvidence(agent);
-  // Metrics live behind the disclosure, not in the showcase: the vitals
-  // instrument band leads the Evidence column when it opens.
-  const vitals = renderVitals(agent);
-  if (vitals) body.prepend(vitals);
   const section = el("section", {
     class: "shelf-section shelf-evidence is-open",
     dataset: { shelf: "evidence" },
@@ -3677,19 +3897,24 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   return dock;
 }
 
-function renderDockTool(agent, cap, action) {
+function renderDockTool(agent, cap, action, opts = {}) {
   const key = agent.id + ":" + action;
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
+  // focus restore and the confirm strip must bind to the clicked instance —
+  // never both surfaces at once. Busy/sendControl state stays shared via key.
+  const fkey = (opts.fkeyPrefix || "") + "act:" + key;
+  const confirmKey = (opts.fkeyPrefix || "") + "confirm:" + key;
 
-  if (state.confirming === key) {
+  if (state.confirming === fkey) {
     return el("span", { class: "confirm-strip command-confirm", role: "group",
       "aria-label": label + " " + agentName(agent) + "?" },
       el("span", { text: label + "?" }),
       el("button", {
         type: "button", class: "btn confirm-yes",
-        dataset: { fkey: "confirm:" + key },
+        dataset: { fkey: confirmKey },
         onclick: () => { state.confirming = null; sendControl(agent, action); },
       }, "Confirm"),
       el("button", {
@@ -3704,12 +3929,12 @@ function renderDockTool(agent, cap, action) {
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
     title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
-    dataset: { fkey: "act:" + key },
+    dataset: { fkey },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
-        state.confirming = key;
+        state.confirming = fkey;
         render();
-        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
+        const btn = document.querySelector(`[data-fkey="${CSS.escape(confirmKey)}"]`);
         if (btn) btn.focus();
         return;
       }
@@ -3867,9 +4092,13 @@ function vitalTile(label, figure) {
 }
 
 /* Vitals band — the numbers an operator acts on, rendered as instruments (a
-   context ring, session spend + cache efficiency, uptime) instead of a grey meta
-   row. Every tile self-guards; if nothing has data the band renders nothing. */
-function renderVitals(agent) {
+   context ring, session tokens + cache efficiency, uptime) directly under the
+   verdict head instead of buried in the Evidence shelf. Every tile self-guards;
+   if nothing has data the band renders nothing (omit-empty), so the mount's
+   :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
+   the type but is never populated — real cost is program/pulse-level only, and
+   program cost has no place inside a single agent's band. */
+function renderVitalsBand(agent) {
   const t = agent.tokens || {};
   const tiles = [];
 
@@ -3933,8 +4162,8 @@ function renderOperateMeta(agent) {
       node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
     });
   }
-  // Uptime, token, and context figures now lead the Operate tab in the vitals
-  // instrument band (renderVitals). This meta row stays identity-only.
+  // Uptime, token, and context figures now lead the drawer in the vitals
+  // instrument band under the verdict head. This meta row stays identity-only.
   if (!items.length) return null;
 
   const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
@@ -3975,7 +4204,7 @@ function renderOperate(agent, _program) {
     }));
   }
 
-  // Vitals moved behind the Evidence disclosure (renderEvidenceShelf) — Operate
+  // Vitals lead the drawer as an instrument band under the verdict head — Operate
   // stays a calm digest so Chat + Operate can showcase side by side.
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);
@@ -4786,9 +5015,9 @@ function renderUsagePanel() {
         el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
-        el("td", { text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
-        el("td", { text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
-        el("td", {}, sessionCell)));
+        el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
+        el("td", { class: "usage-val", text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
+        el("td", { class: "usage-val" }, sessionCell)));
     }
   }
   table.append(body);
@@ -4874,10 +5103,12 @@ function boot() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (state.confirming) {
+      // state.confirming holds the full instance fkey ("[head:]act:<id>:<action>"),
+      // so Escape restores focus to the exact instance that opened the strip.
       const key = state.confirming;
       state.confirming = null;
       render();
-      const origin = document.querySelector(`[data-fkey="${CSS.escape("act:" + key)}"]`);
+      const origin = document.querySelector(`[data-fkey="${CSS.escape(key)}"]`);
       if (origin) origin.focus();
     } else if (state.renaming) {
       cancelRename();

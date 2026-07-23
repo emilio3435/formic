@@ -570,7 +570,8 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain("workspaceTitle");
     expect(source).toContain("cwdMismatch");
     expect(source).toContain('!agent.target?.cwdMismatch');
-    expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
+    // B2: the head renders this via quietSourceLine, no longer a text: ternary.
+    expect(source).toContain('"Source agent: " + sourceAgentName(agent)');
     expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -602,7 +603,10 @@ describe("calm program and agent list rendering", () => {
   test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
     expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
-    for (const label of ["Status", "Agent/message", "Model", "Context", "Access"]) {
+    // C1: the header now names the identity column plus the promoted instrument
+    // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
+    // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
       expect(source).toContain(`text: "${label}"`);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -633,6 +637,197 @@ describe("calm program and agent list rendering", () => {
     expect(source).toContain("function renderEvidence(");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
+  });
+});
+
+describe("agent rows: instrument cluster + de-noise (C1)", () => {
+  /* Same DOM-less execution trick B2/B3/B4 used: a minimal fake document lets
+     renderAgentRow build real nodes via el()/icon(), so these assert on what the
+     row actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // First node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function findByClass(node: any, token: string): any {
+    if (!node || typeof node !== "object") return null;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) return node;
+    for (const kid of node.children || []) {
+      const hit = findByClass(kid, token);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  const program = { id: "p1", name: "Prog" };
+
+  test("(a) the executed row renders a .row-instruments cluster with mono model/ctx%/tokens/elapsed", () => {
+    expect(typeof M.renderAgentRow).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(live, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    const text = textOf(instruments);
+    expect(text).toContain("gpt-5-codex"); // model short id, reused from modelShort
+    expect(text).toContain("20%");         // ctx% (40k/200k) — DESIGN "model + ctx%"
+    expect(text).toContain("40k");         // observed tokens, reused from tokenSummary
+    expect(text).toContain("2m");          // 125s uptime → fmtElapsed "2m"
+    // Values ride the canonical "<size> mono" convention (DESIGN rule 2 —
+    // mono for values), like vital-big mono; status word is the one non-value.
+    const monoVals = classesOf(instruments)
+      .filter((c) => /\bri-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBeGreaterThanOrEqual(3); // model, tokens, elapsed
+  });
+
+  test("(b) unknown tokens/context omit cells honestly — no fabricated numbers", () => {
+    const bare = agent({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      tokens: { provenance: "unknown" },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(bare, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    // Model still shows its honest short id, but no invented context percentage.
+    const modelCell = findByClass(instruments, "ri-model");
+    expect(modelCell).not.toBeNull();
+    expect(textOf(modelCell)).toContain("opus 4.8");
+    // Honest omission (vitals-band precedent): no tokens cell, no elapsed cell.
+    expect(findByClass(instruments, "ri-tokens")).toBeNull();
+    expect(findByClass(instruments, "ri-elapsed")).toBeNull();
+    const text = textOf(instruments);
+    expect(text).not.toContain("%");            // no invented percentage
+    expect(text).not.toContain("not reported"); // cell omitted, never faked as text
+  });
+
+  test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
+    const rowSrc = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(rowSrc).toBeDefined();
+    // The visible "terminal: " / "source: " / "cwd differs" text tags are gone
+    // from the row output path (they now live in the drawer + tooltip only).
+    expect(rowSrc).not.toContain('"terminal: " + terminal');
+    expect(rowSrc).not.toContain('"source: " + sourceName');
+    expect(rowSrc).not.toContain('" · cwd differs"');
+    // De-noised detail is reused from the drawer's helper, not re-forked.
+    expect(rowSrc).toContain("fullSourceDetail(agent)");
+    // Executed: a cwd-mismatch session renders exactly one small marked indicator
+    // carrying an accessible label — and no naming prose survives on the row.
+    const mism = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true, workspaceTitle: "ridge-term" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(mism, program));
+    const dot = findByClass(row, "source-mismatch-dot");
+    expect(dot).not.toBeNull();
+    expect(dot.attributes["aria-label"]).toBeTruthy();
+    expect(textOf(row)).not.toContain("cwd differs");
+    expect(textOf(row)).not.toContain("terminal:");
+    // A calm (non-mismatch) session shows no source mark at all on the row.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calmRow: any = withDom(() => M.renderAgentRow(agent(), program));
+    expect(findByClass(calmRow, "source-mismatch-dot")).toBeNull();
+  });
+
+  test("(d) the column header names the promoted instrument columns", () => {
+    expect(source).toContain("function renderAgentColumnHeader()");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const header: any = withDom(() => M.renderAgentColumnHeader());
+    const text = textOf(header);
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Elapsed"]) {
+      expect(text).toContain(label);
+    }
+  });
+
+  test("(e) alert washes pair their tint with a state-colored edge rail (Rule 1 — indicator inks, not flood fills)", () => {
+    // WS-C audit finding: is-needs-you / is-blocked / is-failed carried a soft tint
+    // but NO colored rail. Codified open-q2 threshold: a ≤10% tint must always ride
+    // WITH a status-colored edge mark. Assert each alert modifier now sets one.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rail = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(${ink}\\)`),
+      );
+      expect(rail).not.toBeNull();
+      // And the tint it rides with is still present (paired, not replaced).
+      const tint = styles.match(new RegExp(`\\.agent-row\\.${mod}\\b[^\\n{]*\\{[^}]*background:[^;}]*color-mix`));
+      expect(tint).not.toBeNull();
+    }
+  });
+
+  test("(f) the CSS the removed row-fact / control-access helpers owned is gone and can't return", () => {
+    // rowFact / contextFact / controlFact were deleted with the instrument-cluster
+    // rewrite, so no element emits their classes anymore. Guard both the emitters
+    // (app.js) and the now-dead rules (styles) so neither silently comes back.
+    for (const cls of ["row-fact", "control-access"]) {
+      expect(source).not.toContain(cls);
+    }
+    for (const rule of [".row-fact {", ".row-fact-value {", ".fact-control {", ".control-access {", ".control-icon {"]) {
+      expect(styles).not.toContain(rule);
+    }
+    // The live neighbours the cleanup must NOT touch stay put.
+    expect(styles).toContain(".tm-track { fill: var(--line); }");            // SVG meter fill, shared
+    expect(styles).toContain(".status-line-item.control-linked");            // drawer status line, distinct selector
+  });
+
+  test("(g) keyboard focus survives the alert rails — each alert state combines its rail with the focus ring", () => {
+    // The alert rails `.agent-row.is-needs-you:not(.is-selected)` (and -blocked /
+    // -failed) sit at (0,3,0) on the SAME box-shadow property as the (0,2,0)
+    // :focus-visible ring, so on exactly the alert rows the rail clobbered the ring
+    // and keyboard focus went invisible. The fix is a :focus-visible variant per
+    // alert state (0,4,0) that combines BOTH shadow layers — rail + inset ring.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rule = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
+      )?.[0] ?? "";
+      expect(rule).not.toBe("");
+      // Both components present: the state-colored 4px rail AND the 1px focus ring.
+      expect(rule).toContain(`inset 4px 0 var(${ink})`);
+      expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
+    }
   });
 });
 
@@ -701,8 +896,59 @@ describe("operations canvas layout", () => {
     expect(M.topSourceIssue(snapshot())).toBeNull();
     expect(source).toContain("topSourceIssue(state.snap)");
     expect(source).toContain('dataset: { fkey: "degraded-refresh" }');
-    expect(source).toContain("onclick: () => fetchSnapshot()");
+    expect(source).toContain("onclick: () => recollectSnapshot()");
     expect(styles).toContain(".reading-repair");
+  });
+
+  test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", () => {
+    // B1 built POST /api/recollect but the UI never consumed it: the button re-served
+    // cache via fetchSnapshot. It now POSTs a fresh collection and applies the result
+    // through fetchSnapshot's own apply path; a non-OK envelope (e.g. 500
+    // RECOLLECT_FAILED) falls back to fetchSnapshot so Refresh is never a dead button.
+    expect(source).toContain("onclick: () => recollectSnapshot()");
+    const fn = source.match(/async function recollectSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('fetch("/api/recollect", { method: "POST"');
+    expect(fn).toContain("applySnapshot(");
+    expect(fn).toContain("await fetchSnapshot()");
+    // Both consumers apply through the one shared path — no forked apply logic.
+    expect(source).toContain("function applySnapshot(");
+    const fetchFn = source.match(/async function fetchSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fetchFn).toContain("applySnapshot(");
+  });
+
+  test("the degraded reason names how long since the source was last healthy, and stays silent when never healthy", () => {
+    const twelveMinAgo = new Date(Date.now() - 12 * 60_000).toISOString();
+    const withHistory = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: twelveMinAgo },
+          },
+        },
+      },
+    });
+    // A degraded source with a known last-healthy moment names it (reuses agoText).
+    expect(M.degradedSinceText(withHistory)).toBe(" · last healthy 12m ago");
+    // Honest omission: a source that has NEVER been healthy says nothing extra —
+    // "never seen healthy" would be a lie.
+    const neverHealthy = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: null },
+          },
+        },
+      },
+    });
+    expect(M.degradedSinceText(neverHealthy)).toBe("");
+    // No per-provider source health at all → no suffix (default fixture omits it).
+    expect(M.degradedSinceText(snapshot())).toBe("");
   });
 
   test("live re-render preserves focus via the stable fkey restore loop", () => {
@@ -1086,12 +1332,15 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
     expect(source).toContain("evidenceOpen: false");
     expect(source).toContain('class: "shelf-evidence-rail"');
-    // Metrics are hidden behind the disclosure: vitals render inside the
-    // Evidence shelf, never in Operate.
+    // B3: metrics are promoted to the instrument band under the verdict head —
+    // Evidence no longer builds vitals (neither the old call nor the band), and
+    // Operate never did.
     const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] || "";
-    expect(evidenceShelf).toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
     expect(operate).not.toContain("renderVitals(");
+    expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
     expect(styles).toContain(".shelf-evidence-rail {");
     // Widescreen split: roster rail ~40%, drawer ~60%.
@@ -1134,5 +1383,1008 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
       || "";
     expect(operate).toContain("taskMeaningfullyDifferent(agent)");
     expect(operate).toContain("renderOperateMeta(agent)");
+  });
+});
+
+describe("verdict head — act from the top (B2)", () => {
+  /* Brace-counted extraction, not a landmark regex: it walks from the
+     signature's opening `{` to its true matching `}` by depth, so it can
+     never stop early at a column-0 `}` that belongs to nested content, and
+     it never depends on whatever function/comment happens to follow —
+     inserting a new top-level helper anywhere else in the file cannot
+     truncate or widen the body it returns. */
+  function extractFunctionBody(signature: string): string {
+    const start = source.indexOf(signature);
+    if (start === -1) return "";
+    const braceStart = source.indexOf("{", start);
+    if (braceStart === -1) return "";
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return source.slice(start, i + 1);
+      }
+    }
+    return "";
+  }
+  const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
+
+  test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
+    const drawer = agentDrawer();
+    expect(drawer).toBeTruthy();
+    const headAt = drawer.indexOf("inspector-head inspector-verdict");
+    const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
+    const nextAt = drawer.indexOf('class: "next-action"');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
+    const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
+    for (const at of [headAt, bannerAt, nextAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
+      expect(at).toBeGreaterThan(-1);
+    }
+    // The banner stays state, pinned immediately after the head.
+    expect(bannerAt).toBeGreaterThan(headAt);
+    // Next action directly under the head; the vitals mount (B3's slot) sits
+    // between next-action and the Operate | Chat shelf.
+    expect(nextAt).toBeGreaterThan(bannerAt);
+    expect(vitalsAt).toBeGreaterThan(nextAt);
+    expect(shelfAt).toBeGreaterThan(vitalsAt);
+    // Lineage is demoted below the shelf — context, not action — and the
+    // command dock stays pinned at the bottom.
+    expect(lineageAt).toBeGreaterThan(shelfAt);
+    expect(dockAt).toBeGreaterThan(lineageAt);
+    // The empty mount must not spend a flex gap until B3 fills it.
+    expect(styles).toContain(".inspector-vitals:empty { display: none; }");
+  });
+
+  test("the head carries the gate chip and one primary-action control", () => {
+    const drawer = agentDrawer();
+    const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
+    expect(head).toContain("verdictGate(");
+    expect(head).toContain("headPrimaryAction(");
+    // headPrimaryAction reuses the dock's derivation — capability() +
+    // renderDockTool() — never a duplicated action implementation.
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('capability(agent, "focus")');
+    expect(headFn).toContain("renderDockTool(");
+    // The gate is ember ink + outline, never a filled banner.
+    const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
+    expect(gateCss).toContain("color: var(--ember)");
+    expect(gateCss).toContain("background: none");
+    // Touch sweep: the head action clears 44px below 1024px.
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    expect(block).toContain(".verdict-action .dock-tool");
+  });
+
+  test("head de-noising: one quiet source line, full sentence in the tooltip", () => {
+    const drawer = agentDrawer();
+    // The three-way naming ternary collapsed into a single render.
+    expect((drawer.match(/inspector-source-name/g) || []).length).toBe(1);
+    expect(drawer).toContain("quietSourceLine(agent)");
+    expect(drawer).toContain("fullSourceDetail(agent)");
+    expect(drawer).not.toContain('session cwd ≠ pane folder"');
+    // The mismatch state keeps a visible ember mark on the quiet line.
+    expect(styles).toMatch(/\.inspector-source-name\.is-mismatch::before\s*\{[^}]*var\(--ember\)/);
+  });
+
+  test("quietSourceLine goes quiet when the terminal title is the shown name; the mismatch sentence moves to fullSourceDetail", () => {
+    // Terminal title IS the display name → no source line at all.
+    const matching = agent({ target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane" } });
+    expect(M.quietSourceLine(matching)).toBeNull();
+    expect(M.fullSourceDetail(matching)).toBeNull();
+
+    // cwd mismatch → the quiet line is short; the explanation lives in the tooltip.
+    const mismatched = agent({
+      cwd: "/Users/op",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(mismatched)).toBe("Terminal: ridge-pane");
+    expect(M.quietSourceLine(mismatched)).not.toContain("≠");
+    expect(M.fullSourceDetail(mismatched)).toContain("Terminal: ridge-pane");
+    expect(M.fullSourceDetail(mismatched)).toContain("Session cwd ≠ pane folder");
+
+    // No terminal title, no custom name → still quiet.
+    expect(M.quietSourceLine(agent())).toBeNull();
+  });
+});
+
+describe("B2 review fixes — instance-scoped head keys + executable head logic", () => {
+  /* app.js is imported without a document (DOM wiring stays un-booted), but
+     headPrimaryAction/verdictGate build real nodes via el()/icon(). A minimal
+     fake document, installed only around each call, lets the tests execute the
+     actual helpers and assert on the returned nodes. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+
+  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; both enabled → focus wins; absent → null", () => {
+    const locked = agent({ controls: [
+      { action: "focus", enabled: false, reason: "no route" },
+      { action: "instruct", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    expect(withDom(() => M.headPrimaryAction(locked))).toBeNull();
+
+    const focusReady = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "instruct", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const focusTool: any = withDom(() => M.headPrimaryAction(focusReady));
+    expect(focusTool).not.toBeNull();
+    expect(focusTool.className).toContain("dock-tool");
+    expect(focusTool.dataset.fkey).toBe("head:act:codex:a1:focus");
+
+    const interruptOnly = agent({ controls: [{ action: "interrupt", enabled: true }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
+    expect(interruptTool).not.toBeNull();
+    expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
+
+    // Priority head-to-head: both focus and interrupt enabled at once — focus
+    // must win, not just when interrupt is absent entirely.
+    const bothEnabled = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bothTool: any = withDom(() => M.headPrimaryAction(bothEnabled));
+    expect(bothTool).not.toBeNull();
+    expect(bothTool.dataset.fkey).toBe("head:act:codex:a1:focus");
+
+    expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
+  });
+
+  test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
+    // Visible text from gates; statusReason empty → the tooltip carries the
+    // gate text, never an empty title.
+    const gated = agent({ gates: ["needs-review"], statusReason: "" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip: any = withDom(() => M.verdictGate(gated, "blocked"));
+    expect(chip).not.toBeNull();
+    expect(chip.className).toBe("verdict-gate");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip.children.some((c: any) => c.textContent === "needs-review")).toBe(true);
+    expect(chip.attributes.title).toBe("needs-review");
+
+    // No gate → statusReason carries both the visible text and the tooltip.
+    const reason = agent({ statusReason: "Blocked by CI gate on main." });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip2: any = withDom(() => M.verdictGate(reason, "blocked"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip2.children.some((c: any) => c.textContent === "Blocked by CI gate on main.")).toBe(true);
+    expect(chip2.attributes.title).toBe("Blocked by CI gate on main.");
+
+    expect(withDom(() => M.verdictGate(agent(), "healthy"))).toBeNull();
+  });
+
+  test("cwd mismatch keeps its mark even when the shown name equals the terminal title", () => {
+    const aliasLike = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(aliasLike)).toBe("Terminal: Ridge pane");
+    expect(M.fullSourceDetail(aliasLike)).toContain("Session cwd ≠ pane folder");
+    // Without the mismatch the same identity stays quiet.
+    const calm = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane" },
+    });
+    expect(M.quietSourceLine(calm)).toBeNull();
+  });
+
+  test("instance-scoped keys: head prefixes its fkeys; confirm strip and Escape bind to one instance", () => {
+    const dockToolFn = source.match(/function renderDockTool\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(dockToolFn).toContain('opts.fkeyPrefix || ""');
+    // The confirm strip renders only for the instance that opened it.
+    expect(dockToolFn).toContain("state.confirming === fkey");
+    expect(dockToolFn).toContain("state.confirming = fkey");
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('fkeyPrefix: "head:"');
+    // Escape restores focus to the exact instance fkey stored in state.confirming.
+    expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+  });
+});
+
+describe("vitals instrument band (B3)", () => {
+  /* Same DOM-less execution trick B2 used: a minimal fake document installed
+     around each call lets renderVitalsBand build real nodes via el()/svg helpers,
+     so tests assert on what actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // Walk the built node tree: collect el()-set classNames and concatenated text.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // el() writes leaf text via the `text:` attr (node.textContent) and multi-child
+  // text via createTextNode kids; a node uses one or the other, so summing both
+  // never double-counts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+
+  test("(a) renderVitalsBand is exported and renders mono-classed values for a live agent", () => {
+    expect(typeof M.renderVitalsBand).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(live));
+    expect(band).not.toBeNull();
+    expect(band.className).toContain("vitals");
+    const classes = classesOf(band);
+    // Values ride the canonical "vital-big mono" convention (DESIGN rule 2).
+    expect(classes.some((c) => c.includes("vital-big") && c.includes("mono"))).toBe(true);
+    // An observed context window renders a real SVG ring; uptime is present.
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
+    const text = textOf(band);
+    expect(text).toContain("40k"); // observed context total
+    expect(text).toContain("2m");  // 125s uptime → fmtElapsed "2m"
+  });
+
+  test("(b) missing vitals render honest fallbacks — observed count without a fabricated window, omit-empty otherwise", () => {
+    // Claude-style: observed total but NO context window → absolute count, never a
+    // fabricated percentage/ring (no invented denominator).
+    const noWindow = agent({
+      provider: "claude",
+      tokens: { provenance: "observed", total: 40000 },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(noWindow));
+    expect(band).not.toBeNull();
+    const classes = classesOf(band);
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(false); // no fabricated ring
+    const text = textOf(band);
+    expect(text).toContain("40k");   // honest observed count
+    expect(text).not.toContain("%"); // no invented percentage
+    // Nothing reported at all → the band is omitted entirely (never a fake $0/0 tile).
+    const blank = withDom(() => M.renderVitalsBand(
+      agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
+    ));
+    expect(blank).toBeNull();
+    // The honest "not reported" string itself stays byte-identical.
+    expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
+  });
+
+  test("(c) renderEvidenceShelf no longer builds the vitals block — it moved to the band", () => {
+    const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(evidenceShelf).toBeTruthy();
+    // The moved pattern, quoted from the pre-B3 source: the vitals prepend.
+    expect(evidenceShelf).not.toContain("body.prepend(vitals)");
+    // No vitals tiles are built in Evidence now — neither the old call nor the band.
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
+  });
+
+  test("(d) renderAgentDrawer fills the .inspector-vitals mount with the band, before the shelf", () => {
+    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain('class: "inspector-vitals"');
+    expect(drawer).toContain("renderVitalsBand(agent)");
+    // B2 appended the mount EMPTY; B3 must fill it — that bare append is gone.
+    expect(drawer).not.toContain('pane.append(el("div", { class: "inspector-vitals" }))');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    expect(vitalsAt).toBeGreaterThan(-1);
+    expect(vitalsAt).toBeLessThan(shelfAt);
+  });
+});
+
+describe("per-type drawers lead with verdict + action (B4)", () => {
+  /* Same DOM-less execution trick B2/B3 used, so the program-rollup test asserts
+     on the real built tree — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  const bodyOf = (name: string) =>
+    source.match(new RegExp("function " + name + "\\(pane, view\\) \\{[\\s\\S]*?\\n\\}\\n"))?.[0] ?? "";
+
+  test("(a) every entity drawer opens with a shared verdict-head block before its detail", () => {
+    // The shared head is verdict-shaped: the totem chassis + a right-side stack
+    // that carries Close and the one promoted action.
+    const helper = source.match(/function drawerVerdictHead\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(helper).toBeTruthy();
+    expect(helper).toContain("inspector-head inspector-verdict");
+    expect(helper).toContain('class: "verdict-side"');
+    expect(helper).toContain('class: "verdict-action"');
+
+    // Intervention: head → workStateBanner → impactBlock (guards stay below).
+    const iv = bodyOf("renderInterventionDrawer");
+    const ivHead = iv.indexOf("drawerVerdictHead(");
+    expect(ivHead).toBeGreaterThan(-1);
+    expect(ivHead).toBeLessThan(iv.indexOf("workStateBanner(issue)"));
+    expect(iv.indexOf("workStateBanner(issue)")).toBeLessThan(iv.indexOf("impactBlock(issue)"));
+
+    // Advisory: head → workStateBanner → impactBlock.
+    const av = bodyOf("renderAdvisoryDrawer");
+    const avHead = av.indexOf("drawerVerdictHead(");
+    expect(avHead).toBeGreaterThan(-1);
+    expect(avHead).toBeLessThan(av.indexOf("workStateBanner(issue)"));
+    expect(av.indexOf("workStateBanner(issue)")).toBeLessThan(av.indexOf("impactBlock(issue)"));
+
+    // Investigation: head → status line → steps.
+    const inv = bodyOf("renderInvestigationDrawer");
+    const invHead = inv.indexOf("drawerVerdictHead(");
+    expect(invHead).toBeGreaterThan(-1);
+    expect(invHead).toBeLessThan(inv.indexOf('class: "dw-status"'));
+
+    // Resolved: head → cleared lead → before/after grid. No invented action.
+    const rv = bodyOf("renderResolvedDrawer");
+    const rvHead = rv.indexOf("drawerVerdictHead(");
+    expect(rvHead).toBeGreaterThan(-1);
+    expect(rvHead).toBeLessThan(rv.indexOf("dw-lead--past"));
+    expect(rv.indexOf("dw-lead--past")).toBeLessThan(rv.indexOf('class: "detail-grid"'));
+    expect(rv).not.toContain("issueHeadAction"); // no action invented for a past-tense drawer
+    expect(rv).not.toContain("action:");
+
+    // Program: head (with the rollup line) → roster.
+    const pr = bodyOf("renderProgramDrawer");
+    const prHead = pr.indexOf("drawerVerdictHead(");
+    expect(prHead).toBeGreaterThan(-1);
+    expect(pr).toContain("programRollupLine(program)");
+    expect(prHead).toBeLessThan(pr.indexOf('class: "dw-roster"'));
+    // The broadcast lever stays a body control (not promoted into the head).
+    expect(pr).toContain("prog-broadcast:");
+  });
+
+  test("(b) regression guard: workStateBanner + impactBlock still render, logic byte-untouched", () => {
+    const iv = bodyOf("renderInterventionDrawer");
+    const av = bodyOf("renderAdvisoryDrawer");
+    expect(iv).toContain("pane.append(workStateBanner(issue));");
+    expect(iv).toContain("pane.append(impactBlock(issue));");
+    expect(av).toContain("pane.append(workStateBanner(issue));");
+    expect(av).toContain("pane.append(impactBlock(issue));");
+    // The two guarded functions are untouched — quote their load-bearing lines.
+    const wsb = source.match(/function workStateBanner\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const imp = source.match(/function impactBlock\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(wsb).toContain('el("div", { class: "dw-work work-" + work.key, role: "status" }');
+    expect(imp).toContain('el("h3", { class: "section-title", text: "Impact" })');
+  });
+
+  test("(c) program head carries the rollup vitals with mono values, aggregated over the swarm", () => {
+    expect(typeof M.renderProgramDrawer).toBe("function");
+    const mk = (over: Record<string, unknown>) => agent({
+      tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+    });
+    const program = {
+      id: "p1", name: "Ridge program",
+      agents: [
+        mk({ id: "codex:w1", status: "running" }),
+        mk({ id: "codex:w2", status: "running" }),
+        mk({ id: "codex:n1", status: "attention" }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const classes = classesOf(pane);
+    // Verdict-shaped head + a rollup line whose VALUES ride the mono convention.
+    expect(classes.some((c) => c.includes("inspector-head") && c.includes("inspector-verdict"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup-value") && c.includes("mono"))).toBe(true);
+    const text = textOf(pane);
+    // 3 agents · 2 working · 1 alert · aggregate session tokens (10k×3 = 30k).
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");
+    expect(text).toContain("tokens");
+  });
+
+  test("(c2) the token cell is omitted honestly when no agent reports session usage", () => {
+    const program = {
+      id: "p2", name: "Quiet program",
+      agents: [
+        agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+        agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const text = textOf(pane);
+    expect(text).toContain("2agents");   // counts are always derivable
+    expect(text).not.toContain("tokens"); // an un-derivable aggregate is never faked
+  });
+
+  test("(d1) audit closed: dead .state-pill / .inspector-state CSS (and its #fff-on-fill) removed", () => {
+    expect(styles).not.toContain(".state-pill");
+    expect(styles).not.toContain(".inspector-state");
+    // The dead policy-mismatch pill was the only #fff literal in the inspector
+    // per-type section — scope the check there (the live .policy-chip #fff lives
+    // in agent-rows, WS-C's territory, and is out of scope for this task).
+    const perType = styles.slice(
+      styles.indexOf("/* ---------- inspector: per-type drawer states"),
+      styles.indexOf("/* ---------- vitals band"),
+    );
+    expect(perType).toBeTruthy();
+    expect(perType).not.toContain("#fff");
+    // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
+    // those class strings, or it would render as an unstyled element. Back the
+    // grep claim with the suite (source = app.js text, html = index.html text).
+    expect(source).not.toContain("state-pill");
+    expect(source).not.toContain("inspector-state");
+    expect(html).not.toContain("state-pill");
+    expect(html).not.toContain("inspector-state");
+  });
+
+  test("(e) orphan cleanup: drawerHead is gone; every drawer head is drawerVerdictHead", () => {
+    // The migration moved all five entity heads to drawerVerdictHead, orphaning
+    // drawerHead — the change created the orphan, so the change removes it.
+    expect(source).not.toContain("function drawerHead(");
+    expect(source).not.toContain("drawerHead(");
+    // The agent drawer builds its head inline; missingDrawer uses a bare
+    // .inspector-head — so the base class stays live, only the helper is gone.
+    expect(source).toContain('el("div", { class: "inspector-head inspector-verdict" }'); // drawerVerdictHead
+    for (const fn of ["renderInterventionDrawer", "renderAdvisoryDrawer",
+      "renderInvestigationDrawer", "renderResolvedDrawer", "renderProgramDrawer"]) {
+      expect(bodyOf(fn)).toContain("drawerVerdictHead(");
+    }
+  });
+
+  test("(f) confirm parity: head triage/launch fire triageIssue directly, exactly like their body twins", () => {
+    // Controller ruling: a head action must have IDENTICAL confirm semantics to
+    // its body twin. The confirm mechanism (state.confirming) is scoped to
+    // renderDockTool and gated on NEEDS_CONFIRM = {interrupt, archive} only —
+    // triage/queue/run never enter it. So the parity-correct head is a direct
+    // triageIssue() call, mirroring the body. This test pins that both sides
+    // fire directly and neither reaches for the confirm gate.
+    expect(source).toContain('const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);');
+    const head1 = source.match(/function issueHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const head2 = source.match(/function investigationHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyTriage = source.match(/function renderTriage\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyInvestigation = bodyOf("renderInvestigationDrawer");
+    for (const chunk of [head1, head2, bodyTriage, bodyInvestigation]) {
+      expect(chunk).toBeTruthy();
+      expect(chunk).toContain("triageIssue(");        // direct fire on both sides
+      expect(chunk).not.toContain("state.confirming"); // no confirm gate on either
+      expect(chunk).not.toContain("NEEDS_CONFIRM");
+    }
+    // The head's onclick calls the SAME triageIssue actions the body does.
+    expect(head1).toContain('triageIssue(id, "run")');
+    expect(head1).toContain('triageIssue(id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "run")');
+    expect(head2).toContain('triageIssue(item.issueId, "run")');
+    expect(bodyInvestigation).toContain('triageIssue(item.issueId, "run")');
+  });
+
+  test("(d2) audit closed: control-banner conforms to --failed ink + --ember-soft tint (settled ruling)", () => {
+    const banner = styles.match(/\.control-banner\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerIco = styles.match(/\.control-banner \.ico\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerLink = styles.match(/\.control-banner-link\s*\{[^}]*\}/)?.[0] ?? "";
+    // Sanctioned pattern: --failed ink (border + icon + link) over the one --ember-soft tint.
+    expect(banner).toContain("var(--ember-soft)");       // the sole sanctioned soft tint
+    expect(banner).toContain("var(--failed)");           // border ink from the failed family
+    expect(bannerIco).toContain("color: var(--failed)"); // icon ink
+    // The link previously reached for the OTHER red (--ember); unify it to --failed so
+    // the banner never mixes two red inks (only --failed ink + --ember-soft tint).
+    expect(bannerLink).toContain("color: var(--failed)");
+    expect(bannerLink).not.toContain("var(--ember)");
+  });
+});
+
+describe("program-header at-a-glance rollups (C2)", () => {
+  /* DOM-less execution, same idiom the drawer rollup tests (B4) use: build the
+     real .program-rollup tree in a fake document and assert on the built nodes,
+     not on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1, tagName: tag, className: "", textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // Every node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function allByClass(node: any, token: string, out: any[] = []): any[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) out.push(node);
+    for (const kid of node.children || []) allByClass(kid, token, out);
+    return out;
+  }
+  const mk = (over: Record<string, unknown>) => agent({
+    tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+  });
+
+  test("(a) header rollup renders all four cells — mono values, ember class on the alert cell", () => {
+    expect(typeof M.programHeadRollup).toBe("function");
+    // 3 agents: 2 running (working), 1 attention (alert); each reports 10k session tokens.
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    // Four cells: agents · working · alert · tokens.
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(4);
+    // Values ride the mono convention (Rule 2 — mono for values), like the drawer.
+    const monoVals = classesOf(rollup).filter((c) =>
+      /\bprogram-rollup-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBe(4);
+    const text = textOf(rollup);
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");   // 10k × 3 aggregate session tokens
+    expect(text).toContain("tokens");
+    // Alert ink is class-gated (is-alerting → --ember), never inline (strict CSP),
+    // and rides on the alert cell only.
+    const alerting = allByClass(rollup, "is-alerting");
+    expect(alerting.length).toBe(1);
+    expect(textOf(alerting[0])).toContain("1alert");
+  });
+
+  test("(b) calm earns no color: 0 alerts renders the count WITHOUT the ember class", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:w3", status: "running" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("0alerts");                       // the alert cell still renders...
+    expect(allByClass(rollup, "is-alerting").length).toBe(0); // ...but takes no ember ink at zero
+  });
+
+  test("(c) honest omission: an un-derivable token aggregate drops the token cell", () => {
+    const agents = [
+      agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+      agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("2agents");                              // counts are always derivable
+    expect(text).not.toContain("tokens");                          // no session total → no faked aggregate
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(3); // agents · working · alert only
+  });
+
+  test("(d) header and drawer rollups share ONE aggregation source — no duplicated arithmetic", () => {
+    // The aggregation core is defined exactly once.
+    expect((source.match(/function programRollupCells\(/g) ?? []).length).toBe(1);
+    // BOTH DOM builders feed off it rather than re-deriving counts/tokens.
+    const drawer = source.match(/function programRollupLine\(program\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const header = source.match(/function programHeadRollup\(agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain("programRollupCells(");
+    expect(header).toContain("programRollupCells(");
+    // The token reduce — the one bit of arithmetic that could drift — lives ONLY in
+    // the shared core: it appears exactly once in the whole file.
+    expect((source.match(/sum \+ a\.tokens\.sessionTotal/g) ?? []).length).toBe(1);
+    // renderProgram delegates its header rollup to the shared builder and keeps no
+    // parallel arithmetic; the old rollupParts text summary is gone.
+    const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(rp).toContain("programHeadRollup(agents)");
+    expect(rp).not.toContain("deriveRollup(agents)");
+    expect(source).not.toContain("rollupParts");
+  });
+
+  test("(e) rollup data rides the header's accessible text (extends the drawer aria pattern)", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const label = rollup.attributes["aria-label"] ?? "";
+    expect(label).toContain("Program rollup"); // extends the drawer's group name…
+    expect(label).toContain("3 agents");        // …and carries the data itself
+    expect(label).toContain("2 working");
+    expect(label).toContain("1 alert");
+    expect(label).toContain("30k tokens");
+  });
+});
+
+describe("agent-row density pass at ≥1440px (C3)", () => {
+  // The compact rule is a single min-width:1440px media block holding one
+  // .agent-row override with the inner rule on one line, so it closes on the
+  // first `\n}` after the query opens — that boundary is the whole block.
+  function compactBlock() {
+    const idx = styles.indexOf("@media (min-width: 1440px)");
+    if (idx < 0) return "";
+    const end = styles.indexOf("\n}", idx);
+    return end < 0 ? styles.slice(idx) : styles.slice(idx, end + 2);
+  }
+  // The base .agent-row rule (top of the `agent rows` section) — the comfortable
+  // default that must survive untouched below the 1440px breakpoint.
+  function baseAgentRow() {
+    return styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
+  }
+
+  // (a) A ≥1440px media rule tightens .agent-row vertical padding. The compact
+  //     0.35rem is one step down the `agent rows` section's own spacing scale —
+  //     it is exactly the .agent-column-header's bottom padding (0.45rem 0.85rem
+  //     0.35rem 0.8rem), so the row's dense vertical rhythm at width matches the
+  //     header it sits under. Not an invented pixel.
+  test("(a) a ≥1440px rule tightens .agent-row vertical padding to the section's 0.35rem step", () => {
+    expect(styles).toContain("@media (min-width: 1440px)");
+    const block = compactBlock();
+    expect(block).toContain(".agent-row");
+    // Compact vertical padding, both edges, matched to the header's 0.35rem step.
+    expect(block).toContain("padding-top: 0.35rem");
+    expect(block).toContain("padding-bottom: 0.35rem");
+    // The header whose bottom padding we borrow really is 0.35rem — locks the
+    // derivation so a future scale change can't silently orphan the compact value.
+    expect(baseAgentRow()).not.toBe("");
+    expect(styles).toContain("padding: 0.45rem 0.85rem 0.35rem 0.8rem"); // .agent-column-header
+  });
+
+  // (c) The compact override lives ONLY inside min-width:1440px, so it cannot
+  //     reach tablet/mobile: the base row keeps its comfortable 0.45rem, and the
+  //     compact 0.35rem padding-top appears exactly once — inside that query.
+  test("(c) the compact rule is fenced inside min-width:1440px and never leaks below it", () => {
+    // The base .agent-row rule is unchanged: comfortable 0.45rem all around.
+    expect(baseAgentRow()).toContain("padding: 0.45rem 0.85rem 0.45rem 0.8rem");
+    // The compact override exists exactly once, and it is the 1440px block's.
+    const overrides = styles.match(/padding-top: 0\.35rem/g) ?? [];
+    expect(overrides.length).toBe(1);
+    expect(compactBlock()).toContain("padding-top: 0.35rem");
+    // It is a min-width query — it cannot match below tablet. No max-width block
+    // (the <1024px sheet sweep or the <720px stack) carries the compact row.
+    const sweep1024 = styles.slice(styles.indexOf("@media (max-width: 1024px)"), styles.indexOf("@media (max-width: 720px)"));
+    expect(sweep1024).not.toContain("padding-top: 0.35rem");
+    const stack720 = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
+    expect(stack720).not.toContain("padding-top: 0.35rem");
+  });
+
+  // (b) Honest regression guard (not a fresh RED — this passes before the density
+  //     rule is written): the <1024px 44px touch sweep must keep its full selector
+  //     list, including the one agent-row-scoped control in it (.agent-rename).
+  //     The density pass is ≥1440px only; it must not disturb the touch sweep that
+  //     wins below 1024px. Binding constraint: 44px touch targets below 1024px.
+  test("(b) the <1024px 44px touch sweep keeps its full list incl. the row's rename control", () => {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    const sweep = block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+    // The row treatment in the sweep: the agent-row rename button.
+    expect(sweep).toContain(".agent-rename");
+    // The full current list is intact — quote its anchors end-to-end so an
+    // accidental drop during the density pass fails here.
+    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor");
+    expect(sweep).toContain(".program-rename, .agent-rename");
+    expect(sweep).toContain(".command-composer input, .instruct-form input, .rename-form input");
+    expect(sweep).toContain("min-height: 44px");
+  });
+});
+
+describe("toolbar on the instrument-rail language (A3)", () => {
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
+  // the active view-tab is ink text + a 2px --signal-rail bottom rail driven
+  // by the class `is-current`, never a filled/boxed tab.
+  test("active view-tab is an is-current ink signal rail, not a filled tab (Rule 1)", () => {
+    const currentRule = styles.match(/\.view-tab\.is-current\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(currentRule).toContain("color: var(--ink)");
+    expect(currentRule).toContain("var(--signal-rail)");
+    // Rule 1 — indicator inks, not flood fills: no --surface fill / boxed tab.
+    expect(currentRule).not.toContain("var(--surface)");
+    // renderTabs drives the active marker by class, not by aria-pressed styling.
+    expect(source).toContain('classList.toggle("is-current"');
+  });
+
+  test("the old filled-surface active-tab rule is gone (Rule 1)", () => {
+    // Quote the current offending pattern from source and assert it is gone.
+    expect(styles).not.toContain(
+      '.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface)',
+    );
+    // The active state no longer keys off aria-pressed at all in CSS.
+    expect(styles).not.toContain('.view-tab[aria-pressed="true"]');
+  });
+
+  test("view-tab count badges render in mono (Rule 2: mono for values)", () => {
+    const countRule = styles.match(/\.view-tab \.count\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(countRule).toContain("font-family: var(--font-mono)");
+  });
+
+  test("the Alerts tab count takes ember ink only when alerting (>0), quiet at zero (converges on C2's is-alerting)", () => {
+    // Reviewer Minor 3 drift, toolbar direction: renderTabs marks the Alerts
+    // (needs-you) count with the SAME is-alerting modifier the program rollup alert
+    // cell uses — driven by class, never inline (strict CSP). Zero keeps the default.
+    const fn = source.match(/function renderTabs\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('view === "needs-you"');
+    expect(fn).toContain('classList.toggle("is-alerting", count > 0)');
+    // CSS gives that class ember ink only — no fill (Rule 1: indicator ink, not flood).
+    const rule = styles.match(/\.view-tab \.count\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ember)");
+    expect(rule).not.toContain("background");
+  });
+
+  test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
+    const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ink)");
+    expect(rule).toContain("background: var(--sand)");
+    expect(rule).toContain("border-color: var(--ink)");
+    // The old ink flood fill (ink background, surface text) is gone.
+    expect(rule).not.toContain("background: var(--ink)");
+  });
+
+  test("index.html seeds is-current on the default Now tab (honest guard — the markup already does)", () => {
+    // renderTabs re-derives the active marker on every render, but the first paint
+    // before JS runs must already present Now as current. This locks the seed markup
+    // so a future edit to the tab list can't ship a currentless first frame.
+    expect(html).toContain('class="view-tab is-current" data-view="now" aria-pressed="true"');
+  });
+});
+
+describe("masthead + program headers share the frame + quiet header language (A4)", () => {
+  // Rule 3 — shared frame: the masthead full-width band caps its content at
+  // --frame, the same alignment contract the pulse strip and toolbar follow.
+  test("masthead aligns its content to the shared --frame (Rule 3)", () => {
+    const innerRule = styles.match(/\.masthead-inner\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(innerRule).toContain("max-width: var(--frame)");
+    expect(innerRule).toContain("margin: 0 auto");
+  });
+
+  // The programs band aligns to --frame through its container: #programs lives
+  // inside .app-body, the one centered canvas the masthead, summary, and
+  // toolbar all share — not its own full-width strip.
+  test("the programs band aligns to --frame through its .app-body container (Rule 3)", () => {
+    const bodyRule = styles.match(/\.app-body\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(bodyRule).toContain("max-width: var(--frame)");
+    expect(bodyRule).toContain("margin: 0 auto");
+    expect(html).toContain('<section id="programs" class="programs"');
+  });
+
+  // Rule 2 — mono for values: the program-header rollup renders counts (data),
+  // so they carry --font-mono, like the view-tab count badges (A3). C2 decomposed
+  // the single .program-rollup text span into value/label cells (mirroring the
+  // drawer's .dw-rollup-value mono), so the mono now lives on .program-rollup-value.
+  test("program-header rollup counts render in mono (Rule 2: mono for values)", () => {
+    const valueRule = styles.match(/\.program-rollup-value\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valueRule).toContain("font-family: var(--font-mono)");
+  });
+
+  // A4 audit finding: .program-alias-tag is a 9px uppercase tracked micro-label
+  // exactly like .eyebrow / .agent-column-label / .vital-label — the ratified
+  // mono micro-label idiom — but was the one outlier missing --font-mono.
+  test("program-alias-tag joins the mono micro-label idiom (Rule 2, A4 finding)", () => {
+    const tagRule = styles.match(/\.program-alias-tag\s*\{[^}]*\}/)?.[0] ?? "";
+    // Replacement rule: the alias tag now carries mono like every other label.
+    expect(tagRule).toContain("font-family: var(--font-mono)");
+    // Absence: the old rule that opened straight into font-size, with no
+    // font-family, is gone.
+    expect(styles).not.toContain(".program-alias-tag { font-size: 9px");
+    // It keeps its micro-label furniture (uppercase, tracked, faint ink).
+    expect(tagRule).toContain("text-transform: uppercase");
+    expect(tagRule).toContain("color: var(--faint)");
+  });
+});
+
+describe("motion + responsive conformance for the restyled body (A6)", () => {
+  // The single 44px touch-sweep rule inside the <1024px block: the selector list
+  // that terminates in `{ min-height: 44px; }`. This is the rule the audit says
+  // must grow to close the touch-target gaps.
+  function touchSweep1024() {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    return block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+  }
+
+  // A6 finding 1: .filter-chip (toolbar, 30px min-height) was never swept to 44px
+  // at any breakpoint — absent from both the 1024px and 720px sweep lists.
+  // Binding constraint: 44px touch targets below 1024px.
+  test("the <1024px touch sweep now covers the filter chip (A6 finding)", () => {
+    expect(touchSweep1024()).toContain(".filter-chip");
+  });
+
+  // A6 finding 1: .program-details (programs, 30px) was swept only at ≤720px, so it
+  // stayed 30px through the 721–1024px tablet range where the constraint already
+  // requires 44px. It graduates into the <1024px sweep.
+  test("program-details gets its 44px treatment at <1024px, not just <720px (A6 finding)", () => {
+    // Replacement: .program-details is now in the <1024px sweep.
+    expect(touchSweep1024()).toContain(".program-details");
+    // Absence: the old <720px-only pattern that carried .program-details is gone;
+    // the 720px list keeps only the drawer-scoped controls.
+    expect(styles).not.toContain(".dw-lin-name, .program-details { min-height: 44px; }");
+    expect(styles).toContain(
+      ".signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
+    );
+  });
+
+  // A6 finding 1: three text inputs were never swept at any breakpoint —
+  // .command-composer input (40px), .instruct-form input (38px),
+  // .rename-form input (36px) — while #search (a sibling input) already was.
+  test("the three text inputs clear 44px below 1024px (A6 finding)", () => {
+    const sweep = touchSweep1024();
+    expect(sweep).toContain(".command-composer input");
+    expect(sweep).toContain(".instruct-form input");
+    expect(sweep).toContain(".rename-form input");
+  });
+
+  // A6 finding 2 — Rule 6 (motion respects prefers-reduced-motion). Honest
+  // regression guard, not a fresh RED: WS-A (b4f9d80..d516ad7) added and removed
+  // no @keyframes or `animation:` declarations, so the pre-existing universal
+  // guard already disables the full animation set. This locks that guarantee.
+  test("reduced-motion universally disables the full WS-A animation set (A6 regression guard)", () => {
+    const reduced = styles.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    // Universal selector + !important: disables ANY animation/transition regardless
+    // of specificity — every current keyframe and any a later task might add.
+    expect(reduced).toContain("*, *::before, *::after");
+    expect(reduced).toContain("animation: none !important");
+    expect(reduced).toContain("transition: none !important");
+    // The full existing animation set the guard covers.
+    const keyframes = [...styles.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "status-pulse", "sun-pulse"]);
+    // Every live `animation:` usage keys off one of those keyframes — none escapes.
+    const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
+    expect(new Set(animated)).toEqual(new Set(keyframes));
+  });
+});
+
+describe("peripheral surfaces conform to the design language (A5)", () => {
+  // A5 audit finding: the .usage-table "Recent invocations" rows render Tokens,
+  // Cost, and Session-ID cells — token/cost values and a literal identifier, the
+  // exact subjects of Rule 2 — yet they rendered in plain --font-ui with no mono
+  // treatment, unlike .row-fact-value / .swarm-chip / .artifact-path elsewhere.
+  // Rule 2 — mono for values only.
+  test("usage-table token/cost/session values render in mono (Rule 2, A5 finding)", () => {
+    // Replacement rule: a mono modifier scoped to the invocation-table value cells.
+    const valRule = styles.match(/\.usage-table td\.usage-val\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valRule).toContain("font-family: var(--font-mono)");
+    // The render tags the Tokens, Cost, and Session value cells with it...
+    expect(source).toContain('class: "usage-val", text: row.tokens == null');
+    expect(source).toContain('class: "usage-val", text: row.costUsd == null');
+    expect(source).toContain('el("td", { class: "usage-val" }, sessionCell)');
+    // ...and leaves the prose columns (When / Provider / Model) in --font-ui, so
+    // the test fails if mono is over-applied to non-value cells.
+    expect(source).not.toContain('class: "usage-val", text: row.startTime');
+    expect(source).not.toContain('class: "usage-val", text: row.provider');
+    expect(source).not.toContain('class: "usage-val", text: modelShort');
+  });
+
+  // A5 audit finding: .toast.err carried a hardcoded #f4c9bd text color — a magic
+  // hex outside the token vocabulary (DESIGN-LANGUAGE §5 open q5, "non-token
+  // hexes"). Tokenize it as a light-ember mix on --surface, the file's soft-tint
+  // idiom, so the error-toast text stays inside the vocabulary.
+  test("toast error text is tokenized, not a hardcoded hex (§5 non-token hexes, A5 finding)", () => {
+    const errRule = styles.match(/\.toast\.err\s*\{[^}]*\}/)?.[0] ?? "";
+    // Absence: the magic hex is gone from the rule and the whole sheet.
+    expect(errRule).not.toContain("#f4c9bd");
+    expect(styles).not.toContain("color: #f4c9bd");
+    // Replacement: the text tint is built from vocabulary tokens.
+    expect(errRule).toContain("color: color-mix(in srgb, var(--ember)");
+    expect(errRule).toContain("var(--surface)");
+    // The status border stays the --bad token.
+    expect(errRule).toContain("border-color: var(--bad)");
   });
 });
