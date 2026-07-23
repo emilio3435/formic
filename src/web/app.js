@@ -1054,7 +1054,7 @@ globalThis.TheAntHill = {
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
-  broadcastEligible,
+  broadcastEligible, broadcastIneligibleReason,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
@@ -4520,6 +4520,17 @@ function broadcastEligible(agent) {
   return deriveActivity(agent) !== "ended" && !!cap && cap.enabled === true;
 }
 
+/* Why an ineligible recipient can't receive a broadcast, in one operator word —
+   read from the SAME state broadcastEligible checks so the chip label and the
+   eligibility gate never disagree. Ended sessions split archived vs ended;
+   live-but-locked sessions read their control state (quarantined vs view only). */
+function broadcastIneligibleReason(agent) {
+  if (deriveActivity(agent) === "ended") {
+    return (agent.status === "archived" || agent.activity === "archived") ? "archived" : "ended";
+  }
+  return deriveControlState(agent) === "quarantined" ? "quarantined" : "view only";
+}
+
 function toggleSelect(agentId) {
   if (state.selection.has(agentId)) state.selection.delete(agentId);
   else state.selection.add(agentId);
@@ -4640,7 +4651,7 @@ function renderBroadcastBar() {
         el("span", { text: agentName(agent) }),
         result
           ? el("span", { class: "recipient-result " + (result.ok ? "ok" : "err"), text: result.ok ? "sent" : (result.error && result.error.code === "AGENT_NOT_FOUND" ? "gone" : "failed") })
-          : el("span", { class: "rc-state", text: ok ? "ready" : "unavailable" })));
+          : el("span", { class: "rc-state", text: ok ? "ready" : broadcastIneligibleReason(agent) })));
     }
     bar.append(list);
   } else {

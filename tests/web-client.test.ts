@@ -530,6 +530,30 @@ describe("broadcast recipient eligibility", () => {
     expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "focus", enabled: true }] }))).toBe(false);
     expect(M.broadcastEligible(agent({ status: "running", controls: [] }))).toBe(false);
   });
+
+  test("ineligible recipients name their reason from the same state the gate reads", () => {
+    // Ended splits archived (explicit) vs ended (stale / other non-live).
+    expect(M.broadcastIneligibleReason(agent({ status: "archived" }))).toBe("archived");
+    expect(M.broadcastIneligibleReason(agent({ status: "stale" }))).toBe("ended");
+    expect(M.broadcastIneligibleReason(agent({ activity: "ended", status: "running" }))).toBe("ended");
+    // Live-but-locked reads its control state: ambiguous target → quarantined,
+    // everything else → view only. Same fields deriveControlState consumes.
+    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
+    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
+    expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
+    // Never the bare "unavailable" placeholder.
+    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } })]) {
+      expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
+    }
+  });
+
+  test("the broadcast dock chip renders the reason word, not a bare 'unavailable'", () => {
+    const barSrc = source.match(/function renderBroadcastBar\(\) \{[\s\S]*?\n\}/)?.[0];
+    expect(barSrc).toBeDefined();
+    // The chip's resting state label is derived, never the old hard-coded string.
+    expect(barSrc).toContain('text: ok ? "ready" : broadcastIneligibleReason(agent)');
+    expect(barSrc).not.toContain('"unavailable"');
+  });
 });
 
 describe("redesigned network contracts (source-level)", () => {
