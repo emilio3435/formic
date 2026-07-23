@@ -4677,9 +4677,9 @@ function renderUsagePanel() {
         el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
-        el("td", { text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
-        el("td", { text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
-        el("td", {}, sessionCell)));
+        el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
+        el("td", { class: "usage-val", text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
+        el("td", { class: "usage-val" }, sessionCell)));
     }
   }
   table.append(body);

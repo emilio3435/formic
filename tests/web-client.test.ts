@@ -1159,3 +1159,40 @@ describe("masthead + program headers share the frame + quiet header language (A4
     expect(tagRule).toContain("color: var(--faint)");
   });
 });
+
+describe("peripheral surfaces conform to the design language (A5)", () => {
+  // A5 audit finding: the .usage-table "Recent invocations" rows render Tokens,
+  // Cost, and Session-ID cells — token/cost values and a literal identifier, the
+  // exact subjects of Rule 2 — yet they rendered in plain --font-ui with no mono
+  // treatment, unlike .row-fact-value / .swarm-chip / .artifact-path elsewhere.
+  // Rule 2 — mono for values only.
+  test("usage-table token/cost/session values render in mono (Rule 2, A5 finding)", () => {
+    // Replacement rule: a mono modifier scoped to the invocation-table value cells.
+    const valRule = styles.match(/\.usage-table td\.usage-val\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valRule).toContain("font-family: var(--font-mono)");
+    // The render tags the Tokens, Cost, and Session value cells with it...
+    expect(source).toContain('class: "usage-val", text: row.tokens == null');
+    expect(source).toContain('class: "usage-val", text: row.costUsd == null');
+    expect(source).toContain('el("td", { class: "usage-val" }, sessionCell)');
+    // ...and leaves the prose columns (When / Provider / Model) in --font-ui, so
+    // the test fails if mono is over-applied to non-value cells.
+    expect(source).not.toContain('class: "usage-val", text: row.provider');
+    expect(source).not.toContain('class: "usage-val", text: modelShort');
+  });
+
+  // A5 audit finding: .toast.err carried a hardcoded #f4c9bd text color — a magic
+  // hex outside the token vocabulary (DESIGN-LANGUAGE §5 open q5, "non-token
+  // hexes"). Tokenize it as a light-ember mix on --surface, the file's soft-tint
+  // idiom, so the error-toast text stays inside the vocabulary.
+  test("toast error text is tokenized, not a hardcoded hex (§5 non-token hexes, A5 finding)", () => {
+    const errRule = styles.match(/\.toast\.err\s*\{[^}]*\}/)?.[0] ?? "";
+    // Absence: the magic hex is gone from the rule and the whole sheet.
+    expect(errRule).not.toContain("#f4c9bd");
+    expect(styles).not.toContain("color: #f4c9bd");
+    // Replacement: the text tint is built from vocabulary tokens.
+    expect(errRule).toContain("color: color-mix(in srgb, var(--ember)");
+    expect(errRule).toContain("var(--surface)");
+    // The status border stays the --bad token.
+    expect(errRule).toContain("border-color: var(--bad)");
+  });
+});

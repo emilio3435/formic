@@ -1962,7 +1962,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   transition: opacity 180ms ease, transform 180ms ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { border-color: var(--bad); color: #f4c9bd; }
+.toast.err { border-color: var(--bad); color: color-mix(in srgb, var(--ember) 25%, var(--surface)); }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 60%, var(--ink)); }
 
 /* ---------- responsive ---------- */
@@ -2157,6 +2157,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   text-transform: uppercase;
   color: var(--faint);
 }
+/* Rule 2 — mono for values: the Tokens/Cost/Session cells carry token/cost
+   values and an identifier, so they render in mono like .row-fact-value; the
+   session cell's .linkish button inherits it. When/Provider/Model stay prose. */
+.usage-table td.usage-val { font-family: var(--font-mono); }
 .linkish {
   border: 0;
   background: none;
