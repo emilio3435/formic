@@ -2533,3 +2533,59 @@ describe("peripheral surfaces conform to the design language (A5)", () => {
     expect(errRule).toContain("border-color: var(--bad)");
   });
 });
+
+/* Scroll shell + sticky headers (Emilio 2026-07-23).
+   Part 0 root cause: the `flex:none` .health-rail hosts unbounded inline
+   expansions (#pulse-findings, #widget-customizer); on the fragile height:100%
+   body box (overflow-y computes to auto) that chrome can exceed the viewport and
+   the DOCUMENT scrolls, carrying masthead + summary away. The fix is a 100dvh app
+   frame with bounded expansions + contained pane scrolling; sticky program/column
+   headers within the roster; a capped tree indent. Intent-test idioms only. */
+describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", () => {
+  // (a) The body is a dynamic-viewport frame (dvh), not the fragile height:100%
+  //     chain, with a 100vh fallback line before it for old engines.
+  test("(a) the shell sizes to 100dvh with a 100vh fallback", () => {
+    const bodyRule = styles.match(/\nbody\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(bodyRule).toContain("height: 100vh");   // fallback line
+    expect(bodyRule).toContain("height: 100dvh");  // 2026 dynamic viewport frame
+    // The full-width strip guard stays; a vertical clip guard rides in addition
+    // to the root-cause fix (never instead of one).
+    expect(bodyRule).toContain("overflow-x: hidden");
+    expect(bodyRule).toContain("overflow-y: clip");
+  });
+
+  // (a) Both desktop scroll surfaces contain their scroll — no chaining to the
+  //     page when a pane hits its end — and the inspector gains a stable gutter.
+  test("(a) both panes carry overscroll-behavior: contain; inspector adds a stable gutter", () => {
+    expect(styles).toMatch(/\.pane-list\s*\{[^}]*overscroll-behavior:\s*contain/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*overscroll-behavior:\s*contain/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*scrollbar-gutter:\s*stable/);
+  });
+
+  // (a) The summary strip's inline expansions are the Part-0 culprit: `flex:none`
+  //     chrome with no height bound. Each expansion gets a max-height + internal
+  //     scroll so the chrome can never push the document into scrolling.
+  test("(a) the findings + customizer expansions are height-bounded with internal scroll", () => {
+    const findings = styles.match(/#pulse-findings\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(findings).toContain("max-height:");
+    expect(findings).toContain("dvh");            // sized against the viewport
+    expect(findings).toContain("overflow-y: auto");
+    expect(findings).not.toContain("overflow: hidden"); // the unbounded clip is replaced
+    const customizer = styles.match(/\.widget-customizer\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(customizer).toContain("max-height:");
+    expect(customizer).toContain("overflow-y: auto");
+  });
+
+  // (e) Regression guard: the <1024px full-sheet fixed-inspector contract is a
+  //     DIFFERENT contract and must stay untouched.
+  test("(e) the <1024px fixed-inspector contract is unchanged", () => {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    expect(block).toContain(".pane-inspector");
+    expect(block).toContain("position: fixed");
+    expect(block).toContain("inset: 0");
+    // The desktop shell is not forced onto it: no overflow-clip / dvh height leaks
+    // into the full-sheet inspector block.
+    expect(block).not.toContain("height: 100dvh");
+  });
+});

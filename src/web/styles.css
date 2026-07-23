@@ -69,7 +69,13 @@ html { height: 100%; }
 
 body {
   margin: 0;
-  height: 100%;
+  /* 2026 app-shell frame: the shell is exactly the viewport. `100dvh` tracks the
+     dynamic viewport (mobile toolbars) and replaces the fragile height:100% chain;
+     the `100vh` line before it is the fallback for engines without dvh. A definite
+     height (not min-height) is what lets .app-body's flex:1/min-height:0 resolve so
+     the panes scroll INTERNALLY instead of the document. */
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--canvas);
@@ -79,6 +85,11 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;   /* the full-width pulse strip wraps a flex row; guard against a stray scrollbar */
+  /* Root-cause fix is the dvh frame + bounded chrome expansions below; this clip is
+     an additional guard so a sub-pixel rounding can never turn the doc into a
+     scroller (chrome + panes are all internally bounded). Fixed dock/toast and
+     .pane-list sticky headers are unaffected (body is not their containing block). */
+  overflow-y: clip;
 }
 
 /* ---------- utilities ---------- */
@@ -352,7 +363,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
-.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); }
+/* Same Part-0 guard as #pulse-findings: the customizer expands inside the flex:none
+   summary strip, so it is bounded to the viewport and scrolls internally rather than
+   growing the chrome until the document scrolls. */
+.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
 .widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
 .widget-help { margin: 0.15rem 0 0; color: var(--muted); font-size: 12px; }
@@ -397,9 +411,14 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 
 .pane-list {
+  /* The roster's stuck program/column headers pin at these offsets. --program-head-h
+     matches the single-line head (46px desktop); it is re-pointed to 60px in the
+     <=1024px block where the touch sweep grows the head's buttons. */
+  --program-head-h: 46px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;   /* no scroll-chaining to the page at the roster's ends */
   padding: 0.6rem 0.85rem 5rem;
   scrollbar-gutter: stable;
 }
@@ -469,10 +488,15 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 #pulse-findings {
   max-width: var(--frame);
   margin: 0 auto 0.15rem;
+  /* Part-0 fix: this expansion lives in the flex:none .health-rail, so without a
+     bound it grows the chrome past the viewport and the document scrolls. Cap it
+     against the viewport and scroll the ledger internally; the chrome stays put. */
+  max-height: min(40dvh, 26rem);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--raise);
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   contain: layout paint;
 }
 .pulse-more {
@@ -1373,6 +1397,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
   overflow-y: auto;
   overflow-x: hidden;   /* content wraps; guarantee no horizontal scroll at 375px */
+  overscroll-behavior: contain;   /* the drawer's scroll never chains to the page */
+  scrollbar-gutter: stable;       /* match the roster: no content shift when the bar appears */
   /* Internal divider only — the ops-stage shell owns the outer frame/raise. */
   border-left: 1px solid var(--line-strong);
   box-shadow: none;
