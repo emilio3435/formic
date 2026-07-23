@@ -3740,7 +3740,7 @@ function renderVitals(agent) {
   }
 
   // Session spend + cache-hit efficiency (computed, not raw).
-  const cacheHit = (t.cachedInput != null && t.input) ? Math.round((t.cachedInput / t.input) * 100) : null;
+  const cacheHit = (t.cachedInput != null && t.input) ? Math.min(100, Math.round((t.cachedInput / t.input) * 100)) : null;
   if (t.sessionTotal != null) {
     tiles.push(vitalTile("Session tokens",
       el("div", {},
