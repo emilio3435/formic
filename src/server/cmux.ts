@@ -10,6 +10,16 @@ function stringValue(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === "string" && value.length > 0);
 }
 
+// cmux prefixes a surface title with a live status glyph/spinner (braille frames
+// like ⠂, or ▪/●) while the terminal is active. That glyph is machinery, not the
+// operator's rename — strip any leading non-alphanumeric run before the name.
+function cleanSurfaceTitle(...values: unknown[]): string | undefined {
+  const raw = stringValue(...values);
+  if (!raw) return undefined;
+  const cleaned = raw.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
 export function parseCmuxTerminals(output: string): CmuxSurface[] {
   const parsed = JSON.parse(output);
   const terminals = parsed?.terminals ?? parsed?.result?.terminals;
@@ -37,6 +47,7 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
       paneId: stringValue(terminal.pane_id, terminal.paneId),
       cwd: stringValue(terminal.current_directory, terminal.cwd),
       workspaceTitle: stringValue(terminal.workspace_title, terminal.workspaceTitle),
+      title: cleanSurfaceTitle(terminal.surface_title, terminal.surfaceTitle),
       branch: stringValue(terminal.git_branch, terminal.branch),
       dirty: typeof terminal.git_dirty === "boolean" ? terminal.git_dirty : undefined,
       head: stringValue(terminal.git_head, terminal.head),

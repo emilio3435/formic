@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
-import { extractLastHumanMessage, type HumanMessageCandidate } from "./human-message";
+import {
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  type HumanMessageCandidate,
+} from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 
@@ -210,6 +214,8 @@ function makeAgent(input: {
       input.task,
       statusReason,
     ),
+    lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
+    lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,

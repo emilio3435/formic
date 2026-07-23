@@ -1,0 +1,467 @@
+<title>Ant Hill · Widescreen Weights Review</title>
+<style>
+  :root {
+    /* --- Ant Hill product tokens (mirrored from src/web/styles.css) --- */
+    --canvas: #f3f5f7;
+    --surface: #fbfcfd;
+    --raise: #ffffff;
+    --sand: #e8edf2;
+    --ink: #121820;
+    --muted: #445260;
+    --faint: #5a6876;
+    --line: #d4dce4;
+    --line-strong: #aeb9c4;
+    --ember: #c23b2e;
+    --amber: #9a6b12;
+    --moss: #1f6b4a;
+    --slate: #3f5f78;
+    --clay: #64707c;
+    --claude: #a64b2a;
+    --codex: #2e6d58;
+    --ember-soft: color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --moss-soft: color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --amber-soft: color-mix(in srgb, var(--amber) 10%, var(--surface));
+
+    /* --- review-doc chrome (a cooler slate ground so the white panels pop) --- */
+    --doc-bg: #e7ebf0;
+    --doc-ink: #16202b;
+    --doc-muted: #4a5a6b;
+    --doc-line: #cbd4de;
+    --doc-card: #ffffff;
+
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    --radius: 8px;
+    --radius-sm: 5px;
+    --shadow-soft: 0 1px 2px rgba(18,24,32,0.06), 0 8px 24px rgba(18,24,32,0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #10151b; --surface: #141b23; --raise: #171f28; --sand: #1d2731;
+      --ink: #eef2f6; --muted: #9fb0c0; --faint: #7e8fa0;
+      --line: #2a343f; --line-strong: #3a4855;
+      --ember-soft: color-mix(in srgb, var(--ember) 22%, var(--surface));
+      --moss-soft: color-mix(in srgb, var(--moss) 22%, var(--surface));
+      --amber-soft: color-mix(in srgb, var(--amber) 22%, var(--surface));
+      --doc-bg: #0b0f14; --doc-ink: #e9eef3; --doc-muted: #93a3b3;
+      --doc-line: #232d38; --doc-card: #141b23;
+      --shadow-soft: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.45);
+    }
+  }
+  :root[data-theme="light"] {
+    --canvas: #f3f5f7; --surface: #fbfcfd; --raise: #ffffff; --sand: #e8edf2;
+    --ink: #121820; --muted: #445260; --faint: #5a6876;
+    --line: #d4dce4; --line-strong: #aeb9c4;
+    --ember-soft: color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --moss-soft: color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --amber-soft: color-mix(in srgb, var(--amber) 10%, var(--surface));
+    --doc-bg: #e7ebf0; --doc-ink: #16202b; --doc-muted: #4a5a6b;
+    --doc-line: #cbd4de; --doc-card: #ffffff;
+    --shadow-soft: 0 1px 2px rgba(18,24,32,0.06), 0 8px 24px rgba(18,24,32,0.06);
+  }
+  :root[data-theme="dark"] {
+    --canvas: #10151b; --surface: #141b23; --raise: #171f28; --sand: #1d2731;
+    --ink: #eef2f6; --muted: #9fb0c0; --faint: #7e8fa0;
+    --line: #2a343f; --line-strong: #3a4855;
+    --ember-soft: color-mix(in srgb, var(--ember) 22%, var(--surface));
+    --moss-soft: color-mix(in srgb, var(--moss) 22%, var(--surface));
+    --amber-soft: color-mix(in srgb, var(--amber) 22%, var(--surface));
+    --doc-bg: #0b0f14; --doc-ink: #e9eef3; --doc-muted: #93a3b3;
+    --doc-line: #232d38; --doc-card: #141b23;
+    --shadow-soft: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.45);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--doc-bg); color: var(--doc-ink);
+    font-family: var(--font-ui); line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+
+  /* ---------- masthead ---------- */
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--doc-muted); margin: 0 0 0.9rem;
+  }
+  h1 {
+    font-size: clamp(1.9rem, 4vw, 2.9rem); line-height: 1.05; margin: 0 0 0.6rem;
+    font-weight: 680; letter-spacing: -0.02em; text-wrap: balance; max-width: 20ch;
+  }
+  h1 em { font-style: normal; color: var(--ember); }
+  .lede { max-width: 66ch; font-size: 1.05rem; color: var(--doc-muted); margin: 0.4rem 0 0; }
+  .lede strong { color: var(--doc-ink); font-weight: 620; }
+
+  /* ---------- section rhythm ---------- */
+  section { margin-top: 3.4rem; }
+  .sec-head { display: flex; align-items: baseline; gap: 0.75rem; margin: 0 0 1.1rem; }
+  .sec-num {
+    font-family: var(--font-mono); font-size: 12px; color: var(--doc-muted);
+    letter-spacing: 0.05em; padding-top: 0.15rem;
+  }
+  h2 { font-size: 1.35rem; margin: 0; font-weight: 640; letter-spacing: -0.01em; }
+  .sec-sub { color: var(--doc-muted); max-width: 68ch; margin: 0.35rem 0 0; font-size: 0.98rem; }
+
+  /* ---------- the product-panel stage (faithful to the app) ---------- */
+  .stage-frame {
+    background: var(--canvas); border: 1px solid var(--doc-line);
+    border-radius: 12px; padding: 1.15rem; margin-top: 1rem;
+    box-shadow: var(--shadow-soft);
+  }
+  .stage-cap {
+    display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.8rem;
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage-cap .frame-w { margin-left: auto; color: var(--faint); }
+
+  .ops-stage {
+    display: flex; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    background: var(--raise); overflow: hidden; box-shadow: var(--shadow-soft);
+    min-height: 430px;
+  }
+  .pane-list { min-width: 0; padding: 0.6rem 0.7rem; display: flex; flex-direction: column; }
+  .pane-inspector {
+    border-left: 1px solid var(--line); background: var(--surface);
+    padding: 0.85rem 0.9rem; min-width: 0; overflow: hidden;
+  }
+
+  /* current = backwards weights */
+  .m-current .pane-list { flex: 2.15; }
+  .m-current .pane-inspector { flex: 0 0 32%; box-shadow: inset 3px 0 var(--codex); }
+  /* proposed = reading-focused */
+  .m-proposed .pane-list { flex: 0 0 40%; border-right: 1px solid var(--line); }
+  .m-proposed .pane-inspector { flex: 1; box-shadow: inset 3px 0 var(--codex); }
+
+  /* ---------- roster (list pane) ---------- */
+  .tabs { display: flex; gap: 0.9rem; font-size: 12px; color: var(--faint); padding: 0.15rem 0.25rem 0.6rem; border-bottom: 1px solid var(--line); }
+  .tabs .on { color: var(--ink); font-weight: 640; }
+  .grp {
+    display: flex; align-items: center; gap: 0.5rem; font-size: 12px; color: var(--muted);
+    padding: 0.7rem 0.3rem 0.4rem; font-weight: 600;
+  }
+  .grp .count { margin-left: auto; color: var(--faint); font-weight: 500; }
+
+  /* full 5-column table row (current) */
+  .row5 {
+    display: grid; grid-template-columns: 1.1rem minmax(0,2.8fr) 4.2rem 3.4rem 5rem;
+    gap: 0.6rem; align-items: center; padding: 0.5rem 0.3rem;
+    border-top: 1px solid var(--line); font-size: 12.5px;
+  }
+  .row5:first-of-type { border-top: 0; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--moss); box-shadow: 0 0 0 3px var(--moss-soft); }
+  .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .msg .role { display: inline-block; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; background: var(--sand); color: var(--muted); padding: 0.05rem 0.35rem; border-radius: 3px; margin-right: 0.4rem; vertical-align: 1px; }
+  .cell { font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell.q { color: var(--ember); }
+  .cell.dim { color: var(--faint); }
+
+  /* compact rail row (proposed) */
+  .row-rail {
+    display: grid; grid-template-columns: 1.1rem minmax(0,1fr) auto; gap: 0.55rem;
+    align-items: start; padding: 0.55rem 0.3rem; border-top: 1px solid var(--line); cursor: default;
+  }
+  .row-rail:first-of-type { border-top: 0; }
+  .row-rail.sel { background: var(--moss-soft); border-radius: 6px; box-shadow: inset 2px 0 var(--codex); }
+  .rail-main { min-width: 0; }
+  .rail-msg { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .rail-meta { display: flex; gap: 0.45rem; margin-top: 0.25rem; font-family: var(--font-mono); font-size: 10px; color: var(--faint); flex-wrap: wrap; }
+  .rail-meta .q { color: var(--ember); }
+  .rail-metric { font-family: var(--font-mono); font-size: 11px; color: var(--muted); text-align: right; padding-top: 0.1rem; font-variant-numeric: tabular-nums; }
+
+  .void-note {
+    margin-top: auto; padding: 0.9rem 0.3rem 0.2rem; font-size: 11px; color: var(--faint);
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .void-fill { flex: 1; min-height: 92px; }
+
+  /* ---------- inspector body ---------- */
+  .insp-title { font-size: 1.05rem; font-weight: 620; line-height: 1.2; margin: 0 0 0.3rem; letter-spacing: -0.01em; }
+  .m-current .insp-title { font-size: 0.98rem; }
+  .insp-sub { font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); margin: 0 0 0.55rem; }
+  .insp-states { display: flex; gap: 0.7rem; font-size: 11.5px; margin-bottom: 0.6rem; }
+  .insp-states b { font-weight: 600; }
+  .st-ok { color: var(--moss); } .st-q { color: var(--ember); }
+  .banner {
+    background: var(--ember-soft); border: 1px solid color-mix(in srgb, var(--ember) 30%, transparent);
+    border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 11.5px; color: var(--ember); margin-bottom: 0.7rem;
+  }
+  .insp-tabs { display: flex; gap: 1rem; border-bottom: 1px solid var(--line); font-size: 12px; margin-bottom: 0.7rem; }
+  .insp-tabs .on { color: var(--ink); font-weight: 640; border-bottom: 2px solid var(--ink); padding-bottom: 0.4rem; margin-bottom: -1px; }
+  .insp-tabs span:not(.on) { color: var(--faint); padding-bottom: 0.4rem; }
+
+  /* CURRENT: single-column key/value that WRAPS (the pain) */
+  .kv-cramped dt { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); margin-top: 0.5rem; }
+  .kv-cramped dd { margin: 0.1rem 0 0; font-family: var(--font-mono); font-size: 11px; color: var(--ink); word-break: break-word; }
+
+  /* PROPOSED: 2-column spec-sheet grid, no wrapping pain */
+  .kv-spec { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.15rem 1.4rem; margin: 0; }
+  .kv-spec > div { display: grid; grid-template-columns: 8.5rem minmax(0,1fr); gap: 0.5rem; align-items: baseline; padding: 0.32rem 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .kv-spec dt { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); margin: 0; }
+  .kv-spec dd { margin: 0; font-family: var(--font-mono); font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .kv-span { grid-column: 1 / -1 !important; grid-template-columns: 8.5rem minmax(0,1fr) !important; }
+  .kv-span dd { white-space: normal !important; }
+
+  /* ---------- annotation callouts ---------- */
+  .notes { display: grid; gap: 0.6rem; margin-top: 1rem; }
+  .note {
+    display: grid; grid-template-columns: auto 1fr; gap: 0.7rem; align-items: start;
+    background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 8px;
+    padding: 0.7rem 0.85rem; font-size: 0.92rem;
+  }
+  .note .tag {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 0.2rem 0.45rem; border-radius: 4px; font-weight: 600; white-space: nowrap; align-self: center;
+  }
+  .note.bad .tag { background: var(--ember-soft); color: var(--ember); }
+  .note.good .tag { background: var(--moss-soft); color: var(--moss); }
+  .note p { margin: 0; color: var(--doc-muted); }
+  .note p b { color: var(--doc-ink); font-weight: 620; }
+
+  /* ---------- options table ---------- */
+  .opts { width: 100%; border-collapse: collapse; margin-top: 0.4rem; font-size: 0.92rem; }
+  .opts th, .opts td { text-align: left; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--doc-line); vertical-align: top; }
+  .opts th { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--doc-muted); font-weight: 600; }
+  .opts tr.rec td { background: var(--moss-soft); }
+  .opts td:first-child { font-weight: 620; white-space: nowrap; }
+  .pick { font-family: var(--font-mono); font-size: 10px; color: var(--moss); font-weight: 700; letter-spacing: 0.05em; }
+  .opts td p { margin: 0.2rem 0 0; color: var(--doc-muted); }
+
+  /* ---------- implementation ---------- */
+  .impl { display: grid; gap: 0.9rem; margin-top: 1rem; }
+  .diff {
+    background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 8px;
+    overflow: hidden;
+  }
+  .diff-h {
+    font-family: var(--font-mono); font-size: 11px; color: var(--doc-muted);
+    padding: 0.55rem 0.85rem; border-bottom: 1px solid var(--doc-line); background: color-mix(in srgb, var(--doc-line) 22%, transparent);
+    display: flex; gap: 0.5rem; align-items: center;
+  }
+  .diff-h b { color: var(--doc-ink); font-family: var(--font-ui); font-weight: 620; letter-spacing: -0.01em; }
+  pre { margin: 0; padding: 0.85rem; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.55; }
+  .del { color: var(--ember); } .add { color: var(--moss); } .cx { color: var(--doc-muted); }
+  .path { font-family: var(--font-mono); font-size: 11px; color: var(--codex); }
+
+  .foot { margin-top: 3.4rem; padding-top: 1.4rem; border-top: 1px solid var(--doc-line); color: var(--doc-muted); font-size: 0.86rem; }
+
+  @media (max-width: 720px) {
+    .ops-stage { min-height: 0; }
+    .m-current .pane-inspector, .m-proposed .pane-list, .m-proposed .pane-inspector, .m-current .pane-list { flex: 1 1 100%; }
+    .ops-stage { flex-direction: column; }
+    .kv-spec { grid-template-columns: 1fr; }
+    .row5 { grid-template-columns: 1.1rem minmax(0,1fr) 3.4rem; }
+    .row5 .cell.dim, .row5 .cell:nth-child(4) { display: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Ant Hill · Widescreen Layout Review · 2026-07-22</p>
+  <h1>The weights are <em>backwards</em></h1>
+  <p class="lede">On widescreen, the roster owns the widest column but only ever holds a handful of rows — the rest is dead whitespace. The inspector, the dossier you're actually <strong>reading</strong>, is pinned to a fixed 480–520&nbsp;px rail where long values wrap two and three lines. <strong>Heavy content in the small box; light content in the big box.</strong> This plan flips the split to follow where your attention actually goes.</p>
+
+  <!-- ============ 1 · THE PROBLEM ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>What's happening now</h2></div>
+    <p class="sec-sub">Today the split is <code>pane-list: flex 1</code> (grows unbounded) next to <code>pane-inspector: clamp(480px, 32vw, 520px)</code> (fixed). At the 1680&nbsp;px frame the table gets ~1160&nbsp;px, the inspector ~520&nbsp;px.</p>
+
+    <div class="stage-frame">
+      <div class="stage-cap"><span>Current — 1680px frame</span><span class="frame-w">list ≈ 1160px · inspector ≈ 520px</span></div>
+      <div class="ops-stage m-current">
+
+        <!-- roster: wide + mostly empty -->
+        <div class="pane-list">
+          <div class="tabs"><span class="on">Now 3</span><span>Alerts 0</span><span>Working 3</span><span>Idle 3</span><span>History 90</span><span>Usage</span></div>
+          <div class="grp">Home / Unassigned <span class="count">2 working</span></div>
+          <div class="row5">
+            <span class="dot"></span>
+            <span class="msg">also, tjer'es something still off about the widescreen view of the…</span>
+            <span class="cell dim">not reported</span><span class="cell dim">not reported</span><span class="cell q">Quarantined</span>
+          </div>
+          <div class="row5">
+            <span class="dot"></span>
+            <span class="msg"><span class="role">Orchestrator</span>Orchestrate a CMUX swarm that restores a mergeable master b…</span>
+            <span class="cell">sol 5.6</span><span class="cell">60%</span><span class="cell q">Quarantined</span>
+          </div>
+          <div class="grp">Elio Suite <span class="count">1 working</span></div>
+          <div class="row5">
+            <span class="dot"></span>
+            <span class="msg"><span class="role">Automation</span>Keep Elio PRs moving by reviewing trusted open and recently m…</span>
+            <span class="cell">sol 5.6</span><span class="cell">14%</span><span class="cell dim">View only</span>
+          </div>
+          <div class="void-fill"></div>
+          <div class="void-note">↕ ~600px of empty column below the last row</div>
+        </div>
+
+        <!-- inspector: narrow + cramped + wrapping -->
+        <div class="pane-inspector">
+          <p class="insp-title">Orchestrate a CMUX swarm that restores a mergeable master baseline, lands the prepared</p>
+          <p class="insp-sub">Home / Unassigned · Codex · sol 5.6</p>
+          <div class="insp-states"><span class="st-ok"><b>● Working</b></span><span class="st-ok">Healthy</span><span class="st-q"><b>◆ Quarantined</b></span></div>
+          <div class="banner">Control routing locked — both read-only audits completed substantial inspection but hit their 9-minute caps before…</div>
+          <div class="insp-tabs"><span>Overview</span><span class="on">Technical</span></div>
+          <dl class="kv-cramped">
+            <dt>Session ID</dt><dd>codex:019f80bc-6e3c-76c0-af42-9d5c039d9cc1</dd>
+            <dt>Working directory</dt><dd>/Users/emilionunezgarcia</dd>
+            <dt>Latest call</dt><dd>in 142k · out 284 · cached 140k · total 142k · measured</dd>
+            <dt>Session total</dt><dd>852.0M tokens · cumulative this session</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note bad"><span class="tag">Backwards</span><p><b>The empty column is the wide one.</b> The roster caps out at a few rows, so the widest surface on screen is mostly blank — while the reading surface is the pinched one.</p></div>
+      <div class="note bad"><span class="tag">Wrapping</span><p><b>Dense dossier in a 520px rail.</b> Key/values like "in 142k · out 284 · cached 140k · total 142k" wrap to 2–3 lines; the "Available controls" prose stacks into a tall ribbon. The content you're reading fights for room the empty table isn't using.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · OPTIONS ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Three ways to fix it</h2></div>
+    <table class="opts">
+      <thead><tr><th>Approach</th><th>What changes</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>A · Flip the ratio</td>
+          <td>Roster shrinks to a scannable rail; inspector becomes the dominant reading panel.<p>Master–detail convention: the detail dominates.</p></td>
+          <td>Full 5-column table only shows when nothing is selected.</td>
+        </tr>
+        <tr>
+          <td>B · Densify in place</td>
+          <td>Keep the wide table; give the inspector a 2-column spec grid so values stop wrapping.<p>Smallest change.</p></td>
+          <td>Doesn't fix the core feel — the thing you're reading is still the small box next to a blank one.</td>
+        </tr>
+        <tr class="rec">
+          <td>C · Hybrid <span class="pick">◆ RECOMMENDED</span></td>
+          <td>Do both: roster → rail (~40%), inspector → reading panel (~60%) <em>with</em> the 2-column spec grid.<p>Flips the weight <b>and</b> kills the wrapping.</p></td>
+          <td>Two CSS surfaces to touch instead of one. Roster loses its extra columns while an agent is open — but those live in full in the inspector anyway.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 3 · PROPOSED ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Proposed — reading-focused split</h2></div>
+    <p class="sec-sub">When an agent is selected: roster collapses to a rail (dot · message · one metric, with model/context/access folded into a compact meta line), and the inspector expands into the reading surface with a spec-sheet grid. Deselect and the roster springs back to the full-width 5-column table (unchanged).</p>
+
+    <div class="stage-frame">
+      <div class="stage-cap"><span>Proposed — 1680px frame, agent selected</span><span class="frame-w">rail ≈ 40% · reading panel ≈ 60%</span></div>
+      <div class="ops-stage m-proposed">
+
+        <!-- rail: compact, scannable -->
+        <div class="pane-list">
+          <div class="tabs"><span class="on">Now 3</span><span>Alerts 0</span><span>Working 3</span><span>Idle 3</span><span>History 90</span></div>
+          <div class="grp">Home / Unassigned <span class="count">2 working</span></div>
+          <div class="row-rail">
+            <span class="dot"></span>
+            <div class="rail-main">
+              <div class="rail-msg">also, tjer'es something still off about the widescreen view of the ant hill's table…</div>
+              <div class="rail-meta"><span class="q">Quarantined</span><span>not reported</span></div>
+            </div>
+            <span class="rail-metric">—</span>
+          </div>
+          <div class="row-rail sel">
+            <span class="dot"></span>
+            <div class="rail-main">
+              <div class="rail-msg"><span class="role">Orchestrator</span>Orchestrate a CMUX swarm that restores a mergeable master baseline…</div>
+              <div class="rail-meta"><span>sol 5.6</span><span class="q">Quarantined</span></div>
+            </div>
+            <span class="rail-metric">60%</span>
+          </div>
+          <div class="grp">Elio Suite <span class="count">1 working</span></div>
+          <div class="row-rail">
+            <span class="dot"></span>
+            <div class="rail-main">
+              <div class="rail-msg"><span class="role">Automation</span>Keep Elio PRs moving by reviewing trusted open and recently merged…</div>
+              <div class="rail-meta"><span>sol 5.6</span><span>View only</span></div>
+            </div>
+            <span class="rail-metric">14%</span>
+          </div>
+        </div>
+
+        <!-- reading panel: roomy, spec grid -->
+        <div class="pane-inspector">
+          <p class="insp-title">Orchestrate a CMUX swarm that restores a mergeable master baseline, lands the prepared</p>
+          <p class="insp-sub">Home / Unassigned · Codex · sol 5.6</p>
+          <div class="insp-states"><span class="st-ok"><b>● Working</b></span><span class="st-ok">Healthy</span><span class="st-q"><b>◆ Quarantined</b></span></div>
+          <div class="banner">Control routing locked — both read-only audits completed substantial inspection but hit their 9-minute caps before resolving the identity conflict.</div>
+          <div class="insp-tabs"><span>Overview</span><span class="on">Technical</span></div>
+          <dl class="kv-spec">
+            <div><dt>Session ID</dt><dd>019f80bc…9d5c</dd></div>
+            <div><dt>Status</dt><dd>running · active 3m</dd></div>
+            <div class="kv-span"><dt>Directory</dt><dd>/Users/emilionunezgarcia</dd></div>
+            <div><dt>Model</dt><dd>gpt-5.6-sol</dd></div>
+            <div><dt>Effort</dt><dd>MAX</dd></div>
+            <div><dt>Started</dt><dd>24.8h ago</dd></div>
+            <div><dt>Nesting</dt><dd>not reported</dd></div>
+            <div class="kv-span"><dt>Latest call</dt><dd>in 142k · out 284 · cached 140k · total 142k</dd></div>
+            <div><dt>Session total</dt><dd>852.0M tokens</dd></div>
+            <div><dt>Context window</dt><dd>250k tokens</dd></div>
+            <div><dt>Checks</dt><dd>none</dd></div>
+            <div><dt>Tests</dt><dd>not reported</dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note good"><span class="tag">Balanced</span><p><b>Space follows attention.</b> The panel you read holds the majority of the width; the index you scan is a tight rail. No blank megacolumn.</p></div>
+      <div class="note good"><span class="tag">Legible</span><p><b>Values stop wrapping.</b> A 2-column spec grid turns the technical dump into a scannable sheet; long fields (Latest call, Directory) span both columns instead of stacking to three lines.</p></div>
+      <div class="note good"><span class="tag">Preserved</span><p><b>Nothing lost.</b> Model / context / access move to the rail's meta line and the full dossier — the columns aren't deleted, they're where you were already looking.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ 4 · IMPLEMENTATION ============ -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Implementation</h2></div>
+    <p class="sec-sub">Four surgical edits in <span class="path">src/web/styles.css</span>, plus one class toggle in <span class="path">app.js</span> so the split only flips when an agent is selected.</p>
+
+    <div class="impl">
+      <div class="diff">
+        <div class="diff-h"><b>1 · The split</b> — pane widths react to a selection</div>
+<pre><span class="cx">/* .app-body gets a state hook when an agent is open */</span>
+<span class="del">- .pane-list      { flex: 1; }</span>
+<span class="del">- .pane-inspector { width: clamp(480px, 32vw, 520px); }</span>
+<span class="add">+ /* default (nothing selected): full-width table, no drawer */</span>
+<span class="add">+ .pane-list      { flex: 1; }</span>
+<span class="add">+ /* agent selected: rail + reading panel */</span>
+<span class="add">+ .app-body[data-inspecting] .pane-list      { flex: 0 0 clamp(360px, 38%, 460px); }</span>
+<span class="add">+ .app-body[data-inspecting] .pane-inspector { flex: 1; width: auto; }</span></pre>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><b>2 · Rail rows</b> — collapse 5 columns to dot · message · metric</div>
+<pre><span class="cx">/* when inspecting, the roster row drops to a 3-track grid; */</span>
+<span class="cx">/* model / context / access fold into a .rail-meta line     */</span>
+<span class="add">+ [data-inspecting] .work-row {</span>
+<span class="add">+   grid-template-columns: 1.1rem minmax(0,1fr) auto;</span>
+<span class="add">+ }</span>
+<span class="add">+ [data-inspecting] .work-row .col-model,</span>
+<span class="add">+ [data-inspecting] .work-row .col-access { /* → .rail-meta */ }</span></pre>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><b>3 · Spec grid</b> — technical readout stops wrapping</div>
+<pre><span class="del">- .signal-tech dl { display: block; }  /* single column, wraps */</span>
+<span class="add">+ .signal-tech dl {</span>
+<span class="add">+   display: grid;</span>
+<span class="add">+   grid-template-columns: repeat(2, minmax(0, 1fr));</span>
+<span class="add">+   gap: 0.15rem 1.4rem;</span>
+<span class="add">+ }</span>
+<span class="add">+ .signal-tech dl > .kv-span { grid-column: 1 / -1; }  /* long fields */</span></pre>
+      </div>
+
+      <div class="diff">
+        <div class="diff-h"><b>4 · The toggle</b> — one line where selection is set/cleared</div>
+<pre><span class="cx">// app.js — wherever the inspector opens/closes</span>
+<span class="add">+ appBody.toggleAttribute('data-inspecting', Boolean(selectedId));</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <p class="foot">Mockup renders the Ant Hill's own tokens from <span class="path">src/web/styles.css</span> (canvas #f3f5f7, ink #121820, codex #2e6d58). Both layouts shown at the 1680&nbsp;px frame. Proposed ratios are the starting point — worth a live tune at 1440 / 1680 / 1920 before locking the clamp.</p>
+</div>

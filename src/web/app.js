@@ -57,6 +57,11 @@ const ICON_PATHS = {
   intervention: [["line", { x1: 12, y1: 4.5, x2: 12, y2: 13.5, "stroke-width": 2.6 }], ["rect", { x: 10.7, y: 16.6, width: 2.6, height: 2.6, fill: "currentColor", stroke: "none" }]],
   // advisory: caution diamond (no clinical triangle) with peak stem + LED
   warning: [["path", { d: "M12 2.8 21.2 12 12 21.2 2.8 12z", "stroke-linejoin": "miter" }], ["line", { x1: 12, y1: 7.6, x2: 12, y2: 12.8, "stroke-width": 2 }], ["rect", { x: 11, y: 15, width: 2, height: 2, fill: "currentColor", stroke: "none" }]],
+  // cog for the Evidence disclosure — a settings-flavored "more machinery" mark
+  gear: [
+    ["circle", { cx: 12, cy: 12, r: 3 }],
+    ["path", { d: "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.1 5.1l1.6 1.6M17.3 17.3l1.6 1.6M5.1 18.9l1.6-1.6M17.3 6.7l1.6-1.6" }],
+  ],
   // resolved: crisp confirm tick
   check: [["polyline", { points: "4.5 12.5 9.5 17.5 19.5 6.5", "stroke-linejoin": "miter" }]],
   // rename: nib + trim edge
@@ -1051,7 +1056,7 @@ const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  inspectorTab: "operate", // operate | chat | evidence
+  evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // `${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -2845,6 +2850,7 @@ function selectEntity(sel) {
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
+  state.evidenceOpen = false;
   render();
   // On explicit open (not on background SSE re-renders), move focus to the
   // drawer's lead element per kind — the differentiator band, or the title.
@@ -2865,6 +2871,7 @@ function closeInspector() {
   state.selected = null;
   state.selectedId = null;
   state.confirming = null;
+  state.evidenceOpen = false;
   render();
   if (id) {
     const row = document.getElementById("agent-" + id);
@@ -2911,7 +2918,7 @@ function renderInspector() {
     queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
     triage ? triage.generatedAt + ":" + triage.headline : "",
     pending,
-    state.inspectorTab,
+    state.evidenceOpen ? "1" : "0",
   ].join("\u001f");
   if (paintUnchanged("inspector", sig)) {
     pane.hidden = false;
@@ -3330,27 +3337,95 @@ function renderAgentDrawer(pane, view) {
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
-  const tab = ["operate", "chat", "evidence"].includes(state.inspectorTab)
-    ? state.inspectorTab
-    : "operate";
-  if (tab !== state.inspectorTab) state.inspectorTab = tab;
-
-  pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
-    inspectorTabButton("operate", "Operate"),
-    inspectorTabButton("chat", "Chat"),
-    inspectorTabButton("evidence", "Evidence")));
-
-  const operatePanel = renderOperate(agent, program);
-  operatePanel.dataset.tab = "operate";
-  const chatPanel = renderChat(agent);
-  chatPanel.dataset.tab = "chat";
-  const evidencePanel = renderEvidence(agent);
-  evidencePanel.dataset.tab = "evidence";
-  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: tab } },
-    operatePanel, chatPanel, evidencePanel));
+  // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
+  // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
+  // rail that progressively reveals as a third column.
+  pane.append(el("div", {
+    class: "drawer-shelf" + (state.evidenceOpen ? " is-evidence-open" : ""),
+    "aria-label": "Agent sections",
+  },
+    renderShelfSection({
+      key: "operate",
+      title: "Operate",
+      open: true,
+      body: renderOperate(agent, program),
+    }),
+    renderShelfSection({
+      key: "chat",
+      title: "Chat",
+      open: true,
+      body: renderChat(agent),
+    }),
+    renderEvidenceShelf(agent)));
 
   // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));
+}
+
+/* Bookshelf section — Operate/Chat stay open; Evidence uses the cog variant. */
+function renderShelfSection({ key, title, open, body }) {
+  const section = el("section", {
+    class: "shelf-section" + (open ? " is-open" : ""),
+    dataset: { shelf: key },
+  });
+  section.append(el("h3", { class: "shelf-title", text: title }));
+  const panel = el("div", {
+    class: "shelf-body inspector-panel",
+    id: "shelf-" + key,
+  });
+  if (body) {
+    if (body.nodeType) panel.append(body);
+    else for (const child of body) if (child) panel.append(child);
+  }
+  section.append(panel);
+  return section;
+}
+
+function renderEvidenceShelf(agent) {
+  if (!state.evidenceOpen) {
+    // Whimsical collapsed rail — third column as a caterpillar/cog strip.
+    return el("button", {
+      type: "button",
+      class: "shelf-evidence-rail",
+      "aria-expanded": "false",
+      "aria-controls": "shelf-evidence",
+      title: "Open evidence — vitals, paths, routing, transcript",
+      dataset: { fkey: "shelf:evidence:open" },
+      onclick: () => { state.evidenceOpen = true; render(); },
+    },
+      el("span", { class: "shelf-rail-spine", "aria-hidden": "true" },
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" })),
+      icon("gear", { label: "Open evidence" }),
+      el("span", { class: "shelf-rail-label", text: "Evidence" }));
+  }
+
+  const body = renderEvidence(agent);
+  // Metrics live behind the disclosure, not in the showcase: the vitals
+  // instrument band leads the Evidence column when it opens.
+  const vitals = renderVitals(agent);
+  if (vitals) body.prepend(vitals);
+  const section = el("section", {
+    class: "shelf-section shelf-evidence is-open",
+    dataset: { shelf: "evidence" },
+  });
+  section.append(el("div", { class: "shelf-evidence-head" },
+    el("h3", { class: "shelf-title", text: "Evidence" }),
+    el("button", {
+      type: "button",
+      class: "shelf-cog is-active",
+      "aria-expanded": "true",
+      "aria-controls": "shelf-evidence",
+      title: "Tuck evidence away",
+      dataset: { fkey: "shelf:evidence:close" },
+      onclick: () => { state.evidenceOpen = false; render(); },
+    }, icon("gear", { label: "Hide evidence" }))));
+  body.id = "shelf-evidence";
+  body.classList.add("shelf-body");
+  section.append(body);
+  return section;
 }
 
 /* One calm status sentence under the title — replaces the pill cluster. */
@@ -3412,7 +3487,7 @@ function renderControlBanner(agent, control) {
       el("button", {
         type: "button",
         class: "control-banner-link",
-        onclick: () => { state.inspectorTab = "evidence"; render(); },
+        onclick: () => { state.evidenceOpen = true; render(); },
       }, "See routing evidence →")));
 }
 
@@ -3423,17 +3498,6 @@ function closeButton() {
     dataset: { fkey: "inspector-close" },
     onclick: () => closeInspector(),
   }, icon("close"), "Close");
-}
-
-function inspectorTabButton(tab, label) {
-  return el("button", {
-    type: "button",
-    class: "inspector-tab",
-    role: "tab",
-    "aria-selected": String(state.inspectorTab === tab),
-    dataset: { fkey: "itab:" + tab },
-    onclick: () => { state.inspectorTab = tab; render(); },
-  }, label);
 }
 
 /* ---------- inspector: command dock ---------- */
@@ -3847,9 +3911,8 @@ function renderOperate(agent, _program) {
     }));
   }
 
-  const vitals = renderVitals(agent);
-  if (vitals) panel.append(vitals);
-
+  // Vitals moved behind the Evidence disclosure (renderEvidenceShelf) — Operate
+  // stays a calm digest so Chat + Operate can showcase side by side.
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);
   if (!panel.childNodes.length) {
@@ -3902,10 +3965,12 @@ function renderChatTurn(role, text) {
 
 function renderChat(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const user = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  const assistant = typeof agent.transcriptTail === "string" ? agent.transcriptTail.trim() : "";
-  if (user) panel.append(renderChatTurn("user", agent.lastHumanMessage));
-  if (assistant) panel.append(renderChatTurn("assistant", agent.transcriptTail));
+  // Readable You/Agent turns only — the raw transcript tail lives in Evidence.
+  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
+  const user = typeof userRaw === "string" ? userRaw.trim() : "";
+  const assistant = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
+  if (user) panel.append(renderChatTurn("user", userRaw));
+  if (assistant) panel.append(renderChatTurn("assistant", agent.lastAgentMessage));
 
   const artifact = transcriptArtifact(agent);
   if (artifact && artifact.path) {

@@ -92,6 +92,10 @@ export interface AgentSnapshot {
   nickname?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
+  /** Latest sanitized human-legible USER request; null when none survived cleaning. */
+  lastUserMessage?: string | null;
+  /** Latest sanitized human-legible AGENT reply; null when none survived cleaning. */
+  lastAgentMessage?: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;
