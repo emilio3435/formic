@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  collectSessions,
   parseClaudeJsonl,
   parseCodexJsonl,
   parseOmpJsonl,
@@ -462,5 +471,29 @@ describe("collector identity and usage truth", () => {
 
     expect(agent?.sourceSessionId).toBe("019f86c4-1558-7000-aeb8-26e2cfd0e8ec");
     expect(agent?.displayName).toBe("Health tester");
+  });
+
+  test("a scan evicts cached files that are no longer present", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-cache-"));
+    const sessions = join(home, ".codex", "sessions");
+    const path = join(sessions, "session.jsonl");
+    mkdirSync(sessions, { recursive: true });
+    const transcript = (id: string) => JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      payload: { id, cwd: "/tmp/project" },
+    });
+    const fixedTime = new Date();
+
+    writeFileSync(path, transcript("session-a"));
+    utimesSync(path, fixedTime, fixedTime);
+    expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-a");
+
+    unlinkSync(path);
+    expect((await collectSessions(home)).codex.value).toEqual([]);
+
+    writeFileSync(path, transcript("session-b"));
+    utimesSync(path, fixedTime, fixedTime);
+    expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-b");
   });
 });

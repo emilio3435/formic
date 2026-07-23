@@ -12,7 +12,12 @@ import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
-const fileCache = new Map<string, { mtimeMs: number; size: number; agent: CollectedAgent | null }>();
+const fileCache = new Map<string, {
+  provider: Provider;
+  mtimeMs: number;
+  size: number;
+  agent: CollectedAgent | null;
+}>();
 
 export interface ParseMetadata {
   sourcePath?: string;
@@ -553,6 +558,10 @@ async function collectProvider(
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
   const files = await recentJsonlFiles(root, depth, windowMs);
+  const currentPaths = new Set(files);
+  for (const [path, cached] of fileCache) {
+    if (cached.provider === provider && !currentPaths.has(path)) fileCache.delete(path);
+  }
   await Promise.all(
     files.map(async (path) => {
       try {
@@ -564,7 +573,7 @@ async function collectProvider(
         }
         const contents = await readFile(path, "utf8");
         const parsed = parser(contents, { sourcePath: path, mtimeMs: details.mtimeMs });
-        fileCache.set(path, { mtimeMs: details.mtimeMs, size: details.size, agent: parsed });
+        fileCache.set(path, { provider, mtimeMs: details.mtimeMs, size: details.size, agent: parsed });
         if (parsed) agents.push(parsed);
       } catch (error) {
         errors.push(`${provider} ${path}: ${error instanceof Error ? error.message : String(error)}`);
