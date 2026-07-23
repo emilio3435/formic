@@ -78,6 +78,10 @@ export class HubState {
     return this.#snapshot;
   }
 
+  surfaces(): readonly CmuxSurface[] {
+    return this.#surfaces;
+  }
+
   subscribe(listener: (snapshot: HubSnapshot) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
