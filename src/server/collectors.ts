@@ -397,10 +397,11 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
 // exposes `model_context_window`. Derive it from the model id for models whose
 // window is known in this deployment; leave undefined otherwise so the UI falls
 // back to an honest observed-token count instead of a fabricated percentage.
-// Opus 4.8 and Sonnet 5 run the 1M-token context here.
+// Opus 4.8, Sonnet 5, and Fable 5 run the 1M-token context here.
 const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
   ["opus-4-8", 1_000_000],
   ["sonnet-5", 1_000_000],
+  ["fable-5", 1_000_000],
 ];
 
 function claudeContextWindow(model: string | undefined): number | undefined {

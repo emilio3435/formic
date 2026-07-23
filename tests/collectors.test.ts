@@ -281,12 +281,13 @@ describe("collector identity and usage truth", () => {
       cachedInput: 0,
       total: 50_790,
       sessionTotal: 50_790,
+      contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
     });
   });
 
-  test("Claude derives the 1M context window for Opus 4.8 and Sonnet 5, undefined otherwise", () => {
+  test("Claude derives the 1M context window for Opus 4.8, Sonnet 5, and Fable 5, undefined otherwise", () => {
     const row = (model: string) => JSON.stringify({
       type: "assistant",
       sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
@@ -304,8 +305,8 @@ describe("collector identity and usage truth", () => {
     expect(parseClaudeJsonl(row("claude-opus-4-8"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-opus-4-8[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-sonnet-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
+    expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
-    expect(parseClaudeJsonl(row("claude-fable-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
     expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
   });
 
@@ -353,6 +354,7 @@ describe("collector identity and usage truth", () => {
       cachedInput: 7,
       total: 26,
       sessionTotal: 126,
+      contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
     });
