@@ -3,6 +3,7 @@ import { JsonArchiveStore } from "./archive";
 import { createMountainFetch } from "./app";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
+import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { JsonSettingsStore } from "./settings";
@@ -21,6 +22,7 @@ const archiveStore = await JsonArchiveStore.open(join(PROJECT_ROOT, "data/archiv
 const triageStore = await JsonTriageQueueStore.open(join(PROJECT_ROOT, "data/triage-queue.json"));
 const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "data/program-aliases.json"));
 const settingsStore = await JsonSettingsStore.open(join(PROJECT_ROOT, "data/settings.json"));
+const identityBindingStore = await JsonIdentityBindingStore.open(join(PROJECT_ROOT, "data/identity-bindings.json"));
 const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJECT_ROOT, "data/investigations"));
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
 const state = new HubState(
@@ -30,6 +32,8 @@ const state = new HubState(
   undefined,
   () => settingsStore.get(),
   () => triageStore.list(),
+  undefined,
+  identityBindingStore,
 );
 await state.refresh({ cmux: true });
 

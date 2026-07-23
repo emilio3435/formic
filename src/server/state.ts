@@ -7,6 +7,7 @@ import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from 
 import { PulseTracker } from "./pulse";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
+import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
 import type { UsageSummary } from "./burnbar";
 
@@ -56,6 +57,7 @@ export class HubState {
     private readonly settingsReader?: () => HubSettings,
     private readonly triageReader?: () => readonly TriageQueueSummary[],
     private readonly burnReader?: () => Promise<UsageSummary>,
+    private readonly bindingStore?: IdentityBindingStore,
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
@@ -173,22 +175,27 @@ export class HubState {
         ? { healthy: true, lastHealthyAt: collectedAt }
         : { healthy: false, lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt };
     }
+    const collectedAgents = providers.flatMap((provider) => sessions[provider].value);
     if (cmux) {
       this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
-      const collectedAgents = providers.flatMap(
-        (provider) => sessions[provider].value,
-      );
       const enriched = await this.collectors.enrichIdentity(cmux.value, collectedAgents, this.runner);
       this.#surfaces = enriched.value;
       this.#notifications = notifications?.value ?? [];
       this.#cmuxReachable = cmux.errors.length === 0;
-      this.#cmuxErrors = [...cmux.errors, ...(notifications?.errors ?? []), ...enriched.errors];
+      // Only completed identity scans confirm bindings; a failed write is an
+      // operator-visible error, never a silent skip or a broken refresh loop.
+      const bindingErrors = this.bindingStore
+        ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
+        : [];
+      this.#cmuxErrors = [...cmux.errors, ...(notifications?.errors ?? []), ...enriched.errors, ...bindingErrors];
     }
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].errors]),
     ) as Record<Provider, string[]>;
     const built = this.#withSourceHealth(buildSnapshot({
-      agents: providers.flatMap((provider) => sessions[provider].value),
+      agents: this.bindingStore
+        ? bridgeAgentsWithBindings(this.bindingStore, collectedAgents, this.#surfaces)
+        : collectedAgents,
       surfaces: this.#surfaces,
       notifications: this.#notifications,
       programHints: this.programHints,
