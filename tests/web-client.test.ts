@@ -797,6 +797,21 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       expect(tint).not.toBeNull();
     }
   });
+
+  test("(f) the CSS the removed row-fact / control-access helpers owned is gone and can't return", () => {
+    // rowFact / contextFact / controlFact were deleted with the instrument-cluster
+    // rewrite, so no element emits their classes anymore. Guard both the emitters
+    // (app.js) and the now-dead rules (styles) so neither silently comes back.
+    for (const cls of ["row-fact", "control-access"]) {
+      expect(source).not.toContain(cls);
+    }
+    for (const rule of [".row-fact {", ".row-fact-value {", ".fact-control {", ".control-access {", ".control-icon {"]) {
+      expect(styles).not.toContain(rule);
+    }
+    // The live neighbours the cleanup must NOT touch stay put.
+    expect(styles).toContain(".tm-track { fill: var(--line); }");            // SVG meter fill, shared
+    expect(styles).toContain(".status-line-item.control-linked");            // drawer status line, distinct selector
+  });
 });
 
 describe("operations canvas layout", () => {

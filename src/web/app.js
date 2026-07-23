@@ -2705,9 +2705,9 @@ function renderAgentRow(agent, program, opts = {}) {
       el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
       outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
     el("span", {
-      class: "ri-cell ri-model" + (modelShort(agent.model) ? "" : " is-unknown"),
+      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
       "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
-      title: ctxUsage ? ctxUsage.text : (modelShort(agent.model) || "Model not reported"),
+      title: ctxUsage ? ctxUsage.text : modelText,
     },
       el("span", { class: "ri-value mono", text: modelCtx })),
     tokens.known
@@ -2759,7 +2759,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;

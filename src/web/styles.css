@@ -1128,11 +1128,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 
-.row-fact { min-width: 0; overflow: hidden; }
-.row-fact-value { display: block; overflow: hidden; color: var(--ink); font: 600 12.5px/1.35 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.fact-tokens .row-fact-value { font-size: 13.5px; font-weight: 700; }
-.row-fact.is-unknown .row-fact-value { color: var(--faint); font-size: 11px; font-weight: 500; }
-
 .token-fact-value { display: flex; align-items: center; gap: 0.4rem; }
 /* Compatibility: token text remains the readable source of truth; the old
    green bar was decorative and made the primary row noisy. */
@@ -1141,19 +1136,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
 .tm-fill.hot { fill: var(--ember); }
-
-.fact-control { display: grid; justify-items: start; }
-/* ACCESS: icon + explicit state word (Ready / View only / Quarantined). */
-.control-access { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; }
-.control-icon { display: inline-grid; width: 1.35rem; height: 1.35rem; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); flex: none; }
-.control-icon .ico { width: 0.85rem; height: 0.85rem; }
-.control-access-text { font: 650 11.5px/1.2 var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.control-linked .control-icon { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 40%, var(--line-strong)); }
-.control-linked .control-access-text { color: var(--moss); }
-.control-observed-only .control-icon { color: var(--faint); border-style: dashed; }
-.control-observed-only .control-access-text { color: var(--faint); }
-.control-quarantined .control-icon { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--line)); background: color-mix(in srgb, var(--failed) 7%, var(--raise)); }
-.control-quarantined .control-access-text { color: var(--failed); font-weight: 750; }
 
 .row-update { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; margin: 0.3rem 0 0 8.5rem; }
 .row-summary {
