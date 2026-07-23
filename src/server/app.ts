@@ -123,6 +123,19 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/api/recollect") {
+      const origin = request.headers.get("origin");
+      if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || !origin || origin !== url.origin) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "ORIGIN_REJECTED",
+              message: "Recollect requests require an exact same-origin loopback Origin header.",
+            },
+          },
+          { status: 403, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      }
       try {
         const snapshot = await recollect();
         return Response.json(snapshot, {
@@ -130,8 +143,14 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         });
       } catch (error) {
         return Response.json(
-          { error: error instanceof Error ? error.message : String(error) },
-          { status: 500, headers: SECURITY_HEADERS },
+          {
+            ok: false,
+            error: {
+              code: "RECOLLECT_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          },
+          { status: 500, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
         );
       }
     }

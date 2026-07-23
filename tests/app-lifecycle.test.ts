@@ -131,7 +131,10 @@ describe("SSE lifecycle", () => {
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
     const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
 
-    const response = await fetch(new Request("http://127.0.0.1:4701/api/recollect", { method: "POST" }));
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/recollect", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4701" },
+    }));
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(fresh);
@@ -161,14 +164,89 @@ describe("SSE lifecycle", () => {
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
     const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
 
-    const firstResponse = fetch(new Request("http://127.0.0.1:4701/api/recollect", { method: "POST" }));
-    const secondResponse = fetch(new Request("http://127.0.0.1:4701/api/recollect", { method: "POST" }));
+    const firstResponse = fetch(new Request("http://127.0.0.1:4701/api/recollect", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4701" },
+    }));
+    const secondResponse = fetch(new Request("http://127.0.0.1:4701/api/recollect", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4701" },
+    }));
     releaseRefresh(fresh);
     const [first, second] = await Promise.all([firstResponse, secondResponse]);
 
     expect(refreshCalls).toBe(1);
     expect(await first.json()).toEqual(fresh);
     expect(await second.json()).toEqual(fresh);
+    fetch.dispose();
+  });
+  test("POST /api/recollect rejects cross-origin requests without refreshing", async () => {
+    let refreshCalls = 0;
+    const state: MountainAppState = {
+      get: emptySnapshot,
+      subscribe: () => () => {},
+      refresh: async () => {
+        refreshCalls += 1;
+        return emptySnapshot();
+      },
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/recollect", {
+      method: "POST",
+      headers: { origin: "http://evil.example" },
+    }));
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: {
+        code: "ORIGIN_REJECTED",
+        message: "Recollect requests require an exact same-origin loopback Origin header.",
+      },
+    });
+    expect(refreshCalls).toBe(0);
+    fetch.dispose();
+  });
+
+  test("failed POST /api/recollect returns the error envelope and allows a retry", async () => {
+    const fresh = lifecycleSnapshot();
+    let refreshCalls = 0;
+    const state: MountainAppState = {
+      get: () => fresh,
+      subscribe: () => () => {},
+      refresh: async () => {
+        refreshCalls += 1;
+        if (refreshCalls === 1) throw new Error("collector failed");
+        return fresh;
+      },
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+    const request = () => fetch(new Request("http://127.0.0.1:4701/api/recollect", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4701" },
+    }));
+
+    const failed = await request();
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({
+      ok: false,
+      error: { code: "RECOLLECT_FAILED", message: "collector failed" },
+    });
+    expect(refreshCalls).toBe(1);
+
+    const recovered = await request();
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toEqual(fresh);
+    expect(refreshCalls).toBe(2);
     fetch.dispose();
   });
 });
