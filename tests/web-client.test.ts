@@ -2567,12 +2567,14 @@ describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", (
   //     scroll so the chrome can never push the document into scrolling.
   test("(a) the findings + customizer expansions are height-bounded with internal scroll", () => {
     const findings = styles.match(/#pulse-findings\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(findings).toContain("max-height:");
-    expect(findings).toContain("dvh");            // sized against the viewport
+    // vh fallback line before the dvh bound, matching the body's fallback discipline.
+    expect(findings).toContain("max-height: min(40vh");
+    expect(findings).toContain("max-height: min(40dvh"); // sized against the viewport
     expect(findings).toContain("overflow-y: auto");
     expect(findings).not.toContain("overflow: hidden"); // the unbounded clip is replaced
     const customizer = styles.match(/\.widget-customizer\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(customizer).toContain("max-height:");
+    expect(customizer).toContain("max-height: min(50vh");
+    expect(customizer).toContain("max-height: min(50dvh");
     expect(customizer).toContain("overflow-y: auto");
   });
 
@@ -2581,12 +2583,14 @@ describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", (
   test("(e) the <1024px fixed-inspector contract is unchanged", () => {
     const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
     const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
-    expect(block).toContain(".pane-inspector");
-    expect(block).toContain("position: fixed");
-    expect(block).toContain("inset: 0");
-    // The desktop shell is not forced onto it: no overflow-clip / dvh height leaks
-    // into the full-sheet inspector block.
-    expect(block).not.toContain("height: 100dvh");
+    // Bind the three invariants to the ONE extracted .pane-inspector rule, so the
+    // guard can't pass on stray matches elsewhere in the block.
+    const inspRule = block.match(/\.pane-inspector\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(inspRule).not.toBe("");
+    expect(inspRule).toContain("position: fixed");
+    expect(inspRule).toContain("inset: 0");
+    // The desktop shell is not forced onto it: no dvh height leaks into the sheet.
+    expect(inspRule).not.toContain("height: 100dvh");
   });
 });
 describe("scroll shell: sticky left-pane headers (Part 2)", () => {
@@ -2624,21 +2628,91 @@ describe("scroll shell: sticky left-pane headers (Part 2)", () => {
 
   // (c) Keyboard parity: focused rows clear the stuck stack (head + column header)
   //     so Tab/arrow focus never lands hidden beneath the frozen headers.
-  test("(c) rows carry scroll-margin-top equal to the stuck header stack", () => {
+  test("(c) rows carry scroll-margin-top equal to the stuck header stack (head + column)", () => {
+    // Both focusable roster elements — agent rows AND swarm anchors — clear the stack.
     const row = styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
     expect(row).toContain("scroll-margin-top:");
     expect(row).toContain("var(--program-head-h)");
+    expect(row).toContain("var(--column-head-h)");   // magic px replaced by a coupled var
+    const anchor = styles.match(/\.swarm-anchor\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(anchor).toContain("scroll-margin-top:");
+    expect(anchor).toContain("var(--program-head-h)");
+    expect(anchor).toContain("var(--column-head-h)");
+    // The offset vars are defined together on the scroll container.
+    expect(styles).toMatch(/\.pane-list\s*\{[^}]*--program-head-h:/);
+    expect(styles).toMatch(/\.pane-list\s*\{[^}]*--column-head-h:/);
   });
 });
 describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
   // (d) Deep nesting stops indenting past level 3 (N·step: 3·1.3rem + 0.8rem base
   //     = 4.7rem = 75px ≤ 25% of the 380px min pane); depth colour + chips carry
-  //     the deeper hierarchy. The uncapped multiplier is replaced.
-  test("(d) the child indent is capped at 3 levels (min(var(--tree-depth), 3))", () => {
-    expect(styles).toContain("min(var(--tree-depth), 3)");
-    // Absence: the old uncapped desktop indent pattern is gone.
-    expect(styles).not.toContain("calc(0.8rem + var(--tree-depth) * 1.3rem)");
-    // The connector rail tracks the same cap so it stays aligned to the indent.
-    expect(styles).toMatch(/\.agent-row\.is-child::before[\s\S]*?left:\s*calc\(0\.55rem \+ \(min\(var\(--tree-depth\), 3\)/);
+  //     the deeper hierarchy. The cap must bind at EVERY indenting site, not just
+  //     one file-wide match — so each rule is extracted and checked on its own.
+  test("(d) the cap min(var(--tree-depth), 3) binds at all five indenting sites", () => {
+    // 1. desktop child row indent
+    const isChild = styles.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(isChild).toContain("min(var(--tree-depth), 3) * 1.3rem");
+    // 2. desktop child row while selecting
+    const selecting = styles.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(selecting).toContain("min(var(--tree-depth), 3) * 1.3rem");
+    // 3. connector rail (tracks the same cap so it stays aligned)
+    const connector = styles.match(/\.agent-row\.is-child::before\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(connector).toContain("(min(var(--tree-depth), 3) - 1) * 1.3rem");
+    // 4. swarm anchor indent (matches the row indent)
+    const anchor = styles.match(/\.swarm-anchor\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(anchor).toContain("min(var(--tree-depth), 3) * 1.3rem");
+    // 5. the ≤720px mobile step rules (smaller 0.85rem step)
+    const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
+    const mChild = mobile.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(mChild).toContain("min(var(--tree-depth), 3) * 0.85rem");
+    const mSelecting = mobile.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(mSelecting).toContain("min(var(--tree-depth), 3) * 0.85rem");
+    // Absence: no uncapped multiplier survives at any width (the ", 3)" between
+    // the var and the operator means the capped form is not a false match here).
+    expect(styles).not.toContain("var(--tree-depth) * 1.3rem");
+    expect(styles).not.toContain("var(--tree-depth) * 0.85rem");
+  });
+});
+
+/* Review fixes (2026-07-23): the fix's own edge cases. */
+describe("scroll shell: review fixes", () => {
+  // (1 Important) The findings ledger and the widget customizer are BOTH
+  //   flex:none summary-strip expansions; opening both at once was 918px > 900px
+  //   at 1440×900 (clipped invisibly by body overflow-y:clip). Make them mutually
+  //   exclusive — opening either collapses the other — so combined overflow is
+  //   structurally impossible (the max-height bounds stay as belt-and-suspenders).
+  test("(1) the two summary-strip expansions are mutually exclusive", () => {
+    // Opening the findings collapses the customizer.
+    const pulse = source.match(/function togglePulseFindings\(\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(pulse).toContain("state.pulseExpanded = !state.pulseExpanded");
+    expect(pulse).toContain("state.widgetCustomizerOpen = false");
+    // Opening the customizer collapses the findings.
+    const handler = source.match(/"customize-summary"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{[\s\S]*?\}\);/)?.[0] ?? "";
+    expect(handler).toContain("state.widgetCustomizerOpen = !state.widgetCustomizerOpen");
+    expect(handler).toContain("state.pulseExpanded = false");
+  });
+
+  // (2 Important) The nowrap rollup sits inside a .program overflow:clip card, so
+  //   at narrow widths the fixed cluster was cropped with zero indication. It must
+  //   shrink HONESTLY (min-width:0 + per-cell overflow), the alerts cell must never
+  //   shrink (last to go, always legible), and the least-critical tokens cell is
+  //   dropped outright at ≤720px.
+  test("(2) the rollup shrinks honestly and never crops the alerts cell", () => {
+    const rollup = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rollup).toContain("min-width: 0");
+    expect(rollup).toContain("flex: 0 1 auto");   // shrinks after the name truncates
+    const cell = styles.match(/\.program-rollup-cell\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(cell).toContain("min-width: 0");
+    expect(cell).toContain("overflow: hidden");
+    // The alerts cell is pinned against shrink — it is the last thing to give.
+    const alert = styles.match(/\.program-rollup-cell\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(alert).toContain("flex-shrink: 0");
+    // The tokens cell (tagged by JS with a key) is dropped on narrow screens.
+    expect(source).toContain('label: "tokens", key: "tokens"');
+    expect(source).toContain('" program-rollup-cell--" + c.key');
+    const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
+    expect(mobile).toContain(".program-rollup-cell--tokens { display: none; }");
+    // The alerts cell is never targeted for dropping.
+    expect(styles).not.toContain(".program-rollup-cell.is-alerting { display: none");
   });
 });

@@ -342,7 +342,9 @@ function programRollupCells(agents) {
   const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
   if (withTokens.length) {
     const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
-    cells.push({ value: fmtTok(total), label: "tokens" });
+    // key "tokens" lets the header rollup drop this cell first on narrow screens
+    // (it is the least critical; the alerts cell is never dropped).
+    cells.push({ value: fmtTok(total), label: "tokens", key: "tokens" });
   }
   return cells;
 }
@@ -2348,7 +2350,11 @@ function renderFindingRow(finding) {
 
 function togglePulseFindings() {
   state.pulseExpanded = !state.pulseExpanded;
-  if (!state.pulseExpanded) state.pulseShowAll = false;
+  // The findings ledger and the widget customizer are both summary-strip (chrome)
+  // expansions; opening both at once could exceed the viewport, so they are
+  // mutually exclusive — opening the findings collapses the customizer.
+  if (state.pulseExpanded) state.widgetCustomizerOpen = false;
+  else state.pulseShowAll = false;
   renderHealthRail();
 }
 
@@ -2648,7 +2654,7 @@ function programHeadRollup(agents) {
   const cells = programRollupCells(agents);
   const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
   return el("span", { class: "program-rollup", "aria-label": label },
-    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") },
+    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") + (c.key ? " program-rollup-cell--" + c.key : "") },
       el("span", { class: "program-rollup-value mono", text: c.value }),
       el("span", { class: "program-rollup-label", text: c.label }))));
 }
@@ -5165,6 +5171,9 @@ function boot() {
 
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
+    // Exclusive with the findings ledger (both are chrome expansions) — opening
+    // the customizer collapses the findings so the strip never exceeds the viewport.
+    if (state.widgetCustomizerOpen) state.pulseExpanded = false;
     renderHealthRail();
   });
 

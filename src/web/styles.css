@@ -366,7 +366,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* Same Part-0 guard as #pulse-findings: the customizer expands inside the flex:none
    summary strip, so it is bounded to the viewport and scrolls internally rather than
    growing the chrome until the document scrolls. */
-.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
+.widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50vh, 22rem); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
 .widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
 .widget-help { margin: 0.15rem 0 0; color: var(--muted); font-size: 12px; }
@@ -412,9 +412,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .pane-list {
   /* The roster's stuck program/column headers pin at these offsets. --program-head-h
-     matches the single-line head (46px desktop); it is re-pointed to 60px in the
-     <=1024px block where the touch sweep grows the head's buttons. */
+     matches the single-line head (46px desktop; re-pointed to 60px in the <=1024px
+     block where the touch sweep grows the head's buttons). --column-head-h matches
+     the column header's own height and drives the rows' scroll-margin (head + column). */
   --program-head-h: 46px;
+  --column-head-h: 25px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
@@ -494,7 +496,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   margin: 0 auto 0.15rem;
   /* Part-0 fix: this expansion lives in the flex:none .health-rail, so without a
      bound it grows the chrome past the viewport and the document scrolls. Cap it
-     against the viewport and scroll the ledger internally; the chrome stays put. */
+     against the viewport and scroll the ledger internally; the chrome stays put.
+     vh fallback line before dvh, matching the body's fallback discipline. */
+  max-height: min(40vh, 26rem);
   max-height: min(40dvh, 26rem);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -1035,11 +1039,15 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
 /* nowrap keeps the rollup's cells on one line so the sticky head is single-line
-   (the head's --program-head-h offset depends on it); the name truncates first. */
-.program-rollup { margin-left: auto; display: inline-flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
-.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; }
-.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.program-rollup-label { font-size: 11px; color: var(--faint); }
+   (the head's --program-head-h offset depends on it); the name truncates first,
+   then the rollup shrinks HONESTLY (min-width:0 + per-cell overflow) instead of
+   being silently cropped by the .program overflow:clip ancestor. The alerts cell
+   never shrinks and so is the last thing to go — it must always stay legible. */
+.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
+.program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.program-rollup-label { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -1081,7 +1089,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   box-sizing: border-box;
   /* Keyboard parity: Tab/arrow focus scrolls the row clear of the stuck header
      stack (program head + column header) so it never lands hidden beneath them. */
-  scroll-margin-top: calc(var(--program-head-h) + 25px);
+  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));
 }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
@@ -1410,7 +1418,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   min-height: 40px;
   padding: 0.4rem 0.7rem;
   text-align: left;
-  scroll-margin-top: calc(var(--program-head-h) + 25px);   /* clear the stuck header stack on keyboard focus */
+  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));   /* clear the stuck header stack on keyboard focus */
   color: var(--muted);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--sand) 55%, var(--raise));
@@ -2355,6 +2363,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .widget-move { width: 2.75rem; height: 2.75rem; }
   .pane-list { padding: 0 0.65rem 5rem; }   /* top breathing rides the toolbar margin; headers pin flush */
   .program-head { min-height: 44px; }
+  /* Narrow screens can't fit the whole rollup beside the truncating name; drop
+     the least-critical tokens cell (the alerts cell is never dropped). Also raise
+     the stuck column header's scroll-margin offset to the 2-row mobile header. */
+  .program-rollup-cell--tokens { display: none; }
+  .pane-list { --column-head-h: 44px; }
   .program-rename,
   .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }
   .agent-column-header,
