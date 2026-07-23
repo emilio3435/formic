@@ -474,6 +474,29 @@ describe("search", () => {
     }
     expect(M.matchesQuery(a, program, "zzz-nope")).toBe(false);
   });
+
+  test("the search affordance advertises exactly the fields matchesQuery covers", () => {
+    const input = html.match(/<input id="search"[^>]*>/)?.[0];
+    expect(input).toBeDefined();
+    const placeholder = input!.match(/placeholder="([^"]*)"/)?.[1] ?? "";
+    const title = input!.match(/title="([^"]*)"/)?.[1] ?? "";
+    // Both surfaces name the same searchable fields; every advertised field is
+    // one matchesQuery actually indexes — no promise the search can't keep.
+    const program = { id: "p", name: "Prog" };
+    const probes: Array<[string, string]> = [
+      ["name", "ridge-scout"], ["model", "gpt-5.6-sol"], ["cwd", "/Users/emilio/Developer/deep-ridge"],
+      ["provider", "codex"], ["role", "verifier"], ["status", "running"], ["session id", "sess-ridge-9"],
+    ];
+    const a = agent({
+      displayName: "ridge-scout", model: "gpt-5.6-sol", cwd: "/Users/emilio/Developer/deep-ridge",
+      provider: "codex", role: "verifier", status: "running", sourceSessionId: "sess-ridge-9",
+    });
+    for (const [field, sample] of probes) {
+      expect(placeholder.toLowerCase()).toContain(field);
+      expect(title.toLowerCase()).toContain(field);
+      expect(M.matchesQuery(a, program, sample.toLowerCase())).toBe(true);
+    }
+  });
 });
 
 describe("stable-feed elapsed clocks", () => {
