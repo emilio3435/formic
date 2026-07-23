@@ -36,6 +36,107 @@ class SequenceRunner implements CommandRunner {
   }
 }
 
+// A CLI assistant message blob: the resolved modelName lives on content PARTS,
+// while the message-level providerOptions.cursor carries only routing ids.
+function assistantBlob(modelName: string): string {
+  return JSON.stringify({
+    role: "assistant",
+    id: `blob-${modelName}`,
+    content: [
+      { type: "reasoning", providerOptions: { cursor: { modelName } } },
+      { type: "text", text: "ok" },
+    ],
+    providerOptions: { cursor: { modelProviderMessageId: "msg-1", requestId: "req-1" } },
+  });
+}
+
+// Builds a Cursor GUI home fixture with the real store layout so the collector can
+// resolve one local conversation. composerData (when provided) is written to
+// state.vscdb's cursorDiskKV; ai-tracking (when provided) supplies the fallback.
+async function setupGuiComposerHome(options: {
+  composerData?: { modelName: string; parameters?: { id: string; value: string }[] };
+  trackingModel?: string;
+}): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
+  temporaryDirectories.push(home);
+  const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+  const projectCwd = "/Users/me/elio-intelligence-suite";
+  const projectId = "378abb0f-fefb-4ae9-bdf3-754920b7b4fe";
+  const projectDirectory = join(home, ".cursor", "projects", "Users-me-elio-intelligence-suite");
+  const transcriptDirectory = join(projectDirectory, "agent-transcripts", GUI_SESSION_ID);
+  await mkdir(transcriptDirectory, { recursive: true });
+  await mkdir(globalStorage, { recursive: true });
+  const transcriptPath = join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`);
+  await writeFile(transcriptPath, [
+    JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "Repair the SEM demo path." }] } }),
+    JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "Waiting for review." }] } }),
+    JSON.stringify({ type: "turn_ended", status: "success" }),
+  ].join("\n"));
+  await utimes(transcriptPath, new Date(1784691238958), new Date(1784691238958));
+
+  const state = new Database(join(globalStorage, "state.vscdb"));
+  state.run("create table ItemTable (key text primary key, value blob)");
+  state.run("insert into ItemTable(key, value) values (?, ?)", [
+    "glass.localAgentProjectMembership.v1",
+    JSON.stringify({ [GUI_SESSION_ID]: projectId }),
+  ]);
+  state.run("insert into ItemTable(key, value) values (?, ?)", [
+    "glass.localAgentProjects.v1",
+    JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
+  ]);
+  if (options.composerData) {
+    state.run("create table cursorDiskKV (key text primary key, value blob)");
+    state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
+      `composerData:${GUI_SESSION_ID}`,
+      JSON.stringify({
+        modelConfig: {
+          modelName: options.composerData.modelName,
+          selectedModels: [{ parameters: options.composerData.parameters ?? [] }],
+        },
+        usageData: {},
+      }),
+    ]);
+  }
+  state.close();
+
+  const conversations = new Database(join(globalStorage, "conversation-search.db"));
+  conversations.run(`create table conversations (
+    fts_rowid integer primary key,
+    source text not null,
+    scope text not null,
+    id text not null,
+    title text not null,
+    updated_at integer not null,
+    is_archived integer not null,
+    root_fingerprint text,
+    cache_fingerprint text
+  )`);
+  conversations.run(
+    "insert into conversations(source, scope, id, title, updated_at, is_archived, root_fingerprint) values ('local', '', ?, ?, ?, 0, 'fingerprint')",
+    [GUI_SESSION_ID, "Elio: SEM Night", 1784691238958],
+  );
+  conversations.close();
+
+  if (options.trackingModel) {
+    await mkdir(join(home, ".cursor", "ai-tracking"), { recursive: true });
+    const tracking = new Database(join(home, ".cursor", "ai-tracking", "ai-code-tracking.db"));
+    tracking.run(`create table ai_code_hashes (
+      hash text primary key,
+      source text not null,
+      conversationId text,
+      timestamp integer,
+      model text,
+      createdAt integer not null
+    )`);
+    tracking.run(
+      "insert into ai_code_hashes(hash, source, conversationId, timestamp, model, createdAt) values ('hash', 'composer', ?, ?, ?, ?)",
+      [GUI_SESSION_ID, 1784691434327, options.trackingModel, 1784691434327],
+    );
+    tracking.close();
+  }
+  return home;
+}
+
 describe("Cursor Agent persisted session truth", () => {
   test("parses exact session, cwd, model, task, tail, status, and unknown billing honestly", async () => {
     const agent = parseCursorSession({
@@ -221,6 +322,53 @@ describe("Cursor Agent persisted session truth", () => {
       mode: "search",
       model: "Cursor Grok 4.5",
     });
+  });
+
+  test("prefers meta lastUsedModel over the newest assistant blob modelName", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-lastused-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.run("create table meta (key text primary key, value text)");
+    database.run("create table blobs (id text primary key, data blob)");
+    database.run("insert into meta(key, value) values ('0', ?)", [
+      Buffer.from(JSON.stringify({
+        agentId: SESSION_ID,
+        name: "New Agent",
+        mode: "default",
+        lastUsedModel: "grok-4.5",
+      })).toString("hex"),
+    ]);
+    // A conflicting per-turn modelName in the blobs must lose to the authoritative
+    // meta lastUsedModel when the latter is present.
+    database.run("insert into blobs(id, data) values ('a', ?)", [Buffer.from(assistantBlob("cursor-grok-4.5-high-fast"))]);
+    database.close();
+
+    expect(readCursorStoreEvidence(path)).toMatchObject({ agentId: SESSION_ID, model: "grok-4.5" });
+  });
+
+  test("falls back to the newest assistant blob modelName, detecting Composer models", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-blobmodel-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.run("create table meta (key text primary key, value text)");
+    database.run("create table blobs (id text primary key, data blob)");
+    // No lastUsedModel: the model must come from the blobs.
+    database.run("insert into meta(key, value) values ('0', ?)", [
+      Buffer.from(JSON.stringify({ agentId: SESSION_ID, name: "New Agent", mode: "plan" })).toString("hex"),
+    ]);
+    // The message-level providerOptions.cursor carries no modelName (only routing
+    // ids), so extraction must read the content PARTS. The newest turn (highest
+    // rowid) switched to Composer and must win over the earlier Grok turn.
+    database.run("insert into blobs(id, data) values ('older', ?)", [Buffer.from(assistantBlob("cursor-grok-4.5-high-fast"))]);
+    database.run("insert into blobs(id, data) values ('user', ?)", [
+      Buffer.from(JSON.stringify({ role: "user", content: [{ type: "text", text: "switch model" }] })),
+    ]);
+    database.run("insert into blobs(id, data) values ('newer', ?)", [Buffer.from(assistantBlob("composer-2.5-fast"))]);
+    database.close();
+
+    expect(readCursorStoreEvidence(path).model).toBe("composer-2.5-fast");
   });
 
   test("reads a WAL-mode store immutably when the read-only handle cannot create SQLite sidecars", async () => {
@@ -427,6 +575,42 @@ describe("Cursor Agent persisted session truth", () => {
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });
+  });
+
+  test("reads the GUI model and effort from composerData, overriding ai-tracking", async () => {
+    // composerData names Opus; ai-tracking still lists the older Grok model. The
+    // authoritative composerData model and its effort tier must win.
+    const home = await setupGuiComposerHome({
+      composerData: {
+        modelName: "claude-opus-4-8-thinking-high",
+        parameters: [
+          { id: "thinking", value: "true" },
+          { id: "context", value: "300k" },
+          { id: "effort", value: "xhigh" },
+        ],
+      },
+      trackingModel: "grok-4.5",
+    });
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.errors).toEqual([]);
+    expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)).toMatchObject({
+      model: "claude-opus-4-8-thinking-high",
+      effort: "xhigh",
+    });
+  });
+
+  test("falls back to ai-tracking when composerData reports the sentinel 'default' model", async () => {
+    const home = await setupGuiComposerHome({
+      composerData: { modelName: "default" },
+      trackingModel: "grok-4.5",
+    });
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.errors).toEqual([]);
+    expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)?.model).toBe("grok-4.5");
   });
 });
 
