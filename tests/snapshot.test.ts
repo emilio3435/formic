@@ -350,6 +350,45 @@ describe("snapshot control safety and SSE deduplication", () => {
     }));
   });
 
+  test("Cursor Composer families count as compliant native models", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          id: "cursor:composer-fast",
+          provider: "cursor",
+          sourceSessionId: "composer-fast",
+          model: "composer-2.5-fast",
+        }),
+        collected({
+          id: "cursor:composer-2",
+          provider: "cursor",
+          sourceSessionId: "composer-2",
+          model: "composer-2",
+        }),
+        collected({
+          id: "cursor:composer-child",
+          provider: "cursor",
+          sourceSessionId: "composer-child",
+          parentSourceSessionId: "composer-fast",
+          model: "composer-2.5",
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agents = snapshot.programs.flatMap(({ agents }) => agents);
+
+    const composerFast = agents.find(({ id }) => id === "cursor:composer-fast")?.modelPolicy;
+    expect(composerFast?.state).toBe("compliant");
+    // The summary names the family that actually matched — honest about why.
+    expect(composerFast?.summary).toContain("composer-2.5");
+    expect(agents.find(({ id }) => id === "cursor:composer-2")?.modelPolicy?.state).toBe("compliant");
+    expect(agents.find(({ id }) => id === "cursor:composer-child")?.modelPolicy?.state).toBe("compliant");
+    expect(snapshot.totals.cursorModelHealth).toMatchObject({ compliant: 3, mismatch: 0 });
+    expect((snapshot.issues ?? []).some((issue) => issue.id.startsWith("system:cursor-model-policy"))).toBe(false);
+  });
+
   test("provider-native statuses become one operator state language", () => {
     const snapshot = buildSnapshot({
       agents: [

@@ -18,7 +18,7 @@ import type {
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
-import { MODEL_CONFIG, modelFamily } from "./model-config";
+import { MODEL_CONFIG, cursorNativeFamily } from "./model-config";
 import { resolveAgentTargetWithTrace } from "./targets";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
@@ -223,10 +223,12 @@ function cursorModelPolicy(
       summary: `${agent.model} was observed, but the parent model was not reported, so inheritance cannot be verified.`,
     };
   }
-  const compliant = modelFamily(agent.model) === modelFamily(expected);
-  return compliant
-    ? { state: "compliant", expected, observed: agent.model, evidence, summary: `${agent.model} matches the expected Cursor model.` }
-    : { state: "mismatch", expected, observed: agent.model, evidence, summary: `${agent.model} does not match the expected Cursor model.` };
+  // Any Cursor-native family (Grok or Composer) is compliant; a reported
+  // non-native model is a routing violation regardless of the parent model.
+  const nativeFamily = cursorNativeFamily(agent.model);
+  return nativeFamily
+    ? { state: "compliant", expected, observed: agent.model, evidence, summary: `${agent.model} runs the Cursor-native ${nativeFamily} family.` }
+    : { state: "mismatch", expected, observed: agent.model, evidence, summary: `${agent.model} is not a Cursor-native model family.` };
 }
 
 function roleFor(agent: CollectedAgent, hasChildren: boolean): AgentRole {
