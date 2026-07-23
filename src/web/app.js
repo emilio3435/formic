@@ -1009,7 +1009,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction,
+  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -3340,9 +3340,15 @@ function renderAgentDrawer(pane, view) {
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
-  // B3's slot: renderVitalsBand(agent) fills this mount. The empty container
-  // must hold this DOM position (after next-action, before the shelf) from B2 on.
-  pane.append(el("div", { class: "inspector-vitals" }));
+  // Vitals promoted to an instrument band directly under the verdict head —
+  // the numbers an operator acts on, no longer buried in the Evidence shelf.
+  // The mount always holds this DOM position (after next-action, before the
+  // shelf); renderVitalsBand omit-empties, and :empty hides the mount when the
+  // source reports nothing, so no flex gap is spent on a blank band.
+  const vitalsMount = el("div", { class: "inspector-vitals" });
+  const vitalsBand = renderVitalsBand(agent);
+  if (vitalsBand) vitalsMount.append(vitalsBand);
+  pane.append(vitalsMount);
 
   // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
   // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
@@ -3412,11 +3418,10 @@ function renderEvidenceShelf(agent) {
       el("span", { class: "shelf-rail-label", text: "Evidence" }));
   }
 
+  // Evidence holds paths, routing, and the transcript tail. The vitals
+  // instrument band moved out to lead the drawer under the verdict head
+  // (renderVitalsBand); Evidence no longer carries the metrics tiles.
   const body = renderEvidence(agent);
-  // Metrics live behind the disclosure, not in the showcase: the vitals
-  // instrument band leads the Evidence column when it opens.
-  const vitals = renderVitals(agent);
-  if (vitals) body.prepend(vitals);
   const section = el("section", {
     class: "shelf-section shelf-evidence is-open",
     dataset: { shelf: "evidence" },
@@ -3818,9 +3823,13 @@ function vitalTile(label, figure) {
 }
 
 /* Vitals band — the numbers an operator acts on, rendered as instruments (a
-   context ring, session spend + cache efficiency, uptime) instead of a grey meta
-   row. Every tile self-guards; if nothing has data the band renders nothing. */
-function renderVitals(agent) {
+   context ring, session tokens + cache efficiency, uptime) directly under the
+   verdict head instead of buried in the Evidence shelf. Every tile self-guards;
+   if nothing has data the band renders nothing (omit-empty), so the mount's
+   :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
+   the type but is never populated — real cost is program/pulse-level only, and
+   program cost has no place inside a single agent's band. */
+function renderVitalsBand(agent) {
   const t = agent.tokens || {};
   const tiles = [];
 
@@ -3884,8 +3893,8 @@ function renderOperateMeta(agent) {
       node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
     });
   }
-  // Uptime, token, and context figures now lead the Operate tab in the vitals
-  // instrument band (renderVitals). This meta row stays identity-only.
+  // Uptime, token, and context figures now lead the drawer in the vitals
+  // instrument band under the verdict head. This meta row stays identity-only.
   if (!items.length) return null;
 
   const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
@@ -3926,7 +3935,7 @@ function renderOperate(agent, _program) {
     }));
   }
 
-  // Vitals moved behind the Evidence disclosure (renderEvidenceShelf) — Operate
+  // Vitals lead the drawer as an instrument band under the verdict head — Operate
   // stays a calm digest so Chat + Operate can showcase side by side.
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);

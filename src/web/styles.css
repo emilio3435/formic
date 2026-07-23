@@ -1802,8 +1802,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- vitals band: the instrument tiles ----------
    The numbers an operator acts on (context ring, session tokens + cache, uptime)
-   rendered as instruments above the identity meta. Omit-empty: absent tiles are
-   never rendered, so the band flexes to whatever the source reports. */
+   rendered as instruments in a compact row directly under the verdict head — the
+   band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
+   absent tiles are never rendered, so the band flexes to whatever the source
+   reports; when the source reports nothing the mount's :empty rule collapses it. */
+.inspector-vitals { min-width: 0; }
 .vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .vital {
   flex: 1 1 8.5rem;

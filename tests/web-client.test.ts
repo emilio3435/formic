@@ -1030,10 +1030,12 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
     expect(source).toContain("evidenceOpen: false");
     expect(source).toContain('class: "shelf-evidence-rail"');
-    // Metrics are hidden behind the disclosure: vitals render inside the
-    // Evidence shelf, never in Operate.
+    // B3: metrics are promoted to the instrument band under the verdict head —
+    // Evidence no longer builds vitals (neither the old call nor the band), and
+    // Operate never did.
     const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] || "";
-    expect(evidenceShelf).toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
     expect(operate).not.toContain("renderVitals(");
     expect(styles).toContain(".drawer-shelf {");
@@ -1273,5 +1275,124 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     expect(headFn).toContain('fkeyPrefix: "head:"');
     // Escape restores focus to the exact instance fkey stored in state.confirming.
     expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+  });
+});
+
+describe("vitals instrument band (B3)", () => {
+  /* Same DOM-less execution trick B2 used: a minimal fake document installed
+     around each call lets renderVitalsBand build real nodes via el()/svg helpers,
+     so tests assert on what actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // Walk the built node tree: collect el()-set classNames and concatenated text.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // el() writes leaf text via the `text:` attr (node.textContent) and multi-child
+  // text via createTextNode kids; a node uses one or the other, so summing both
+  // never double-counts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+
+  test("(a) renderVitalsBand is exported and renders mono-classed values for a live agent", () => {
+    expect(typeof M.renderVitalsBand).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(live));
+    expect(band).not.toBeNull();
+    expect(band.className).toContain("vitals");
+    const classes = classesOf(band);
+    // Values ride the canonical "vital-big mono" convention (DESIGN rule 2).
+    expect(classes.some((c) => c.includes("vital-big") && c.includes("mono"))).toBe(true);
+    // An observed context window renders a real SVG ring; uptime is present.
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
+    const text = textOf(band);
+    expect(text).toContain("40k"); // observed context total
+    expect(text).toContain("2m");  // 125s uptime → fmtElapsed "2m"
+  });
+
+  test("(b) missing vitals render honest fallbacks — observed count without a fabricated window, omit-empty otherwise", () => {
+    // Claude-style: observed total but NO context window → absolute count, never a
+    // fabricated percentage/ring (no invented denominator).
+    const noWindow = agent({
+      provider: "claude",
+      tokens: { provenance: "observed", total: 40000 },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(noWindow));
+    expect(band).not.toBeNull();
+    const classes = classesOf(band);
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(false); // no fabricated ring
+    const text = textOf(band);
+    expect(text).toContain("40k");   // honest observed count
+    expect(text).not.toContain("%"); // no invented percentage
+    // Nothing reported at all → the band is omitted entirely (never a fake $0/0 tile).
+    const blank = withDom(() => M.renderVitalsBand(
+      agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
+    ));
+    expect(blank).toBeNull();
+    // The honest "not reported" string itself stays byte-identical.
+    expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
+  });
+
+  test("(c) renderEvidenceShelf no longer builds the vitals block — it moved to the band", () => {
+    const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(evidenceShelf).toBeTruthy();
+    // The moved pattern, quoted from the pre-B3 source: the vitals prepend.
+    expect(evidenceShelf).not.toContain("body.prepend(vitals)");
+    // No vitals tiles are built in Evidence now — neither the old call nor the band.
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
+  });
+
+  test("(d) renderAgentDrawer fills the .inspector-vitals mount with the band, before the shelf", () => {
+    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain('class: "inspector-vitals"');
+    expect(drawer).toContain("renderVitalsBand(agent)");
+    // B2 appended the mount EMPTY; B3 must fill it — that bare append is gone.
+    expect(drawer).not.toContain('pane.append(el("div", { class: "inspector-vitals" }))');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    expect(vitalsAt).toBeGreaterThan(-1);
+    expect(vitalsAt).toBeLessThan(shelfAt);
   });
 });
