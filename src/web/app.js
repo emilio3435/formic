@@ -73,6 +73,11 @@ const ICON_PATHS = {
   interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
   // archive: tray
   archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }]],
+  // evidence / advanced: gear
+  gear: [
+    ["circle", { cx: 12, cy: 12, r: 3 }],
+    ["path", { d: "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.1 5.1l1.6 1.6M17.3 17.3l1.6 1.6M5.1 18.9l1.6-1.6M17.3 6.7l1.6-1.6" }],
+  ],
 };
 
 function icon(name, opts = {}) {
@@ -998,7 +1003,8 @@ const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  inspectorTab: "operate", // operate | chat | evidence
+  // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
+  evidenceOpen: false,
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // `${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -2657,6 +2663,8 @@ function selectEntity(sel) {
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
+  // Evidence stays opt-in per open — don't carry an expanded wall across agents.
+  state.evidenceOpen = false;
   render();
   // On explicit open (not on background SSE re-renders), move focus to the
   // drawer's lead element per kind — the differentiator band, or the title.
@@ -2677,6 +2685,7 @@ function closeInspector() {
   state.selected = null;
   state.selectedId = null;
   state.confirming = null;
+  state.evidenceOpen = false;
   render();
   if (id) {
     const row = document.getElementById("agent-" + id);
@@ -2723,7 +2732,7 @@ function renderInspector() {
     queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
     triage ? triage.generatedAt + ":" + triage.headline : "",
     pending,
-    state.inspectorTab,
+    state.evidenceOpen ? "1" : "0",
   ].join("\u001f");
   if (paintUnchanged("inspector", sig)) {
     pane.hidden = false;
@@ -3130,34 +3139,28 @@ function renderAgentDrawer(pane, view) {
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
 
-  pane.append(renderLineageSpine(agent));
+  // Instrument panel (token burn · context · $ · uptime), then a horizontal
+  // three-column shelf: Operate | Chat | Evidence (Evidence starts as a rail).
+  const instruments = renderInstrumentPanel(agent);
+  if (instruments) pane.append(instruments);
 
-  if (agent.nextAction) {
-    pane.append(el("p", { class: "next-action" },
-      el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
-  }
-
-  // Home instrument band — keep above the Take A tabs.
-  pane.append(renderVitals(agent));
-
-  const tab = ["operate", "chat", "evidence"].includes(state.inspectorTab)
-    ? state.inspectorTab
-    : "operate";
-  if (tab !== state.inspectorTab) state.inspectorTab = tab;
-
-  pane.append(el("div", { class: "inspector-tabs", role: "tablist" },
-    inspectorTabButton("operate", "Operate"),
-    inspectorTabButton("chat", "Chat"),
-    inspectorTabButton("evidence", "Evidence")));
-
-  const operatePanel = renderOperate(agent, program);
-  operatePanel.dataset.tab = "operate";
-  const chatPanel = renderChat(agent);
-  chatPanel.dataset.tab = "chat";
-  const evidencePanel = renderEvidence(agent);
-  evidencePanel.dataset.tab = "evidence";
-  pane.append(el("div", { class: "inspector-body", dataset: { activeTab: tab } },
-    operatePanel, chatPanel, evidencePanel));
+  pane.append(el("div", {
+    class: "drawer-shelf" + (state.evidenceOpen ? " is-evidence-open" : ""),
+    "aria-label": "Agent sections",
+  },
+    renderShelfSection({
+      key: "operate",
+      title: "Operate",
+      open: true,
+      body: renderOperate(agent, program),
+    }),
+    renderShelfSection({
+      key: "chat",
+      title: "Chat",
+      open: true,
+      body: renderChat(agent),
+    }),
+    renderEvidenceShelf(agent)));
 
   pane.append(renderCommandDock(agent, control));
 
@@ -3230,7 +3233,7 @@ function renderControlBanner(agent, control) {
       el("button", {
         type: "button",
         class: "control-banner-link",
-        onclick: () => { state.inspectorTab = "evidence"; render(); },
+        onclick: () => { state.evidenceOpen = true; render(); },
       }, "See routing evidence →")));
 }
 
@@ -3243,15 +3246,74 @@ function closeButton() {
   }, icon("close"), "Close");
 }
 
-function inspectorTabButton(tab, label) {
-  return el("button", {
-    type: "button",
-    class: "inspector-tab",
-    role: "tab",
-    "aria-selected": String(state.inspectorTab === tab),
-    dataset: { fkey: "itab:" + tab },
-    onclick: () => { state.inspectorTab = tab; render(); },
-  }, label);
+/* Bookshelf section — Operate/Chat stay open; Evidence uses the cog variant. */
+function renderShelfSection({ key, title, open, body }) {
+  const section = el("section", {
+    class: "shelf-section" + (open ? " is-open" : ""),
+    dataset: { shelf: key },
+  });
+  section.append(el("h3", { class: "shelf-title", text: title }));
+  const panel = el("div", {
+    class: "shelf-body inspector-panel",
+    id: "shelf-" + key,
+  });
+  if (body) {
+    if (body.nodeType) panel.append(body);
+    else for (const child of body) if (child) panel.append(child);
+  }
+  section.append(panel);
+  return section;
+}
+
+function renderEvidenceShelf(agent) {
+  if (!state.evidenceOpen) {
+    // Whimsical collapsed rail — third column as a caterpillar/cog strip.
+    return el("button", {
+      type: "button",
+      class: "shelf-evidence-rail",
+      "aria-expanded": "false",
+      "aria-controls": "shelf-evidence",
+      title: "Open evidence — paths, routing, transcript",
+      dataset: { fkey: "shelf:evidence:open" },
+      onclick: () => { state.evidenceOpen = true; render(); },
+    },
+      el("span", { class: "shelf-rail-spine", "aria-hidden": "true" },
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" }),
+        el("span", { class: "shelf-rail-bead" })),
+      icon("gear", { label: "Open evidence" }),
+      el("span", { class: "shelf-rail-label", text: "Evidence" }));
+  }
+
+  const body = renderEvidence(agent);
+  const section = el("section", {
+    class: "shelf-section shelf-evidence is-open",
+    dataset: { shelf: "evidence" },
+  });
+  section.append(el("div", { class: "shelf-evidence-head" },
+    el("h3", { class: "shelf-title", text: "Evidence" }),
+    el("button", {
+      type: "button",
+      class: "shelf-cog is-active",
+      "aria-expanded": "true",
+      "aria-controls": "shelf-evidence",
+      title: "Tuck evidence away",
+      dataset: { fkey: "shelf:evidence:close" },
+      onclick: () => { state.evidenceOpen = false; render(); },
+    }, icon("gear", { label: "Hide evidence" }))));
+  body.id = "shelf-evidence";
+  body.classList.add("shelf-body");
+  section.append(body);
+  return section;
+}
+
+function evidencePacket(title, ...nodes) {
+  const kids = nodes.flat().filter(Boolean);
+  if (!kids.length) return null;
+  return el("div", { class: "evidence-packet" },
+    el("h4", { class: "evidence-packet-title", text: title }),
+    ...kids);
 }
 
 /* ---------- inspector: command dock ---------- */
@@ -3532,53 +3594,13 @@ function transcriptArtifact(agent) {
 }
 
 function renderOperateMeta(agent) {
+  // Keep Operate light: role only. Burn / context / $ / uptime live in instruments.
   const items = [];
   if (agent.role && agent.role !== "agent") {
     items.push({
       label: "role",
       hint: GLOSSARY.role,
       node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
-    });
-  }
-  if (agent.model) {
-    items.push({
-      label: "model",
-      hint: GLOSSARY.model,
-      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
-    });
-  }
-  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
-  if (elapsed && elapsed !== "—") {
-    items.push({
-      label: "running for",
-      hint: GLOSSARY["running for"],
-      node: el("span", {
-        class: "mono",
-        dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt),
-        text: elapsed,
-      }),
-    });
-  } else if (agent.updatedAt) {
-    items.push({
-      label: "last update",
-      hint: GLOSSARY["last update"],
-      node: el("span", { class: "mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) }),
-    });
-  }
-  const tok = tokenSummary(agent.tokens);
-  if (tok.known) {
-    items.push({
-      label: tok.label,
-      hint: tok.label === "latest call" ? LATEST_CALL_HINT : TOKENS_HINT,
-      node: el("span", { title: tok.title, class: "mono", text: tok.text }),
-    });
-  }
-  const ctx = contextUsage(agent.tokens);
-  if (ctx) {
-    items.push({
-      label: "context",
-      hint: GLOSSARY.context,
-      node: el("span", { class: "mono", text: ctx.text }),
     });
   }
   if (!items.length) return null;
@@ -3599,18 +3621,12 @@ function renderOperateMeta(agent) {
 }
 
 function renderOperate(agent, _program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  if (message) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Last human message" }),
-      el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
-  }
+  // Operate is action + status only — chat copy lives in Chat; gauges above.
+  const panel = el("div", { class: "operate-body" });
 
-  if (taskMeaningfullyDifferent(agent)) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Task" }),
-      el("p", { class: "operate-task", text: agent.task.trim() }));
+  if (agent.nextAction) {
+    panel.append(el("p", { class: "next-action" },
+      el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
 
   const outcome = deriveOutcome(agent);
@@ -3623,8 +3639,12 @@ function renderOperate(agent, _program) {
 
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);
+
+  const spine = renderLineageSpine(agent);
+  if (spine && !spine.hidden) panel.append(spine);
+
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
+    panel.append(el("p", { class: "inspector-note", text: "Ready — use the dock below to focus or send." }));
   }
   return panel;
 }
@@ -3672,24 +3692,13 @@ function renderChatTurn(role, text) {
 }
 
 function renderChat(agent) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const user = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  const assistant = typeof agent.transcriptTail === "string" ? agent.transcriptTail.trim() : "";
-  if (user) panel.append(renderChatTurn("user", agent.lastHumanMessage));
-  if (assistant) panel.append(renderChatTurn("assistant", agent.transcriptTail));
-
-  const artifact = transcriptArtifact(agent);
-  if (artifact && artifact.path) {
-    panel.append(el("p", { class: "chat-transcript-link" },
-      el("span", { text: "Transcript: " }),
-      el("code", { text: artifact.path }),
-      " ",
-      el("button", {
-        type: "button", class: "btn sm",
-        dataset: { fkey: `copy-transcript:${agent.id}` },
-        onclick: () => copyText(artifact.path),
-      }, "Copy path")));
-  }
+  // Readable turns only — raw transcript tail + path live in Evidence.
+  const panel = el("div", { class: "chat-body" });
+  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
+  const user = typeof userRaw === "string" ? userRaw.trim() : "";
+  const assistant = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
+  if (user) panel.append(renderChatTurn("user", userRaw));
+  if (assistant) panel.append(renderChatTurn("assistant", agent.lastAgentMessage));
 
   if (!panel.childNodes.length) {
     panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
@@ -3775,65 +3784,87 @@ function renderLineageSpine(agent) {
   return spine;
 }
 
-/* ---------- vitals band (home instrument panel) ---------- */
+/* ---------- instrument panel (above the three-column shelf) ---------- */
 
-/* One instrument tile: label + figure, or a muted "not reported" face when the
-   source gives us nothing to show. Never a broken ring. */
-function vitalTile(label, figure) {
-  return el("div", { class: "vital" },
-    el("span", { class: "vital-label", text: label }),
-    figure || el("div", { class: "vital-absent", text: "not reported" }));
+function instrumentTile(label, figure, opts = {}) {
+  return el("div", { class: "instrument" + (figure ? "" : " is-quiet") },
+    el("span", { class: "instrument-label", text: label }),
+    figure || el("div", { class: "instrument-absent", text: opts.absent || "—" }));
 }
 
-/* Vitals band — the 2–3 numbers an operator acts on, as instruments rather than
-   another run of grey key/value lines. Context pressure, cumulative spend + cache
-   efficiency, and uptime. Each tile degrades on missing data. */
-function renderVitals(agent) {
+/* Four gauges the operator glances at first: burn, context, $, uptime. */
+function renderInstrumentPanel(agent) {
   const t = agent.tokens || {};
-  const band = el("div", { class: "vitals" });
+  const band = el("div", {
+    class: "drawer-instruments",
+    role: "group",
+    "aria-label": "Session instruments",
+  });
 
-  // Context pressure — a donut when we have an observed latest-turn window,
-  // otherwise fall back to the raw token parts so non-observed sources still
-  // surface a number instead of an empty tile.
-  const ctx = contextUsage(t);
-  let ctxLabel = "Context", ctxFigure = null;
-  if (ctx) {
-    ctxFigure = el("div", { class: "vital-ring-wrap" },
-      svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
-      el("div", { class: "vital-figure" },
-        el("div", { class: "vital-big mono" },
-          fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))));
-  } else {
-    const parts = [];
-    if (t.input != null) parts.push("in " + fmtTok(t.input));
-    if (t.output != null) parts.push("out " + fmtTok(t.output));
-    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
-    if (parts.length) {
-      ctxLabel = "Tokens";
-      ctxFigure = el("div", {},
-        el("div", { class: "vital-big mono", text: parts.shift().replace(/^in /, "") }),
-        parts.length ? el("div", { class: "vital-sub", text: parts.join(" · ") }) : null);
-    }
-  }
-  band.append(vitalTile(ctxLabel, ctxFigure));
-
-  // Session spend + cache-hit efficiency (computed, not raw).
-  const cacheHit = (t.cachedInput != null && t.input) ? Math.round((t.cachedInput / t.input) * 100) : null;
-  band.append(vitalTile("Session tokens", t.sessionTotal != null
+  // Token burn — prefer session total; fall back to latest-call total.
+  const burn = t.sessionTotal != null ? t.sessionTotal : t.total;
+  const cacheHit = (t.cachedInput != null && t.input)
+    ? Math.round((t.cachedInput / t.input) * 100)
+    : null;
+  band.append(instrumentTile("Token burn", burn != null
     ? el("div", {},
-        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
-        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
-        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)
+        el("div", { class: "instrument-big mono", text: fmtTok(burn) }),
+        el("div", {
+          class: "instrument-sub",
+          text: t.sessionTotal != null
+            ? "session" + (cacheHit != null ? " · " + cacheHit + "% cache" : "")
+            : (t.scope === "latest-turn" ? "latest call" : "reported"),
+        }))
     : null));
 
-  // Uptime.
-  band.append(vitalTile("Uptime", agent.startedAt
+  // Context use — donut when we have an observed window.
+  const ctx = contextUsage(t);
+  band.append(instrumentTile("Context use", ctx
+    ? el("div", { class: "instrument-ring-wrap" },
+        svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
+        el("div", { class: "instrument-figure" },
+          el("div", { class: "instrument-big mono", text: ctx.pct + "%" }),
+          el("div", { class: "instrument-sub", text: fmtTok(t.total) + " / " + fmtTok(t.contextWindow) })))
+    : null));
+
+  // $ use — only when the session reports cost.
+  const cost = agent.cost;
+  band.append(instrumentTile("$ use", cost && Number.isFinite(cost.amount)
     ? el("div", {},
-        el("div", { class: "vital-big mono", dataset: { ago: agent.startedAt }, text: agoText(agent.startedAt).replace(/\s*ago$/, "") }),
-        agent.status ? el("div", { class: "vital-sub", text: agent.status }) : null)
+        el("div", { class: "instrument-big mono", text: fmtUsd(cost.amount) }),
+        el("div", {
+          class: "instrument-sub",
+          text: (cost.provenance === "estimated" ? "est." : "obs.")
+            + (cost.note ? " · " + cost.note : ""),
+        }))
+    : null, { absent: "n/a" }));
+
+  // Uptime.
+  band.append(instrumentTile("Uptime", agent.startedAt
+    ? el("div", {},
+        el("div", {
+          class: "instrument-big mono",
+          dataset: { ago: agent.startedAt },
+          text: agoText(agent.startedAt).replace(/\s*ago$/, ""),
+        }),
+        agent.status
+          ? el("div", { class: "instrument-sub", text: agent.status })
+          : null)
     : null));
 
   return band;
+}
+
+/* Legacy vitals helper — kept for Evidence packet reuse / grep discoverability. */
+function vitalTile(label, figure) {
+  if (!figure) return null;
+  return el("div", { class: "vital" },
+    el("span", { class: "vital-label", text: label }),
+    figure);
+}
+
+function renderVitals(agent) {
+  return renderInstrumentPanel(agent);
 }
 
 /* ---------- inspector: Evidence ---------- */
@@ -3891,28 +3922,28 @@ function renderControlLink(target) {
 }
 
 function renderEvidence(agent) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const grid = el("dl", { class: "detail-grid" });
+  // Advanced packets only — gauges live above; Chat/Operate already showed the rest.
+  const panel = el("div", { class: "inspector-panel evidence-body" });
 
-  dtdd(grid, "session cwd", agent.cwd, { code: true });
+  const paths = el("dl", { class: "detail-grid" });
+  dtdd(paths, "session cwd", agent.cwd, { code: true });
   const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
   const surfaceCwd = agent.target && agent.target.surfaceCwd
     ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
     : "";
   if (surfaceCwd && surfaceCwd !== sessionCwd) {
-    dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
+    dtdd(paths, "terminal folder", agent.target.surfaceCwd, {
       code: true,
       hint: CWD_MISMATCH_HINT,
     });
   }
+  if (paths.childNodes.length) panel.append(evidencePacket("Paths", paths));
 
-  dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
-    ? el("span", {},
-        el("code", { text: agent.git.branch || "(detached)" }),
-        agent.git.dirty ? el("span", { class: "git-dirty", text: " · uncommitted changes" }) : null,
-        agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
-    : null);
+  const link = renderControlLink(agent.target);
+  if (link) panel.append(evidencePacket("Control link", link));
 
+  // Latest-call breakdown only — burn/context/$ live in the instrument panel.
+  const usage = el("dl", { class: "detail-grid" });
   const t = agent.tokens || {};
   if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
     const parts = [];
@@ -3920,29 +3951,34 @@ function renderEvidence(agent) {
     if (t.output != null) parts.push("out " + fmtTok(t.output));
     if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
     if (t.total != null) parts.push("total " + fmtTok(t.total));
-    dtdd(grid, "latest call", el("span", {
+    dtdd(usage, "latest call", el("span", {
       class: "mono",
       text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
     }), { hint: LATEST_CALL_HINT });
   }
-  if (t.sessionTotal != null) {
-    dtdd(grid, "session total", el("span", {
-      class: "mono",
-      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
-    }), { hint: SESSION_TOTAL_HINT });
+  if (usage.childNodes.length) panel.append(evidencePacket("Latest call", usage));
+
+  const repo = el("dl", { class: "detail-grid" });
+  dtdd(repo, "git", agent.git && (agent.git.branch || agent.git.head)
+    ? el("span", {},
+        el("code", { text: agent.git.branch || "(detached)" }),
+        agent.git.dirty ? el("span", { class: "git-dirty", text: " · uncommitted changes" }) : null,
+        agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
+    : null);
+  if (agent.tests && agent.tests.state) {
+    dtdd(repo, "tests", el("span", { class: "tests-" + agent.tests.state },
+      agent.tests.state + (agent.tests.summary ? " — " + agent.tests.summary : "")));
   }
-
-  const link = renderControlLink(agent.target);
-  if (link) dtdd(grid, "control link", link);
-
-  if (grid.childNodes.length) panel.append(grid);
+  if (agent.gates && agent.gates.length) {
+    dtdd(repo, "checks", el("span", {}, agent.gates.map((g) => el("span", { class: "gate-chip", text: g }))));
+  }
+  if (repo.childNodes.length) panel.append(evidencePacket("Repo", repo));
 
   const names = renderNamesDisclosure(agent);
-  if (names) panel.append(names);
+  if (names) panel.append(evidencePacket("Names", names));
 
   if (agent.artifacts && agent.artifacts.length) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Artifacts" }),
+    panel.append(evidencePacket("Artifacts",
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
@@ -3952,17 +3988,29 @@ function renderEvidence(agent) {
             type: "button", class: "btn sm",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
-          }, "Copy path")))));
+          }, "Copy path"))))));
   }
 
-  if (agent.transcriptTail) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Transcript tail" }),
-      el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
+  const artifact = transcriptArtifact(agent);
+  if (artifact && artifact.path) {
+    panel.append(evidencePacket("Transcript file",
+      el("p", { class: "chat-transcript-link" },
+        el("code", { text: artifact.path }),
+        " ",
+        el("button", {
+          type: "button", class: "btn sm",
+          dataset: { fkey: `copy-transcript:${agent.id}` },
+          onclick: () => copyText(artifact.path),
+        }, "Copy path"))));
+  }
+
+  if (agent.transcriptTail && String(agent.transcriptTail).trim()) {
+    panel.append(evidencePacket("Transcript tail",
+      el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail })));
   }
 
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+    panel.append(el("p", { class: "inspector-note", text: "No extra evidence for this session." }));
   }
   return panel;
 }

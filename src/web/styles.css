@@ -1280,21 +1280,212 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .pane-inspector[hidden] { display: none; }
 @keyframes drawer-in { from { transform: translateX(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 
-/* Operate · Chat · Evidence: one active tab in the drawer body. */
-.inspector-body { display: block; }
-.inspector-body[data-active-tab="operate"] > [data-tab="chat"],
-.inspector-body[data-active-tab="operate"] > [data-tab="evidence"],
-.inspector-body[data-active-tab="chat"] > [data-tab="operate"],
-.inspector-body[data-active-tab="chat"] > [data-tab="evidence"],
-.inspector-body[data-active-tab="evidence"] > [data-tab="operate"],
-.inspector-body[data-active-tab="evidence"] > [data-tab="chat"] { display: none; }
+/* Instrument panel above the three-column shelf. */
+.drawer-instruments {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+}
+.instrument {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.65rem 0.6rem;
+  min-width: 0;
+}
+.instrument.is-quiet { opacity: 0.72; }
+.instrument-label {
+  display: block;
+  margin: 0 0 0.35rem;
+  font: 750 9.5px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.instrument-big {
+  font-size: 1.35rem;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--ink);
+}
+.instrument-sub {
+  margin-top: 0.3rem;
+  font: 500 10.5px/1.3 var(--font-mono);
+  color: var(--faint);
+}
+.instrument-absent {
+  font: 500 1.1rem/1.2 var(--font-mono);
+  color: var(--faint);
+}
+.instrument-ring-wrap { display: flex; align-items: center; gap: 0.5rem; }
+.instrument-figure { min-width: 0; }
+
+/* Horizontal bookshelf: Operate | Chat | Evidence rail/column. */
+.drawer-shelf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) 2.75rem;
+  gap: 0.65rem;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 14rem;
+  flex: 1 1 auto;
+}
+.drawer-shelf.is-evidence-open {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(12rem, 0.95fr);
+}
+.shelf-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.shelf-title {
+  margin: 0;
+  padding: 0.55rem 0.75rem 0.35rem;
+  font: 750 10px/1.3 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--faint);
+  flex: none;
+}
+.shelf-body {
+  padding: 0.15rem 0.75rem 0.75rem;
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.operate-body,
+.chat-body,
+.evidence-body { display: flex; flex-direction: column; gap: 0.7rem; }
+
+/* Whimsical Evidence caterpillar rail — collapsed third column. */
+.shelf-evidence-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 100%;
+  padding: 0.7rem 0.25rem 0.85rem;
+  border: 1px dashed color-mix(in oklab, var(--ember) 35%, var(--line-strong));
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 18%, color-mix(in oklab, var(--ember) 12%, transparent), transparent 55%),
+    var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+.shelf-evidence-rail:hover,
+.shelf-evidence-rail:focus-visible {
+  color: var(--ink);
+  border-color: var(--ember);
+  border-style: solid;
+  transform: translateY(-1px);
+  outline: none;
+}
+.shelf-evidence-rail .ico { width: 1.05rem; height: 1.05rem; flex: none; }
+.shelf-rail-spine {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.15rem 0 0.1rem;
+}
+.shelf-rail-bead {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ember) 55%, var(--sand));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--ember) 20%, transparent);
+}
+.shelf-rail-bead:nth-child(2) { width: 0.5rem; height: 0.5rem; opacity: 0.9; }
+.shelf-rail-bead:nth-child(3) { width: 0.58rem; height: 0.58rem; opacity: 0.8; }
+.shelf-rail-bead:nth-child(4) { width: 0.42rem; height: 0.42rem; opacity: 0.65; }
+.shelf-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font: 750 10px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.shelf-cog {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 32px;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.shelf-cog:hover { color: var(--ink); border-color: var(--ink); }
+.shelf-cog.is-active { color: var(--ink); background: var(--sand); }
+.shelf-cog .ico { width: 1rem; height: 1rem; }
+.shelf-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-right: 0.45rem;
+  flex: none;
+}
+.evidence-packet {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.evidence-packet-title {
+  margin: 0;
+  font: 700 10px/1.3 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+@media (max-width: 1179px) {
+  .drawer-instruments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .drawer-shelf,
+  .drawer-shelf.is-evidence-open {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .shelf-evidence-rail {
+    flex-direction: row;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    min-height: 44px;
+    padding: 0.45rem 0.85rem;
+  }
+  .shelf-rail-spine { flex-direction: row; padding: 0; }
+  .shelf-rail-label {
+    writing-mode: horizontal-tb;
+    transform: none;
+    letter-spacing: 0.08em;
+  }
+}
 
 /* ---------- widescreen: reading-focused split ----------
-   Above ~1180px the weights flip: the sparse roster collapses to a scannable
-   rail and the dense inspector takes the width it actually needs. Model/Context/
-   Access drop off the rail row — they live in full inside the inspector. Hooks
-   on body.inspector-open, already toggled in renderInspector(). Tabs stay —
-   Operate / Chat / Evidence are mutually exclusive, not a side-by-side pair. */
+   Above ~1180px the sparse roster collapses to a rail and the inspector takes
+   the width a three-column shelf needs. Model/Context/Access drop off the
+   roster — they live in the instrument panel + columns. */
 @media (min-width: 1180px) {
   body.inspector-open .pane-list {
     flex: 0 0 clamp(380px, 40%, 520px);
@@ -1680,10 +1871,6 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
 .next-action { margin: 0; font-size: 13.5px; color: var(--muted); }
 .next-key { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.25rem; }
 
-.inspector-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line-strong); }
-.inspector-tab { padding: 0.4rem 0.7rem; min-height: 34px; font-size: 12.5px; font-weight: 650; color: var(--faint); border-bottom: 2px solid transparent; }
-.inspector-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ember); }
-
 .inspector-panel { display: flex; flex-direction: column; gap: 0.85rem; }
 .names-disclosure {
   border: 1px solid var(--line);
@@ -1956,7 +2143,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
-  .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
+  .view-tab, .btn, #search, .shelf-cog, .shelf-evidence-rail, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
   .reading-repair { min-height: 44px; }
@@ -2018,7 +2205,7 @@ body.is-all-clear .score .seg:not(.clear-banner).zero { display: none; }
   .advisory-summary, .advisory-impact { display: none; }
   .triage-steps { grid-template-columns: 1fr; }
   .broadcast-compose textarea { flex-basis: 100%; }
-  .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
+  .view-tab, .btn, #search, .shelf-cog, .shelf-evidence-rail, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch. */
   .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }

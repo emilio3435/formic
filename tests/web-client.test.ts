@@ -189,7 +189,7 @@ describe("provider-aware row summaries", () => {
     expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
   });
 
-  test("keeps the raw transcript tail in Chat/Evidence, not Operate", () => {
+  test("keeps the raw transcript tail in Evidence, not Operate or Chat", () => {
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
       || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
       || "";
@@ -200,7 +200,8 @@ describe("provider-aware row summaries", () => {
       || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
       || "";
     expect(operate).not.toContain("transcriptTail");
-    expect(chat).toContain("transcriptTail");
+    expect(chat).not.toContain("transcriptTail");
+    expect(chat).toContain("lastAgentMessage");
     expect(evidence).toContain("transcriptTail");
   });
 });
@@ -647,8 +648,8 @@ describe("calm program and agent list rendering", () => {
 
   test("selected rows retain an accessible full-text inspector path", () => {
     expect(source).toContain("Select to open the full message and session details in the inspector.");
-    expect(source).toContain('text: "Last human message"');
-    expect(source).toContain('class: "last-human-message"');
+    expect(source).toContain("function renderChatTurn(");
+    expect(source).toContain('class: "chat-turn-body"');
     expect(source).toContain("function renderOperate(");
     expect(source).toContain("function renderChat(");
     expect(source).toContain("function renderEvidence(");
@@ -699,13 +700,15 @@ describe("operations canvas layout", () => {
     expect(source).not.toContain('class: "signal-title-btn"');
   });
 
-  test("the inspector/drawer holds a stable 480-520px desktop pane; Take A tabs stay single-column", () => {
+  test("the inspector/drawer holds a stable 480-520px desktop pane; bookshelf is three columns", () => {
     expect(styles).toContain("--inspector-w: clamp(480px, 32vw, 520px)");
     expect(styles).not.toContain("clamp(38rem, 42vw, 60rem)");
-    // Operate · Chat · Evidence are mutually exclusive — never a side-by-side pair.
-    expect(styles).toContain(".inspector-body { display: block; }");
+    // Operate | Chat | Evidence rail — horizontal shelf, not a side-by-side reading pair.
+    expect(styles).toContain(".drawer-shelf");
+    expect(styles).toContain(".drawer-instruments");
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) 2.75rem");
+    expect(styles).toContain(".shelf-evidence-rail");
     expect(styles).not.toContain("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)");
-    expect(styles).toContain('data-active-tab="operate"');
   });
 
   test("below 1024px the inspector becomes a full-surface drawer and keeps the workboard wide", () => {
@@ -1000,17 +1003,28 @@ describe("fail-loud control invariants (source-level)", () => {
   });
 });
 
-describe("Take A agent drawer — Operate · Chat · Evidence", () => {
-  test("tabs are Operate, Chat, and Evidence", () => {
-    expect(source).toContain('inspectorTabButton("operate", "Operate")');
-    expect(source).toContain('inspectorTabButton("chat", "Chat")');
-    expect(source).toContain('inspectorTabButton("evidence", "Evidence")');
-    expect(source).not.toContain('inspectorTabButton("overview", "Overview")');
-    expect(source).not.toContain('inspectorTabButton("technical", "Technical")');
-    expect(source).toContain('inspectorTab: "operate"');
-    expect(styles).toContain('data-active-tab="operate"');
-    expect(styles).toContain('data-active-tab="chat"');
-    expect(styles).toContain('data-active-tab="evidence"');
+describe("Take A agent drawer — Operate · Chat · Evidence bookshelf", () => {
+  test("instrument panel sits above a three-column shelf; Evidence is a rail until opened", () => {
+    expect(source).toContain("function renderInstrumentPanel(");
+    expect(source).toContain("function renderShelfSection(");
+    expect(source).toContain("function renderEvidenceShelf(");
+    expect(source).toContain('title: "Operate"');
+    expect(source).toContain('title: "Chat"');
+    expect(source).toContain("evidenceOpen: false");
+    expect(source).toContain('class: "shelf-evidence-rail"');
+    expect(source).toContain('class: "drawer-instruments"');
+    expect(source).toContain('icon("gear"');
+    expect(source).toContain("Token burn");
+    expect(source).toContain("Context use");
+    expect(source).toContain("$ use");
+    expect(source).toContain("Uptime");
+    expect(source).not.toContain("inspectorTabButton(");
+    expect(source).not.toContain('inspectorTab: "operate"');
+    expect(styles).toContain(".drawer-shelf");
+    expect(styles).toContain(".drawer-instruments");
+    expect(styles).toContain(".shelf-section");
+    expect(styles).toContain(".shelf-evidence-rail");
+    expect(styles).toContain(".evidence-packet");
   });
 
   test("Names rename UI stays collapsed under a disclosure", () => {
@@ -1019,7 +1033,7 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(source).toContain('class: "names-disclosure"');
     expect(source).not.toContain('text: "Presentation labels"');
     expect(styles).toContain(".names-disclosure");
-    // Names live in Evidence, not always-on chrome above the tabs.
+    // Names live in Evidence, not always-on chrome above the shelves.
     const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\n\/\* One calm status/)?.[0]
       || source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\nfunction renderStatusLine/)?.[0]
       || "";
@@ -1041,12 +1055,15 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(source).toContain("copyIdButton(");
   });
 
-  test("Operate shows task only when meaningfully different from the human message", () => {
-    expect(source).toContain("function taskMeaningfullyDifferent(");
+  test("Operate stays action-focused; chat copy and gauges live elsewhere", () => {
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
       || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
       || "";
-    expect(operate).toContain("taskMeaningfullyDifferent(agent)");
+    expect(operate).toContain("agent.nextAction");
     expect(operate).toContain("renderOperateMeta(agent)");
+    expect(operate).toContain("renderLineageSpine(agent)");
+    expect(operate).not.toContain("taskMeaningfullyDifferent");
+    expect(operate).not.toContain("transcriptTail");
+    expect(operate).not.toContain("lastAgentMessage");
   });
 });
