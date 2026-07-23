@@ -876,6 +876,67 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
     }
   });
+
+  test("(h) linked rows carry a terminal breadcrumb in the identity tags, deduped against the name", () => {
+    // exact / unique-cwd links resolve a destination; the breadcrumb rides the
+    // existing .row-identity-tags row, not a new line, and never repeats the name.
+    const linked = agent({
+      displayName: "ridge-term",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-term", surfaceCwd: "/Users/emilio/Developer/deep-ridge" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(linked, program));
+    const crumb = findByClass(row, "row-terminal");
+    expect(crumb).not.toBeNull();
+    // The breadcrumb lives inside the identity tag row (not a fabricated line).
+    expect(findByClass(findByClass(row, "row-identity-tags"), "row-terminal")).not.toBeNull();
+    // Workspace title equals the display name, so it is deduped OUT; the pane
+    // folder is the surviving, non-redundant segment.
+    expect(textOf(crumb)).toBe("deep-ridge");
+    // The breadcrumb tag previews the same destination the Focus button does.
+    expect(crumb.attributes["title"]).toContain("/Users/emilio/Developer/deep-ridge");
+
+    // When the shown name is NOT the terminal title (here a home-cwd orch parked
+    // in a project-titled pane, so agentName keeps its own identity), both the
+    // workspace title and the pane folder survive as distinct destination info.
+    const twoPart = agent({
+      nickname: "Scout",
+      cwd: "/Users/emilio",
+      target: { resolution: "unique-cwd", surfaceId: "s2", workspaceId: "w2", workspaceTitle: "CODEX · platform", surfaceCwd: "/srv/app/web", cwdMismatch: true },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const two: any = withDom(() => M.renderAgentRow(twoPart, program));
+    expect(textOf(findByClass(two, "row-terminal"))).toBe("CODEX · platform · web");
+
+    // Ambiguous / missing targets resolve no safe destination — no breadcrumb.
+    for (const res of ["ambiguous", "missing"]) {
+      const unlinked = agent({ target: { resolution: res, workspaceTitle: "ghost", surfaceCwd: "/x/y" } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r: any = withDom(() => M.renderAgentRow(unlinked, program));
+      expect(findByClass(r, "row-terminal")).toBeNull();
+    }
+  });
+
+  test("(i) the Focus dock button title previews the destination (terminal + pane cwd)", () => {
+    const linked = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-term", surfaceCwd: "/Users/emilio/Developer/deep-ridge" },
+    });
+    expect(M.focusDestinationHint(linked)).toBe("Jump to ridge-term · /Users/emilio/Developer/deep-ridge");
+    // No resolved destination falls back to the generic label, never a broken one.
+    expect(M.focusDestinationHint(agent({ target: { resolution: "missing" } }))).toBe("Jump to terminal pane");
+    // The dock tool wires the hint through for the focus action only.
+    const toolSrc = source.match(/function renderDockTool\([\s\S]*?\n\}/)?.[0];
+    expect(toolSrc).toContain('action === "focus" ? focusDestinationHint(agent) : label');
+  });
+
+  test("(j) the terminal breadcrumb stays compact and mono to protect row density", () => {
+    const rule = styles.match(/\.row-terminal\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toContain("var(--font-mono)"); // Rule 2 — identifiers/paths in mono
+    expect(rule).toContain("var(--faint)");     // dim quiet fact, not a status chip
+    expect(rule).toContain("white-space: nowrap");
+    expect(rule).toContain("text-overflow: ellipsis"); // truncates, never wraps a new line
+  });
 });
 
 describe("operations canvas layout", () => {
