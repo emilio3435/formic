@@ -216,7 +216,7 @@ function agoText(iso) {
 }
 
 const MODEL_SHORT = [
-  ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"], ["grok", "grok"],
+  ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"],
 ];
 // Anthropic families whose transcript id carries a version we want to keep
 // (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
@@ -230,6 +230,20 @@ function modelShort(m) {
     // Trailing version group right after the family (e.g. "-4-8" → "4.8").
     const ver = low.slice(at + fam.length).match(/^[-_](\d+(?:[-_]\d+)*)/);
     return ver ? fam + " " + ver[1].replace(/[-_]/g, ".") : fam;
+  }
+  // Cursor-native Grok: keep the recognizable family + dotted version, dropping
+  // effort/fast qualifiers (e.g. cursor-grok-4.5-high-fast → "grok 4.5").
+  const grokAt = low.indexOf("grok");
+  if (grokAt !== -1) {
+    const ver = low.slice(grokAt + 4).match(/^-(\d+(?:\.\d+)*)/);
+    return ver ? "grok " + ver[1] : "grok";
+  }
+  // Cursor-native Composer: flatten to "composer <version> <qualifier>" within
+  // the 18-char bound (e.g. composer-2.5-fast → "composer 2.5 fast").
+  const composerAt = low.indexOf("composer");
+  if (composerAt !== -1) {
+    const flat = low.slice(composerAt).replace(/[-_]/g, " ");
+    return flat.length > 18 ? flat.slice(0, 17) + "…" : flat;
   }
   for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
   return m.length > 18 ? m.slice(0, 17) + "…" : m;
