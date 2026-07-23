@@ -870,6 +870,25 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
+   source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
+   agoText. A source that has never been healthy (lastHealthyAt null) contributes
+   nothing — claiming "never seen healthy" would be a lie — so an all-null or
+   sourceless snapshot yields no suffix at all. */
+function degradedSinceText(snap) {
+  const byProvider = snap && snap.totals && snap.totals.sourceHealth && snap.totals.sourceHealth.byProvider;
+  if (!byProvider) return "";
+  let latest = null;
+  for (const health of Object.values(byProvider)) {
+    if (!health || health.healthy !== false || !health.lastHealthyAt) continue;
+    const t = Date.parse(health.lastHealthyAt);
+    if (Number.isNaN(t)) continue;
+    if (latest === null || t > latest) latest = t;
+  }
+  if (latest === null) return "";
+  return " · last healthy " + agoText(new Date(latest).toISOString());
+}
+
 function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
@@ -1039,7 +1058,7 @@ globalThis.TheAntHill = {
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
-  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
+  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult,
 };
 
@@ -1204,18 +1223,24 @@ function saveWidgetPreferences() {
 
 /* ---------- data flow ---------- */
 
+/* The one apply path a validated snapshot takes into the UI: shape-guard, adopt
+   it, sync the scan window, clear the failure flag, re-render. Both the GET poll
+   (fetchSnapshot) and the POST recollect feed through here so neither can drift. */
+function applySnapshot(snap) {
+  if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
+    throw new Error("unexpected snapshot shape");
+  }
+  state.snap = snap;
+  if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
+  state.fetchFailed = false;
+  render();
+}
+
 async function fetchSnapshot() {
   try {
     const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const snap = await res.json();
-    if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
-      throw new Error("unexpected snapshot shape");
-    }
-    state.snap = snap;
-    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
-    state.fetchFailed = false;
-    render();
+    applySnapshot(await res.json());
   } catch (err) {
     state.fetchFailed = true;
     if (!state.snap) {
@@ -1223,6 +1248,21 @@ async function fetchSnapshot() {
       render();
     }
     console.warn("snapshot fetch failed:", err);
+  }
+}
+
+/* The Degraded verdict's Refresh forces a fresh server-side collection rather than
+   re-serving cache: POST /api/recollect (no body, same-origin — the browser sends
+   the Origin header the server guard requires). Apply the returned snapshot through
+   the shared path; any non-OK envelope ({ ok:false, ... }, e.g. 500 RECOLLECT_FAILED)
+   or a network error falls back to fetchSnapshot so Refresh is never a dead button. */
+async function recollectSnapshot() {
+  try {
+    const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
+    if (!res.ok) { await fetchSnapshot(); return; }
+    applySnapshot(await res.json());
+  } catch {
+    await fetchSnapshot();
   }
 }
 
@@ -1429,8 +1469,9 @@ function renderSummaryWidget(id, weight = "normal") {
   // and exposes the existing refresh control right there.
   const degraded = id === "health" && data.tone === "degraded";
   const reason = degraded ? topSourceIssue(state.snap) : null;
+  const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
+  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + sinceNote + snapNote }));
   if (degraded) {
     subNode.append(el("button", {
       type: "button",
@@ -1438,7 +1479,7 @@ function renderSummaryWidget(id, weight = "normal") {
       title: "Re-pull the latest snapshot evidence",
       "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
       dataset: { fkey: "degraded-refresh" },
-      onclick: () => fetchSnapshot(),
+      onclick: () => recollectSnapshot(),
     }, "Refresh"));
   }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);

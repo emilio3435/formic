@@ -879,8 +879,59 @@ describe("operations canvas layout", () => {
     expect(M.topSourceIssue(snapshot())).toBeNull();
     expect(source).toContain("topSourceIssue(state.snap)");
     expect(source).toContain('dataset: { fkey: "degraded-refresh" }');
-    expect(source).toContain("onclick: () => fetchSnapshot()");
+    expect(source).toContain("onclick: () => recollectSnapshot()");
     expect(styles).toContain(".reading-repair");
+  });
+
+  test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", () => {
+    // B1 built POST /api/recollect but the UI never consumed it: the button re-served
+    // cache via fetchSnapshot. It now POSTs a fresh collection and applies the result
+    // through fetchSnapshot's own apply path; a non-OK envelope (e.g. 500
+    // RECOLLECT_FAILED) falls back to fetchSnapshot so Refresh is never a dead button.
+    expect(source).toContain("onclick: () => recollectSnapshot()");
+    const fn = source.match(/async function recollectSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('fetch("/api/recollect", { method: "POST"');
+    expect(fn).toContain("applySnapshot(");
+    expect(fn).toContain("await fetchSnapshot()");
+    // Both consumers apply through the one shared path — no forked apply logic.
+    expect(source).toContain("function applySnapshot(");
+    const fetchFn = source.match(/async function fetchSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fetchFn).toContain("applySnapshot(");
+  });
+
+  test("the degraded reason names how long since the source was last healthy, and stays silent when never healthy", () => {
+    const twelveMinAgo = new Date(Date.now() - 12 * 60_000).toISOString();
+    const withHistory = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: twelveMinAgo },
+          },
+        },
+      },
+    });
+    // A degraded source with a known last-healthy moment names it (reuses agoText).
+    expect(M.degradedSinceText(withHistory)).toBe(" · last healthy 12m ago");
+    // Honest omission: a source that has NEVER been healthy says nothing extra —
+    // "never seen healthy" would be a lie.
+    const neverHealthy = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: null },
+          },
+        },
+      },
+    });
+    expect(M.degradedSinceText(neverHealthy)).toBe("");
+    // No per-provider source health at all → no suffix (default fixture omits it).
+    expect(M.degradedSinceText(snapshot())).toBe("");
   });
 
   test("live re-render preserves focus via the stable fkey restore loop", () => {
