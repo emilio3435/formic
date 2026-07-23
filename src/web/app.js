@@ -2221,11 +2221,15 @@ function renderTabs() {
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    countNode.textContent = state.snap
-      ? String(agents.filter((a) =>
+    const count = state.snap
+      ? agents.filter((a) =>
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
-        ).length)
-      : "";
+        ).length
+      : null;
+    countNode.textContent = count == null ? "" : String(count);
+    // The Alerts (needs-you) tab count takes ember ink when there is anything to
+    // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
+    if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
     const isCurrent = btn.dataset.view === state.view;

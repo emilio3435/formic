@@ -766,6 +766,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .view-tab.is-current { color: var(--ink); background: transparent; border-color: transparent; border-bottom: var(--signal-rail) solid var(--ink); }
 .view-tab .count { font-size: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--faint); }
 .view-tab.is-current .count { color: var(--muted); }
+/* Alerts tab count when there is something to act on: ember ink, no fill. Placed
+   after the is-current rule so it wins by source order on the active Alerts tab. */
+.view-tab .count.is-alerting { color: var(--ember); }
 .view-tab .count:empty { display: none; }
 
 /* filter chips (above search) — single scrolling row to spare vertical space */

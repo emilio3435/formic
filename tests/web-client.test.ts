@@ -2159,6 +2159,19 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(countRule).toContain("font-family: var(--font-mono)");
   });
 
+  test("the Alerts tab count takes ember ink only when alerting (>0), quiet at zero (converges on C2's is-alerting)", () => {
+    // Reviewer Minor 3 drift, toolbar direction: renderTabs marks the Alerts
+    // (needs-you) count with the SAME is-alerting modifier the program rollup alert
+    // cell uses — driven by class, never inline (strict CSP). Zero keeps the default.
+    const fn = source.match(/function renderTabs\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('view === "needs-you"');
+    expect(fn).toContain('classList.toggle("is-alerting", count > 0)');
+    // CSS gives that class ember ink only — no fill (Rule 1: indicator ink, not flood).
+    const rule = styles.match(/\.view-tab \.count\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ember)");
+    expect(rule).not.toContain("background");
+  });
+
   test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
     const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).toContain("color: var(--ink)");
