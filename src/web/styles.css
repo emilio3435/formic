@@ -1388,6 +1388,22 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .dw-eyebrow--moss  { color: var(--moss); }
 .dw-eyebrow--slate { color: var(--slate); }
 
+/* Entity-drawer head action (B4) — the promoted primary lever in the verdict
+   side. Compact, matching the agent drawer's .verdict-action .dock-tool sizing so
+   every drawer's head reads the same. Scoped under .verdict-action so it wins the
+   compact size over the base .btn (which is later in source); inherits .btn
+   colours/border/radius. Touch-swept to 44px below 1024px in the responsive block. */
+.verdict-action .dw-head-action { min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; white-space: nowrap; }
+
+/* Program head rollup (B4) — the swarm at a glance: mono values with quiet ui
+   unit words, hairline-gapped. Values mono per rule 2; unit labels stay
+   ui/--faint; an alert count earns ember ink (urgency earns weight, calm does not). */
+.dw-rollup { display: flex; flex-wrap: wrap; gap: 0.1rem 0.85rem; margin: 0.15rem 0 0; }
+.dw-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.dw-rollup-value { font: 650 14px/1.05 var(--font-mono); color: var(--ink); }
+.dw-rollup-label { font-size: 11.5px; color: var(--faint); }
+.dw-rollup-cell.is-alert .dw-rollup-value { color: var(--ember); }
+
 .dw-lead { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--ink); overflow-wrap: anywhere; }
 .dw-lead--quiet { font-size: 0.95rem; font-weight: 500; color: var(--muted); }
 .dw-lead--past { color: var(--moss); font-weight: 650; }
@@ -1554,20 +1570,53 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
-/* Legacy pill styles kept for any residual list surfaces; agent drawer uses .status-line. */
-.inspector-state { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--sand); }
-.state-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.6rem; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 12px; font-weight: 650; color: var(--muted); background: var(--raise); }
-.state-pill .ico { width: 0.85rem; height: 0.85rem; }
-.state-pill.act-working { color: var(--working); border-color: color-mix(in srgb, var(--working) 45%, transparent); }
-.state-pill.act-idle { color: var(--idle); border-color: color-mix(in srgb, var(--idle) 45%, transparent); }
-.state-pill.outcome-needs-you { color: var(--needs); border-color: color-mix(in srgb, var(--needs) 45%, transparent); }
-.state-pill.outcome-blocked { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 45%, transparent); }
-.state-pill.outcome-failed { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-quarantined { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.state-pill.control-linked { color: var(--moss); }
-.state-pill.policy-compliant { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.state-pill.policy-unreported { color: var(--faint); border-style: dashed; }
-.state-pill.policy-mismatch { color: #fff; background: var(--failed); border-color: var(--failed); }
+/* Verdict head (B2): the head carries the verdict — name, status words, the
+   ember-outline gate when blocked — plus the one most-relevant action, so the
+   operator can act from the top. Close and the head action stack on the right. */
+.inspector-verdict .verdict-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  flex: none;
+}
+.verdict-action .dock-tool {
+  min-height: 32px;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--raise);
+}
+.verdict-action .dock-tool:hover:not(:disabled) { border-color: var(--ink); background: var(--sand); }
+.verdict-gate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  padding: 0.16rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 55%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--ember);
+  background: none; /* indicator ink + outline, never a fill */
+}
+.verdict-gate .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+/* De-noised mismatch: the quiet line keeps a visible ember dot; the full
+   sentence lives in the title tooltip. */
+.inspector-source-name.is-mismatch::before {
+  content: "";
+  display: inline-block;
+  width: 0.38rem;
+  height: 0.38rem;
+  margin-right: 0.32rem;
+  border-radius: 50%;
+  background: var(--ember);
+}
+/* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
+   holds DOM order without spending a flex gap. */
+.inspector-vitals:empty { display: none; }
 
 /* Agent drawer status — one sentence under the title, not a pill cluster. */
 .status-line {
@@ -1610,8 +1659,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .control-banner-copy { min-width: 0; overflow-wrap: anywhere; }
 .control-banner-copy strong { color: var(--ink); font-weight: 650; }
 .control-banner-link {
+  /* One red ink for the whole banner: --failed (settled ruling — border/icon/link
+     are --failed ink over the sanctioned --ember-soft tint; never two red inks). */
   display: inline; padding: 0; border: 0; background: none; cursor: pointer;
-  color: var(--ember); font: inherit; font-weight: 650;
+  color: var(--failed); font: inherit; font-weight: 650;
 }
 .control-banner-link:hover { text-decoration: underline; }
 
@@ -1754,8 +1805,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- vitals band: the instrument tiles ----------
    The numbers an operator acts on (context ring, session tokens + cache, uptime)
-   rendered as instruments above the identity meta. Omit-empty: absent tiles are
-   never rendered, so the band flexes to whatever the source reports. */
+   rendered as instruments in a compact row directly under the verdict head — the
+   band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
+   absent tiles are never rendered, so the band flexes to whatever the source
+   reports; when the source reports nothing the mount's :empty rule collapses it. */
+.inspector-vitals { min-width: 0; }
 .vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .vital {
   flex: 1 1 8.5rem;
@@ -2007,6 +2061,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
+  .verdict-action .dock-tool, .verdict-action .dw-head-action,
   .reading-repair, .filter-chip, .program-details,
   .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
 }

@@ -1009,6 +1009,8 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
+  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  renderProgramDrawer, programRollupLine,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -1070,7 +1072,7 @@ const state = {
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   drafts: new Map(),      // agentId -> instruct draft text
-  confirming: null,       // `${agentId}:${action}`
+  confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation
@@ -2951,10 +2953,91 @@ function dwEyebrow(kindClass, iconName, text) {
   return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
 }
 
-function drawerHead(eyebrowNode, titleText) {
-  return el("div", { class: "inspector-head" },
-    el("div", { class: "inspector-id" }, eyebrowNode, el("h2", { class: "inspector-title", text: titleText })),
-    closeButton());
+/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
+   the agent drawer: the status kicker + title (+ an optional sub line) on the
+   left, Close and the one promoted action stacked on the right. The agent drawer
+   keeps its own richer head (provider rail, status line, gate); the entity
+   drawers share this so the five near-identical heads are not hand-rolled. */
+function drawerVerdictHead({ eyebrow, title, sub, action }) {
+  return el("div", { class: "inspector-head inspector-verdict" },
+    el("div", { class: "inspector-id" },
+      eyebrow || null,
+      el("h2", { class: "inspector-title", text: title }),
+      sub || null),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      action ? el("div", { class: "verdict-action" }, action) : null));
+}
+
+/* Compact promoted lever for an issue drawer's head — the single most-relevant
+   action, so an operator can act from the top without scrolling to the Fix
+   block. Reuses the same triageIssue(...) calls the body controls use; the
+   head: fkey prefix (B2 convention) keeps the key distinct from the body twin.
+   A queued investigation → Launch; a not-yet-triaged finding → Triage; anything
+   in flight → null (the Fix/Triage block owns the plan/queue story). */
+function issueHeadAction(issue) {
+  const id = issue.id;
+  const queueItem = state.queueItems.find((it) => it.issueId === id);
+  if (queueItem && queueItem.state === "queued") {
+    const launching = state.triagePending.has("run:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: launching ? "" : null,
+      "aria-busy": launching ? "true" : null,
+      dataset: { fkey: "head:run:" + id },
+      onclick: () => triageIssue(id, "run"),
+    }, launching ? "Launching…" : "Launch");
+  }
+  if (!state.triage.get(id)) {
+    const generating = state.triagePending.has("generate:" + id);
+    return el("button", {
+      type: "button", class: "btn dw-head-action",
+      disabled: generating ? "" : null,
+      "aria-busy": generating ? "true" : null,
+      dataset: { fkey: "head:triage:" + id },
+      onclick: () => triageIssue(id, "generate"),
+    }, generating ? "Triaging…" : "Triage");
+  }
+  return null;
+}
+
+/* The investigation head's promoted lever — the queued run's Launch button, the
+   drawer's one existing primary control. Head: prefix keeps it distinct from the
+   full-width Launch that stays in the body. Null unless the run is queued. */
+function investigationHeadAction(item) {
+  if (item.state !== "queued") return null;
+  const launching = state.triagePending.has("run:" + item.issueId);
+  return el("button", {
+    type: "button", class: "btn dw-head-action",
+    disabled: launching ? "" : null,
+    "aria-busy": launching ? "true" : null,
+    dataset: { fkey: "head:run:" + item.issueId },
+    onclick: () => triageIssue(item.issueId, "run"),
+  }, launching ? "Launching…" : "Launch");
+}
+
+/* Program head rollup — the swarm at a glance: agent count, working, alerts, and
+   aggregate session tokens, aggregated client-side over the program's agents.
+   Values ride the mono convention; unit words stay ui/--faint. The token cell is
+   omitted when no agent on the client reports session usage — an aggregate we
+   cannot derive is never faked to zero. */
+function programRollupLine(program) {
+  const agents = program.agents || [];
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
+    cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
+      el("span", { class: "dw-rollup-value mono", text: c.value }),
+      el("span", { class: "dw-rollup-label", text: c.label }))));
 }
 
 const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
@@ -3037,9 +3120,11 @@ function renderInterventionDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "ember");
-  pane.append(drawerHead(
-    dwEyebrow("ember", "intervention", work.label),
-    issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ember", "intervention", work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3060,7 +3145,11 @@ function renderAdvisoryDrawer(pane, view) {
   const note = issueLifecycleNote(issue);
   const work = issueWorkState(issue);
   drawerAccent(pane, "amber");
-  pane.append(drawerHead(dwEyebrow("amber", "warning", "Advisory · " + work.label), issue.title));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("amber", "warning", "Advisory · " + work.label),
+    title: issue.title,
+    action: issueHeadAction(issue),
+  }));
   pane.append(workStateBanner(issue));
   pane.append(el("p", { class: "dw-lead dw-lead--quiet", text: issue.summary || issue.title }));
   pane.append(impactBlock(issue));
@@ -3086,9 +3175,11 @@ function renderInvestigationDrawer(pane, view) {
   const running = item.state === "running";
   const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
   drawerAccent(pane, "slate");
-  pane.append(drawerHead(
-    dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
-    item.headline));
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    title: item.headline,
+    action: investigationHeadAction(item),
+  }));
 
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
@@ -3141,7 +3232,12 @@ function renderResolvedDrawer(pane, view) {
   const result = lifecycle.result || "Source confirmation cleared the finding.";
   pane.classList.add("dw-past");
   drawerAccent(pane, "moss");
-  pane.append(drawerHead(dwEyebrow("moss", "check", "Resolved"), issue.title));
+  // Resolved is the only past-tense drawer — no reopen/inspect control exists, so
+  // the head renders verdict-only; no action is invented.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("moss", "check", "Resolved"),
+    title: issue.title,
+  }));
   pane.append(el("p", { class: "dw-lead dw-lead--past", text: "Cleared " + issueTimestamp(lifecycle.resolvedAt) }));
 
   const grid = el("dl", { class: "detail-grid" });
@@ -3201,14 +3297,19 @@ function programRosterRow(agent) {
 function renderProgramDrawer(pane, view) {
   const program = view.program;
   const agents = program.agents;
-  const r = deriveRollup(agents);
   drawerAccent(pane, "ink");
-  pane.append(drawerHead(dwEyebrow("ink", null, "Program"), programName(program)));
+  // Program head leads with the rollup glance (counts + aggregate tokens); the
+  // segmented meter below stays as the visual breakdown, no longer restating the
+  // same numbers in a caption.
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ink", null, "Program"),
+    title: programName(program),
+    sub: programRollupLine(program),
+  }));
 
   pane.append(el("div", { class: "dw-block" },
     el("div", { class: "dw-block-label", text: agents.length + (agents.length === 1 ? " agent" : " agents") }),
-    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" }),
-    el("p", { class: "dw-impact", text: rollupParts(r).map((p) => p.text).join(" · ") })));
+    svgSegmentMeter(programMeterSegments(agents), { label: "Program health rollup" })));
 
   if (program.purpose || program.path) {
     const grid = el("dl", { class: "detail-grid" });
@@ -3241,6 +3342,59 @@ function renderProgramDrawer(pane, view) {
     roster));
 }
 
+/* Head de-noising (B2): the three-way naming ternaries collapse into one quiet
+   line. quietSourceLine returns one short line of text — or null when the
+   terminal name already matches the display name — and fullSourceDetail returns
+   the complete sentence for the title tooltip (mismatch explanation included).
+   B4 reuses both for the other drawer types' heads. */
+function quietSourceLine(agent) {
+  const terminal = terminalSourceName(agent);
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  if (terminal) {
+    // A cwd mismatch must keep its mark even when the shown name happens to
+    // equal the terminal title — only calm matching identities go quiet.
+    if (terminal === agentName(agent) && !mismatch) return null;
+    return "Terminal: " + terminal;
+  }
+  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  return hasCustomName ? "Source agent: " + sourceAgentName(agent) : null;
+}
+
+function fullSourceDetail(agent) {
+  const quiet = quietSourceLine(agent);
+  if (!quiet) return null;
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  return mismatch ? quiet + " · " + CWD_MISMATCH_HINT : quiet;
+}
+
+/* Ember-outline gate chip for the verdict head — names the blocker when the
+   outcome is blocked. Indicator ink + outline, never a filled banner. */
+function verdictGate(agent, outcome) {
+  if (outcome !== "blocked") return null;
+  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
+  const text = gate ? conciseText(gate, 64)
+    : agent.statusReason ? conciseText(agent.statusReason, 64)
+      : OUTCOME_LABELS.blocked;
+  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
+    icon("warning"), text);
+}
+
+/* The single most-relevant action control for the verdict head. Reuses the
+   dock's derivation (capability + renderDockTool) so head and dock behave
+   identically. Focus (jump to the pane) leads; Interrupt only when it is the
+   sole enabled lever. When safe controls are locked the head stays empty —
+   the control banner owns that story. */
+function headPrimaryAction(agent) {
+  const focusCap = capability(agent, "focus");
+  const instructCap = capability(agent, "instruct");
+  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
+  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
+  const interruptCap = capability(agent, "interrupt");
+  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
+  return null;
+}
+
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
 function renderAgentDrawer(pane, view) {
@@ -3254,43 +3408,49 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  const terminal = terminalSourceName(agent);
-  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  // Verdict head — name, status words, the gate when blocked, and the one
+  // most-relevant action: verdict first, act from the top.
+  const sourceLine = quietSourceLine(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  pane.append(el("div", { class: "inspector-head" },
+  const headAction = headPrimaryAction(agent);
+  pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
-      cwdMismatch && terminal
+      sourceLine
         ? el("p", {
-          class: "inspector-source-name is-mismatch",
-          title: CWD_MISMATCH_HINT,
-          text: "Terminal: " + terminal + " · session cwd ≠ pane folder",
+          class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
+          title: fullSourceDetail(agent),
+          text: sourceLine,
         })
-        : hasCustomName && terminal
-          ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-          : hasCustomName
-            ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
-            : terminal && terminal !== agentName(agent)
-              ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-              : null,
+        : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
         el("span", { class: "chip provider-" + agent.provider },
           providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
-      renderStatusLine(agent, activity, outcome, control, policy)),
-    closeButton()));
+      renderStatusLine(agent, activity, outcome, control, policy),
+      verdictGate(agent, outcome)),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
 
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
-
-  pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
+
+  // Vitals promoted to an instrument band directly under the verdict head —
+  // the numbers an operator acts on, no longer buried in the Evidence shelf.
+  // The mount always holds this DOM position (after next-action, before the
+  // shelf); renderVitalsBand omit-empties, and :empty hides the mount when the
+  // source reports nothing, so no flex gap is spent on a blank band.
+  const vitalsMount = el("div", { class: "inspector-vitals" });
+  const vitalsBand = renderVitalsBand(agent);
+  if (vitalsBand) vitalsMount.append(vitalsBand);
+  pane.append(vitalsMount);
 
   // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
   // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
@@ -3312,6 +3472,9 @@ function renderAgentDrawer(pane, view) {
       body: renderChat(agent),
     }),
     renderEvidenceShelf(agent)));
+
+  // Lineage spine demoted below the shelf — context, not action.
+  pane.append(renderLineageSpine(agent));
 
   // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));
@@ -3357,11 +3520,10 @@ function renderEvidenceShelf(agent) {
       el("span", { class: "shelf-rail-label", text: "Evidence" }));
   }
 
+  // Evidence holds paths, routing, and the transcript tail. The vitals
+  // instrument band moved out to lead the drawer under the verdict head
+  // (renderVitalsBand); Evidence no longer carries the metrics tiles.
   const body = renderEvidence(agent);
-  // Metrics live behind the disclosure, not in the showcase: the vitals
-  // instrument band leads the Evidence column when it opens.
-  const vitals = renderVitals(agent);
-  if (vitals) body.prepend(vitals);
   const section = el("section", {
     class: "shelf-section shelf-evidence is-open",
     dataset: { shelf: "evidence" },
@@ -3568,19 +3730,24 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   return dock;
 }
 
-function renderDockTool(agent, cap, action) {
+function renderDockTool(agent, cap, action, opts = {}) {
   const key = agent.id + ":" + action;
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
+  // focus restore and the confirm strip must bind to the clicked instance —
+  // never both surfaces at once. Busy/sendControl state stays shared via key.
+  const fkey = (opts.fkeyPrefix || "") + "act:" + key;
+  const confirmKey = (opts.fkeyPrefix || "") + "confirm:" + key;
 
-  if (state.confirming === key) {
+  if (state.confirming === fkey) {
     return el("span", { class: "confirm-strip command-confirm", role: "group",
       "aria-label": label + " " + agentName(agent) + "?" },
       el("span", { text: label + "?" }),
       el("button", {
         type: "button", class: "btn confirm-yes",
-        dataset: { fkey: "confirm:" + key },
+        dataset: { fkey: confirmKey },
         onclick: () => { state.confirming = null; sendControl(agent, action); },
       }, "Confirm"),
       el("button", {
@@ -3595,12 +3762,12 @@ function renderDockTool(agent, cap, action) {
     disabled: cap.enabled && !busy ? null : "",
     "aria-busy": busy ? "true" : null,
     title: cap.enabled ? (action === "focus" ? "Jump to terminal pane" : label) : "Unavailable",
-    dataset: { fkey: "act:" + key },
+    dataset: { fkey },
     onclick: () => {
       if (NEEDS_CONFIRM.has(action)) {
-        state.confirming = key;
+        state.confirming = fkey;
         render();
-        const btn = document.querySelector(`[data-fkey="${CSS.escape("confirm:" + key)}"]`);
+        const btn = document.querySelector(`[data-fkey="${CSS.escape(confirmKey)}"]`);
         if (btn) btn.focus();
         return;
       }
@@ -3758,9 +3925,13 @@ function vitalTile(label, figure) {
 }
 
 /* Vitals band — the numbers an operator acts on, rendered as instruments (a
-   context ring, session spend + cache efficiency, uptime) instead of a grey meta
-   row. Every tile self-guards; if nothing has data the band renders nothing. */
-function renderVitals(agent) {
+   context ring, session tokens + cache efficiency, uptime) directly under the
+   verdict head instead of buried in the Evidence shelf. Every tile self-guards;
+   if nothing has data the band renders nothing (omit-empty), so the mount's
+   :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
+   the type but is never populated — real cost is program/pulse-level only, and
+   program cost has no place inside a single agent's band. */
+function renderVitalsBand(agent) {
   const t = agent.tokens || {};
   const tiles = [];
 
@@ -3824,8 +3995,8 @@ function renderOperateMeta(agent) {
       node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
     });
   }
-  // Uptime, token, and context figures now lead the Operate tab in the vitals
-  // instrument band (renderVitals). This meta row stays identity-only.
+  // Uptime, token, and context figures now lead the drawer in the vitals
+  // instrument band under the verdict head. This meta row stays identity-only.
   if (!items.length) return null;
 
   const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
@@ -3866,7 +4037,7 @@ function renderOperate(agent, _program) {
     }));
   }
 
-  // Vitals moved behind the Evidence disclosure (renderEvidenceShelf) — Operate
+  // Vitals lead the drawer as an instrument band under the verdict head — Operate
   // stays a calm digest so Chat + Operate can showcase side by side.
   const meta = renderOperateMeta(agent);
   if (meta) panel.append(meta);
@@ -4765,10 +4936,12 @@ function boot() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (state.confirming) {
+      // state.confirming holds the full instance fkey ("[head:]act:<id>:<action>"),
+      // so Escape restores focus to the exact instance that opened the strip.
       const key = state.confirming;
       state.confirming = null;
       render();
-      const origin = document.querySelector(`[data-fkey="${CSS.escape("act:" + key)}"]`);
+      const origin = document.querySelector(`[data-fkey="${CSS.escape(key)}"]`);
       if (origin) origin.focus();
     } else if (state.renaming) {
       cancelRename();

@@ -570,7 +570,8 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain("workspaceTitle");
     expect(source).toContain("cwdMismatch");
     expect(source).toContain('!agent.target?.cwdMismatch');
-    expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
+    // B2: the head renders this via quietSourceLine, no longer a text: ternary.
+    expect(source).toContain('"Source agent: " + sourceAgentName(agent)');
     expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -1029,12 +1030,15 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
     expect(source).toContain("evidenceOpen: false");
     expect(source).toContain('class: "shelf-evidence-rail"');
-    // Metrics are hidden behind the disclosure: vitals render inside the
-    // Evidence shelf, never in Operate.
+    // B3: metrics are promoted to the instrument band under the verdict head —
+    // Evidence no longer builds vitals (neither the old call nor the band), and
+    // Operate never did.
     const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] || "";
-    expect(evidenceShelf).toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
     const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
     expect(operate).not.toContain("renderVitals(");
+    expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
     expect(styles).toContain(".shelf-evidence-rail {");
     // Widescreen split: roster rail ~40%, drawer ~60%.
@@ -1077,6 +1081,591 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
       || "";
     expect(operate).toContain("taskMeaningfullyDifferent(agent)");
     expect(operate).toContain("renderOperateMeta(agent)");
+  });
+});
+
+describe("verdict head — act from the top (B2)", () => {
+  /* Brace-counted extraction, not a landmark regex: it walks from the
+     signature's opening `{` to its true matching `}` by depth, so it can
+     never stop early at a column-0 `}` that belongs to nested content, and
+     it never depends on whatever function/comment happens to follow —
+     inserting a new top-level helper anywhere else in the file cannot
+     truncate or widen the body it returns. */
+  function extractFunctionBody(signature: string): string {
+    const start = source.indexOf(signature);
+    if (start === -1) return "";
+    const braceStart = source.indexOf("{", start);
+    if (braceStart === -1) return "";
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return source.slice(start, i + 1);
+      }
+    }
+    return "";
+  }
+  const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
+
+  test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
+    const drawer = agentDrawer();
+    expect(drawer).toBeTruthy();
+    const headAt = drawer.indexOf("inspector-head inspector-verdict");
+    const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
+    const nextAt = drawer.indexOf('class: "next-action"');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
+    const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
+    for (const at of [headAt, bannerAt, nextAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
+      expect(at).toBeGreaterThan(-1);
+    }
+    // The banner stays state, pinned immediately after the head.
+    expect(bannerAt).toBeGreaterThan(headAt);
+    // Next action directly under the head; the vitals mount (B3's slot) sits
+    // between next-action and the Operate | Chat shelf.
+    expect(nextAt).toBeGreaterThan(bannerAt);
+    expect(vitalsAt).toBeGreaterThan(nextAt);
+    expect(shelfAt).toBeGreaterThan(vitalsAt);
+    // Lineage is demoted below the shelf — context, not action — and the
+    // command dock stays pinned at the bottom.
+    expect(lineageAt).toBeGreaterThan(shelfAt);
+    expect(dockAt).toBeGreaterThan(lineageAt);
+    // The empty mount must not spend a flex gap until B3 fills it.
+    expect(styles).toContain(".inspector-vitals:empty { display: none; }");
+  });
+
+  test("the head carries the gate chip and one primary-action control", () => {
+    const drawer = agentDrawer();
+    const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
+    expect(head).toContain("verdictGate(");
+    expect(head).toContain("headPrimaryAction(");
+    // headPrimaryAction reuses the dock's derivation — capability() +
+    // renderDockTool() — never a duplicated action implementation.
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('capability(agent, "focus")');
+    expect(headFn).toContain("renderDockTool(");
+    // The gate is ember ink + outline, never a filled banner.
+    const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
+    expect(gateCss).toContain("color: var(--ember)");
+    expect(gateCss).toContain("background: none");
+    // Touch sweep: the head action clears 44px below 1024px.
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    expect(block).toContain(".verdict-action .dock-tool");
+  });
+
+  test("head de-noising: one quiet source line, full sentence in the tooltip", () => {
+    const drawer = agentDrawer();
+    // The three-way naming ternary collapsed into a single render.
+    expect((drawer.match(/inspector-source-name/g) || []).length).toBe(1);
+    expect(drawer).toContain("quietSourceLine(agent)");
+    expect(drawer).toContain("fullSourceDetail(agent)");
+    expect(drawer).not.toContain('session cwd ≠ pane folder"');
+    // The mismatch state keeps a visible ember mark on the quiet line.
+    expect(styles).toMatch(/\.inspector-source-name\.is-mismatch::before\s*\{[^}]*var\(--ember\)/);
+  });
+
+  test("quietSourceLine goes quiet when the terminal title is the shown name; the mismatch sentence moves to fullSourceDetail", () => {
+    // Terminal title IS the display name → no source line at all.
+    const matching = agent({ target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane" } });
+    expect(M.quietSourceLine(matching)).toBeNull();
+    expect(M.fullSourceDetail(matching)).toBeNull();
+
+    // cwd mismatch → the quiet line is short; the explanation lives in the tooltip.
+    const mismatched = agent({
+      cwd: "/Users/op",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(mismatched)).toBe("Terminal: ridge-pane");
+    expect(M.quietSourceLine(mismatched)).not.toContain("≠");
+    expect(M.fullSourceDetail(mismatched)).toContain("Terminal: ridge-pane");
+    expect(M.fullSourceDetail(mismatched)).toContain("Session cwd ≠ pane folder");
+
+    // No terminal title, no custom name → still quiet.
+    expect(M.quietSourceLine(agent())).toBeNull();
+  });
+});
+
+describe("B2 review fixes — instance-scoped head keys + executable head logic", () => {
+  /* app.js is imported without a document (DOM wiring stays un-booted), but
+     headPrimaryAction/verdictGate build real nodes via el()/icon(). A minimal
+     fake document, installed only around each call, lets the tests execute the
+     actual helpers and assert on the returned nodes. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+
+  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; both enabled → focus wins; absent → null", () => {
+    const locked = agent({ controls: [
+      { action: "focus", enabled: false, reason: "no route" },
+      { action: "instruct", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    expect(withDom(() => M.headPrimaryAction(locked))).toBeNull();
+
+    const focusReady = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "instruct", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const focusTool: any = withDom(() => M.headPrimaryAction(focusReady));
+    expect(focusTool).not.toBeNull();
+    expect(focusTool.className).toContain("dock-tool");
+    expect(focusTool.dataset.fkey).toBe("head:act:codex:a1:focus");
+
+    const interruptOnly = agent({ controls: [{ action: "interrupt", enabled: true }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
+    expect(interruptTool).not.toBeNull();
+    expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
+
+    // Priority head-to-head: both focus and interrupt enabled at once — focus
+    // must win, not just when interrupt is absent entirely.
+    const bothEnabled = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bothTool: any = withDom(() => M.headPrimaryAction(bothEnabled));
+    expect(bothTool).not.toBeNull();
+    expect(bothTool.dataset.fkey).toBe("head:act:codex:a1:focus");
+
+    expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
+  });
+
+  test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
+    // Visible text from gates; statusReason empty → the tooltip carries the
+    // gate text, never an empty title.
+    const gated = agent({ gates: ["needs-review"], statusReason: "" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip: any = withDom(() => M.verdictGate(gated, "blocked"));
+    expect(chip).not.toBeNull();
+    expect(chip.className).toBe("verdict-gate");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip.children.some((c: any) => c.textContent === "needs-review")).toBe(true);
+    expect(chip.attributes.title).toBe("needs-review");
+
+    // No gate → statusReason carries both the visible text and the tooltip.
+    const reason = agent({ statusReason: "Blocked by CI gate on main." });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip2: any = withDom(() => M.verdictGate(reason, "blocked"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(chip2.children.some((c: any) => c.textContent === "Blocked by CI gate on main.")).toBe(true);
+    expect(chip2.attributes.title).toBe("Blocked by CI gate on main.");
+
+    expect(withDom(() => M.verdictGate(agent(), "healthy"))).toBeNull();
+  });
+
+  test("cwd mismatch keeps its mark even when the shown name equals the terminal title", () => {
+    const aliasLike = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(aliasLike)).toBe("Terminal: Ridge pane");
+    expect(M.fullSourceDetail(aliasLike)).toContain("Session cwd ≠ pane folder");
+    // Without the mismatch the same identity stays quiet.
+    const calm = agent({
+      nickname: "Ridge pane",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane" },
+    });
+    expect(M.quietSourceLine(calm)).toBeNull();
+  });
+
+  test("instance-scoped keys: head prefixes its fkeys; confirm strip and Escape bind to one instance", () => {
+    const dockToolFn = source.match(/function renderDockTool\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(dockToolFn).toContain('opts.fkeyPrefix || ""');
+    // The confirm strip renders only for the instance that opened it.
+    expect(dockToolFn).toContain("state.confirming === fkey");
+    expect(dockToolFn).toContain("state.confirming = fkey");
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('fkeyPrefix: "head:"');
+    // Escape restores focus to the exact instance fkey stored in state.confirming.
+    expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+  });
+});
+
+describe("vitals instrument band (B3)", () => {
+  /* Same DOM-less execution trick B2 used: a minimal fake document installed
+     around each call lets renderVitalsBand build real nodes via el()/svg helpers,
+     so tests assert on what actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // Walk the built node tree: collect el()-set classNames and concatenated text.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // el() writes leaf text via the `text:` attr (node.textContent) and multi-child
+  // text via createTextNode kids; a node uses one or the other, so summing both
+  // never double-counts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+
+  test("(a) renderVitalsBand is exported and renders mono-classed values for a live agent", () => {
+    expect(typeof M.renderVitalsBand).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(live));
+    expect(band).not.toBeNull();
+    expect(band.className).toContain("vitals");
+    const classes = classesOf(band);
+    // Values ride the canonical "vital-big mono" convention (DESIGN rule 2).
+    expect(classes.some((c) => c.includes("vital-big") && c.includes("mono"))).toBe(true);
+    // An observed context window renders a real SVG ring; uptime is present.
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
+    const text = textOf(band);
+    expect(text).toContain("40k"); // observed context total
+    expect(text).toContain("2m");  // 125s uptime → fmtElapsed "2m"
+  });
+
+  test("(b) missing vitals render honest fallbacks — observed count without a fabricated window, omit-empty otherwise", () => {
+    // Claude-style: observed total but NO context window → absolute count, never a
+    // fabricated percentage/ring (no invented denominator).
+    const noWindow = agent({
+      provider: "claude",
+      tokens: { provenance: "observed", total: 40000 },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const band: any = withDom(() => M.renderVitalsBand(noWindow));
+    expect(band).not.toBeNull();
+    const classes = classesOf(band);
+    expect(classes.some((c) => c.includes("vital-ring"))).toBe(false); // no fabricated ring
+    const text = textOf(band);
+    expect(text).toContain("40k");   // honest observed count
+    expect(text).not.toContain("%"); // no invented percentage
+    // Nothing reported at all → the band is omitted entirely (never a fake $0/0 tile).
+    const blank = withDom(() => M.renderVitalsBand(
+      agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
+    ));
+    expect(blank).toBeNull();
+    // The honest "not reported" string itself stays byte-identical.
+    expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
+  });
+
+  test("(c) renderEvidenceShelf no longer builds the vitals block — it moved to the band", () => {
+    const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] ?? "";
+    expect(evidenceShelf).toBeTruthy();
+    // The moved pattern, quoted from the pre-B3 source: the vitals prepend.
+    expect(evidenceShelf).not.toContain("body.prepend(vitals)");
+    // No vitals tiles are built in Evidence now — neither the old call nor the band.
+    expect(evidenceShelf).not.toContain("renderVitals(agent)");
+    expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
+  });
+
+  test("(d) renderAgentDrawer fills the .inspector-vitals mount with the band, before the shelf", () => {
+    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain('class: "inspector-vitals"');
+    expect(drawer).toContain("renderVitalsBand(agent)");
+    // B2 appended the mount EMPTY; B3 must fill it — that bare append is gone.
+    expect(drawer).not.toContain('pane.append(el("div", { class: "inspector-vitals" }))');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    expect(vitalsAt).toBeGreaterThan(-1);
+    expect(vitalsAt).toBeLessThan(shelfAt);
+  });
+});
+
+describe("per-type drawers lead with verdict + action (B4)", () => {
+  /* Same DOM-less execution trick B2/B3 used, so the program-rollup test asserts
+     on the real built tree — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  const bodyOf = (name: string) =>
+    source.match(new RegExp("function " + name + "\\(pane, view\\) \\{[\\s\\S]*?\\n\\}\\n"))?.[0] ?? "";
+
+  test("(a) every entity drawer opens with a shared verdict-head block before its detail", () => {
+    // The shared head is verdict-shaped: the totem chassis + a right-side stack
+    // that carries Close and the one promoted action.
+    const helper = source.match(/function drawerVerdictHead\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(helper).toBeTruthy();
+    expect(helper).toContain("inspector-head inspector-verdict");
+    expect(helper).toContain('class: "verdict-side"');
+    expect(helper).toContain('class: "verdict-action"');
+
+    // Intervention: head → workStateBanner → impactBlock (guards stay below).
+    const iv = bodyOf("renderInterventionDrawer");
+    const ivHead = iv.indexOf("drawerVerdictHead(");
+    expect(ivHead).toBeGreaterThan(-1);
+    expect(ivHead).toBeLessThan(iv.indexOf("workStateBanner(issue)"));
+    expect(iv.indexOf("workStateBanner(issue)")).toBeLessThan(iv.indexOf("impactBlock(issue)"));
+
+    // Advisory: head → workStateBanner → impactBlock.
+    const av = bodyOf("renderAdvisoryDrawer");
+    const avHead = av.indexOf("drawerVerdictHead(");
+    expect(avHead).toBeGreaterThan(-1);
+    expect(avHead).toBeLessThan(av.indexOf("workStateBanner(issue)"));
+    expect(av.indexOf("workStateBanner(issue)")).toBeLessThan(av.indexOf("impactBlock(issue)"));
+
+    // Investigation: head → status line → steps.
+    const inv = bodyOf("renderInvestigationDrawer");
+    const invHead = inv.indexOf("drawerVerdictHead(");
+    expect(invHead).toBeGreaterThan(-1);
+    expect(invHead).toBeLessThan(inv.indexOf('class: "dw-status"'));
+
+    // Resolved: head → cleared lead → before/after grid. No invented action.
+    const rv = bodyOf("renderResolvedDrawer");
+    const rvHead = rv.indexOf("drawerVerdictHead(");
+    expect(rvHead).toBeGreaterThan(-1);
+    expect(rvHead).toBeLessThan(rv.indexOf("dw-lead--past"));
+    expect(rv.indexOf("dw-lead--past")).toBeLessThan(rv.indexOf('class: "detail-grid"'));
+    expect(rv).not.toContain("issueHeadAction"); // no action invented for a past-tense drawer
+    expect(rv).not.toContain("action:");
+
+    // Program: head (with the rollup line) → roster.
+    const pr = bodyOf("renderProgramDrawer");
+    const prHead = pr.indexOf("drawerVerdictHead(");
+    expect(prHead).toBeGreaterThan(-1);
+    expect(pr).toContain("programRollupLine(program)");
+    expect(prHead).toBeLessThan(pr.indexOf('class: "dw-roster"'));
+    // The broadcast lever stays a body control (not promoted into the head).
+    expect(pr).toContain("prog-broadcast:");
+  });
+
+  test("(b) regression guard: workStateBanner + impactBlock still render, logic byte-untouched", () => {
+    const iv = bodyOf("renderInterventionDrawer");
+    const av = bodyOf("renderAdvisoryDrawer");
+    expect(iv).toContain("pane.append(workStateBanner(issue));");
+    expect(iv).toContain("pane.append(impactBlock(issue));");
+    expect(av).toContain("pane.append(workStateBanner(issue));");
+    expect(av).toContain("pane.append(impactBlock(issue));");
+    // The two guarded functions are untouched — quote their load-bearing lines.
+    const wsb = source.match(/function workStateBanner\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const imp = source.match(/function impactBlock\(issue\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(wsb).toContain('el("div", { class: "dw-work work-" + work.key, role: "status" }');
+    expect(imp).toContain('el("h3", { class: "section-title", text: "Impact" })');
+  });
+
+  test("(c) program head carries the rollup vitals with mono values, aggregated over the swarm", () => {
+    expect(typeof M.renderProgramDrawer).toBe("function");
+    const mk = (over: Record<string, unknown>) => agent({
+      tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+    });
+    const program = {
+      id: "p1", name: "Ridge program",
+      agents: [
+        mk({ id: "codex:w1", status: "running" }),
+        mk({ id: "codex:w2", status: "running" }),
+        mk({ id: "codex:n1", status: "attention" }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const classes = classesOf(pane);
+    // Verdict-shaped head + a rollup line whose VALUES ride the mono convention.
+    expect(classes.some((c) => c.includes("inspector-head") && c.includes("inspector-verdict"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup"))).toBe(true);
+    expect(classes.some((c) => c.includes("dw-rollup-value") && c.includes("mono"))).toBe(true);
+    const text = textOf(pane);
+    // 3 agents · 2 working · 1 alert · aggregate session tokens (10k×3 = 30k).
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");
+    expect(text).toContain("tokens");
+  });
+
+  test("(c2) the token cell is omitted honestly when no agent reports session usage", () => {
+    const program = {
+      id: "p2", name: "Quiet program",
+      agents: [
+        agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+        agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+      ],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    const text = textOf(pane);
+    expect(text).toContain("2agents");   // counts are always derivable
+    expect(text).not.toContain("tokens"); // an un-derivable aggregate is never faked
+  });
+
+  test("(d1) audit closed: dead .state-pill / .inspector-state CSS (and its #fff-on-fill) removed", () => {
+    expect(styles).not.toContain(".state-pill");
+    expect(styles).not.toContain(".inspector-state");
+    // The dead policy-mismatch pill was the only #fff literal in the inspector
+    // per-type section — scope the check there (the live .policy-chip #fff lives
+    // in agent-rows, WS-C's territory, and is out of scope for this task).
+    const perType = styles.slice(
+      styles.indexOf("/* ---------- inspector: per-type drawer states"),
+      styles.indexOf("/* ---------- vitals band"),
+    );
+    expect(perType).toBeTruthy();
+    expect(perType).not.toContain("#fff");
+    // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
+    // those class strings, or it would render as an unstyled element. Back the
+    // grep claim with the suite (source = app.js text, html = index.html text).
+    expect(source).not.toContain("state-pill");
+    expect(source).not.toContain("inspector-state");
+    expect(html).not.toContain("state-pill");
+    expect(html).not.toContain("inspector-state");
+  });
+
+  test("(e) orphan cleanup: drawerHead is gone; every drawer head is drawerVerdictHead", () => {
+    // The migration moved all five entity heads to drawerVerdictHead, orphaning
+    // drawerHead — the change created the orphan, so the change removes it.
+    expect(source).not.toContain("function drawerHead(");
+    expect(source).not.toContain("drawerHead(");
+    // The agent drawer builds its head inline; missingDrawer uses a bare
+    // .inspector-head — so the base class stays live, only the helper is gone.
+    expect(source).toContain('el("div", { class: "inspector-head inspector-verdict" }'); // drawerVerdictHead
+    for (const fn of ["renderInterventionDrawer", "renderAdvisoryDrawer",
+      "renderInvestigationDrawer", "renderResolvedDrawer", "renderProgramDrawer"]) {
+      expect(bodyOf(fn)).toContain("drawerVerdictHead(");
+    }
+  });
+
+  test("(f) confirm parity: head triage/launch fire triageIssue directly, exactly like their body twins", () => {
+    // Controller ruling: a head action must have IDENTICAL confirm semantics to
+    // its body twin. The confirm mechanism (state.confirming) is scoped to
+    // renderDockTool and gated on NEEDS_CONFIRM = {interrupt, archive} only —
+    // triage/queue/run never enter it. So the parity-correct head is a direct
+    // triageIssue() call, mirroring the body. This test pins that both sides
+    // fire directly and neither reaches for the confirm gate.
+    expect(source).toContain('const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);');
+    const head1 = source.match(/function issueHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const head2 = source.match(/function investigationHeadAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyTriage = source.match(/function renderTriage\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    const bodyInvestigation = bodyOf("renderInvestigationDrawer");
+    for (const chunk of [head1, head2, bodyTriage, bodyInvestigation]) {
+      expect(chunk).toBeTruthy();
+      expect(chunk).toContain("triageIssue(");        // direct fire on both sides
+      expect(chunk).not.toContain("state.confirming"); // no confirm gate on either
+      expect(chunk).not.toContain("NEEDS_CONFIRM");
+    }
+    // The head's onclick calls the SAME triageIssue actions the body does.
+    expect(head1).toContain('triageIssue(id, "run")');
+    expect(head1).toContain('triageIssue(id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "generate")');
+    expect(bodyTriage).toContain('triageIssue(issue.id, "run")');
+    expect(head2).toContain('triageIssue(item.issueId, "run")');
+    expect(bodyInvestigation).toContain('triageIssue(item.issueId, "run")');
+  });
+
+  test("(d2) audit closed: control-banner conforms to --failed ink + --ember-soft tint (settled ruling)", () => {
+    const banner = styles.match(/\.control-banner\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerIco = styles.match(/\.control-banner \.ico\s*\{[^}]*\}/)?.[0] ?? "";
+    const bannerLink = styles.match(/\.control-banner-link\s*\{[^}]*\}/)?.[0] ?? "";
+    // Sanctioned pattern: --failed ink (border + icon + link) over the one --ember-soft tint.
+    expect(banner).toContain("var(--ember-soft)");       // the sole sanctioned soft tint
+    expect(banner).toContain("var(--failed)");           // border ink from the failed family
+    expect(bannerIco).toContain("color: var(--failed)"); // icon ink
+    // The link previously reached for the OTHER red (--ember); unify it to --failed so
+    // the banner never mixes two red inks (only --failed ink + --ember-soft tint).
+    expect(bannerLink).toContain("color: var(--failed)");
+    expect(bannerLink).not.toContain("var(--ember)");
   });
 });
 
