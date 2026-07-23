@@ -2166,7 +2166,9 @@ function renderTabs() {
       : "";
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
-    btn.setAttribute("aria-pressed", String(btn.dataset.view === state.view));
+    const isCurrent = btn.dataset.view === state.view;
+    btn.setAttribute("aria-pressed", String(isCurrent));
+    btn.classList.toggle("is-current", isCurrent);
   }
   const toggle = $("select-toggle");
   if (toggle) {
@@ -4846,9 +4848,9 @@ function renderUsagePanel() {
         el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
-        el("td", { text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
-        el("td", { text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
-        el("td", {}, sessionCell)));
+        el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
+        el("td", { class: "usage-val", text: row.costUsd == null ? "—" : fmtUsd(row.costUsd) }),
+        el("td", { class: "usage-val" }, sessionCell)));
     }
   }
   table.append(body);

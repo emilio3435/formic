@@ -1635,3 +1635,181 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     expect(bannerLink).not.toContain("var(--ember)");
   });
 });
+
+describe("toolbar on the instrument-rail language (A3)", () => {
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
+  // the active view-tab is ink text + a 2px --signal-rail bottom rail driven
+  // by the class `is-current`, never a filled/boxed tab.
+  test("active view-tab is an is-current ink signal rail, not a filled tab (Rule 1)", () => {
+    const currentRule = styles.match(/\.view-tab\.is-current\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(currentRule).toContain("color: var(--ink)");
+    expect(currentRule).toContain("var(--signal-rail)");
+    // Rule 1 — indicator inks, not flood fills: no --surface fill / boxed tab.
+    expect(currentRule).not.toContain("var(--surface)");
+    // renderTabs drives the active marker by class, not by aria-pressed styling.
+    expect(source).toContain('classList.toggle("is-current"');
+  });
+
+  test("the old filled-surface active-tab rule is gone (Rule 1)", () => {
+    // Quote the current offending pattern from source and assert it is gone.
+    expect(styles).not.toContain(
+      '.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface)',
+    );
+    // The active state no longer keys off aria-pressed at all in CSS.
+    expect(styles).not.toContain('.view-tab[aria-pressed="true"]');
+  });
+
+  test("view-tab count badges render in mono (Rule 2: mono for values)", () => {
+    const countRule = styles.match(/\.view-tab \.count\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(countRule).toContain("font-family: var(--font-mono)");
+  });
+
+  test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
+    const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ink)");
+    expect(rule).toContain("background: var(--sand)");
+    expect(rule).toContain("border-color: var(--ink)");
+    // The old ink flood fill (ink background, surface text) is gone.
+    expect(rule).not.toContain("background: var(--ink)");
+  });
+});
+
+describe("masthead + program headers share the frame + quiet header language (A4)", () => {
+  // Rule 3 — shared frame: the masthead full-width band caps its content at
+  // --frame, the same alignment contract the pulse strip and toolbar follow.
+  test("masthead aligns its content to the shared --frame (Rule 3)", () => {
+    const innerRule = styles.match(/\.masthead-inner\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(innerRule).toContain("max-width: var(--frame)");
+    expect(innerRule).toContain("margin: 0 auto");
+  });
+
+  // The programs band aligns to --frame through its container: #programs lives
+  // inside .app-body, the one centered canvas the masthead, summary, and
+  // toolbar all share — not its own full-width strip.
+  test("the programs band aligns to --frame through its .app-body container (Rule 3)", () => {
+    const bodyRule = styles.match(/\.app-body\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(bodyRule).toContain("max-width: var(--frame)");
+    expect(bodyRule).toContain("margin: 0 auto");
+    expect(html).toContain('<section id="programs" class="programs"');
+  });
+
+  // Rule 2 — mono for values: the program-header rollup renders counts (data),
+  // so it carries --font-mono, like the view-tab count badges (A3).
+  test("program-header rollup counts render in mono (Rule 2: mono for values)", () => {
+    const rollupRule = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rollupRule).toContain("font-family: var(--font-mono)");
+  });
+
+  // A4 audit finding: .program-alias-tag is a 9px uppercase tracked micro-label
+  // exactly like .eyebrow / .agent-column-label / .vital-label — the ratified
+  // mono micro-label idiom — but was the one outlier missing --font-mono.
+  test("program-alias-tag joins the mono micro-label idiom (Rule 2, A4 finding)", () => {
+    const tagRule = styles.match(/\.program-alias-tag\s*\{[^}]*\}/)?.[0] ?? "";
+    // Replacement rule: the alias tag now carries mono like every other label.
+    expect(tagRule).toContain("font-family: var(--font-mono)");
+    // Absence: the old rule that opened straight into font-size, with no
+    // font-family, is gone.
+    expect(styles).not.toContain(".program-alias-tag { font-size: 9px");
+    // It keeps its micro-label furniture (uppercase, tracked, faint ink).
+    expect(tagRule).toContain("text-transform: uppercase");
+    expect(tagRule).toContain("color: var(--faint)");
+  });
+});
+
+describe("motion + responsive conformance for the restyled body (A6)", () => {
+  // The single 44px touch-sweep rule inside the <1024px block: the selector list
+  // that terminates in `{ min-height: 44px; }`. This is the rule the audit says
+  // must grow to close the touch-target gaps.
+  function touchSweep1024() {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    return block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+  }
+
+  // A6 finding 1: .filter-chip (toolbar, 30px min-height) was never swept to 44px
+  // at any breakpoint — absent from both the 1024px and 720px sweep lists.
+  // Binding constraint: 44px touch targets below 1024px.
+  test("the <1024px touch sweep now covers the filter chip (A6 finding)", () => {
+    expect(touchSweep1024()).toContain(".filter-chip");
+  });
+
+  // A6 finding 1: .program-details (programs, 30px) was swept only at ≤720px, so it
+  // stayed 30px through the 721–1024px tablet range where the constraint already
+  // requires 44px. It graduates into the <1024px sweep.
+  test("program-details gets its 44px treatment at <1024px, not just <720px (A6 finding)", () => {
+    // Replacement: .program-details is now in the <1024px sweep.
+    expect(touchSweep1024()).toContain(".program-details");
+    // Absence: the old <720px-only pattern that carried .program-details is gone;
+    // the 720px list keeps only the drawer-scoped controls.
+    expect(styles).not.toContain(".dw-lin-name, .program-details { min-height: 44px; }");
+    expect(styles).toContain(
+      ".signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
+    );
+  });
+
+  // A6 finding 1: three text inputs were never swept at any breakpoint —
+  // .command-composer input (40px), .instruct-form input (38px),
+  // .rename-form input (36px) — while #search (a sibling input) already was.
+  test("the three text inputs clear 44px below 1024px (A6 finding)", () => {
+    const sweep = touchSweep1024();
+    expect(sweep).toContain(".command-composer input");
+    expect(sweep).toContain(".instruct-form input");
+    expect(sweep).toContain(".rename-form input");
+  });
+
+  // A6 finding 2 — Rule 6 (motion respects prefers-reduced-motion). Honest
+  // regression guard, not a fresh RED: WS-A (b4f9d80..d516ad7) added and removed
+  // no @keyframes or `animation:` declarations, so the pre-existing universal
+  // guard already disables the full animation set. This locks that guarantee.
+  test("reduced-motion universally disables the full WS-A animation set (A6 regression guard)", () => {
+    const reduced = styles.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+    // Universal selector + !important: disables ANY animation/transition regardless
+    // of specificity — every current keyframe and any a later task might add.
+    expect(reduced).toContain("*, *::before, *::after");
+    expect(reduced).toContain("animation: none !important");
+    expect(reduced).toContain("transition: none !important");
+    // The full existing animation set the guard covers.
+    const keyframes = [...styles.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "status-pulse", "sun-pulse"]);
+    // Every live `animation:` usage keys off one of those keyframes — none escapes.
+    const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
+    expect(new Set(animated)).toEqual(new Set(keyframes));
+  });
+});
+
+describe("peripheral surfaces conform to the design language (A5)", () => {
+  // A5 audit finding: the .usage-table "Recent invocations" rows render Tokens,
+  // Cost, and Session-ID cells — token/cost values and a literal identifier, the
+  // exact subjects of Rule 2 — yet they rendered in plain --font-ui with no mono
+  // treatment, unlike .row-fact-value / .swarm-chip / .artifact-path elsewhere.
+  // Rule 2 — mono for values only.
+  test("usage-table token/cost/session values render in mono (Rule 2, A5 finding)", () => {
+    // Replacement rule: a mono modifier scoped to the invocation-table value cells.
+    const valRule = styles.match(/\.usage-table td\.usage-val\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valRule).toContain("font-family: var(--font-mono)");
+    // The render tags the Tokens, Cost, and Session value cells with it...
+    expect(source).toContain('class: "usage-val", text: row.tokens == null');
+    expect(source).toContain('class: "usage-val", text: row.costUsd == null');
+    expect(source).toContain('el("td", { class: "usage-val" }, sessionCell)');
+    // ...and leaves the prose columns (When / Provider / Model) in --font-ui, so
+    // the test fails if mono is over-applied to non-value cells.
+    expect(source).not.toContain('class: "usage-val", text: row.provider');
+    expect(source).not.toContain('class: "usage-val", text: modelShort');
+  });
+
+  // A5 audit finding: .toast.err carried a hardcoded #f4c9bd text color — a magic
+  // hex outside the token vocabulary (DESIGN-LANGUAGE §5 open q5, "non-token
+  // hexes"). Tokenize it as a light-ember mix on --surface, the file's soft-tint
+  // idiom, so the error-toast text stays inside the vocabulary.
+  test("toast error text is tokenized, not a hardcoded hex (§5 non-token hexes, A5 finding)", () => {
+    const errRule = styles.match(/\.toast\.err\s*\{[^}]*\}/)?.[0] ?? "";
+    // Absence: the magic hex is gone from the rule and the whole sheet.
+    expect(errRule).not.toContain("#f4c9bd");
+    expect(styles).not.toContain("color: #f4c9bd");
+    // Replacement: the text tint is built from vocabulary tokens.
+    expect(errRule).toContain("color: color-mix(in srgb, var(--ember)");
+    expect(errRule).toContain("var(--surface)");
+    // The status border stays the --bad token.
+    expect(errRule).toContain("border-color: var(--bad)");
+  });
+});

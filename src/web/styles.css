@@ -763,9 +763,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .views { gap: 0; align-items: stretch; border-bottom: 1px solid var(--line-strong); }
 .view-tab:hover { color: var(--ink); background: var(--sand); border-color: var(--line); border-bottom-color: var(--line-strong); }
-.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface); border-color: var(--line-strong); border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--surface); }
-.view-tab .count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
-.view-tab[aria-pressed="true"] .count { color: var(--muted); }
+.view-tab.is-current { color: var(--ink); background: transparent; border-color: transparent; border-bottom: var(--signal-rail) solid var(--ink); }
+.view-tab .count { font-size: 11px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--faint); }
+.view-tab.is-current .count { color: var(--muted); }
 .view-tab .count:empty { display: none; }
 
 /* filter chips (above search) — single scrolling row to spare vertical space */
@@ -817,7 +817,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 #search:focus-visible { outline-offset: 0; }
 
 .select-toggle { flex: none; }
-.select-toggle[aria-pressed="true"] { color: var(--surface); background: var(--ink); border-color: var(--ink); }
+.select-toggle[aria-pressed="true"] { color: var(--ink); background: var(--sand); border-color: var(--ink); }
 
 .scope-note {
   margin: 0;
@@ -854,7 +854,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-label { display: inline-flex; align-items: center; gap: 0.35rem; min-width: 0; text-align: left; border-radius: var(--radius-sm); }
 .program-label:hover { color: var(--ember); }
 .program-name { font-weight: 700; font-size: 1rem; letter-spacing: -0.005em; }
-.program-alias-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
+.program-alias-tag { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem; }
 .program-rename {
   margin-left: 0.35rem;
   display: inline-grid;
@@ -869,7 +869,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .program-details { flex: none; margin-left: 0.25rem; min-height: 30px; padding: 0.2rem 0.55rem; font-size: 11px; font-weight: 650; color: var(--faint); background: none; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
 .program-details:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
 
-.program-rollup { margin-left: auto; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.program-rollup { margin-left: auto; font-size: 12.5px; font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup .hot { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -2016,7 +2016,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   transition: opacity 180ms ease, transform 180ms ease;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.toast.err { border-color: var(--bad); color: #f4c9bd; }
+.toast.err { border-color: var(--bad); color: color-mix(in srgb, var(--ember) 25%, var(--surface)); }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 60%, var(--ink)); }
 
 /* ---------- responsive ---------- */
@@ -2062,7 +2062,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
-  .reading-repair { min-height: 44px; }
+  .reading-repair, .filter-chip, .program-details,
+  .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -2124,8 +2125,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .triage-steps { grid-template-columns: 1fr; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
-  /* Per-type drawer controls stay comfortably tappable on touch. */
-  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name, .program-details { min-height: 44px; }
+  /* Per-type drawer controls stay comfortably tappable on touch.
+     (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
+  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
@@ -2212,6 +2214,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   text-transform: uppercase;
   color: var(--faint);
 }
+/* Rule 2 — mono for values: the Tokens/Cost/Session cells carry token/cost
+   values and an identifier, so they render in mono like .row-fact-value; the
+   session cell's .linkish button inherits it. When/Provider/Model stay prose. */
+.usage-table td.usage-val { font-family: var(--font-mono); }
 .linkish {
   border: 0;
   background: none;
