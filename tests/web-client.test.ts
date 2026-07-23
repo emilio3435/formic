@@ -812,6 +812,23 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(styles).toContain(".tm-track { fill: var(--line); }");            // SVG meter fill, shared
     expect(styles).toContain(".status-line-item.control-linked");            // drawer status line, distinct selector
   });
+
+  test("(g) keyboard focus survives the alert rails — each alert state combines its rail with the focus ring", () => {
+    // The alert rails `.agent-row.is-needs-you:not(.is-selected)` (and -blocked /
+    // -failed) sit at (0,3,0) on the SAME box-shadow property as the (0,2,0)
+    // :focus-visible ring, so on exactly the alert rows the rail clobbered the ring
+    // and keyboard focus went invisible. The fix is a :focus-visible variant per
+    // alert state (0,4,0) that combines BOTH shadow layers — rail + inset ring.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rule = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
+      )?.[0] ?? "";
+      expect(rule).not.toBe("");
+      // Both components present: the state-colored 4px rail AND the 1px focus ring.
+      expect(rule).toContain(`inset 4px 0 var(${ink})`);
+      expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
+    }
+  });
 });
 
 describe("operations canvas layout", () => {

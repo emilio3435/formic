@@ -959,6 +959,13 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
 .agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
 .agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
+/* The alert rails above ride the same box-shadow property as the :focus-visible
+   ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
+   on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
+   colour AND the focus ring shows. */
+.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 1px var(--line-strong); }
 .agent-row.is-ended { opacity: 0.66; }
 .agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
