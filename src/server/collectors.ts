@@ -9,9 +9,15 @@ import {
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
+import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
-const fileCache = new Map<string, { mtimeMs: number; size: number; agent: CollectedAgent | null }>();
+const fileCache = new Map<string, {
+  provider: Provider;
+  mtimeMs: number;
+  size: number;
+  agent: CollectedAgent | null;
+}>();
 
 export interface ParseMetadata {
   sourcePath?: string;
@@ -245,11 +251,8 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
   let tail: string | undefined;
   const humanMessages: HumanMessageCandidate[] = [];
   let updatedAt = isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta);
-  let input = 0;
-  let output = 0;
-  let cachedInput = 0;
-  let total = 0;
-  let sawUsage = false;
+  let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
+  let sessionTotal = 0;
   let exited = false;
 
   for (const row of rows) {
@@ -270,17 +273,14 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
       model = typeof row.message?.model === "string" ? row.message.model : model;
       const usage = row.message?.usage;
       if (!usage) continue;
-      sawUsage = true;
-      input += Number(usage?.input ?? 0);
-      output += Number(usage?.output ?? 0);
-      cachedInput += Number(usage?.cacheRead ?? 0);
-      total += Number(
-        usage?.totalTokens ??
-          Number(usage?.input ?? 0) +
-            Number(usage?.output ?? 0) +
-            Number(usage?.cacheRead ?? 0) +
-            Number(usage?.cacheWrite ?? 0),
-      );
+      const input = Number(usage.input ?? 0);
+      const output = Number(usage.output ?? 0);
+      const cachedInput = Number(usage.cacheRead ?? 0);
+      const cacheWrite = Number(usage.cacheWrite ?? 0);
+      const total = Number(usage.totalTokens ?? input + output + cachedInput + cacheWrite);
+      if (![input, output, cachedInput, total].every(Number.isFinite)) continue;
+      latestUsage = { input, output, cachedInput, total };
+      sessionTotal += total;
     }
   }
 
@@ -293,15 +293,14 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
     task,
     startedAt: isoTimestamp(session.timestamp),
     updatedAt,
-    tokens: {
-      input,
-      output,
-      cachedInput,
-      total,
-      sessionTotal: total,
-      scope: "session",
-      provenance: sawUsage ? "observed" : "unknown",
-    },
+    tokens: latestUsage
+      ? {
+          ...latestUsage,
+          sessionTotal,
+          scope: "latest-turn",
+          provenance: "observed",
+        }
+      : { scope: "unknown", provenance: "unknown" },
     transcriptTail: tail,
     humanMessages,
     statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
@@ -384,7 +383,7 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
     provider: "codex",
     sourceSessionId: sessionId,
     cwd: typeof session.cwd === "string" ? session.cwd : undefined,
-    model: model ?? "gpt-5.6-sol",
+    model,
     effort,
     task,
     startedAt: isoTimestamp(session.timestamp ?? sessionRow?.timestamp),
@@ -404,13 +403,10 @@ export function parseCodexJsonl(jsonl: string, meta: ParseMetadata = {}): Collec
 // window is known in this deployment; leave undefined otherwise so the UI falls
 // back to an honest observed-token count instead of a fabricated percentage.
 // Opus 4.8, Sonnet 5, and Fable 5 run the 1M-token context here.
-const CLAUDE_CONTEXT_WINDOWS: Array<[string, number]> = [
-  ["opus-4-8", 1_000_000],
-  ["sonnet-5", 1_000_000],
-  ["fable-5", 1_000_000],
-];
-
-function claudeContextWindow(model: string | undefined): number | undefined {
+export function claudeContextWindow(
+  model: string | undefined,
+  config: ModelConfig = MODEL_CONFIG,
+): number | undefined {
   if (!model) return undefined;
   const id = model.toLowerCase();
   // Ground truth first: if the model id ever carries an explicit 1M-context
@@ -418,7 +414,7 @@ function claudeContextWindow(model: string | undefined): number | undefined {
   // table. This is absent from transcripts today, but costs nothing and gives
   // free per-session accuracy if Anthropic ever stamps the beta into message.model.
   if (id.includes("[1m]")) return 1_000_000;
-  for (const [needle, window] of CLAUDE_CONTEXT_WINDOWS) {
+  for (const [needle, window] of Object.entries(config.claudeContextWindows)) {
     if (id.includes(needle)) return window;
   }
   return undefined;
@@ -503,19 +499,21 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
     task,
     startedAt,
     updatedAt,
-    tokens: {
-      input: latestUsage?.input,
-      output: latestUsage?.output,
-      cachedInput: latestUsage?.cachedInput,
-      // Anthropic exposes cache creation as a separate input component. The
-      // shared schema has no cache-write field, so preserve raw input/cache-read
-      // fields and include cache creation exactly once in the observed total.
-      total: latestUsage ? usageTotal(latestUsage) : undefined,
-      sessionTotal: latestUsage ? sessionTotal : undefined,
-      contextWindow: claudeContextWindow(model),
-      scope: latestUsage ? "latest-turn" : "unknown",
-      provenance: latestUsage ? "observed" : "unknown",
-    },
+    tokens: latestUsage
+      ? {
+          input: latestUsage.input,
+          output: latestUsage.output,
+          cachedInput: latestUsage.cachedInput,
+          // Anthropic exposes cache creation as a separate input component. The
+          // shared schema has no cache-write field, so preserve raw input/cache-read
+          // fields and include cache creation exactly once in the observed total.
+          total: usageTotal(latestUsage),
+          sessionTotal,
+          contextWindow: claudeContextWindow(model),
+          scope: "latest-turn",
+          provenance: "observed",
+        }
+      : { scope: "unknown", provenance: "unknown" },
     transcriptTail: tail,
     humanMessages,
     meta,
@@ -560,6 +558,10 @@ async function collectProvider(
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
   const files = await recentJsonlFiles(root, depth, windowMs);
+  const currentPaths = new Set(files);
+  for (const [path, cached] of fileCache) {
+    if (cached.provider === provider && !currentPaths.has(path)) fileCache.delete(path);
+  }
   await Promise.all(
     files.map(async (path) => {
       try {
@@ -571,7 +573,7 @@ async function collectProvider(
         }
         const contents = await readFile(path, "utf8");
         const parsed = parser(contents, { sourcePath: path, mtimeMs: details.mtimeMs });
-        fileCache.set(path, { mtimeMs: details.mtimeMs, size: details.size, agent: parsed });
+        fileCache.set(path, { provider, mtimeMs: details.mtimeMs, size: details.size, agent: parsed });
         if (parsed) agents.push(parsed);
       } catch (error) {
         errors.push(`${provider} ${path}: ${error instanceof Error ? error.message : String(error)}`);

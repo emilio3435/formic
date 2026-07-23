@@ -1,0 +1,13 @@
+{
+  "claudeContextWindows": {
+    "opus-4-8": 1000000,
+    "sonnet-5": 1000000,
+    "fable-5": 1000000
+  },
+  "modelFamilyAliases": {
+    "grok-4.5": ["grok-4.5", "cursor-grok-4.5"],
+    "gpt-5.6-sol": ["gpt-5.6-sol"],
+    "claude-fable-5": ["claude-fable-5", "fable-5"]
+  },
+  "cursorRootModel": "Grok 4.5 Fast"
+}

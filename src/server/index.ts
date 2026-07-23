@@ -3,6 +3,7 @@ import { JsonArchiveStore } from "./archive";
 import { createMountainFetch } from "./app";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
+import { runtimeCmuxExecutable } from "./cmux";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { JsonSettingsStore } from "./settings";
@@ -17,6 +18,7 @@ if (!Number.isInteger(configuredPort) || configuredPort < 1 || configuredPort > 
 }
 
 const runner = new BunCommandRunner();
+const cmuxExecutable = runtimeCmuxExecutable();
 const archiveStore = await JsonArchiveStore.open(join(PROJECT_ROOT, "data/archive.json"));
 const triageStore = await JsonTriageQueueStore.open(join(PROJECT_ROOT, "data/triage-queue.json"));
 const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "data/program-aliases.json"));
@@ -30,6 +32,8 @@ const state = new HubState(
   undefined,
   () => settingsStore.get(),
   () => triageStore.list(),
+  undefined,
+  cmuxExecutable,
 );
 await state.refresh({ cmux: true });
 
@@ -41,6 +45,7 @@ const mountainFetch = createMountainFetch({
   triageRunner,
   programAliasStore,
   settingsStore,
+  cmuxExecutable,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });
 const server = Bun.serve({

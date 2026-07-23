@@ -189,6 +189,69 @@ describe("fail-loud control execution", () => {
       JSON.stringify({ surface_id: "SURFACE-EXACT", text: instruction }),
     ]);
   });
+
+  test("an Enter failure is retried once and succeeds without restaging text", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 7, stdout: "", stderr: "surface was busy", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(200);
+    expect(runner.commands.map((command) => command[2])).toEqual([
+      "surface.send_text",
+      "surface.send_key",
+      "surface.send_key",
+    ]);
+  });
+
+  test("a second Enter failure reports that staged text was not submitted", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 7, stdout: "", stderr: "first failure", timedOut: false },
+      { exitCode: 23, stdout: "", stderr: "surface rejected Enter", timedOut: false },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(502);
+    expect(execution.response).toMatchObject({
+      ok: false,
+      error: {
+        code: "TEXT_STAGED_NOT_SUBMITTED",
+        stderr: "surface rejected Enter",
+        exitCode: 23,
+      },
+    });
+  });
+
+  test("send_text failures retain CMUX_COMMAND_FAILED without attempting Enter", async () => {
+    const runner = new StubRunner([
+      { exitCode: 19, stdout: "", stderr: "text rejected", timedOut: false },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.response).toMatchObject({
+      ok: false,
+      error: { code: "CMUX_COMMAND_FAILED", stderr: "text rejected", exitCode: 19 },
+    });
+    expect(runner.commands).toHaveLength(1);
+  });
 });
 
 describe("same-origin loopback control HTTP boundary", () => {

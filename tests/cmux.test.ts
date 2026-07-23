@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parseCmuxTerminals } from "../src/server/cmux";
+import {
+  DEFAULT_CMUX_EXECUTABLE,
+  parseCmuxTerminals,
+  runtimeCmuxExecutable,
+} from "../src/server/cmux";
 
 function discovery(terminal: Record<string, unknown>): string {
   return JSON.stringify({ terminals: [{ surface_id: "SURFACE-1", ...terminal }] });
@@ -28,5 +32,12 @@ describe("parseCmuxTerminals — the surface rename becomes the terminal title",
 
     const [glyphOnly] = parseCmuxTerminals(discovery({ surface_title: "⠂ " }));
     expect(glyphOnly?.title).toBeUndefined();
+  });
+});
+
+describe("runtime cmux executable", () => {
+  test("uses a configured executable and otherwise preserves the default", () => {
+    expect(runtimeCmuxExecutable("/opt/cmux/bin/cmux")).toBe("/opt/cmux/bin/cmux");
+    expect(runtimeCmuxExecutable("  ")).toBe(DEFAULT_CMUX_EXECUTABLE);
   });
 });

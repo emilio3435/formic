@@ -18,6 +18,7 @@ import type {
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
+import { MODEL_CONFIG, modelFamily } from "./model-config";
 import { resolveAgentTarget } from "./targets";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
@@ -195,25 +196,6 @@ function operatorControlState(
   return target.resolution === "ambiguous" ? "quarantined" : "observed-only";
 }
 
-function modelFamily(model: string): string {
-  const canonical = model
-    .split("/")
-    .at(-1)!
-    .trim()
-    .toLowerCase()
-    .replace(/[ _]+/g, "-");
-  if (canonical === "grok-4.5" || canonical.startsWith("grok-4.5-") ||
-    canonical === "cursor-grok-4.5" || canonical.startsWith("cursor-grok-4.5-")) {
-    return "grok-4.5";
-  }
-  if (canonical === "gpt-5.6-sol" || canonical.startsWith("gpt-5.6-sol-")) return "gpt-5.6-sol";
-  if (canonical === "claude-fable-5" || canonical.startsWith("claude-fable-5-") ||
-    canonical === "fable-5" || canonical.startsWith("fable-5-")) {
-    return "claude-fable-5";
-  }
-  return canonical;
-}
-
 function cursorModelPolicy(
   agent: CollectedAgent,
   sourcesById: ReadonlyMap<string, CollectedAgent>,
@@ -222,7 +204,7 @@ function cursorModelPolicy(
   const parent = agent.parentSourceSessionId
     ? sourcesById.get(`cursor:${agent.parentSourceSessionId}`)
     : undefined;
-  const expected = parent?.model ?? "Grok 4.5 Fast";
+  const expected = parent?.model ?? MODEL_CONFIG.cursorRootModel;
   const evidence = agent.parentSourceSessionId ? "cursor-ai-tracking" : "cursor-local";
   if (!agent.model) {
     return {

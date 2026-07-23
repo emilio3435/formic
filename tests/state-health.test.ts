@@ -11,6 +11,40 @@ const emptySessions = () => ({
 });
 
 describe("cmux collection time truth", () => {
+  test("passes the runtime executable to terminal and notification discovery", async () => {
+    const executables: string[] = [];
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      cmux: async (_runner, executable) => {
+        executables.push(executable ?? "missing");
+        return { value: [], errors: [] };
+      },
+      notifications: async (_runner, executable) => {
+        executables.push(executable ?? "missing");
+        return { value: [], errors: [] };
+      },
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      undefined,
+      undefined,
+      undefined,
+      "/opt/cmux/bin/cmux",
+    );
+
+    await state.refresh({ cmux: true });
+
+    expect(executables).toEqual(["/opt/cmux/bin/cmux", "/opt/cmux/bin/cmux"]);
+  });
+
   test("a cmux request coalesced behind a source refresh still runs once and remains the lastCheckedAt", async () => {
     let releaseFirst!: () => void;
     const firstSessionScan = new Promise<void>((resolve) => { releaseFirst = resolve; });

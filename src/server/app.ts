@@ -43,6 +43,7 @@ export interface MountainAppDependencies {
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
+  cmuxExecutable?: string;
   webRoot: string;
 }
 
@@ -195,6 +196,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
+        cmuxExecutable: dependencies.cmuxExecutable,
         afterControl: async (agentIds) => {
           await markIssuesForAgents(agentIds ?? []);
           await dependencies.state.refresh({ cmux: true });
@@ -206,6 +208,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
+        cmuxExecutable: dependencies.cmuxExecutable,
         afterControl: async (agentIds) => {
           await markIssuesForAgents(agentIds ?? []);
           await dependencies.state.refresh({ cmux: true });

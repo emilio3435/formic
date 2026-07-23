@@ -4,6 +4,10 @@ import type { CmuxNotification, CollectionResult, CmuxSurface, CommandRunner } f
 export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
 
+export function runtimeCmuxExecutable(value = process.env.CMUX_EXECUTABLE): string {
+  return value?.trim() || DEFAULT_CMUX_EXECUTABLE;
+}
+
 export { cmuxCommand, cmuxSocketPassword, loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 
 function stringValue(...values: unknown[]): string | undefined {

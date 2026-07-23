@@ -109,9 +109,28 @@ export async function executeControl(
   } else if (request.action === "instruct") {
     const instruction = request.instruction?.trim();
     if (!instruction) return failure(request, 400, "INSTRUCTION_REQUIRED", "A non-empty instruction is required.");
-    commands.push(
+    const textFailure = await runCommand(
+      request,
+      dependencies.runner,
       cmuxRpc(executable, "surface.send_text", { surface_id: surfaceId, text: instruction }),
-      cmuxRpc(executable, "surface.send_key", { surface_id: surfaceId, key: "Enter" }),
+    );
+    if (textFailure) return textFailure;
+
+    const enter = cmuxRpc(executable, "surface.send_key", { surface_id: surfaceId, key: "Enter" });
+    const firstSubmit = await dependencies.runner.run(enter);
+    if (!firstSubmit.timedOut && firstSubmit.exitCode === 0) {
+      return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+    }
+    const retrySubmit = await dependencies.runner.run(enter);
+    if (!retrySubmit.timedOut && retrySubmit.exitCode === 0) {
+      return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+    }
+    return failure(
+      request,
+      retrySubmit.timedOut ? 504 : 502,
+      "TEXT_STAGED_NOT_SUBMITTED",
+      "Instruction text was staged, but Enter failed twice.",
+      retrySubmit,
     );
   } else {
     const unsupported: never = request.action;
