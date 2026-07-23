@@ -2063,6 +2063,18 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 /* ---------- responsive ---------- */
 
+/* Density at width: from 1440px up the canvas is wide enough that agent rows can
+   afford less vertical breathing room. Tighten ONLY the row's vertical padding —
+   0.45rem → 0.35rem, one step down this section's own spacing scale (it is the
+   .agent-column-header's bottom padding), so the dense row rhythm matches the
+   header it sits under — and a full swarm fits more rows per screen. Structure is
+   untouched: min-height, the instrument cluster, and the summary line keep their
+   sizes; horizontal padding is inherited from the base rule; and the <1024px 44px
+   touch sweep (a max-width rule below) never sees this min-width override. */
+@media (min-width: 1440px) {
+  .agent-row { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+}
+
 @media (max-width: 1180px) {
   /* Wrap the strip to two rows; drop dividers so wrapped cells don't stray. */
   .rail-inner { gap: 0.55rem 1.1rem; }

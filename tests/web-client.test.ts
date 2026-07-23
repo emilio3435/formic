@@ -1990,6 +1990,78 @@ describe("program-header at-a-glance rollups (C2)", () => {
   });
 });
 
+describe("agent-row density pass at ≥1440px (C3)", () => {
+  // The compact rule is a single min-width:1440px media block holding one
+  // .agent-row override with the inner rule on one line, so it closes on the
+  // first `\n}` after the query opens — that boundary is the whole block.
+  function compactBlock() {
+    const idx = styles.indexOf("@media (min-width: 1440px)");
+    if (idx < 0) return "";
+    const end = styles.indexOf("\n}", idx);
+    return end < 0 ? styles.slice(idx) : styles.slice(idx, end + 2);
+  }
+  // The base .agent-row rule (top of the `agent rows` section) — the comfortable
+  // default that must survive untouched below the 1440px breakpoint.
+  function baseAgentRow() {
+    return styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
+  }
+
+  // (a) A ≥1440px media rule tightens .agent-row vertical padding. The compact
+  //     0.35rem is one step down the `agent rows` section's own spacing scale —
+  //     it is exactly the .agent-column-header's bottom padding (0.45rem 0.85rem
+  //     0.35rem 0.8rem), so the row's dense vertical rhythm at width matches the
+  //     header it sits under. Not an invented pixel.
+  test("(a) a ≥1440px rule tightens .agent-row vertical padding to the section's 0.35rem step", () => {
+    expect(styles).toContain("@media (min-width: 1440px)");
+    const block = compactBlock();
+    expect(block).toContain(".agent-row");
+    // Compact vertical padding, both edges, matched to the header's 0.35rem step.
+    expect(block).toContain("padding-top: 0.35rem");
+    expect(block).toContain("padding-bottom: 0.35rem");
+    // The header whose bottom padding we borrow really is 0.35rem — locks the
+    // derivation so a future scale change can't silently orphan the compact value.
+    expect(baseAgentRow()).not.toBe("");
+    expect(styles).toContain("padding: 0.45rem 0.85rem 0.35rem 0.8rem"); // .agent-column-header
+  });
+
+  // (c) The compact override lives ONLY inside min-width:1440px, so it cannot
+  //     reach tablet/mobile: the base row keeps its comfortable 0.45rem, and the
+  //     compact 0.35rem padding-top appears exactly once — inside that query.
+  test("(c) the compact rule is fenced inside min-width:1440px and never leaks below it", () => {
+    // The base .agent-row rule is unchanged: comfortable 0.45rem all around.
+    expect(baseAgentRow()).toContain("padding: 0.45rem 0.85rem 0.45rem 0.8rem");
+    // The compact override exists exactly once, and it is the 1440px block's.
+    const overrides = styles.match(/padding-top: 0\.35rem/g) ?? [];
+    expect(overrides.length).toBe(1);
+    expect(compactBlock()).toContain("padding-top: 0.35rem");
+    // It is a min-width query — it cannot match below tablet. No max-width block
+    // (the <1024px sheet sweep or the <720px stack) carries the compact row.
+    const sweep1024 = styles.slice(styles.indexOf("@media (max-width: 1024px)"), styles.indexOf("@media (max-width: 720px)"));
+    expect(sweep1024).not.toContain("padding-top: 0.35rem");
+    const stack720 = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
+    expect(stack720).not.toContain("padding-top: 0.35rem");
+  });
+
+  // (b) Honest regression guard (not a fresh RED — this passes before the density
+  //     rule is written): the <1024px 44px touch sweep must keep its full selector
+  //     list, including the one agent-row-scoped control in it (.agent-rename).
+  //     The density pass is ≥1440px only; it must not disturb the touch sweep that
+  //     wins below 1024px. Binding constraint: 44px touch targets below 1024px.
+  test("(b) the <1024px 44px touch sweep keeps its full list incl. the row's rename control", () => {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    const sweep = block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+    // The row treatment in the sweep: the agent-row rename button.
+    expect(sweep).toContain(".agent-rename");
+    // The full current list is intact — quote its anchors end-to-end so an
+    // accidental drop during the density pass fails here.
+    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor");
+    expect(sweep).toContain(".program-rename, .agent-rename");
+    expect(sweep).toContain(".command-composer input, .instruct-form input, .rename-form input");
+    expect(sweep).toContain("min-height: 44px");
+  });
+});
+
 describe("toolbar on the instrument-rail language (A3)", () => {
   // Interface contract (later WS-C tasks reuse `is-current` unchanged):
   // Interface contract (later WS-C tasks reuse `is-current` unchanged):
