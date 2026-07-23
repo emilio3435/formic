@@ -1554,6 +1554,54 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
+/* Verdict head (B2): the head carries the verdict — name, status words, the
+   ember-outline gate when blocked — plus the one most-relevant action, so the
+   operator can act from the top. Close and the head action stack on the right. */
+.inspector-verdict .verdict-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  flex: none;
+}
+.verdict-action .dock-tool {
+  min-height: 32px;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--raise);
+}
+.verdict-action .dock-tool:hover:not(:disabled) { border-color: var(--ink); background: var(--sand); }
+.verdict-gate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  padding: 0.16rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 55%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--ember);
+  background: none; /* indicator ink + outline, never a fill */
+}
+.verdict-gate .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+/* De-noised mismatch: the quiet line keeps a visible ember dot; the full
+   sentence lives in the title tooltip. */
+.inspector-source-name.is-mismatch::before {
+  content: "";
+  display: inline-block;
+  width: 0.38rem;
+  height: 0.38rem;
+  margin-right: 0.32rem;
+  border-radius: 50%;
+  background: var(--ember);
+}
+/* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
+   holds DOM order without spending a flex gap. */
+.inspector-vitals:empty { display: none; }
+
 /* Legacy pill styles kept for any residual list surfaces; agent drawer uses .status-line. */
 .inspector-state { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.6rem; border-radius: var(--radius-sm); background: var(--sand); }
 .state-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.18rem 0.6rem; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 12px; font-weight: 650; color: var(--muted); background: var(--raise); }
@@ -2007,6 +2055,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
   .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
+  .verdict-action .dock-tool,
   .reading-repair { min-height: 44px; }
 }
 

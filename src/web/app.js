@@ -1009,6 +1009,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
+  quietSourceLine, fullSourceDetail,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -3239,6 +3240,53 @@ function renderProgramDrawer(pane, view) {
     roster));
 }
 
+/* Head de-noising (B2): the three-way naming ternaries collapse into one quiet
+   line. quietSourceLine returns one short line of text — or null when the
+   terminal name already matches the display name — and fullSourceDetail returns
+   the complete sentence for the title tooltip (mismatch explanation included).
+   B4 reuses both for the other drawer types' heads. */
+function quietSourceLine(agent) {
+  const terminal = terminalSourceName(agent);
+  if (terminal) return terminal === agentName(agent) ? null : "Terminal: " + terminal;
+  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
+    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  return hasCustomName ? "Source agent: " + sourceAgentName(agent) : null;
+}
+
+function fullSourceDetail(agent) {
+  const quiet = quietSourceLine(agent);
+  if (!quiet) return null;
+  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  return mismatch ? quiet + " · " + CWD_MISMATCH_HINT : quiet;
+}
+
+/* Ember-outline gate chip for the verdict head — names the blocker when the
+   outcome is blocked. Indicator ink + outline, never a filled banner. */
+function verdictGate(agent, outcome) {
+  if (outcome !== "blocked") return null;
+  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
+  const text = gate ? conciseText(gate, 64)
+    : agent.statusReason ? conciseText(agent.statusReason, 64)
+      : OUTCOME_LABELS.blocked;
+  return el("span", { class: "verdict-gate", title: agent.statusReason || null },
+    icon("warning"), text);
+}
+
+/* The single most-relevant action control for the verdict head. Reuses the
+   dock's derivation (capability + renderDockTool) so head and dock behave
+   identically. Focus (jump to the pane) leads; Interrupt only when it is the
+   sole enabled lever. When safe controls are locked the head stays empty —
+   the control banner owns that story. */
+function headPrimaryAction(agent) {
+  const focusCap = capability(agent, "focus");
+  const instructCap = capability(agent, "instruct");
+  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
+  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus");
+  const interruptCap = capability(agent, "interrupt");
+  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt");
+  return null;
+}
+
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
 function renderAgentDrawer(pane, view) {
@@ -3252,43 +3300,43 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  const terminal = terminalSourceName(agent);
-  const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
+  // Verdict head — name, status words, the gate when blocked, and the one
+  // most-relevant action: verdict first, act from the top.
+  const sourceLine = quietSourceLine(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  pane.append(el("div", { class: "inspector-head" },
+  const headAction = headPrimaryAction(agent);
+  pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title", text: agentName(agent) }),
-      cwdMismatch && terminal
+      sourceLine
         ? el("p", {
-          class: "inspector-source-name is-mismatch",
-          title: CWD_MISMATCH_HINT,
-          text: "Terminal: " + terminal + " · session cwd ≠ pane folder",
+          class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
+          title: fullSourceDetail(agent),
+          text: sourceLine,
         })
-        : hasCustomName && terminal
-          ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-          : hasCustomName
-            ? el("p", { class: "inspector-source-name", text: "Source agent: " + sourceAgentName(agent) })
-            : terminal && terminal !== agentName(agent)
-              ? el("p", { class: "inspector-source-name", text: "Terminal: " + terminal })
-              : null,
+        : null,
       el("p", { class: "inspector-sub" },
         el("span", { text: programName(program) }),
         " · ",
         el("span", { class: "chip provider-" + agent.provider },
           providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
-      renderStatusLine(agent, activity, outcome, control, policy)),
-    closeButton()));
+      renderStatusLine(agent, activity, outcome, control, policy),
+      verdictGate(agent, outcome)),
+    el("div", { class: "verdict-side" },
+      closeButton(),
+      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
 
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
-
-  pane.append(renderLineageSpine(agent));
 
   if (agent.nextAction) {
     pane.append(el("p", { class: "next-action" },
       el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
   }
+
+  // B3's slot: renderVitalsBand(agent) fills this mount. The empty container
+  // must hold this DOM position (after next-action, before the shelf) from B2 on.
+  pane.append(el("div", { class: "inspector-vitals" }));
 
   // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
   // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
@@ -3310,6 +3358,9 @@ function renderAgentDrawer(pane, view) {
       body: renderChat(agent),
     }),
     renderEvidenceShelf(agent)));
+
+  // Lineage spine demoted below the shelf — context, not action.
+  pane.append(renderLineageSpine(agent));
 
   // Control feedback renders inside the dock, above the composer.
   pane.append(renderCommandDock(agent, control));

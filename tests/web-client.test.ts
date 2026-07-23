@@ -570,7 +570,8 @@ describe("redesigned network contracts (source-level)", () => {
     expect(source).toContain("workspaceTitle");
     expect(source).toContain("cwdMismatch");
     expect(source).toContain('!agent.target?.cwdMismatch');
-    expect(source).toContain('text: "Source agent: " + sourceAgentName(agent)');
+    // B2: the head renders this via quietSourceLine, no longer a text: ternary.
+    expect(source).toContain('"Source agent: " + sourceAgentName(agent)');
     expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -1077,5 +1078,90 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
       || "";
     expect(operate).toContain("taskMeaningfullyDifferent(agent)");
     expect(operate).toContain("renderOperateMeta(agent)");
+  });
+});
+
+describe("verdict head — act from the top (B2)", () => {
+  const agentDrawer = () =>
+    source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+
+  test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
+    const drawer = agentDrawer();
+    expect(drawer).toBeTruthy();
+    const headAt = drawer.indexOf("inspector-head inspector-verdict");
+    const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
+    const nextAt = drawer.indexOf('class: "next-action"');
+    const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
+    const shelfAt = drawer.indexOf('class: "drawer-shelf"');
+    const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
+    const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
+    for (const at of [headAt, bannerAt, nextAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
+      expect(at).toBeGreaterThan(-1);
+    }
+    // The banner stays state, pinned immediately after the head.
+    expect(bannerAt).toBeGreaterThan(headAt);
+    // Next action directly under the head; the vitals mount (B3's slot) sits
+    // between next-action and the Operate | Chat shelf.
+    expect(nextAt).toBeGreaterThan(bannerAt);
+    expect(vitalsAt).toBeGreaterThan(nextAt);
+    expect(shelfAt).toBeGreaterThan(vitalsAt);
+    // Lineage is demoted below the shelf — context, not action — and the
+    // command dock stays pinned at the bottom.
+    expect(lineageAt).toBeGreaterThan(shelfAt);
+    expect(dockAt).toBeGreaterThan(lineageAt);
+    // The empty mount must not spend a flex gap until B3 fills it.
+    expect(styles).toContain(".inspector-vitals:empty { display: none; }");
+  });
+
+  test("the head carries the gate chip and one primary-action control", () => {
+    const drawer = agentDrawer();
+    const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
+    expect(head).toContain("verdictGate(");
+    expect(head).toContain("headPrimaryAction(");
+    // headPrimaryAction reuses the dock's derivation — capability() +
+    // renderDockTool() — never a duplicated action implementation.
+    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(headFn).toContain('capability(agent, "focus")');
+    expect(headFn).toContain("renderDockTool(");
+    // The gate is ember ink + outline, never a filled banner.
+    const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
+    expect(gateCss).toContain("color: var(--ember)");
+    expect(gateCss).toContain("background: none");
+    // Touch sweep: the head action clears 44px below 1024px.
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    expect(block).toContain(".verdict-action .dock-tool");
+  });
+
+  test("head de-noising: one quiet source line, full sentence in the tooltip", () => {
+    const drawer = agentDrawer();
+    // The three-way naming ternary collapsed into a single render.
+    expect((drawer.match(/inspector-source-name/g) || []).length).toBe(1);
+    expect(drawer).toContain("quietSourceLine(agent)");
+    expect(drawer).toContain("fullSourceDetail(agent)");
+    expect(drawer).not.toContain('session cwd ≠ pane folder"');
+    // The mismatch state keeps a visible ember mark on the quiet line.
+    expect(styles).toMatch(/\.inspector-source-name\.is-mismatch::before\s*\{[^}]*var\(--ember\)/);
+  });
+
+  test("quietSourceLine goes quiet when the terminal title is the shown name; the mismatch sentence moves to fullSourceDetail", () => {
+    // Terminal title IS the display name → no source line at all.
+    const matching = agent({ target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane" } });
+    expect(M.quietSourceLine(matching)).toBeNull();
+    expect(M.fullSourceDetail(matching)).toBeNull();
+
+    // cwd mismatch → the quiet line is short; the explanation lives in the tooltip.
+    const mismatched = agent({
+      cwd: "/Users/op",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdMismatch: true },
+    });
+    expect(M.quietSourceLine(mismatched)).toBe("Terminal: ridge-pane");
+    expect(M.quietSourceLine(mismatched)).not.toContain("≠");
+    expect(M.fullSourceDetail(mismatched)).toContain("Terminal: ridge-pane");
+    expect(M.fullSourceDetail(mismatched)).toContain("Session cwd ≠ pane folder");
+
+    // No terminal title, no custom name → still quiet.
+    expect(M.quietSourceLine(agent())).toBeNull();
   });
 });
