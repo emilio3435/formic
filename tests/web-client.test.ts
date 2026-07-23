@@ -425,6 +425,31 @@ describe("Cursor model policy", () => {
   });
 });
 
+describe("modelShort — Cursor-native short forms within the 18-char bound", () => {
+  test("Composer flattens to 'composer <version> <qualifier>'", () => {
+    expect(M.modelShort("composer-2.5-fast")).toBe("composer 2.5 fast");
+    expect(M.modelShort("composer-2.5")).toBe("composer 2.5");
+    expect(M.modelShort("composer-2")).toBe("composer 2");
+    // The recognizable output must stay within the row's 18-char budget.
+    expect(M.modelShort("composer-2.5-fast").length).toBeLessThanOrEqual(18);
+  });
+
+  test("Grok keeps a recognizable family + dotted version, dropping qualifiers", () => {
+    expect(M.modelShort("cursor-grok-4.5-high-fast")).toBe("grok 4.5");
+    expect(M.modelShort("grok-4.5-fast-xhigh")).toBe("grok 4.5");
+    expect(M.modelShort("grok-4.5")).toBe("grok 4.5");
+    expect(M.modelShort("grok")).toBe("grok");
+  });
+
+  test("existing Anthropic, Codex, and Cursor-agent short forms are unchanged", () => {
+    expect(M.modelShort("claude-opus-4-8-thinking-high")).toBe("opus 4.8");
+    expect(M.modelShort("claude-fable-5-thinking-high")).toBe("fable 5");
+    expect(M.modelShort("gpt-5.6-sol-xhigh")).toBe("sol 5.6");
+    expect(M.modelShort("gpt-5-codex")).toBe("gpt-5-codex");
+    expect(M.modelShort(null)).toBeNull();
+  });
+});
+
 describe("issues", () => {
   test("normalized server issues pass through untouched", () => {
     const issues = [{ id: "system:x", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }];
