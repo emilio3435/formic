@@ -603,7 +603,10 @@ describe("calm program and agent list rendering", () => {
   test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
     expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
-    for (const label of ["Status", "Agent/message", "Model", "Context", "Access"]) {
+    // C1: the header now names the identity column plus the promoted instrument
+    // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
+    // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
       expect(source).toContain(`text: "${label}"`);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -634,6 +637,197 @@ describe("calm program and agent list rendering", () => {
     expect(source).toContain("function renderEvidence(");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
+  });
+});
+
+describe("agent rows: instrument cluster + de-noise (C1)", () => {
+  /* Same DOM-less execution trick B2/B3/B4 used: a minimal fake document lets
+     renderAgentRow build real nodes via el()/icon(), so these assert on what the
+     row actually renders — not merely on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // First node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function findByClass(node: any, token: string): any {
+    if (!node || typeof node !== "object") return null;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) return node;
+    for (const kid of node.children || []) {
+      const hit = findByClass(kid, token);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  const program = { id: "p1", name: "Prog" };
+
+  test("(a) the executed row renders a .row-instruments cluster with mono model/ctx%/tokens/elapsed", () => {
+    expect(typeof M.renderAgentRow).toBe("function");
+    const live = agent({
+      model: "gpt-5-codex",
+      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      elapsedMs: 125000,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(live, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    const text = textOf(instruments);
+    expect(text).toContain("gpt-5-codex"); // model short id, reused from modelShort
+    expect(text).toContain("20%");         // ctx% (40k/200k) — DESIGN "model + ctx%"
+    expect(text).toContain("40k");         // observed tokens, reused from tokenSummary
+    expect(text).toContain("2m");          // 125s uptime → fmtElapsed "2m"
+    // Values ride the canonical "<size> mono" convention (DESIGN rule 2 —
+    // mono for values), like vital-big mono; status word is the one non-value.
+    const monoVals = classesOf(instruments)
+      .filter((c) => /\bri-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBeGreaterThanOrEqual(3); // model, tokens, elapsed
+  });
+
+  test("(b) unknown tokens/context omit cells honestly — no fabricated numbers", () => {
+    const bare = agent({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      tokens: { provenance: "unknown" },
+      elapsedMs: undefined,
+      updatedAt: undefined,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(bare, program));
+    const instruments = findByClass(row, "row-instruments");
+    expect(instruments).not.toBeNull();
+    // Model still shows its honest short id, but no invented context percentage.
+    const modelCell = findByClass(instruments, "ri-model");
+    expect(modelCell).not.toBeNull();
+    expect(textOf(modelCell)).toContain("opus 4.8");
+    // Honest omission (vitals-band precedent): no tokens cell, no elapsed cell.
+    expect(findByClass(instruments, "ri-tokens")).toBeNull();
+    expect(findByClass(instruments, "ri-elapsed")).toBeNull();
+    const text = textOf(instruments);
+    expect(text).not.toContain("%");            // no invented percentage
+    expect(text).not.toContain("not reported"); // cell omitted, never faked as text
+  });
+
+  test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
+    const rowSrc = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
+    expect(rowSrc).toBeDefined();
+    // The visible "terminal: " / "source: " / "cwd differs" text tags are gone
+    // from the row output path (they now live in the drawer + tooltip only).
+    expect(rowSrc).not.toContain('"terminal: " + terminal');
+    expect(rowSrc).not.toContain('"source: " + sourceName');
+    expect(rowSrc).not.toContain('" · cwd differs"');
+    // De-noised detail is reused from the drawer's helper, not re-forked.
+    expect(rowSrc).toContain("fullSourceDetail(agent)");
+    // Executed: a cwd-mismatch session renders exactly one small marked indicator
+    // carrying an accessible label — and no naming prose survives on the row.
+    const mism = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true, workspaceTitle: "ridge-term" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(mism, program));
+    const dot = findByClass(row, "source-mismatch-dot");
+    expect(dot).not.toBeNull();
+    expect(dot.attributes["aria-label"]).toBeTruthy();
+    expect(textOf(row)).not.toContain("cwd differs");
+    expect(textOf(row)).not.toContain("terminal:");
+    // A calm (non-mismatch) session shows no source mark at all on the row.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calmRow: any = withDom(() => M.renderAgentRow(agent(), program));
+    expect(findByClass(calmRow, "source-mismatch-dot")).toBeNull();
+  });
+
+  test("(d) the column header names the promoted instrument columns", () => {
+    expect(source).toContain("function renderAgentColumnHeader()");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const header: any = withDom(() => M.renderAgentColumnHeader());
+    const text = textOf(header);
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Elapsed"]) {
+      expect(text).toContain(label);
+    }
+  });
+
+  test("(e) alert washes pair their tint with a state-colored edge rail (Rule 1 — indicator inks, not flood fills)", () => {
+    // WS-C audit finding: is-needs-you / is-blocked / is-failed carried a soft tint
+    // but NO colored rail. Codified open-q2 threshold: a ≤10% tint must always ride
+    // WITH a status-colored edge mark. Assert each alert modifier now sets one.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rail = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(${ink}\\)`),
+      );
+      expect(rail).not.toBeNull();
+      // And the tint it rides with is still present (paired, not replaced).
+      const tint = styles.match(new RegExp(`\\.agent-row\\.${mod}\\b[^\\n{]*\\{[^}]*background:[^;}]*color-mix`));
+      expect(tint).not.toBeNull();
+    }
+  });
+
+  test("(f) the CSS the removed row-fact / control-access helpers owned is gone and can't return", () => {
+    // rowFact / contextFact / controlFact were deleted with the instrument-cluster
+    // rewrite, so no element emits their classes anymore. Guard both the emitters
+    // (app.js) and the now-dead rules (styles) so neither silently comes back.
+    for (const cls of ["row-fact", "control-access"]) {
+      expect(source).not.toContain(cls);
+    }
+    for (const rule of [".row-fact {", ".row-fact-value {", ".fact-control {", ".control-access {", ".control-icon {"]) {
+      expect(styles).not.toContain(rule);
+    }
+    // The live neighbours the cleanup must NOT touch stay put.
+    expect(styles).toContain(".tm-track { fill: var(--line); }");            // SVG meter fill, shared
+    expect(styles).toContain(".status-line-item.control-linked");            // drawer status line, distinct selector
+  });
+
+  test("(g) keyboard focus survives the alert rails — each alert state combines its rail with the focus ring", () => {
+    // The alert rails `.agent-row.is-needs-you:not(.is-selected)` (and -blocked /
+    // -failed) sit at (0,3,0) on the SAME box-shadow property as the (0,2,0)
+    // :focus-visible ring, so on exactly the alert rows the rail clobbered the ring
+    // and keyboard focus went invisible. The fix is a :focus-visible variant per
+    // alert state (0,4,0) that combines BOTH shadow layers — rail + inset ring.
+    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+      const rule = styles.match(
+        new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
+      )?.[0] ?? "";
+      expect(rule).not.toBe("");
+      // Both components present: the state-colored 4px rail AND the 1px focus ring.
+      expect(rule).toContain(`inset 4px 0 var(${ink})`);
+      expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
+    }
   });
 });
 
@@ -702,8 +896,59 @@ describe("operations canvas layout", () => {
     expect(M.topSourceIssue(snapshot())).toBeNull();
     expect(source).toContain("topSourceIssue(state.snap)");
     expect(source).toContain('dataset: { fkey: "degraded-refresh" }');
-    expect(source).toContain("onclick: () => fetchSnapshot()");
+    expect(source).toContain("onclick: () => recollectSnapshot()");
     expect(styles).toContain(".reading-repair");
+  });
+
+  test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", () => {
+    // B1 built POST /api/recollect but the UI never consumed it: the button re-served
+    // cache via fetchSnapshot. It now POSTs a fresh collection and applies the result
+    // through fetchSnapshot's own apply path; a non-OK envelope (e.g. 500
+    // RECOLLECT_FAILED) falls back to fetchSnapshot so Refresh is never a dead button.
+    expect(source).toContain("onclick: () => recollectSnapshot()");
+    const fn = source.match(/async function recollectSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('fetch("/api/recollect", { method: "POST"');
+    expect(fn).toContain("applySnapshot(");
+    expect(fn).toContain("await fetchSnapshot()");
+    // Both consumers apply through the one shared path — no forked apply logic.
+    expect(source).toContain("function applySnapshot(");
+    const fetchFn = source.match(/async function fetchSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fetchFn).toContain("applySnapshot(");
+  });
+
+  test("the degraded reason names how long since the source was last healthy, and stays silent when never healthy", () => {
+    const twelveMinAgo = new Date(Date.now() - 12 * 60_000).toISOString();
+    const withHistory = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: twelveMinAgo },
+          },
+        },
+      },
+    });
+    // A degraded source with a known last-healthy moment names it (reuses agoText).
+    expect(M.degradedSinceText(withHistory)).toBe(" · last healthy 12m ago");
+    // Honest omission: a source that has NEVER been healthy says nothing extra —
+    // "never seen healthy" would be a lie.
+    const neverHealthy = snapshot({
+      totals: {
+        live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+        sourceHealth: {
+          healthy: 1, degraded: 1, total: 2,
+          byProvider: {
+            codex: { healthy: true, lastHealthyAt: twelveMinAgo },
+            claude: { healthy: false, lastHealthyAt: null },
+          },
+        },
+      },
+    });
+    expect(M.degradedSinceText(neverHealthy)).toBe("");
+    // No per-provider source health at all → no suffix (default fixture omits it).
+    expect(M.degradedSinceText(snapshot())).toBe("");
   });
 
   test("live re-render preserves focus via the stable fkey restore loop", () => {
@@ -1669,7 +1914,224 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
   });
 });
 
+describe("program-header at-a-glance rollups (C2)", () => {
+  /* DOM-less execution, same idiom the drawer rollup tests (B4) use: build the
+     real .program-rollup tree in a fake document and assert on the built nodes,
+     not on source substrings. */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1, tagName: tag, className: "", textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classesOf(node: any, out: string[] = []): string[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className) out.push(node.className);
+    for (const kid of node.children || []) classesOf(kid, out);
+    return out;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function textOf(node: any): string {
+    if (!node || typeof node !== "object") return "";
+    if (node.nodeType === 3) return String(node.textContent || "");
+    let s = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children || []) s += textOf(kid);
+    return s;
+  }
+  // Every node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function allByClass(node: any, token: string, out: any[] = []): any[] {
+    if (!node || typeof node !== "object") return out;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) out.push(node);
+    for (const kid of node.children || []) allByClass(kid, token, out);
+    return out;
+  }
+  const mk = (over: Record<string, unknown>) => agent({
+    tokens: { provenance: "observed", sessionTotal: 10000 }, ...over,
+  });
+
+  test("(a) header rollup renders all four cells — mono values, ember class on the alert cell", () => {
+    expect(typeof M.programHeadRollup).toBe("function");
+    // 3 agents: 2 running (working), 1 attention (alert); each reports 10k session tokens.
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    // Four cells: agents · working · alert · tokens.
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(4);
+    // Values ride the mono convention (Rule 2 — mono for values), like the drawer.
+    const monoVals = classesOf(rollup).filter((c) =>
+      /\bprogram-rollup-value\b/.test(c) && /\bmono\b/.test(c));
+    expect(monoVals.length).toBe(4);
+    const text = textOf(rollup);
+    expect(text).toContain("3agents");
+    expect(text).toContain("2working");
+    expect(text).toContain("1alert");
+    expect(text).toContain("30k");   // 10k × 3 aggregate session tokens
+    expect(text).toContain("tokens");
+    // Alert ink is class-gated (is-alerting → --ember), never inline (strict CSP),
+    // and rides on the alert cell only.
+    const alerting = allByClass(rollup, "is-alerting");
+    expect(alerting.length).toBe(1);
+    expect(textOf(alerting[0])).toContain("1alert");
+  });
+
+  test("(b) calm earns no color: 0 alerts renders the count WITHOUT the ember class", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:w3", status: "running" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("0alerts");                       // the alert cell still renders...
+    expect(allByClass(rollup, "is-alerting").length).toBe(0); // ...but takes no ember ink at zero
+  });
+
+  test("(c) honest omission: an un-derivable token aggregate drops the token cell", () => {
+    const agents = [
+      agent({ id: "codex:a", status: "running", tokens: { provenance: "observed", total: 500 } }),
+      agent({ id: "codex:b", status: "running", tokens: { provenance: "unknown" } }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const text = textOf(rollup);
+    expect(text).toContain("2agents");                              // counts are always derivable
+    expect(text).not.toContain("tokens");                          // no session total → no faked aggregate
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(3); // agents · working · alert only
+  });
+
+  test("(d) header and drawer rollups share ONE aggregation source — no duplicated arithmetic", () => {
+    // The aggregation core is defined exactly once.
+    expect((source.match(/function programRollupCells\(/g) ?? []).length).toBe(1);
+    // BOTH DOM builders feed off it rather than re-deriving counts/tokens.
+    const drawer = source.match(/function programRollupLine\(program\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const header = source.match(/function programHeadRollup\(agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toContain("programRollupCells(");
+    expect(header).toContain("programRollupCells(");
+    // The token reduce — the one bit of arithmetic that could drift — lives ONLY in
+    // the shared core: it appears exactly once in the whole file.
+    expect((source.match(/sum \+ a\.tokens\.sessionTotal/g) ?? []).length).toBe(1);
+    // renderProgram delegates its header rollup to the shared builder and keeps no
+    // parallel arithmetic; the old rollupParts text summary is gone.
+    const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(rp).toContain("programHeadRollup(agents)");
+    expect(rp).not.toContain("deriveRollup(agents)");
+    expect(source).not.toContain("rollupParts");
+  });
+
+  test("(e) rollup data rides the header's accessible text (extends the drawer aria pattern)", () => {
+    const agents = [
+      mk({ id: "codex:w1", status: "running" }),
+      mk({ id: "codex:w2", status: "running" }),
+      mk({ id: "codex:n1", status: "attention" }),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rollup: any = withDom(() => M.programHeadRollup(agents));
+    const label = rollup.attributes["aria-label"] ?? "";
+    expect(label).toContain("Program rollup"); // extends the drawer's group name…
+    expect(label).toContain("3 agents");        // …and carries the data itself
+    expect(label).toContain("2 working");
+    expect(label).toContain("1 alert");
+    expect(label).toContain("30k tokens");
+  });
+});
+
+describe("agent-row density pass at ≥1440px (C3)", () => {
+  // The compact rule is a single min-width:1440px media block holding one
+  // .agent-row override with the inner rule on one line, so it closes on the
+  // first `\n}` after the query opens — that boundary is the whole block.
+  function compactBlock() {
+    const idx = styles.indexOf("@media (min-width: 1440px)");
+    if (idx < 0) return "";
+    const end = styles.indexOf("\n}", idx);
+    return end < 0 ? styles.slice(idx) : styles.slice(idx, end + 2);
+  }
+  // The base .agent-row rule (top of the `agent rows` section) — the comfortable
+  // default that must survive untouched below the 1440px breakpoint.
+  function baseAgentRow() {
+    return styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
+  }
+
+  // (a) A ≥1440px media rule tightens .agent-row vertical padding. The compact
+  //     0.35rem is one step down the `agent rows` section's own spacing scale —
+  //     it is exactly the .agent-column-header's bottom padding (0.45rem 0.85rem
+  //     0.35rem 0.8rem), so the row's dense vertical rhythm at width matches the
+  //     header it sits under. Not an invented pixel.
+  test("(a) a ≥1440px rule tightens .agent-row vertical padding to the section's 0.35rem step", () => {
+    expect(styles).toContain("@media (min-width: 1440px)");
+    const block = compactBlock();
+    expect(block).toContain(".agent-row");
+    // Compact vertical padding, both edges, matched to the header's 0.35rem step.
+    expect(block).toContain("padding-top: 0.35rem");
+    expect(block).toContain("padding-bottom: 0.35rem");
+    // The header whose bottom padding we borrow really is 0.35rem — locks the
+    // derivation so a future scale change can't silently orphan the compact value.
+    expect(baseAgentRow()).not.toBe("");
+    expect(styles).toContain("padding: 0.45rem 0.85rem 0.35rem 0.8rem"); // .agent-column-header
+  });
+
+  // (c) The compact override lives ONLY inside min-width:1440px, so it cannot
+  //     reach tablet/mobile: the base row keeps its comfortable 0.45rem, and the
+  //     compact 0.35rem padding-top appears exactly once — inside that query.
+  test("(c) the compact rule is fenced inside min-width:1440px and never leaks below it", () => {
+    // The base .agent-row rule is unchanged: comfortable 0.45rem all around.
+    expect(baseAgentRow()).toContain("padding: 0.45rem 0.85rem 0.45rem 0.8rem");
+    // The compact override exists exactly once, and it is the 1440px block's.
+    const overrides = styles.match(/padding-top: 0\.35rem/g) ?? [];
+    expect(overrides.length).toBe(1);
+    expect(compactBlock()).toContain("padding-top: 0.35rem");
+    // It is a min-width query — it cannot match below tablet. No max-width block
+    // (the <1024px sheet sweep or the <720px stack) carries the compact row.
+    const sweep1024 = styles.slice(styles.indexOf("@media (max-width: 1024px)"), styles.indexOf("@media (max-width: 720px)"));
+    expect(sweep1024).not.toContain("padding-top: 0.35rem");
+    const stack720 = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
+    expect(stack720).not.toContain("padding-top: 0.35rem");
+  });
+
+  // (b) Honest regression guard (not a fresh RED — this passes before the density
+  //     rule is written): the <1024px 44px touch sweep must keep its full selector
+  //     list, including the one agent-row-scoped control in it (.agent-rename).
+  //     The density pass is ≥1440px only; it must not disturb the touch sweep that
+  //     wins below 1024px. Binding constraint: 44px touch targets below 1024px.
+  test("(b) the <1024px 44px touch sweep keeps its full list incl. the row's rename control", () => {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    const sweep = block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+    // The row treatment in the sweep: the agent-row rename button.
+    expect(sweep).toContain(".agent-rename");
+    // The full current list is intact — quote its anchors end-to-end so an
+    // accidental drop during the density pass fails here.
+    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor");
+    expect(sweep).toContain(".program-rename, .agent-rename");
+    expect(sweep).toContain(".command-composer input, .instruct-form input, .rename-form input");
+    expect(sweep).toContain("min-height: 44px");
+  });
+});
+
 describe("toolbar on the instrument-rail language (A3)", () => {
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
   // Interface contract (later WS-C tasks reuse `is-current` unchanged):
   // the active view-tab is ink text + a 2px --signal-rail bottom rail driven
   // by the class `is-current`, never a filled/boxed tab.
@@ -1697,6 +2159,19 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(countRule).toContain("font-family: var(--font-mono)");
   });
 
+  test("the Alerts tab count takes ember ink only when alerting (>0), quiet at zero (converges on C2's is-alerting)", () => {
+    // Reviewer Minor 3 drift, toolbar direction: renderTabs marks the Alerts
+    // (needs-you) count with the SAME is-alerting modifier the program rollup alert
+    // cell uses — driven by class, never inline (strict CSP). Zero keeps the default.
+    const fn = source.match(/function renderTabs\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('view === "needs-you"');
+    expect(fn).toContain('classList.toggle("is-alerting", count > 0)');
+    // CSS gives that class ember ink only — no fill (Rule 1: indicator ink, not flood).
+    const rule = styles.match(/\.view-tab \.count\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ember)");
+    expect(rule).not.toContain("background");
+  });
+
   test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
     const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).toContain("color: var(--ink)");
@@ -1704,6 +2179,13 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).toContain("border-color: var(--ink)");
     // The old ink flood fill (ink background, surface text) is gone.
     expect(rule).not.toContain("background: var(--ink)");
+  });
+
+  test("index.html seeds is-current on the default Now tab (honest guard — the markup already does)", () => {
+    // renderTabs re-derives the active marker on every render, but the first paint
+    // before JS runs must already present Now as current. This locks the seed markup
+    // so a future edit to the tab list can't ship a currentless first frame.
+    expect(html).toContain('class="view-tab is-current" data-view="now" aria-pressed="true"');
   });
 });
 
@@ -1727,10 +2209,12 @@ describe("masthead + program headers share the frame + quiet header language (A4
   });
 
   // Rule 2 — mono for values: the program-header rollup renders counts (data),
-  // so it carries --font-mono, like the view-tab count badges (A3).
+  // so they carry --font-mono, like the view-tab count badges (A3). C2 decomposed
+  // the single .program-rollup text span into value/label cells (mirroring the
+  // drawer's .dw-rollup-value mono), so the mono now lives on .program-rollup-value.
   test("program-header rollup counts render in mono (Rule 2: mono for values)", () => {
-    const rollupRule = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rollupRule).toContain("font-family: var(--font-mono)");
+    const valueRule = styles.match(/\.program-rollup-value\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(valueRule).toContain("font-family: var(--font-mono)");
   });
 
   // A4 audit finding: .program-alias-tag is a 9px uppercase tracked micro-label
@@ -1826,6 +2310,7 @@ describe("peripheral surfaces conform to the design language (A5)", () => {
     expect(source).toContain('el("td", { class: "usage-val" }, sessionCell)');
     // ...and leaves the prose columns (When / Provider / Model) in --font-ui, so
     // the test fails if mono is over-applied to non-value cells.
+    expect(source).not.toContain('class: "usage-val", text: row.startTime');
     expect(source).not.toContain('class: "usage-val", text: row.provider');
     expect(source).not.toContain('class: "usage-val", text: modelShort');
   });

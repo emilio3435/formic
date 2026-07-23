@@ -121,7 +121,7 @@ vocabulary — recorded 2026-07-23 by the program controller.)
 ## 2. Named patterns
 
 **Mono-for-values.** `--font-mono` carries identifiers, paths, timestamps, and
-token/cost values (`.row-fact-value`, `.swarm-chip`, `.artifact-path`,
+token/cost values (`.ri-value`, `.swarm-chip`, `.artifact-path`,
 `.transcript`, `.control-feedback`, `.gate-chip`, `.target-chip`). Observed idiom
 throughout the pulse work: mono also carries uppercase micro-labels/kickers at
 9–12px with letter-spacing (`.eyebrow`, `.agent-column-label`, `.dw-eyebrow`,
@@ -217,7 +217,7 @@ both files, so the assessments hold for both.
 | empty state | `empty state` | pass | n/a | n/a | pass | n/a | n/a |
 | toast | `toast` | pass | n/a | n/a | pass | pass | pass |
 | responsive | `responsive` | pass | n/a | pass | pass | pass | pass |
-| usage tab | `usage tab` | pass | ? | pass | pass | pass | n/a |
+| usage tab | `usage tab` | pass | pass | pass | pass | pass | n/a |
 | motion | `motion` | n/a | n/a | n/a | n/a | n/a | pass |
 
 ### Per-row evidence notes
@@ -243,7 +243,7 @@ both files, so the assessments hold for both.
 - **agent rows** — provider/role identity via left border rails; alert rows use
   6–7% background washes plus rails — judged pass, but see open question 2.
   `.policy-chip` is a small solid `--failed` chip (deliberate top-severity mark,
-  not a banner). Mono on `.row-fact-value` (model/tokens), `.swarm-chip` (workflow
+  not a banner). Mono on `.ri-value` (model/tokens), `.swarm-chip` (workflow
   id), `.agent-column-label` (micro-label idiom) (R2). `--tree-depth`/`--tree-color`
   and `.token-meter` fills are class-set (R4). One-line summary expands on
   hover/selection (R5 exemplar). Rename-button opacity transition guarded (R6).
@@ -278,10 +278,12 @@ both files, so the assessments hold for both.
   sweeps at 1024px and 720px, advisories collapse to title-only on narrow (R5).
   `sheet-up` guarded (R6). Frame math self-adjusts via `calc(100vw - 64px)` (R3).
 - **usage tab** — `.usage-unavailable` = 6% ember tint + dashed border, no flood
-  (R1). R2 is `?`: KPI and table token/cost values render in `--font-ui`
-  tabular-nums, not `--font-mono` — whether Rule 2's positive direction ("mono
-  *for* token/cost values") makes this a gap is for the audit (open question 4).
-  `.usage-bar-rect` fill via class on SVG rects (R4). `[hidden]` panel (R5).
+  (R1). R2 now `pass`: as of Task A5 the invocation-table token/cost/session
+  *values* render mono via `.usage-table td.usage-val`, while the prose columns
+  (When / Provider / Model) stay `--font-ui` — the values-in-mono / prose-in-ui
+  split (open question 4 resolved). KPI display numerals follow the `.reading-value`
+  ui + tabular-nums idiom. `.usage-bar-rect` fill via class on SVG rects (R4).
+  `[hidden]` panel (R5).
 - **motion** — the guard block itself:
   `@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }`
   — universal, so every animation/transition in every section above is disabled
@@ -298,11 +300,14 @@ experiments (inspector workstream territory).
 
 ## 5. Open questions for the audit
 
-1. **Mono micro-labels.** Rule 2's letter says values-only, but the pulse
-   reference uses `--font-mono` pervasively for 9–12px uppercase tracked
-   micro-labels (eyebrows, kickers, column labels, chip labels). Recommend
-   ratifying the idiom as label furniture; otherwise dozens of cells above flip to
-   FAIL, including in the finished pulse sections.
+1. **Mono micro-labels — resolved (ratified).** Rule 2's letter says values-only,
+   but the pulse reference uses `--font-mono` pervasively for 9–12px uppercase
+   tracked micro-labels (eyebrows, kickers, column labels, chip labels). Verdict:
+   the idiom is ratified as label furniture — mono legitimately carries these
+   instrument labels (`.eyebrow`, `.agent-column-label`, `.dw-eyebrow`,
+   `.vital-label`, …), so the R2 `pass` verdicts that rely on it stand rather than
+   flipping to FAIL. Task A4 already brought `.program-alias-tag` into the idiom;
+   the body-restyle design pass confirms it program-wide.
 2. **Soft-wash threshold.** Alert rows and blocks use 5–10% `color-mix` tints
    behind rails/borders (`.agent-row.is-needs-you`, `.dw-block--fix`,
    `.control-banner`, `.usage-unavailable`). Recommend codifying: tint ≤10% mixed
@@ -311,10 +316,12 @@ experiments (inspector workstream territory).
 3. **Filled action buttons.** `.btn.primary`, `.btn.confirm-yes`, `.triage-mode`,
    `.policy-chip` are solid fills. Judged action/identity affordances outside Rule
    1 (which governs *status* surfaces); audit should confirm.
-4. **Usage-tab numerals.** Should token/cost values in `.usage-table` /
-   `.usage-kpis` move to `--font-mono` for Rule 2 consistency with
-   `.row-fact-value`, or is ui-tabular-nums the display-numeral idiom (as in
-   `.reading-value`)?
+4. **Usage-tab numerals — resolved (split implemented, Task A5).** Verdict: token/
+   cost *values* in the invocation table move to `--font-mono` via `.usage-table
+   td.usage-val` (the `.ri-value` counterpart for the usage surface), while the
+   prose columns (When / Provider / Model) and the KPI display numerals stay
+   `--font-ui` (the `.reading-value` tabular-nums idiom). Values in mono, prose in
+   ui — the same split Rule 2 draws elsewhere.
 5. **Non-token hexes.** Hard-coded values that bypass the vocabulary:
    `#34302a` (`.btn.primary:hover`, `.triage-generate:hover` — a warm dark that
    predates the cool graphite `--ink`), `#b42318` repeated literally as

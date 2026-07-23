@@ -327,6 +327,26 @@ function deriveRollup(agents) {
 
 const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
+/* At-a-glance rollup cells — the ONE aggregation source shared by the program
+   drawer head (programRollupLine) and the left-tree program header
+   (programHeadRollup). Counts are always client-derivable, so they always
+   render; the token aggregate is omitted honestly when no agent reports a
+   session total (never faked). Alert cells flag themselves for ink gating. */
+function programRollupCells(agents) {
+  const r = deriveRollup(agents);
+  const cells = [
+    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    { value: String(r.working), label: "working" },
+    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+  ];
+  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
+  if (withTokens.length) {
+    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+    cells.push({ value: fmtTok(total), label: "tokens" });
+  }
+  return cells;
+}
+
 /* Plain-language control explanation for the Operate chrome. Never echoes
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
@@ -850,6 +870,25 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
+   source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
+   agoText. A source that has never been healthy (lastHealthyAt null) contributes
+   nothing — claiming "never seen healthy" would be a lie — so an all-null or
+   sourceless snapshot yields no suffix at all. */
+function degradedSinceText(snap) {
+  const byProvider = snap && snap.totals && snap.totals.sourceHealth && snap.totals.sourceHealth.byProvider;
+  if (!byProvider) return "";
+  let latest = null;
+  for (const health of Object.values(byProvider)) {
+    if (!health || health.healthy !== false || !health.lastHealthyAt) continue;
+    const t = Date.parse(health.lastHealthyAt);
+    if (Number.isNaN(t)) continue;
+    if (latest === null || t > latest) latest = t;
+  }
+  if (latest === null) return "";
+  return " · last healthy " + agoText(new Date(latest).toISOString());
+}
+
 function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
@@ -1010,7 +1049,8 @@ globalThis.TheAntHill = {
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
-  renderProgramDrawer, programRollupLine,
+  renderAgentRow, renderAgentColumnHeader,
+  renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
@@ -1018,7 +1058,7 @@ globalThis.TheAntHill = {
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
-  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue,
+  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult,
 };
 
@@ -1183,18 +1223,24 @@ function saveWidgetPreferences() {
 
 /* ---------- data flow ---------- */
 
+/* The one apply path a validated snapshot takes into the UI: shape-guard, adopt
+   it, sync the scan window, clear the failure flag, re-render. Both the GET poll
+   (fetchSnapshot) and the POST recollect feed through here so neither can drift. */
+function applySnapshot(snap) {
+  if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
+    throw new Error("unexpected snapshot shape");
+  }
+  state.snap = snap;
+  if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
+  state.fetchFailed = false;
+  render();
+}
+
 async function fetchSnapshot() {
   try {
     const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const snap = await res.json();
-    if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
-      throw new Error("unexpected snapshot shape");
-    }
-    state.snap = snap;
-    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
-    state.fetchFailed = false;
-    render();
+    applySnapshot(await res.json());
   } catch (err) {
     state.fetchFailed = true;
     if (!state.snap) {
@@ -1202,6 +1248,21 @@ async function fetchSnapshot() {
       render();
     }
     console.warn("snapshot fetch failed:", err);
+  }
+}
+
+/* The Degraded verdict's Refresh forces a fresh server-side collection rather than
+   re-serving cache: POST /api/recollect (no body, same-origin — the browser sends
+   the Origin header the server guard requires). Apply the returned snapshot through
+   the shared path; any non-OK envelope ({ ok:false, ... }, e.g. 500 RECOLLECT_FAILED)
+   or a network error falls back to fetchSnapshot so Refresh is never a dead button. */
+async function recollectSnapshot() {
+  try {
+    const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
+    if (!res.ok) { await fetchSnapshot(); return; }
+    applySnapshot(await res.json());
+  } catch {
+    await fetchSnapshot();
   }
 }
 
@@ -1408,8 +1469,9 @@ function renderSummaryWidget(id, weight = "normal") {
   // and exposes the existing refresh control right there.
   const degraded = id === "health" && data.tone === "degraded";
   const reason = degraded ? topSourceIssue(state.snap) : null;
+  const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + snapNote }));
+  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + sinceNote + snapNote }));
   if (degraded) {
     subNode.append(el("button", {
       type: "button",
@@ -1417,7 +1479,7 @@ function renderSummaryWidget(id, weight = "normal") {
       title: "Re-pull the latest snapshot evidence",
       "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
       dataset: { fkey: "degraded-refresh" },
-      onclick: () => fetchSnapshot(),
+      onclick: () => recollectSnapshot(),
     }, "Refresh"));
   }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
@@ -2159,11 +2221,15 @@ function renderTabs() {
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    countNode.textContent = state.snap
-      ? String(agents.filter((a) =>
+    const count = state.snap
+      ? agents.filter((a) =>
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
-        ).length)
-      : "";
+        ).length
+      : null;
+    countNode.textContent = count == null ? "" : String(count);
+    // The Alerts (needs-you) tab count takes ember ink when there is anything to
+    // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
+    if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
     const isCurrent = btn.dataset.view === state.view;
@@ -2402,26 +2468,24 @@ function renderPrograms() {
   }
 }
 
-function rollupParts(r) {
-  const parts = [];
-  if (r.needsYou) parts.push({ text: r.needsYou + (r.needsYou === 1 ? " alert" : " alerts"), hot: true });
-  if (r.working) parts.push({ text: r.working + " working" });
-  if (r.idle) parts.push({ text: r.idle + " idle" });
-  if (r.ended) parts.push({ text: r.ended + " done" });
-  if (!parts.length) parts.push({ text: r.total + " tracked" });
-  return parts;
+/* Left-tree program header rollup — the same at-a-glance data as the drawer head
+   (programRollupCells is the single aggregation source), rendered as the mono
+   .program-rollup cluster A4 established. The alert count takes ember ink
+   (is-alerting → --ember) only when alerts exist; calm earns no color. The
+   accessible name carries the data itself, extending the drawer's aria pattern. */
+function programHeadRollup(agents) {
+  const cells = programRollupCells(agents);
+  const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
+  return el("span", { class: "program-rollup", "aria-label": label },
+    cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") },
+      el("span", { class: "program-rollup-value mono", text: c.value }),
+      el("span", { class: "program-rollup-label", text: c.label }))));
 }
 
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const r = deriveRollup(agents);
-
-  const rollup = el("span", { class: "program-rollup" });
-  rollupParts(r).forEach((part, i) => {
-    if (i) rollup.append(" · ");
-    rollup.append(part.hot ? el("span", { class: "hot", text: part.text }) : part.text);
-  });
+  const rollup = programHeadRollup(agents);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -2552,15 +2616,18 @@ function renderAgentRows(program, agents) {
 }
 
 function renderAgentColumnHeader() {
+  // Identity on the left, the right-aligned instrument cluster on the right:
+  // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
+  // aria-label; the terminal/source naming tags fold into the tooltip + drawer.)
   return el("div", {
     class: "agent-grid agent-column-header",
     "aria-label": "Agent list columns",
   },
-    el("span", { class: "agent-column-label", text: "Status" }),
     el("span", { class: "agent-column-label", text: "Agent/message" }),
-    el("span", { class: "agent-column-label", text: "Model" }),
-    el("span", { class: "agent-column-label", text: "Context" }),
-    el("span", { class: "agent-column-label", text: "Access" }));
+    el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -2585,11 +2652,6 @@ function rowSummary(agent) {
   return NO_READABLE_MESSAGE;
 }
 
-function rowFact(label, value, className = "") {
-  return el("span", { class: "row-fact " + className, "aria-label": `${label}: ${value}`, title: String(value) },
-    el("span", { class: "row-fact-value", text: value }));
-}
-
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
@@ -2610,38 +2672,11 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-function contextFact(agent) {
-  const usage = contextUsage(agent.tokens);
-  const value = contextDisplayValue(agent.tokens);
-  const title = usage
-    ? usage.text
-    : hasObservedTotal(agent.tokens)
-      ? "Context window size not reported by Claude; showing observed tokens."
-      : "This source does not report observed context usage.";
-  return el("span", {
-    class: "row-fact fact-tokens fact-context" + (usage ? "" : " is-unknown"),
-    "aria-label": `${contextDisplayLabel()}: ${value}`,
-  },
-    el("span", {
-      class: "row-fact-value context-fact-value",
-      title,
-      text: value,
-    }));
-}
-
+// Shared control vocabulary — the icon key + human state word for each access
+// state. The agent row folds Access into its aria-label; the drawer status line
+// renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
-
-function controlFact(control) {
-  const stateText = CONTROL_STATE_TEXT[control] || "View only";
-  return el("span", {
-    class: "row-fact fact-control control-" + control,
-    "aria-label": "Access: " + stateText + ". " + CONTROL_HINTS[control],
-  },
-    el("span", { class: "control-access", title: stateText + " — " + CONTROL_HINTS[control] },
-      el("span", { class: "control-icon" }, icon(CONTROL_ICONS[control] || "observed")),
-      el("span", { class: "control-access-text", text: stateText })));
-}
 
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
@@ -2665,10 +2700,13 @@ function renderAgentRow(agent, program, opts = {}) {
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
   const terminal = terminalSourceName(agent);
-  const customLabel = state.aliases.has(nameKey)
-    || state.aliases.has(presentationLabelKey(agentLabelTarget(agent)));
   const sourceName = sourceAgentName(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  // The terminal / source / cwd-mismatch naming detail leaves the visible row.
+  // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
+  // sentence into the row tooltip + aria-label; the drawer still carries it too.
+  const sourceDetail = fullSourceDetail(agent);
+  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
   const activate = () => {
     if (state.selecting) {
@@ -2696,25 +2734,32 @@ function renderAgentRow(agent, program, opts = {}) {
         },
       }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
-      cwdMismatch && terminal
+      // De-noised: only the cwd-mismatch state keeps a visible mark — a small
+      // ember dot with an accessible label. The full sentence rides the row
+      // tooltip + aria-label and the drawer; no naming prose on the row.
+      cwdMismatch
         ? el("span", {
-          class: "source-label is-mismatch",
-          title: "This agent session cwd differs from the cmux pane folder. Title is the terminal; identity stays the session.",
-          text: "terminal: " + terminal + " · cwd differs",
+          class: "source-mismatch-dot",
+          role: "img",
+          "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
+          title: sourceDetail || CWD_MISMATCH_HINT,
         })
-        : customLabel && terminal
-          ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-          : customLabel
-            ? el("span", { class: "source-label", title: "Provider source name", text: "source: " + sourceName })
-            : terminal && terminal !== displayName
-              ? el("span", { class: "source-label", title: "Live terminal / workspace title from cmux", text: "terminal: " + terminal })
-              : null,
+        : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
       policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
-  const line1 = el("span", { class: "agent-grid" },
+  // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
+  // elapsed. Values ride --font-mono with tabular-nums; each cell is omitted
+  // honestly when its number is unknown (never fabricated), matching the
+  // vitals-band precedent. Access + the naming detail fold into the aria-label.
+  const ctxUsage = contextUsage(agent.tokens);
+  const modelText = modelShort(agent.model) || "not reported";
+  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const tokens = tokenSummary(agent.tokens);
+
+  const instruments = el("span", { class: "row-instruments" },
     el("span", {
       class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
       title: stateText,
@@ -2722,10 +2767,29 @@ function renderAgentRow(agent, program, opts = {}) {
     },
       el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
       outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
-    identity,
-    rowFact("Model", modelShort(agent.model) || "not reported", "fact-model"),
-    contextFact(agent),
-    controlFact(control));
+    el("span", {
+      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
+      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
+      title: ctxUsage ? ctxUsage.text : modelText,
+    },
+      el("span", { class: "ri-value mono", text: modelCtx })),
+    tokens.known
+      ? el("span", {
+        class: "ri-cell ri-tokens",
+        "aria-label": "Tokens: " + tokens.text,
+        title: tokens.title,
+      },
+        el("span", { class: "ri-value mono", text: tokens.text }))
+      : null,
+    elapsed && elapsed !== "—"
+      ? el("span", {
+        class: "ri-cell ri-elapsed",
+        "aria-label": "Elapsed: " + elapsed,
+      },
+        el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
+      : null);
+
+  const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
   const rowClass = "agent-row provider-" + agent.provider +
     " role-" + role.key +
@@ -2752,10 +2816,13 @@ function renderAgentRow(agent, program, opts = {}) {
     id: "agent-" + agent.id,
     role: "button",
     tabindex: state.selecting && !eligible ? "-1" : "0",
+    // The de-noised naming detail rides the tooltip for sighted hover; screen
+    // readers get it (plus tokens/elapsed/access) in the aria-label below.
+    title: sourceDetail || null,
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelShort(agent.model) || "Model not reported"}. Context: ${contextDisplayValue(agent.tokens)}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;
@@ -3022,18 +3089,7 @@ function investigationHeadAction(item) {
    omitted when no agent on the client reports session usage — an aggregate we
    cannot derive is never faked to zero. */
 function programRollupLine(program) {
-  const agents = program.agents || [];
-  const r = deriveRollup(agents);
-  const cells = [
-    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
-    { value: String(r.working), label: "working" },
-    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
-  ];
-  const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
-  if (withTokens.length) {
-    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
-    cells.push({ value: fmtTok(total), label: "tokens" });
-  }
+  const cells = programRollupCells(program.agents || []);
   return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
     cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
       el("span", { class: "dw-rollup-value mono", text: c.value }),
