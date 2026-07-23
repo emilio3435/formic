@@ -147,7 +147,19 @@ export async function enrichCmuxIdentity(
       .map((surface) => surface.tty)
       .filter((tty): tty is string => Boolean(tty)),
   );
-  if (ttyNames.size === 0) return { value: [...surfaces], errors };
+  if (ttyNames.size === 0) {
+    // No runtime-ready surfaces to probe — but stale surfaces still need their
+    // bindings cleared, not left intact. Skipping the map here left a lone stale
+    // surface holding its old sourceSessionIds and reading as a phantom identity.
+    return {
+      value: surfaces.map((surface) =>
+        surface.runtimeSurfaceReady === false
+          ? { ...surface, sourceSessionIds: [], identityConflict: undefined }
+          : surface,
+      ),
+      errors,
+    };
+  }
 
   const processResult = await runner.run(["ps", "-axo", "pid=,tty=,command="], 8_000);
   if (processResult.timedOut || processResult.exitCode !== 0) {
