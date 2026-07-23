@@ -26,6 +26,7 @@ export interface CursorStoreEvidence {
   name?: string;
   mode?: string;
   model?: string;
+  effort?: string;
 }
 
 export interface CursorSessionInput {
@@ -186,6 +187,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     displayName,
     cwd: meta.cwd,
     model: input.store?.model,
+    effort: input.store?.effort,
     task,
     status,
     statusReason,
@@ -288,10 +290,35 @@ function decodeHexJson(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+// Tertiary, last-resort model source: the "powered by (Cursor X.Y)" phrase only
+// ever appears in Grok system prompts, so it cannot see any other family.
 function cursorModelFromSystemMessage(content: unknown): string | undefined {
   if (typeof content !== "string") return undefined;
   const match = content.match(/powered by (Cursor\s+[A-Za-z][A-Za-z0-9 _-]*?\d(?:\.\d+)+)/i);
   return match?.[1]?.trim();
+}
+
+// The authoritative per-turn model on a CLI assistant message lives on its content
+// PARTS (type "reasoning"/"redacted-reasoning"/"text"), not on the message-level
+// providerOptions.cursor (which carries only modelProviderMessageId/requestId).
+function contentPartModelName(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const part of content) {
+    const cursor = asRecord(asRecord(asRecord(part)?.providerOptions)?.cursor);
+    const modelName = nonEmptyString(cursor?.modelName);
+    if (modelName) return modelName;
+  }
+  return undefined;
 }
 
 function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
@@ -299,26 +326,37 @@ function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
     | { value?: string }
     | null;
   const metadata = decodeHexJson(metaRow?.value);
-  let model: string | undefined;
-  const rows = database
-    .query("select data from blobs where substr(data, 1, 1) = x'7B'")
-    .all() as { data: Uint8Array }[];
-  for (const row of rows) {
-    try {
-      const message = JSON.parse(Buffer.from(row.data).toString("utf8"));
-      if (message?.role === "system") {
-        model = cursorModelFromSystemMessage(message.content);
-        if (model) break;
+  // PRIMARY: newer sessions persist the resolved model on meta key '0'.
+  const lastUsedModel = nonEmptyString(metadata?.lastUsedModel);
+  // FALLBACK + tertiary: walk the content-addressed message blobs newest-first
+  // (rowid is append order). Prefer the newest assistant part modelName; keep the
+  // newest Grok system-prompt phrase only as a last resort.
+  let blobModel: string | undefined;
+  let systemModel: string | undefined;
+  if (!lastUsedModel) {
+    const rows = database
+      .query("select data from blobs where substr(data, 1, 1) = x'7B' order by rowid desc")
+      .all() as { data: Uint8Array }[];
+    for (const row of rows) {
+      let message: unknown;
+      try {
+        message = JSON.parse(Buffer.from(row.data).toString("utf8"));
+      } catch {
+        // Cursor's content-addressed store also contains non-JSON blobs.
+        continue;
       }
-    } catch {
-      // Cursor's content-addressed store also contains non-JSON blobs.
+      const record = asRecord(message);
+      if (!record) continue;
+      if (!blobModel && record.role === "assistant") blobModel = contentPartModelName(record.content);
+      if (!systemModel && record.role === "system") systemModel = cursorModelFromSystemMessage(record.content);
+      if (blobModel) break;
     }
   }
   return {
     agentId: typeof metadata?.agentId === "string" ? metadata.agentId : undefined,
     name: typeof metadata?.name === "string" ? metadata.name : undefined,
     mode: typeof metadata?.mode === "string" ? metadata.mode : undefined,
-    model,
+    model: lastUsedModel ?? blobModel ?? systemModel,
   };
 }
 
@@ -406,6 +444,49 @@ function latestCursorModel(database: Database | undefined, sessionId: string): s
     "select model from ai_code_hashes where conversationId = ? and model is not null order by timestamp desc, rowid desc limit 1",
   ).get(sessionId) as { model?: string } | null;
   return typeof row?.model === "string" ? row.model : undefined;
+}
+
+// modelConfig.selectedModels[0].parameters is an [{id,value}] list carrying the
+// effort/fast tier a GUI agent was configured with (e.g. {id:"effort",value:"xhigh"}).
+function composerEffort(selectedModels: unknown): string | undefined {
+  if (!Array.isArray(selectedModels)) return undefined;
+  const parameters = asRecord(selectedModels[0])?.parameters;
+  if (!Array.isArray(parameters)) return undefined;
+  for (const parameter of parameters) {
+    const record = asRecord(parameter);
+    if (record?.id === "effort") return nonEmptyString(record.value);
+  }
+  return undefined;
+}
+
+// GUI PRIMARY model source: composerData:<conversationId>.modelConfig covers every
+// family incl. Composer variants. "default" means "no explicit model", so it is
+// treated as unreported and left to the ai-tracking fallback. The state.vscdb is a
+// live WAL database; callers open it read-only and may lack the cursorDiskKV table
+// on older installs, so the query is guarded.
+function guiComposerModel(database: Database, sessionId: string): CursorStoreEvidence {
+  let row: { value?: string | Uint8Array } | null;
+  try {
+    row = database.query("select value from cursorDiskKV where key = ?").get(`composerData:${sessionId}`) as
+      | { value?: string | Uint8Array }
+      | null;
+  } catch {
+    return {};
+  }
+  if (row?.value === undefined || row.value === null) return {};
+  let parsed: unknown;
+  try {
+    const value = typeof row.value === "string" ? row.value : Buffer.from(row.value).toString("utf8");
+    parsed = JSON.parse(value);
+  } catch {
+    return {};
+  }
+  const modelConfig = asRecord(asRecord(parsed)?.modelConfig);
+  const modelName = nonEmptyString(modelConfig?.modelName);
+  return {
+    model: modelName === "default" ? undefined : modelName,
+    effort: composerEffort(modelConfig?.selectedModels),
+  };
 }
 
 async function cursorChildAgents(
@@ -498,14 +579,17 @@ async function collectCursorGuiSessions(
 
   const statePath = join(globalStorage, "state.vscdb");
   let sessionCwds = new Map<string, string>();
+  // state.vscdb also holds the authoritative per-session model (cursorDiskKV
+  // composerData), so the handle stays open through the conversation loop.
+  let state: Database | undefined;
+  let hasComposerData = false;
   if (await readableFile(statePath)) {
     try {
-      const state = new Database(statePath, { readonly: true });
-      try {
-        sessionCwds = guiSessionCwds(state);
-      } finally {
-        state.close();
-      }
+      state = new Database(statePath, { readonly: true });
+      sessionCwds = guiSessionCwds(state);
+      hasComposerData = state
+        .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
+        .get() !== null;
     } catch (error) {
       errors.push(`cursor GUI project state: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -535,6 +619,8 @@ async function collectCursorGuiSessions(
       try {
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
+        // PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
+        const composer = hasComposerData && state ? guiComposerModel(state, row.id) : {};
         const parsed = parseCursorSession({
           sessionId: row.id,
           metaJson: JSON.stringify({
@@ -550,7 +636,8 @@ async function collectCursorGuiSessions(
           store: {
             agentId: row.id,
             name: typeof row.title === "string" ? row.title : undefined,
-            model: latestCursorModel(tracking, row.id),
+            model: composer.model ?? latestCursorModel(tracking, row.id),
+            effort: composer.effort,
           },
           archived: row.is_archived === 1,
           allowCwdFallback: false,
@@ -569,6 +656,7 @@ async function collectCursorGuiSessions(
   } finally {
     conversations?.close();
     tracking?.close();
+    state?.close();
   }
   return { value: agents, errors };
 }

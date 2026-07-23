@@ -130,6 +130,12 @@ make the Cursor model policy and the row model display honest for Cursor's own
 model families, ahead of a sibling lane's model-extraction fix that will start
 reporting real strings (`composer-2.5-fast`, `composer-2`, `cursor-grok-4.5-high-fast`,
 `grok-4.5-fast-xhigh`, `claude-…`, `gpt-…-sol`, …). Nothing pushed.
+# Lane Report — cursor-model-20260723
+
+Branch `ant-hill/opus-cursor-model-20260723`, cut from main @ `5b71f38`. Goal: fix
+Cursor model detection using the fields the real stores persist, taking model
+coverage from ~15% to ~92% CLI / 100% GUI (incl. Composer models). Scope limited to
+`src/server/cursor.ts` + `tests/cursor.test.ts`.
 
 ## Commits
 
@@ -182,3 +188,75 @@ names still render cleanly.
 - README "Data truth" section was read for policy intent but not edited (outside
   the allowed file set). Its wording still says "Grok-family … compliant" and
   should be widened to "Cursor-native (Grok + Composer)" if this default holds.
+| `cfbf902` | feat(cursor): detect real models from live CLI and GUI stores |
+| `(this)`  | test(cursor): pin Cursor out of token/burn rollups + lane report |
+
+Not pushed; no merges. The pre-existing modified `bun.lock` (from dep install) was
+left untouched and excluded from all commits. No `src/server/types.ts` change was
+needed — `CollectedAgent.effort` already existed; the only new field is `effort` on
+the module-local `CursorStoreEvidence` in `cursor.ts`.
+
+## What changed
+
+**CLI** (`~/.cursor/chats/<hash>/<uuid>/store.db`), in `readCursorStoreEvidenceFrom`:
+1. PRIMARY: meta key `'0'` hex-JSON `lastUsedModel` (e.g. `grok-4.5`, `composer-2.5`),
+   present on newer sessions only (7/89 today); used when present.
+2. FALLBACK: newest assistant blob's `content[].providerOptions.cursor.modelName`
+   (e.g. `cursor-grok-4.5-high-fast`, `composer-2.5-fast`). Blobs (`data` byte `0x7B`)
+   walked newest-first by `rowid`; the model lives on content PARTS (`reasoning`/
+   `redacted-reasoning`/`text`), not on message-level `providerOptions.cursor` (which
+   holds only `modelProviderMessageId`/`requestId`).
+3. TERTIARY: the old `powered by (Cursor X.Y)` system-prompt regex, last resort only.
+
+**GUI** (`state.vscdb` → `cursorDiskKV`), in `collectCursorGuiSessions`:
+1. PRIMARY: `composerData:<conversationId>.modelConfig.modelName` (all families incl.
+   every Composer variant; sentinel `"default"` treated as unreported).
+   `modelConfig.selectedModels[0].parameters` (`[{id,value}]`) surfaces the `effort`
+   tier into the agent's `effort` field. The `state.vscdb` handle now stays open
+   through the loop; the `cursorDiskKV` table is probed via `sqlite_master` and the
+   query is guarded for older installs.
+2. FALLBACK: existing `ai-code-tracking.db` lookup (for `"default"` / missing table).
+
+External JSON parsed as `unknown` behind guards (`asRecord`, `nonEmptyString`,
+`contentPartModelName`, `composerEffort`); no `any` added. Live-store reads are
+read-only (`readonly:true`, with `immutable=1` only as a WAL-sidecar fallback).
+
+## Coverage evidence (measured on this machine, new code, read-only)
+
+| Surface | Metric | Result |
+|---|---|---|
+| CLI | store.db with a resolved model | **85 / 89 = 96%** (7 via `lastUsedModel`, 78 via blob/system) |
+| CLI | old baseline (system regex only) | 56 / 89 = 63% today |
+| GUI | local conversations with a `composerData` entry | **234 / 234 = 100%** |
+| GUI | explicit composerData model | 213 / 234 = 91% (21 `"default"` → ai-tracking) |
+
+The 4 unresolved CLI stores are sessions with no assistant blobs yet. Note the
+system-regex-only baseline measured 63% on today's Grok-heavy session mix, not the
+~15% the task cited (mix-dependent); either way it is a large, verifiable jump. GUI
+model coverage is effectively 100% via composerData + ai-tracking fallback.
+
+## Token / context-occupancy decision
+
+**Cursor tokens left fully untouched** — `{scope:"unknown", provenance:"unknown"}`,
+`cost: null`. Context occupancy (`contextTokensUsed`/`contextTokenLimit`, on 668/864
+composerData) is **NOT surfaced.** After tracing consumers: `snapshot.ts` rolls up
+usage off `tokens.total`; `pulse.ts` rolls up burn off `tokens.sessionTotal` +
+`provenance==="observed"` and already drops `provider==="cursor"`; and the renderer
+`src/web/app.js` prints `tokens.total / tokens.contextWindow` as **consumed** tokens.
+Any honest occupancy display needs a "used" figure, and the only carriers
+(`total`/`contextWindow`) are exactly what the renderer treats as billed usage — so a
+truthful occupancy surface would require a new field plus an `app.js` change, which is
+outside this lane's file scope. Rather than risk a context snapshot reading as billed
+tokens, occupancy stays out. A pin test locks the invariant (no numeric totals,
+unknown provenance) and asserts through `buildSnapshot` + `PulseTracker` that a
+working Cursor agent adds 0 to the token sum/median/reporting and lands in burn
+`coverage.unknown`, never `eligible`.
+
+## Verification
+
+`bun run check` — typecheck (strict) + full suite green: **349 pass, 0 fail**
+(344 base + 5 new Cursor tests). New tests: meta `lastUsedModel` wins over blob
+modelName; newest assistant blob modelName fallback detecting a Composer model; GUI
+`composerData` model + `effort` overriding ai-tracking; GUI `"default"` → ai-tracking
+fallback; plus the rollup-exclusion pin. The pre-existing WAL/mode-ro and GUI-fallback
+tests continue to pass unchanged.
