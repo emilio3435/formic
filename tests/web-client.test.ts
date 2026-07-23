@@ -1079,3 +1079,41 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(operate).toContain("renderOperateMeta(agent)");
   });
 });
+
+describe("toolbar on the instrument-rail language (A3)", () => {
+  // Interface contract (later WS-C tasks reuse `is-current` unchanged):
+  // the active view-tab is ink text + a 2px --signal-rail bottom rail driven
+  // by the class `is-current`, never a filled/boxed tab.
+  test("active view-tab is an is-current ink signal rail, not a filled tab (Rule 1)", () => {
+    const currentRule = styles.match(/\.view-tab\.is-current\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(currentRule).toContain("color: var(--ink)");
+    expect(currentRule).toContain("var(--signal-rail)");
+    // Rule 1 — indicator inks, not flood fills: no --surface fill / boxed tab.
+    expect(currentRule).not.toContain("var(--surface)");
+    // renderTabs drives the active marker by class, not by aria-pressed styling.
+    expect(source).toContain('classList.toggle("is-current"');
+  });
+
+  test("the old filled-surface active-tab rule is gone (Rule 1)", () => {
+    // Quote the current offending pattern from source and assert it is gone.
+    expect(styles).not.toContain(
+      '.view-tab[aria-pressed="true"] { color: var(--ink); background: var(--surface)',
+    );
+    // The active state no longer keys off aria-pressed at all in CSS.
+    expect(styles).not.toContain('.view-tab[aria-pressed="true"]');
+  });
+
+  test("view-tab count badges render in mono (Rule 2: mono for values)", () => {
+    const countRule = styles.match(/\.view-tab \.count\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(countRule).toContain("font-family: var(--font-mono)");
+  });
+
+  test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
+    const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).toContain("color: var(--ink)");
+    expect(rule).toContain("background: var(--sand)");
+    expect(rule).toContain("border-color: var(--ink)");
+    // The old ink flood fill (ink background, surface text) is gone.
+    expect(rule).not.toContain("background: var(--ink)");
+  });
+});
