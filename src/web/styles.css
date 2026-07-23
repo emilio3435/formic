@@ -1150,6 +1150,14 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* Staleness fact: a live-looking row that has gone quiet. Dim mono (it carries a
+   relative timestamp — Rule 2), deliberately NOT ember; staleness is a nudge,
+   not an alert, so it never competes with the status rails. */
+.row-stale {
+  font: 500 10px/1.4 var(--font-mono);
+  color: var(--faint);
+  white-space: nowrap;
+}
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 

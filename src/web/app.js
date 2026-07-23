@@ -614,6 +614,21 @@ function lookbackApplies(view) {
   return view === "idle" || view === "history";
 }
 
+const ROW_STALE_AFTER_MS = 10 * 60_000;
+/* A running / waiting row whose last update is older than 10 minutes earns a
+   dim "updated Nm ago" fact — a quiet nudge that a live-looking session has gone
+   quiet. Fresh rows and ended rows return "" and render exactly as before.
+   nowMs is injectable so the threshold is testable without wall-clock flake. */
+function rowStalenessText(agent, nowMs = Date.now()) {
+  const act = deriveActivity(agent);
+  if (act !== "working" && act !== "idle") return "";
+  const updated = Date.parse(agent && agent.updatedAt);
+  if (!Number.isFinite(updated)) return "";
+  const ageMs = nowMs - updated;
+  if (ageMs < ROW_STALE_AFTER_MS) return "";
+  return "updated " + fmtElapsed(ageMs) + " ago";
+}
+
 function lookbackLabel(hours) {
   if (hours == null) return "all collected";
   return hours + "h";
@@ -1098,7 +1113,7 @@ globalThis.TheAntHill = {
   renderAgentRow, renderAgentColumnHeader,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
-  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel,
+  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
@@ -2747,6 +2762,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const displayName = agentName(agent);
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
+  const staleFact = rowStalenessText(agent);
   const sourceName = sourceAgentName(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   // The terminal / source / cwd-mismatch naming detail leaves the visible row.
@@ -2798,6 +2814,9 @@ function renderAgentRow(agent, program, opts = {}) {
       // against the display name. Identity info (distinct from control state) —
       // an operator can read the destination without opening the drawer.
       terminalCrumb ? el("span", { class: "row-terminal", title: focusDestinationHint(agent), text: terminalCrumb }) : null,
+      // A live-looking row that has gone quiet for >10min names how long — a dim
+      // fact, never an alert (staleness is a nudge, not a status change).
+      staleFact ? el("span", { class: "row-stale", title: "Last update " + agoText(agent.updatedAt), text: staleFact }) : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 

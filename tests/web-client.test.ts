@@ -937,6 +937,43 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(rule).toContain("white-space: nowrap");
     expect(rule).toContain("text-overflow: ellipsis"); // truncates, never wraps a new line
   });
+
+  test("(k) a live row gone quiet >10min shows a dim staleness fact; fresh rows don't", () => {
+    // Threshold is exact: 10 min. Only running/waiting (working/idle) rows qualify.
+    const now = Date.parse("2026-07-22T03:00:00.000Z");
+    const at = (min: number) => new Date(now - min * 60_000).toISOString();
+    // Pure-function contract (nowMs injected so no wall-clock flake).
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(9) }), now)).toBe("");
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(15) }), now)).toBe("updated 15m ago");
+    expect(M.rowStalenessText(agent({ status: "waiting", updatedAt: at(42) }), now)).toBe("updated 42m ago");
+    // Ended rows never go "stale" — they are done, not quiet.
+    expect(M.rowStalenessText(agent({ status: "archived", updatedAt: at(120) }), now)).toBe("");
+    // Missing timestamp is honestly silent, never a fabricated age.
+    expect(M.rowStalenessText(agent({ status: "running", updatedAt: undefined }), now)).toBe("");
+
+    // Executed: a stale running row renders a .row-stale fact inside the tag row,
+    // and it is NOT an ember/alert element (staleness is a nudge, not a status).
+    const stale = agent({ status: "running", updatedAt: new Date(Date.now() - 20 * 60_000).toISOString() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(stale, program));
+    const fact = findByClass(row, "row-stale");
+    expect(fact).not.toBeNull();
+    expect(textOf(fact)).toContain("ago");
+    expect(findByClass(findByClass(row, "row-identity-tags"), "row-stale")).not.toBeNull();
+    // A fresh running row renders exactly as today — no staleness fact.
+    const fresh = agent({ status: "running", updatedAt: new Date().toISOString() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const freshRow: any = withDom(() => M.renderAgentRow(fresh, program));
+    expect(findByClass(freshRow, "row-stale")).toBeNull();
+  });
+
+  test("(l) the staleness fact is dim, not an alert ink", () => {
+    const rule = styles.match(/\.row-stale\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toContain("var(--faint)");        // dim
+    expect(rule).toContain("var(--font-mono)");    // relative timestamp → mono (Rule 2)
+    expect(rule).not.toContain("--ember");         // never an alert
+  });
 });
 
 describe("operations canvas layout", () => {
