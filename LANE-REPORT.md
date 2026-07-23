@@ -260,3 +260,42 @@ modelName; newest assistant blob modelName fallback detecting a Composer model; 
 `composerData` model + `effort` overriding ai-tracking; GUI `"default"` → ai-tracking
 fallback; plus the rollup-exclusion pin. The pre-existing WAL/mode-ro and GUI-fallback
 tests continue to pass unchanged.
+
+## Postmortem — live gap after deploy (subagent path missed)
+
+After landing, live measurement showed the gap barely moved: **137 / 163 Cursor
+agents were still model-less**, all with a fresh `updatedAt` (re-collected every tick,
+not stale archives). Root cause, verified by running the *actual* collector against
+the live home:
+
+- **All 137 blanks were subagents** — `parentSourceSessionId` set, 0 blank roots.
+  They are enumerated by `cursorChildAgents` (reads
+  `<project>/agent-transcripts/<parentId>/subagents/<childId>.jsonl`) →
+  `parseCursorChildSession`, whose model came **only** from `latestCursorModel`
+  (ai-code-tracking), which is silent for subagents.
+- The composerData PRIMARY lookup landed in the first commit was wired **only** into
+  the conversation-search-driven loop in `collectCursorGuiSessions` — subagents (and
+  any other blank) never reached it.
+- The sample `94c107d8-…` (coordinator's example) has no `~/.cursor/chats` dir, no
+  own `agent-transcripts` dir, and **no** conversation-search row — it is a subagent
+  whose transcript lives under its parent `3b191f66-…`'s `subagents/` folder, and its
+  model exists in `cursorDiskKV` as `composerData:94c107d8-…` = `cursor-grok-4.5-high-fast`.
+  (The coordinator's "glass membership" hypothesis pointed at the right *fix* — model
+  by session id — but the real *entry path* is the subagent transcript, not membership
+  enumeration; there is no membership-enumeration code path.)
+- **137 / 137 blanks were resolvable via `composerData:<childSessionId>`.**
+
+**Fix (commit `697e052`):** `fillMissingCursorModels` — a universal last-resort pass
+in `collectCursorSessions` that, after every entry path (chats store.db,
+agent-transcripts, conversation-search, subagents), fills any agent still missing a
+model + effort from `composerData:<sourceSessionId>`, keyed purely by session id.
+`guiComposerModel` was renamed `composerModelForSession` to reflect the shared,
+path-agnostic role. Tokens remain untouched (the pass only ever writes `model` /
+`effort`). GUI conversation-search sessions keep composerData as their PRIMARY source;
+this pass only touches sessions left blank.
+
+**Live re-run of the collector against the real home: 162 / 162 agents now carry a
+model (was 25 / 162); 0 blank.** Regression test added: a subagent absent from
+conversation-search, with no ai-tracking row, resolves its `model` and `effort`
+purely from `composerData`. Final `bun run check`: **356 pass, 0 fail** (typecheck
+strict clean).
