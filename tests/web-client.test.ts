@@ -1197,6 +1197,63 @@ describe("pulse strip — verdict-first summary", () => {
   });
 });
 
+describe("state cards — two-line ledger rows, instrument brief, verdict result (mockups A2/B1/C1)", () => {
+  test("strip findings carry the ledger row data: summary, evidence tokens, and an honest since", () => {
+    const life = { state: "verifying", openedAt: "2026-07-23T03:00:00.000Z", verificationStartedAt: "2026-07-23T04:15:00.000Z" };
+    const snap = snapshot({
+      issues: [{
+        id: "sys:1", kind: "system", severity: "warning", title: "Routing mismatch",
+        summary: "4 ended Cursor sessions used a different model than expected.",
+        affectedAgentIds: ["codex:a1"], lifecycle: life,
+      }],
+    });
+    const model = M.pulseStripModel(snap, "live", []);
+    const finding = model.findings[0];
+    expect(finding.summary).toBe("4 ended Cursor sessions used a different model than expected.");
+    // Evidence = program rollup tokens, derived from real affected agents.
+    expect(finding.evidence).toEqual(["P · 1"]);
+    // Verification start outranks openedAt; no timestamp means no fabricated age.
+    expect(finding.since).toBe("2026-07-23T04:15:00.000Z");
+    const bare = snapshot({ issues: [{ id: "sys:2", kind: "system", severity: "warning", title: "T", summary: "s", affectedAgentIds: [] }] });
+    expect(M.pulseStripModel(bare, "live", []).findings[0].since).toBeNull();
+  });
+
+  test("routeFromBullet extracts evidence routing and refuses prose", () => {
+    expect(M.routeFromBullet("`542577F9…` → `ttys003`")).toEqual({ from: "542577F9…", to: "ttys003" });
+    expect(M.routeFromBullet("8C3BB027… -> ttys005")).toEqual({ from: "8C3BB027…", to: "ttys005" });
+    // Prose containing an arrow mid-sentence, chained arrows, and empty sides stay bullets.
+    expect(M.routeFromBullet("The launcher moved a → b and then failed on c")).toBeNull();
+    expect(M.routeFromBullet("a → b → c")).toBeNull();
+    expect(M.routeFromBullet("→ ttys003")).toBeNull();
+    expect(M.routeFromBullet("x".repeat(130) + " → y")).toBeNull();
+  });
+
+  test("the plan renders as an always-visible spine — the details disclosure is gone", () => {
+    const triage = source.match(/function renderTriage\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(triage).toContain('"tri-spine"');
+    expect(triage).toContain('"tri-band"');
+    expect(triage).not.toContain("-step plan");
+    // The band never invents instruments: model/effort/access appear only
+    // when the launcher reported runModel.
+    expect(triage).toContain("queueItem.runModel");
+    // A reload mid-investigation must not regress to the Triage button: the
+    // queue item itself hydrates the recommendation.
+    expect(triage).toContain("state.triage.get(issue.id) || queueItem");
+  });
+
+  test("state-card CSS binds to the DOM app.js builds, and the replaced chrome is gone", () => {
+    for (const selector of [".finding .lede", ".finding .gist", ".finding .trace", ".finding .meta",
+      ".finding .state.st-hot", ".tri-band", ".tri-spine", ".tri-dot", ".brf-head", ".brf-glyph",
+      ".brf-routes", ".brf-route", ".brf-times"]) {
+      expect(styles).toContain(selector);
+    }
+    for (const dead of [".triage-plan-head", ".triage-mode", ".triage-details", ".triage-steps",
+      ".triage-briefing-kicker "]) {
+      expect(styles).not.toContain(dead);
+    }
+  });
+});
+
 describe("single lock narrative in the agent drawer", () => {
   test("the banner owns the lock reason; the dock meta never repeats it", () => {
     const dockStart = source.indexOf("function renderCommandDock(");
