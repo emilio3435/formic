@@ -15,8 +15,10 @@ import {
   identityFromSessionPath,
   isRecognizedAgentProcess,
 } from "../src/server/identity";
+import { buildSnapshot } from "../src/server/snapshot";
+import { PulseTracker } from "../src/server/pulse";
 import { resolveAgentTarget } from "../src/server/targets";
-import type { CmuxSurface, CommandResult, CommandRunner } from "../src/server/types";
+import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
 
 const SESSION_ID = "286ab053-e84f-4538-9292-4aa3fae6fe9b";
 const GUI_SESSION_ID = "a5336a9a-f434-4e7b-b8f0-a3c8509502cb";
@@ -611,6 +613,64 @@ describe("Cursor Agent persisted session truth", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)?.model).toBe("grok-4.5");
+  });
+
+  test("keeps Cursor sessions out of the token usage and burn rollups", () => {
+    const nowMs = 1784689180000;
+    const cursorAgent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: JSON.stringify({
+        createdAtMs: nowMs - 60_000,
+        updatedAtMs: nowMs - 30_000,
+        cwd: "/Users/me/project",
+        hasConversation: true,
+      }),
+      store: { agentId: SESSION_ID, model: "grok-4.5" },
+      nowMs,
+    })!;
+    // The invariant that excludes Cursor from every rollup: no numeric totals and
+    // unknown provenance. snapshot.ts keys usage off `tokens.total`; pulse.ts keys
+    // burn off `tokens.sessionTotal` + `provenance` and drops `provider === "cursor"`.
+    expect(cursorAgent.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
+    expect(cursorAgent.tokens.total).toBeUndefined();
+    expect(cursorAgent.tokens.sessionTotal).toBeUndefined();
+    expect(cursorAgent.tokens.contextWindow).toBeUndefined();
+    expect(cursorAgent.cost).toBeNull();
+
+    const claudeAgent: CollectedAgent = {
+      id: "claude:token-session",
+      provider: "claude",
+      sourceSessionId: "token-session",
+      displayName: "Claude worker",
+      cwd: "/Users/me/other-project",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date(nowMs).toISOString(),
+      tokens: { total: 1000, sessionTotal: 1000, scope: "session", provenance: "observed" },
+      artifacts: [],
+      gates: [],
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+
+    const snapshot = buildSnapshot({
+      agents: [cursorAgent, claudeAgent],
+      surfaces: [],
+      archiveStore,
+      now: new Date(nowMs),
+    });
+    // The Cursor session is a working agent, yet contributes nothing to the token
+    // sum, median, or reporting numerator.
+    expect(snapshot.totals.working).toBe(2);
+    expect(snapshot.totals.tokens).toBe(1000);
+    expect(snapshot.totals.tokenReporting).toBe(1);
+    expect(snapshot.totals.tokenMedian).toBe(1000);
+
+    const pulse = new PulseTracker(undefined, nowMs);
+    pulse.observe(snapshot, nowMs);
+    const report = pulse.report(nowMs);
+    // Burn coverage counts the Cursor session as "unknown", never "eligible".
+    expect(report.burn.coverage.eligible).toBe(1);
+    expect(report.burn.coverage.unknown).toBe(1);
   });
 });
 
