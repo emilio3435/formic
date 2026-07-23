@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
-import { collectCmux, collectCmuxNotifications } from "./cmux";
+import { collectCmux, collectCmuxNotifications, DEFAULT_CMUX_EXECUTABLE } from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
@@ -56,6 +56,7 @@ export class HubState {
     private readonly settingsReader?: () => HubSettings,
     private readonly triageReader?: () => readonly TriageQueueSummary[],
     private readonly burnReader?: () => Promise<UsageSummary>,
+    private readonly cmuxExecutable = DEFAULT_CMUX_EXECUTABLE,
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
@@ -159,8 +160,8 @@ export class HubState {
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
     const [sessions, cmux, notifications] = await Promise.all([
       this.collectors.sessions(homedir(), windowMs),
-      options.cmux ? this.collectors.cmux(this.runner) : Promise.resolve(undefined),
-      options.cmux ? this.collectors.notifications(this.runner) : Promise.resolve(undefined),
+      options.cmux ? this.collectors.cmux(this.runner, this.cmuxExecutable) : Promise.resolve(undefined),
+      options.cmux ? this.collectors.notifications(this.runner, this.cmuxExecutable) : Promise.resolve(undefined),
     ]);
     const collectedAt = new Date().toISOString();
     for (const provider of providers) {

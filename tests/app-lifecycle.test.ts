@@ -40,6 +40,49 @@ function lifecycleSnapshot(): HubSnapshot {
 }
 
 describe("SSE lifecycle", () => {
+  test("control requests use the runtime cmux executable override", async () => {
+    const current = lifecycleSnapshot();
+    const controlAgent = current.programs[0]!.agents[0]!;
+    controlAgent.controls = [{ action: "instruct", enabled: true }];
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: async () => current,
+    };
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        commands.push([...command]);
+        return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      },
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({
+      state,
+      runner,
+      archiveStore,
+      cmuxExecutable: "/opt/cmux/bin/cmux",
+      webRoot: import.meta.dir,
+    });
+
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/control", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "instruct",
+        agentId: controlAgent.id,
+        instruction: "Continue.",
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(commands.map((command) => command[0])).toEqual([
+      "/opt/cmux/bin/cmux",
+      "/opt/cmux/bin/cmux",
+    ]);
+    fetch.dispose();
+  });
+
   test("disposing the app unsubscribes state, closes active streams, and rejects new clients", async () => {
     const listeners = new Set<(snapshot: ReturnType<typeof emptySnapshot>) => void>();
     const state: MountainAppState = {
