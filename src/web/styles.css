@@ -1927,6 +1927,46 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--failed); font: inherit; font-weight: 650;
 }
 .control-banner-link:hover { text-decoration: underline; }
+/* The banner now carries the reason resolution refused and the operator's next
+   move; both are quiet body copy under the verdict sentence, never a second
+   alarm. `why` is resolver-authored text, so it wraps rather than truncates. */
+.control-banner-why {
+  margin: 0.4rem 0 0; color: var(--ink); overflow-wrap: anywhere;
+}
+.control-banner-next { margin: 0.25rem 0 0.45rem; color: var(--muted); }
+
+/* Identity resolution trail in Evidence — the tier ladder plus, on demand, the
+   terminals that claim this session. Instrument type, no color flood: the one
+   contested row takes ember ink on its rail, everything else stays neutral. */
+.identity-block { margin-top: 0.85rem; }
+.identity-verdict { margin: 0 0 0.2rem; color: var(--ink); font-weight: 600; font-size: 12.5px; }
+.identity-reason { margin: 0 0 0.5rem; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.identity-steps {
+  list-style: none; margin: 0 0 0.6rem; padding: 0 0 0 0.7rem;
+  border-left: 1px solid var(--line); display: grid; gap: 0.4rem;
+}
+.identity-step { display: grid; gap: 0.1rem; font-size: 12px; }
+.identity-step-tier { color: var(--ink); font-weight: 600; }
+.identity-step-outcome {
+  color: var(--muted); font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.02em; text-transform: uppercase;
+}
+.identity-step--quarantined .identity-step-outcome,
+.identity-step--ambiguous .identity-step-outcome,
+.identity-step--rejected .identity-step-outcome { color: var(--failed); }
+.identity-step--matched .identity-step-outcome { color: var(--moss); }
+.identity-step-detail { color: var(--muted); overflow-wrap: anywhere; }
+.identity-note { margin: 0 0 0.5rem; color: var(--muted); font-size: 12px; }
+.identity-error { margin: 0 0 0.4rem; color: var(--failed); font-size: 12px; overflow-wrap: anywhere; }
+.identity-surfaces { display: grid; gap: 0.4rem; justify-items: start; }
+.identity-surface-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; width: 100%; }
+.identity-surface {
+  display: grid; gap: 0.15rem; padding-left: 0.55rem;
+  border-left: 2px solid var(--line); font-size: 12px;
+}
+.identity-surface.is-contested { border-left-color: var(--failed); }
+.identity-surface-line { color: var(--ink); overflow-wrap: anywhere; }
+.identity-surface-conflict { color: var(--failed); overflow-wrap: anywhere; }
 
 /* Sticky command dock — composer owns the bottom; tools stay quiet.
    Horizontal bleed tracks --inspector-pad-x so mobile (1rem pad) does not

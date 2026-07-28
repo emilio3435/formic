@@ -200,6 +200,30 @@ const allByClass = (node: any, token: string) =>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const byClass = (node: any, token: string) => allByClass(node, token)[0] || null;
 
+/* A stand-in for the module's `state`, for helpers that take it as an argument. */
+function identityUi(overrides: Record<string, unknown> = {}) {
+  return {
+    snap: null,
+    queueItems: [] as unknown[],
+    triage: new Map(),
+    triagePending: new Set<string>(),
+    evidenceOpen: false,
+    pending: new Set<string>(),
+    feedback: new Map(),
+    drafts: new Map(),
+    confirming: null,
+    renaming: null,
+    renameDraft: "",
+    renamePending: false,
+    renameError: "",
+    labelsLoading: false,
+    labelLoadError: "",
+    labels: new Map<string, string>(),
+    identity: { agentId: null, loading: false, error: "", data: null },
+    ...overrides,
+  };
+}
+
 /* The three drawer panels, rendered and flattened to text. */
 function panelTexts(a: Record<string, unknown>) {
   return withDom(() => ({
@@ -3312,6 +3336,220 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
     expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
     expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- finding 1: the quarantine dead end -----------------------------
+     Identity resolution refuses to bind a session, Focus and Send go dead, and
+     the operator was given a fixed sentence with no reason and no way forward —
+     while agent.identityTrace sat unread in the payload the client had already
+     received, and GET /api/debug/identity sat unused beside it. */
+
+  const CONFLICTED = {
+    identityTrace: {
+      resolution: "ambiguous",
+      reason: "cmux 6952219A-6C2F-4A61-9C0E-1F0B2D3E4A55 has conflicting open agent session files on ttys082.",
+      surfaceId: "SURFACE-82",
+      steps: [
+        { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
+        { tier: "session", outcome: "quarantined", detail: "ttys082 has open session files for two providers." },
+        { tier: "cwd", outcome: "no-match", detail: "Two terminals report the same working folder." },
+      ],
+    },
+    target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+    controlState: "quarantined",
+    controls: [
+      { action: "focus", enabled: false, reason: "Identity conflict on ttys082." },
+      { action: "instruct", enabled: false, reason: "Identity conflict on ttys082." },
+    ],
+  };
+
+  const DEBUG_PAYLOAD = {
+    ok: true,
+    agent: { id: "codex:a1", resolution: "ambiguous" },
+    relatedSurfaces: [{
+      surfaceId: "SURFACE-82",
+      tty: "ttys082",
+      identityConflict: "Two providers hold open session files on this terminal.",
+      identityTrace: {
+        surfaceId: "SURFACE-82",
+        tty: "ttys082",
+        processes: [
+          { pid: 4242, command: "codex resume 019f94a1", recognizedAgentProcess: true },
+          { pid: 5150, command: "claude --resume", recognizedAgentProcess: true },
+          { pid: 9001, command: "zsh", recognizedAgentProcess: false },
+        ],
+        openFileMatches: [
+          { pid: 4242, path: "/Users/me/.codex/sessions/019f94a1-....jsonl", provider: "codex", sessionId: "019f94a1-1558-7000-aeb8-26e2cfd0e8ec" },
+          { pid: 5150, path: "/Users/me/.claude/projects/p/c0eb6d3f-....jsonl", provider: "claude", sessionId: "c0eb6d3f-9a41-7000-b2aa-77c1f0e93b21" },
+        ],
+        commandHints: [],
+        outcome: "conflict",
+        sourceSessionIds: ["019f94a1-1558-7000-aeb8-26e2cfd0e8ec", "c0eb6d3f-9a41-7000-b2aa-77c1f0e93b21"],
+      },
+    }],
+  };
+
+  test("(1) the trace the payload already carried becomes a normalized view", () => {
+    const view = M.identityTraceView(agent(CONFLICTED));
+    expect(view.resolution).toBe("ambiguous");
+    expect(view.matchedTier).toBeNull();
+    expect(view.reason).toContain("ttys082");
+    expect(view.steps.map((s: { tier: string }) => s.tier)).toEqual(["recorded", "session", "cwd"]);
+    expect(view.steps[1]).toMatchObject({
+      tierLabel: "Session ID on a terminal",
+      outcome: "quarantined",
+      outcomeLabel: "quarantined",
+    });
+    // A bound session still reports which tier bound it.
+    const bound = M.identityTraceView(agent({
+      identityTrace: { resolution: "exact", matchedTier: "session", surfaceId: "s1", steps: [{ tier: "session", outcome: "matched", detail: "Session ID recorded by cmux." }] },
+    }));
+    expect(bound.matchedTier).toBe("session");
+    // An agent with no trace at all degrades to its target, never to a guess.
+    const bare = M.identityTraceView(agent());
+    expect(bare.resolution).toBe("exact");
+    expect(bare.steps).toEqual([]);
+    expect(bare.reason).toBeNull();
+  });
+
+  test("(1) a quarantined session gets a reason and a next step, not just 'no'", () => {
+    const brief = M.quarantineBrief(agent(CONFLICTED), "quarantined");
+    expect(brief.title).toBe("Control routing locked.");
+    expect(brief.cause).toBe("contested-terminal");
+    expect(brief.why).toContain("More than one session claims the same terminal");
+    // The whole point: a way forward, and one that does not require a restart.
+    expect(brief.nextStep).toContain("End or close one of the sessions sharing that terminal");
+
+    /* The shape the LIVE board actually produces: every one of the 9 quarantined
+       sessions on 127.0.0.1:4701 resolves "ambiguous" having refused at the cwd
+       tier, not the session tier — so keying the copy off the resolution alone
+       would have told all of them to close a terminal that is not the problem. */
+    const sharedFolder = M.quarantineBrief(agent({
+      identityTrace: {
+        resolution: "ambiguous",
+        reason: "2 active sources share this cwd; cwd fallback requires exactly one and controls are disabled.",
+        steps: [
+          { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
+          { tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." },
+          { tier: "cwd", outcome: "ambiguous", detail: "2 active sources share this cwd; cwd fallback requires exactly one." },
+        ],
+      },
+    }), "quarantined");
+    expect(sharedFolder.cause).toBe("shared-folder");
+    expect(sharedFolder.why).toContain("shares its working folder");
+    expect(sharedFolder.nextStep).toContain("own cmux pane");
+
+    // Observed-only with nothing claiming it is a third failure, third next step.
+    const observed = M.quarantineBrief(agent({ target: { resolution: "missing" } }), "observed-only");
+    expect(observed.title).toBe("Controls unavailable.");
+    expect(observed.cause).toBe("missing");
+    expect(observed.nextStep).toContain("cmux pane");
+    // The three causes really do read differently — this is not one string thrice.
+    expect(new Set([brief.nextStep, sharedFolder.nextStep, observed.nextStep]).size).toBe(3);
+    // A healthy session gets no banner at all.
+    expect(M.quarantineBrief(agent(), "linked")).toBeNull();
+  });
+
+  test("(1) the control banner names the reason and the exit, and leaks no cmux identifiers", () => {
+    const locked = agent(CONFLICTED);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const banner: any = withDom(() => M.renderControlBanner(locked, "quarantined"));
+    expect(banner).not.toBeNull();
+    const text = textOf(banner);
+    expect(text).toContain("Control routing locked.");
+    expect(text).toContain("More than one session claims the same terminal");
+    expect(text).toContain("End or close one of the sessions sharing that terminal");
+    expect(text).toContain("See routing evidence");
+    // The established Operate-chrome rule holds: raw cmux/session identifiers
+    // live in Evidence, never in the banner — even though the trace is full of
+    // them and the capability reasons name the tty.
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+    expect(text).not.toContain("ttys082");
+    expect(text).not.toContain("SURFACE-82");
+    // The evidence link is focus-restorable like every other repainted control.
+    const link = buttonsOf(banner)[0];
+    expect(link.dataset.fkey).toBe("control-evidence:codex:a1");
+    // A linked session still renders no banner.
+    expect(withDom(() => M.renderControlBanner(agent({ controls: [{ action: "focus", enabled: true }] }), "linked"))).toBeNull();
+  });
+
+  test("(1) Evidence renders the tier trail the resolver actually walked", () => {
+    const locked = agent(CONFLICTED);
+    const evidence = withDom(() => M.renderEvidence(locked));
+    const block = byClass(evidence, "identity-block");
+    expect(block).not.toBeNull();
+    const text = textOf(block);
+    expect(text).toContain("Not bound");
+    expect(text).toContain("ambiguous");
+    // Every tier the resolver walked, in order, with its own words. THIS is
+    // where the raw identifiers belong.
+    expect(text).toContain("No recorded cmux target IDs on this source.");
+    expect(text).toContain("ttys082 has open session files for two providers.");
+    expect(text).toContain("Two terminals report the same working folder.");
+    expect(allByClass(block, "identity-step").length).toBe(3);
+    // Terminal evidence is opt-in — a button until the operator asks for it.
+    const load = buttonsOf(block).find((b) => String(b.dataset.fkey).startsWith("identity-load:"));
+    expect(load).toBeDefined();
+    expect(textOf(load)).toContain("Show which terminals claim this session");
+    // A healthy session with no trace grows no block at all.
+    expect(byClass(withDom(() => M.renderEvidence(agent())), "identity-block")).toBeNull();
+  });
+
+  test("(1) debug-endpoint evidence becomes 'this tty has both of these sessions open'", () => {
+    const collisions = M.surfaceCollisions(DEBUG_PAYLOAD);
+    expect(collisions.length).toBe(1);
+    expect(collisions[0]).toMatchObject({ surfaceId: "SURFACE-82", tty: "ttys082" });
+    expect(collisions[0].claims.length).toBe(2);
+    // The process that is NOT holding a session file is not presented as a claim.
+    expect(collisions[0].claims.map((c: { pid: number }) => c.pid)).toEqual([4242, 5150]);
+
+    const line = M.collisionLine(collisions[0]);
+    expect(line).toContain("ttys082");
+    expect(line).toContain("2 sessions claim it");
+    expect(line).toContain("Codex 019f94a1…");
+    expect(line).toContain("Claude c0eb6d3f…");
+    expect(line).toContain("pid 4242, codex resume 019f94a1");
+    expect(line).toContain("pid 5150, claude --resume");
+
+    // An uncontested terminal reads as one session, and an empty one says so
+    // rather than implying a conflict that is not there.
+    expect(M.collisionLine({ tty: "ttys001", surfaceId: "S1", conflict: "", claims: [{ provider: "claude", sessionId: "abcdefghijkl", pid: 7, command: "claude" }] }))
+      .toBe("ttys001 — one session open: Claude abcdefgh… (pid 7, claude)");
+    expect(M.collisionLine({ tty: "", surfaceId: "S9", conflict: "", claims: [] }))
+      .toBe("S9 — no open agent session files observed.");
+    expect(M.surfaceCollisions(null)).toEqual([]);
+  });
+
+  test("(1) fetched terminal evidence reaches the screen and moves the drawer signature", () => {
+    const locked = agent(CONFLICTED);
+    const loaded = { agentId: "codex:a1", loading: false, error: "", data: DEBUG_PAYLOAD };
+    const block = withDom(() => M.renderIdentityBlock(locked, { identity: loaded }));
+    const text = textOf(block);
+    expect(text).toContain("ttys082 — 2 sessions claim it");
+    expect(text).toContain("Two providers hold open session files on this terminal.");
+    expect(byClass(block, "is-contested")).not.toBeNull();
+
+    // Failure is reported, never smoothed into "no conflicts found".
+    const failed = withDom(() => M.renderIdentityBlock(locked, {
+      identity: { agentId: "codex:a1", loading: false, error: "HTTP 404", data: null },
+    }));
+    expect(textOf(failed)).toContain("Terminal evidence unavailable: HTTP 404");
+    expect(buttonsOf(failed).some((b) => textOf(b) === "Retry")).toBe(true);
+
+    // Evidence that arrives while nothing else changed must still repaint: the
+    // drawer signature is the only thing standing between the fetch and the DOM.
+    const program = { id: "p", name: "P", agents: [locked] };
+    const view = { kind: "agent", agent: locked, program };
+    const sel = { kind: "agent", id: "codex:a1" };
+    const base = M.inspectorPaintSig(sel, view, identityUi());
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:a1", loading: true, error: "", data: null } }))).not.toBe(base);
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: loaded }))).not.toBe(base);
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:a1", loading: false, error: "HTTP 404", data: null } }))).not.toBe(base);
+    // Another agent's evidence must not repaint this drawer.
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:other", loading: false, error: "", data: DEBUG_PAYLOAD } }))).toBe(base);
+    // And a trace that changes repaints, now that the drawer renders it.
+    const rebound = { ...locked, identityTrace: { ...CONFLICTED.identityTrace, resolution: "exact", matchedTier: "session" } };
+    expect(M.inspectorPaintSig(sel, { kind: "agent", agent: rebound, program }, identityUi())).not.toBe(base);
   });
 
   /* -------- findings 5 + 12: five unreachable render functions -------------

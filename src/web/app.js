@@ -385,6 +385,150 @@ function controlUnavailableText(controlState) {
     : "Controls are unavailable — no safe cmux target is linked to this session.";
 }
 
+/* ---------- identity resolution: why a session is quarantined ----------
+   The server ships `identityTrace` on every agent in the snapshot (it is only
+   stripped from the SSE change-fingerprint, never from the payload), plus a
+   read-only GET /api/debug/identity?agent=<id> that joins that trace to the
+   ps/lsof evidence of every related terminal. Both were being discarded by the
+   renderer, so the one failure mode that disables Focus and Send at scale
+   surfaced as a fixed sentence with no reason and no way forward. */
+
+const IDENTITY_TIER_LABELS = {
+  recorded: "Recorded target",
+  session: "Session ID on a terminal",
+  cwd: "Working folder",
+};
+const IDENTITY_OUTCOME_LABELS = {
+  matched: "matched",
+  quarantined: "quarantined",
+  ambiguous: "ambiguous",
+  "no-match": "no match",
+  skipped: "skipped",
+  rejected: "rejected",
+};
+/* Why routing refused, and what the operator can actually DO about it — one
+   entry per shape the resolver produces. Deliberately ID-free: the banner is
+   Operate chrome and the established rule (controlUnavailableText, and the test
+   that pins it) is that raw cmux/session identifiers belong only in Evidence.
+   The specific "ttys082 has both of these open" answer is one click away in the
+   routing-evidence block, not in the banner. */
+const IDENTITY_CAUSES = {
+  "contested-terminal": {
+    why: "More than one session claims the same terminal, so there is no unambiguous target to type into.",
+    next: "End or close one of the sessions sharing that terminal — controls re-arm on the next scan, no restart needed.",
+  },
+  "shared-folder": {
+    why: "This session is not registered on any terminal, and more than one session shares its working folder — so matching by folder cannot pick one.",
+    next: "Give this session its own cmux pane, or end the other session running in that folder; the next scan then binds it.",
+  },
+  missing: {
+    why: "No cmux terminal reports this session, so there is nothing to route Focus or Send to.",
+    next: "Open it in a cmux pane (or start the agent from one) and the next scan binds it.",
+  },
+};
+
+/* Normalized, render-ready view of one agent's identity trace. Pure. */
+function identityTraceView(agent) {
+  const trace = (agent && agent.identityTrace) || null;
+  const target = (agent && agent.target) || {};
+  const rawSteps = trace && Array.isArray(trace.steps) ? trace.steps : [];
+  return {
+    resolution: (trace && trace.resolution) || target.resolution || "missing",
+    matchedTier: (trace && trace.matchedTier) || null,
+    reason: (trace && trace.reason) || null,
+    surfaceId: (trace && trace.surfaceId) || target.surfaceId || null,
+    bridge: (trace && trace.bindingBridge) || null,
+    steps: rawSteps.map((step) => ({
+      tier: step.tier,
+      tierLabel: IDENTITY_TIER_LABELS[step.tier] || step.tier,
+      outcome: step.outcome,
+      outcomeLabel: IDENTITY_OUTCOME_LABELS[step.outcome] || step.outcome,
+      detail: step.detail || "",
+    })),
+  };
+}
+
+/* Which of the three real refusal shapes this is. Read off the tier that
+   actually refused, not off the resolution alone: every quarantine resolves as
+   "ambiguous", but a terminal contested by two sessions and a folder shared by
+   two sessions need different instructions. (Measured against the live board:
+   9 quarantined sessions, all `ambiguous`, all refused at the cwd tier.) */
+function identityCause(view) {
+  const refused = (tier) => view.steps.some((step) =>
+    step.tier === tier && (step.outcome === "quarantined" || step.outcome === "ambiguous"));
+  if (refused("session")) return "contested-terminal";
+  if (refused("cwd")) return "shared-folder";
+  return "missing";
+}
+
+/* The banner's whole story: what happened, why, and what to do about it.
+   Returns null when controls route normally. Pure. */
+function quarantineBrief(agent, control = deriveControlState(agent)) {
+  if (control === "linked") return null;
+  const view = identityTraceView(agent);
+  const cause = identityCause(view);
+  return {
+    title: control === "quarantined" ? "Control routing locked." : "Controls unavailable.",
+    summary: controlUnavailableText(control),
+    why: IDENTITY_CAUSES[cause].why,
+    nextStep: IDENTITY_CAUSES[cause].next,
+    cause,
+    steps: view.steps,
+  };
+}
+
+/* Short form of a provider session id — long enough to tell two sessions on
+   one terminal apart, short enough to read in a sentence. */
+function shortSessionId(id) {
+  const text = String(id || "");
+  return text.length > 10 ? text.slice(0, 8) + "…" : text;
+}
+
+/* GET /api/debug/identity?agent=<id> → the sentence the operator needs: which
+   terminal, and which sessions are fighting over it. The pids/commands/open
+   files live only on CmuxSurface, which the snapshot does not carry, so this is
+   the one piece of evidence that has to be fetched on demand. Pure. */
+function surfaceCollisions(payload) {
+  const surfaces = (payload && Array.isArray(payload.relatedSurfaces)) ? payload.relatedSurfaces : [];
+  return surfaces.map((surface) => {
+    const trace = surface.identityTrace || {};
+    const commandByPid = new Map((trace.processes || []).map((proc) => [proc.pid, proc.command]));
+    const claims = [];
+    const seen = new Set();
+    for (const match of trace.openFileMatches || []) {
+      const key = match.provider + ":" + match.sessionId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      claims.push({
+        provider: match.provider,
+        sessionId: match.sessionId,
+        pid: match.pid,
+        command: commandByPid.get(match.pid) || "",
+      });
+    }
+    return {
+      surfaceId: surface.surfaceId,
+      tty: surface.tty || "",
+      conflict: surface.identityConflict || trace.identityConflict || "",
+      claims,
+    };
+  });
+}
+
+function collisionClaimText(claim) {
+  const who = (PROVIDER_LABELS[claim.provider] || claim.provider) + " " + shortSessionId(claim.sessionId);
+  if (!claim.pid) return who;
+  return who + " (pid " + claim.pid + (claim.command ? ", " + conciseText(claim.command, 40) : "") + ")";
+}
+
+function collisionLine(collision) {
+  const where = collision.tty || collision.surfaceId || "this terminal";
+  if (!collision.claims.length) return where + " — no open agent session files observed.";
+  if (collision.claims.length === 1) return where + " — one session open: " + collisionClaimText(collision.claims[0]);
+  return where + " — " + collision.claims.length + " sessions claim it: "
+    + collision.claims.map(collisionClaimText).join(" · ");
+}
+
 function conciseText(value, limit = 88) {
   const text = String(value || "").split("\n")[0].replace(/^(goal:|you are)\s*/i, "").trim();
   if (text.length <= limit) return text;
@@ -1159,6 +1303,8 @@ globalThis.TheAntHill = {
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
+  identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
+  renderControlBanner, renderIdentityBlock,
   el,
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
@@ -1233,6 +1379,11 @@ const state = {
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
+  // Terminal-level identity evidence for the open drawer. The pids, commands
+  // and open-file matches that say "ttys082 has both of these sessions open"
+  // live on CmuxSurface, which /api/snapshot does not carry — so they are
+  // fetched on demand from the read-only GET /api/debug/identity.
+  identity: { agentId: null, loading: false, error: "", data: null },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1388,6 +1539,33 @@ async function recollectSnapshot() {
   } catch {
     await fetchSnapshot();
   }
+}
+
+/* On-demand terminal evidence for a quarantined session. Read-only GET; the
+   result is scoped to one agent id so a drawer switched mid-flight can never
+   adopt the previous agent's evidence. */
+async function loadIdentityEvidence(agentId) {
+  state.identity = { agentId, loading: true, error: "", data: null };
+  render();
+  let next;
+  try {
+    const res = await fetch("/api/debug/identity?agent=" + encodeURIComponent(agentId), {
+      headers: { accept: "application/json" },
+    });
+    let body = null;
+    try { body = await res.json(); } catch { /* non-JSON body */ }
+    if (!res.ok || !body || body.ok !== true) {
+      const message = (body && body.error && body.error.message) || "HTTP " + res.status;
+      throw new Error(message);
+    }
+    next = { agentId, loading: false, error: "", data: body };
+  } catch (err) {
+    next = { agentId, loading: false, error: err instanceof Error ? err.message : String(err), data: null };
+  }
+  // The operator moved on — do not paint stale evidence into another drawer.
+  if (state.identity.agentId !== agentId) return;
+  state.identity = next;
+  render();
 }
 
 let refetchTimer = null;
@@ -3261,8 +3439,14 @@ function findSelected() {
    nodes in place every 5s, so letting them into a paint signature would rebuild
    the drawer on every snapshot and defeat the guard. Their PRESENCE still
    matters (a tile appears when elapsedMs stops being null), so the projection
-   keeps a presence marker for each. */
-const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "identityTrace"]);
+   keeps a presence marker for each.
+
+   `identityTrace` itself is NOT in this set any more: the drawer now renders
+   the tier trail and the quarantine reason, so a resolution that changes has to
+   repaint. Only its one clock-like field (`confirmedAt`, the moment a persisted
+   binding was last re-confirmed) is dropped, because that moves on its own
+   without changing anything the operator reads. */
+const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "confirmedAt"]);
 
 /* The agent drawer paints very nearly the whole agent record — status, gates,
    model policy, tokens, cwd, git, messages, artifacts, transcript tail, target
@@ -3312,6 +3496,7 @@ function inspectorPaintSig(sel, view, ui) {
   const issue = view && (view.issue || view.item);
   const agent = view && view.kind === "agent" ? view.agent : null;
   const feedback = agent ? ui.feedback.get(agent.id) : null;
+  const identity = ui.identity || {};
   return [
     sel.kind, sel.id,
     view ? view.kind : "missing",
@@ -3334,6 +3519,15 @@ function inspectorPaintSig(sel, view, ui) {
     ui.renameError || "",
     ui.labelsLoading ? "1" : "0",
     ui.labelLoadError || "",
+    // On-demand terminal evidence: nothing else in the drawer moves when it
+    // lands, so without this the fetched surfaces would never reach the screen.
+    agent && identity.agentId === agent.id
+      ? [
+        identity.loading ? "1" : "0",
+        identity.error || "",
+        identity.data ? JSON.stringify(surfaceCollisions(identity.data)) : "",
+      ].join(":")
+      : "",
   ].join("\u001f");
 }
 
@@ -4054,25 +4248,38 @@ function renderStatusLine(agent, activity, outcome, control, policy) {
   return line;
 }
 
-/* Quarantine / observed-only: one banner, not a disabled Focus card. */
+/* Quarantine / observed-only: one banner, not a disabled Focus card. It names
+   the reason resolution refused, in the resolver's own words, and the one thing
+   the operator can do about it — the evidence was always in the payload; the
+   banner used to throw it away and print a fixed sentence instead. All of
+   `why` is agent-controlled text, so it rides textContent only. */
 function renderControlBanner(agent, control) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   const locked = [focusCap, instructCap].some((c) => c && !c.enabled);
   if (!locked) return null;
+  const brief = quarantineBrief(agent, control);
+
+  const copy = el("div", { class: "control-banner-copy" },
+    el("strong", { text: brief.title }),
+    " ",
+    controlUnavailableText(control));
+  if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
+  copy.append(el("button", {
+    type: "button",
+    class: "control-banner-link",
+    dataset: { fkey: "control-evidence:" + agent.id },
+    onclick: () => {
+      state.evidenceOpen = true;
+      if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
+      else render();
+    },
+  }, "See routing evidence →"));
 
   return el("div", { class: "control-banner", role: "status" },
     icon(control === "quarantined" ? "quarantine" : "observed"),
-    el("div", { class: "control-banner-copy" },
-      el("strong", { text: control === "quarantined" ? "Control routing locked." : "Controls unavailable." }),
-      " ",
-      controlUnavailableText(control),
-      " ",
-      el("button", {
-        type: "button",
-        class: "control-banner-link",
-        onclick: () => { state.evidenceOpen = true; render(); },
-      }, "See routing evidence →")));
+    copy);
 }
 
 function closeButton() {
@@ -4669,6 +4876,92 @@ function renderControlLink(target) {
   return wrap;
 }
 
+/* The routing story in full: which tier bound the session (or refused), the
+   ordered evidence trail, and — on demand — the ps/lsof view of the terminals
+   involved, which is the only place "ttys082 has both of these open" can come
+   from. Nothing here is fabricated: an agent with no trace renders nothing. */
+function renderIdentityBlock(agent, ui = state) {
+  const view = identityTraceView(agent);
+  if (!view.steps.length && !view.reason && !view.bridge) return null;
+
+  const wrap = el("div", { class: "identity-block" },
+    el("h3", { class: "section-title", text: "Identity resolution" }));
+
+  const verdict = view.matchedTier
+    ? "Bound by " + (IDENTITY_TIER_LABELS[view.matchedTier] || view.matchedTier).toLowerCase()
+      + " · " + (RESOLUTION_LABELS[view.resolution] || view.resolution)
+    : "Not bound · " + (RESOLUTION_LABELS[view.resolution] || view.resolution);
+  wrap.append(el("p", { class: "identity-verdict", text: verdict }));
+  if (view.reason) wrap.append(el("p", { class: "identity-reason", text: view.reason }));
+
+  if (view.steps.length) {
+    wrap.append(el("ol", { class: "identity-steps", "aria-label": "Identity resolution trail" },
+      view.steps.map((step) => el("li", { class: "identity-step identity-step--" + step.outcome },
+        el("span", { class: "identity-step-tier", text: step.tierLabel }),
+        el("span", { class: "identity-step-outcome", text: step.outcomeLabel }),
+        el("span", { class: "identity-step-detail", text: step.detail })))));
+  }
+
+  if (view.bridge) {
+    wrap.append(el("p", { class: "identity-note", text:
+      "A remembered binding to " + (view.bridge.surfaceId || "a terminal")
+      + " carried this session through a scan with no live evidence"
+      + (view.bridge.confirmedAt ? " (last confirmed " + agoText(view.bridge.confirmedAt) + ")" : "")
+      + "." }));
+  }
+
+  wrap.append(renderSurfaceEvidence(agent, ui));
+  return wrap;
+}
+
+/* The on-demand half. Only the debug endpoint knows the pids, commands and
+   open session files behind a terminal, so this is a button until asked. */
+function renderSurfaceEvidence(agent, ui = state) {
+  const identity = ui.identity || { agentId: null, loading: false, error: "", data: null };
+  const shown = identity.agentId === agent.id;
+  const wrap = el("div", { class: "identity-surfaces" });
+
+  if (!shown || identity.loading) {
+    wrap.append(el("button", {
+      type: "button",
+      class: "btn sm identity-load",
+      disabled: shown && identity.loading ? "" : null,
+      "aria-busy": shown && identity.loading ? "true" : null,
+      dataset: { fkey: "identity-load:" + agent.id },
+      onclick: () => void loadIdentityEvidence(agent.id),
+    }, shown && identity.loading ? "Reading terminals…" : "Show which terminals claim this session"));
+    return wrap;
+  }
+
+  if (identity.error) {
+    wrap.append(el("p", { class: "identity-error", role: "alert",
+      text: "Terminal evidence unavailable: " + identity.error }));
+    wrap.append(el("button", {
+      type: "button", class: "btn sm identity-load",
+      dataset: { fkey: "identity-load:" + agent.id },
+      onclick: () => void loadIdentityEvidence(agent.id),
+    }, "Retry"));
+    return wrap;
+  }
+
+  const collisions = surfaceCollisions(identity.data);
+  if (!collisions.length) {
+    wrap.append(el("p", { class: "identity-note", text: "No cmux terminal reports evidence for this session." }));
+    return wrap;
+  }
+  const list = el("ul", { class: "identity-surface-list", "aria-label": "Terminals claiming this session" });
+  for (const collision of collisions) {
+    const item = el("li", { class: "identity-surface" + (collision.claims.length > 1 ? " is-contested" : "") },
+      el("span", { class: "identity-surface-line mono", text: collisionLine(collision) }));
+    if (collision.conflict) {
+      item.append(el("span", { class: "identity-surface-conflict", text: collision.conflict }));
+    }
+    list.append(item);
+  }
+  wrap.append(list);
+  return wrap;
+}
+
 function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
@@ -4715,6 +5008,9 @@ function renderEvidence(agent) {
   if (link) dtdd(grid, "control link", link);
 
   if (grid.childNodes.length) panel.append(grid);
+
+  const identity = renderIdentityBlock(agent);
+  if (identity) panel.append(identity);
 
   const names = renderNamesDisclosure(agent);
   if (names) panel.append(names);
