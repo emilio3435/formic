@@ -1,3 +1,278 @@
+# WAVE 3 / FE-C — the four things the operator could not do
+
+Date: 2026-07-28
+Branch: `ant-hill/fe-capabilities-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/fe-capabilities-20260728`
+Base: `dbb468f` (wave-2 merge)
+Files touched: `src/web/app.js`, `src/web/styles.css`, `src/web/index.html`,
+`tests/web-client.test.ts` — nothing else.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **500 pass / 0 fail**, 2271 expect() calls, 29 files — no skips, no `.only`, no filtered runs |
+| Baseline before this lane | 467 pass (so 33 tests added) |
+| Pushed / merged / deployed | **no** — commits are local to this branch; `ai.imaginethat.anthill` was never touched |
+
+`bunx` needed the lockfile-pinned dev dependencies (`bun install --frozen-lockfile`).
+`package.json` and `bun.lock` are unchanged.
+
+### The tests are not hollow
+
+Thirty-one mutations were applied one at a time to the finished code and the
+suite re-run — seven per finding, plus two for the repairs in `038d58b`.
+**30 of 31 were caught.** Each original bug is among them: a
+`tickClocks` that ignores the frozen verdict, a dock that never holds, a
+`feedAlarm` that never fires on age, a transcript that renders all 1000 nodes, a
+missing route that lies "this agent has no transcript", a log that shows only
+successes, `staged` reported as `Delivered`, a notifier that announces the
+backlog on load, one that ignores the off switch, and one that fires without
+permission.
+
+**The one that slipped:** re-seeding `paintSig.alarm`/`paintSig.actions` with
+`""` instead of `null` is not caught by any test — see "Honest gaps" below.
+
+### What the unit suite structurally cannot reach
+
+The suite imports `app.js` with no `document`, so `boot()` and `render()` never
+run. I wrote a throwaway harness (not committed; it lives in this session's
+scratchpad) that drives the **real** boot path against a fake DOM with stubbed
+`fetch`, `EventSource`, `localStorage` and `Notification`. **It found two real
+bugs the unit tests had passed over** — both now fixed in `038d58b`, one of them
+with a regression test. Details under finding 1.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `1d34b11` | staleness alarm — the bar, the frozen clocks, the held controls (finding 1) |
+| `212f924` | inline transcript viewer (finding 2) |
+| `54ac50a` | action log + per-agent "last sent" fact (finding 3) |
+| `4aec9f5` | tab-title count + opt-in Notification (finding 4) |
+| `038d58b` | two staleness gaps found by driving the real boot path (finding 1) |
+
+## Per-finding status
+
+### 1. No staleness alarm — **FIXED** (`1d34b11`, `038d58b`)
+
+Wave 1 fixed the *badge*. A badge is something you have to go and look at, and
+the failure was that the operator looked at the board and believed it. One
+predicate, `feedAlarm(conn, generatedAt, now)`, now drives three surfaces so they
+cannot disagree about whether the board is trustworthy:
+
+- **The alarm.** A full-width bar between the masthead and the summary
+  (`#feed-alarm`), naming the age in the headline and carrying `Refresh now`
+  (wired to the existing `recollectSnapshot`). Unmissable by **position, not
+  animation** — I did not add a keyframe, because `tests/web-client.test.ts`
+  pins the complete keyframe inventory and the reduced-motion guard, and I would
+  rather not spend that budget on a bar that is already the widest ember thing on
+  the page.
+- **The clocks.** `tickClocks` no longer extrapolates elapsed while the feed is
+  frozen; it holds at the value the snapshot actually reported and marks the node
+  `is-frozen`. A dead agent's uptime climbing for four days was the most
+  convincing lie on the page, because it was the one thing visibly moving.
+  **`data-ago` deliberately keeps ticking** — "4d ago" is a real distance from a
+  real past moment, and freezing it would replace one lie with another.
+- **The controls.** Composer, Send, Focus, Interrupt, Archive, the head's action
+  copy and the broadcast dock are all held, with the reason stated. The reason is
+  about the **feed**, never a routing `capability.reason` — the existing rule
+  that the dock must not echo those is intact and still tested.
+- Plus `body.feed-frozen`, which recedes the summary rail and the roster, so
+  stale data looks stale where it is *displayed* and not only where it is
+  announced.
+
+The alarm keys off **snapshot age, never the transport**: the 25s server
+heartbeat is precisely what talked the old verdict down.
+
+**Two bugs the unit suite missed, found by driving `boot()`:**
+
+1. A feed that froze under an **open drawer** left the dock offering
+   live-looking controls. `generatedAt` is not in `inspectorPaintSig` and
+   `agentRecordSig` is byte-identical across a frozen refresh, so the paint guard
+   early-returned and the held state never rendered. The freshness verdict joined
+   the signature; there is a regression test for the frozen and offline cases.
+2. `renderFeedAlarm` and `renderActionsPanel` seeded their paint signature with
+   `""`, which is *also* their calm signature — so the very first paint was a
+   no-op. Both now set `hidden` on every paint **before** the guard, so the
+   signature only decides whether the subtree is worth rebuilding.
+
+Proven by ten tests under `FE-C: a frozen feed is announced…`: the alarm firing
+on data age under `conn === "live"`; not crying wolf on a merely lagging
+snapshot, an unparseable date, or no snapshot at all; the offline variant
+claiming no age it cannot support; the rendered copy and its keyed refresh
+control; `tickClocks` end-to-end over real `[data-elapsed-base]` nodes (the "4d"
+lie reproduced, then held at "60s"); the one-predicate identity; every dock
+control held with an fkey-keyed reason; the broadcast signature moving on a
+mid-compose freeze while typing still does not move it; and the open-drawer
+repaint.
+
+**Not mine, and still open:** `GET /api/health`, the `#performRefresh` timeout,
+and pointing `scripts/anthill-deploy.sh:44` at `/api/health` are all in
+`src/server/**` and `scripts/**`. The client half is done and does not depend on
+them — but **the deploy script still certifies a wedged server as LIVE.** Route it.
+
+### 2. No transcript viewer — **FIXED** (`212f924`)
+
+The snapshot carries a fixed 800-char tail (`MAX_TRANSCRIPT_TAIL_CHARS`), which
+is not enough to answer "this lane claims done — is that true?". Evidence grows
+an inline viewer over the contract's `GET /api/transcript?agent&limit`.
+
+- **`text` is untrusted agent output and rides `textContent`, with no
+  exceptions.** Every string goes through `el({ text })`. A test renders an
+  `<img onerror>` / `<script>` payload and asserts it is the node's own
+  `textContent` with zero child nodes — it cannot pass on a markup path.
+- **Degrades honestly.** The route does not exist in this worktree, so the common
+  case is a 404 with no JSON envelope: that reads **"Transcript view is not
+  available in this build."**, deliberately *not* "this agent has no
+  transcript", which is a lie the operator would act on. The contract's real 404
+  (`AGENT_NOT_FOUND`) reads differently on purpose, and a network failure reads
+  differently again.
+- **Never an endless spinner.** `loadTranscript` always settles into data or a
+  named error; the loading state is a stated status, and the failure state
+  carries a retry.
+- **Never invented content.** A non-string `text` is dropped rather than
+  `String()`-ed into `[object Object]`; an unknown role collapses to `unknown`;
+  a missing `source` stays `null` rather than becoming a plausible-looking path;
+  "no file recorded" and "file present, no readable turns" are different
+  sentences.
+- **Bounded.** 1000 turns render as 300 nodes — the window is the tail, and it
+  states the count it is hiding. `Load more` walks 200 → 500 → 1000 and stops.
+- Fetch is **opt-in per drawer** (fetching for every drawer open would hammer the
+  server for a panel nobody asked for) and **scoped to one agent id**, so a
+  drawer switched mid-flight cannot adopt the previous agent's turns.
+- `state.transcript` joined `inspectorPaintSig`, without which the fetched turns
+  would sit in state and never reach the screen — the exact failure mode
+  `state.identity` had.
+
+Seven tests. The end-to-end smoke run rendered 300 line nodes from a 420-line
+payload through the real drawer.
+
+### 3. No action log — **FIXED** (`54ac50a`)
+
+Consumes the contract's `GET /api/actions`.
+
+- A toolbar-toggled ledger under the roster (`#actions-panel`), newest-first,
+  with a fixed outcome column so a page of failures cannot hide among the
+  successes. All four outcomes get **distinct** words; `staged` reads
+  **"Staged — not submitted"**, which is the one the operator most needs and the
+  whole reason a success-only log is worse than none. A failure's own detail
+  string ("0 of 4 recipients delivered") is rendered, not summarised away.
+- **The per-agent fact**, which is the actual anti-double-instruct value: the
+  dock prints this agent's last journalled action right beside the button that
+  would resend it. It stays **silent until the log has loaded** — an unanswered
+  endpoint must never read as "nothing was ever sent to this agent".
+- Fetched **once at boot** plus after every control and broadcast, and on panel
+  open. A build without the route latches `available = false`, so a missing
+  endpoint is asked for once rather than every five seconds forever.
+- A fan-out collapses to "4 sessions" instead of a wall of ids, but an agent the
+  snapshot no longer names keeps its **raw id** rather than being silently
+  dropped from the record of who was instructed.
+- Missing route degrades to "not available in this build", never to the
+  empty-log copy.
+
+Six tests, including one asserting the drawer repaints when a journal entry
+lands or changes outcome.
+
+### 4. No out-of-page notification — **FIXED** (`4aec9f5`)
+
+- **Tab title.** `(3) The Ant Hill — operator console`. No permission, cannot
+  annoy anyone, and the prefix is idempotent so repainting cannot stack it into
+  `(3) (2) (1) …`.
+- **Notification, opt-in.** A masthead toggle. `requestPermission()` is called
+  from that click and **nowhere else** — a test asserts there is exactly one call
+  site in the whole client, that it is inside `toggleNotifications`, and that
+  `boot()` does not contain it. Asking on load is how a page gets denied
+  permanently, which would disable the feature forever.
+- **Denial is quiet.** "Alerts blocked", disabled, no nagging and no second
+  prompt. Unsupported browsers likewise. Both degrade to the title alone.
+- **It does not cry wolf.** It fires only for an agent that has *newly entered*
+  the needs-a-human set: not on count churn, not on an agent leaving, not on a
+  reordered payload, and **not on the first snapshot** — opening the page to six
+  waiting agents is not six pieces of news. A burst names three and counts the
+  rest, under one `tag`, so a second burst replaces the first instead of stacking
+  a pile to dismiss.
+- "Needs a human" is the board's own `deriveOutcome` verdict, so the
+  notification can never disagree with the page it came from.
+
+Seven tests, five of them about *silence*.
+
+## Honest gaps
+
+- **The `paintSig` seed fix has no test.** Re-seeding `alarm`/`actions` with `""`
+  survives the suite. `renderFeedAlarm` and `renderActionsPanel` mount into the
+  document and read module state, and I chose not to export mutable app state to
+  test them (FE-A/FE-B both declined the same trade). Instead I made the seed
+  **not load-bearing**: `hidden` is now assigned on every paint before the guard,
+  so a colliding seed can no longer suppress the alarm. The null seed remains as
+  belt-and-braces. This is a structural fix, not a tested one — say so if that is
+  not good enough.
+- **The two endpoints do not exist here.** Every claim above about the loaded
+  states is proven against the contract as written, with hand-built payloads and
+  a fake `fetch`. **Nothing in this lane has been exercised against the real
+  routes.** When the parallel lane lands, both features want one live pass —
+  especially the transcript's `truncated` semantics and the action log's
+  `agentIds` for `broadcast`.
+- **`renderBroadcastBar` is still untestable in isolation.** It reads module
+  state directly; FE-B named this same gap. I asserted the held state through
+  `broadcastPaintSig` and the smoke harness instead of threading `ui` through it,
+  because unpicking `selectedRecipients` and the confirm-key plumbing is a blast
+  radius this lane did not need.
+- **The smoke harness is not committed.** It is a scratchpad script, not a test:
+  its fake node does not implement `textContent = ""` as a child-clearing
+  operation, so its output shows stale duplicates. It is a bug-finding tool, and
+  it earned its keep twice. A real jsdom-backed boot test is worth a lane of its
+  own; it was not in my findings.
+- **No live QA.** Production runs from a different worktree under launchd and I
+  did not touch it, start a competing server, or run `/browse`.
+
+## What I deliberately left alone
+
+- **FE-A's live-input exclusions.** `drafts`, `renameDraft` and `broadcastDraft`
+  are still out of every paint signature, including the pieces I added, and the
+  tests pinning that exclusion are untouched. A test in my own block re-asserts
+  that typing does not move the broadcast signature even as freshness now does.
+- **No new `@keyframes`, no `animation:`.** The pinned inventory and the
+  reduced-motion guard are byte-identical.
+- **No source-regex tests**, with one deliberate exception: the
+  `requestPermission()` call-site assertion under finding 4. That is a
+  *placement* rule, not a style rule — "asked from a gesture, never on load" is
+  the security property, and it is not observable from rendered output.
+- **The existing 800-char `transcriptTail` `<pre>`**, kept beside the new viewer:
+  it is test-pinned and it is the only thing that works with no endpoint at all.
+- **Everything outside my four files.** No `src/server/**`, no `scripts/**`, no
+  `config/**`, no `package.json`, no docs other than this report.
+- **Nothing pushed, merged, deployed, or restarted.**
+
+## Out-of-scope observations (not fixed, not mine)
+
+1. **`scripts/anthill-deploy.sh:44` still certifies a wedged server as LIVE** by
+   curling `/` and printing LIVE on 200. The client now alarms, but the deploy
+   script does not. Highest-value leftover from finding 1. **Route it.**
+2. **No `GET /api/health` and no `#performRefresh` timeout.** `state.ts:140-144`
+   still coalesces on `#refreshing` with no deadline; the unguarded surfaces the
+   skeptic named (`collectors.ts:586-597` `collectSessions`, the synchronous
+   `bun:sqlite` reads in `cursor.ts:365/376/588`) are untested. Server lanes.
+3. **`renderHealthRail`, `renderTabs` and `renderFilterBar` still have no paint
+   guard** — FE-A's observation #1, unchanged; still cheap now that
+   `reconcileKeyed` exists.
+4. **The client's paint guards are all seeded with `""`.** `programs`,
+   `inspector`, `widgets` and `broadcast` are safe today only because their calm
+   signatures are non-empty strings (`"closed"`, `"empty"`, …). That is a
+   coincidence of their current shapes, not a rule. A cheap follow-up is to seed
+   every one of them `null`.
+5. **`agentsById` is now called from three more places per paint** (the action
+   panel, the notifier). It is `WeakMap`-memoized on snapshot identity, so this
+   is free — noting it only because the memo is now load-bearing for more than
+   `affectedImpact`.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
 # WAVE 2 / FE-B — client cost, dead weight, and the quarantine dead end
 
 Date: 2026-07-28
