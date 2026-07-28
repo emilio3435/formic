@@ -1,3 +1,154 @@
+# Wave 1 / OPS — production-sensitive scripts
+
+Date: 2026-07-28
+
+Branch: `ant-hill/ops-scripts-20260728`
+
+Code and regression-test commit: `078e016`
+
+Nothing was pushed, merged, deployed, restarted, or run against the live
+`ai.imaginethat.anthill` service. All mutation checks used disposable fixtures
+under `/private/tmp/claude-501`.
+
+## Finding results
+
+### 1. Hygiene could repoint production at the wrong worktree
+
+- **Status:** FIXED
+- **Commit:** `078e016`
+- **Change:** `anthill-hygiene.sh` now derives its default repo from its own
+  location and requires that repo to be on `main` before any plist write,
+  `launchctl` call, or listener handling. `ANTHILL_REPO` remains available for an
+  explicit main-worktree override and is subject to the same branch guard.
+- **Proof:** `tests/anthill-scripts.test.ts` — “hygiene refuses a feature-branch
+  worktree before rewriting its LaunchAgent plist”. The fixture preserves a
+  production-plist sentinel and proves the fake `launchctl` was never called.
+- **Deliberately left alone:** no live plist, listener, service, or production
+  worktree was inspected or changed.
+
+### 2. Throwaway preview shared production persistence
+
+- **Status:** FIXED
+- **Commit:** `078e016`
+- **Change:** `anthill-preview.sh` copies the invoking worktree's current `src/`
+  and `config/` into a per-run `mktemp` root, creates a fresh `data/`, copies only
+  `data/cmux-socket.env` when present, runs the server in the temporary root, and
+  removes the root on exit. Preview writes therefore resolve beneath the
+  temporary project root rather than the invoking worktree's `data/`.
+- **Proof:** `tests/anthill-scripts.test.ts` — “preview writes only to its
+  temporary data root and removes it after exit”. A fake server performs the
+  same relative `data/archive.json` write that the real server performs; the
+  production sentinel remains byte-identical and the temporary root is gone.
+- **Deliberately left alone:** `src/server/index.ts` was not edited because
+  `src/**` belongs to another lane. Preview state is intentionally not seeded
+  from production; only cmux socket authentication is shared.
+
+### 3. `bun start` discarded its PATH-resolved cmux executable
+
+- **Status:** FIXED
+- **Commit:** `078e016`
+- **Change:** the in-shell path resolves cmux and exports
+  `CMUX_EXECUTABLE`; the dedicated-workspace path includes the safely
+  shell-escaped resolved executable in its server command.
+- **Proof:** `tests/anthill-scripts.test.ts` — “start propagates a PATH-resolved
+  cmux executable to both server launch paths”. The fake cmux binary lives in a
+  directory containing a space; the test executes the captured workspace
+  command and proves both server launches receive the exact resolved path.
+- **Deliberately left alone:** `src/server/cmux.ts` is outside this lane and did
+  not need modification once the launcher supplies the runtime override.
+  `scripts/setup-cmux-password.ts` was also left unchanged: its config-reload
+  executable selection is separate from the reported `bun start` propagation
+  defect.
+
+### 4. `bun start` could not run without cmux
+
+- **Status:** ALREADY-FIXED / FIXED
+- **Commit:** `b02f236`
+- **Change:** none in this lane. The branch already contained
+  `fix(start): honest shell fallback when cmux is absent`, which routes auto mode
+  to `run_server_here` and reports that Focus/Send remain disabled.
+- **Proof:** `git show b02f236 -- scripts/anthill-start.sh`, plus
+  `tests/anthill-scripts.test.ts` — “start keeps the existing no-cmux fallback
+  and binds the canonical port”. The scratch run has no cmux on PATH, exits 0,
+  prints the monitoring-only warning, and invokes the fake Bun server.
+- **Deliberately left alone:** the existing fallback implementation and wording
+  were not rewritten or otherwise “improved”.
+
+### 5. `bun start` defaulted to port 4702
+
+- **Status:** FIXED for this lane's script side
+- **Commit:** `078e016`
+- **Change:** `anthill-start.sh` and its `--help` text now default to 4701,
+  matching the server default. With production already answering on 4701,
+  `already_up` reuses that instance instead of starting a second writer on
+  4702.
+- **Proof:** `tests/anthill-scripts.test.ts` — “start keeps the existing no-cmux
+  fallback and binds the canonical port” proves the launched fake server
+  receives `MOUNTAIN_PORT=4701`.
+- **Deliberately left alone / docs handoff:** README's operator URL and DEPLOY's
+  production table already say 4701 and need no script-lane edit. QUICKSTART's
+  current fallback URL still says `http://127.0.0.1:4702`; its owner needs to
+  change that URL to `http://127.0.0.1:4701`. No README, QUICKSTART, DEPLOY,
+  package, config, or `src/**` file was edited.
+
+## Executable before/after evidence
+
+Before the code change, the scratch regression run failed all four checks. These
+are the relevant terminal lines captured from that run:
+
+```text
+LaunchAgent pointed at wrong tree:
+  WorkingDirectory=<missing>
+  ProgramArguments[1]=<missing>
+Repointing to /private/tmp/claude-501/anthill-ops-tests-25500/hygiene-feature-branch
+
+fake bun cwd=/private/tmp/claude-501/anthill-ops-tests-25500/preview-data-isolation data=/private/tmp/claude-501/anthill-ops-tests-25500/preview-data-isolation/data
+
+Received: "MOUNTAIN_PORT=4702 bun run start:server"
+Received: "port=4702 cmux=/private/tmp/claude-501/anthill-ops-tests-25500/start-no-cmux/missing-cmux args=run start:server"
+
+0 pass
+4 fail
+```
+
+After the code change, the same scratch test file produced:
+
+```text
+(pass) production-safe Ant Hill scripts > hygiene refuses a feature-branch worktree before rewriting its LaunchAgent plist
+(pass) production-safe Ant Hill scripts > preview writes only to its temporary data root and removes it after exit
+(pass) production-safe Ant Hill scripts > start propagates a PATH-resolved cmux executable to both server launch paths
+(pass) production-safe Ant Hill scripts > start keeps the existing no-cmux fallback and binds the canonical port
+
+4 pass
+0 fail
+19 expect() calls
+Ran 4 tests across 1 file.
+```
+
+A direct post-fix invocation against this feature-branch worktree, with HOME
+redirected to scratch, exited before any service action:
+
+```text
+error: Hygiene worktree must be on 'main' (currently 'ant-hill/ops-scripts-20260728'). Aborting.
+```
+
+## Final verification
+
+- `bash -n scripts/anthill-hygiene.sh scripts/anthill-preview.sh scripts/anthill-start.sh` — passed.
+- `bunx tsc --noEmit` — passed with no diagnostics.
+- `bun test` — **371 pass, 0 fail, 1581 expect() calls, 25 files**.
+  The conditional SQLCipher case ran and passed; no tests were skipped, focused,
+  or filtered.
+- `git diff --check` — passed.
+- The repository has no lint script and `shellcheck` is not installed; no lint
+  result is claimed.
+- The first typecheck attempt could not use Bun's sandboxed temp/cache path, and
+  the next exposed that this fresh worktree had no installed `@types/bun`.
+  `bun install --frozen-lockfile` installed the tracked dependencies without
+  changing `package.json` or `bun.lock`; the exact required commands then passed.
+
+---
+
 # Under-hood program lane reports — 2026-07-23
 
 # SOL under-hood backend quick wins
