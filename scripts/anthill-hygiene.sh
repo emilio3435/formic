@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Ant Hill hygiene — keep the LaunchAgent on main the-mountain, port 4701 healthy,
+# Ant Hill hygiene — keep the LaunchAgent on this main worktree, port 4701 healthy,
 # and programs.json covering worktree lanes. Safe to re-run anytime.
 set -euo pipefail
 
-REPO="${ANTHILL_REPO:-/Users/emilionunezgarcia/Developer/the-mountain}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${ANTHILL_REPO:-${ROOT}}"
 PORT="${MOUNTAIN_PORT:-4701}"
 LABEL="ai.imaginethat.anthill"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
@@ -28,10 +29,16 @@ need launchctl
 need curl
 need plutil
 need python3
+need git
 [[ -n "${BUN_BIN}" && -x "${BUN_BIN}" ]] || die "bun not found (set BUN_BIN)"
 [[ -d "${REPO}" ]] || die "repo not found: ${REPO}"
 [[ -f "${SERVER_ENTRY}" ]] || die "server entry not found: ${SERVER_ENTRY}"
 [[ -f "${PROGRAMS_JSON}" ]] || die "programs.json not found: ${PROGRAMS_JSON}"
+
+BRANCH="$(git -C "${REPO}" branch --show-current 2>/dev/null || true)"
+if [[ "${BRANCH}" != "main" ]]; then
+  die "Hygiene worktree must be on 'main' (currently '${BRANCH}'). Aborting."
+fi
 
 FIXED_PLIST=0
 RESTARTED=0
