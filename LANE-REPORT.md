@@ -669,3 +669,70 @@ model (was 25 / 162); 0 blank.** Regression test added: a subagent absent from
 conversation-search, with no ai-tracking row, resolves its `model` and `effort`
 purely from `composerData`. Final `bun run check`: **356 pass, 0 fail** (typecheck
 strict clean).
+
+---
+
+# WAVE 2 / BE-B — identity evidence and snapshot truth
+
+Branch: `ant-hill/be-identity-20260728`
+
+## Verification
+
+- `bunx tsc --noEmit`: clean
+- `bun test`: 402 passing, 0 failing, no skipped or filtered tests
+- `git diff --check`: clean
+
+## Findings
+
+### 1. lsof failure was fail-open — **FIXED**
+
+- Commit: `ae00ad2`
+- A timed-out `lsof`, or a nonzero exit without usable identity output, now returns `probe-failed` traces, clears carried session IDs, and marks affected surfaces conflicted so cwd fallback and sticky bindings cannot re-enable controls. Nonzero output with a usable allowlisted session path remains accepted, including routine nonempty `lsof` stderr.
+- Proof: `tests/identity.test.ts` — “a timed-out open-session lookup rejects truncated identity evidence and quarantines the surface” and “partial allowlisted lsof output remains usable when a target PID races away”.
+- Left alone: `src/server/state.ts` is owned by another lane. Failed probes cannot satisfy `updateBindingsFromScan`, and the conflicted surface preserves the binding quarantine invariant.
+
+### 2. Stale session elapsed time kept growing — **FIXED**
+
+- Commit: `22fb155`
+- Elapsed time now stops at `updatedAt` for stale sessions as well as archived sessions.
+- Proof: `tests/snapshot.test.ts` — “stale elapsed time stops at the last observed activity”.
+- Left alone: Client extrapolation was already limited to non-ended agents.
+
+### 3. Archive copies dropped conversation fields — **FIXED**
+
+- Commit: `22fb155`
+- Archive copies now retain `lastUserMessage`, `lastAgentMessage`, and `allowCwdFallback`.
+- Proof: `tests/archive.test.ts` — “persists enough source truth to render an archive after the live file leaves the scan window”.
+- Left alone: The existing explicit-copy convention remains in place.
+
+### 4. identityTrace was eagerly built and shipped — **BLOCKED**
+
+- Commit: N/A
+- A complete lazy implementation requires changing the target-only resolver in `src/server/targets.ts` and/or the on-demand consumer in `src/server/debug-identity.ts`. Neither file is owned by this lane, and `resolveAgentTarget` still delegates to the trace-building resolver. Removing the field only in owned `snapshot.ts` would retain the construction cost or break `/api/debug/identity`.
+- Test: None, because no in-scope implementation can satisfy the finding without changing forbidden files.
+- Left alone: `snapshot.ts` trace construction and fingerprint stripping remain unchanged.
+
+### 5. Archived agents accumulated in live snapshots — **FIXED**
+
+- Commit: `22fb155`
+- Durable agent archive records are pruned on load and persist after 30 days, and archived agents older than the configured scan window are excluded from the live snapshot.
+- Proof: `tests/archive.test.ts` — “agent archive records older than the retention window are pruned on load” and “persisting a new archive prunes records that expired after load”; `tests/snapshot.test.ts` — “archived sources outside the configured scan window stay out of the live snapshot”.
+- Left alone: Legacy string-only archive IDs have no timestamp and cannot be aged safely; they do not enter snapshots.
+
+### 6. Identity enrichment rebuilt indexes per surface — **FIXED**
+
+- Commit: `ae00ad2`
+- Agent identity and process-by-tty indexes are now built once per scan, and command-hint resolutions are cached across surfaces.
+- Proof: The identity and identity-trace suites protect match, conflict, ancestry, command-hint, and no-evidence behavior. No timing assertion was added because it would be environment-dependent; the structural regression is directly reviewable in `enrichCmuxIdentity`.
+- Left alone: The remaining prefix scan runs once per distinct hint and preserves matching semantics.
+
+### 7. Binding persistence rewrote once per session — **FIXED**
+
+- Commit: `9f402af`
+- Stores now accept a batch, and one identity scan commits all confirmed bindings through one queued atomic write/rename.
+- Proof: `tests/identity-bindings.test.ts` — “one scan persists all confirmed bindings with one atomic file write”. The existing conflict test still proves a binding cannot un-quarantine a conflicted surface.
+- Left alone: No confirmation-time debounce was added; one write per scan removes the amplification without weakening freshness semantics.
+
+## Out-of-scope observations
+
+No additional out-of-scope defects were changed.
