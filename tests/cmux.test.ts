@@ -66,3 +66,64 @@ describe("cmux timeout results", () => {
     expect(commands).toHaveLength(2);
   });
 });
+
+describe("cmux terminal discovery outcomes", () => {
+  test("reports a non-zero discovery exit with stderr", async () => {
+    const runner: CommandRunner = {
+      run: async () => ({
+        exitCode: 17,
+        stdout: "",
+        stderr: "socket unavailable",
+        timedOut: false,
+      }),
+    };
+
+    await expect(collectCmux(runner, "cmux")).resolves.toEqual({
+      value: [],
+      errors: ["cmux terminal discovery exited 17: socket unavailable"],
+    });
+  });
+
+  test("reports invalid discovery output as an error", async () => {
+    const runner: CommandRunner = {
+      run: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({ result: {} }),
+        stderr: "",
+        timedOut: false,
+      }),
+    };
+
+    const result = await collectCmux(runner, "cmux");
+    expect(result.value).toEqual([]);
+    expect(result.errors).toEqual([
+      "cmux terminal discovery returned invalid JSON: cmux response did not contain a terminals array",
+    ]);
+  });
+
+  test("returns parsed terminals and uses the bounded discovery command", async () => {
+    const calls: { command: readonly string[]; timeoutMs?: number }[] = [];
+    const runner: CommandRunner = {
+      run: async (command, timeoutMs) => {
+        calls.push({ command: [...command], timeoutMs });
+        return {
+          exitCode: 0,
+          stdout: discovery({ surface_title: "Ridge worker" }),
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+
+    const result = await collectCmux(runner, "cmux");
+
+    expect(result).toMatchObject({
+      value: [{ surfaceId: "SURFACE-1", title: "Ridge worker" }],
+      errors: [],
+    });
+    expect(calls).toEqual([{
+      command: ["cmux", "rpc", "debug.terminals", "{}"],
+      timeoutMs: 10_000,
+    }]);
+  });
+});
