@@ -192,6 +192,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--faint);
 }
 
+.masthead-signals { align-self: center; display: flex; align-items: center; gap: 0.5rem; }
+.notify-toggle { white-space: nowrap; }
+.notify-toggle.is-on { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); }
+
 .conn {
   align-self: center;
   margin: 0;
@@ -220,6 +224,59 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .conn-reconnecting .conn-dot { animation: sun-pulse 1.4s ease-in-out infinite; }
 .conn-offline { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line-strong)); }
 .conn-offline .conn-dot { background: var(--bad); }
+
+/* ---------- staleness alarm ----------
+   Rule 1 (indicator inks, not flood fills) bends here on purpose: this is the
+   one surface that must be impossible to scan past, because the failure it
+   reports is precisely "the operator looked at the board and believed it". A
+   soft ember wash plus a 3px ember cap rule, and no motion of any kind, so the
+   reduced-motion guard and the pinned keyframe inventory both stay intact. */
+
+.feed-alarm {
+  flex: none;
+  border-top: 3px solid var(--ember);
+  border-bottom: 1px solid color-mix(in srgb, var(--ember) 35%, var(--line-strong));
+  background: var(--ember-soft);
+}
+.feed-alarm[hidden] { display: none; }
+.feed-alarm-inner {
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0.6rem 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.feed-alarm-inner > svg { flex: none; width: 20px; height: 20px; color: var(--ember); }
+.feed-alarm-inner.is-offline > svg { color: var(--bad); }
+.feed-alarm-copy { flex: 1 1 auto; min-width: 0; }
+.feed-alarm-head {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--ember);
+}
+.feed-alarm-inner.is-offline .feed-alarm-head { color: var(--bad); }
+.feed-alarm-detail {
+  margin: 0.15rem 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.feed-alarm-refresh { flex: none; }
+
+/* Stale data has to look stale everywhere it is DISPLAYED, not only where it is
+   announced — the summary numbers and the roster recede while the alarm holds. */
+body.feed-frozen .rail-inner,
+body.feed-frozen .programs { opacity: 0.62; }
+
+/* A frozen clock reads as a held instrument, not as a live one. */
+.is-frozen {
+  color: var(--faint);
+  text-decoration: underline dotted color-mix(in srgb, var(--ember) 60%, transparent);
+  text-underline-offset: 3px;
+}
 
 /* ---------- health rail (single operational summary) ---------- */
 
@@ -1961,6 +2018,17 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .command-dock-ready { color: var(--moss); font-weight: 650; }
 .command-dock-hint { color: var(--faint); }
+/* A held dock is visibly held: the reason reads first, and the controls under it
+   are dimmed so "enabled-looking" and "actually sendable" cannot diverge. */
+.command-dock.is-held { border-top-color: color-mix(in srgb, var(--ember) 55%, var(--line)); }
+.command-dock-stale {
+  margin: 0 0 0.4rem;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ember);
+}
+.dock-tool.is-held { opacity: 0.55; }
 .command-composer {
   display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; align-items: stretch;
 }
@@ -2140,6 +2208,49 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .transcript { margin: 0; padding: 0.6rem 0.7rem; max-height: 13rem; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* ---------- inline transcript ----------
+   Untrusted agent output rendered as text. The log scrolls inside its own box so
+   a long tail can never stretch the drawer, and role is carried on a data
+   attribute rather than a composed class so the stylesheet lint stays exact. */
+
+.transcript-view { display: flex; flex-direction: column; gap: 0.4rem; }
+.transcript-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+  font-size: 11.5px; color: var(--faint);
+}
+.transcript-source { font-weight: 650; color: var(--muted); }
+.transcript-more { color: var(--amber); }
+.transcript-source-path {
+  flex: 1 1 12rem; min-width: 0;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.transcript-log {
+  max-height: 22rem; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.tr-line { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.55rem; align-items: baseline; }
+.tr-meta { display: flex; flex-direction: column; gap: 0.05rem; min-width: 0; }
+.tr-role {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint);
+}
+.tr-line[data-role="user"] .tr-role { color: var(--slate); }
+.tr-line[data-role="assistant"] .tr-role { color: var(--moss); }
+.tr-line[data-role="tool"] .tr-role { color: var(--clay); }
+.tr-line[data-role="system"] .tr-role { color: var(--amber); }
+.tr-at { font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
+.tr-text {
+  margin: 0;
+  font-size: 12px; line-height: 1.5; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tr-line[data-role="tool"] .tr-text { font-family: var(--font-mono); font-size: 11px; }
+
 .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
 .artifact-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; font-size: 12.5px; }
 .artifact-kind { font-family: var(--font-mono); font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -2225,6 +2336,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .broadcast-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem; border: 1px solid color-mix(in srgb, var(--ember) 45%, transparent); border-radius: var(--radius-sm); background: var(--ember-soft); font-size: 13px; }
 .broadcast-note { font-size: 12px; color: var(--faint); }
 .broadcast-note.err { color: var(--ember); }
+.broadcast-note.is-held { color: var(--ember); font-weight: 650; }
 
 /* ---------- empty state ---------- */
 
@@ -2387,6 +2499,53 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 
 /* ---------- usage tab ---------- */
+
+/* ---------- action log ----------
+   A ledger, not a feed: fixed columns so outcome is scannable down one edge and
+   a page of failures cannot hide among the successes. */
+
+.actions-panel { padding: 0 1.1rem 1.1rem; }
+.actions-panel[hidden] { display: none; }
+.actions-toggle.is-open { border-color: var(--line-strong); color: var(--ink); }
+.action-log { display: flex; flex-direction: column; gap: 0.5rem; }
+.action-log-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.action-log-title {
+  margin: 0;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
+}
+.action-log-note { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--faint); }
+.action-log-note.err { color: var(--ember); }
+.action-rows {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: var(--raise);
+  max-height: 24rem; overflow: auto;
+}
+.action-row {
+  display: grid;
+  grid-template-columns: 5rem 5.5rem minmax(6rem, 1fr) 9rem minmax(0, 1.4fr);
+  gap: 0.6rem; align-items: baseline;
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.action-row:last-child { border-bottom: 0; }
+.action-when, .action-kind { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
+.action-kind { color: var(--muted); font-weight: 650; }
+.action-who { color: var(--muted); overflow-wrap: anywhere; }
+.action-outcome { font-weight: 650; color: var(--muted); }
+.action-detail { color: var(--faint); overflow-wrap: anywhere; }
+.action-row[data-tone="ok"] .action-outcome { color: var(--moss); }
+.action-row[data-tone="warn"] .action-outcome { color: var(--amber); }
+.action-row[data-tone="err"] .action-outcome { color: var(--ember); }
+.command-dock-last { margin: 0 0 0.4rem; font-size: 11.5px; color: var(--faint); }
+.command-dock-last[data-tone="err"] { color: var(--ember); }
+.command-dock-last[data-tone="warn"] { color: var(--amber); }
+
+@media (max-width: 720px) {
+  .action-row { grid-template-columns: 1fr 1fr; }
+}
 
 .usage-panel {
   display: grid;

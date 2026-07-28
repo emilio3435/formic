@@ -4185,3 +4185,667 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(fn).not.toMatch(/\bconst state\b/);
   });
 });
+
+/* ---------------------------------------------------------------------------
+   WAVE 3 / FE-C — the four things the operator could not do.
+
+   Finding 1: :4701 served a 91-hour-frozen snapshot while the UI read "Live".
+   Wave 1 fixed the BADGE. A badge is something you have to go and look at; the
+   failure was that the operator looked at the board and believed it. This block
+   pins the alarm, the clocks and the controls all keying off ONE predicate, so
+   they can never disagree about whether the board is trustworthy.
+   ------------------------------------------------------------------------- */
+
+const FROZEN_AT = "2026-07-24T12:42:29.656Z";   // the real generatedAt on the wedged box
+const FROZEN_NOW = Date.parse("2026-07-28T08:00:00.000Z"); // ~91h later
+
+describe("FE-C: a frozen feed is announced, not merely available on inspection", () => {
+  test("(1) the alarm fires on DATA age — a live socket cannot talk it down", () => {
+    const now = FROZEN_NOW;
+    // Fresh data: no alarm, whatever the transport thinks.
+    expect(M.feedAlarm("live", new Date(now - 3_000).toISOString(), now)).toBeNull();
+    expect(M.feedAlarm("reconnecting", new Date(now - 3_000).toISOString(), now)).toBeNull();
+    // The exact production failure: conn === "live" (the server heartbeats every
+    // 25s from a timer that knows nothing about the collector) over a snapshot
+    // generated four days ago. The alarm must fire anyway.
+    const alarm = M.feedAlarm("live", FROZEN_AT, now);
+    expect(alarm).not.toBeNull();
+    expect(alarm.kind).toBe("frozen");
+    expect(alarm.headline).toContain("Feed frozen");
+    expect(alarm.headline).toContain("4d");              // the age, in the headline
+    expect(alarm.ageMs).toBeGreaterThan(91 * 3_600_000);
+    // It names the consequence, not just the condition.
+    expect(alarm.detail).toContain("Controls are held");
+  });
+
+  test("(1) it does not cry wolf: a merely lagging snapshot is not an alarm", () => {
+    const now = FROZEN_NOW;
+    // 30s > SNAPSHOT_FRESH_MS but <= SNAPSHOT_STALE_MS: "lagging", not stale.
+    expect(M.snapshotFreshness(new Date(now - 30_000).toISOString(), now).state).toBe("lagging");
+    expect(M.feedAlarm("live", new Date(now - 30_000).toISOString(), now)).toBeNull();
+    // Nothing collected yet is not evidence of staleness — never invent one.
+    expect(M.feedAlarm("connecting", null, now)).toBeNull();
+    expect(M.feedAlarm("live", "not-a-date", now)).toBeNull();
+    // 61s past the stale threshold does alarm.
+    expect(M.feedAlarm("live", new Date(now - 61_000).toISOString(), now)).not.toBeNull();
+  });
+
+  test("(1) an unreachable server is its own alarm, with no invented age", () => {
+    const alarm = M.feedAlarm("offline", FROZEN_AT, FROZEN_NOW);
+    expect(alarm.kind).toBe("offline");
+    expect(alarm.ageMs).toBeNull();               // no age claim we cannot support
+    expect(alarm.headline).toContain("not updating");
+  });
+
+  test("(1) the alarm names the age and carries the one action that repairs it", () => {
+    const alarm = M.feedAlarm("live", FROZEN_AT, FROZEN_NOW);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const node: any = withDom(() => M.feedAlarmNode(alarm));
+    const text = textOf(node);
+    expect(text).toContain("Feed frozen");
+    expect(text).toContain("4d");
+    expect(text).toContain("Refresh now");
+    const refresh = buttonsOf(node);
+    expect(refresh).toHaveLength(1);
+    // Repainted chrome without an fkey loses keyboard focus on every snapshot.
+    expect(refresh[0].dataset.fkey).toBe("feed-alarm-refresh");
+    // Offline gets the severed-node mark, not the advisory diamond.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const offline: any = withDom(() => M.feedAlarmNode(M.feedAlarm("offline", null, FROZEN_NOW)));
+    expect(byClass(offline, "is-offline")).not.toBeNull();
+  });
+
+  test("(1) tickClocks stops extrapolating a dead agent's uptime while the feed is frozen", () => {
+    const base = 60_000;
+    const from = "2026-07-24T12:42:29.656Z";
+    const now = Date.parse(from) + 5_000;
+    // Healthy board: the clock advances with wall time, exactly as before.
+    expect(M.elapsedTickText(base, from, now, false)).toBe("65s");
+    // Frozen board: it HOLDS at the value the snapshot actually reported. The
+    // bug was that this number kept climbing for four days, which made a dead
+    // agent the most convincingly alive thing on the page.
+    expect(M.elapsedTickText(base, from, FROZEN_NOW, true)).toBe("60s");
+    expect(M.elapsedTickText(base, from, FROZEN_NOW, false)).toBe("4d"); // the lie, for contrast
+    // Unreadable datasets yield null rather than "—" written over a real value.
+    expect(M.elapsedTickText("nope", from, now, false)).toBeNull();
+    expect(M.elapsedTickText(base, "nope", now, false)).toBeNull();
+    expect(M.elapsedTickText(base, "nope", now, true)).toBe("60s"); // frozen needs no `from`
+  });
+
+  test("(1) the 5s clock tick itself holds — not merely the helper it calls", () => {
+    // End-to-end over the real loop: tickClocks walks [data-elapsed-base] nodes
+    // and rewrites them in place, which is where the four-day lie was painted.
+    const uptime = newNode("div");
+    uptime.dataset.elapsedBase = "60000";
+    uptime.dataset.elapsedFrom = FROZEN_AT;
+    const ago = newNode("div");
+    ago.dataset.ago = FROZEN_AT;
+    const doc = {
+      querySelectorAll: (sel: string) =>
+        (sel === "[data-elapsed-base]" ? [uptime] : sel === "[data-ago]" ? [ago] : []),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withStub = (fn: () => void) => {
+      (globalThis as unknown as { document: unknown }).document = doc;
+      try { fn(); } finally { delete (globalThis as unknown as { document?: unknown }).document; }
+    };
+
+    withStub(() => M.tickClocks(false, FROZEN_NOW));
+    expect(uptime.textContent).toBe("4d");                 // the bug, reproduced
+    expect(uptime.classList.contains("is-frozen")).toBe(false);
+
+    withStub(() => M.tickClocks(true, FROZEN_NOW));
+    expect(uptime.textContent).toBe("60s");                // held at the reported value
+    expect(uptime.classList.contains("is-frozen")).toBe(true);
+
+    // "4d ago" is a real distance from a real past moment — freezing it would
+    // replace one lie with another, so it keeps ticking.
+    expect(ago.textContent).toContain("ago");
+  });
+
+  test("(1) one predicate drives the alarm, the clocks and the controls", () => {
+    for (const [conn, at] of [["live", FROZEN_AT], ["offline", null], ["live", null]] as [string, string | null][]) {
+      expect(M.clocksFrozen(conn, at, FROZEN_NOW)).toBe(M.feedAlarm(conn, at, FROZEN_NOW) !== null);
+    }
+    // feedFrozen reads the same rule off a state-shaped object.
+    expect(M.feedFrozen({ conn: "live", snap: { generatedAt: FROZEN_AT } }, FROZEN_NOW)).toBe(true);
+    expect(M.feedFrozen({ conn: "live", snap: { generatedAt: new Date(FROZEN_NOW).toISOString() } }, FROZEN_NOW)).toBe(false);
+    expect(M.feedFrozen({ conn: "connecting", snap: null }, FROZEN_NOW)).toBe(false);
+  });
+
+  test("(1) every control in the dock is held — and says so — on a frozen board", () => {
+    const live = agent({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+        { action: "archive", enabled: true },
+      ],
+    });
+    const alarm = M.feedAlarm("live", FROZEN_AT, FROZEN_NOW);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ok: any = withDom(() => M.renderCommandDock(live, "linked", null));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const heldDock: any = withDom(() => M.renderCommandDock(live, "linked", alarm));
+
+    // Baseline: on a healthy board these controls are live.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const enabledOf = (n: any) => buttonsOf(n).map((b: any) => b.hasAttribute("disabled"));
+    expect(enabledOf(ok).every((d: boolean) => d === false)).toBe(true);
+    expect(byClass(ok, "command-dock-stale")).toBeNull();
+    expect(byClass(ok, "command-dock--linked")).not.toBeNull();
+
+    // Frozen: nothing is clickable, and the input cannot be typed into either.
+    expect(enabledOf(heldDock).every((d: boolean) => d === true)).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const input: any = findAll(heldDock, (n: any) => n.tagName === "input")[0];
+    expect(input.hasAttribute("disabled")).toBe(true);
+    expect(input.attributes.placeholder).toContain("Held");
+    // The reason is stated, and it is about the FEED — not a routing capability
+    // reason, which this chrome is forbidden to echo.
+    const note = byClass(heldDock, "command-dock-stale");
+    expect(note).not.toBeNull();
+    expect(textOf(note)).toContain("out of date");
+    // "Ready · linked" is a claim the board cannot support while frozen.
+    expect(textOf(heldDock)).not.toContain("Ready · linked");
+  });
+
+  test("(1) the held reason is about the feed, and offline vs frozen read differently", () => {
+    expect(M.staleControlNote(null)).toBe("");
+    expect(M.staleControlNote(M.feedAlarm("offline", null, FROZEN_NOW))).toContain("unreachable");
+    const frozen = M.staleControlNote(M.feedAlarm("live", FROZEN_AT, FROZEN_NOW));
+    expect(frozen).toContain("4d");
+    expect(frozen).toContain("Refresh");
+  });
+
+  test("(1) a feed that freezes under an OPEN drawer repaints its held controls", () => {
+    // Found by driving the real boot path, not by reading the code: when the
+    // feed freezes, generatedAt is not in this signature and agentRecordSig is
+    // byte-identical across the frozen refresh, so the drawer never repainted —
+    // the dock kept offering live-looking Focus/Send over four-day-old routing.
+    const a = agent();
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const fresh = identityUi({ conn: "live", snap: { generatedAt: new Date().toISOString(), programs: [] } });
+    const stuck = identityUi({ conn: "live", snap: { generatedAt: FROZEN_AT, programs: [] } });
+    expect(M.inspectorPaintSig(sel, view, stuck)).not.toBe(M.inspectorPaintSig(sel, view, fresh));
+    // And an unreachable server is the same story.
+    expect(M.inspectorPaintSig(sel, view, identityUi({ ...fresh, conn: "offline" })))
+      .not.toBe(M.inspectorPaintSig(sel, view, fresh));
+  });
+
+  test("(1) a board that freezes mid-compose repaints the broadcast dock", () => {
+    const recipients = [{ agent: agent({ status: "running", controls: [{ action: "instruct", enabled: true }] }), program: { id: "p", name: "P", agents: [] } }];
+    // broadcastPaintSig reads the wall clock (it is called during a real paint),
+    // so "fresh" here has to be a snapshot generated a moment ago.
+    const fresh = { conn: "live", snap: { generatedAt: new Date().toISOString() }, broadcastResults: null, broadcastConfirming: false, broadcastPending: false, broadcastError: "" };
+    const stuck = { ...fresh, snap: { generatedAt: FROZEN_AT } };
+    // The guard exists so the dock does not strobe; it must still notice this.
+    expect(M.broadcastPaintSig(recipients, recipients, stuck))
+      .not.toBe(M.broadcastPaintSig(recipients, recipients, fresh));
+    // …and typing still must not move it (FE-A's live-input rule, unchanged).
+    expect(M.broadcastPaintSig(recipients, recipients, { ...fresh, broadcastDraft: "half a sentence" }))
+      .toBe(M.broadcastPaintSig(recipients, recipients, fresh));
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Finding 2: reading what an agent actually did required leaving the dashboard.
+   The snapshot carries a fixed 800-char tail; the decision the operator makes
+   most often — "this lane claims done, is that true?" — cannot be made from it.
+
+   The route is being built in a parallel lane and does not exist here, so the
+   degrade path is as important as the happy path and is tested first.
+   ------------------------------------------------------------------------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transcriptUi(over: Record<string, unknown> = {}): any {
+  return { transcript: { agentId: null, loading: false, error: "", data: null, limit: 200, ...over } };
+}
+
+describe("FE-C: the transcript is readable inside the drawer", () => {
+  test("(2) the request names an agent and a bounded line budget — never a path", () => {
+    expect(M.transcriptUrl("claude:abc-123", 200)).toBe("/api/transcript?agent=claude%3Aabc-123&limit=200");
+    // The contract's hard max is 1000 and the floor is 1; a caller cannot widen it.
+    expect(M.transcriptUrl("a", 99999)).toContain("limit=1000");
+    expect(M.clampTranscriptLimit(0)).toBe(1);
+    expect(M.clampTranscriptLimit(5000)).toBe(1000);
+    expect(M.clampTranscriptLimit("nonsense")).toBe(200);
+    expect(M.clampTranscriptLimit(350)).toBe(350);
+    // "Load more" walks a fixed ladder and stops at the ceiling.
+    expect(M.nextTranscriptLimit(200)).toBe(500);
+    expect(M.nextTranscriptLimit(500)).toBe(1000);
+    expect(M.nextTranscriptLimit(1000)).toBeNull();
+  });
+
+  test("(2) a build without the route says so — it never claims the agent is silent", () => {
+    // The exact shape a server with no such route returns: 404, non-JSON body.
+    expect(M.transcriptFailureText(404, null)).toBe("Transcript view is not available in this build.");
+    // …which must NOT be confused with the contract's real 404.
+    expect(M.transcriptFailureText(404, { ok: false, error: { code: "AGENT_NOT_FOUND" } }))
+      .toContain("no longer tracked");
+    expect(M.transcriptFailureText(0, null)).toContain("Could not reach the server");
+    const other = M.transcriptFailureText(500, { ok: false, error: { code: "READ_FAILED", message: "EACCES" } });
+    expect(other).toContain("READ_FAILED");
+    expect(other).toContain("EACCES");
+    // Every degrade names the failure; none of them is silence or a spinner.
+    for (const text of [M.transcriptFailureText(404, null), M.transcriptFailureText(0, null), other]) {
+      expect(text.length).toBeGreaterThan(10);
+    }
+  });
+
+  test("(2) the wire payload is defended: no invented content, no invented source", () => {
+    const view = M.normalizeTranscript({
+      ok: true,
+      source: "/Users/e/.claude/projects/x/3de6d691.jsonl",
+      truncated: true,
+      lines: [
+        { at: "2026-07-28T09:12:03.114Z", role: "assistant", text: "pushed the branch" },
+        { at: "not-a-date", role: "wizard", text: "odd role and odd time" },
+        { at: null, role: "tool", text: "" },
+        { role: "user", text: { nope: 1 } },      // non-string text is dropped…
+        null,                                     // …as is a non-object row
+      ],
+    });
+    expect(view.source).toBe("/Users/e/.claude/projects/x/3de6d691.jsonl");
+    expect(view.truncated).toBe(true);
+    expect(view.lines).toHaveLength(3);
+    expect(view.lines[1].role).toBe("unknown");   // unknown role collapses, not passed through
+    expect(view.lines[1].at).toBeNull();          // an unparseable time becomes absent
+    expect(view.lines[2].text).toBe("");          // an empty turn is still a turn
+    // An honest empty answer stays empty — source null, zero lines, no filler.
+    const empty = M.normalizeTranscript({ ok: true, source: null, truncated: false, lines: [] });
+    expect(empty).toEqual({ source: null, truncated: false, lines: [] });
+    expect(M.normalizeTranscript({ ok: true }).lines).toEqual([]);
+  });
+
+  test("(2) a very long transcript is windowed, and says how much it is hiding", () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({ at: null, role: "assistant", text: "turn " + i }));
+    const win = M.transcriptWindow(many);
+    expect(win.shown).toHaveLength(300);          // the cap — never 1000 nodes
+    expect(win.hidden).toBe(700);
+    expect(win.total).toBe(1000);
+    expect(win.shown[299].text).toBe("turn 999"); // the window is the TAIL
+    // Under the cap nothing is hidden and nothing is copied away.
+    const few = many.slice(0, 12);
+    expect(M.transcriptWindow(few)).toEqual({ shown: few, hidden: 0, total: 12 });
+  });
+
+  test("(2) untrusted transcript text reaches the DOM as text, never as markup", () => {
+    const hostile = "<img src=x onerror=alert(1)> & <script>steal()</script>";
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderTranscriptPanel(a, transcriptUi({
+      agentId: a.id,
+      data: { source: "/tmp/t.jsonl", truncated: false, lines: [{ at: null, role: "assistant", text: hostile }] },
+    })));
+    const body = byClass(panel, "tr-text");
+    // el({ text }) assigns textContent. If it ever became an attribute or markup
+    // assignment, the string would not be the node's own textContent.
+    expect(body.textContent).toBe(hostile);
+    expect(body.children).toHaveLength(0);
+    expect(body.attributes.text).toBeUndefined();
+  });
+
+  test("(2) the drawer covers all four states: unloaded, empty, loaded, failed", () => {
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const render = (over: Record<string, unknown>): any =>
+      withDom(() => M.renderTranscriptPanel(a, transcriptUi(over)));
+
+    // Unloaded: one opt-in control, because fetching a transcript for every
+    // drawer open would hammer the server for a panel nobody asked for.
+    const idle = render({});
+    expect(textOf(idle)).toContain("Read the transcript");
+    expect(buttonsOf(idle)[0].dataset.fkey).toBe("transcript-load:codex:a1");
+
+    // Loading: a stated status, and loadTranscript always settles into data or
+    // an error, so this is never an endless spinner.
+    expect(textOf(render({ agentId: a.id, loading: true }))).toContain("Reading the transcript");
+
+    // Failed: the reason, plus a way out.
+    const failed = render({ agentId: a.id, error: "Transcript view is not available in this build." });
+    expect(textOf(failed)).toContain("not available in this build");
+    expect(buttonsOf(failed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey)).toEqual(["transcript-retry:codex:a1"]);
+
+    // Empty: honest about which kind of empty it is, and never invents a turn.
+    const noFile = render({ agentId: a.id, data: { source: null, truncated: false, lines: [] } });
+    expect(textOf(noFile)).toContain("No transcript file is recorded");
+    expect(allByClass(noFile, "tr-line")).toHaveLength(0);
+    const emptyFile = render({ agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [] } });
+    expect(textOf(emptyFile)).toContain("no readable turns");
+
+    // Loaded: the turns, the count, the source, and a bounded node count.
+    const lines = Array.from({ length: 400 }, (_, i) => ({ at: null, role: "assistant", text: "turn " + i }));
+    const loaded = render({ agentId: a.id, limit: 500, data: { source: "/tmp/t.jsonl", truncated: true, lines } });
+    expect(allByClass(loaded, "tr-line")).toHaveLength(300);
+    expect(textOf(loaded)).toContain("Last 300 of 400");
+    expect(textOf(loaded)).toContain("older turns exist above this window");
+    expect(textOf(loaded)).toContain("/tmp/t.jsonl");
+    // Refresh, and one step up the ladder — every repainted control keyed.
+    const keys = buttonsOf(loaded).map((b: { dataset: { fkey: string } }) => b.dataset.fkey);
+    expect(keys).toEqual(["transcript-refresh:codex:a1", "transcript-more:codex:a1"]);
+    // At the ceiling there is no "load more" to offer.
+    const maxed = render({ agentId: a.id, limit: 1000, data: { source: "/tmp/t.jsonl", truncated: true, lines } });
+    expect(buttonsOf(maxed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey))
+      .toEqual(["transcript-refresh:codex:a1"]);
+  });
+
+  test("(2) another agent's transcript never bleeds into this drawer", () => {
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderTranscriptPanel(a, transcriptUi({
+      agentId: "claude:someone-else",
+      data: { source: "/tmp/other.jsonl", truncated: false, lines: [{ at: null, role: "assistant", text: "NOT MINE" }] },
+    })));
+    expect(textOf(panel)).not.toContain("NOT MINE");
+    expect(textOf(panel)).toContain("Read the transcript");
+  });
+
+  test("(2) the panel lives in Evidence, and a landed fetch actually repaints it", () => {
+    const a = agent({ transcriptTail: "…tail" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const evidence: any = withDom(() => M.renderEvidence(a, transcriptUi()));
+    expect(byClass(evidence, "transcript-view")).not.toBeNull();
+
+    // Without the drawer signature tracking it, the fetched turns would sit in
+    // state and never reach the screen — the exact failure mode identity had.
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const base = M.inspectorPaintSig(sel, view, identityUi(transcriptUi()));
+    for (const [why, over] of [
+      ["loading", { agentId: a.id, loading: true }],
+      ["error", { agentId: a.id, error: "Transcript view is not available in this build." }],
+      ["landed", { agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [{ at: null, role: "user", text: "hi" }] } }],
+      ["widened", { agentId: a.id, limit: 500 }],
+    ] as [string, Record<string, unknown>][]) {
+      expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi(over))), why).not.toBe(base);
+    }
+    // A transcript belonging to a different agent must not move this signature.
+    expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi({
+      agentId: "claude:other", data: { source: "/x", truncated: false, lines: [] },
+    })))).toBe(base);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Finding 3: what was broadcast, to whom, and whether it landed lived only in
+   client memory and died on reload. A broadcast reaches up to 50 agents and
+   instruct is fire-and-forget text typed into a terminal, so the natural
+   recovery after a refresh is to send it again — double-instructing lanes that
+   already got it.
+   ------------------------------------------------------------------------- */
+
+function actionsUi(over: Record<string, unknown> = {}) {
+  return { actions: { loading: false, error: "", available: true, items: [] as unknown[], fetchedAt: 1, ...over } };
+}
+
+const ACT = {
+  delivered: { id: "act_01", at: "2026-07-28T09:12:03.114Z", kind: "instruct", agentIds: ["codex:a1"], outcome: "ok", detail: "typed and submitted" },
+  staged: { id: "act_02", at: "2026-07-28T09:10:00.000Z", kind: "instruct", agentIds: ["codex:a1"], outcome: "staged", detail: "TEXT_STAGED_NOT_SUBMITTED" },
+  failed: { id: "act_03", at: "2026-07-28T09:05:00.000Z", kind: "broadcast", agentIds: ["codex:a1", "claude:b", "claude:c", "claude:d"], outcome: "failed", detail: "0 of 4 recipients delivered" },
+  partial: { id: "act_04", at: "2026-07-28T09:00:00.000Z", kind: "broadcast", agentIds: ["claude:b", "claude:c"], outcome: "partial", detail: "3 of 4 recipients delivered" },
+};
+
+describe("FE-C: operator actions survive a reload, failures included", () => {
+  test("(3) the request is bounded and the payload is defended", () => {
+    expect(M.actionsUrl()).toBe("/api/actions?limit=100");
+    expect(M.actionsUrl(9999)).toBe("/api/actions?limit=500");   // the contract's hard cap
+    expect(M.clampActionsLimit(0)).toBe(1);
+    expect(M.clampActionsLimit("x")).toBe(100);
+
+    const items = M.normalizeActions({
+      ok: true,
+      actions: [
+        ACT.delivered,
+        { ...ACT.staged, kind: "telepathy" },              // unknown kind: dropped
+        { ...ACT.failed, id: "" },                          // no id: dropped
+        { ...ACT.partial, at: "nonsense", agentIds: ["ok", 7, ""], outcome: "" },
+        null,
+      ],
+    });
+    expect(items.map((a: { id: string }) => a.id)).toEqual(["act_01", "act_04"]);
+    expect(items[1].at).toBeNull();                         // unparseable time → absent
+    expect(items[1].agentIds).toEqual(["ok"]);              // non-string ids dropped
+    expect(items[1].outcome).toBe("unknown");               // never silently "ok"
+    expect(M.normalizeActions({ ok: true }).length).toBe(0);
+  });
+
+  test("(3) every outcome the contract can return has its own word", () => {
+    expect(M.actionOutcomeView("ok").label).toBe("Delivered");
+    expect(M.actionOutcomeView("failed").label).toBe("Failed");
+    expect(M.actionOutcomeView("partial").label).toBe("Partly delivered");
+    // The one the operator most needs to see, and the reason a success-only log
+    // is worse than none: text sat in a terminal and was never submitted.
+    expect(M.actionOutcomeView("staged").label).toContain("not submitted");
+    // The four are distinct — no two states share a word.
+    const labels = ["ok", "failed", "partial", "staged"].map((o) => M.actionOutcomeView(o).label);
+    expect(new Set(labels).size).toBe(4);
+    // Tones separate the good from the bad, so scanning one column works.
+    expect(M.actionOutcomeView("ok").tone).toBe("ok");
+    expect(M.actionOutcomeView("failed").tone).toBe("err");
+    // An outcome the server adds later reads as the server's own word.
+    expect(M.actionOutcomeView("rejected").label).toBe("rejected");
+    expect(M.actionOutcomeView(undefined).label).toBe("unknown");
+  });
+
+  test("(3) the log renders newest-first with failures and staged fully visible", () => {
+    const items = [ACT.delivered, ACT.staged, ACT.failed, ACT.partial];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderActionLog(actionsUi({ items }), (id: string) => (id === "codex:a1" ? "Ridge worker" : null)));
+    const rows = allByClass(panel, "action-row");
+    expect(rows).toHaveLength(4);
+    // Contract order is newest-first; the view must not resort and lose it. The
+    // detail strings are unique, so this pins position, not just membership.
+    expect(rows.map((r: unknown) => textOf(r).includes(ACT.delivered.detail))).toEqual([true, false, false, false]);
+    expect(items.map((a) => a.detail).every((d, i) => textOf(rows[i]).includes(d))).toBe(true);
+    const text = textOf(panel);
+    expect(text).toContain("Delivered");
+    expect(text).toContain("not submitted");
+    expect(text).toContain("Failed");
+    expect(text).toContain("Partly delivered");
+    // The failure's own words survive — "0 of 4 recipients delivered" is the
+    // whole point, and a log that dropped it would read as four successes.
+    expect(text).toContain("0 of 4 recipients delivered");
+    // Recipients resolve to names where the snapshot still knows them, and a
+    // fan-out collapses to a count instead of a wall of session ids.
+    expect(text).toContain("Ridge worker");
+    expect(text).toContain("4 sessions");
+    // Outcome tone rides a data attribute so one column is scannable.
+    expect(rows.map((r: { dataset: { tone: string } }) => r.dataset.tone)).toEqual(["ok", "warn", "err", "warn"]);
+  });
+
+  test("(3) recipients degrade honestly rather than dropping unknown sessions", () => {
+    expect(M.actionRecipients({ agentIds: [] }, () => "x")).toBe("no recipients");
+    // An agent gone from the snapshot keeps its raw id — never silently omitted
+    // from the record of who was instructed.
+    expect(M.actionRecipients({ agentIds: ["codex:gone"] }, () => null)).toBe("codex:gone");
+    expect(M.actionRecipients({ agentIds: ["a", "b", "c"] }, (id: string) => id.toUpperCase())).toBe("A, B, C");
+    expect(M.actionRecipients({ agentIds: ["a", "b", "c", "d"] }, () => "n")).toBe("4 sessions");
+  });
+
+  test("(3) an empty log, a loading log and a missing endpoint each read differently", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const render = (over: Record<string, unknown>): any => withDom(() => M.renderActionLog(actionsUi(over)));
+    // Empty is empty — and says what WILL appear, including the failures.
+    const empty = textOf(render({}));
+    expect(empty).toContain("No operator actions recorded yet");
+    expect(empty).toContain("including the ones that fail");
+    expect(textOf(render({ loading: true }))).toContain("Reading the action log");
+    // A build without the route says so; it never renders as "nothing happened".
+    const missing = textOf(render({ error: "The action log is not available in this build." }));
+    expect(missing).toContain("not available in this build");
+    expect(missing).not.toContain("No operator actions recorded yet");
+    expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
+    expect(M.actionsFailureText(0, null)).toContain("Could not reach the server");
+    expect(M.actionsFailureText(500, { error: { code: "LOG_CORRUPT" } })).toContain("LOG_CORRUPT");
+  });
+
+  test("(3) the dock answers 'did I already send this?' next to the button that resends", () => {
+    const live = agent({ controls: [{ action: "instruct", enabled: true }, { action: "focus", enabled: true }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withLog: any = withDom(() => M.renderCommandDock(live, "linked", null, [ACT.staged, ACT.delivered]));
+    const fact = byClass(withLog, "command-dock-last");
+    expect(fact).not.toBeNull();
+    // Newest-first: the staged one is the most recent, and staged is exactly the
+    // case where resending blindly is the wrong move.
+    expect(textOf(fact)).toContain("not submitted");
+    expect(fact.dataset.tone).toBe("warn");
+
+    // Silence before the log has loaded: an unanswered endpoint must never read
+    // as "nothing was ever sent to this agent".
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const noLog: any = withDom(() => M.renderCommandDock(live, "linked", null, []));
+    expect(byClass(noLog, "command-dock-last")).toBeNull();
+    // An action for a different agent is not this agent's history.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const other: any = withDom(() => M.renderCommandDock(live, "linked", null, [ACT.partial]));
+    expect(byClass(other, "command-dock-last")).toBeNull();
+    expect(M.lastActionFor([ACT.partial], "codex:a1")).toBeNull();
+    expect(M.lastActionFor([ACT.staged, ACT.delivered], "codex:a1").id).toBe("act_02");
+  });
+
+  test("(3) a new journal entry repaints the open drawer", () => {
+    const a = agent();
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const base = M.inspectorPaintSig(sel, view, identityUi(actionsUi()));
+    // A landed entry for this agent moves it…
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.delivered] })))).not.toBe(base);
+    // …and so does the SAME entry coming back with a different outcome.
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.delivered] }))))
+      .not.toBe(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [{ ...ACT.delivered, outcome: "failed" }] }))));
+    // Someone else's action does not.
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.partial] })))).toBe(base);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Finding 4: the operator had to keep the tab visible to learn an agent was
+   waiting. grep for Notification / document.title / favicon / vibrate / Audio
+   over app.js returned zero matches; the only attention affordances were the
+   in-page beacon and the Alerts tab count.
+
+   The firing RULE is the feature. A notifier that cries wolf gets muted, and
+   then the feature is worthless — so these tests are mostly about silence.
+   ------------------------------------------------------------------------- */
+
+describe("FE-C: an agent that starts waiting reaches the operator outside the tab", () => {
+  const waiting = (id: string) => agent({ id, status: "attention", outcome: "needs-you", displayName: id });
+  const calm = (id: string) => agent({ id, status: "running", outcome: "healthy", displayName: id });
+  const snapOf = (...agents: unknown[]) => snapshot({ programs: [{ id: "p", name: "P", agents }] });
+
+  test("(4) 'needs a human' is the board's own verdict, not a second definition", () => {
+    const snap = snapOf(
+      waiting("codex:1"),
+      agent({ id: "codex:2", outcome: "blocked" }),
+      agent({ id: "codex:3", outcome: "failed" }),
+      calm("codex:4"),
+      // An ended session is not waiting for anyone, whatever it last reported.
+      agent({ id: "codex:5", status: "archived", outcome: "needs-you" }),
+    );
+    expect(M.needsHumanIds(snap)).toEqual(["codex:1", "codex:2", "codex:3"]);
+    expect(M.needsHumanIds(snapOf(calm("codex:4")))).toEqual([]);
+    expect(M.needsHumanIds(null)).toEqual([]);
+  });
+
+  test("(4) it fires for a NEW waiter and stays silent for everything else", () => {
+    // The one case worth interrupting someone for.
+    const fired = M.notificationPlan(["codex:1"], ["codex:1", "codex:2"], (id: string) => "Lane " + id.slice(-1));
+    expect(fired.fire).toBe(true);
+    expect(fired.title).toBe("1 agent needs you");
+    expect(fired.body).toBe("Lane 2");
+
+    // Routine churn, all of which must be silent:
+    expect(M.notificationPlan(["codex:1"], ["codex:1"]).fire).toBe(false);              // unchanged
+    expect(M.notificationPlan(["codex:1", "codex:2"], ["codex:1"]).fire).toBe(false);   // one resolved
+    expect(M.notificationPlan(["codex:1"], []).fire).toBe(false);                       // all cleared
+    expect(M.notificationPlan([], []).fire).toBe(false);                                // quiet fleet
+    // Same agents, different order off the wire — not news.
+    expect(M.notificationPlan(["codex:1", "codex:2"], ["codex:2", "codex:1"]).fire).toBe(false);
+    // A swap (one clears, one starts) IS news about the one that started.
+    const swap = M.notificationPlan(["codex:1"], ["codex:2"]);
+    expect(swap.fire).toBe(true);
+    expect(swap.title).toBe("1 agent needs you");
+  });
+
+  test("(4) opening the page to a backlog is silent — a reload is not news", () => {
+    // This is what stops the feature being unusable on a fleet of 200: the first
+    // snapshot seeds the baseline, it does not announce it.
+    const first = M.notificationPlan(null, ["codex:1", "codex:2", "codex:3"]);
+    expect(first.fire).toBe(false);
+    expect(first.reason).toBe("seeded");
+    expect(first.ids).toEqual(["codex:1", "codex:2", "codex:3"]);
+    // Only what arrives AFTER the baseline is announced.
+    expect(M.notificationPlan(first.ids, ["codex:1", "codex:2", "codex:3"]).fire).toBe(false);
+    expect(M.notificationPlan(first.ids, ["codex:1", "codex:2", "codex:3", "codex:4"]).fire).toBe(true);
+  });
+
+  test("(4) a burst names a few agents and counts the rest instead of listing 40", () => {
+    const many = Array.from({ length: 40 }, (_, i) => "codex:" + i);
+    const plan = M.notificationPlan([], many, (id: string) => id.toUpperCase());
+    expect(plan.fire).toBe(true);
+    expect(plan.title).toBe("40 agents need you");
+    expect(plan.body).toBe("CODEX:0, CODEX:1, CODEX:10 and 37 more");
+    // An agent the snapshot no longer names keeps its id rather than vanishing.
+    expect(M.notificationPlan([], ["codex:gone"], () => null).body).toBe("codex:gone");
+  });
+
+  test("(4) delivery is gated: opted out, blocked and unsupported are all silent", () => {
+    const plan = M.notificationPlan(["codex:1"], ["codex:1", "codex:2"]);
+    const sent: { title: string; opts: { body: string; tag: string } }[] = [];
+    class FakeNotification {
+      constructor(title: string, opts: { body: string; tag: string }) { sent.push({ title, opts }); }
+    }
+    const granted = { enabled: true, permission: "granted" };
+
+    expect(M.deliverNotification(plan, granted, FakeNotification)).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].title).toBe(plan.title);
+    // One tag, so a second burst REPLACES the first instead of stacking a pile
+    // of notifications the operator has to dismiss.
+    expect(sent[0].opts.tag).toBe("anthill-needs-you");
+
+    // Every silent path, each with its own reason — never an ambiguous no-op.
+    expect(M.deliverNotification(plan, { enabled: false, permission: "granted" }, FakeNotification)).toBe("muted");
+    expect(M.deliverNotification(plan, { enabled: true, permission: "denied" }, FakeNotification)).toBe("not-granted");
+    expect(M.deliverNotification(plan, granted, null)).toBe("unsupported");
+    expect(M.deliverNotification({ fire: false, reason: "seeded" }, granted, FakeNotification)).toBe("seeded");
+    // A browser that refuses to construct one degrades, it does not throw.
+    const Broken = function Broken() { throw new Error("nope"); } as unknown as new () => unknown;
+    expect(M.deliverNotification(plan, granted, Broken)).toBe("refused");
+    expect(sent).toHaveLength(1); // nothing else was delivered
+  });
+
+  test("(4) the tab title carries the count without asking for anything", () => {
+    const base = "The Ant Hill — operator console";
+    expect(M.titleWithAlerts(base, 3)).toBe("(3) " + base);
+    expect(M.titleWithAlerts(base, 0)).toBe(base);
+    // Idempotent: repainting must not stack prefixes into "(3) (2) (1) …".
+    expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 2)).toBe("(2) " + base);
+    expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
+  });
+
+  test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
+    // The control states an operator can actually reach.
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Alerts off");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true))
+      .toMatchObject({ label: "Alerts on", pressed: true, disabled: false });
+    // Denied: stated once, disabled, no nagging and no repeated prompt.
+    const denied = M.notifyToggleView({ enabled: false, permission: "denied" }, true);
+    expect(denied.disabled).toBe(true);
+    expect(denied.label).toBe("Alerts blocked");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, false).disabled).toBe(true);
+
+    // The one requestPermission call in the client is inside the click handler.
+    // Asking on load is how a page gets denied permanently, which would disable
+    // the feature forever — so this is a placement rule, not a style rule.
+    expect(source.match(/requestPermission\(/g) ?? []).toHaveLength(1);
+    const toggle = source.match(/async function toggleNotifications\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(toggle).toContain("requestPermission(");
+    const bootFn = source.match(/function boot\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(bootFn).not.toContain("requestPermission(");
+    expect(bootFn).toContain('$("notify-toggle").addEventListener("click"');
+  });
+});

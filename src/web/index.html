@@ -19,12 +19,21 @@
           <p class="eyebrow">Live multi-agent control room</p>
         </div>
       </div>
-      <p id="conn-badge" class="conn conn-connecting">
-        <span class="conn-dot" aria-hidden="true"></span>
-        <span id="conn-label">Connecting</span>
-      </p>
+      <div class="masthead-signals">
+        <!-- Opt-in out-of-page alerts. Permission is requested from this click
+             and nowhere else — never on load. -->
+        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Alerts off</button>
+        <p id="conn-badge" class="conn conn-connecting">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span id="conn-label">Connecting</span>
+        </p>
+      </div>
     </div>
   </header>
+
+  <!-- Staleness alarm. Sits in the reading path between the masthead and the
+       summary so a frozen feed cannot be missed by not looking at a badge. -->
+  <div id="feed-alarm" class="feed-alarm" role="alert" hidden></div>
 
   <!-- One status verdict plus a configurable, scan-ordered summary rail. -->
   <section id="health-rail" class="health-rail" aria-label="Fleet health">
@@ -65,12 +74,17 @@
               <input id="search" type="search" placeholder="Search name, model, cwd, provider, role, status, session id…" title="Search agents across name, model, cwd, provider, role, status, and session id" autocomplete="off">
             </div>
             <button type="button" class="btn select-toggle" id="select-toggle" aria-pressed="false">Select</button>
+            <button type="button" class="btn actions-toggle" id="actions-toggle" aria-pressed="false" aria-controls="actions-panel">Action log</button>
           </div>
           <p id="scope-note" class="scope-note" aria-live="polite"></p>
         </section>
 
         <section id="programs" class="programs" aria-label="Programs and agents"></section>
         <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
+
+        <!-- Persistent operator journal: what was sent, to whom, and whether it
+             landed — including the failures and the staged-not-submitted ones. -->
+        <section id="actions-panel" class="actions-panel" aria-label="Recent operator actions" hidden></section>
 
         <div id="empty-state" class="empty-state" hidden>
           <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">

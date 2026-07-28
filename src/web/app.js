@@ -1358,6 +1358,15 @@ globalThis.TheAntHill = {
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
+  feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
+  renderCommandDock, renderDockTool,
+  // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
+  // they are `const`s declared below this block. Assert the behavior instead.
+  transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
+  transcriptFailureText, transcriptWindow, renderTranscriptPanel,
+  actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
+  actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
+  needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
@@ -1383,6 +1392,67 @@ function snapshotFreshness(generatedAt, now = Date.now()) {
   const ageMs = Math.max(0, now - at);
   if (ageMs <= SNAPSHOT_FRESH_MS) return { state: "fresh", ageMs };
   return { state: ageMs > SNAPSHOT_STALE_MS ? "stale" : "lagging", ageMs };
+}
+
+/* The badge tells the truth once you look at it — the ALARM is what makes you
+   look. :4701 served a 91-hour-frozen snapshot behind a green "Live" badge and
+   the operator acted on a world that had ended four days earlier. A badge in the
+   corner is not a warning; a full-width bar in the reading path is.
+
+   One predicate decides the whole staleness story, so the alarm, the clocks and
+   the controls can never disagree with each other. Pure, so the rule is testable
+   without a browser. Returns null when the board is trustworthy. */
+function feedAlarm(conn, generatedAt, now = Date.now()) {
+  if (conn === "offline") {
+    return {
+      kind: "offline",
+      headline: "Server unreachable — this board is not updating",
+      detail: "Nothing below is current. Focus, Send, Interrupt, Archive and Broadcast are held until the server answers.",
+      ageMs: null,
+    };
+  }
+  const fresh = snapshotFreshness(generatedAt, now);
+  if (fresh.state !== "stale") return null;
+  const age = fmtElapsed(fresh.ageMs);
+  return {
+    kind: "frozen",
+    headline: "Feed frozen — last snapshot " + age + " ago",
+    detail: "Every agent, count and clock below is " + age + " old. Controls are held: routing on stale evidence can type into the wrong terminal.",
+    ageMs: fresh.ageMs,
+  };
+}
+
+/* Stale data has to LOOK stale everywhere it is displayed, not just in the bar.
+   Same predicate as the alarm by construction. */
+function clocksFrozen(conn, generatedAt, now = Date.now()) {
+  return feedAlarm(conn, generatedAt, now) !== null;
+}
+
+function feedFrozen(ui = state, now = Date.now()) {
+  return clocksFrozen(ui && ui.conn, ui && ui.snap && ui.snap.generatedAt, now);
+}
+
+/* tickClocks extrapolated elapsed from data-elapsed-base plus wall-clock drift
+   every 5s, so on a frozen board a dead agent's uptime kept climbing — the most
+   convincing lie on the page, because it was the one thing visibly moving. When
+   the feed is frozen the clock holds at the value the snapshot actually
+   reported. Returns null when the dataset cannot be read at all. */
+function elapsedTickText(base, fromIso, now, frozen) {
+  const b = Number(base);
+  if (!Number.isFinite(b)) return null;
+  if (frozen) return fmtElapsed(b);
+  const drift = now - Date.parse(fromIso);
+  if (!Number.isFinite(drift)) return null;
+  return fmtElapsed(b + Math.max(0, drift));
+}
+
+/* Why a control is held. Kept separate from the capability reasons the dock is
+   forbidden to echo — this is about the feed, not about routing. */
+function staleControlNote(alarm) {
+  if (!alarm) return "";
+  return alarm.kind === "offline"
+    ? "Held — the server is unreachable, so there is no safe route to this session."
+    : "Held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Refresh before sending.";
 }
 
 const state = {
@@ -1435,6 +1505,18 @@ const state = {
   // live on CmuxSurface, which /api/snapshot does not carry — so they are
   // fetched on demand from the read-only GET /api/debug/identity.
   identity: { agentId: null, loading: false, error: "", data: null },
+  // Inline transcript for the open drawer. Scoped to one agent id for the same
+  // reason `identity` is: a drawer switched mid-flight must never adopt the
+  // previous agent's transcript.
+  transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
+  // Persistent operator journal (GET /api/actions). `available` latches false on
+  // a build with no such route so a missing endpoint is asked for once, not
+  // every five seconds forever.
+  actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
+  actionsOpen: false,
+  // Out-of-page attention. `seen` is null until the first snapshot is adopted,
+  // which is what makes opening the page to a backlog silent.
+  notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1450,7 +1532,10 @@ const state = {
   pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "" },
+  // `alarm` and `actions` start null, not "": their calm signature IS the empty
+  // string, so a "" seed would make the very first paint a no-op and leave both
+  // surfaces showing whatever markup they were served with.
+  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
 };
 state.aliases = state.labels;
 
@@ -1559,6 +1644,9 @@ function applySnapshot(snap) {
   state.snap = snap;
   if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
   state.fetchFailed = false;
+  // Escalate before painting: the tab title and any notification are about the
+  // snapshot being adopted, and this is the only place a snapshot is adopted.
+  applyNotifications(snap);
   render();
 }
 
@@ -1768,6 +1856,43 @@ function renderBeacon() {
   beacon.classList.add(issuesOf(state.snap).length > 0 ? "flare" : "calm");
 }
 
+/* The alarm body. Split from the mount so the copy and the repair action can be
+   asserted without a document. */
+function feedAlarmNode(alarm) {
+  return el("div", { class: "feed-alarm-inner" + (alarm.kind === "offline" ? " is-offline" : "") },
+    icon(alarm.kind === "offline" ? "offline" : "warning", { label: "Alarm" }),
+    el("div", { class: "feed-alarm-copy" },
+      el("strong", { class: "feed-alarm-head", text: alarm.headline }),
+      el("p", { class: "feed-alarm-detail", text: alarm.detail })),
+    el("button", {
+      type: "button",
+      class: "btn feed-alarm-refresh",
+      dataset: { fkey: "feed-alarm-refresh" },
+      onclick: () => recollectSnapshot(),
+    }, "Refresh now"));
+}
+
+/* Unmissable by position, not by animation: a full-width bar between the
+   masthead and the summary, in the operator's reading path, carrying the age and
+   the one action that can fix it. `feed-frozen` on <body> is what lets the rest
+   of the board grey itself out in the same beat. */
+function renderFeedAlarm() {
+  const bar = $("feed-alarm");
+  if (!bar) return;
+  const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
+  if (document.body) document.body.classList.toggle("feed-frozen", !!alarm);
+  // Visibility is set on EVERY paint, before the guard: the signature only
+  // decides whether the subtree is worth rebuilding, and a guard that can also
+  // suppress `hidden` is one seed-value collision away from a silent alarm.
+  bar.hidden = !alarm;
+  const sig = alarm ? alarm.kind + "\u001f" + alarm.headline : "";
+  if (state.paintSig.alarm === sig) return;
+  state.paintSig.alarm = sig;
+  bar.textContent = "";
+  bar.className = "feed-alarm";
+  if (alarm) bar.append(feedAlarmNode(alarm));
+}
+
 /* ---------- rendering ---------- */
 
 function paintUnchanged(key, signature) {
@@ -1794,10 +1919,12 @@ function render() {
   const inspectorScroll = inspector.scrollTop;
 
   renderConn();
+  renderFeedAlarm();
   renderHealthRail();
   renderTabs();
   renderFilterBar();
   renderPrograms();
+  renderActionsPanel();
   renderInspector();
   renderBroadcastBar();
   renderEmpty();
@@ -3699,6 +3826,10 @@ function inspectorPaintSig(sel, view, ui) {
   const agent = view && view.kind === "agent" ? view.agent : null;
   const feedback = agent ? ui.feedback.get(agent.id) : null;
   const identity = ui.identity || {};
+  const transcript = ui.transcript || {};
+  // The dock prints this agent's last journalled action, so a new entry landing
+  // has to repaint the drawer or the fact stays wrong until something else moves.
+  const lastAction = agent ? lastActionFor(ui.actions && ui.actions.items, agent.id) : null;
   return [
     sel.kind, sel.id,
     view ? view.kind : "missing",
@@ -3730,6 +3861,26 @@ function inspectorPaintSig(sel, view, ui) {
         identity.data ? JSON.stringify(surfaceCollisions(identity.data)) : "",
       ].join(":")
       : "",
+    // Same reason as identity: nothing else in the drawer moves when a fetched
+    // transcript lands, so without this it would never reach the screen. The
+    // line COUNT and the source stand in for the payload — the text is immutable
+    // once fetched, and hashing 1000 turns on every paint is not free.
+    agent && transcript.agentId === agent.id
+      ? [
+        transcript.loading ? "1" : "0",
+        transcript.error || "",
+        String(transcript.limit || ""),
+        transcript.data
+          ? transcript.data.lines.length + ":" + (transcript.data.source || "") + ":" + (transcript.data.truncated ? "1" : "0")
+          : "",
+      ].join(":")
+      : "",
+    lastAction ? lastAction.id + ":" + lastAction.outcome : "",
+    // A feed that freezes under an OPEN drawer changes nothing else the drawer
+    // signs — generatedAt is not in here and the agent record is byte-identical
+    // across a frozen refresh — so without this the dock would keep painting
+    // live-looking Focus/Send/Interrupt/Archive over four-day-old routing.
+    feedFrozen(ui) ? "held" : "",
   ].join("\u001f");
 }
 
@@ -4508,8 +4659,12 @@ function capability(agent, action) {
   return (agent.controls || []).find((c) => c.action === action);
 }
 
-/* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone. */
-function renderCommandDock(agent, control = deriveControlState(agent)) {
+/* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone.
+   `alarm` is the feed-staleness verdict: on a frozen board every control here is
+   held and says so, because the snapshot's routing evidence is as old as the
+   rest of it. Defaulted (not passed by the caller) so the drawer call site stays
+   `renderCommandDock(agent, control)` and the dock is still testable in isolation. */
+function renderCommandDock(agent, control = deriveControlState(agent), alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt), actions = state.actions.items) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   const interruptCap = capability(agent, "interrupt");
@@ -4519,15 +4674,19 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   }
 
   const safeLocked = [focusCap, instructCap].some((c) => c && !c.enabled);
-  const linkedReady = !safeLocked && control === "linked";
+  const held = Boolean(alarm);
+  const linkedReady = !safeLocked && !held && control === "linked";
   const dock = el("div", {
-    class: "command-dock" + (linkedReady ? " command-dock--linked" : ""),
+    class: "command-dock" + (linkedReady ? " command-dock--linked" : "") + (held ? " is-held" : ""),
     "aria-label": "Session controls",
   });
+  if (held) {
+    dock.append(el("p", { class: "command-dock-stale", role: "status", text: staleControlNote(alarm) }));
+  }
 
   // One lock narrative: the control banner owns the reason. The dock meta only
   // speaks when the link is live, and the send hint only when Send can send.
-  const showHint = Boolean(instructCap && instructCap.enabled);
+  const showHint = Boolean(instructCap && instructCap.enabled) && !held;
   if (linkedReady || showHint) {
     const meta = el("div", { class: "command-dock-meta" });
     meta.append(linkedReady
@@ -4546,18 +4705,33 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
     }));
   }
 
+  // "Did I already tell this lane to rebase?" — the journal's answer, next to
+  // the button that would send it again. Silent until the log has actually
+  // loaded: an unanswered endpoint must not read as "nothing was ever sent".
+  const last = lastActionFor(actions, agent.id);
+  if (last) {
+    const outcome = actionOutcomeView(last.outcome);
+    dock.append(el("p", { class: "command-dock-last", dataset: { tone: outcome.tone } },
+      (ACTION_KIND_LABELS[last.kind] || last.kind)
+      + (last.at ? " " + agoText(last.at) : "")
+      + " · " + outcome.label));
+  }
+
   // Composer is the primary interaction — Focus no longer sits above a dead input.
   if (instructCap) {
     const key = agent.id + ":instruct";
     const busy = state.pending.has(key);
+    const sendable = instructCap.enabled && !held;
     const input = el("input", {
       type: "text",
-      placeholder: instructCap.enabled
-        ? "Instruct this agent…"
-        : (control === "quarantined"
-          ? "Resolve identity conflict to instruct…"
-          : "Instruction unavailable"),
-      disabled: instructCap.enabled ? null : "",
+      placeholder: held
+        ? "Held until the feed catches up…"
+        : instructCap.enabled
+          ? "Instruct this agent…"
+          : (control === "quarantined"
+            ? "Resolve identity conflict to instruct…"
+            : "Instruction unavailable"),
+      disabled: sendable ? null : "",
       value: state.drafts.get(agent.id) || "",
       "aria-label": "Instruction for " + agentName(agent),
       dataset: { fkey: "draft:" + agent.id },
@@ -4566,7 +4740,7 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
         if (!(e.key === "Enter" && (e.metaKey || e.ctrlKey))) return;
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !instructCap.enabled) return;
+        if (!text || busy || !sendable) return;
         sendControl(agent, "instruct", text);
       },
     });
@@ -4575,31 +4749,31 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
       onsubmit: (e) => {
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !instructCap.enabled) return;
+        if (!text || busy || !sendable) return;
         sendControl(agent, "instruct", text);
       },
     },
       input,
       el("button", {
         type: "submit", class: "btn primary command-send",
-        disabled: instructCap.enabled && !busy ? null : "",
+        disabled: sendable && !busy ? null : "",
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
       }, busy ? "Sending…" : "Send")));
   }
 
   const tools = el("div", { class: "command-dock-tools" });
-  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus"));
-  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt"));
+  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus", { held }));
+  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt", { held }));
   tools.append(el("span", { class: "command-dock-spacer" }));
   // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
   // the dock does not offer a destructive peer next to dead controls.
-  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive"));
+  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
   dock.append(tools);
   if (archiveCap && safeLocked) {
     dock.append(el("details", { class: "command-dock-more" },
       el("summary", { text: "More" }),
-      renderDockTool(agent, archiveCap, "archive")));
+      renderDockTool(agent, archiveCap, "archive", { held })));
   }
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
@@ -4617,6 +4791,10 @@ function renderDockTool(agent, cap, action, opts = {}) {
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // The head renders a copy of a dock tool without knowing about the feed, so a
+  // caller that does not pass `held` still gets the module verdict rather than a
+  // silently-live button on a frozen board.
+  const held = opts.held === undefined ? feedFrozen() : Boolean(opts.held);
   // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
   // focus restore and the confirm strip must bind to the clicked instance —
   // never both surfaces at once. Busy/sendControl state stays shared via key.
@@ -4641,12 +4819,13 @@ function renderDockTool(agent, cap, action, opts = {}) {
 
   return el("button", {
     type: "button",
-    class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
-    disabled: cap.enabled && !busy ? null : "",
+    class: "dock-tool" + (isArchive ? " dock-tool-warn" : "") + (held ? " is-held" : ""),
+    disabled: cap.enabled && !busy && !held ? null : "",
     "aria-busy": busy ? "true" : null,
-    title: cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
+    title: held ? "Held — the board is not current" : cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
     dataset: { fkey },
     onclick: () => {
+      if (held) return;
       if (NEEDS_CONFIRM.has(action)) {
         state.confirming = fkey;
         render();
@@ -5171,7 +5350,195 @@ function renderSurfaceEvidence(agent, ui = state) {
   return wrap;
 }
 
-function renderEvidence(agent) {
+/* ---------- inspector: inline transcript ----------
+
+   Verifying "this lane says it is done — is that true?" used to mean copying a
+   path out of the drawer, switching to a terminal, jq-ing a JSONL and switching
+   back, per agent, across ~200 lanes. The snapshot only carries a fixed 800-char
+   tail (MAX_TRANSCRIPT_TAIL_CHARS), which is not enough to answer the question.
+
+   Contract (GET /api/transcript?agent=<id>&limit=<n>, built in a parallel lane):
+     { ok, agentId, source, truncated, lines: [{ at, role, text }] }
+   `text` is UNTRUSTED agent output. It rides textContent only, with no
+   exceptions — the source guard that forbids markup assignment covers this file
+   as a whole, and every string below goes through el({ text }). */
+
+const TRANSCRIPT_DEFAULT_LIMIT = 200;
+const TRANSCRIPT_MAX_LIMIT = 1000;         // the contract's hard cap
+const TRANSCRIPT_LIMIT_STEPS = [200, 500, 1000];
+// Painting a 1000-line transcript as 1000 nodes on every drawer repaint is how
+// an inspector becomes unusable. The window is the tail, which is the part the
+// operator is asking about; the count it is hiding is stated, never implied.
+const TRANSCRIPT_RENDER_CAP = 300;
+const TRANSCRIPT_ROLES = new Set(["user", "assistant", "tool", "system", "unknown"]);
+const TRANSCRIPT_ROLE_LABELS = {
+  user: "You", assistant: "Agent", tool: "Tool", system: "System", unknown: "—",
+};
+
+function clampTranscriptLimit(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return TRANSCRIPT_DEFAULT_LIMIT;
+  return Math.min(TRANSCRIPT_MAX_LIMIT, Math.max(1, v));
+}
+
+function nextTranscriptLimit(current) {
+  return TRANSCRIPT_LIMIT_STEPS.find((step) => step > clampTranscriptLimit(current)) || null;
+}
+
+function transcriptUrl(agentId, limit) {
+  return "/api/transcript?agent=" + encodeURIComponent(agentId) + "&limit=" + clampTranscriptLimit(limit);
+}
+
+/* The wire shape, defended. Everything in it is agent-derived: an unknown role
+   collapses to "unknown", a non-string `text` is dropped rather than String()-ed
+   into "[object Object]", and a missing `source` stays null instead of becoming
+   a plausible-looking path. Never invent content. */
+function normalizeTranscript(body) {
+  const rows = Array.isArray(body && body.lines) ? body.lines : [];
+  const lines = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || typeof row.text !== "string") continue;
+    lines.push({
+      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
+      role: TRANSCRIPT_ROLES.has(row.role) ? row.role : "unknown",
+      text: row.text,
+    });
+  }
+  return {
+    source: typeof body.source === "string" && body.source ? body.source : null,
+    truncated: body.truncated === true,
+    lines,
+  };
+}
+
+/* Degrade honestly. This client ships ahead of the route, so the common failure
+   is a 404 with no JSON envelope — which means "this build cannot show you a
+   transcript", NOT "this agent has no transcript". Saying the second would be a
+   lie the operator would act on. */
+function transcriptFailureText(status, body) {
+  const code = body && body.error && body.error.code;
+  const message = body && body.error && body.error.message;
+  if (!status) return "Could not reach the server for this transcript.";
+  if (code === "AGENT_NOT_FOUND") return "This session is no longer tracked, so its transcript cannot be resolved.";
+  if (status === 404 && !code) return "Transcript view is not available in this build.";
+  return "Transcript unavailable"
+    + (code ? " [" + code + "]" : "")
+    + (message ? ": " + message : " (HTTP " + status + ")");
+}
+
+function transcriptWindow(lines, cap = TRANSCRIPT_RENDER_CAP) {
+  const total = lines.length;
+  if (total <= cap) return { shown: lines, hidden: 0, total };
+  return { shown: lines.slice(total - cap), hidden: total - cap, total };
+}
+
+async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {
+  const want = clampTranscriptLimit(limit);
+  state.transcript = { agentId, loading: true, error: "", data: null, limit: want };
+  render();
+  let next;
+  try {
+    const res = await fetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    next = !res.ok || !body || body.ok !== true
+      ? { agentId, loading: false, error: transcriptFailureText(res.status, body), data: null, limit: want }
+      : { agentId, loading: false, error: "", data: normalizeTranscript(body), limit: want };
+  } catch {
+    next = { agentId, loading: false, error: transcriptFailureText(0, null), data: null, limit: want };
+  }
+  // The operator moved on — never paint one agent's transcript into another's drawer.
+  if (state.transcript.agentId !== agentId) return;
+  state.transcript = next;
+  render();
+}
+
+function transcriptLineNode(line) {
+  return el("div", { class: "tr-line", dataset: { role: line.role } },
+    el("div", { class: "tr-meta" },
+      el("span", { class: "tr-role", text: TRANSCRIPT_ROLE_LABELS[line.role] || line.role }),
+      line.at ? el("span", { class: "tr-at", title: line.at, text: agoText(line.at) }) : null),
+    // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+    el("p", { class: "tr-text", tabindex: "0", text: line.text }));
+}
+
+function renderTranscriptPanel(agent, ui = state) {
+  const view = (ui && ui.transcript) || {};
+  const mine = view.agentId === agent.id;
+  const section = el("section", { class: "transcript-view" },
+    el("h3", { class: "section-title", text: "Transcript" }));
+
+  if (!mine) {
+    section.append(el("button", {
+      type: "button", class: "btn sm transcript-load",
+      dataset: { fkey: "transcript-load:" + agent.id },
+      onclick: () => void loadTranscript(agent.id),
+    }, "Read the transcript"));
+    return section;
+  }
+
+  if (view.loading) {
+    // Bounded by construction: loadTranscript always resolves into data or an
+    // error, so this can never become a spinner that never resolves.
+    section.append(el("p", { class: "inspector-note", role: "status", text: "Reading the transcript…" }));
+    return section;
+  }
+
+  if (view.error) {
+    section.append(
+      el("p", { class: "inspector-note err", role: "status", text: view.error }),
+      el("button", {
+        type: "button", class: "btn sm transcript-load",
+        dataset: { fkey: "transcript-retry:" + agent.id },
+        onclick: () => void loadTranscript(agent.id, view.limit),
+      }, "Try again"));
+    return section;
+  }
+
+  const data = view.data || { lines: [], source: null, truncated: false };
+  const head = el("div", { class: "transcript-head" });
+  if (!data.lines.length) {
+    head.append(el("span", {
+      class: "transcript-source",
+      text: data.source
+        ? "The transcript file is present but has no readable turns."
+        : "No transcript file is recorded for this session.",
+    }));
+  } else {
+    const win = transcriptWindow(data.lines);
+    head.append(el("span", {
+      class: "transcript-source",
+      text: win.hidden
+        ? "Last " + win.shown.length + " of " + win.total + " loaded turns"
+        : win.total + (win.total === 1 ? " turn" : " turns"),
+    }));
+    if (data.truncated) head.append(el("span", { class: "transcript-more", text: "· older turns exist above this window" }));
+  }
+  if (data.source) head.append(el("code", { class: "transcript-source-path", text: data.source }));
+  head.append(el("button", {
+    type: "button", class: "btn sm transcript-load",
+    dataset: { fkey: "transcript-refresh:" + agent.id },
+    onclick: () => void loadTranscript(agent.id, view.limit),
+  }, "Refresh"));
+  const more = nextTranscriptLimit(view.limit);
+  if (more && data.truncated) {
+    head.append(el("button", {
+      type: "button", class: "btn sm transcript-load",
+      dataset: { fkey: "transcript-more:" + agent.id },
+      onclick: () => void loadTranscript(agent.id, more),
+    }, "Load " + more));
+  }
+  section.append(head);
+
+  if (data.lines.length) {
+    const log = el("div", { class: "transcript-log", tabindex: "0", "aria-label": "Transcript turns" });
+    for (const line of transcriptWindow(data.lines).shown) log.append(transcriptLineNode(line));
+    section.append(log);
+  }
+  return section;
+}
+
+function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
 
@@ -5245,6 +5612,10 @@ function renderEvidence(agent) {
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
 
+  // The 800-char tail above is whatever the snapshot happened to carry; this is
+  // the part an operator can actually read a decision out of.
+  panel.append(renderTranscriptPanel(agent, ui));
+
   if (!panel.childNodes.length) {
     panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
   }
@@ -5300,6 +5671,7 @@ async function sendControl(agent, action, instruction) {
   state.feedback.set(agent.id, { ...result, action });
   render();
   toast(result.message.split("\n")[0], result.ok ? "ok" : "err");
+  refreshActions(); // the server just journalled this attempt — success or not
 }
 
 /* ---------- presentation labels (source identities stay authoritative) ---------- */
@@ -5457,7 +5829,354 @@ async function sendBroadcast() {
   } finally {
     state.broadcastPending = false;
     render();
+    refreshActions(); // per-recipient outcomes now survive a reload
   }
+}
+
+/* ---------- out-of-page notification ----------
+
+   With ~200 sessions the operator is working in other windows. An agent that
+   starts waiting produced no signal outside the tab, so "needs you" agents sat
+   idle until someone happened to look — the unread-cmux signal the product
+   already collects was never escalated past the in-page beacon.
+
+   Two escalations, deliberately asymmetric in cost:
+     - the tab title, which needs no permission and cannot annoy anyone;
+     - a Notification, opt-in behind an explicit click, silent when denied.
+
+   The firing rule is the whole feature. A notifier that cries wolf gets muted
+   and then the feature is worthless, so this fires ONLY for an agent that has
+   newly entered the needs-a-human set. Not on count changes, not on an agent
+   leaving, not on the first paint (opening the page to six waiting agents is
+   not six pieces of news), and never on routine churn. */
+
+const NOTIFY_STORAGE_KEY = "mtn3-notify";
+const NOTIFY_NAME_LIMIT = 3;
+const NOTIFY_TAG = "anthill-needs-you";  // replaces its predecessor; never stacks
+
+/* Who actually needs a human — the same verdict the Alerts view and the beacon
+   read, so the notification can never disagree with the board it came from. */
+function needsHumanIds(snap) {
+  const ids = [];
+  for (const { agent } of snapshotAgents(snap)) {
+    if (deriveActivity(agent) === "ended") continue;
+    const outcome = deriveOutcome(agent);
+    if (outcome === "needs-you" || outcome === "blocked" || outcome === "failed") ids.push(agent.id);
+  }
+  return ids.sort();
+}
+
+/* Pure. `prev === null` means "we have not looked yet": seed the baseline and
+   stay silent, which is what stops a reload from announcing the whole backlog. */
+function notificationPlan(prev, next, nameFor = null) {
+  const ids = next.slice().sort();
+  if (prev === null || prev === undefined) return { fire: false, ids, reason: "seeded" };
+  const before = new Set(prev);
+  const fresh = ids.filter((id) => !before.has(id));
+  if (!fresh.length) return { fire: false, ids, reason: "no new agent needs you" };
+  const names = fresh.slice(0, NOTIFY_NAME_LIMIT).map((id) => (nameFor && nameFor(id)) || id);
+  const rest = fresh.length - names.length;
+  return {
+    fire: true,
+    ids,
+    reason: "new",
+    title: fresh.length === 1 ? "1 agent needs you" : fresh.length + " agents need you",
+    body: names.join(", ") + (rest > 0 ? " and " + rest + " more" : ""),
+  };
+}
+
+/* The zero-permission escalation: a background tab shows its own alert count. */
+function titleWithAlerts(base, count) {
+  const clean = String(base).replace(/^\(\d+\)\s*/, "");
+  return count > 0 ? "(" + count + ") " + clean : clean;
+}
+
+function notificationsSupported() {
+  return typeof Notification !== "undefined";
+}
+
+function loadNotifyPreference() {
+  try {
+    state.notify.enabled = localStorage.getItem(NOTIFY_STORAGE_KEY) === "on";
+  } catch { state.notify.enabled = false; }
+  if (notificationsSupported()) state.notify.permission = Notification.permission;
+  // Permission revoked in browser settings between sessions: the stored
+  // preference is stale, so do not carry a promise we cannot keep.
+  if (state.notify.enabled && state.notify.permission !== "granted") state.notify.enabled = false;
+}
+
+function saveNotifyPreference() {
+  try { localStorage.setItem(NOTIFY_STORAGE_KEY, state.notify.enabled ? "on" : "off"); }
+  catch { /* storage unavailable */ }
+}
+
+/* The ONLY place permission is requested, and it is reachable only from a click.
+   Never on load: an unprompted permission dialog is how a page gets denied
+   permanently, which would silently disable the feature forever. */
+async function toggleNotifications() {
+  if (state.notify.enabled) {
+    state.notify.enabled = false;
+    saveNotifyPreference();
+    renderNotifyToggle();
+    return;
+  }
+  if (!notificationsSupported()) { renderNotifyToggle(); return; }
+  let permission = Notification.permission;
+  if (permission === "default") {
+    try { permission = await Notification.requestPermission(); }
+    catch { permission = "denied"; }
+  }
+  state.notify.permission = permission;
+  state.notify.enabled = permission === "granted";
+  saveNotifyPreference();
+  renderNotifyToggle();
+}
+
+/* Denied is not an error state to shout about — the operator said no. The
+   control just reads "unavailable" and nothing else changes. */
+function notifyToggleView(notify, supported = notificationsSupported()) {
+  if (!supported) return { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." };
+  if (notify.permission === "denied") {
+    return { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." };
+  }
+  return notify.enabled
+    ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
+    : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
+}
+
+function renderNotifyToggle() {
+  const btn = $("notify-toggle");
+  if (!btn) return;
+  const view = notifyToggleView(state.notify);
+  btn.textContent = view.label;
+  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  btn.setAttribute("title", view.title);
+  if (view.disabled) btn.setAttribute("disabled", "");
+  else btn.removeAttribute("disabled");
+  btn.classList.toggle("is-on", view.pressed);
+}
+
+/* Delivery, kept separate from the decision so every gate is assertable without
+   a browser. Each refusal returns its own reason rather than a shared silence,
+   because "we chose not to" and "the browser refused" are different facts. */
+function deliverNotification(plan, notify, ctor) {
+  if (!plan.fire) return plan.reason;
+  if (!notify.enabled) return "muted";
+  if (!ctor) return "unsupported";
+  if (notify.permission !== "granted") return "not-granted";
+  try {
+    // eslint-disable-next-line no-new
+    new ctor(plan.title, { body: plan.body, tag: NOTIFY_TAG });
+    return "sent";
+  } catch { return "refused"; }
+}
+
+/* Called on every adopted snapshot. The title always updates — it costs no
+   permission and cannot annoy anyone. The Notification only fires when the plan
+   says a NEW agent needs a human AND the operator opted in; denied, unsupported
+   or muted all degrade to the title alone, silently. */
+function applyNotifications(snap = state.snap) {
+  const next = needsHumanIds(snap);
+  const byId = agentsById(snap);
+  const plan = notificationPlan(state.notify.seen, next, (id) => {
+    const found = byId.get(id);
+    return found ? agentName(found.agent) : null;
+  });
+  state.notify.seen = plan.ids;
+  if (typeof document !== "undefined") {
+    document.title = titleWithAlerts(state.notify.baseTitle || document.title, next.length);
+  }
+  return deliverNotification(plan, state.notify, notificationsSupported() ? Notification : null);
+}
+
+/* ---------- action log ----------
+
+   What was broadcast, to whom, and whether it landed lived only in client
+   memory (state.broadcastResults) and died on reload. A broadcast reaches up to
+   50 agents and instruct is fire-and-forget text typed into a terminal, so after
+   a refresh the operator could not tell which lanes received an instruction,
+   which came back TEXT_STAGED_NOT_SUBMITTED, or whether they had already sent
+   it — and the natural recovery is to send it again, double-instructing lanes
+   that already got it.
+
+   Contract (GET /api/actions?limit=<n>, built in a parallel lane):
+     { ok, actions: [{ id, at, kind, agentIds, outcome, detail }] }   // newest first
+   This is an OPERATOR log, not a transcript: it never carries agent output. */
+
+const ACTIONS_DEFAULT_LIMIT = 100;
+const ACTIONS_MAX_LIMIT = 500;             // the contract's hard cap
+const ACTIONS_RENDER_CAP = 100;
+const ACTION_KINDS = new Set(["focus", "instruct", "interrupt", "broadcast", "archive"]);
+const ACTION_KIND_LABELS = {
+  focus: "Focus", instruct: "Send", interrupt: "Interrupt",
+  broadcast: "Broadcast", archive: "Archive",
+};
+/* A log that shows only successes is worse than no log: it reads as proof the
+   instruction landed. Every outcome the contract can return gets its own word. */
+const ACTION_OUTCOME_VIEW = {
+  ok: { label: "Delivered", tone: "ok" },
+  failed: { label: "Failed", tone: "err" },
+  partial: { label: "Partly delivered", tone: "warn" },
+  staged: { label: "Staged — not submitted", tone: "warn" },
+};
+
+function actionOutcomeView(outcome) {
+  // An outcome the server adds later reads as the server's own word rather than
+  // as a confident wrong label — the same rule investigationView follows.
+  return ACTION_OUTCOME_VIEW[outcome] || { label: String(outcome || "unknown"), tone: "warn" };
+}
+
+function clampActionsLimit(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return ACTIONS_DEFAULT_LIMIT;
+  return Math.min(ACTIONS_MAX_LIMIT, Math.max(1, v));
+}
+
+function actionsUrl(limit = ACTIONS_DEFAULT_LIMIT) {
+  return "/api/actions?limit=" + clampActionsLimit(limit);
+}
+
+function normalizeActions(body) {
+  const rows = Array.isArray(body && body.actions) ? body.actions : [];
+  const out = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    if (typeof row.id !== "string" || !row.id) continue;
+    if (!ACTION_KINDS.has(row.kind)) continue;
+    out.push({
+      id: row.id,
+      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
+      kind: row.kind,
+      agentIds: Array.isArray(row.agentIds) ? row.agentIds.filter((id) => typeof id === "string" && id) : [],
+      outcome: typeof row.outcome === "string" && row.outcome ? row.outcome : "unknown",
+      detail: typeof row.detail === "string" ? row.detail : "",
+    });
+  }
+  return out;
+}
+
+/* "Did I already tell these lanes to rebase?" — answered per agent, in the one
+   place where sending again is a click away. Newest-first is the contract, so
+   the first match is the most recent; sorting here would fight it. */
+function lastActionFor(actions, agentId) {
+  return (actions || []).find((a) => a.agentIds.includes(agentId)) || null;
+}
+
+/* Who it went to, without a wall of session ids. `nameFor` resolves what the
+   snapshot still knows; an agent that has since disappeared keeps its raw id
+   rather than being silently dropped from the record. */
+function actionRecipients(action, nameFor) {
+  const ids = action.agentIds || [];
+  if (!ids.length) return "no recipients";
+  if (ids.length > 3) return ids.length + " sessions";
+  return ids.map((id) => (nameFor && nameFor(id)) || id).join(", ");
+}
+
+async function loadActions(limit = ACTIONS_DEFAULT_LIMIT) {
+  state.actions = { ...state.actions, loading: true, error: "" };
+  render();
+  let next;
+  try {
+    const res = await fetch(actionsUrl(limit), { headers: { accept: "application/json" } });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    next = !res.ok || !body || body.ok !== true
+      ? { loading: false, error: actionsFailureText(res.status, body), available: !(res.status === 404 && !(body && body.error)), items: [], fetchedAt: 0 }
+      : { loading: false, error: "", available: true, items: normalizeActions(body), fetchedAt: Date.now() };
+  } catch {
+    next = { loading: false, error: actionsFailureText(0, null), available: true, items: [], fetchedAt: 0 };
+  }
+  state.actions = next;
+  render();
+}
+
+function actionsFailureText(status, body) {
+  const code = body && body.error && body.error.code;
+  const message = body && body.error && body.error.message;
+  if (!status) return "Could not reach the server for the action log.";
+  if (status === 404 && !code) return "The action log is not available in this build.";
+  return "Action log unavailable"
+    + (code ? " [" + code + "]" : "")
+    + (message ? ": " + message : " (HTTP " + status + ")");
+}
+
+/* Refresh the journal after anything that writes to it, but only once the log
+   has proved it exists — a build without the route must not be polled forever. */
+function refreshActions() {
+  if (state.actions.available && state.actions.fetchedAt) void loadActions();
+}
+
+function actionRowNode(action, nameFor) {
+  const outcome = actionOutcomeView(action.outcome);
+  return el("div", { class: "action-row", dataset: { tone: outcome.tone } },
+    el("span", { class: "action-when", title: action.at || null, text: action.at ? agoText(action.at) : "time unknown" }),
+    el("span", { class: "action-kind", text: ACTION_KIND_LABELS[action.kind] || action.kind }),
+    el("span", { class: "action-who", text: actionRecipients(action, nameFor) }),
+    el("span", { class: "action-outcome", text: outcome.label }),
+    action.detail ? el("span", { class: "action-detail", text: action.detail }) : null);
+}
+
+function renderActionLog(ui = state, nameFor = null) {
+  const log = ui.actions || {};
+  const panel = el("div", { class: "action-log" },
+    el("div", { class: "action-log-head" },
+      el("h2", { class: "action-log-title", text: "Recent operator actions" }),
+      el("button", {
+        type: "button", class: "btn sm",
+        disabled: log.loading ? "" : null,
+        dataset: { fkey: "actions-refresh" },
+        onclick: () => void loadActions(),
+      }, log.loading ? "Loading…" : "Refresh")));
+
+  if (log.error) {
+    panel.append(el("p", { class: "action-log-note err", role: "status", text: log.error }));
+    return panel;
+  }
+  if (log.loading && !log.items.length) {
+    panel.append(el("p", { class: "action-log-note", role: "status", text: "Reading the action log…" }));
+    return panel;
+  }
+  if (!log.items.length) {
+    panel.append(el("p", {
+      class: "action-log-note",
+      text: "No operator actions recorded yet. Focus, Send, Interrupt, Archive and Broadcast are journalled here as they happen — including the ones that fail.",
+    }));
+    return panel;
+  }
+
+  const rows = log.items.slice(0, ACTIONS_RENDER_CAP);
+  const list = el("div", { class: "action-rows" });
+  for (const action of rows) list.append(actionRowNode(action, nameFor));
+  panel.append(list);
+  if (log.items.length > rows.length) {
+    panel.append(el("p", { class: "action-log-note", text: "Showing the most recent " + rows.length + " of " + log.items.length + " recorded actions." }));
+  }
+  return panel;
+}
+
+function renderActionsPanel() {
+  const panel = $("actions-panel");
+  const toggle = $("actions-toggle");
+  if (!panel) return;
+  const open = state.actionsOpen && state.view !== "usage";
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", open ? "true" : "false");
+    toggle.classList.toggle("is-open", open);
+  }
+  const log = state.actions;
+  // Same rule as the alarm: visibility every paint, rebuild only on change.
+  panel.hidden = !open;
+  const sig = [open ? "1" : "0", log.loading ? "1" : "0", log.error, String(log.fetchedAt),
+    log.items.map((a) => a.id + ":" + a.outcome).join(",")].join("|");
+  if (state.paintSig.actions === sig) return;
+  state.paintSig.actions = sig;
+  panel.textContent = "";
+  if (!open) return;
+  const byId = agentsById(state.snap);
+  panel.append(renderActionLog(state, (id) => {
+    const found = byId.get(id);
+    return found ? agentName(found.agent) : null;
+  }));
 }
 
 /* ---------- misc UI ---------- */
@@ -5489,6 +6208,9 @@ function broadcastPaintSig(recipients, eligible, ui) {
   return [
     recipients.map(({ agent }) => agent.id + "=" + (broadcastEligible(agent) ? "1" : "0") + ":" + agentName(agent)).join(","),
     String(eligible.length),
+    // A board that goes stale mid-compose must repaint the dock so Send stops
+    // offering to fan a message out over four-day-old routing.
+    feedFrozen(ui) ? "held" : "",
     ui.broadcastResults
       ? [...ui.broadcastResults].map(([id, r]) => id + "=" + (r && r.ok ? "ok" : (r && r.error && r.error.code) || "err")).join(",")
       : "",
@@ -5514,8 +6236,10 @@ function renderBroadcastBar() {
   const recipients = selectedRecipients();
   const eligible = recipients.filter(({ agent }) => broadcastEligible(agent));
   const results = state.broadcastResults;
+  const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   if (paintUnchanged("broadcast", broadcastPaintSig(recipients, eligible, state))) return;
   bar.textContent = "";
+  if (alarm) bar.append(el("p", { class: "broadcast-note is-held", role: "status", text: staleControlNote(alarm) }));
 
   bar.append(el("div", { class: "broadcast-head" },
     icon("broadcast", { label: "Broadcast" }),
@@ -5546,10 +6270,10 @@ function renderBroadcastBar() {
   if (state.broadcastConfirming) {
     bar.append(el("div", { class: "broadcast-confirm", role: "group", "aria-label": "Confirm broadcast" },
       el("span", { text: `Send this instruction to ${eligible.length} ${eligible.length === 1 ? "agent" : "agents"}?` }),
-      el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => sendBroadcast() }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
+      el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending || alarm ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => { if (!alarm) sendBroadcast(); } }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
       el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, dataset: { fkey: "broadcast-cancel" }, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
   } else {
-    const canSend = eligible.length > 0 && instruction.trim().length > 0;
+    const canSend = !alarm && eligible.length > 0 && instruction.trim().length > 0;
     bar.append(el("div", { class: "broadcast-compose" },
       el("textarea", {
         placeholder: eligible.length ? "Instruction sent to every eligible recipient…" : "Select at least one eligible agent first",
@@ -5597,14 +6321,15 @@ function renderEmpty() {
   }
 }
 
-function tickClocks() {
+function tickClocks(frozen = feedFrozen(), now = Date.now()) {
   for (const node of document.querySelectorAll("[data-elapsed-base]")) {
-    const base = Number(node.dataset.elapsedBase);
-    const drift = Date.now() - Date.parse(node.dataset.elapsedFrom);
-    if (Number.isFinite(base) && Number.isFinite(drift)) {
-      node.textContent = fmtElapsed(base + Math.max(0, drift));
-    }
+    const text = elapsedTickText(node.dataset.elapsedBase, node.dataset.elapsedFrom, now, frozen);
+    if (text != null) node.textContent = text;
+    node.classList.toggle("is-frozen", frozen);
   }
+  // data-ago is NOT frozen: "12m ago" measures the distance from a real past
+  // moment to now, and that distance genuinely keeps growing while the feed is
+  // stuck. Freezing it would replace one lie with another.
   for (const node of document.querySelectorAll("[data-ago]")) {
     node.textContent = agoText(node.dataset.ago);
   }
@@ -5870,7 +6595,12 @@ function boot() {
   loadOverrides();
   loadWidgetPreferences();
   loadLookback();
+  state.notify.baseTitle = document.title;
+  loadNotifyPreference();
+  renderNotifyToggle();
   void fetchSettings();
+
+  $("notify-toggle").addEventListener("click", () => void toggleNotifications());
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
@@ -5883,6 +6613,14 @@ function boot() {
   });
 
   $("select-toggle").addEventListener("click", () => enterSelectMode(!state.selecting));
+
+  $("actions-toggle").addEventListener("click", () => {
+    state.actionsOpen = !state.actionsOpen;
+    // Re-read on open: another operator (or this one, in another tab) may have
+    // acted since the boot fetch.
+    if (state.actionsOpen && state.actions.available) void loadActions();
+    else render();
+  });
 
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
@@ -5939,6 +6677,9 @@ function boot() {
   fetchSnapshot();
   fetchLabels();
   fetchTriageQueue();
+  // One attempt at boot. It populates the drawer's "last action" fact, and on a
+  // build without the route it latches available=false so nothing retries it.
+  void loadActions();
   connect();
 }
 
