@@ -867,21 +867,39 @@ describe("unavailable-control explanation stays plain-language", () => {
     }
   });
 
+  /* W4-B: was seven source substrings over two hand-sliced function bodies —
+     it could not fail if a reason were echoed through a variable, and it broke
+     whenever a function moved. Now a real routing reason is planted and both
+     surfaces are read: the banner explains, the dock stays silent. */
   test("command dock never echoes capability reasons in the Operate chrome", () => {
-    expect(source).toContain("function renderCommandDock(");
-    expect(source).toContain("function renderControlBanner(");
-    expect(source).toContain("controlUnavailableText(");
-    // Dock tools must not surface raw capability.reason strings in Operate chrome.
-    const dockStart = source.indexOf("function renderCommandDock(");
-    const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
-    const bannerStart = source.indexOf("function renderControlBanner(");
-    const bannerEnd = source.indexOf("\nfunction ", bannerStart + 10);
-    const dock = source.slice(dockStart, dockEnd === -1 ? undefined : dockEnd);
-    const banner = source.slice(bannerStart, bannerEnd === -1 ? undefined : bannerEnd);
-    expect(dock).toContain("controlUnavailableText(");
-    expect(banner).toContain("controlUnavailableText(");
-    expect(dock).not.toContain(".reason");
-    expect(banner).not.toContain(".reason");
+    const reason = "surface a1b2 is claimed by two sessions (lsof evidence conflicts)";
+    const quarantined = agent({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", reason },
+      controls: [
+        { action: "instruct", enabled: false, reason },
+        { action: "focus", enabled: false, reason },
+        { action: "interrupt", enabled: false, reason },
+        { action: "archive", enabled: false, reason },
+      ],
+    });
+    const dock = withDom(() => M.renderCommandDock(quarantined, "quarantined", null, []));
+    const banner = withDom(() => M.renderControlBanner(quarantined, "quarantined"));
+
+    // The banner owns the explanation — in its own operator sentence, not by
+    // pasting the resolver's evidence string at someone.
+    expect(banner).not.toBeNull();
+    expect(textOf(banner)).toContain(M.controlUnavailableText("quarantined"));
+    expect(textOf(banner)).not.toContain(reason);
+
+    // The dock never repeats the raw routing reason — not in text, not in a
+    // title, not in an aria-label. That string is evidence, not operator copy.
+    const dockText = textOf(dock);
+    expect(dockText).not.toContain(reason);
+    expect(dockText).toContain(M.controlUnavailableText("quarantined"));
+    const leaked = findAll(dock, (n: any) =>
+      Object.values(n.attributes || {}).some((v) => String(v).includes(reason)));
+    expect(leaked).toEqual([]);
   });
 });
 
