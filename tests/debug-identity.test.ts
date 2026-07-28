@@ -87,7 +87,11 @@ const surfaces: CmuxSurface[] = [
     identityTrace: {
       surfaceId: "SURFACE-HEALTH",
       tty: "ttys033",
-      processes: [{ pid: 4242, command: "claude --resume", recognizedAgentProcess: true }],
+      processes: [{
+        pid: 4242,
+        command: "claude --resume --api-key super-secret",
+        recognizedAgentProcess: true,
+      }],
       openFileMatches: [
         {
           pid: 4242,
@@ -181,8 +185,12 @@ describe("read-only identity debug endpoint", () => {
     expect(body.relatedSurfaces).toHaveLength(1);
     expect(body.relatedSurfaces[0]).toMatchObject({
       surfaceId: "SURFACE-HEALTH",
-      identityTrace: { outcome: "open-file-match" },
+      identityTrace: {
+        outcome: "open-file-match",
+        processes: [{ pid: 4242, command: "[redacted]", recognizedAgentProcess: true }],
+      },
     });
+    expect(JSON.stringify(body)).not.toContain("super-secret");
     fetch.dispose();
   });
 

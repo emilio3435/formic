@@ -3,6 +3,7 @@ import { executeControl } from "../src/server/control";
 import {
   handleControlRequest,
   MAX_CONTROL_BODY_BYTES,
+  MAX_CONTROL_SNAPSHOT_AGE_MS,
 } from "../src/server/http";
 import type {
   AgentSnapshot,
@@ -422,7 +423,12 @@ describe("same-origin loopback control HTTP boundary", () => {
     ]);
     const response = await handleControlRequest(
       post(JSON.stringify({ action: "focus", agentId: "codex:test-session" })),
-      { runner, archiveStore: archiveStore(), getSnapshot: snapshot },
+      {
+        runner,
+        archiveStore: archiveStore(),
+        getSnapshot: snapshot,
+        now: () => Date.parse(snapshot().generatedAt),
+      },
     );
 
     expect(response.status).toBe(502);
@@ -430,5 +436,52 @@ describe("same-origin loopback control HTTP boundary", () => {
       ok: false,
       error: { code: "CMUX_COMMAND_FAILED", stderr: "permission denied", exitCode: 9 },
     });
+  });
+
+  test("stale routing evidence refuses terminal controls before invoking cmux", async () => {
+    const runner = new StubRunner([]);
+    const generatedAt = Date.parse(snapshot().generatedAt);
+    const response = await handleControlRequest(
+      post(JSON.stringify({
+        action: "instruct",
+        agentId: "codex:test-session",
+        instruction: "Continue.",
+      })),
+      {
+        runner,
+        archiveStore: archiveStore(),
+        getSnapshot: snapshot,
+        now: () => generatedAt + MAX_CONTROL_SNAPSHOT_AGE_MS + 1,
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: {
+        code: "STALE_SNAPSHOT",
+        message: `Control routing evidence is ${MAX_CONTROL_SNAPSHOT_AGE_MS + 1}ms old; recollect before retrying.`,
+        ageMs: MAX_CONTROL_SNAPSHOT_AGE_MS + 1,
+        maxAgeMs: MAX_CONTROL_SNAPSHOT_AGE_MS,
+      },
+    });
+    expect(runner.commands).toHaveLength(0);
+  });
+
+  test("archive remains available when routing evidence is stale because it does not target cmux", async () => {
+    const store = archiveStore();
+    const generatedAt = Date.parse(snapshot().generatedAt);
+    const response = await handleControlRequest(
+      post(JSON.stringify({ action: "archive", agentId: "codex:test-session" })),
+      {
+        runner: new StubRunner([]),
+        archiveStore: store,
+        getSnapshot: snapshot,
+        now: () => generatedAt + MAX_CONTROL_SNAPSHOT_AGE_MS + 1,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(store.archived).toEqual(["codex:test-session"]);
   });
 });

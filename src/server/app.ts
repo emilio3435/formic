@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import type { HubSnapshot, TriageQueueItem } from "../shared/types";
@@ -38,6 +39,21 @@ const SECURITY_HEADERS = {
   "x-frame-options": "DENY",
 };
 
+export const MAX_SSE_CLIENTS = 16;
+export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
+
+function isLoopback(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+}
+
+function compactSnapshotFingerprint(snapshot: HubSnapshot): string {
+  return createHash("sha256").update(snapshotFingerprint(snapshot)).digest("base64url");
+}
+
+function snapshotEvent(snapshot: HubSnapshot): string {
+  return `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+}
+
 export interface MountainAppDependencies {
   state: MountainAppState;
   runner: CommandRunner;
@@ -74,6 +90,25 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (timer) clearInterval(timer);
     heartbeatTimers.delete(client);
   };
+  const dropClient = (client: ReadableStreamDefaultController<string>): void => {
+    removeClient(client);
+    try {
+      client.close();
+    } catch {
+      // A disconnected client may already have closed its stream.
+    }
+  };
+  const enqueueClient = (client: ReadableStreamDefaultController<string>, event: string): void => {
+    if (client.desiredSize !== null && client.desiredSize <= 0) {
+      dropClient(client);
+      return;
+    }
+    try {
+      client.enqueue(event);
+    } catch {
+      removeClient(client);
+    }
+  };
   const markIssuesForAgents = async (agentIds: readonly string[]): Promise<void> => {
     if (agentIds.length === 0) return;
     const affected = new Set(agentIds);
@@ -107,28 +142,29 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     await dependencies.state.refresh({ cmux: true });
   };
   void hydrateTriageLifecycle();
-  let fingerprint = snapshotFingerprint(dependencies.state.get());
+  const initialSnapshot = dependencies.state.get();
+  let fingerprint = compactSnapshotFingerprint(initialSnapshot);
+  let currentSnapshotEvent = snapshotEvent(initialSnapshot);
   let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
-    const nextFingerprint = snapshotFingerprint(snapshot);
+    const nextFingerprint = compactSnapshotFingerprint(snapshot);
     if (nextFingerprint === fingerprint) return;
     fingerprint = nextFingerprint;
-    const event = `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+    currentSnapshotEvent = snapshotEvent(snapshot);
     for (const client of clients) {
-      try {
-        client.enqueue(event);
-      } catch {
-        removeClient(client);
-      }
+      enqueueClient(client, currentSnapshotEvent);
     }
   });
 
   const fetch = (async (request: Request): Promise<Response> => {
-    if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
     const url = new URL(request.url);
+    if (!isLoopback(url.hostname)) {
+      return new Response("Forbidden", { status: 403, headers: SECURITY_HEADERS });
+    }
+    if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
     if (request.method === "POST" && url.pathname === "/api/recollect") {
       const origin = request.headers.get("origin");
-      if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) || !origin || origin !== url.origin) {
+      if (!origin || origin !== url.origin) {
         return Response.json(
           {
             ok: false,
@@ -167,26 +203,34 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       });
     }
     if (request.method === "GET" && url.pathname === "/api/events") {
+      if (clients.size >= MAX_SSE_CLIENTS) {
+        return new Response("Too many event streams", {
+          status: 503,
+          headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+        });
+      }
       let client: ReadableStreamDefaultController<string> | undefined;
       const stream = new ReadableStream<string>({
         start(controller) {
           client = controller;
           clients.add(controller);
-          controller.enqueue(`event: snapshot\ndata: ${JSON.stringify(dependencies.state.get())}\n\n`);
+          controller.enqueue(currentSnapshotEvent);
           heartbeatTimers.set(
             controller,
             setInterval(() => {
-              try {
-                controller.enqueue(`event: heartbeat\ndata: ${JSON.stringify({ ts: new Date().toISOString() })}\n\n`);
-              } catch {
-                removeClient(controller);
-              }
+              enqueueClient(
+                controller,
+                `event: heartbeat\ndata: ${JSON.stringify({ ts: new Date().toISOString() })}\n\n`,
+              );
             }, 25_000),
           );
         },
         cancel() {
           if (client) removeClient(client);
         },
+      }, {
+        highWaterMark: MAX_SSE_BACKLOG_BYTES,
+        size: (event) => new TextEncoder().encode(event).byteLength,
       });
       return new Response(stream, {
         headers: {
@@ -268,12 +312,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     unsubscribe();
     unsubscribeTriage?.();
     for (const client of [...clients]) {
-      removeClient(client);
-      try {
-        client.close();
-      } catch {
-        // A disconnected client may already have closed its stream.
-      }
+      dropClient(client);
     }
   };
   return fetch;
