@@ -12,5 +12,15 @@
     "claude-fable-5": ["claude-fable-5", "fable-5"]
   },
   "cursorNativeFamilies": ["grok-4.5", "cursor-grok-4.5", "composer-2", "composer-2.5"],
-  "cursorRootModel": "Grok 4.5 Fast"
+  "cursorRootModel": "Grok 4.5 Fast",
+  "pricingVersion": "2026-07-28",
+  "modelPricingUsdPerMillionTokens": {
+    "claude-opus-4-8": {
+      "aliases": ["claude-opus-4-8", "claude-opus-4-8[1m]"],
+      "input": 5,
+      "output": 25,
+      "cacheRead": 0.5,
+      "cacheCreation": 6.25
+    }
+  }
 }

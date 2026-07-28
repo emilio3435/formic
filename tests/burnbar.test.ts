@@ -8,6 +8,7 @@ import {
   getUsageSummary,
   handleUsageRequest,
   isEncryptedSqliteFile,
+  resolveUsageCost,
 } from "../src/server/burnbar";
 
 const dylib =
@@ -57,6 +58,79 @@ describe("burnbar usage bridge", () => {
     }
   });
 
+  test("derives only configured model costs and labels the estimate", () => {
+    const config = {
+      pricingVersion: "test-v1",
+      modelPricingUsdPerMillionTokens: {
+        "priced-model": {
+          aliases: ["priced-model"],
+          input: 2,
+          output: 8,
+          cacheRead: 0.2,
+          cacheCreation: 2.5,
+        },
+      },
+    };
+    expect(resolveUsageCost({
+      model: "provider/priced-model-fast",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 500_000,
+      cacheCreationTokens: 40_000,
+      measuredCostUsd: null,
+    }, config)).toEqual({
+      costUsd: 3,
+      costProvenance: "derived_estimate",
+      pricingVersion: "test-v1",
+    });
+    expect(resolveUsageCost({
+      model: "unpriced-model",
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      measuredCostUsd: null,
+    }, config)).toEqual({ costUsd: null, costProvenance: "unknown" });
+  });
+
+  test("authoritative source cost wins, including measured zero", () => {
+    expect(resolveUsageCost({
+      model: "unpriced-model",
+      inputTokens: 10_000,
+      outputTokens: 10_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      measuredCostUsd: 0,
+    })).toEqual({ costUsd: 0, costProvenance: "measured" });
+  });
+
+  test("missing OpenBurnBar reports an install health state instead of zeros", async () => {
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = join(root, "not-installed");
+    delete process.env.BURNBAR_DB_PATH;
+    try {
+      const summary = await getUsageSummary("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+      expect(summary).toMatchObject({
+        available: false,
+        sourceHealth: {
+          state: "not_installed",
+          message: "Cost source not installed. Install OpenBurnBar with SQLCipher support.",
+        },
+        estimatedCostUsd: null,
+        costKnown: false,
+        costProvenance: "unknown",
+      });
+    } finally {
+      if (previous.support == null) delete process.env.BURNBAR_SUPPORT_DIR;
+      else process.env.BURNBAR_SUPPORT_DIR = previous.support;
+      if (previous.db == null) delete process.env.BURNBAR_DB_PATH;
+      else process.env.BURNBAR_DB_PATH = previous.db;
+    }
+  });
+
   test.skipIf(!canSqlcipher)("summary/invocations unlock via SQLCipher helper", async () => {
     // Build the encrypted fixture in a child process so this test file never
     // calls Database.setCustomSQLite in the shared bun test worker.
@@ -70,10 +144,12 @@ const db = new Database(${JSON.stringify(dbPath)}, { create: true });
 db.run("PRAGMA key = '${key}'");
 db.run(\`CREATE TABLE token_usage (
   id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
-  totalTokens INTEGER, cost REAL, startTime TEXT, endTime TEXT)\`);
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
 db.run(\`INSERT INTO token_usage VALUES
-  ('1','Claude Code','sess-a','proj','opus',1000,0.05,'2026-07-22T10:00:00.000Z','2026-07-22T10:01:00.000Z'),
-  ('2','Codex','sess-b','proj','gpt',2000,NULL,'2026-07-22T11:00:00.000Z','2026-07-22T11:01:00.000Z')\`);
+  ('1','Claude Code','sess-a','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22T10:00:00.000Z','2026-07-22T10:01:00.000Z'),
+  ('2','Codex','sess-b','proj','unpriced-model',1500,500,0,0,2000,0,'low_confidence_estimate','2026-07-22T11:00:00.000Z','2026-07-22T11:01:00.000Z'),
+  ('3','Claude Code','sess-c','proj','claude-opus-4-8',800,200,0,0,1000,99,'low_confidence_estimate','2026-07-23T10:00:00.000Z','2026-07-23T10:01:00.000Z')\`);
 db.close();
 `,
     );
@@ -98,6 +174,25 @@ db.close();
       // One row lacks cost — never invent a total spend.
       expect(summary.costKnown).toBe(false);
       expect(summary.estimatedCostUsd).toBeNull();
+      expect(summary.costProvenance).toBe("unknown");
+
+      const derived = await getUsageSummary("2026-07-23T00:00:00.000Z", "2026-07-24T00:00:00.000Z");
+      expect(derived).toMatchObject({
+        estimatedCostUsd: 0.009,
+        costKnown: true,
+        costProvenance: "derived_estimate",
+        pricingVersion: "2026-07-28",
+      });
+
+      const empty = await getUsageSummary("2026-07-24T00:00:00.000Z", "2026-07-25T00:00:00.000Z");
+      expect(empty).toMatchObject({
+        available: true,
+        processedTokens: 0,
+        invocations: 0,
+        estimatedCostUsd: null,
+        costKnown: false,
+        costProvenance: "unknown",
+      });
 
       const invocations = await getUsageInvocations("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z", 10);
       expect(invocations.available).toBe(true);
