@@ -1509,3 +1509,140 @@ Branch: `ant-hill/be-identity-20260728`
 ## Out-of-scope observations
 
 No additional out-of-scope defects were changed.
+
+---
+
+# WAVE 3 / TEST — test integrity
+
+Date: 2026-07-28
+Branch: `ant-hill/test-integrity-20260728`
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| Baseline | 467 pass / 0 fail / 0 skip / 2064 expect() calls |
+| `bunx tsc --noEmit` | clean |
+| Unfiltered `bun test` | **470 pass / 0 fail / 0 skip**, 2072 expect() calls, 29 files |
+| Forced missing SQLCipher dependency | 4 pass / 1 explicitly named skip / 0 fail; unconditional degraded test ran |
+| Mutation testing | **11/11 caught** in a disposable `/private/tmp` copy; worktree `src/**` untouched |
+| Bun runtime | `1.3.14` |
+| Pushed / merged / deployed / service restarted | **no** |
+
+`bunx` initially could not resolve `@types/bun` because this worktree had no
+dependencies installed. `bun install --frozen-lockfile` installed the
+lockfile-pinned dev dependencies; tracked dependency files did not change.
+
+## 1. Raw-source client assertions and unreachable behavior — **BLOCKED**
+
+- Commit: `49e303a`
+- Converted real behavior for stable program-label keys, rendered program-label
+  semantics, terminal naming/rename targeting, the selected-row inspector path,
+  Evidence tooltips/copy IDs, and untrusted text through `el()`.
+- Added fail-loud source extraction for the remaining negative-only
+  `renderEvidenceShelf` and `renderOperate` slices.
+- Proof:
+  - `program rename is presentation-only via GET/POST /api/program-aliases`
+  - `program labels use semantic keyboard controls with a caret that only expands`
+  - `agent names track terminal titles and stay editable in the list`
+  - `selected rows retain an accessible full-text inspector path`
+  - `no dynamic content flows through innerHTML`
+  - `Evidence carries Learn-style tooltips for cwd mismatch and token scope`
+  - `bookshelf shelf replaces tabs: Operate + Chat open, Evidence behind the caterpillar rail`
+- Mutation proof: missing rendered message class, altered latest-call tooltip,
+  vanished slice anchors, unstable program-label key, missing caret, wrong rename
+  target, and `innerHTML` text routing all failed.
+- Blocker: interrupt/archive confirmation lives in private
+  `renderDockTool`/`NEEDS_CONFIRM` closure state, and HTTP-result interpretation
+  lives in private `sendControl`. Honest coverage needs a source-lane seam such
+  as `needsConfirm(action)` and `controlSucceeded(status, body)`, or injected
+  state/fetch dependencies.
+- Left alone: the existing two source assertions remain as an explicitly weak
+  signal instead of being deleted without replacement. No `src/**` was edited.
+
+## 2. Twenty-seven pure source/style/HTML tests — **BLOCKED**
+
+- Commit: `49e303a`
+- The audit's exact direct-source census is down from 27 pure tests to 22.
+  Wave 2 had already converted the program-list test; this lane converted
+  program rename, the selected-row inspector path, Evidence tooltips, and
+  no-`innerHTML`. It also converted two derived-slice tests outside that narrow
+  census: program-label semantics and agent naming/editability.
+- Eight remaining tests represent private behavior that needs a source seam or
+  browser-capable harness:
+  - labels hydration and stable client payloads
+  - broadcast client payload/results
+  - finding-row drawer routing
+  - live focus restoration
+  - intervention/queue/launch separation
+  - pulse verdict/calm markup
+  - interrupt/archive confirmation
+  - HTTP control-result interpretation
+- Fourteen remaining tests are source-structure contracts, so source/CSS/HTML
+  inspection is the actual contract: removed CSS helpers; inspector width;
+  horizontal overflow; control-byte hygiene; CSP-safe SVG/no inline style;
+  structural anchors; base type; removed ticket chrome; signal tokens; strip
+  CSS binding; state-card CSS binding; removed filled tabs; initial Now-tab
+  markup; and pane overscroll/gutter rules.
+- Left alone: no test was deleted. Server request behavior remains covered by
+  `tests/program-aliases.test.ts` and `tests/broadcast.test.ts`, but that does
+  not prove the private client request builders.
+
+## 3. Vacuous negative source slices — **FIXED**
+
+- Commit: `49e303a`
+- Added `requiredSlice`, which throws when a named extraction stops matching,
+  to the remaining unguarded negative-only `renderEvidenceShelf` and
+  `renderOperate` slices. Wave 2 had already replaced the other cited slices
+  with rendered behavior.
+- Proof: `bookshelf shelf replaces tabs: Operate + Chat open, Evidence behind the caterpillar rail`.
+- Mutation proof: renaming either extracted function failed instead of turning
+  the negative assertions into no-ops.
+- Left alone: positive slices that already fail empty and existing
+  `toBeTruthy()`-guarded slices were not mechanically rewritten.
+
+## 4. Conditional BurnBar SQLCipher coverage — **FIXED**
+
+- Commit: `2ea809d`
+- Added an unconditional missing-storage contract for `getUsageSummary`,
+  `getUsageInvocations`, and the loopback summary response. It requires
+  unavailable provenance and null/empty usage instead of invented zeroes.
+- A missing dylib now emits a warning with its exact path and gives the skipped
+  encrypted-fixture test an explicit reason.
+- Proof:
+  - `missing encrypted storage stays explicitly unavailable without fabricating usage`
+  - `summary/invocations unlock via SQLCipher helper`
+- Mutation proof: fabricating `available: true` failed.
+- Left alone: no binary fixture or SQLCipher dylib was vendored; the positive
+  encrypted read remains dependency-backed, but the gap is loud.
+
+## 5. Single-agent control routing fixture — **FIXED**
+
+- Commit: `c4c6c00`
+- Added a three-agent, two-program fixture with `codex:test-session`,
+  `codex:test-session-2`, and `claude:test-session`, all on distinct surfaces.
+- Added a strict-prefix request that must return `404 AGENT_NOT_FOUND` without
+  invoking cmux.
+- Proof:
+  - `routes an exact ID to its surface among similar agents across programs`
+  - `a strict ID prefix is not an agent and never invokes cmux`
+- Mutation proof: both “first agent wins” and `startsWith` lookup failed.
+- Left alone: `src/server/http.ts` and the existing identity-mismatch defense.
+
+## 6. Missing Bun engine declaration — **FIXED**
+
+- Commit: `b23dbdd`
+- Added only `"engines": { "bun": ">=1.3.14" }` to `package.json`.
+- Proof: installed Bun `1.3.14`, clean `bunx tsc --noEmit`, and the unfiltered
+  470-test run.
+- No unit test was added because package-manager metadata is not executable
+  application logic; the runtime/toolchain checks are direct.
+- Left alone: no `packageManager`, QUICKSTART, README, or other package change.
+
+## Test-lane operational notes
+
+- No source, scripts, config, launchd service, main worktree, push, merge, or
+  deployment was touched.
+- Cleanup of `/private/tmp/anthill-test-integrity-mutations.GVmImO` was rejected
+  by the machine's destructive-command guard. It is outside the worktree and
+  has no runtime effect.
