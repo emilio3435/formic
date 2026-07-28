@@ -297,7 +297,7 @@ describe("Cursor Agent persisted session truth", () => {
     });
   });
 
-  test("reads Cursor's hex metadata and per-session system model from the real SQLite schema", async () => {
+  test("does not invent a model id from English prose in a system prompt", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-store-"));
     temporaryDirectories.push(directory);
     const path = join(directory, "store.db");
@@ -322,7 +322,7 @@ describe("Cursor Agent persisted session truth", () => {
       agentId: SESSION_ID,
       name: "Grok verifier",
       mode: "search",
-      model: "Cursor Grok 4.5",
+      model: undefined,
     });
   });
 
@@ -371,6 +371,57 @@ describe("Cursor Agent persisted session truth", () => {
     database.close();
 
     expect(readCursorStoreEvidence(path).model).toBe("composer-2.5-fast");
+  });
+
+  test("caches unchanged stores and invalidates when their fingerprint changes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-store-cache-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.run("create table meta (key text primary key, value text)");
+    database.run("create table blobs (id text primary key, data blob)");
+    const metadata = (model: string) => Buffer.from(JSON.stringify({
+      agentId: SESSION_ID,
+      lastUsedModel: model,
+    })).toString("hex");
+    database.run("insert into meta(key, value) values ('0', ?)", [metadata("model-a")]);
+    database.close();
+
+    const fixedTime = new Date(1784690000000);
+    await utimes(path, fixedTime, fixedTime);
+    expect(readCursorStoreEvidence(path).model).toBe("model-a");
+    const changed = new Database(path);
+    changed.run("update meta set value = ? where key = '0'", [metadata("model-b")]);
+    changed.close();
+    await utimes(path, fixedTime, fixedTime);
+
+    expect(readCursorStoreEvidence(path).model).toBe("model-a");
+    await utimes(path, new Date(), new Date(fixedTime.getTime() + 1_000));
+    expect(readCursorStoreEvidence(path).model).toBe("model-b");
+  });
+
+  test("bounds fallback blob inspection to the newest 200 records", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-blob-bound-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.run("create table meta (key text primary key, value text)");
+    database.run("create table blobs (id text primary key, data blob)");
+    database.run("insert into meta(key, value) values ('0', ?)", [
+      Buffer.from(JSON.stringify({ agentId: SESSION_ID })).toString("hex"),
+    ]);
+    database.run("insert into blobs(id, data) values ('old-model', ?)", [
+      Buffer.from(assistantBlob("old-model")),
+    ]);
+    for (let index = 0; index < 200; index += 1) {
+      database.run("insert into blobs(id, data) values (?, ?)", [
+        `newer-${index}`,
+        Buffer.from(JSON.stringify({ role: "system", content: `instruction ${index}` })),
+      ]);
+    }
+    database.close();
+
+    expect(readCursorStoreEvidence(path).model).toBeUndefined();
   });
 
   test("reads a WAL-mode store immutably when the read-only handle cannot create SQLite sidecars", async () => {

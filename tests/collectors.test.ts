@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  appendFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
+  statSync,
+  truncateSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -159,11 +163,11 @@ describe("collector identity and usage truth", () => {
     expect(agent?.transcriptTail).toContain("git diff --check");
   });
 
-  test("empty Codex transcripts use the concise status reason as the final fallback", () => {
+  test("empty Codex transcripts report no readable human message", () => {
     const agent = parseCodexJsonl(fixture("empty-transcript-session.jsonl"), { nowMs });
 
     expect(agent?.task).toBeUndefined();
-    expect(agent?.lastHumanMessage).toBe("No source activity in the last 3 minutes.");
+    expect(agent?.lastHumanMessage).toBeNull();
   });
 
   test("Codex leaves the model undefined when the transcript never reports one", () => {
@@ -485,15 +489,69 @@ describe("collector identity and usage truth", () => {
     });
     const fixedTime = new Date();
 
-    writeFileSync(path, transcript("session-a"));
+    writeFileSync(path, `${transcript("session-a")}\n`);
     utimesSync(path, fixedTime, fixedTime);
     expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-a");
 
     unlinkSync(path);
     expect((await collectSessions(home)).codex.value).toEqual([]);
 
-    writeFileSync(path, transcript("session-b"));
+    writeFileSync(path, `${transcript("session-b")}\n`);
     utimesSync(path, fixedTime, fixedTime);
     expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-b");
+  });
+
+  test("incremental collection matches a full re-read across append, rotation, truncation, and replacement", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-incremental-"));
+    const sessions = join(home, ".codex", "sessions");
+    const path = join(sessions, "session.jsonl");
+    mkdirSync(sessions, { recursive: true });
+    const timestamp = new Date().toISOString();
+    const session = (id: string) => JSON.stringify({
+      type: "session_meta",
+      timestamp,
+      payload: { id, cwd: "/tmp/project" },
+    });
+    const user = (message: string) => JSON.stringify({
+      type: "event_msg",
+      timestamp,
+      payload: { type: "user_message", message },
+    });
+    const assistant = (message: string) => JSON.stringify({
+      type: "response_item",
+      timestamp,
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: message }] },
+    });
+    const expectMatchesFullRead = async () => {
+      const details = statSync(path);
+      const full = parseCodexJsonl(readFileSync(path, "utf8"), {
+        sourcePath: path,
+        mtimeMs: details.mtimeMs,
+      });
+      if (!full) throw new Error("full fixture parse unexpectedly returned null");
+      expect((await collectSessions(home)).codex.value[0]).toEqual(full);
+    };
+
+    writeFileSync(path, `${session("append-session")}\n${user("Initial task.")}\n`);
+    await expectMatchesFullRead();
+
+    const partial = assistant("Append completed.");
+    appendFileSync(path, partial);
+    expect((await collectSessions(home)).codex.value[0]?.lastAgentMessage).toBeNull();
+    appendFileSync(path, "\n");
+    await expectMatchesFullRead();
+
+    renameSync(path, `${path}.rotated`);
+    writeFileSync(path, `${session("rotated-session")}\n${user("Rotated task.")}\n`);
+    await expectMatchesFullRead();
+
+    truncateSync(path, 0);
+    writeFileSync(path, `${session("short")}\n`);
+    await expectMatchesFullRead();
+
+    const replacement = `${path}.replacement`;
+    writeFileSync(replacement, `${session("replacement-session")}\n${user("Replacement task.")}\n`);
+    renameSync(replacement, path);
+    await expectMatchesFullRead();
   });
 });
