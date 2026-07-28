@@ -46,6 +46,15 @@ function svgChild(spec) {
   return node;
 }
 
+/* SVG has no `title` content attribute — a shape's tooltip and accessible name
+   come from a <title> CHILD element. setAttribute("title", …) on a <rect> is
+   inert, which is why the usage bars used to hover-report nothing. */
+function svgTitle(text) {
+  const node = document.createElementNS(SVGNS, "title");
+  node.textContent = text;
+  return node;
+}
+
 /* Instrument-panel glyph set — mixing-console / oscilloscope language rather than
    clinical warning-triangle + info slop. Marks are built from straight rails,
    nodes (LEDs), and peaks so severity reads as shape, not flood color. Angular
@@ -374,6 +383,150 @@ function controlUnavailableText(controlState) {
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
     : "Controls are unavailable — no safe cmux target is linked to this session.";
+}
+
+/* ---------- identity resolution: why a session is quarantined ----------
+   The server ships `identityTrace` on every agent in the snapshot (it is only
+   stripped from the SSE change-fingerprint, never from the payload), plus a
+   read-only GET /api/debug/identity?agent=<id> that joins that trace to the
+   ps/lsof evidence of every related terminal. Both were being discarded by the
+   renderer, so the one failure mode that disables Focus and Send at scale
+   surfaced as a fixed sentence with no reason and no way forward. */
+
+const IDENTITY_TIER_LABELS = {
+  recorded: "Recorded target",
+  session: "Session ID on a terminal",
+  cwd: "Working folder",
+};
+const IDENTITY_OUTCOME_LABELS = {
+  matched: "matched",
+  quarantined: "quarantined",
+  ambiguous: "ambiguous",
+  "no-match": "no match",
+  skipped: "skipped",
+  rejected: "rejected",
+};
+/* Why routing refused, and what the operator can actually DO about it — one
+   entry per shape the resolver produces. Deliberately ID-free: the banner is
+   Operate chrome and the established rule (controlUnavailableText, and the test
+   that pins it) is that raw cmux/session identifiers belong only in Evidence.
+   The specific "ttys082 has both of these open" answer is one click away in the
+   routing-evidence block, not in the banner. */
+const IDENTITY_CAUSES = {
+  "contested-terminal": {
+    why: "More than one session claims the same terminal, so there is no unambiguous target to type into.",
+    next: "End or close one of the sessions sharing that terminal — controls re-arm on the next scan, no restart needed.",
+  },
+  "shared-folder": {
+    why: "This session is not registered on any terminal, and more than one session shares its working folder — so matching by folder cannot pick one.",
+    next: "Give this session its own cmux pane, or end the other session running in that folder; the next scan then binds it.",
+  },
+  missing: {
+    why: "No cmux terminal reports this session, so there is nothing to route Focus or Send to.",
+    next: "Open it in a cmux pane (or start the agent from one) and the next scan binds it.",
+  },
+};
+
+/* Normalized, render-ready view of one agent's identity trace. Pure. */
+function identityTraceView(agent) {
+  const trace = (agent && agent.identityTrace) || null;
+  const target = (agent && agent.target) || {};
+  const rawSteps = trace && Array.isArray(trace.steps) ? trace.steps : [];
+  return {
+    resolution: (trace && trace.resolution) || target.resolution || "missing",
+    matchedTier: (trace && trace.matchedTier) || null,
+    reason: (trace && trace.reason) || null,
+    surfaceId: (trace && trace.surfaceId) || target.surfaceId || null,
+    bridge: (trace && trace.bindingBridge) || null,
+    steps: rawSteps.map((step) => ({
+      tier: step.tier,
+      tierLabel: IDENTITY_TIER_LABELS[step.tier] || step.tier,
+      outcome: step.outcome,
+      outcomeLabel: IDENTITY_OUTCOME_LABELS[step.outcome] || step.outcome,
+      detail: step.detail || "",
+    })),
+  };
+}
+
+/* Which of the three real refusal shapes this is. Read off the tier that
+   actually refused, not off the resolution alone: every quarantine resolves as
+   "ambiguous", but a terminal contested by two sessions and a folder shared by
+   two sessions need different instructions. (Measured against the live board:
+   9 quarantined sessions, all `ambiguous`, all refused at the cwd tier.) */
+function identityCause(view) {
+  const refused = (tier) => view.steps.some((step) =>
+    step.tier === tier && (step.outcome === "quarantined" || step.outcome === "ambiguous"));
+  if (refused("session")) return "contested-terminal";
+  if (refused("cwd")) return "shared-folder";
+  return "missing";
+}
+
+/* The banner's whole story: what happened, why, and what to do about it.
+   Returns null when controls route normally. Pure. */
+function quarantineBrief(agent, control = deriveControlState(agent)) {
+  if (control === "linked") return null;
+  const view = identityTraceView(agent);
+  const cause = identityCause(view);
+  return {
+    title: control === "quarantined" ? "Control routing locked." : "Controls unavailable.",
+    summary: controlUnavailableText(control),
+    why: IDENTITY_CAUSES[cause].why,
+    nextStep: IDENTITY_CAUSES[cause].next,
+    cause,
+    steps: view.steps,
+  };
+}
+
+/* Short form of a provider session id — long enough to tell two sessions on
+   one terminal apart, short enough to read in a sentence. */
+function shortSessionId(id) {
+  const text = String(id || "");
+  return text.length > 10 ? text.slice(0, 8) + "…" : text;
+}
+
+/* GET /api/debug/identity?agent=<id> → the sentence the operator needs: which
+   terminal, and which sessions are fighting over it. The pids/commands/open
+   files live only on CmuxSurface, which the snapshot does not carry, so this is
+   the one piece of evidence that has to be fetched on demand. Pure. */
+function surfaceCollisions(payload) {
+  const surfaces = (payload && Array.isArray(payload.relatedSurfaces)) ? payload.relatedSurfaces : [];
+  return surfaces.map((surface) => {
+    const trace = surface.identityTrace || {};
+    const commandByPid = new Map((trace.processes || []).map((proc) => [proc.pid, proc.command]));
+    const claims = [];
+    const seen = new Set();
+    for (const match of trace.openFileMatches || []) {
+      const key = match.provider + ":" + match.sessionId;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      claims.push({
+        provider: match.provider,
+        sessionId: match.sessionId,
+        pid: match.pid,
+        command: commandByPid.get(match.pid) || "",
+      });
+    }
+    return {
+      surfaceId: surface.surfaceId,
+      tty: surface.tty || "",
+      conflict: surface.identityConflict || trace.identityConflict || "",
+      claims,
+    };
+  });
+}
+
+function collisionClaimText(claim) {
+  const who = (PROVIDER_LABELS[claim.provider] || claim.provider) + " " + shortSessionId(claim.sessionId);
+  if (!claim.pid) return who;
+  return who + " (pid " + claim.pid + (claim.command ? ", " + conciseText(claim.command, 40) : "") + ")";
+}
+
+function collisionLine(collision) {
+  const where = collision.tty || collision.surfaceId || "this terminal";
+  if (!collision.claims.length) return where + " — no open agent session files observed.";
+  if (collision.claims.length === 1) return where + " — one session open: " + collisionClaimText(collision.claims[0]);
+  return where + " — " + collision.claims.length + " sessions claim it: "
+    + collision.claims.map(collisionClaimText).join(" · ");
 }
 
 function conciseText(value, limit = 88) {
@@ -849,13 +1002,16 @@ function cursorPolicyParts(health) {
 function modelPolicyView(agent) {
   const p = agent.modelPolicy;
   if (!p || !MODEL_POLICY_LABELS[p.state]) return null;
-  const state = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
+  // Never name this `state` — the module-level app-state singleton is what the
+  // rest of this file means by that identifier, and shadowing it here is a trap
+  // for the next edit that reaches for state.contextDisplay or state.aliases.
+  const policyState = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
   return {
-    state,
+    state: policyState,
     label: MODEL_POLICY_LABELS[p.state],
     expected: p.expected || null,
     summary: p.summary || (
-      state === "mismatch" ? "The reported model is outside the approved model policy."
+      policyState === "mismatch" ? "The reported model is outside the approved model policy."
       : p.state === "compliant" ? "The reported model matches the approved model policy."
       : "The model is unavailable, so policy compliance cannot be verified."),
   };
@@ -1093,6 +1249,54 @@ const WORK_STATE_VIEW = {
 
 // Progress 0–100 per work state (normative). blocked keeps a mid value but
 // its ember tone (not the %) carries the alarm.
+/* One server enum, one operator vocabulary. Every surface that names an
+   investigation state reads from here: the plan chip, the queue button and its
+   note, the pulse row's work state, the drawer eyebrow and the drawer status
+   sentence. Before this table `completed` read "Complete" on the chip,
+   "complete · verifying" on the button, "verifying" in the pulse row,
+   "Verifying" in the drawer eyebrow and "complete · waiting for fresh data" in
+   the drawer status — four different words for one state, on one board.
+   `work` maps into WORK_STATE_VIEW, which stays the downstream row vocabulary. */
+const INVESTIGATION_STATE_VIEW = {
+  queued: {
+    work: "queued", label: "Queued", tone: "cool",
+    button: "✓ Investigation queued",
+    note: "Queued and ready for explicit launch",
+    status: "queued and ready for explicit launch",
+  },
+  running: {
+    work: "investigating", label: "Running", tone: "warm",
+    button: "● Investigation running",
+    note: "Investigation running",
+    status: "running",
+  },
+  completed: {
+    work: "verifying", label: "Verifying", tone: "ok",
+    button: "✓ Investigation verifying",
+    note: "Investigation verifying · waiting for fresh data",
+    status: "verifying · waiting for fresh data",
+  },
+  blocked: {
+    work: "blocked", label: "Blocked", tone: "hot",
+    button: "! Investigation blocked",
+    note: "Investigation blocked · review result",
+    status: "blocked · review result",
+  },
+};
+
+/* A state the server adds later reads as its own word everywhere rather than
+   as a confident wrong label on one surface and a raw enum on the next. */
+function investigationView(stateKey) {
+  if (INVESTIGATION_STATE_VIEW[stateKey]) return INVESTIGATION_STATE_VIEW[stateKey];
+  const raw = String(stateKey || "queued");
+  return {
+    work: "queued", label: raw, tone: "cool",
+    button: "Investigation " + raw,
+    note: "Investigation " + raw,
+    status: raw,
+  };
+}
+
 const PROGRESS_BY_WORK = {
   needs: 0, watching: 0, triaging: 15, planned: 35, queued: 50,
   investigating: 70, verifying: 85, blocked: 70, cleared: 100,
@@ -1143,13 +1347,20 @@ globalThis.TheAntHill = {
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
+  INVESTIGATION_STATE_VIEW, investigationView,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
+  serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
+  renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
+  identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
+  renderControlBanner, renderIdentityBlock,
   el,
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
-  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig,
+  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
+  reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
+  filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
 /* ---------- state ---------- */
@@ -1219,6 +1430,11 @@ const state = {
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
+  // Terminal-level identity evidence for the open drawer. The pids, commands
+  // and open-file matches that say "ttys082 has both of these sessions open"
+  // live on CmuxSurface, which /api/snapshot does not carry — so they are
+  // fetched on demand from the read-only GET /api/debug/identity.
+  identity: { agentId: null, loading: false, error: "", data: null },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1374,6 +1590,33 @@ async function recollectSnapshot() {
   } catch {
     await fetchSnapshot();
   }
+}
+
+/* On-demand terminal evidence for a quarantined session. Read-only GET; the
+   result is scoped to one agent id so a drawer switched mid-flight can never
+   adopt the previous agent's evidence. */
+async function loadIdentityEvidence(agentId) {
+  state.identity = { agentId, loading: true, error: "", data: null };
+  render();
+  let next;
+  try {
+    const res = await fetch("/api/debug/identity?agent=" + encodeURIComponent(agentId), {
+      headers: { accept: "application/json" },
+    });
+    let body = null;
+    try { body = await res.json(); } catch { /* non-JSON body */ }
+    if (!res.ok || !body || body.ok !== true) {
+      const message = (body && body.error && body.error.message) || "HTTP " + res.status;
+      throw new Error(message);
+    }
+    next = { agentId, loading: false, error: "", data: body };
+  } catch (err) {
+    next = { agentId, loading: false, error: err instanceof Error ? err.message : String(err), data: null };
+  }
+  // The operator moved on — do not paint stale evidence into another drawer.
+  if (state.identity.agentId !== agentId) return;
+  state.identity = next;
+  render();
 }
 
 let refetchTimer = null;
@@ -1617,9 +1860,8 @@ function healthMicroChip(data) {
     icon(data.icon), data.value);
 }
 
-function renderSummaryWidget(id, weight = "normal") {
+function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
-  const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
   const cellClass = "reading-widget widget-" + id
     + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
   // A healthy control plane stays a trailing micro-chip; any degradation
@@ -1746,7 +1988,7 @@ function renderWidgetCustomizer() {
 /* Calm collapse — the whole strip is one moss line: verdict, shipping count,
    pulse numbers when the server reports them (graceful without them), a small
    activity sparkline, and the trailing health micro-chip. */
-function renderPulseCalm() {
+function renderPulseCalm(healthData) {
   const snap = state.snap;
   const totals = totalsOf(snap);
   const pulse = snap && snap.pulse;
@@ -1762,7 +2004,7 @@ function renderPulseCalm() {
     ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
     : null;
   if (spark) line.append(spark);
-  line.append(healthMicroChip(summaryWidgetData("health", snap, state.conn)));
+  line.append(healthMicroChip(healthData || summaryWidgetData("health", snap, state.conn)));
   return line;
 }
 
@@ -1776,7 +2018,11 @@ let pulseNeedsYouWas = 0;
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const model = pulseStripModel(state.snap, state.conn, state.queueItems);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay);
+  // One derivation per widget per paint. The signature, the cell and the calm
+  // line all read this map; each used to call summaryWidgetData again, and each
+  // of those calls re-derived the whole findings list underneath.
+  const dataById = new Map(model.cells.map((cell) => [cell.id, cell.data]));
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
@@ -1792,7 +2038,7 @@ function renderHealthRail() {
     // The calm line renders momentum/burn/health regardless of which widgets
     // are enabled, so sign its actual inputs — not the customized cell list.
     (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
-      const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+      const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
   ].join("\u001f");
@@ -1810,11 +2056,11 @@ function renderHealthRail() {
 
   widgets.textContent = "";
   if (model.calm) {
-    widgets.append(renderPulseCalm());
+    widgets.append(renderPulseCalm(dataById.get("health")));
   } else {
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
-      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal"));
+      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal", dataById.get(id)));
     }
   }
   renderPulseFindings(model);
@@ -2187,16 +2433,16 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
   return briefing;
 }
 
-function renderTriage(issue) {
-  const queueItem = state.queueItems.find((item) => item.issueId === issue.id);
+function renderTriage(issue, ui = state) {
+  const queueItem = ui.queueItems.find((item) => item.issueId === issue.id);
   // A queue item IS a recommendation (TriageQueueItem extends it), so a page
   // reload mid-investigation still shows the plan — not a stale Triage button.
-  const recommendation = state.triage.get(issue.id) || queueItem;
+  const recommendation = ui.triage.get(issue.id) || queueItem;
   const queued = !!queueItem;
-  const generating = state.triagePending.has("generate:" + issue.id);
-  const queueing = state.triagePending.has("queue:" + issue.id);
-  const launching = state.triagePending.has("run:" + issue.id);
-  const error = state.triageErrors.get(issue.id);
+  const generating = ui.triagePending.has("generate:" + issue.id);
+  const queueing = ui.triagePending.has("queue:" + issue.id);
+  const launching = ui.triagePending.has("run:" + issue.id);
+  const error = ui.triageErrors.get(issue.id);
   const wrap = el("div", { class: "triage-actions" });
 
   if (!recommendation) {
@@ -2214,11 +2460,7 @@ function renderTriage(issue) {
     // shows instruments we actually know (runModel splits into model/effort/
     // access when the launcher reported them; nothing is fabricated).
     const qState = queueItem ? queueItem.state : null;
-    const live = qState === "running" ? { key: "running", label: "Running", tone: "warm" }
-      : qState === "queued" ? { key: "queued", label: "Queued", tone: "cool" }
-      : qState === "completed" ? { key: "complete", label: "Complete", tone: "ok" }
-      : qState === "blocked" ? { key: "blocked", label: "Blocked", tone: "hot" }
-      : { key: "ready", label: "Plan ready", tone: "cool" };
+    const live = qState ? investigationView(qState) : { label: "Plan ready", tone: "cool" };
     const inst = (value, label) => el("span", { class: "tri-inst" },
       el("span", { class: "tri-inst-v", text: value }),
       el("span", { class: "tri-inst-k", text: label }));
@@ -2263,25 +2505,22 @@ function renderTriage(issue) {
           class: "btn triage-queue",
           disabled: queued || queueing ? "" : null,
           "aria-busy": queueing ? "true" : null,
+          dataset: { fkey: "triage-queue:" + issue.id },
           onclick: () => triageIssue(issue.id, "queue"),
         }, queued
-          ? queueItem.state === "completed" ? "✓ Investigation complete · verifying"
-            : queueItem.state === "running" ? "● Investigation running"
-            : queueItem.state === "blocked" ? "! Investigation blocked"
-            : "✓ Investigation queued"
+          ? investigationView(queueItem.state).button
           : queueing ? "Queueing…" : "Queue investigation"),
         queueItem && queueItem.state === "queued" ? el("button", {
           type: "button",
           class: "btn triage-run",
           disabled: launching ? "" : null,
           "aria-busy": launching ? "true" : null,
+          dataset: { fkey: "triage-run:" + issue.id },
           onclick: () => triageIssue(issue.id, "run"),
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
-          ? queueItem.state === "running" ? "Investigation running · " + (queueItem.runModel || "native Luna")
-            : queueItem.state === "completed" ? "Investigation complete · waiting for fresh data"
-            : queueItem.state === "blocked" ? "Investigation blocked · review result"
-            : "Queued and ready for explicit launch"
+          ? investigationView(queueItem.state).note
+            + (queueItem.state === "running" ? " · " + (queueItem.runModel || "native Luna") : "")
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
         plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed",
@@ -2378,14 +2617,17 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    no session near its context ceiling. cells carry the fixed-order weighting
    (urgency changes weight via cell-hot/cell-micro, never order); findings is
    the ordered inline-expansion list. */
-function pulseStripModel(snap, conn = "live", queueItems = []) {
+function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
   const peak = peakContext(snap);
   const calm = !!snap && !!attention && attention.count === 0
     && status.key === "operational" && !(peak && peak.pct >= 85);
+  // `display` is threaded so renderHealthRail can compute each widget's data
+  // ONCE and reuse it for the paint signature, the cell and the calm line —
+  // it used to derive the same three from scratch on every paint.
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
-    const data = summaryWidgetData(id, snap, conn, "percent", queueItems);
+    const data = summaryWidgetData(id, snap, conn, display, queueItems);
     const weight = id === "health"
       ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
@@ -2413,14 +2655,8 @@ function findingFromIssue(issue, kind, snap = state.snap) {
 }
 
 function findingFromQueueItem(item) {
-  const workKey = item.state === "running" ? "investigating"
-    : item.state === "completed" ? "verifying"
-    : item.state === "blocked" ? "blocked"
-    : "queued";
-  const work = WORK_STATE_VIEW[workKey === "investigating" ? "investigating"
-    : workKey === "verifying" ? "verifying"
-    : workKey === "blocked" ? "blocked"
-    : "queued"];
+  const view = investigationView(item.state);
+  const work = WORK_STATE_VIEW[view.work] || WORK_STATE_VIEW.queued;
   const scope = Number.isFinite(item.affectedAgents) && Number.isFinite(item.affectedPrograms)
     ? item.affectedAgents + " agents · " + item.affectedPrograms + " programs" : "";
   return {
@@ -2428,8 +2664,8 @@ function findingFromQueueItem(item) {
     id: item.issueId,
     title: item.headline,
     work,
-    impact: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
-    summary: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
+    impact: "Investigation " + view.label.toLowerCase(),
+    summary: "Investigation " + view.label.toLowerCase(),
     evidence: [scope, item.runModel || ""].filter(Boolean),
     since: item.startedAt || item.createdAt || null,
     progress: PROGRESS_BY_WORK[work.key] ?? 50,
@@ -2552,6 +2788,10 @@ function renderTabs() {
   if (search) search.disabled = state.view === "usage";
 }
 
+/* Every chip carries a data-fkey. renderFilterBar tears the whole bar down on
+   each paint, so without one a keyboard operator's focus fell to <body> roughly
+   fifteen times a minute — render()'s focus-restore contract keys on nothing
+   else. The key is stable across paints (it names the control, not the label). */
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
@@ -2559,30 +2799,31 @@ function filterChip(label, active, onclick, opts = {}) {
     "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
+    dataset: opts.fkey ? { fkey: opts.fkey } : null,
     onclick,
   }, label);
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
-function renderFilterBar() {
+function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
   bar.textContent = "";
-  if (state.view === "usage") {
+  if (ui.view === "usage") {
     bar.hidden = false;
     bar.setAttribute("aria-hidden", "false");
     bar.append(el("span", { class: "filter-lead", text: "Range" }));
     for (const preset of USAGE_RANGE_PRESETS) {
-      bar.append(filterChip(preset.label, state.usageRangeId === preset.id, () => {
+      bar.append(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
         state.usageRangeId = preset.id;
         state.usageCustomHours = preset.hours;
         void loadUsageData(true);
         render();
-      }));
+      }, { fkey: "usage-range:" + preset.id }));
     }
-    const customActive = state.usageRangeId === "custom";
+    const customActive = ui.usageRangeId === "custom";
     bar.append(filterChip(
-      customActive ? ("Custom " + state.usageCustomHours + "h") : "Custom",
+      customActive ? ("Custom " + ui.usageCustomHours + "h") : "Custom",
       customActive,
       () => {
         const raw = window.prompt("Usage range hours", String(state.usageCustomHours || 24));
@@ -2594,10 +2835,11 @@ function renderFilterBar() {
         void loadUsageData(true);
         render();
       },
+      { fkey: "usage-range:custom" },
     ));
     return;
   }
-  if (!lookbackApplies(state.view)) {
+  if (!lookbackApplies(ui.view)) {
     bar.hidden = true;
     bar.setAttribute("aria-hidden", "true");
     return;
@@ -2606,23 +2848,27 @@ function renderFilterBar() {
   bar.setAttribute("aria-hidden", "false");
   bar.append(el("span", { class: "filter-lead", text: "Lookback" }));
   for (const hours of LOOKBACK_PRESETS) {
-    bar.append(filterChip(hours + "h", state.lookbackHours === hours, () => setLookbackHours(hours)));
+    bar.append(filterChip(hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours), {
+      fkey: "lookback:" + hours,
+    }));
   }
-  bar.append(filterChip("All", state.lookbackHours == null, () => setLookbackHours(null), {
+  bar.append(filterChip("All", ui.lookbackHours == null, () => setLookbackHours(null), {
     title: "Show every session inside the collector scan window",
+    fkey: "lookback:all",
   }));
-  const customActive = state.lookbackHours != null && !LOOKBACK_PRESETS.includes(state.lookbackHours);
+  const customActive = ui.lookbackHours != null && !LOOKBACK_PRESETS.includes(ui.lookbackHours);
   bar.append(filterChip(
-    customActive ? ("Custom " + state.lookbackHours + "h") : "Custom",
+    customActive ? ("Custom " + ui.lookbackHours + "h") : "Custom",
     customActive,
     () => {
       const raw = window.prompt("Lookback hours", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
       if (raw == null) return;
       setLookbackHours(raw);
     },
+    { fkey: "lookback:custom" },
   ));
   bar.append(el("span", { class: "filter-lead", text: "Scan" }));
-  const scanHours = Number((state.snap && state.snap.scanWindowHours) || state.scanWindowHours) || 36;
+  const scanHours = Number((ui.snap && ui.snap.scanWindowHours) || ui.scanWindowHours) || 36;
   bar.append(filterChip(
     scanHours + "h window",
     false,
@@ -2631,7 +2877,7 @@ function renderFilterBar() {
       if (raw == null) return;
       void postScanWindow(raw);
     },
-    { disabled: state.settingsPending, title: "How far back collectors harvest sessions" },
+    { disabled: ui.settingsPending, title: "How far back collectors harvest sessions", fkey: "scan-window" },
   ));
 }
 
@@ -2675,6 +2921,104 @@ function toggleProgram(program) {
   render();
 }
 
+/* ---------- keyed reconciliation ----------
+   The list guard used to be all-or-nothing: any visible agent's status, token
+   count or summary moving invalidated one signature for the WHOLE list, and the
+   next paint ran `root.textContent = ""` and rebuilt every program and every
+   row — ~27 elements per row, so ~5,400 destroyed and recreated at 200 visible
+   rows, every 4s, taking the operator's text selection and hover with them.
+
+   `plan` is [{ key, sig, build }]. A key whose signature is unchanged keeps its
+   existing DOM node, in place; only changed, added, removed and reordered keys
+   are touched. `cache` is a Map key -> { sig, node } that OUTLIVES its parent,
+   so even a rebuilt program section re-adopts its row nodes rather than
+   constructing them again. Returns the set of keys the plan claimed, so the
+   caller can prune the cache. */
+function reconcileKeyed(parent, plan, cache) {
+  const seen = new Set();
+  let cursor = parent.firstChild;
+  for (const item of plan) {
+    let entry = cache.get(item.key);
+    if (!entry || entry.sig !== item.sig) {
+      entry = { sig: item.sig, node: item.build() };
+      cache.set(item.key, entry);
+    }
+    seen.add(item.key);
+    if (cursor === entry.node) cursor = entry.node.nextSibling;
+    else parent.insertBefore(entry.node, cursor);
+  }
+  // Anything the plan did not claim has drifted to the tail by now.
+  while (cursor) {
+    const next = cursor.nextSibling;
+    cursor.remove();
+    cursor = next;
+  }
+  return seen;
+}
+
+const programSectionCache = new Map(); // programId -> { sig, node }
+const programBodies = new Map();       // programId -> the .program-agents node
+const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, node }
+
+/* Everything the program SHELL paints — head label, caret state, rollup cells,
+   the selection row and the rename form. Deliberately NOT the rows: a rollup
+   that has not moved must leave the section node alone so its rows stay
+   attached. renameDraft stays out for the same reason it stays out of every
+   other signature (live input); every external reset of it flips renamePending. */
+function programShellSig(program, agents, ui) {
+  const key = presentationLabelKey(programLabelTarget(program));
+  const pool = ui.selecting ? program.agents.filter(broadcastEligible) : [];
+  return [
+    program.id,
+    programName(program),
+    ui.labels.has(key) ? "1" : "0",
+    programOpen(program, ui) ? "open" : "shut",
+    programRollupCells(agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    ui.selecting ? "1" : "0",
+    ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
+    ui.renaming === key ? "1" : "0",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+  ].join("\u001f");
+}
+
+/* Everything ONE row paints. agentRecordSig is the same whole-record projection
+   the drawer uses, so a snapshot field added later is covered automatically;
+   the rest is the per-row slice of list state (this row's selection, checkbox
+   and rename form) plus its position in the swarm tree. The live elapsed clock
+   stays out — tickClocks rewrites it in place from data-elapsed-base — but the
+   >10min staleness fact does not tick, so it is in. */
+function agentRowSig(agent, ui, opts = {}) {
+  return [
+    agentRecordSig(agent),
+    rowStalenessText(agent),
+    ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
+    ui.labels.get(presentationLabelKey(preferredRenameTarget(agent))) || "",
+    ui.selectedId === agent.id ? "1" : "0",
+    ui.selecting ? "1" : "0",
+    ui.selection.has(agent.id) ? "1" : "0",
+    ui.renaming === presentationLabelKey(preferredRenameTarget(agent)) ? "1" : "0",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+    ui.contextDisplay || "",
+    String(opts.depth || 0),
+    String(opts.childCount || 0),
+    swarmNote(agent, opts) || "",
+  ].join("\u001f");
+}
+
+function swarmAnchorSig(agent, depth, activeChildren, ui) {
+  return [
+    agent.id,
+    agentName(agent),
+    agent.provider,
+    agent.model || "",
+    String(depth),
+    String(activeChildren),
+    ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
+  ].join("\u001f");
+}
+
 /* Signature ignores live elapsed clocks — status/message/model/context drive
    paint. It must also carry the state the list CONTROLS write, or every one of
    them reads as dead: toggleProgram only mutates programOverrides, and both
@@ -2712,6 +3056,39 @@ function programsPaintSig(visible, ui) {
   ].join("\u001f");
 }
 
+/* Two levels of keyed reconciliation instead of one wholesale rebuild: program
+   sections by program id, then rows by agent id inside each section body. Split
+   out of renderPrograms so the whole path can be driven directly in a test
+   without the module's state plumbing. Returns the visible agent count. */
+function syncProgramList(root, visible, ui = state) {
+  const keptSections = reconcileKeyed(root, visible.map(({ program, agents }) => ({
+    key: program.id,
+    sig: programShellSig(program, agents, ui),
+    build: () => renderProgram(program, agents),
+  })), programSectionCache);
+  for (const key of [...programSectionCache.keys()]) {
+    if (keptSections.has(key)) continue;
+    programSectionCache.delete(key);
+    programBodies.delete(key);
+  }
+
+  let shown = 0;
+  const keptRows = new Set();
+  for (const { program, agents } of visible) {
+    shown += agents.length;
+    const body = programBodies.get(program.id);
+    if (!body) continue;
+    // A collapsed program keeps its section but drops its rows; the row cache
+    // still holds them, so re-expanding costs a move rather than a rebuild.
+    const plan = programOpen(program, ui)
+      ? agentRowPlan(program, agents, ui).map((item) => ({ ...item, key: program.id + "\u001f" + item.key }))
+      : [];
+    for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
+  }
+  for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
+  return shown;
+}
+
 function renderPrograms() {
   const root = $("programs");
   const usage = $("usage-panel");
@@ -2732,6 +3109,9 @@ function renderPrograms() {
   if (!state.snap) {
     state.paintSig.programs = "empty";
     root.textContent = "";
+    programSectionCache.clear();
+    programBodies.clear();
+    agentRowCache.clear();
     renderScopeNote(0);
     return;
   }
@@ -2748,12 +3128,7 @@ function renderPrograms() {
     return;
   }
 
-  root.textContent = "";
-  let shown = 0;
-  for (const { program, agents } of visible) {
-    shown += agents.length;
-    root.append(renderProgram(program, agents));
-  }
+  const shown = syncProgramList(root, visible, state);
   renderScopeNote(shown);
 
   const tracked = totalsOf(state.snap).tracked;
@@ -2860,7 +3235,11 @@ function renderProgram(program, agents) {
       chosen ? el("span", { class: "program-select-note", text: `${chosen} of ${pool.length} selected` }) : null));
   }
   if (state.renaming === presentationLabelKey(programLabelTarget(program))) section.append(renderRenameForm(program));
-  section.append(el("div", { class: "program-agents", id: bodyId }, open ? renderAgentRows(program, agents) : null));
+  // The body is left empty on purpose: renderPrograms reconciles the rows into
+  // it by agent id, so a shell rebuild never destroys a row that has not moved.
+  const body = el("div", { class: "program-agents", id: bodyId });
+  programBodies.set(program.id, body);
+  section.append(body);
   return section;
 }
 
@@ -2891,14 +3270,18 @@ function renderLabelForm(target, opts) {
       oninput: (e) => { state.renameDraft = e.target.value; },
       onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); cancelRename(); } },
     }),
-    el("button", { type: "submit", class: "btn primary", disabled: state.renamePending ? "" : null, "aria-busy": state.renamePending ? "true" : null }, state.renamePending ? "Saving…" : "Save"),
-    el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => cancelRename() }, "Cancel"),
-    state.aliases.has(key) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => { state.renameDraft = ""; submitRename(target); } }, "Reset") : null,
+    el("button", { type: "submit", class: "btn primary", disabled: state.renamePending ? "" : null, "aria-busy": state.renamePending ? "true" : null, dataset: { fkey: "label-save:" + key } }, state.renamePending ? "Saving…" : "Save"),
+    el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, dataset: { fkey: "label-cancel:" + key }, onclick: () => cancelRename() }, "Cancel"),
+    state.aliases.has(key) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, dataset: { fkey: "label-reset:" + key }, onclick: () => { state.renameDraft = ""; submitRename(target); } }, "Reset") : null,
     el("span", { class: "rename-source", text: opts.source }),
     state.renameError ? el("p", { class: "rename-error", role: "alert", text: state.renameError }) : null);
 }
 
-function renderAgentRows(program, agents) {
+/* The ordered row PLAN for one program: the column header, then the swarm tree
+   with a descriptor per node. Each descriptor is keyed by agent id and carries
+   its own signature, so reconcileKeyed can rebuild exactly the rows that moved.
+   `build` is a closure — nothing is constructed for a row that has not changed. */
+function agentRowPlan(program, agents, ui = state) {
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -2912,7 +3295,7 @@ function renderAgentRows(program, agents) {
     }
   }
   const { roots, children } = buildClusters(program.agents.filter((agent) => relevantIds.has(agent.id)));
-  const fullById = new Map(snapshotAgents(state.snap).map(({ agent }) => [agent.id, agent]));
+  const fullById = new Map(snapshotAgents(ui.snap).map(({ agent }) => [agent.id, agent]));
   const fullChildren = new Map();
   for (const a of fullById.values()) {
     if (a.parentAgentId) fullChildren.set(a.parentAgentId, [...(fullChildren.get(a.parentAgentId) || []), a.id]);
@@ -2923,16 +3306,27 @@ function renderAgentRows(program, agents) {
     return (fullChildren.get(id) || []).reduce((total, childId) => total + 1 + descendantCount(childId, seen), 0);
   };
 
-  const rows = [];
+  const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || []).filter((id) => relevantIds.has(id)).length;
-    rows.push(visibleIds.has(agent.id)
-      ? renderAgentRow(agent, program, { depth, childCount: descendantCount(agent.id), fullById })
-      : renderSwarmAnchor(agent, depth, visibleDescendants));
+    if (visibleIds.has(agent.id)) {
+      const opts = { depth, childCount: descendantCount(agent.id), fullById };
+      plan.push({
+        key: "row:" + agent.id,
+        sig: agentRowSig(agent, ui, opts),
+        build: () => renderAgentRow(agent, program, opts),
+      });
+    } else {
+      plan.push({
+        key: "anchor:" + agent.id,
+        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui),
+        build: () => renderSwarmAnchor(agent, depth, visibleDescendants),
+      });
+    }
     for (const child of children.get(agent.id) || []) appendTree(child, depth + 1);
   };
   for (const agent of roots) appendTree(agent, 0);
-  return [renderAgentColumnHeader(), ...rows];
+  return plan;
 }
 
 function renderAgentColumnHeader() {
@@ -3247,8 +3641,14 @@ function findSelected() {
    nodes in place every 5s, so letting them into a paint signature would rebuild
    the drawer on every snapshot and defeat the guard. Their PRESENCE still
    matters (a tile appears when elapsedMs stops being null), so the projection
-   keeps a presence marker for each. */
-const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "identityTrace"]);
+   keeps a presence marker for each.
+
+   `identityTrace` itself is NOT in this set any more: the drawer now renders
+   the tier trail and the quarantine reason, so a resolution that changes has to
+   repaint. Only its one clock-like field (`confirmedAt`, the moment a persisted
+   binding was last re-confirmed) is dropped, because that moves on its own
+   without changing anything the operator reads. */
+const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "confirmedAt"]);
 
 /* The agent drawer paints very nearly the whole agent record — status, gates,
    model policy, tokens, cwd, git, messages, artifacts, transcript tail, target
@@ -3298,6 +3698,7 @@ function inspectorPaintSig(sel, view, ui) {
   const issue = view && (view.issue || view.item);
   const agent = view && view.kind === "agent" ? view.agent : null;
   const feedback = agent ? ui.feedback.get(agent.id) : null;
+  const identity = ui.identity || {};
   return [
     sel.kind, sel.id,
     view ? view.kind : "missing",
@@ -3320,6 +3721,15 @@ function inspectorPaintSig(sel, view, ui) {
     ui.renameError || "",
     ui.labelsLoading ? "1" : "0",
     ui.labelLoadError || "",
+    // On-demand terminal evidence: nothing else in the drawer moves when it
+    // lands, so without this the fetched surfaces would never reach the screen.
+    agent && identity.agentId === agent.id
+      ? [
+        identity.loading ? "1" : "0",
+        identity.error || "",
+        identity.data ? JSON.stringify(surfaceCollisions(identity.data)) : "",
+      ].join(":")
+      : "",
   ].join("\u001f");
 }
 
@@ -3404,8 +3814,19 @@ function missingDrawer() {
   ];
 }
 
+/* An immutable snapshot yields the same index every time, but affectedImpact
+   rebuilt it once PER ISSUE — O(issues × agents) per pass, and renderHealthRail
+   drives several passes per paint. Keyed on the snapshot object itself, so
+   adopting a new snapshot invalidates it for free and nothing has to be cleared
+   by hand. Callers read it; nobody mutates it. */
+const agentIndexCache = new WeakMap();
 function agentsById(snap = state.snap) {
-  return new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  if (!snap || typeof snap !== "object") return new Map();
+  const cached = agentIndexCache.get(snap);
+  if (cached) return cached;
+  const index = new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  agentIndexCache.set(snap, index);
+  return index;
 }
 
 function drawerAccent(pane, kind) {
@@ -3491,8 +3912,6 @@ function programRollupLine(program) {
       el("span", { class: "dw-rollup-value mono", text: c.value }),
       el("span", { class: "dw-rollup-label", text: c.label }))));
 }
-
-const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
 
 /* Impact summary — never dump hundreds of anonymous chips as "Affects (160)".
    Plain language first, program rollup second, optional short sample third. */
@@ -3625,10 +4044,10 @@ function renderAdvisoryDrawer(pane, view) {
 function renderInvestigationDrawer(pane, view) {
   const item = view.item;
   const running = item.state === "running";
-  const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
+  const stateView = investigationView(item.state);
   drawerAccent(pane, "slate");
   pane.append(drawerVerdictHead({
-    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateView.label),
     title: item.headline,
     action: investigationHeadAction(item),
   }));
@@ -3636,10 +4055,7 @@ function renderInvestigationDrawer(pane, view) {
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
   status.append(el("span", { text:
-    item.state === "running" ? "running · " + (item.runModel || "native Luna")
-    : item.state === "completed" ? "complete · waiting for fresh data"
-    : item.state === "blocked" ? "blocked · review result"
-    : "queued and ready for explicit launch" }));
+    stateView.status + (running ? " · " + (item.runModel || "native Luna") : "") }));
   pane.append(status);
 
   if (item.steps && item.steps.length) {
@@ -4040,25 +4456,38 @@ function renderStatusLine(agent, activity, outcome, control, policy) {
   return line;
 }
 
-/* Quarantine / observed-only: one banner, not a disabled Focus card. */
+/* Quarantine / observed-only: one banner, not a disabled Focus card. It names
+   the reason resolution refused, in the resolver's own words, and the one thing
+   the operator can do about it — the evidence was always in the payload; the
+   banner used to throw it away and print a fixed sentence instead. All of
+   `why` is agent-controlled text, so it rides textContent only. */
 function renderControlBanner(agent, control) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   const locked = [focusCap, instructCap].some((c) => c && !c.enabled);
   if (!locked) return null;
+  const brief = quarantineBrief(agent, control);
+
+  const copy = el("div", { class: "control-banner-copy" },
+    el("strong", { text: brief.title }),
+    " ",
+    controlUnavailableText(control));
+  if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
+  copy.append(el("button", {
+    type: "button",
+    class: "control-banner-link",
+    dataset: { fkey: "control-evidence:" + agent.id },
+    onclick: () => {
+      state.evidenceOpen = true;
+      if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
+      else render();
+    },
+  }, "See routing evidence →"));
 
   return el("div", { class: "control-banner", role: "status" },
     icon(control === "quarantined" ? "quarantine" : "observed"),
-    el("div", { class: "control-banner-copy" },
-      el("strong", { text: control === "quarantined" ? "Control routing locked." : "Controls unavailable." }),
-      " ",
-      controlUnavailableText(control),
-      " ",
-      el("button", {
-        type: "button",
-        class: "control-banner-link",
-        onclick: () => { state.evidenceOpen = true; render(); },
-      }, "See routing evidence →")));
+    copy);
 }
 
 function closeButton() {
@@ -4205,6 +4634,7 @@ function renderDockTool(agent, cap, action, opts = {}) {
       }, "Confirm"),
       el("button", {
         type: "button", class: "btn sm",
+        dataset: { fkey: confirmKey + ":cancel" },
         onclick: () => { state.confirming = null; render(); },
       }, "Cancel"));
   }
@@ -4229,12 +4659,6 @@ function renderDockTool(agent, cap, action, opts = {}) {
   },
     icon(action === "focus" ? "focus" : action === "interrupt" ? "interrupt" : "archive"),
     busy ? label + "…" : label);
-}
-
-/* Kept as a thin alias so source-level tests that look for the primary-actions
-   contract still find controlUnavailableText wired through the dock path. */
-function renderPrimaryActions(agent) {
-  return renderCommandDock(agent, deriveControlState(agent));
 }
 
 function sourceWorkspaceLabel(target) {
@@ -4322,11 +4746,6 @@ function renderNamesDisclosure(agent) {
   },
     el("summary", { text: "Names" }),
     body);
-}
-
-/* Kept as a thin alias so source-level rename contracts still resolve. */
-function renderPresentationLabels(agent) {
-  return renderNamesDisclosure(agent) || el("span", { hidden: "" });
 }
 
 /* ---------- inspector: Operate · Chat · Evidence ---------- */
@@ -4500,42 +4919,6 @@ function renderOperate(agent, _program) {
   return panel;
 }
 
-/* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
-   (P4), but it MUST stay defined immediately after renderOperate: a test
-   asserts the renderOperate…renderSwarmSection source adjacency. Do not
-   reorder or delete it. */
-function renderSwarmSection(agent, program) {
-  const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
-  const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
-  const parent = agent.parentAgentId ? fullById.get(agent.parentAgentId) : null;
-  if (!parent && !children.length && !agent.parentAgentId) return el("span", { hidden: "" });
-
-  const wrap = el("div", { class: "swarm-section" },
-    el("h3", { class: "section-title", text: "Swarm" }));
-
-  if (agent.parentAgentId) {
-    wrap.append(parent
-      ? el("button", {
-          type: "button", class: "swarm-link",
-          dataset: { fkey: "swarm:" + parent.id },
-          onclick: () => selectAgent(parent.id),
-        }, "↖ Orchestrator: " + agentName(parent))
-      : el("p", { class: "absent", text: "Orchestrator session is not tracked in this snapshot." }));
-  }
-
-  for (const child of children) {
-    const act = deriveActivity(child);
-    wrap.append(el("button", {
-      type: "button", class: "swarm-link",
-      dataset: { fkey: "swarm:" + child.id },
-      onclick: () => selectAgent(child.id),
-    },
-      el("span", { class: "act-glyph act-" + act, "aria-hidden": "true" }),
-      agentName(child) + " — " + ACTIVITY_LABELS[act]));
-  }
-  return wrap;
-}
-
 function renderChatTurn(role, text) {
   return el("div", { class: "chat-turn chat-turn--" + role },
     el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
@@ -4702,6 +5085,92 @@ function renderControlLink(target) {
   return wrap;
 }
 
+/* The routing story in full: which tier bound the session (or refused), the
+   ordered evidence trail, and — on demand — the ps/lsof view of the terminals
+   involved, which is the only place "ttys082 has both of these open" can come
+   from. Nothing here is fabricated: an agent with no trace renders nothing. */
+function renderIdentityBlock(agent, ui = state) {
+  const view = identityTraceView(agent);
+  if (!view.steps.length && !view.reason && !view.bridge) return null;
+
+  const wrap = el("div", { class: "identity-block" },
+    el("h3", { class: "section-title", text: "Identity resolution" }));
+
+  const verdict = view.matchedTier
+    ? "Bound by " + (IDENTITY_TIER_LABELS[view.matchedTier] || view.matchedTier).toLowerCase()
+      + " · " + (RESOLUTION_LABELS[view.resolution] || view.resolution)
+    : "Not bound · " + (RESOLUTION_LABELS[view.resolution] || view.resolution);
+  wrap.append(el("p", { class: "identity-verdict", text: verdict }));
+  if (view.reason) wrap.append(el("p", { class: "identity-reason", text: view.reason }));
+
+  if (view.steps.length) {
+    wrap.append(el("ol", { class: "identity-steps", "aria-label": "Identity resolution trail" },
+      view.steps.map((step) => el("li", { class: "identity-step identity-step--" + step.outcome },
+        el("span", { class: "identity-step-tier", text: step.tierLabel }),
+        el("span", { class: "identity-step-outcome", text: step.outcomeLabel }),
+        el("span", { class: "identity-step-detail", text: step.detail })))));
+  }
+
+  if (view.bridge) {
+    wrap.append(el("p", { class: "identity-note", text:
+      "A remembered binding to " + (view.bridge.surfaceId || "a terminal")
+      + " carried this session through a scan with no live evidence"
+      + (view.bridge.confirmedAt ? " (last confirmed " + agoText(view.bridge.confirmedAt) + ")" : "")
+      + "." }));
+  }
+
+  wrap.append(renderSurfaceEvidence(agent, ui));
+  return wrap;
+}
+
+/* The on-demand half. Only the debug endpoint knows the pids, commands and
+   open session files behind a terminal, so this is a button until asked. */
+function renderSurfaceEvidence(agent, ui = state) {
+  const identity = ui.identity || { agentId: null, loading: false, error: "", data: null };
+  const shown = identity.agentId === agent.id;
+  const wrap = el("div", { class: "identity-surfaces" });
+
+  if (!shown || identity.loading) {
+    wrap.append(el("button", {
+      type: "button",
+      class: "btn sm identity-load",
+      disabled: shown && identity.loading ? "" : null,
+      "aria-busy": shown && identity.loading ? "true" : null,
+      dataset: { fkey: "identity-load:" + agent.id },
+      onclick: () => void loadIdentityEvidence(agent.id),
+    }, shown && identity.loading ? "Reading terminals…" : "Show which terminals claim this session"));
+    return wrap;
+  }
+
+  if (identity.error) {
+    wrap.append(el("p", { class: "identity-error", role: "alert",
+      text: "Terminal evidence unavailable: " + identity.error }));
+    wrap.append(el("button", {
+      type: "button", class: "btn sm identity-load",
+      dataset: { fkey: "identity-load:" + agent.id },
+      onclick: () => void loadIdentityEvidence(agent.id),
+    }, "Retry"));
+    return wrap;
+  }
+
+  const collisions = surfaceCollisions(identity.data);
+  if (!collisions.length) {
+    wrap.append(el("p", { class: "identity-note", text: "No cmux terminal reports evidence for this session." }));
+    return wrap;
+  }
+  const list = el("ul", { class: "identity-surface-list", "aria-label": "Terminals claiming this session" });
+  for (const collision of collisions) {
+    const item = el("li", { class: "identity-surface" + (collision.claims.length > 1 ? " is-contested" : "") },
+      el("span", { class: "identity-surface-line mono", text: collisionLine(collision) }));
+    if (collision.conflict) {
+      item.append(el("span", { class: "identity-surface-conflict", text: collision.conflict }));
+    }
+    list.append(item);
+  }
+  wrap.append(list);
+  return wrap;
+}
+
 function renderEvidence(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
@@ -4749,6 +5218,9 @@ function renderEvidence(agent) {
 
   if (grid.childNodes.length) panel.append(grid);
 
+  const identity = renderIdentityBlock(agent);
+  if (identity) panel.append(identity);
+
   const names = renderNamesDisclosure(agent);
   if (names) panel.append(names);
 
@@ -4777,15 +5249,6 @@ function renderEvidence(agent) {
     panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
   }
   return panel;
-}
-
-/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
-function renderTechnical(agent) {
-  return renderEvidence(agent);
-}
-
-function renderTarget(target) {
-  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */
@@ -5084,7 +5547,7 @@ function renderBroadcastBar() {
     bar.append(el("div", { class: "broadcast-confirm", role: "group", "aria-label": "Confirm broadcast" },
       el("span", { text: `Send this instruction to ${eligible.length} ${eligible.length === 1 ? "agent" : "agents"}?` }),
       el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => sendBroadcast() }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
-      el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
+      el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, dataset: { fkey: "broadcast-cancel" }, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
   } else {
     const canSend = eligible.length > 0 && instruction.trim().length > 0;
     bar.append(el("div", { class: "broadcast-compose" },
@@ -5105,6 +5568,17 @@ function renderBroadcastBar() {
   if (state.broadcastError) bar.append(el("p", { class: "broadcast-note err", role: "alert", text: state.broadcastError }));
 }
 
+/* The one screen a broken instance shows must name the address it was actually
+   served from: MOUNTAIN_PORT, anthill-start.sh and anthill-preview.sh all bind
+   different ports, and a preview on :4715 telling the operator to go check
+   :4701 sends them to a healthy production process. "v3 server" was internal
+   versioning that means nothing to the reader. host is a parameter so the rule
+   is testable without a browser. */
+function serverUnreachableHint(host) {
+  const where = host ? "on " + host : "at this address";
+  return "Check that the Ant Hill server is running " + where + ", then retry.";
+}
+
 function renderEmpty() {
   const empty = $("empty-state");
   const retry = $("empty-retry");
@@ -5114,7 +5588,7 @@ function renderEmpty() {
   empty.hidden = false;
   if (!state.snap) {
     $("empty-message").textContent = "Can't reach the Ant Hill server.";
-    $("empty-hint").textContent = "Check that the v3 server is running on 127.0.0.1:4701, then retry.";
+    $("empty-hint").textContent = serverUnreachableHint(typeof location === "undefined" ? "" : location.host);
     retry.hidden = false;
   } else {
     $("empty-message").textContent = "The ant hill is still — no tracked agents.";
@@ -5209,6 +5683,11 @@ async function loadUsageData(force = false) {
   }
 }
 
+/* The one readable fact per bar: which bucket, how many tokens. */
+function usageBarTitle(bucket, tokens) {
+  return bucket + " · " + fmtTok(tokens) + " tokens";
+}
+
 function renderUsageSeriesChart(points) {
   const wrap = el("div", { class: "usage-series" });
   if (!points || !points.length) {
@@ -5238,7 +5717,7 @@ function renderUsageSeriesChart(points) {
       height: h,
       class: "usage-bar-rect",
     }]);
-    rect.setAttribute("title", bucket + " · " + fmtTok(tokens) + " tokens");
+    rect.append(svgTitle(usageBarTitle(bucket, tokens)));
     svg.append(rect);
   });
   wrap.append(svg);
@@ -5249,29 +5728,30 @@ function renderUsageSeriesChart(points) {
   return wrap;
 }
 
-function renderUsagePanel() {
+function renderUsagePanel(ui = state) {
   const root = $("usage-panel");
   if (!root) return;
   root.textContent = "";
-  if (state.usageLoading && !state.usageSummary) {
+  if (ui.usageLoading && !ui.usageSummary) {
     root.append(el("p", { class: "usage-empty", text: "Loading BurnBar usage…" }));
     return;
   }
-  const summary = state.usageSummary;
+  const summary = ui.usageSummary;
   if (!summary || summary.available === false) {
     root.append(el("div", { class: "usage-unavailable" },
       el("h2", { class: "usage-title", text: "Usage unavailable" }),
       el("p", {
-        text: (summary && summary.error) || state.usageError ||
+        text: (summary && summary.error) || ui.usageError ||
           "BurnBar database could not be unlocked. Quotas sidecar may still be readable separately.",
       }),
       el("button", {
         type: "button", class: "btn",
+        dataset: { fkey: "usage-retry" },
         onclick: () => void loadUsageData(true),
       }, "Retry")));
     // Still show quotas/ward soft data if present without inventing spend zeros.
-    if (state.usageWard && state.usageWard.quotaPressure && state.usageWard.quotaPressure.length) {
-      root.append(renderUsageWard(state.usageWard, true));
+    if (ui.usageWard && ui.usageWard.quotaPressure && ui.usageWard.quotaPressure.length) {
+      root.append(renderUsageWard(ui.usageWard, true));
     }
     return;
   }
@@ -5304,9 +5784,9 @@ function renderUsagePanel() {
 
   root.append(el("section", { class: "usage-section" },
     el("h2", { class: "usage-title", text: "Series" }),
-    renderUsageSeriesChart(state.usageSeries && state.usageSeries.points)));
+    renderUsageSeriesChart(ui.usageSeries && ui.usageSeries.points)));
 
-  root.append(renderUsageWard(state.usageWard, false));
+  root.append(renderUsageWard(ui.usageWard, false));
 
   const table = el("table", { class: "usage-table" });
   table.append(el("thead", {}, el("tr", {},
@@ -5317,7 +5797,7 @@ function renderUsagePanel() {
     el("th", { text: "Cost" }),
     el("th", { text: "Session" }))));
   const body = el("tbody");
-  const rows = (state.usageInvocations && state.usageInvocations.invocations) || [];
+  const rows = (ui.usageInvocations && ui.usageInvocations.invocations) || [];
   if (!rows.length) {
     body.append(el("tr", {}, el("td", { colspan: "6", text: "No invocations in this range." })));
   } else {
@@ -5326,6 +5806,7 @@ function renderUsagePanel() {
       const sessionCell = agentId
         ? el("button", {
           type: "button", class: "linkish",
+          dataset: { fkey: "usage-session:" + row.sessionId },
           onclick: () => {
             setView("now");
             selectEntity({ kind: "agent", id: agentId });

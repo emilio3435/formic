@@ -53,6 +53,221 @@ function snapshot(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/* ---------------------------------------------------------------------------
+   FE-B shared render harness.
+
+   The client guards all DOM wiring behind `typeof document`, so a minimal fake
+   document lets its real render functions build real nodes through el()/icon().
+   Tests can then assert on what a surface RENDERS instead of on the source text
+   that builds it. The node is a linked list (firstChild/nextSibling/insertBefore/
+   remove) because the keyed row reconciler manipulates siblings directly.
+   ------------------------------------------------------------------------- */
+export interface FakeNode {
+  nodeType: number;
+  tagName: string;
+  className: string;
+  textContent: string;
+  hidden?: boolean;
+  id?: string;
+  dataset: Record<string, string>;
+  attributes: Record<string, string>;
+  classList: { add(...c: string[]): void; remove(...c: string[]): void; toggle(c: string, on?: boolean): void; contains(c: string): boolean };
+  children: FakeNode[];
+  parent: FakeNode | null;
+  value?: unknown;
+  readonly firstChild: FakeNode | null;
+  readonly nextSibling: FakeNode | null;
+  setAttribute(k: string, v: unknown): void;
+  hasAttribute(k: string): boolean;
+  addEventListener(): void;
+  append(...kids: unknown[]): void;
+  insertBefore(node: FakeNode, ref: FakeNode | null): void;
+  remove(): void;
+}
+
+function makeNode(tag: string): FakeNode {
+  const classes = new Set<string>();
+  const node = {
+    nodeType: 1,
+    tagName: tag,
+    textContent: "",
+    dataset: {} as Record<string, string>,
+    attributes: {} as Record<string, string>,
+    children: [] as FakeNode[],
+    parent: null as FakeNode | null,
+    get className() { return [...classes].join(" "); },
+    set className(v: string) {
+      classes.clear();
+      for (const c of String(v).split(/\s+/)) if (c) classes.add(c);
+    },
+    classList: {
+      add(...c: string[]) { for (const x of c) if (x) classes.add(x); },
+      remove(...c: string[]) { for (const x of c) classes.delete(x); },
+      toggle(c: string, on?: boolean) { if (on === undefined ? classes.has(c) : !on) classes.delete(c); else classes.add(c); },
+      contains(c: string) { return classes.has(c); },
+    },
+    // Render code asks for childNodes/childElementCount to decide whether a
+    // panel is empty; both are the same array in this DOM-less stand-in.
+    get childNodes(): FakeNode[] { return node.children; },
+    get childElementCount(): number { return node.children.length; },
+    get firstChild(): FakeNode | null { return node.children[0] || null; },
+    get nextSibling(): FakeNode | null {
+      if (!node.parent) return null;
+      const i = node.parent.children.indexOf(node as unknown as FakeNode);
+      return (i >= 0 && node.parent.children[i + 1]) || null;
+    },
+    setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    hasAttribute(k: string) { return k in node.attributes; },
+    addEventListener() {},
+    append(...kids: unknown[]) {
+      for (const kid of kids) {
+        if (kid == null) continue;
+        node.children.push(kid as FakeNode);
+        if (typeof kid === "object" && kid !== null && "parent" in (kid as FakeNode)) (kid as FakeNode).parent = node as unknown as FakeNode;
+      }
+    },
+    insertBefore(child: FakeNode, ref: FakeNode | null) {
+      if (child.parent) {
+        const at = child.parent.children.indexOf(child);
+        if (at >= 0) child.parent.children.splice(at, 1);
+      }
+      child.parent = node as unknown as FakeNode;
+      const i = ref ? node.children.indexOf(ref) : -1;
+      if (i === -1) node.children.push(child);
+      else node.children.splice(i, 0, child);
+    },
+    remove() {
+      if (!node.parent) return;
+      const at = node.parent.children.indexOf(node as unknown as FakeNode);
+      if (at >= 0) node.parent.children.splice(at, 1);
+      node.parent = null;
+    },
+  };
+  return node as unknown as FakeNode;
+}
+
+const domById = new Map<string, FakeNode>();
+function fakeDocument() {
+  domById.clear();
+  return {
+    createElement: (t: string) => makeNode(t),
+    createElementNS: (_ns: string, t: string) => makeNode(t),
+    createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    getElementById: (id: string) => {
+      if (!domById.has(id)) domById.set(id, makeNode("div"));
+      return domById.get(id) as FakeNode;
+    },
+    querySelectorAll: () => [] as unknown[],
+    querySelector: () => null,
+  };
+}
+
+function withDom<T>(fn: () => T): T {
+  (globalThis as unknown as { document: unknown }).document = fakeDocument();
+  try { return fn(); } finally {
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+}
+
+function newNode(tag = "div"): FakeNode {
+  return makeNode(tag);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function textOf(node: any): string {
+  if (!node || typeof node !== "object") return "";
+  if (node.nodeType === 3) return String(node.textContent || "");
+  let s = typeof node.textContent === "string" ? node.textContent : "";
+  for (const kid of node.children || []) s += textOf(kid);
+  return s;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findAll(node: any, pred: (n: any) => boolean, out: any[] = []): any[] {
+  if (!node || typeof node !== "object") return out;
+  if (pred(node)) out.push(node);
+  for (const kid of node.children || []) findAll(kid, pred, out);
+  return out;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const buttonsOf = (node: any) => findAll(node, (n) => n.tagName === "button");
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const allByClass = (node: any, token: string) =>
+  findAll(node, (n) => typeof n.className === "string" && n.className.split(/\s+/).includes(token));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const byClass = (node: any, token: string) => allByClass(node, token)[0] || null;
+
+/* A stand-in for the module's `state`, for helpers that take it as an argument. */
+function identityUi(overrides: Record<string, unknown> = {}) {
+  return {
+    snap: null,
+    queueItems: [] as unknown[],
+    triage: new Map(),
+    triagePending: new Set<string>(),
+    evidenceOpen: false,
+    pending: new Set<string>(),
+    feedback: new Map(),
+    drafts: new Map(),
+    confirming: null,
+    renaming: null,
+    renameDraft: "",
+    renamePending: false,
+    renameError: "",
+    labelsLoading: false,
+    labelLoadError: "",
+    labels: new Map<string, string>(),
+    identity: { agentId: null, loading: false, error: "", data: null },
+    ...overrides,
+  };
+}
+
+/* A `state` stand-in for renderTriage. */
+function triageUi(overrides: Record<string, unknown> = {}) {
+  return {
+    queueItems: [] as unknown[],
+    triage: new Map(),
+    triagePending: new Set<string>(),
+    triageErrors: new Map(),
+    ...overrides,
+  };
+}
+
+/* A `state` stand-in for the list helpers (row/shell signatures, row plans). */
+function listUi(overrides: Record<string, unknown> = {}) {
+  return {
+    snap: null,
+    view: "now",
+    query: "",
+    facetProgram: "",
+    facetProvider: "",
+    lookbackHours: 24,
+    contextDisplay: "percent",
+    selecting: false,
+    selection: new Set<string>(),
+    selected: null,
+    selectedId: null,
+    programOverrides: new Map<string, string>(),
+    labels: new Map<string, string>(),
+    renaming: null,
+    renameDraft: "",
+    renamePending: false,
+    renameError: "",
+    ...overrides,
+  };
+}
+
+/* The three drawer panels, rendered and flattened to text. */
+function panelTexts(a: Record<string, unknown>) {
+  return withDom(() => ({
+    operate: textOf(M.renderOperate(a, { id: "p", name: "P", agents: [] })),
+    chat: textOf(M.renderChat(a)),
+    evidence: textOf(M.renderEvidence(a)),
+  }));
+}
+
 describe("summary status and widgets", () => {
   test("maps live connection, source, and control evidence to one system verdict", () => {
     const healthy = snapshot();
@@ -186,22 +401,23 @@ describe("provider-aware row summaries", () => {
     expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
   });
 
+  /* FE-B: this used to extract the three panels by matching source text between
+     landmark function names, which pinned file ordering rather than behavior.
+     It now renders the panels and reads what they actually show. */
   test("keeps the raw transcript tail in Chat/Evidence, not Operate", () => {
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
-      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
-      || "";
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
+    const TAIL = "RAW-TOOL-DUMP-9f2c";
+    const rich = agent({
+      lastHumanMessage: "ship the fix",
+      lastAgentMessage: "pushed the branch",
+      transcriptTail: TAIL,
+    });
+    const panels = panelTexts(rich);
     // Bookshelf seam: Chat shows readable You/Agent turns only — the raw
     // transcript tail is Evidence-only machinery behind the disclosure.
-    expect(operate).not.toContain("transcriptTail");
-    expect(chat).toContain("lastAgentMessage");
-    expect(chat).not.toContain("renderChatTurn(\"assistant\", agent.transcriptTail)");
-    expect(evidence).toContain("transcriptTail");
+    expect(panels.operate).not.toContain(TAIL);
+    expect(panels.chat).toContain("pushed the branch");
+    expect(panels.chat).not.toContain(TAIL);
+    expect(panels.evidence).toContain(TAIL);
   });
 });
 
@@ -674,12 +890,19 @@ describe("calm program and agent list rendering", () => {
 
   test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
-    expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
-    // C1: the header now names the identity column plus the promoted instrument
+    /* FE-B: the row list is now a keyed PLAN reconciled into the program body
+       rather than an array appended wholesale, so this asserts on the plan the
+       list actually produces — the column header still leads it. */
+    const program = { id: "p1", name: "P", agents: [agent({ id: "codex:a1" }), agent({ id: "codex:a2" })] };
+    const plan = M.agentRowPlan(program, program.agents, listUi({ snap: { schemaVersion: 1, programs: [program] } }));
+    expect(plan.map((item: { key: string }) => item.key)).toEqual(["columns", "row:codex:a1", "row:codex:a2"]);
+    // C1: the header names the identity column plus the promoted instrument
     // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
+    const header = withDom(() => plan[0].build());
+    expect(header.className).toContain("agent-column-header");
     for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
-      expect(source).toContain(`text: "${label}"`);
+      expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
     expect(source).not.toContain("class: \"fact-age\"");
@@ -1406,9 +1629,26 @@ describe("state cards — two-line ledger rows, instrument brief, verdict result
     // The band never invents instruments: model/effort/access appear only
     // when the launcher reported runModel.
     expect(triage).toContain("queueItem.runModel");
-    // A reload mid-investigation must not regress to the Triage button: the
-    // queue item itself hydrates the recommendation.
-    expect(triage).toContain("state.triage.get(issue.id) || queueItem");
+    /* FE-B: a reload mid-investigation must not regress to the Triage button —
+       the queue item itself hydrates the recommendation. Asserted by rendering
+       with an empty local triage map and only a queue row, as a reload leaves it. */
+    const issue = { id: "system:1", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const queueItem = {
+      issueId: "system:1", state: "running", headline: "Re-bind the quarantined sessions",
+      mode: "investigate", rationale: "Two sessions share a terminal.",
+      steps: [{ title: "Read", detail: "Inspect the trace." }],
+      queueRecommended: true, runModel: "luna 5.6 · high", createdAt: "2026-07-28T01:00:00.000Z",
+      startedAt: "2026-07-28T01:01:00.000Z",
+    };
+    const rendered = withDom(() => M.renderTriage(issue, triageUi({ queueItems: [queueItem] })));
+    const text = textOf(rendered);
+    expect(text).not.toContain("Triage this finding");
+    expect(text).toContain("Re-bind the quarantined sessions");
+    expect(byClass(rendered, "tri-spine")).not.toBeNull();
+    // Both queue-row controls carry a data-fkey so focus survives a repaint.
+    const keys = buttonsOf(rendered).map((b) => b.dataset.fkey);
+    expect(keys).toContain("triage-queue:system:1");
+    expect(keys.every(Boolean)).toBe(true);
   });
 
   test("state-card CSS binds to the DOM app.js builds, and the replaced chrome is gone", () => {
@@ -1473,21 +1713,24 @@ describe("fail-loud control invariants (source-level)", () => {
     expect(source).not.toContain('absent: "not reported"');
     expect(source).not.toContain('absent: "not evaluated"');
     expect(source).not.toContain('absent: "none"');
-    // Cost is never a filler row in the drawer body.
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
-      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
-      || "";
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
-    expect(operate).not.toContain("agent.cost");
-    expect(chat).not.toContain("agent.cost");
-    expect(chat).not.toContain("agent.tests");
-    expect(chat).not.toContain("agent.gates");
-    expect(evidence).not.toContain("agent.cost");
+    // FE-B: cost/tests/gates are never filler rows in the drawer body — asserted
+    // by rendering the panels with all three present and reading the output,
+    // rather than by matching source text between landmark function names.
+    const loaded = agent({
+      cost: { totalUsd: 12.3456, provenance: "observed" },
+      tests: { passing: 7, failing: 1 },
+      gates: ["needs-review"],
+      lastHumanMessage: "ship the fix",
+      lastAgentMessage: "pushed",
+      transcriptTail: "tail",
+    });
+    const panels = panelTexts(loaded);
+    for (const [where, text] of Object.entries(panels)) {
+      expect(text, where + " must not render a cost row").not.toContain("12.34");
+      expect(text, where + " must not render a $ figure").not.toContain("$");
+    }
+    expect(panels.chat).not.toContain("needs-review");
+    expect(panels.chat).not.toContain("passing");
   });
 });
 
@@ -1524,16 +1767,22 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(source).toContain('class: "names-disclosure"');
     expect(source).not.toContain('text: "Presentation labels"');
     expect(styles).toContain(".names-disclosure");
-    // Names live in Evidence, not always-on chrome above the tabs.
-    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\n\/\* One calm status/)?.[0]
-      || source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\nfunction renderStatusLine/)?.[0]
-      || "";
-    expect(drawer).not.toContain("renderPresentationLabels(");
-    expect(drawer).not.toContain("renderNamesDisclosure(");
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
-    expect(evidence).toContain("renderNamesDisclosure(");
+    // FE-B: Names live in Evidence, not always-on chrome above the shelf —
+    // asserted against the rendered drawer, not against source adjacency.
+    const named = agent({ cwd: "/repos/x" });
+    const program = { id: "p", name: "P", agents: [named] };
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: named, program });
+      return pane;
+    });
+    // Evidence is collapsed by default, so the rename disclosure is not on screen.
+    expect(byClass(drawer, "names-disclosure")).toBeNull();
+    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
+    // …and it IS what Evidence carries once opened.
+    const evidence = withDom(() => M.renderEvidence(named));
+    expect(byClass(evidence, "names-disclosure")).not.toBeNull();
+    expect(withDom(() => M.renderNamesDisclosure(named))).not.toBeNull();
   });
 
   test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {
@@ -1547,12 +1796,20 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
   });
 
   test("Operate shows task only when meaningfully different from the human message", () => {
-    expect(source).toContain("function taskMeaningfullyDifferent(");
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    expect(operate).toContain("taskMeaningfullyDifferent(agent)");
-    expect(operate).toContain("renderOperateMeta(agent)");
+    // FE-B: rendered, not grepped. A task that merely restates the human message
+    // earns no second heading; a genuinely different one does.
+    const echoed = agent({ lastHumanMessage: "rebuild the collector", task: "Rebuild the collector." });
+    const distinct = agent({ lastHumanMessage: "rebuild the collector", task: "Port the SEM forecast rate limiter", model: "claude-opus-4-8" });
+    expect(M.taskMeaningfullyDifferent(echoed)).toBe(false);
+    expect(M.taskMeaningfullyDifferent(distinct)).toBe(true);
+    const echoedPanel = withDom(() => M.renderOperate(echoed, { id: "p", name: "P", agents: [] }));
+    expect(textOf(echoedPanel)).not.toContain("Task");
+    const distinctPanel = withDom(() => M.renderOperate(distinct, { id: "p", name: "P", agents: [] }));
+    expect(textOf(distinctPanel)).toContain("Task");
+    expect(textOf(distinctPanel)).toContain("Port the SEM forecast rate limiter");
+    // Operate still carries the identity meta row (role/model), not vitals.
+    expect(byClass(distinctPanel, "operate-meta")).not.toBeNull();
+    expect(textOf(byClass(distinctPanel, "operate-meta"))).toContain("opus 4.8");
   });
 });
 
@@ -2350,9 +2607,12 @@ describe("agent-row density pass at ≥1440px (C3)", () => {
     expect(sweep).toContain(".agent-rename");
     // The full current list is intact — quote its anchors end-to-end so an
     // accidental drop during the density pass fails here.
-    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor");
+    // FE-B: .inspector-tab, .swarm-link, .signal-* and .instruct-form left this
+    // list because nothing in the client emits those classes any more — the
+    // constraint is unchanged for every control that actually exists.
+    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-close, .swarm-anchor");
     expect(sweep).toContain(".program-rename, .agent-rename");
-    expect(sweep).toContain(".command-composer input, .instruct-form input, .rename-form input");
+    expect(sweep).toContain(".command-composer input, .rename-form input");
     expect(sweep).toContain("min-height: 44px");
   });
 });
@@ -2486,19 +2746,23 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     // Absence: the old <720px-only pattern that carried .program-details is gone;
     // the 720px list keeps only the drawer-scoped controls.
     expect(styles).not.toContain(".dw-lin-name, .program-details { min-height: 44px; }");
+    // FE-B: .signal-trigger dropped out of this list with the rest of the
+    // removed signal-surface board; the drawer-scoped controls are unchanged.
     expect(styles).toContain(
-      ".signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
+      ".dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
     );
   });
 
-  // A6 finding 1: three text inputs were never swept at any breakpoint —
-  // .command-composer input (40px), .instruct-form input (38px),
-  // .rename-form input (36px) — while #search (a sibling input) already was.
-  test("the three text inputs clear 44px below 1024px (A6 finding)", () => {
+  // A6 finding 1: the text inputs were never swept at any breakpoint —
+  // .command-composer input (40px) and .rename-form input (36px) — while
+  // #search (a sibling input) already was. (.instruct-form input was the third;
+  // FE-B removed it with the rest of the orphaned stylesheet, since no element
+  // in the client has ever carried that class.)
+  test("every text input clears 44px below 1024px (A6 finding)", () => {
     const sweep = touchSweep1024();
     expect(sweep).toContain(".command-composer input");
-    expect(sweep).toContain(".instruct-form input");
     expect(sweep).toContain(".rename-form input");
+    expect(styles).not.toContain(".instruct-form");
   });
 
   // A6 finding 2 — Rule 6 (motion respects prefers-reduced-motion). Honest
@@ -3090,5 +3354,735 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     // An agent losing eligibility mid-compose must repaint its chip.
     const gone = [{ agent: agent({ status: "stale", controls: [] }), program }];
     expect(M.broadcastPaintSig(gone, [], ui())).not.toBe(base);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   WAVE 2 / FE-B — client cost, dead weight, and the quarantine dead end.
+
+   Everything below asserts on rendered DOM or on pure model functions. The
+   shared harness is the same DOM-less trick the C1/B2 blocks use, extended with
+   getElementById + a linked-list node so the keyed row reconciler can be driven
+   for real.
+   ------------------------------------------------------------------------- */
+describe("FE-B: harness-backed client behavior", () => {
+  /* -------- finding 11: the retry hint named a port it was not served on ---- */
+  test("(11) the unreachable hint names the address the page came from, not a hardcoded 4701", () => {
+    expect(M.serverUnreachableHint("127.0.0.1:4715"))
+      .toBe("Check that the Ant Hill server is running on 127.0.0.1:4715, then retry.");
+    // The production default still reads correctly — this is not a regression trade.
+    expect(M.serverUnreachableHint("127.0.0.1:4701")).toContain("127.0.0.1:4701");
+    // No internal version jargon in the one screen a broken instance shows.
+    expect(M.serverUnreachableHint("127.0.0.1:4702")).not.toContain("v3");
+    // A hostless context (file://) must not claim an address it does not know.
+    expect(M.serverUnreachableHint("")).toBe("Check that the Ant Hill server is running at this address, then retry.");
+  });
+
+  /* -------- finding 10: SVG <rect> has no title ATTRIBUTE ------------------- */
+  test("(10) usage bars carry a real SVG <title> child, so hovering reports the bucket", () => {
+    const points = [
+      { bucketStart: "2026-07-28T01:00:00.000Z", tokens: 12_000, provider: "claude" },
+      { bucketStart: "2026-07-28T02:00:00.000Z", tokens: 4_000, provider: "codex" },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart: any = withDom(() => M.renderUsageSeriesChart(points));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rects = findAll(chart, (n: any) => n.tagName === "rect");
+    expect(rects.length).toBe(2);
+    for (const rect of rects) {
+      // The bug: setAttribute("title", …) on a <rect> renders nothing at all.
+      expect(rect.attributes.title).toBeUndefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const titles = (rect.children || []).filter((k: any) => k && k.tagName === "title");
+      expect(titles.length).toBe(1);
+      expect(String(titles[0].textContent)).toMatch(/tokens$/);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const first = (rects[0].children as any[])[0];
+    expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
+    expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
+    expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- finding 8: ~40 orphaned CSS classes still shipped --------------
+     There is no build step and no CSS pruning, so every dead rule shipped on
+     every load — and, more expensively, poisoned grep: a developer editing
+     .advisory-title found rules that looked authoritative and had no effect,
+     because the live advisory drawer uses .dw-lead / .dw-impact.
+
+     This is a dead-asset lint over the stylesheet, not a behavior test. It is
+     here because nothing else can express "this rule has no emitter", and the
+     allowlist below is deliberately the COMPLETE set of class prefixes the
+     client composes at runtime — a new dynamic prefix has to be added here on
+     purpose, which is the point. */
+  test("(8) every class in styles.css is emitted by the client", () => {
+    const RUNTIME_PREFIXES = [
+      "act-", "outcome-", "provider-", "conn-", "dw-accent--", "dw-eyebrow--",
+      "dw-provider--", "work-", "role-", "verdict-", "st-", "tri-kind-",
+      "tri-live-", "depth-", "chat-turn--", "program-rollup-cell--",
+      "widget-option-", "identity-step--", "control-", "is-", "dw-d",
+    ];
+    const declared = [...new Set(styles.match(/\.-?[_A-Za-z][-\w]*/g) ?? [])]
+      .map((selector) => selector.slice(1));
+    expect(declared.length).toBeGreaterThan(400); // the extraction actually ran
+    const client = source + "\n" + html;
+    const orphans = declared.filter((name) =>
+      !client.includes(name) && !RUNTIME_PREFIXES.some((prefix) => name.startsWith(prefix)));
+    expect(orphans).toEqual([]);
+
+    // The allowlist is a prefix list, not a blanket: a fully invented name that
+    // merely starts like a live one is still caught.
+    expect(client.includes("signal-tech")).toBe(true); // the one signal-* survivor
+    for (const gone of ["signal-intervention", "danger-zone", "tests-passing", "advisory-title", "instruct-form", "target-chip"]) {
+      expect(styles.includes("." + gone), gone).toBe(false);
+    }
+  });
+
+  /* -------- finding 7: the same derivation, four times a paint -------------
+     affectedImpact rebuilt a Map of the WHOLE fleet once per issue, and
+     renderHealthRail drove that chain roughly four times per paint. */
+  test("(7) the fleet index is built once per snapshot, not once per issue", () => {
+    const agents = Array.from({ length: 40 }, (_, i) => agent({ id: "codex:a" + i }));
+    const issues = agents.slice(0, 12).map((a, i) => ({
+      id: "agent:" + a.id, kind: "agent", severity: i % 2 ? "warning" : "error",
+      title: "Issue " + i, summary: "s", affectedAgentIds: [a.id],
+    }));
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents }], issues });
+
+    // The mechanism: one index object, reused for the life of the snapshot.
+    const first = M.agentsById(snap);
+    expect(first.size).toBe(40);
+    expect(M.agentsById(snap)).toBe(first);
+
+    // Driving the real derivation chain does not replace it either — that is
+    // what made it O(issues × agents) per pass.
+    M.pulseStripModel(snap, "live", []);
+    for (const issue of issues) M.affectedImpact(issue, snap);
+    expect(M.agentsById(snap)).toBe(first);
+    // …and the answers are still right.
+    expect(M.affectedImpact(issues[0], snap).total).toBe(1);
+    expect(M.affectedImpact(issues[0], snap).plain).toContain("Touches 1 session");
+
+    // A new snapshot object gets a fresh index — no manual invalidation, so a
+    // stale board can never be served out of this cache.
+    const next = snapshot({ programs: [{ id: "p", name: "P", agents: agents.slice(0, 3) }] });
+    const nextIndex = M.agentsById(next);
+    expect(nextIndex).not.toBe(first);
+    expect(nextIndex.size).toBe(3);
+    expect(M.agentsById(null).size).toBe(0);
+  });
+
+  test("(7) pulseStripModel threads the context display so a paint derives each widget once", () => {
+    const withCtx = snapshot({
+      programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
+    });
+    const percentCell = M.pulseStripModel(withCtx, "live", [], "percent").cells.find((c: { id: string }) => c.id === "context-peak");
+    const tokenCell = M.pulseStripModel(withCtx, "live", [], "tokens").cells.find((c: { id: string }) => c.id === "context-peak");
+    expect(percentCell.data.value).toBe("25%");
+    expect(tokenCell.data.value).not.toBe("25%");
+    expect(tokenCell.data.value).toContain("50k");
+    // Weighting is unaffected by the display — the cell the signature and the
+    // renderer share is the same object either way.
+    expect(percentCell.weight).toBe(tokenCell.weight);
+    // The default is unchanged, so every existing caller keeps its behavior.
+    expect(M.pulseStripModel(withCtx, "live", []).cells.find((c: { id: string }) => c.id === "context-peak").data.value).toBe("25%");
+  });
+
+  /* -------- finding 4: five copies of one enum, already disagreeing --------
+     `completed` read "Complete" on the plan chip, "complete · verifying" on the
+     queue button, "verifying" in the pulse row, "Verifying" in the drawer
+     eyebrow and "complete · waiting for fresh data" in the drawer status. */
+  test("(4) one investigation state reads with one word on every surface", () => {
+    const issue = { id: "system:1", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const item = (state: string) => ({
+      issueId: "system:1", state, headline: "Re-bind the sessions", mode: "investigate",
+      rationale: "why", steps: [{ title: "Read", detail: "d" }], queueRecommended: true,
+      createdAt: "2026-07-28T01:00:00.000Z", startedAt: "2026-07-28T01:01:00.000Z",
+    });
+    const triageText = (state: string) =>
+      textOf(withDom(() => M.renderTriage(issue, triageUi({ queueItems: [item(state)] }))));
+
+    // The state that was broken in four ways.
+    const completed = triageText("completed");
+    expect(completed).toContain("Verifying");                     // plan chip
+    expect(completed).toContain("✓ Investigation verifying");      // queue button
+    expect(completed).not.toContain("Complete");                   // the old chip word
+    expect(completed).not.toContain("complete · verifying");       // the old button text
+    const pulseRow = (state: string) =>
+      M.pulseStripModel({ schemaVersion: 1, programs: [], issues: [] }, "live", [item(state)]).findings[0];
+    expect(pulseRow("completed").work.label).toBe("Verifying");     // pulse row
+
+    // Every surface agrees for every state, and the four states stay distinct.
+    for (const [state, word] of [["queued", "Queued"], ["running", "Running"], ["completed", "Verifying"], ["blocked", "Blocked"]] as const) {
+      const view = M.investigationView(state);
+      expect(view.label, state).toBe(word);
+      expect(triageText(state), state).toContain(word);
+      expect(pulseRow(state).impact, state).toBe("Investigation " + word.toLowerCase());
+    }
+    const labels = Object.values(M.INVESTIGATION_STATE_VIEW as Record<string, { label: string }>).map((v) => v.label);
+    expect(new Set(labels).size).toBe(4);
+
+    // A sixth server state degrades to the server's own word CONSISTENTLY,
+    // instead of a confident wrong label on one surface and a raw enum on the next.
+    const unknown = M.investigationView("cancelled");
+    expect(unknown.label).toBe("cancelled");
+    expect(unknown.button).toBe("Investigation cancelled");
+    expect(triageText("cancelled")).toContain("Investigation cancelled");
+  });
+
+  /* -------- finding 3: repaint-and-lose-focus ------------------------------
+     render()'s focus-restore contract keys on data-fkey and nothing else, and
+     renderFilterBar wipes the whole bar unconditionally on every paint. Chips
+     without an fkey were destroyed, nothing was restored, and a keyboard or
+     screen-reader operator was thrown back to <body> ~15 times a minute. */
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function focusKeysOf(node: any): string[] {
+    return buttonsOf(node).map((b: { dataset: Record<string, string> }) => b.dataset.fkey);
+  }
+
+  test("(3) filterChip carries the focus key it is given", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip: any = withDom(() => M.filterChip("6h", true, () => {}, { fkey: "lookback:6" }));
+    expect(chip.tagName).toBe("button");
+    expect(chip.dataset.fkey).toBe("lookback:6");
+    expect(chip.attributes["aria-pressed"]).toBe("true");
+    // The key names the control, not its label, so it survives the label change
+    // that "Custom" → "Custom 12h" performs on the very chip being clicked.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const custom: any = withDom(() => M.filterChip("Custom 12h", true, () => {}, { fkey: "lookback:custom" }));
+    expect(custom.dataset.fkey).toBe("lookback:custom");
+  });
+
+  test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
+    const bar = () => domById.get("filter-bar");
+
+    // Idle/History: Lookback presets + All + Custom, then the Scan window.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", lookbackHours: 6, scanWindowHours: 36 }));
+      const keys = focusKeysOf(bar());
+      expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
+      expect(keys.every(Boolean)).toBe(true);
+      expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
+      expect(keys).toEqual(["lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom", "scan-window"]);
+    });
+
+    // Usage: the range chips, rebuilt on the same cadence.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "usage", usageRangeId: "24h", usageCustomHours: 24 }));
+      const keys = focusKeysOf(bar());
+      expect(keys).toEqual(["usage-range:1h", "usage-range:24h", "usage-range:7d", "usage-range:30d", "usage-range:custom"]);
+    });
+
+    // The key of the chip an operator is standing on does not move when the
+    // selection changes — otherwise focus restore finds nothing after the click.
+    const keyAt = (hours: number | null) => withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", lookbackHours: hours }));
+      return focusKeysOf(bar());
+    });
+    expect(keyAt(6)).toEqual(keyAt(24));
+    expect(keyAt(null)).toEqual(keyAt(6));
+  });
+
+  test("(3) the rename form and the usage panel keep their controls addressable", () => {
+    const target = { kind: "program", programId: "p1" };
+    const form = withDom(() => M.renderLabelForm(target, {
+      inputKey: "rename-input:p1", placeholder: "Display name", ariaLabel: "New display name", source: "Source program: P",
+    }));
+    const keys = focusKeysOf(form);
+    expect(keys).toEqual(["label-save:program:p1", "label-cancel:program:p1"]);
+    expect(keys.every(Boolean)).toBe(true);
+
+    // Usage: Retry on an unavailable BurnBar, and the session links in the table.
+    const failed = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "locked", usageWard: null, usageSeries: null, usageInvocations: null,
+        usageSummary: { available: false, error: "BurnBar database is locked." },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(focusKeysOf(failed)).toEqual(["usage-retry"]);
+
+    const table = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { points: [] },
+        usageInvocations: { invocations: [{ sessionId: "a1", provider: "codex", model: "gpt-5-codex", tokens: 10, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" }] },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(table)).toContain("Recent invocations");
+    /* The session-link button only exists when the invocation maps to an agent
+       in state.snap, which this suite cannot set; likewise the two confirm-strip
+       Cancel buttons are gated behind state.confirming / state.broadcastConfirming.
+       All three carry an fkey now, but they are covered by inspection, not here —
+       said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
+  });
+
+  /* -------- finding 2: one agent's tick rebuilt the whole list -------------
+     The list guard was all-or-nothing: any visible agent's status, tokens or
+     summary moving invalidated one signature for the WHOLE list, and the next
+     paint ran root.textContent = "" and reconstructed every program and every
+     row (~27 elements each), taking the operator's text selection with it. */
+
+  const listProgram = (agents: unknown[]) => ({ id: "p1", name: "Prog", agents });
+  function planFor(agents: Record<string, unknown>[], over: Record<string, unknown> = {}) {
+    const program = listProgram(agents);
+    return M.agentRowPlan(program, agents, listUi({ snap: { schemaVersion: 1, programs: [program] }, ...over }));
+  }
+
+  test("(2) reconcileKeyed keeps the DOM node of every key whose signature held", () => {
+    const parent = newNode("div");
+    const cache = new Map();
+    const plan = (sigs: Record<string, string>) => Object.entries(sigs).map(([key, sig]) => ({
+      key, sig, build: () => newNode("div"),
+    }));
+
+    M.reconcileKeyed(parent, plan({ a: "1", b: "1", c: "1" }), cache);
+    const [a0, b0, c0] = parent.children;
+    expect(parent.children.length).toBe(3);
+
+    // Only b moved. a and c must be the SAME objects — that is the whole point:
+    // a node that is never detached keeps its selection, hover and focus.
+    M.reconcileKeyed(parent, plan({ a: "1", b: "2", c: "1" }), cache);
+    expect(parent.children[0]).toBe(a0);
+    expect(parent.children[1]).not.toBe(b0);
+    expect(parent.children[2]).toBe(c0);
+    const b1 = parent.children[1];
+
+    // Insertion lands in order without disturbing its neighbours.
+    M.reconcileKeyed(parent, plan({ a: "1", d: "1", b: "2", c: "1" }), cache);
+    expect(parent.children.length).toBe(4);
+    expect(parent.children[0]).toBe(a0);
+    expect(parent.children[2]).toBe(b1);
+    expect(parent.children[3]).toBe(c0);
+
+    // Removal drops exactly the missing key…
+    const kept = M.reconcileKeyed(parent, plan({ a: "1", c: "1" }), cache);
+    expect(parent.children.map((n: { tagName: string }) => n)).toEqual([a0, c0]);
+    expect([...kept]).toEqual(["a", "c"]);
+
+    // …and reordering moves nodes rather than rebuilding them.
+    M.reconcileKeyed(parent, plan({ c: "1", a: "1" }), cache);
+    expect(parent.children).toEqual([c0, a0]);
+  });
+
+  test("(2) a row signature moves only for the row that actually changed", () => {
+    const a = agent({ id: "codex:a1", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2", tokens: { provenance: "observed", total: 800 } });
+    const before = planFor([a, b]);
+    // The exact production tick the finding describes: one agent's token count
+    // advances on the 4s snapshot.
+    const after = planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b]);
+    expect(after[0].sig).toBe(before[0].sig); // column header
+    expect(after[1].sig).not.toBe(before[1].sig); // the agent that moved
+    expect(after[2].sig).toBe(before[2].sig); // …and nothing else
+    expect(after.map((i: { key: string }) => i.key)).toEqual(before.map((i: { key: string }) => i.key));
+  });
+
+  test("(2) the row signature still covers everything a row paints", () => {
+    const base = agent({ id: "codex:a1", elapsedMs: 60_000 });
+    const sig = (over: Record<string, unknown> = {}, ui: Record<string, unknown> = {}) =>
+      M.agentRowSig({ ...base, ...over }, listUi(ui), { depth: 0, childCount: 0, fullById: new Map() });
+    const start = sig();
+    const moves: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["status", { status: "attention" }, {}],
+      ["statusReason", { statusReason: "Waiting on review." }, {}],
+      ["model", { model: "claude-opus-4-8" }, {}],
+      ["tokens", { tokens: { provenance: "observed", total: 40_000, contextWindow: 200_000 } }, {}],
+      ["lastHumanMessage (row summary)", { lastHumanMessage: "ship the fix" }, {}],
+      ["role chip", { role: "verifier" }, {}],
+      ["model policy chip", { modelPolicy: { state: "violation", summary: "off policy" } }, {}],
+      ["cwd mismatch dot", { target: { resolution: "exact", surfaceId: "s1", cwdMismatch: true } }, {}],
+      ["terminal breadcrumb", { target: { resolution: "exact", surfaceId: "s1", workspaceTitle: "ridge" } }, {}],
+      ["staleness fact", { updatedAt: new Date(Date.now() - 40 * 60_000).toISOString() }, {}],
+      ["selection highlight", {}, { selectedId: "codex:a1" }],
+      ["select mode", {}, { selecting: true }],
+      ["checkbox", {}, { selecting: true, selection: new Set(["codex:a1"]) }],
+      ["rename form", {}, { renaming: M.presentationLabelKey(M.preferredRenameTarget(base)) }],
+      ["rename pending", {}, { renamePending: true }],
+      ["rename error", {}, { renameError: "Too long" }],
+      ["custom label", {}, { labels: new Map([["agent:codex:a1", "Ridge"]]) }],
+      ["context display toggle", {}, { contextDisplay: "tokens" }],
+    ];
+    for (const [why, over, ui] of moves) expect(sig(over, ui), why).not.toBe(start);
+
+    // The live elapsed clock is deliberately OUT: tickClocks rewrites it in
+    // place from data-elapsed-base, so letting it in would rebuild every row
+    // every 5s and undo the entire fix.
+    expect(sig({ elapsedMs: 61_000 })).toBe(start);
+    // Another agent's rename never touches this row.
+    expect(sig({}, { renaming: "agent:codex:other" })).toBe(start);
+  });
+
+  test("(2) a token tick leaves the program shell alone, so its rows stay attached", () => {
+    const a = agent({ id: "codex:a1", status: "running", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2", status: "running" });
+    const shell = (agents: Record<string, unknown>[], ui: Record<string, unknown> = {}) =>
+      M.programShellSig(listProgram(agents), agents, listUi(ui));
+    const base = shell([a, b]);
+    // The tick that used to rebuild everything now rebuilds nothing above the row.
+    expect(shell([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b])).toBe(base);
+    expect(shell([{ ...a, statusReason: "Still streaming." }, b])).toBe(base);
+    // What the shell DOES paint still moves it.
+    expect(shell([{ ...a, status: "attention" }, b])).not.toBe(base); // rollup counts
+    expect(shell([a, b], { programOverrides: new Map([["p1", "closed"]]) })).not.toBe(base); // caret
+    expect(shell([a, b], { labels: new Map([["program:p1", "Ridge"]]) })).not.toBe(base); // head label
+    expect(shell([a, b], { selecting: true })).not.toBe(base); // selection row
+    expect(shell([a, b], { renaming: "program:p1" })).not.toBe(base); // rename form
+    expect(shell([a], { })).not.toBe(base); // fewer visible agents
+  });
+
+  test("(2) end to end: a tick that changes one agent rebuilds one row", () => {
+    const a = agent({ id: "codex:a1", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2" });
+    const c = agent({ id: "codex:a3" });
+    const body = newNode("div");
+    const cache = new Map();
+
+    withDom(() => M.reconcileKeyed(body, planFor([a, b, c]), cache));
+    expect(body.children.length).toBe(4); // header + 3 rows
+    const [header, rowA, rowB, rowC] = body.children;
+
+    withDom(() => M.reconcileKeyed(
+      body,
+      planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]),
+      cache,
+    ));
+    expect(body.children.length).toBe(4);
+    expect(body.children[0]).toBe(header);
+    expect(body.children[1]).not.toBe(rowA);
+    expect(body.children[2]).toBe(rowB);
+    expect(body.children[3]).toBe(rowC);
+    // The rebuilt row really is the one that moved, and it shows the new number.
+    expect(textOf(body.children[1])).toContain("40k");
+
+    // A repaint with nothing changed touches no node at all.
+    const settled = [...body.children];
+    withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]), cache));
+    expect(body.children).toEqual(settled);
+
+    // An agent leaving the view removes exactly its row.
+    withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, c]), cache));
+    expect(body.children.length).toBe(3);
+    expect(body.children[2]).toBe(rowC);
+  });
+
+  test("(2) the whole list path: a live tick repaints one row, not the list", () => {
+    /* Drives syncProgramList — the exact two-level path renderPrograms runs —
+       with real nodes, so this covers section reuse as well as row reuse. */
+    const mk = (id: string, over: Record<string, unknown> = {}) => agent({ id, status: "running", ...over });
+    const build = (a1Tokens: number, a3Status = "running") => {
+      const alpha = { id: "sync-alpha", name: "Alpha", agents: [mk("codex:s1", { tokens: { provenance: "observed", total: a1Tokens } }), mk("codex:s2")] };
+      const beta = { id: "sync-beta", name: "Beta", agents: [mk("codex:s3", { status: a3Status })] };
+      return [{ program: alpha, agents: alpha.agents }, { program: beta, agents: beta.agents }];
+    };
+    const root = newNode("div");
+    const ui = (visible: ReturnType<typeof build>) => listUi({
+      snap: { schemaVersion: 1, programs: visible.map((v) => v.program) },
+    });
+
+    let visible = build(1200);
+    const shown = withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(shown).toBe(3);
+    expect(root.children.length).toBe(2);
+    const [alphaSection, betaSection] = root.children;
+    const alphaBody = alphaSection.children[alphaSection.children.length - 1];
+    const betaBody = betaSection.children[betaSection.children.length - 1];
+    expect(alphaBody.children.length).toBe(3); // header + 2 rows
+    const [, rowS1, rowS2] = alphaBody.children;
+    const rowS3 = betaBody.children[1];
+
+    // A token tick on codex:s1 — the production case. Everything else must be
+    // the same node object it was, including both program sections.
+    visible = build(40_000);
+    withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(root.children[0]).toBe(alphaSection);
+    expect(root.children[1]).toBe(betaSection);
+    expect(alphaBody.children[1]).not.toBe(rowS1);
+    expect(alphaBody.children[2]).toBe(rowS2);
+    expect(betaBody.children[1]).toBe(rowS3);
+    expect(textOf(alphaBody.children[1])).toContain("40k");
+
+    // A status flip DOES move the program rollup, so Beta's shell is rebuilt —
+    // but its row node is re-adopted rather than reconstructed.
+    visible = build(40_000, "attention");
+    withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(root.children[0]).toBe(alphaSection);
+    expect(root.children[1]).not.toBe(betaSection);
+    const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
+    expect(newBetaBody.children.length).toBe(2);
+    expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
+    // Alpha is untouched by Beta's rebuild.
+    expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* -------- finding 1: the quarantine dead end -----------------------------
+     Identity resolution refuses to bind a session, Focus and Send go dead, and
+     the operator was given a fixed sentence with no reason and no way forward —
+     while agent.identityTrace sat unread in the payload the client had already
+     received, and GET /api/debug/identity sat unused beside it. */
+
+  const CONFLICTED = {
+    identityTrace: {
+      resolution: "ambiguous",
+      reason: "cmux 6952219A-6C2F-4A61-9C0E-1F0B2D3E4A55 has conflicting open agent session files on ttys082.",
+      surfaceId: "SURFACE-82",
+      steps: [
+        { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
+        { tier: "session", outcome: "quarantined", detail: "ttys082 has open session files for two providers." },
+        { tier: "cwd", outcome: "no-match", detail: "Two terminals report the same working folder." },
+      ],
+    },
+    target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+    controlState: "quarantined",
+    controls: [
+      { action: "focus", enabled: false, reason: "Identity conflict on ttys082." },
+      { action: "instruct", enabled: false, reason: "Identity conflict on ttys082." },
+    ],
+  };
+
+  const DEBUG_PAYLOAD = {
+    ok: true,
+    agent: { id: "codex:a1", resolution: "ambiguous" },
+    relatedSurfaces: [{
+      surfaceId: "SURFACE-82",
+      tty: "ttys082",
+      identityConflict: "Two providers hold open session files on this terminal.",
+      identityTrace: {
+        surfaceId: "SURFACE-82",
+        tty: "ttys082",
+        processes: [
+          { pid: 4242, command: "codex resume 019f94a1", recognizedAgentProcess: true },
+          { pid: 5150, command: "claude --resume", recognizedAgentProcess: true },
+          { pid: 9001, command: "zsh", recognizedAgentProcess: false },
+        ],
+        openFileMatches: [
+          { pid: 4242, path: "/Users/me/.codex/sessions/019f94a1-....jsonl", provider: "codex", sessionId: "019f94a1-1558-7000-aeb8-26e2cfd0e8ec" },
+          { pid: 5150, path: "/Users/me/.claude/projects/p/c0eb6d3f-....jsonl", provider: "claude", sessionId: "c0eb6d3f-9a41-7000-b2aa-77c1f0e93b21" },
+        ],
+        commandHints: [],
+        outcome: "conflict",
+        sourceSessionIds: ["019f94a1-1558-7000-aeb8-26e2cfd0e8ec", "c0eb6d3f-9a41-7000-b2aa-77c1f0e93b21"],
+      },
+    }],
+  };
+
+  test("(1) the trace the payload already carried becomes a normalized view", () => {
+    const view = M.identityTraceView(agent(CONFLICTED));
+    expect(view.resolution).toBe("ambiguous");
+    expect(view.matchedTier).toBeNull();
+    expect(view.reason).toContain("ttys082");
+    expect(view.steps.map((s: { tier: string }) => s.tier)).toEqual(["recorded", "session", "cwd"]);
+    expect(view.steps[1]).toMatchObject({
+      tierLabel: "Session ID on a terminal",
+      outcome: "quarantined",
+      outcomeLabel: "quarantined",
+    });
+    // A bound session still reports which tier bound it.
+    const bound = M.identityTraceView(agent({
+      identityTrace: { resolution: "exact", matchedTier: "session", surfaceId: "s1", steps: [{ tier: "session", outcome: "matched", detail: "Session ID recorded by cmux." }] },
+    }));
+    expect(bound.matchedTier).toBe("session");
+    // An agent with no trace at all degrades to its target, never to a guess.
+    const bare = M.identityTraceView(agent());
+    expect(bare.resolution).toBe("exact");
+    expect(bare.steps).toEqual([]);
+    expect(bare.reason).toBeNull();
+  });
+
+  test("(1) a quarantined session gets a reason and a next step, not just 'no'", () => {
+    const brief = M.quarantineBrief(agent(CONFLICTED), "quarantined");
+    expect(brief.title).toBe("Control routing locked.");
+    expect(brief.cause).toBe("contested-terminal");
+    expect(brief.why).toContain("More than one session claims the same terminal");
+    // The whole point: a way forward, and one that does not require a restart.
+    expect(brief.nextStep).toContain("End or close one of the sessions sharing that terminal");
+
+    /* The shape the LIVE board actually produces: every one of the 9 quarantined
+       sessions on 127.0.0.1:4701 resolves "ambiguous" having refused at the cwd
+       tier, not the session tier — so keying the copy off the resolution alone
+       would have told all of them to close a terminal that is not the problem. */
+    const sharedFolder = M.quarantineBrief(agent({
+      identityTrace: {
+        resolution: "ambiguous",
+        reason: "2 active sources share this cwd; cwd fallback requires exactly one and controls are disabled.",
+        steps: [
+          { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
+          { tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." },
+          { tier: "cwd", outcome: "ambiguous", detail: "2 active sources share this cwd; cwd fallback requires exactly one." },
+        ],
+      },
+    }), "quarantined");
+    expect(sharedFolder.cause).toBe("shared-folder");
+    expect(sharedFolder.why).toContain("shares its working folder");
+    expect(sharedFolder.nextStep).toContain("own cmux pane");
+
+    // Observed-only with nothing claiming it is a third failure, third next step.
+    const observed = M.quarantineBrief(agent({ target: { resolution: "missing" } }), "observed-only");
+    expect(observed.title).toBe("Controls unavailable.");
+    expect(observed.cause).toBe("missing");
+    expect(observed.nextStep).toContain("cmux pane");
+    // The three causes really do read differently — this is not one string thrice.
+    expect(new Set([brief.nextStep, sharedFolder.nextStep, observed.nextStep]).size).toBe(3);
+    // A healthy session gets no banner at all.
+    expect(M.quarantineBrief(agent(), "linked")).toBeNull();
+  });
+
+  test("(1) the control banner names the reason and the exit, and leaks no cmux identifiers", () => {
+    const locked = agent(CONFLICTED);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const banner: any = withDom(() => M.renderControlBanner(locked, "quarantined"));
+    expect(banner).not.toBeNull();
+    const text = textOf(banner);
+    expect(text).toContain("Control routing locked.");
+    expect(text).toContain("More than one session claims the same terminal");
+    expect(text).toContain("End or close one of the sessions sharing that terminal");
+    expect(text).toContain("See routing evidence");
+    // The established Operate-chrome rule holds: raw cmux/session identifiers
+    // live in Evidence, never in the banner — even though the trace is full of
+    // them and the capability reasons name the tty.
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
+    expect(text).not.toContain("ttys082");
+    expect(text).not.toContain("SURFACE-82");
+    // The evidence link is focus-restorable like every other repainted control.
+    const link = buttonsOf(banner)[0];
+    expect(link.dataset.fkey).toBe("control-evidence:codex:a1");
+    // A linked session still renders no banner.
+    expect(withDom(() => M.renderControlBanner(agent({ controls: [{ action: "focus", enabled: true }] }), "linked"))).toBeNull();
+  });
+
+  test("(1) Evidence renders the tier trail the resolver actually walked", () => {
+    const locked = agent(CONFLICTED);
+    const evidence = withDom(() => M.renderEvidence(locked));
+    const block = byClass(evidence, "identity-block");
+    expect(block).not.toBeNull();
+    const text = textOf(block);
+    expect(text).toContain("Not bound");
+    expect(text).toContain("ambiguous");
+    // Every tier the resolver walked, in order, with its own words. THIS is
+    // where the raw identifiers belong.
+    expect(text).toContain("No recorded cmux target IDs on this source.");
+    expect(text).toContain("ttys082 has open session files for two providers.");
+    expect(text).toContain("Two terminals report the same working folder.");
+    expect(allByClass(block, "identity-step").length).toBe(3);
+    // Terminal evidence is opt-in — a button until the operator asks for it.
+    const load = buttonsOf(block).find((b) => String(b.dataset.fkey).startsWith("identity-load:"));
+    expect(load).toBeDefined();
+    expect(textOf(load)).toContain("Show which terminals claim this session");
+    // A healthy session with no trace grows no block at all.
+    expect(byClass(withDom(() => M.renderEvidence(agent())), "identity-block")).toBeNull();
+  });
+
+  test("(1) debug-endpoint evidence becomes 'this tty has both of these sessions open'", () => {
+    const collisions = M.surfaceCollisions(DEBUG_PAYLOAD);
+    expect(collisions.length).toBe(1);
+    expect(collisions[0]).toMatchObject({ surfaceId: "SURFACE-82", tty: "ttys082" });
+    expect(collisions[0].claims.length).toBe(2);
+    // The process that is NOT holding a session file is not presented as a claim.
+    expect(collisions[0].claims.map((c: { pid: number }) => c.pid)).toEqual([4242, 5150]);
+
+    const line = M.collisionLine(collisions[0]);
+    expect(line).toContain("ttys082");
+    expect(line).toContain("2 sessions claim it");
+    expect(line).toContain("Codex 019f94a1…");
+    expect(line).toContain("Claude c0eb6d3f…");
+    expect(line).toContain("pid 4242, codex resume 019f94a1");
+    expect(line).toContain("pid 5150, claude --resume");
+
+    // An uncontested terminal reads as one session, and an empty one says so
+    // rather than implying a conflict that is not there.
+    expect(M.collisionLine({ tty: "ttys001", surfaceId: "S1", conflict: "", claims: [{ provider: "claude", sessionId: "abcdefghijkl", pid: 7, command: "claude" }] }))
+      .toBe("ttys001 — one session open: Claude abcdefgh… (pid 7, claude)");
+    expect(M.collisionLine({ tty: "", surfaceId: "S9", conflict: "", claims: [] }))
+      .toBe("S9 — no open agent session files observed.");
+    expect(M.surfaceCollisions(null)).toEqual([]);
+  });
+
+  test("(1) fetched terminal evidence reaches the screen and moves the drawer signature", () => {
+    const locked = agent(CONFLICTED);
+    const loaded = { agentId: "codex:a1", loading: false, error: "", data: DEBUG_PAYLOAD };
+    const block = withDom(() => M.renderIdentityBlock(locked, { identity: loaded }));
+    const text = textOf(block);
+    expect(text).toContain("ttys082 — 2 sessions claim it");
+    expect(text).toContain("Two providers hold open session files on this terminal.");
+    expect(byClass(block, "is-contested")).not.toBeNull();
+
+    // Failure is reported, never smoothed into "no conflicts found".
+    const failed = withDom(() => M.renderIdentityBlock(locked, {
+      identity: { agentId: "codex:a1", loading: false, error: "HTTP 404", data: null },
+    }));
+    expect(textOf(failed)).toContain("Terminal evidence unavailable: HTTP 404");
+    expect(buttonsOf(failed).some((b) => textOf(b) === "Retry")).toBe(true);
+
+    // Evidence that arrives while nothing else changed must still repaint: the
+    // drawer signature is the only thing standing between the fetch and the DOM.
+    const program = { id: "p", name: "P", agents: [locked] };
+    const view = { kind: "agent", agent: locked, program };
+    const sel = { kind: "agent", id: "codex:a1" };
+    const base = M.inspectorPaintSig(sel, view, identityUi());
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:a1", loading: true, error: "", data: null } }))).not.toBe(base);
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: loaded }))).not.toBe(base);
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:a1", loading: false, error: "HTTP 404", data: null } }))).not.toBe(base);
+    // Another agent's evidence must not repaint this drawer.
+    expect(M.inspectorPaintSig(sel, view, identityUi({ identity: { agentId: "codex:other", loading: false, error: "", data: DEBUG_PAYLOAD } }))).toBe(base);
+    // And a trace that changes repaints, now that the drawer renders it.
+    const rebound = { ...locked, identityTrace: { ...CONFLICTED.identityTrace, resolution: "exact", matchedTier: "session" } };
+    expect(M.inspectorPaintSig(sel, { kind: "agent", agent: rebound, program }, identityUi())).not.toBe(base);
+  });
+
+  /* -------- findings 5 + 12: five unreachable render functions -------------
+     They were kept alive only by regexes that matched app.js's source TEXT —
+     function names, their ordering, even the blank lines between them. Those
+     assertions were replaced with the rendered-DOM ones above and below, and
+     the functions deleted. What the drawer actually builds is the contract. */
+  test("(5) the agent drawer builds Operate + Chat + the Evidence rail, and no swarm section", () => {
+    const a = agent({
+      lastHumanMessage: "ship it",
+      lastAgentMessage: "done",
+      cwd: "/repos/x",
+      controls: [{ action: "focus", enabled: true }, { action: "instruct", enabled: true }],
+    });
+    const program = { id: "p", name: "P", agents: [a] };
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
+      return pane;
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shelves = findAll(drawer, (n: any) => n.dataset && n.dataset.shelf).map((n) => n.dataset.shelf);
+    expect(shelves).toEqual(["operate", "chat"]);
+    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
+    // renderSwarmSection's output — the thing the "do not delete" comment was
+    // protecting — is nowhere in the drawer; renderLineageSpine superseded it.
+    expect(byClass(drawer, "swarm-section")).toBeNull();
+    expect(byClass(drawer, "swarm-link")).toBeNull();
+    // The command dock still owns the lock copy renderPrimaryActions claimed to
+    // keep "discoverable" — proof the alias carried nothing of its own.
+    expect(textOf(drawer)).toContain("Send");
+  });
+
+  /* -------- finding 9: the shadowed `state` identifier ---------------------- */
+  test("(9) modelPolicyView returns the same shape after the shadow rename", () => {
+    // The rename must be invisible at the boundary: violation → mismatch,
+    // unverified → unreported, and the summary keyed off the NORMALIZED state.
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "violation" } }))).toEqual({
+      state: "mismatch",
+      label: "Model mismatch",
+      expected: null,
+      summary: "The reported model is outside the approved model policy.",
+    });
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "unverified" } }))).toEqual({
+      state: "unreported",
+      label: "Model unreported",
+      expected: null,
+      summary: "The model is unavailable, so policy compliance cannot be verified.",
+    });
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "compliant" } })).summary)
+      .toBe("The reported model matches the approved model policy.");
+    // No identifier named `state` is declared inside the function any more.
+    const fn = source.match(/function modelPolicyView\(agent\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).not.toMatch(/\bconst state\b/);
   });
 });

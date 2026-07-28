@@ -1,3 +1,344 @@
+# WAVE 2 / FE-B — client cost, dead weight, and the quarantine dead end
+
+Date: 2026-07-28
+Branch: `ant-hill/fe-quality-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/fe-quality-20260728`
+Base: `53de671` (wave-1 merge)
+Files touched: `src/web/app.js`, `src/web/styles.css`, `tests/web-client.test.ts` — nothing else.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **420 pass / 0 fail**, 1936 expect() calls, 26 files — no skips reported, no `.only`, no filtered runs |
+| Baseline before this lane | 397 pass / 0 fail (so 23 tests added) |
+| Pushed / merged / deployed | **no** — commits are local to this branch; `ai.imaginethat.anthill` was not touched |
+
+`bunx` could not create temp files until the lockfile-pinned dev dependencies
+were installed (`bun install --frozen-lockfile`). `package.json` and `bun.lock`
+are unchanged.
+
+### The tests are not hollow
+
+Ten mutations were applied one at a time to the finished code and the suite
+re-run. **10/10 were caught**, including each original bug: an always-rebuilding
+reconciler (3 failures), `setAttribute("title")` back on the `<rect>`, a banner
+that drops the reason and the next step, an un-memoized `agentsById`, a row
+signature that stops tracking its own selection, `completed` reading "Complete"
+again, `filterChip` losing its `fkey` (2 failures), the hard-coded `4701` hint,
+the identity block dropped from Evidence, and the `state` shadow restored inside
+`modelPolicyView`. No mutation slipped through.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `cf60337` | delete dead render aliases + three small client lies (findings 5, 9, 10, 11, 12) |
+| `e400593` | explain quarantine instead of just refusing (finding 1) |
+| `107060a` | keyed reconciliation of the agent list (finding 2) |
+| `5560d56` | data-fkey on every repainted control (finding 3) |
+| `939c67b` | one investigation vocabulary instead of five (finding 4) |
+| `cd94cc7` | derive the fleet index and each widget once per paint (finding 7) |
+| `46dab01` | delete the orphaned stylesheet + guard test (finding 8) |
+
+## Per-finding status
+
+### 1. Quarantine has no in-UI explanation or resolution path — **FIXED** (`e400593`)
+
+I checked the premise against production before designing: `curl
+127.0.0.1:4701/api/snapshot` returns **85/85 agents carrying `identityTrace`**
+and **9 quarantined**, and the snapshot has **no `surfaces` key**. So the
+skeptic was right on both counts — the per-agent trace really is in the payload
+the client already holds (the fingerprint strips it, the payload does not), and
+the pids/commands/open-files really are debug-endpoint-only.
+
+- `identityTraceView(agent)` — pure, normalized view of the trace (tier steps
+  with operator labels, matched tier, reason, binding bridge). Falls back to
+  `agent.target` and never invents a step.
+- `identityCause(view)` / `quarantineBrief(agent, control)` — the cause is read
+  off **the tier that actually refused**, not off the resolution alone. Every
+  quarantine resolves as `ambiguous`, but all 9 live ones refuse at the *cwd*
+  tier ("2 active sources share this cwd"), not the session tier — so keying the
+  copy off the resolution would have told every one of them to close a terminal
+  that is not the problem. Three causes, three next steps.
+- The control banner now names the cause and the operator's next move, and its
+  "See routing evidence →" button also kicks off the evidence fetch. **It stays
+  ID-free on purpose:** `controlUnavailableText`'s comment and the test at
+  `tests/web-client.test.ts` already establish that raw cmux/session identifiers
+  belong in Evidence, not in Operate chrome. I kept that rule rather than
+  averaging it away, and there is a test asserting no UUID / no `ttys082` /
+  no surface id reaches the banner even when the trace is full of them.
+- Evidence grows an **Identity resolution** block: the ordered tier trail in the
+  resolver's own words (this is where the identifiers belong), any
+  persisted-binding bridge, and an opt-in "Show which terminals claim this
+  session" that calls the existing read-only `GET /api/debug/identity?agent=<id>`
+  and renders, e.g.
+  `ttys082 — 2 sessions claim it: Codex 019f94a1… (pid 4242, codex resume …) · Claude c0eb6d3f… (pid 5150, claude --resume)`.
+  A failure reads "Terminal evidence unavailable: <error>" with Retry; it is
+  never smoothed into "no conflicts found".
+- Every one of those strings is agent-controlled and is set through `textContent`
+  via `el({ text })`. No `innerHTML` anywhere (the existing guard test still
+  passes).
+- Paint plumbing: `identityTrace` left `AGENT_SIG_TICKED` (the drawer paints it
+  now, so a resolution that changes must repaint); only its clock-like
+  `confirmedAt` stays out. `state.identity` joined `inspectorPaintSig`, without
+  which the fetched evidence would never reach the screen.
+
+Proven by five tests under `FE-B: harness-backed client behavior` — the
+normalized view, the three causes (including the live cwd shape), the ID-free
+banner, the rendered tier trail, the collision sentence, and the signature.
+
+**Not done, and it is not mine:** `snapshot.ts:318` still filters
+`affectedAgentIds` to `controlState === "quarantined" && activity !== "ended"`,
+so `system:cmux-identity-conflicts` still links to zero agents. That is a
+one-line change in `src/server/snapshot.ts`, which a backend lane owns this
+wave. **Route it.**
+
+### 2. Any single visible agent change tears down the whole list — **FIXED** (`107060a`)
+
+Two levels of keyed reconciliation replace `root.textContent = ""`:
+
+- `reconcileKeyed(parent, plan, cache)` — `plan` is `[{ key, sig, build }]`; a
+  key whose signature held keeps its **existing node, attached**, and only
+  changed/added/removed/reordered keys are touched. `build` is a closure, so
+  nothing is constructed for an unchanged row. The cache outlives its parent, so
+  even a rebuilt program section re-adopts its rows rather than reconstructing
+  them.
+- `programShellSig` covers what the program **head** paints (label, caret,
+  rollup cells, selection row, rename form) and deliberately not the rows — so a
+  token tick leaves the section, and every row inside it, alone.
+- `agentRowSig` is the per-row signature: `agentRecordSig` (the same
+  whole-record projection FE-A built for the drawer, so a field added to the
+  snapshot is covered automatically) plus this row's slice of list state and its
+  place in the swarm tree.
+- `renderAgentRows` became `agentRowPlan`; `syncProgramList` is the extracted
+  driver so the whole path is testable.
+
+Proven by five tests: node identity through change/insert/remove/reorder; a
+token tick moving exactly one row's signature; eighteen row-painted fields that
+must move it (and two that must not); the shell signature staying still for a
+tick and moving for a rollup/caret/label/selection/rename change; and an
+end-to-end `syncProgramList` run over two programs asserting object identity of
+the untouched sections and rows.
+
+Two deliberate calls:
+- **The live elapsed clock stays out of the row signature** (`tickClocks`
+  rewrites it in place from `data-elapsed-base`; letting it in would rebuild
+  every row every 5s and undo the whole fix). The >10-minute staleness fact,
+  which does not tick, *is* in.
+- **`renderProgram` keeps its exact signature and head-building code** because
+  two existing source-regex tests pin them. Only its body-filling line changed.
+
+### 3. Nine interactive controls omit data-fkey — **FIXED** (`5560d56`)
+
+`filterChip` gained `opts.fkey`, and all nine sites carry one: the four Lookback
+presets, All, Custom, the Scan window, the four Usage range chips + Usage
+Custom, rename Save/Cancel/Reset, the dock confirm Cancel, the broadcast confirm
+Cancel, triage Queue/Launch, usage Retry, usage session links. Keys name the
+**control**, not the label, so "Custom" → "Custom 12h" cannot strand focus on
+the very chip being clicked.
+
+`renderFilterBar`, `renderTriage` and `renderUsagePanel` gained the `ui = state`
+default parameter this file already uses (`programOpen(program, ui = state)`,
+`summaryWidgetData(…, queueItems = state.queueItems)`), so the rebuilt controls
+are asserted directly rather than grepped.
+
+**Deliberately not a source-regex test.** The audit suggested "assert every
+`el("button", …)` in app.js carries an fkey"; the brief forbids new source-regex
+tests, and it would be hollow anyway. Instead: three tests over the rendered
+DOM — `filterChip` carries the key it is given; every button `renderFilterBar`
+produces has a **unique, non-empty, selection-stable** key in both Idle and
+Usage modes; the rename form and the usage panel likewise.
+
+**Honest gap:** three of the nine — the usage session link, the dock confirm
+Cancel and the broadcast confirm Cancel — are gated behind `state.snap`,
+`state.confirming` and `state.broadcastConfirming`, which this suite cannot set
+(the client does not expose `state`, and I chose to follow the file's `ui =
+state` convention rather than export mutable app state). They carry an fkey and
+are covered **by inspection, not by test**. I left a comment saying so in the
+test rather than writing a vacuous loop that asserts nothing.
+
+### 4. Five copies of the queue-state → label mapping — **FIXED** (`939c67b`)
+
+`INVESTIGATION_STATE_VIEW` is the single table (work key, label, tone, button
+text, queue note, drawer status). All five sites read from it;
+`INVESTIGATION_STATE_LABELS` is gone; `WORK_STATE_VIEW` stays the downstream row
+vocabulary and is mapped into once. `completed` now reads **Verifying**
+everywhere — that was the dominant existing answer (`issueWorkState`,
+`findingFromQueueItem` and the old label table all already said it); the plan
+chip's "Complete" and the button's "complete · verifying" were the outliers.
+
+A sixth server state degrades to **the server's own word on every surface**
+rather than a confident wrong label on one and a raw enum on the next. Proven by
+a test that walks all four states across the chip, the button and the pulse row,
+asserts the four labels are distinct, and drives an invented `cancelled`.
+
+### 5. Five dead render functions kept alive by source-regex tests — **FIXED** (`cf60337`)
+
+Proved dead first: `rg` over `src/` returned definitions only, zero call sites,
+for `renderSwarmSection`, `renderPrimaryActions`, `renderPresentationLabels`,
+`renderTechnical` and `renderTarget`. All five deleted (~60 lines), along with
+the "it MUST stay defined immediately after renderOperate" comment that was
+false.
+
+The four assertions that kept them alive were **replaced, not loosened**:
+- "transcript tail in Chat/Evidence, not Operate" → renders the three panels and
+  reads them.
+- "drawer omits empty fields" → renders with cost/tests/gates present and
+  asserts no `$` figure and no gate/test text reaches any panel.
+- "Names stay collapsed under a disclosure" → renders `renderAgentDrawer` and
+  asserts `.names-disclosure` is absent while Evidence is collapsed and present
+  inside `renderEvidence`.
+- "Task only when meaningfully different" → renders both cases.
+
+Plus a new test asserting the drawer builds exactly the Operate + Chat shelves
+and the Evidence rail, with no `.swarm-section` / `.swarm-link` anywhere. Per the
+brief I did **not** add a replacement source assertion that the deleted names
+stay deleted — the regex and the function were removed together.
+
+### 6. Client duplicates model display names — **BLOCKED** (no code change)
+
+The finding's framing is wrong and the skeptic was right. I verified both ends:
+
+- `config/models.json` has exactly four keys — `claudeContextWindows`,
+  `modelFamilyAliases`, `cursorNativeFamilies`, `cursorRootModel`. **None is a
+  display label.** Wiring `modelShort()` to today's config would supply nothing.
+- The live snapshot's top-level keys are `controlHealth, generatedAt, issues,
+  lookbackHours, programs, pulse, recentlyResolved, scanWindowHours,
+  schemaVersion, totals, triageSummaries`. **There is no model config on the
+  wire.**
+
+So the real fix is additive and starts on the server: add a display-name map to
+`config/models.json`, expose it on `HubSnapshot` (or a small
+`GET /api/model-config`), and only then have `modelShort()` consult it with the
+current table as the fallback. `config/**` and `src/server/**` are both outside
+my ownership, and the brief says to report rather than guess. **The duplication
+is real ("two places to edit"), but it cannot be closed from the client alone.
+Route the server half.**
+
+### 7. Finding derivations re-run ~4× per render — **FIXED, with one part deliberately not done** (`cd94cc7`)
+
+- `agentsById(snap)` is memoized in a `WeakMap` keyed on the snapshot object.
+  This is the quadratic: `affectedImpact` rebuilt a Map of the whole fleet **once
+  per issue**. Adopting a new snapshot invalidates it for free, so a stale board
+  can never be served out of the cache.
+- `pulseStripModel` takes the context display, so `renderHealthRail` computes
+  each widget's data **once** and the paint signature, the cell and the calm line
+  all read that one result. Each of those calls used to re-derive the whole
+  findings list underneath, so this removes a full `pulseFindings` pass per paint.
+
+**Deliberately NOT memoized:** `issuesOf` and `pulseFindings`. Both read
+`state.labels`, `state.triage` and `state.triagePending`, which move without the
+snapshot changing — caching them on snapshot identity would freeze the board.
+Said in the commit message too.
+
+**Deliberately NOT done: the 120 ms search debounce.** The skeptic measured the
+finding's ~30 ms claim as ~7× high (4.43 ms at 80 findings) and showed the
+dominant per-keystroke cost is `renderPrograms` rebuilding all 254 rows — which
+finding 2 now fixes. Adding a timer would be speculative, would put a visible
+120 ms lag on filtering, and lives inside `boot()` where nothing can test it. I
+would rather report the omission than ship untested UX drag. **If you want it
+anyway, say so and it is four lines.**
+
+### 8. ~40 dead CSS classes — **FIXED** (`46dab01`)
+
+84 selector lines removed: the signal-surface board, the danger zone, the old
+instruct form, the target/routing chips, the `tests-*` and `policy-*`
+vocabularies, and the `swarm-section` / `swarm-link` rules this lane's own
+dead-code deletion orphaned. Grouped selectors were edited to drop only the dead
+members, never the whole rule.
+
+The guard test extracts every class in `styles.css`, filters the **complete**
+list of prefixes the client composes at runtime, and asserts the remainder all
+appear in `app.js` or `index.html`. It is a **dead-asset lint, not a behavior
+test** — nothing else can express "this rule has no emitter" — and adding a new
+dynamic prefix to the allowlist has to be deliberate.
+
+Three existing touch-sweep assertions quoted selector lists containing
+`.inspector-tab`, `.swarm-link`, `.signal-trigger` and `.instruct-form input`.
+They were updated to the live control set, **not loosened**: the 44 px
+constraint still holds for every control that exists.
+
+### 9. Local `const state` shadows the module singleton — **FIXED** (`cf60337`)
+
+Renamed to `policyState`; the returned property name is unchanged. A test pins
+the full returned shape for `violation`, `unverified` and `compliant` — including
+that the summary is keyed off the **normalized** state, which is the thing a
+careless rename would break.
+
+### 10. Usage chart bars set a `title` attribute on `<rect>` — **FIXED** (`cf60337`)
+
+SVG has no `title` content attribute. Added `svgTitle(text)` and a
+`usageBarTitle(bucket, tokens)` helper; each bar now carries a real `<title>`
+child. The test asserts both that the `<title>` child exists **and** that
+`attributes.title` is undefined, so it cannot pass on the old code path.
+`role="img"` was already set (the audit's suggestion there was redundant).
+
+### 11. Error hint hardcodes port 4701 and "v3 server" — **FIXED** (`cf60337`)
+
+`serverUnreachableHint(host)` is pure and exported; `renderEmpty` passes
+`location.host`. A hostless context degrades to "at this address" rather than
+claiming an address it does not know.
+
+### 12. Dead code kept alive by a source-grep test that no longer exists — **FIXED** (`cf60337`)
+
+`renderPrimaryActions` and its misleading comment deleted with the rest of
+finding 5. Its justification was checkable and false: the tests that pin
+`controlUnavailableText` are satisfied by `renderCommandDock`, and
+`renderPrimaryActions` never contained that string.
+
+The audit also asked me to audit the `TheAntHill` export list for names no test
+consumes. **I did not do that**, and it would now be misleading: this lane added
+~25 exports precisely so the replaced source-regex tests could assert on
+behavior. Every export I added is consumed by a test I wrote.
+
+## What I deliberately left alone
+
+- **The remaining source-regex tests.** A later lane owns them. I touched exactly
+  six assertions, and only because my changes made them fail; each was rewritten
+  against rendered DOM or the real data model, never relaxed.
+- **The search debounce** (finding 7) — reasoning above.
+- **FE-A's live-input exclusions.** `drafts`, `renameDraft` and `broadcastDraft`
+  are still out of every paint signature, including the two new ones I added, and
+  the tests pinning that exclusion are untouched.
+- **`renderBroadcastBar` and `renderDockTool` keep reading module state.**
+  Threading `ui` through them would have meant unpicking `selectedRecipients`
+  and the confirm-key plumbing for two test assertions. Not worth the blast
+  radius; the coverage gap is named under finding 3.
+- **Everything outside my three files.** No `src/server/**`, no `scripts/**`, no
+  `config/**`, no `package.json`, no docs.
+- **Nothing pushed, merged, deployed, or restarted.**
+
+## Out-of-scope observations (not fixed, not mine)
+
+1. **`snapshot.ts:318` `affectedAgentIds` filter** — finding 1's cheap half.
+   Server-owned this wave. Route it to a backend lane.
+2. **Model display names need a server + config change first** — finding 6.
+3. **`renderHealthRail`, `renderTabs` and `renderFilterBar` still have no paint
+   guard** (FE-A observation #1). Now that `reconcileKeyed` exists they are cheap
+   to convert, but they were not in my findings and none of them holds a live
+   input, so I left them.
+4. **`tickClocks()` still extrapolates elapsed clocks while `conn === "stale"`**
+   (FE-A observation #2). Unchanged; still needs a design decision.
+5. **`agentRecordSig` now stringifies the agent record once per visible row per
+   paint**, not just once for the open drawer. At 200 rows that is a few hundred
+   KB of JSON per repaint — far cheaper than the ~5,400-element rebuild it
+   replaced, and it only runs when the top-level guard already decided something
+   moved, but it is the obvious next thing to profile if list paint cost is ever
+   measured again.
+6. **`swarmNote(agent, opts)` is called from both the row renderer and the row
+   signature**, so a parent's display name changing repaints its children's rows.
+   Correct, but it means a rename cascades further than it looks.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
+---
+
 # WAVE 2 / BE-D Lane Report
 
 Branch: `ant-hill/be-control-20260728`
