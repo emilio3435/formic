@@ -2607,9 +2607,12 @@ describe("agent-row density pass at ≥1440px (C3)", () => {
     expect(sweep).toContain(".agent-rename");
     // The full current list is intact — quote its anchors end-to-end so an
     // accidental drop during the density pass fails here.
-    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor");
+    // FE-B: .inspector-tab, .swarm-link, .signal-* and .instruct-form left this
+    // list because nothing in the client emits those classes any more — the
+    // constraint is unchanged for every control that actually exists.
+    expect(sweep).toContain(".view-tab, .btn, #search, .inspector-close, .swarm-anchor");
     expect(sweep).toContain(".program-rename, .agent-rename");
-    expect(sweep).toContain(".command-composer input, .instruct-form input, .rename-form input");
+    expect(sweep).toContain(".command-composer input, .rename-form input");
     expect(sweep).toContain("min-height: 44px");
   });
 });
@@ -2743,19 +2746,23 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     // Absence: the old <720px-only pattern that carried .program-details is gone;
     // the 720px list keeps only the drawer-scoped controls.
     expect(styles).not.toContain(".dw-lin-name, .program-details { min-height: 44px; }");
+    // FE-B: .signal-trigger dropped out of this list with the rest of the
+    // removed signal-surface board; the drawer-scoped controls are unchanged.
     expect(styles).toContain(
-      ".signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
+      ".dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }",
     );
   });
 
-  // A6 finding 1: three text inputs were never swept at any breakpoint —
-  // .command-composer input (40px), .instruct-form input (38px),
-  // .rename-form input (36px) — while #search (a sibling input) already was.
-  test("the three text inputs clear 44px below 1024px (A6 finding)", () => {
+  // A6 finding 1: the text inputs were never swept at any breakpoint —
+  // .command-composer input (40px) and .rename-form input (36px) — while
+  // #search (a sibling input) already was. (.instruct-form input was the third;
+  // FE-B removed it with the rest of the orphaned stylesheet, since no element
+  // in the client has ever carried that class.)
+  test("every text input clears 44px below 1024px (A6 finding)", () => {
     const sweep = touchSweep1024();
     expect(sweep).toContain(".command-composer input");
-    expect(sweep).toContain(".instruct-form input");
     expect(sweep).toContain(".rename-form input");
+    expect(styles).not.toContain(".instruct-form");
   });
 
   // A6 finding 2 — Rule 6 (motion respects prefers-reduced-motion). Honest
@@ -3395,6 +3402,40 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
     expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
     expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- finding 8: ~40 orphaned CSS classes still shipped --------------
+     There is no build step and no CSS pruning, so every dead rule shipped on
+     every load — and, more expensively, poisoned grep: a developer editing
+     .advisory-title found rules that looked authoritative and had no effect,
+     because the live advisory drawer uses .dw-lead / .dw-impact.
+
+     This is a dead-asset lint over the stylesheet, not a behavior test. It is
+     here because nothing else can express "this rule has no emitter", and the
+     allowlist below is deliberately the COMPLETE set of class prefixes the
+     client composes at runtime — a new dynamic prefix has to be added here on
+     purpose, which is the point. */
+  test("(8) every class in styles.css is emitted by the client", () => {
+    const RUNTIME_PREFIXES = [
+      "act-", "outcome-", "provider-", "conn-", "dw-accent--", "dw-eyebrow--",
+      "dw-provider--", "work-", "role-", "verdict-", "st-", "tri-kind-",
+      "tri-live-", "depth-", "chat-turn--", "program-rollup-cell--",
+      "widget-option-", "identity-step--", "control-", "is-", "dw-d",
+    ];
+    const declared = [...new Set(styles.match(/\.-?[_A-Za-z][-\w]*/g) ?? [])]
+      .map((selector) => selector.slice(1));
+    expect(declared.length).toBeGreaterThan(400); // the extraction actually ran
+    const client = source + "\n" + html;
+    const orphans = declared.filter((name) =>
+      !client.includes(name) && !RUNTIME_PREFIXES.some((prefix) => name.startsWith(prefix)));
+    expect(orphans).toEqual([]);
+
+    // The allowlist is a prefix list, not a blanket: a fully invented name that
+    // merely starts like a live one is still caught.
+    expect(client.includes("signal-tech")).toBe(true); // the one signal-* survivor
+    for (const gone of ["signal-intervention", "danger-zone", "tests-passing", "advisory-title", "instruct-form", "target-chip"]) {
+      expect(styles.includes("." + gone), gone).toBe(false);
+    }
   });
 
   /* -------- finding 7: the same derivation, four times a paint -------------

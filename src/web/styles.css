@@ -358,8 +358,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .ctx-fill.warn { fill: var(--amber); }
 .ctx-fill.hot { fill: var(--ember); }
 
-.policy-dot { display: inline-flex; align-items: center; gap: 0.35rem; }
-
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
@@ -651,12 +649,8 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
 
 /* Drawer-shared signal helpers (Impact / Technical) */
-.affected-disclosure summary, .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
-.affected-disclosure summary:hover, .signal-tech summary:hover { color: var(--ink); }
-.signal-affected { margin-top: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.3rem 0.4rem; align-items: baseline; white-space: normal; }
-.signal-agent { font-size: 12px; color: var(--ink); padding: 0.12rem 0.5rem; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--raise); }
-.signal-agent:hover { border-color: var(--ink); }
-.signal-agent-prog { color: var(--faint); }
+.signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
+.signal-tech summary:hover { color: var(--ink); }
 .signal-tech { font-size: 12px; }
 .signal-tech ul { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--muted); max-width: 80ch; }
 .signal-tech li { overflow-wrap: anywhere; white-space: normal; }
@@ -888,12 +882,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   font: 12px/1.5 var(--font-mono);
 }
 .triage-error { margin: 0.4rem 0 0; color: var(--ember); font-size: 13px; font-weight: 650; }
-.investigation-item .signal-badge {
-  color: var(--amber);
-  background: var(--raise);
-  border-color: color-mix(in srgb, var(--amber) 70%, var(--line));
-}
-
 /* ---------- toolbar: views, filter chips, search ---------- */
 
 .toolbar { margin-top: 0.6rem; margin-bottom: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
@@ -949,11 +937,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-color: var(--ink);
   background: color-mix(in srgb, var(--ink) 8%, var(--surface));
 }
-.filter-chip.is-active .chip-remove { opacity: 1; }
-.chip-remove { display: inline-grid; place-items: center; width: 1rem; height: 1rem; border-radius: 50%; opacity: 0.7; }
-.chip-remove:hover { background: color-mix(in srgb, var(--ink) 14%, transparent); }
-.chip-remove .ico { width: 0.7rem; height: 0.7rem; opacity: 1; }
-.filter-clear { font-size: 12px; color: var(--ember); font-weight: 650; padding: 0.2rem 0.4rem; }
 
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
 .search-wrap { flex: 1 1 240px; }
@@ -1071,9 +1054,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 
 .program-agents { border-top: 1px solid var(--line); }
 .program:not(.open) .program-agents { display: none; border-top: 0; }
-.investigation-item .triage-result,
-.investigation-item .triage-briefing { grid-column: 1 / -1; }
-
 /* ---------- agent rows ---------- */
 
 .agent-row {
@@ -1343,16 +1323,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
 
-.token-fact-value { display: flex; align-items: center; gap: 0.4rem; }
-/* Compatibility: token text remains the readable source of truth; the old
-   green bar was decorative and made the primary row noisy. */
-.token-meter { display: none; }
 .tm-track { fill: var(--line); }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
 .tm-fill.hot { fill: var(--ember); }
 
-.row-update { display: flex; align-items: baseline; gap: 0.45rem; min-width: 0; margin: 0.3rem 0 0 8.5rem; }
 .row-summary {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1374,7 +1349,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .agent-row.is-needs-you .row-summary { color: color-mix(in srgb, var(--ember) 65%, var(--ink)); }
 .agent-row.is-failed .row-summary { color: color-mix(in srgb, var(--failed) 65%, var(--ink)); }
-.swarm-note { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
 
 /* selection checkbox */
 .row-check { position: absolute; top: 0.6rem; left: 0.5rem; width: 1.2rem; height: 1.2rem; display: grid; place-items: center; border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--raise); color: transparent; }
@@ -1406,8 +1380,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   border-radius: 0 0 0 6px;
   opacity: 0.6;
 }
-.agent-row.is-child .row-update { margin-left: 0; }
-
 .swarm-anchor {
   position: relative;
   display: grid;
@@ -1819,12 +1791,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* .dw-pulse animation is already disabled by the universal prefers-reduced-motion
    rule (`*, *::before, *::after { animation: none !important }`) below. */
 
-/* inline signal bands are now thin triggers that open the matching drawer */
-.signal-trigger { cursor: pointer; }
-.signal-trigger:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; border-radius: var(--radius-sm); }
-.signal-trigger-status { font-size: 12px; color: var(--faint); white-space: nowrap; align-self: center; }
-.signal-intervention.is-selected { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ember) 45%, transparent); }
-
 .inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
 .inspector-id { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
@@ -1993,7 +1959,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
   font-size: 11.5px; color: var(--faint);
 }
-.command-dock-why { color: var(--failed); font-weight: 650; }
 .command-dock-ready { color: var(--moss); font-weight: 650; }
 .command-dock-hint { color: var(--faint); }
 .command-composer {
@@ -2039,7 +2004,6 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .command-dock-more[open] > summary { margin-bottom: 0.35rem; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
-.primary-actions { padding: 0.85rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); display: flex; flex-direction: column; gap: 0.5rem; }
 .next-action { margin: 0; font-size: 13.5px; color: var(--muted); }
 .next-key { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.25rem; }
 
@@ -2064,8 +2028,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; min-width: 0; padding: 0.35rem 0; }
 .label-copy { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
 .label-value { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.label-source, .source-label { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
-.source-label.is-mismatch,
+.label-source { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
 .inspector-source-name.is-mismatch {
   color: color-mix(in srgb, var(--ember) 75%, var(--ink));
   font-weight: 650;
@@ -2171,32 +2134,16 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    explainer"; the tooltip itself is the native title (keyboard-reachable via
    tabindex). Focus outline comes from the global :focus-visible rule. */
 .term-hint { text-decoration: underline dotted; text-underline-offset: 2px; text-decoration-thickness: 1px; cursor: help; }
-.tech-caption { margin: 0 0 0.7rem; }
 
 .git-dirty { color: var(--warn); }
-.tests-passing { color: var(--ok); } .tests-failing { color: var(--bad); } .tests-running { color: var(--idle); } .tests-unknown { color: var(--faint); }
-.policy-compliant { color: var(--ok); } .policy-unreported { color: var(--faint); } .policy-mismatch { color: var(--failed); font-weight: 650; }
+.policy-mismatch { color: var(--failed); font-weight: 650; }
 
-.gate-chip { display: inline-block; margin: 0 0.3rem 0.2rem 0; padding: 0.1rem 0.45rem; border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); border-radius: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--warn); }
-.target-chip { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px; font-family: var(--font-mono); font-size: 10.5px; border: 1px solid var(--line-strong); }
-.target-exact { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
-.target-unique-cwd { color: var(--idle); border-color: color-mix(in srgb, var(--idle) 50%, transparent); }
-.target-ambiguous, .target-missing { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); }
-.routing-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; font-size: 12px; }
-
-.last-result { margin: 0; padding: 0.6rem 0.7rem; font-size: 13.5px; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-left: 3px solid var(--moss); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .transcript { margin: 0; padding: 0.6rem 0.7rem; max-height: 13rem; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
 .artifact-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; font-size: 12.5px; }
 .artifact-kind { font-family: var(--font-mono); font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
 .artifact-path { font-family: var(--font-mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
-
-.swarm-section { display: flex; flex-direction: column; gap: 0.3rem; }
-.swarm-section[hidden] { display: none; }
-.swarm-link { display: inline-flex; align-items: center; gap: 0.4rem; text-align: left; font-size: 13.5px; color: var(--ink); padding: 0.3rem 0; min-height: 30px; }
-.swarm-link:hover { color: var(--ember); }
-.swarm-link .act-glyph { width: 0.6rem; height: 0.6rem; }
 
 /* ---------- controls ---------- */
 
@@ -2217,23 +2164,12 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .btn .ico { width: 0.95rem; height: 0.95rem; }
 .btn.primary { color: #fff; background: var(--ink); border-color: var(--ink); }
 .btn.primary:hover:not(:disabled) { background: #34302a; }
-.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line-strong)); }
-.btn.danger:hover:not(:disabled) { border-color: var(--bad); }
-.btn.danger:disabled { color: var(--faint); border-color: var(--line); }
 .btn.confirm-yes { color: #fff; background: var(--bad); border-color: var(--bad); font-weight: 700; }
 .btn[aria-busy="true"] { opacity: 0.6; }
 .inspector-close { flex: none; }
 
-.control-reason { font-size: 12.5px; color: var(--faint); margin: 0; }
 .confirm-strip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.25rem 0.25rem 0.25rem 0.65rem; border: 1px solid color-mix(in srgb, var(--bad) 50%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bad) 5%, var(--raise)); font-size: 12.5px; }
 
-.instruct-form { display: flex; flex-wrap: wrap; gap: 0.45rem; flex: 1 1 100%; }
-.instruct-form input { flex: 1 1 10rem; padding: 0.45rem 0.65rem; min-height: 38px; font: inherit; font-size: 13.5px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
-.instruct-form input::placeholder { color: var(--faint); }
-.instruct-form input:disabled { color: var(--faint); background: var(--sand); }
-
-.danger-zone { margin-top: auto; padding-top: 0.85rem; border-top: 1px solid color-mix(in srgb, var(--bad) 30%, var(--line)); }
-.danger-title { color: var(--bad); }
 .control-feedback { margin: 0; font-family: var(--font-mono); font-size: 11.5px; }
 .control-feedback.ok { color: var(--ok); }
 .control-feedback.err { color: var(--bad); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2377,12 +2313,11 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
-  .view-tab, .btn, #search, .inspector-tab, .inspector-close, .swarm-anchor,
-  .swarm-link, .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
-  .signal-trigger, .signal-title-btn, .signal-evi-open, .signal-agent,
+  .view-tab, .btn, #search, .inspector-close, .swarm-anchor,
+  .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
   .reading-repair, .filter-chip, .program-details,
-  .command-composer input, .instruct-form input, .rename-form input { min-height: 44px; }
+  .command-composer input, .rename-form input { min-height: 44px; }
 }
 
 @media (max-width: 720px) {
@@ -2439,24 +2374,15 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   .agent-row.is-selected .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
   .agent-row.is-child { padding-left: calc(0.65rem + min(var(--tree-depth), 3) * 0.85rem); }
   .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 0.85rem); }
-  .swarm-note { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
-  .signal-primary { grid-template-columns: 2rem minmax(0, 1fr); }
-  .signal-badge { width: 2rem; height: 2rem; }
-  .signal-action { grid-column: 1 / -1; justify-content: flex-start; margin-top: 0.3rem; }
-  .signal-evidence { padding-left: 0; }
-  /* Advisories: title only on narrow screens; summary/impact would collide. */
-  .advisory-body { display: block; min-width: 0; }
-  .advisory-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .advisory-summary, .advisory-impact { display: none; }
   .tri-spine { flex-direction: column; gap: 0.45rem; }
   .tri-step { flex: 1 1 auto; padding-right: 0; }
   .tri-step::before { display: none; }
   .finding .gist, .finding .trace { display: none; }
   .broadcast-compose textarea { flex-basis: 100%; }
-  .view-tab, .btn, #search, .inspector-tab, .swarm-anchor { min-height: 44px; }
+  .view-tab, .btn, #search, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch.
      (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
-  .signal-trigger, .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
+  .dw-roster-row, .dw-kid, .dw-lin-name { min-height: 44px; }
   .dw-roster-row, .dw-lin-name { align-content: center; }
 }
 
@@ -2544,7 +2470,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--faint);
 }
 /* Rule 2 — mono for values: the Tokens/Cost/Session cells carry token/cost
-   values and an identifier, so they render in mono like .row-fact-value; the
+   values and an identifier, so they render in mono; the
    session cell's .linkish button inherits it. When/Provider/Model stay prose. */
 .usage-table td.usage-val { font-family: var(--font-mono); }
 .linkish {
