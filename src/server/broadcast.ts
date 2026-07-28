@@ -15,24 +15,39 @@ function error(status: number, code: string, message: string): Response {
   return response({ ok: false, error: { code, message } }, status);
 }
 
-function parse(value: unknown): BroadcastRequest | string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "Body must be a JSON object.";
+interface BroadcastParseError {
+  code: "INVALID_BROADCAST_REQUEST" | "INVALID_INSTRUCTION";
+  message: string;
+}
+
+function invalidRequest(message: string): BroadcastParseError {
+  return { code: "INVALID_BROADCAST_REQUEST", message };
+}
+
+function parse(value: unknown): BroadcastRequest | BroadcastParseError {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalidRequest("Body must be a JSON object.");
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
   if (keys.length !== 2 || keys.some((key) => !["agentIds", "instruction"].includes(key))) {
-    return "Body must contain exactly agentIds and instruction.";
+    return invalidRequest("Body must contain exactly agentIds and instruction.");
   }
   if (!Array.isArray(record.agentIds) || record.agentIds.length < 1 || record.agentIds.length > 50) {
-    return "agentIds must contain between 1 and 50 unique agent IDs.";
+    return invalidRequest("agentIds must contain between 1 and 50 unique agent IDs.");
   }
   if (record.agentIds.some((id) => typeof id !== "string" || !id.trim() || id.length > 300)) {
-    return "Each agent ID must be a non-empty string no longer than 300 characters.";
+    return invalidRequest("Each agent ID must be a non-empty string no longer than 300 characters.");
   }
   const agentIds = record.agentIds as string[];
-  if (new Set(agentIds).size !== agentIds.length) return "agentIds must not contain duplicates.";
-  if (typeof record.instruction !== "string" || !record.instruction.trim()) return "instruction is required.";
+  if (new Set(agentIds).size !== agentIds.length) return invalidRequest("agentIds must not contain duplicates.");
+  if (typeof record.instruction !== "string" || !record.instruction.trim()) return invalidRequest("instruction is required.");
   if (new TextEncoder().encode(record.instruction).byteLength > MAX_INSTRUCTION_BYTES) {
-    return `instruction exceeds ${MAX_INSTRUCTION_BYTES} bytes.`;
+    return invalidRequest(`instruction exceeds ${MAX_INSTRUCTION_BYTES} bytes.`);
+  }
+  if (/[\r\n]/.test(record.instruction)) {
+    return {
+      code: "INVALID_INSTRUCTION",
+      message: "instruction must not contain carriage returns or newlines.",
+    };
   }
   return { agentIds, instruction: record.instruction };
 }
@@ -58,7 +73,7 @@ export async function handleBroadcastRequest(request: Request, dependencies: Bro
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return error(400, "INVALID_JSON", "Broadcast body is not valid JSON."); }
   const parsed = parse(raw);
-  if (typeof parsed === "string") return error(400, "INVALID_BROADCAST_REQUEST", parsed);
+  if ("code" in parsed) return error(400, parsed.code, parsed.message);
 
   const agents = new Map(dependencies.getSnapshot().programs.flatMap((program) => program.agents).map((agent) => [agent.id, agent]));
   const results: BroadcastResponse["results"] = [];
