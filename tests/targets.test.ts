@@ -192,6 +192,32 @@ describe("safe cmux target resolution", () => {
     expect(target.surfaceId).toBe("SURFACE-UNIQUE-CWD");
   });
 
+  test("an internal child source does not compete with its controllable parent for cwd fallback", () => {
+    const parent = agent({
+      id: "codex:parent",
+      sourceSessionId: "parent",
+      cwd: "/Users/emilionunezgarcia/Developer/unique-project",
+    });
+    const child = agent({
+      id: "codex:guardian",
+      sourceSessionId: "guardian",
+      parentSourceSessionId: parent.sourceSessionId,
+      cwd: parent.cwd,
+    });
+
+    const parentTarget = resolveAgentTarget(parent, surfaces, [parent, child]);
+    const childTarget = resolveAgentTarget(child, surfaces, [parent, child]);
+
+    expect(parentTarget).toMatchObject({
+      resolution: "unique-cwd",
+      surfaceId: "SURFACE-UNIQUE-CWD",
+    });
+    expect(childTarget).toEqual({
+      resolution: "missing",
+      reason: "Child sources require exact session evidence; cwd fallback is disabled.",
+    });
+  });
+
   test("identity-conflicted surfaces remain quarantined from exact and cwd routing", () => {
     const conflicted = {
       ...surfaces.find(({ surfaceId }) => surfaceId === "SURFACE-UNIQUE-CWD")!,

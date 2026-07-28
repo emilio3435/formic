@@ -199,6 +199,31 @@ describe("target resolution trace", () => {
     });
   });
 
+  test("a child source cannot claim its parent's surface through cwd fallback", () => {
+    const parent: CollectedAgent = {
+      ...agent,
+      id: "omp:parent",
+      sourceSessionId: "parent",
+      cwd: "/Users/emilionunezgarcia/Developer/unique-project",
+    };
+    const child: CollectedAgent = {
+      ...parent,
+      id: "omp:child",
+      sourceSessionId: "child",
+      parentSourceSessionId: parent.sourceSessionId,
+    };
+    const unclaimed: CmuxSurface = { ...exactSurface, sourceSessionIds: [] };
+
+    const { target, trace } = resolveAgentTargetWithTrace(child, [unclaimed], [parent, child]);
+
+    expect(target.resolution).toBe("missing");
+    expect(trace.steps.at(-1)).toEqual({
+      tier: "cwd",
+      outcome: "rejected",
+      detail: "Child source child belongs to parent parent and requires exact session evidence.",
+    });
+  });
+
   test("a quarantined surface finishes the trace at the tier that observed the conflict", () => {
     const conflicted: CmuxSurface = {
       ...exactSurface,

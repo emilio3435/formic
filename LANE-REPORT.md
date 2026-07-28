@@ -1509,3 +1509,65 @@ Branch: `ant-hill/be-identity-20260728`
 ## Out-of-scope observations
 
 No additional out-of-scope defects were changed.
+
+---
+
+# WAVE 3 / BE-H — identity session tier
+
+Branch: `ant-hill/be-identity2-20260728`
+
+## Identity session tier resolves zero agents — **FIXED**
+
+- Fix commit: `c27b4b8` (`fix: recover cmux identity without tty metadata`)
+- Root cause proved:
+  - `identity.ts` already inspected every recognized process sharing a reported surface TTY, regardless of ancestry depth. The proposed immediate-child hypothesis was not the cause.
+  - Live `debug.terminals` data omitted `tty` for 17 of 19 runtime-ready surfaces. Identity enrichment returned `no-tty` before `ps` or `lsof` evidence could be associated with them.
+  - cmux `system.top` returned an exact `cmux_surface_id` on the native Codex PID. That PID held the rollout files open, providing the missing exact surface-to-process link without using cwd.
+- What changed:
+  - A ready surface without TTY now uses only exact `cmux_surface_id -> pid` process attribution before applying the existing recognized-agent and `lsof` session-path checks.
+  - Attribution failures remain visible in collection errors and `identityTrace` notes.
+  - Conflicting open root identities remain quarantined. Persisted bindings still cannot un-quarantine conflicted surfaces.
+- Proving test:
+  - `tests/identity.test.ts` — `cmux process attribution recovers exact identity when terminal discovery omits the tty`
+
+## Duplicate cwd source — **FIXED**
+
+- Fix commit: `c27b4b8`
+- Root cause proved:
+  - The second source was guardian rollout `019fa807-a0f3-7d71-858f-8b66e90c98d7`.
+  - Its metadata records `thread_source: "subagent"` and parent `019fa807-8df1-7e31-8b9f-0f0121f193cc`.
+  - The same native Codex PID held both rollout files. This was an internal child record, not a second controllable terminal.
+- What changed:
+  - A child can still resolve through recorded or exact session evidence.
+  - It cannot claim a terminal through cwd fallback and does not compete with its controllable parent.
+  - Genuine top-level peers sharing a cwd remain ambiguous and fail closed.
+- Proving tests:
+  - `tests/targets.test.ts` — `an internal child source does not compete with its controllable parent for cwd fallback`
+  - `tests/identity-trace.test.ts` — `a child source cannot claim its parent's surface through cwd fallback`
+  - Existing target coverage still proves two genuine active sources sharing one cwd remain ambiguous.
+
+## Live verification
+
+Production `:4701` was queried read-only and never restarted or changed. The repaired branch ran on scratch `:4788`.
+
+Simultaneous measurement at approximately `2026-07-28T09:34:26Z`:
+
+| Server | Agents | Surfaces | exact | unique-cwd | ambiguous | missing |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Production `:4701` | 94 | 20 | 0 | 1 | 14 | 79 |
+| Repaired scratch `:4788` | 94 | 20 | 10 | 0 | 4 | 80 |
+
+Usable routes moved from one weak cwd fallback to ten exact session routes. This lane's parent resolved `exact` through `session` to surface `0E3519FA-EA6B-4328-B685-68A9C7D6159D`; its guardian became observed-only with an explicit child-source cwd rejection.
+
+## Verification gates
+
+- `bunx tsc --noEmit`: clean
+- `bun test`: **470 pass, 0 fail, 0 skipped**, 2,074 assertions across 29 files
+- Owned focused tests: **43 pass, 0 fail**
+- `git diff --check`: clean
+
+## Deliberately left alone
+
+- Four scratch surfaces remained quarantined because their open files reduced to conflicting root identities. Choosing among them would violate the fail-closed requirement.
+- No production service, main worktree, endpoint, collector, configuration, package manifest, or web file was changed.
+- No push, merge, deployment, or launchd action was performed.

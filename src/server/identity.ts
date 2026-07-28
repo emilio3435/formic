@@ -5,13 +5,18 @@ import type {
   SurfaceOpenFileEvidence,
   SurfaceProcessEvidence,
 } from "../shared/types";
+import { cmuxCommand, runtimeCmuxExecutable } from "./cmux";
 import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } from "./types";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const CMUX_PROCESS_ATTRIBUTION_PARAMS = JSON.stringify({
+  all_windows: true,
+  include_processes: true,
+});
 
 interface ProcessRow {
   pid: number;
-  tty: string;
+  tty?: string;
   command: string;
 }
 
@@ -24,8 +29,11 @@ interface IdentityHint {
 export function parseProcessTable(output: string): ProcessRow[] {
   return output.split("\n").flatMap((line) => {
     const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
-    if (!match || match[2] === "??" || match[2] === "?") return [];
-    return [{ pid: Number(match[1]), tty: match[2].replace(/^\/dev\//, ""), command: match[3] }];
+    if (!match) return [];
+    const tty = match[2] === "??" || match[2] === "?"
+      ? undefined
+      : match[2].replace(/^\/dev\//, "");
+    return [{ pid: Number(match[1]), tty, command: match[3] }];
   });
 }
 
@@ -89,6 +97,30 @@ function parseOpenFiles(output: string): Map<number, string[]> {
     }
   }
   return files;
+}
+
+function parseCmuxProcessAttribution(output: string): Map<string, Set<number>> {
+  const attributed = new Map<string, Set<number>>();
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const row = value as Record<string, unknown>;
+    if (
+      row.kind === "process" &&
+      typeof row.cmux_surface_id === "string" &&
+      Number.isInteger(row.pid)
+    ) {
+      const pids = attributed.get(row.cmux_surface_id) ?? new Set<number>();
+      pids.add(row.pid as number);
+      attributed.set(row.cmux_surface_id, pids);
+    }
+    for (const child of Object.values(row)) visit(child);
+  };
+  visit(JSON.parse(output));
+  return attributed;
 }
 
 function uniqueIdentity(hints: readonly IdentityHint[]): string | undefined {
@@ -175,13 +207,13 @@ export async function enrichCmuxIdentity(
   runner: CommandRunner,
 ): Promise<CollectionResult<CmuxSurface[]>> {
   const errors: string[] = [];
+  const readySurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
   const ttyNames = new Set(
-    surfaces
-      .filter((surface) => surface.runtimeSurfaceReady !== false)
+    readySurfaces
       .map((surface) => surface.tty)
       .filter((tty): tty is string => Boolean(tty)),
   );
-  if (ttyNames.size === 0) {
+  if (readySurfaces.length === 0) {
     // No runtime-ready surfaces to probe — but stale surfaces still need their
     // bindings cleared, not left intact. Skipping the map here left a lone stale
     // surface holding its old sourceSessionIds and reading as a phantom identity.
@@ -200,6 +232,44 @@ export async function enrichCmuxIdentity(
     };
   }
 
+  let attributedPids = new Map<string, Set<number>>();
+  let attributionError: string | undefined;
+  if (readySurfaces.some((surface) => !surface.tty)) {
+    const attributionResult = await runner.run(
+      cmuxCommand(runtimeCmuxExecutable(), ["rpc", "system.top", CMUX_PROCESS_ATTRIBUTION_PARAMS]),
+      10_000,
+    );
+    if (attributionResult.timedOut || attributionResult.exitCode !== 0) {
+      attributionError = attributionResult.timedOut
+        ? "cmux process attribution timed out"
+        : `cmux process attribution exited ${attributionResult.exitCode}: ${attributionResult.stderr.trim() || "no stderr"}`;
+    } else {
+      try {
+        attributedPids = parseCmuxProcessAttribution(attributionResult.stdout);
+      } catch (error) {
+        attributionError = `cmux process attribution returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (attributionError) errors.push(attributionError);
+  }
+
+  const allAttributedPids = new Set([...attributedPids.values()].flatMap((pids) => [...pids]));
+  if (ttyNames.size === 0 && allAttributedPids.size === 0) {
+    return {
+      value: surfaces.map((surface) =>
+        surface.runtimeSurfaceReady === false
+          ? {
+              ...surface,
+              sourceSessionIds: [],
+              identityConflict: undefined,
+              identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
+            }
+          : { ...surface, identityTrace: baseTrace(surface, "no-tty", attributionError ? [attributionError] : undefined) },
+      ),
+      errors,
+    };
+  }
+
   const processResult = await runner.run(["ps", "-axo", "pid=,tty=,command="], 8_000);
   if (processResult.timedOut || processResult.exitCode !== 0) {
     const error = processResult.timedOut
@@ -211,9 +281,12 @@ export async function enrichCmuxIdentity(
       errors,
     };
   }
-  const processes = parseProcessTable(processResult.stdout).filter((process) => ttyNames.has(process.tty));
+  const processes = parseProcessTable(processResult.stdout).filter(
+    (process) => (process.tty !== undefined && ttyNames.has(process.tty)) || allAttributedPids.has(process.pid),
+  );
   const processesByTty = new Map<string, ProcessRow[]>();
   for (const process of processes) {
+    if (!process.tty) continue;
     const ttyProcesses = processesByTty.get(process.tty) ?? [];
     ttyProcesses.push(process);
     processesByTty.set(process.tty, ttyProcesses);
@@ -264,21 +337,33 @@ export async function enrichCmuxIdentity(
           identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
         };
       }
-      if (!surface.tty) return { ...surface, identityTrace: baseTrace(surface, "no-tty") };
-      const tty = surface.tty.replace(/^\/dev\//, "");
-      const ttyProcesses = processesByTty.get(tty) ?? [];
-      const processEvidence: SurfaceProcessEvidence[] = ttyProcesses.map((process) => ({
+      const tty = surface.tty?.replace(/^\/dev\//, "");
+      const exactPids = attributedPids.get(surface.surfaceId);
+      const surfaceProcesses = tty
+        ? processesByTty.get(tty) ?? []
+        : exactPids
+          ? processes.filter((process) => exactPids.has(process.pid))
+          : [];
+      const attributionNotes = !tty && exactPids?.size
+        ? ["Terminal discovery omitted tty; exact cmux process attribution supplied the surface process IDs."]
+        : attributionError
+          ? [attributionError]
+          : undefined;
+      if (!tty && surfaceProcesses.length === 0) {
+        return { ...surface, identityTrace: baseTrace(surface, "no-tty", attributionNotes) };
+      }
+      const processEvidence: SurfaceProcessEvidence[] = surfaceProcesses.map((process) => ({
         pid: process.pid,
         command: process.command,
         recognizedAgentProcess: isRecognizedAgentProcess(process.command),
       }));
-      const openFileMatches: SurfaceOpenFileEvidence[] = ttyProcesses.flatMap((process) =>
+      const openFileMatches: SurfaceOpenFileEvidence[] = surfaceProcesses.flatMap((process) =>
         (openFiles.get(process.pid) ?? []).flatMap((path) => {
           const hint = identityFromSessionPath(path);
           return hint ? [{ pid: process.pid, path, provider: hint.provider, sessionId: hint.value }] : [];
         }),
       );
-      const commandHintEvidence: SurfaceCommandHintEvidence[] = ttyProcesses.flatMap((process) =>
+      const commandHintEvidence: SurfaceCommandHintEvidence[] = surfaceProcesses.flatMap((process) =>
         identitiesFromCommand(process.command).map((hint) => ({
           pid: process.pid,
           provider: hint.provider,
@@ -316,11 +401,17 @@ export async function enrichCmuxIdentity(
           ...surface,
           sourceSessionIds: [],
           identityConflict,
-          identityTrace: trace("open-file-conflict", [], identityConflict),
+          identityTrace: trace("open-file-conflict", [], identityConflict, attributionNotes),
         };
       }
       if (openIdentity) {
         const distinctIdentities = new Set(openHints.map((hint) => `${hint.provider}:${hint.value}`)).size;
+        const notes = [
+          ...(attributionNotes ?? []),
+          ...(distinctIdentities > 1
+            ? [`${distinctIdentities} open session files reduce to root identity ${openIdentity.value} via parent links`]
+            : []),
+        ];
         return {
           ...surface,
           sourceSessionIds: [openIdentity.value],
@@ -329,9 +420,7 @@ export async function enrichCmuxIdentity(
             "open-file-match",
             [openIdentity.value],
             undefined,
-            distinctIdentities > 1
-              ? [`${distinctIdentities} open session files reduce to root identity ${openIdentity.value} via parent links`]
-              : undefined,
+            notes.length > 0 ? notes : undefined,
           ),
         };
       }
@@ -347,7 +436,7 @@ export async function enrichCmuxIdentity(
           ...surface,
           sourceSessionIds: [],
           identityConflict,
-          identityTrace: trace("command-hint-conflict", [], identityConflict),
+          identityTrace: trace("command-hint-conflict", [], identityConflict, attributionNotes),
         };
       }
       return commandIdentity
@@ -355,11 +444,11 @@ export async function enrichCmuxIdentity(
             ...surface,
             sourceSessionIds: [commandIdentity],
             identityConflict: undefined,
-            identityTrace: trace("command-hint-match", [commandIdentity]),
+            identityTrace: trace("command-hint-match", [commandIdentity], undefined, attributionNotes),
           }
         : {
             ...surface,
-            identityTrace: trace("no-evidence", [...surface.sourceSessionIds], surface.identityConflict),
+            identityTrace: trace("no-evidence", [...surface.sourceSessionIds], surface.identityConflict, attributionNotes),
           };
     }),
     errors,

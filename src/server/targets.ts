@@ -162,6 +162,17 @@ export function resolveAgentTargetWithTrace(
     steps.push({ tier: "cwd", outcome: "rejected", detail: "Source did not record a cwd." });
     return finish({ resolution: "missing", reason: "Source did not record a cwd or exact cmux target." });
   }
+  if (agent.parentSourceSessionId) {
+    steps.push({
+      tier: "cwd",
+      outcome: "rejected",
+      detail: `Child source ${agent.sourceSessionId} belongs to parent ${agent.parentSourceSessionId} and requires exact session evidence.`,
+    });
+    return finish({
+      resolution: "missing",
+      reason: "Child sources require exact session evidence; cwd fallback is disabled.",
+    });
+  }
   const cwdMatches = routableSurfaces.filter((surface) => sameCwd(surface.cwd, agent.cwd));
   const cwdQuarantine = quarantined(cwdMatches);
   if (cwdQuarantine) {
@@ -176,7 +187,10 @@ export function resolveAgentTargetWithTrace(
     });
   }
   const cwdSources = sources.filter(
-    (candidate) => eligibleForCwdFallback(candidate) && sameCwd(candidate.cwd, agent.cwd),
+    (candidate) =>
+      !candidate.parentSourceSessionId &&
+      eligibleForCwdFallback(candidate) &&
+      sameCwd(candidate.cwd, agent.cwd),
   );
   if (cwdSources.length !== 1 || cwdSources[0]?.id !== agent.id) {
     // Shared cwd with no cmux surface is "not linked" (view only), not an
