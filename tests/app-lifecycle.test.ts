@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createMountainFetch,
   emptySnapshot,
+  MAX_HEALTH_SNAPSHOT_AGE_MS,
   MAX_SSE_BACKLOG_BYTES,
   MAX_SSE_CLIENTS,
   type MountainAppState,
@@ -44,6 +45,78 @@ function lifecycleSnapshot(generatedAt = new Date().toISOString()): HubSnapshot 
     programs: [{ id: "fixture", name: "Fixture", agents: [agent] }],
   };
 }
+
+describe("health endpoint", () => {
+  test("reports cached snapshot freshness without waiting for a wedged refresh", async () => {
+    const now = Date.parse("2026-07-28T12:00:00.000Z");
+    let current = lifecycleSnapshot(new Date(now - MAX_HEALTH_SNAPSHOT_AGE_MS).toISOString());
+    let refreshes = 0;
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: () => {
+        refreshes += 1;
+        return new Promise(() => {});
+      },
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({
+      state,
+      runner,
+      archiveStore,
+      now: () => now,
+      webRoot: import.meta.dir,
+    });
+
+    const healthy = await fetch(new Request("http://127.0.0.1:4701/api/health"));
+    expect(healthy.status).toBe(200);
+    expect(await healthy.json()).toEqual({
+      ok: true,
+      verdict: "healthy",
+      snapshot: {
+        generatedAt: current.generatedAt,
+        ageMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
+        maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
+      },
+    });
+
+    current = lifecycleSnapshot(new Date(now - MAX_HEALTH_SNAPSHOT_AGE_MS - 1).toISOString());
+    const stale = await fetch(new Request("http://127.0.0.1:4701/api/health"));
+    expect(stale.status).toBe(503);
+    expect(await stale.json()).toMatchObject({
+      ok: false,
+      verdict: "stale",
+      snapshot: {
+        generatedAt: current.generatedAt,
+        ageMs: MAX_HEALTH_SNAPSHOT_AGE_MS + 1,
+      },
+    });
+    expect(refreshes).toBe(0);
+    fetch.dispose();
+  });
+
+  test("rejects a non-loopback Host before exposing health", async () => {
+    const current = lifecycleSnapshot();
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: async () => current,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const response = await fetch(new Request("http://ant-hill.example/api/health"));
+
+    expect(response.status).toBe(403);
+    fetch.dispose();
+  });
+});
 
 describe("SSE lifecycle", () => {
   test("control requests use the runtime cmux executable override", async () => {
