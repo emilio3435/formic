@@ -186,12 +186,11 @@ case "$MODE" in
     load_password
     if [[ -n "${CMUX_SOCKET_PASSWORD:-}" ]]; then
       echo "cmux workspace launch unavailable — starting in this shell with password mode."
-      open_ui &
-      run_server_here
+    else
+      echo "cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled)."
     fi
-    echo "Could not start. Run once: bun run setup:cmux" >&2
-    echo "Then: bun start" >&2
-    exit 1
+    open_ui &
+    run_server_here
     ;;
   *)
     echo "Unknown mode: $MODE" >&2
