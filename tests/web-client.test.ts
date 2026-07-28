@@ -4086,3 +4086,191 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(fn).not.toMatch(/\bconst state\b/);
   });
 });
+
+/* ---------------------------------------------------------------------------
+   WAVE 3 / FE-C — the four things the operator could not do.
+
+   Finding 1: :4701 served a 91-hour-frozen snapshot while the UI read "Live".
+   Wave 1 fixed the BADGE. A badge is something you have to go and look at; the
+   failure was that the operator looked at the board and believed it. This block
+   pins the alarm, the clocks and the controls all keying off ONE predicate, so
+   they can never disagree about whether the board is trustworthy.
+   ------------------------------------------------------------------------- */
+
+const FROZEN_AT = "2026-07-24T12:42:29.656Z";   // the real generatedAt on the wedged box
+const FROZEN_NOW = Date.parse("2026-07-28T08:00:00.000Z"); // ~91h later
+
+describe("FE-C: a frozen feed is announced, not merely available on inspection", () => {
+  test("(1) the alarm fires on DATA age — a live socket cannot talk it down", () => {
+    const now = FROZEN_NOW;
+    // Fresh data: no alarm, whatever the transport thinks.
+    expect(M.feedAlarm("live", new Date(now - 3_000).toISOString(), now)).toBeNull();
+    expect(M.feedAlarm("reconnecting", new Date(now - 3_000).toISOString(), now)).toBeNull();
+    // The exact production failure: conn === "live" (the server heartbeats every
+    // 25s from a timer that knows nothing about the collector) over a snapshot
+    // generated four days ago. The alarm must fire anyway.
+    const alarm = M.feedAlarm("live", FROZEN_AT, now);
+    expect(alarm).not.toBeNull();
+    expect(alarm.kind).toBe("frozen");
+    expect(alarm.headline).toContain("Feed frozen");
+    expect(alarm.headline).toContain("4d");              // the age, in the headline
+    expect(alarm.ageMs).toBeGreaterThan(91 * 3_600_000);
+    // It names the consequence, not just the condition.
+    expect(alarm.detail).toContain("Controls are held");
+  });
+
+  test("(1) it does not cry wolf: a merely lagging snapshot is not an alarm", () => {
+    const now = FROZEN_NOW;
+    // 30s > SNAPSHOT_FRESH_MS but <= SNAPSHOT_STALE_MS: "lagging", not stale.
+    expect(M.snapshotFreshness(new Date(now - 30_000).toISOString(), now).state).toBe("lagging");
+    expect(M.feedAlarm("live", new Date(now - 30_000).toISOString(), now)).toBeNull();
+    // Nothing collected yet is not evidence of staleness — never invent one.
+    expect(M.feedAlarm("connecting", null, now)).toBeNull();
+    expect(M.feedAlarm("live", "not-a-date", now)).toBeNull();
+    // 61s past the stale threshold does alarm.
+    expect(M.feedAlarm("live", new Date(now - 61_000).toISOString(), now)).not.toBeNull();
+  });
+
+  test("(1) an unreachable server is its own alarm, with no invented age", () => {
+    const alarm = M.feedAlarm("offline", FROZEN_AT, FROZEN_NOW);
+    expect(alarm.kind).toBe("offline");
+    expect(alarm.ageMs).toBeNull();               // no age claim we cannot support
+    expect(alarm.headline).toContain("not updating");
+  });
+
+  test("(1) the alarm names the age and carries the one action that repairs it", () => {
+    const alarm = M.feedAlarm("live", FROZEN_AT, FROZEN_NOW);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const node: any = withDom(() => M.feedAlarmNode(alarm));
+    const text = textOf(node);
+    expect(text).toContain("Feed frozen");
+    expect(text).toContain("4d");
+    expect(text).toContain("Refresh now");
+    const refresh = buttonsOf(node);
+    expect(refresh).toHaveLength(1);
+    // Repainted chrome without an fkey loses keyboard focus on every snapshot.
+    expect(refresh[0].dataset.fkey).toBe("feed-alarm-refresh");
+    // Offline gets the severed-node mark, not the advisory diamond.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const offline: any = withDom(() => M.feedAlarmNode(M.feedAlarm("offline", null, FROZEN_NOW)));
+    expect(byClass(offline, "is-offline")).not.toBeNull();
+  });
+
+  test("(1) tickClocks stops extrapolating a dead agent's uptime while the feed is frozen", () => {
+    const base = 60_000;
+    const from = "2026-07-24T12:42:29.656Z";
+    const now = Date.parse(from) + 5_000;
+    // Healthy board: the clock advances with wall time, exactly as before.
+    expect(M.elapsedTickText(base, from, now, false)).toBe("65s");
+    // Frozen board: it HOLDS at the value the snapshot actually reported. The
+    // bug was that this number kept climbing for four days, which made a dead
+    // agent the most convincingly alive thing on the page.
+    expect(M.elapsedTickText(base, from, FROZEN_NOW, true)).toBe("60s");
+    expect(M.elapsedTickText(base, from, FROZEN_NOW, false)).toBe("4d"); // the lie, for contrast
+    // Unreadable datasets yield null rather than "—" written over a real value.
+    expect(M.elapsedTickText("nope", from, now, false)).toBeNull();
+    expect(M.elapsedTickText(base, "nope", now, false)).toBeNull();
+    expect(M.elapsedTickText(base, "nope", now, true)).toBe("60s"); // frozen needs no `from`
+  });
+
+  test("(1) the 5s clock tick itself holds — not merely the helper it calls", () => {
+    // End-to-end over the real loop: tickClocks walks [data-elapsed-base] nodes
+    // and rewrites them in place, which is where the four-day lie was painted.
+    const uptime = newNode("div");
+    uptime.dataset.elapsedBase = "60000";
+    uptime.dataset.elapsedFrom = FROZEN_AT;
+    const ago = newNode("div");
+    ago.dataset.ago = FROZEN_AT;
+    const doc = {
+      querySelectorAll: (sel: string) =>
+        (sel === "[data-elapsed-base]" ? [uptime] : sel === "[data-ago]" ? [ago] : []),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withStub = (fn: () => void) => {
+      (globalThis as unknown as { document: unknown }).document = doc;
+      try { fn(); } finally { delete (globalThis as unknown as { document?: unknown }).document; }
+    };
+
+    withStub(() => M.tickClocks(false, FROZEN_NOW));
+    expect(uptime.textContent).toBe("4d");                 // the bug, reproduced
+    expect(uptime.classList.contains("is-frozen")).toBe(false);
+
+    withStub(() => M.tickClocks(true, FROZEN_NOW));
+    expect(uptime.textContent).toBe("60s");                // held at the reported value
+    expect(uptime.classList.contains("is-frozen")).toBe(true);
+
+    // "4d ago" is a real distance from a real past moment — freezing it would
+    // replace one lie with another, so it keeps ticking.
+    expect(ago.textContent).toContain("ago");
+  });
+
+  test("(1) one predicate drives the alarm, the clocks and the controls", () => {
+    for (const [conn, at] of [["live", FROZEN_AT], ["offline", null], ["live", null]] as [string, string | null][]) {
+      expect(M.clocksFrozen(conn, at, FROZEN_NOW)).toBe(M.feedAlarm(conn, at, FROZEN_NOW) !== null);
+    }
+    // feedFrozen reads the same rule off a state-shaped object.
+    expect(M.feedFrozen({ conn: "live", snap: { generatedAt: FROZEN_AT } }, FROZEN_NOW)).toBe(true);
+    expect(M.feedFrozen({ conn: "live", snap: { generatedAt: new Date(FROZEN_NOW).toISOString() } }, FROZEN_NOW)).toBe(false);
+    expect(M.feedFrozen({ conn: "connecting", snap: null }, FROZEN_NOW)).toBe(false);
+  });
+
+  test("(1) every control in the dock is held — and says so — on a frozen board", () => {
+    const live = agent({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+        { action: "archive", enabled: true },
+      ],
+    });
+    const alarm = M.feedAlarm("live", FROZEN_AT, FROZEN_NOW);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ok: any = withDom(() => M.renderCommandDock(live, "linked", null));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const heldDock: any = withDom(() => M.renderCommandDock(live, "linked", alarm));
+
+    // Baseline: on a healthy board these controls are live.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const enabledOf = (n: any) => buttonsOf(n).map((b: any) => b.hasAttribute("disabled"));
+    expect(enabledOf(ok).every((d: boolean) => d === false)).toBe(true);
+    expect(byClass(ok, "command-dock-stale")).toBeNull();
+    expect(byClass(ok, "command-dock--linked")).not.toBeNull();
+
+    // Frozen: nothing is clickable, and the input cannot be typed into either.
+    expect(enabledOf(heldDock).every((d: boolean) => d === true)).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const input: any = findAll(heldDock, (n: any) => n.tagName === "input")[0];
+    expect(input.hasAttribute("disabled")).toBe(true);
+    expect(input.attributes.placeholder).toContain("Held");
+    // The reason is stated, and it is about the FEED — not a routing capability
+    // reason, which this chrome is forbidden to echo.
+    const note = byClass(heldDock, "command-dock-stale");
+    expect(note).not.toBeNull();
+    expect(textOf(note)).toContain("out of date");
+    // "Ready · linked" is a claim the board cannot support while frozen.
+    expect(textOf(heldDock)).not.toContain("Ready · linked");
+  });
+
+  test("(1) the held reason is about the feed, and offline vs frozen read differently", () => {
+    expect(M.staleControlNote(null)).toBe("");
+    expect(M.staleControlNote(M.feedAlarm("offline", null, FROZEN_NOW))).toContain("unreachable");
+    const frozen = M.staleControlNote(M.feedAlarm("live", FROZEN_AT, FROZEN_NOW));
+    expect(frozen).toContain("4d");
+    expect(frozen).toContain("Refresh");
+  });
+
+  test("(1) a board that freezes mid-compose repaints the broadcast dock", () => {
+    const recipients = [{ agent: agent({ status: "running", controls: [{ action: "instruct", enabled: true }] }), program: { id: "p", name: "P", agents: [] } }];
+    // broadcastPaintSig reads the wall clock (it is called during a real paint),
+    // so "fresh" here has to be a snapshot generated a moment ago.
+    const fresh = { conn: "live", snap: { generatedAt: new Date().toISOString() }, broadcastResults: null, broadcastConfirming: false, broadcastPending: false, broadcastError: "" };
+    const stuck = { ...fresh, snap: { generatedAt: FROZEN_AT } };
+    // The guard exists so the dock does not strobe; it must still notice this.
+    expect(M.broadcastPaintSig(recipients, recipients, stuck))
+      .not.toBe(M.broadcastPaintSig(recipients, recipients, fresh));
+    // …and typing still must not move it (FE-A's live-input rule, unchanged).
+    expect(M.broadcastPaintSig(recipients, recipients, { ...fresh, broadcastDraft: "half a sentence" }))
+      .toBe(M.broadcastPaintSig(recipients, recipients, fresh));
+  });
+});

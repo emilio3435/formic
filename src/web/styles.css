@@ -221,6 +221,59 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .conn-offline { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line-strong)); }
 .conn-offline .conn-dot { background: var(--bad); }
 
+/* ---------- staleness alarm ----------
+   Rule 1 (indicator inks, not flood fills) bends here on purpose: this is the
+   one surface that must be impossible to scan past, because the failure it
+   reports is precisely "the operator looked at the board and believed it". A
+   soft ember wash plus a 3px ember cap rule, and no motion of any kind, so the
+   reduced-motion guard and the pinned keyframe inventory both stay intact. */
+
+.feed-alarm {
+  flex: none;
+  border-top: 3px solid var(--ember);
+  border-bottom: 1px solid color-mix(in srgb, var(--ember) 35%, var(--line-strong));
+  background: var(--ember-soft);
+}
+.feed-alarm[hidden] { display: none; }
+.feed-alarm-inner {
+  max-width: var(--frame);
+  margin: 0 auto;
+  padding: 0.6rem 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.feed-alarm-inner > svg { flex: none; width: 20px; height: 20px; color: var(--ember); }
+.feed-alarm-inner.is-offline > svg { color: var(--bad); }
+.feed-alarm-copy { flex: 1 1 auto; min-width: 0; }
+.feed-alarm-head {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--ember);
+}
+.feed-alarm-inner.is-offline .feed-alarm-head { color: var(--bad); }
+.feed-alarm-detail {
+  margin: 0.15rem 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.feed-alarm-refresh { flex: none; }
+
+/* Stale data has to look stale everywhere it is DISPLAYED, not only where it is
+   announced — the summary numbers and the roster recede while the alarm holds. */
+body.feed-frozen .rail-inner,
+body.feed-frozen .programs { opacity: 0.62; }
+
+/* A frozen clock reads as a held instrument, not as a live one. */
+.is-frozen {
+  color: var(--faint);
+  text-decoration: underline dotted color-mix(in srgb, var(--ember) 60%, transparent);
+  text-underline-offset: 3px;
+}
+
 /* ---------- health rail (single operational summary) ---------- */
 
 .health-rail {
@@ -1961,6 +2014,17 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 }
 .command-dock-ready { color: var(--moss); font-weight: 650; }
 .command-dock-hint { color: var(--faint); }
+/* A held dock is visibly held: the reason reads first, and the controls under it
+   are dimmed so "enabled-looking" and "actually sendable" cannot diverge. */
+.command-dock.is-held { border-top-color: color-mix(in srgb, var(--ember) 55%, var(--line)); }
+.command-dock-stale {
+  margin: 0 0 0.4rem;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ember);
+}
+.dock-tool.is-held { opacity: 0.55; }
 .command-composer {
   display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; align-items: stretch;
 }
@@ -2225,6 +2289,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .broadcast-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem; border: 1px solid color-mix(in srgb, var(--ember) 45%, transparent); border-radius: var(--radius-sm); background: var(--ember-soft); font-size: 13px; }
 .broadcast-note { font-size: 12px; color: var(--faint); }
 .broadcast-note.err { color: var(--ember); }
+.broadcast-note.is-held { color: var(--ember); font-weight: 650; }
 
 /* ---------- empty state ---------- */
 

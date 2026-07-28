@@ -1358,6 +1358,8 @@ globalThis.TheAntHill = {
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
+  feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
+  renderCommandDock, renderDockTool,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
@@ -1383,6 +1385,67 @@ function snapshotFreshness(generatedAt, now = Date.now()) {
   const ageMs = Math.max(0, now - at);
   if (ageMs <= SNAPSHOT_FRESH_MS) return { state: "fresh", ageMs };
   return { state: ageMs > SNAPSHOT_STALE_MS ? "stale" : "lagging", ageMs };
+}
+
+/* The badge tells the truth once you look at it — the ALARM is what makes you
+   look. :4701 served a 91-hour-frozen snapshot behind a green "Live" badge and
+   the operator acted on a world that had ended four days earlier. A badge in the
+   corner is not a warning; a full-width bar in the reading path is.
+
+   One predicate decides the whole staleness story, so the alarm, the clocks and
+   the controls can never disagree with each other. Pure, so the rule is testable
+   without a browser. Returns null when the board is trustworthy. */
+function feedAlarm(conn, generatedAt, now = Date.now()) {
+  if (conn === "offline") {
+    return {
+      kind: "offline",
+      headline: "Server unreachable — this board is not updating",
+      detail: "Nothing below is current. Focus, Send, Interrupt, Archive and Broadcast are held until the server answers.",
+      ageMs: null,
+    };
+  }
+  const fresh = snapshotFreshness(generatedAt, now);
+  if (fresh.state !== "stale") return null;
+  const age = fmtElapsed(fresh.ageMs);
+  return {
+    kind: "frozen",
+    headline: "Feed frozen — last snapshot " + age + " ago",
+    detail: "Every agent, count and clock below is " + age + " old. Controls are held: routing on stale evidence can type into the wrong terminal.",
+    ageMs: fresh.ageMs,
+  };
+}
+
+/* Stale data has to LOOK stale everywhere it is displayed, not just in the bar.
+   Same predicate as the alarm by construction. */
+function clocksFrozen(conn, generatedAt, now = Date.now()) {
+  return feedAlarm(conn, generatedAt, now) !== null;
+}
+
+function feedFrozen(ui = state, now = Date.now()) {
+  return clocksFrozen(ui && ui.conn, ui && ui.snap && ui.snap.generatedAt, now);
+}
+
+/* tickClocks extrapolated elapsed from data-elapsed-base plus wall-clock drift
+   every 5s, so on a frozen board a dead agent's uptime kept climbing — the most
+   convincing lie on the page, because it was the one thing visibly moving. When
+   the feed is frozen the clock holds at the value the snapshot actually
+   reported. Returns null when the dataset cannot be read at all. */
+function elapsedTickText(base, fromIso, now, frozen) {
+  const b = Number(base);
+  if (!Number.isFinite(b)) return null;
+  if (frozen) return fmtElapsed(b);
+  const drift = now - Date.parse(fromIso);
+  if (!Number.isFinite(drift)) return null;
+  return fmtElapsed(b + Math.max(0, drift));
+}
+
+/* Why a control is held. Kept separate from the capability reasons the dock is
+   forbidden to echo — this is about the feed, not about routing. */
+function staleControlNote(alarm) {
+  if (!alarm) return "";
+  return alarm.kind === "offline"
+    ? "Held — the server is unreachable, so there is no safe route to this session."
+    : "Held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Refresh before sending.";
 }
 
 const state = {
@@ -1450,7 +1513,7 @@ const state = {
   pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "" },
+  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: "", actions: "" },
 };
 state.aliases = state.labels;
 
@@ -1768,6 +1831,40 @@ function renderBeacon() {
   beacon.classList.add(issuesOf(state.snap).length > 0 ? "flare" : "calm");
 }
 
+/* The alarm body. Split from the mount so the copy and the repair action can be
+   asserted without a document. */
+function feedAlarmNode(alarm) {
+  return el("div", { class: "feed-alarm-inner" + (alarm.kind === "offline" ? " is-offline" : "") },
+    icon(alarm.kind === "offline" ? "offline" : "warning", { label: "Alarm" }),
+    el("div", { class: "feed-alarm-copy" },
+      el("strong", { class: "feed-alarm-head", text: alarm.headline }),
+      el("p", { class: "feed-alarm-detail", text: alarm.detail })),
+    el("button", {
+      type: "button",
+      class: "btn feed-alarm-refresh",
+      dataset: { fkey: "feed-alarm-refresh" },
+      onclick: () => recollectSnapshot(),
+    }, "Refresh now"));
+}
+
+/* Unmissable by position, not by animation: a full-width bar between the
+   masthead and the summary, in the operator's reading path, carrying the age and
+   the one action that can fix it. `feed-frozen` on <body> is what lets the rest
+   of the board grey itself out in the same beat. */
+function renderFeedAlarm() {
+  const bar = $("feed-alarm");
+  if (!bar) return;
+  const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
+  if (document.body) document.body.classList.toggle("feed-frozen", !!alarm);
+  const sig = alarm ? alarm.kind + "\u001f" + alarm.headline : "";
+  if (state.paintSig.alarm === sig) return;
+  state.paintSig.alarm = sig;
+  bar.textContent = "";
+  bar.className = "feed-alarm";
+  bar.hidden = !alarm;
+  if (alarm) bar.append(feedAlarmNode(alarm));
+}
+
 /* ---------- rendering ---------- */
 
 function paintUnchanged(key, signature) {
@@ -1794,6 +1891,7 @@ function render() {
   const inspectorScroll = inspector.scrollTop;
 
   renderConn();
+  renderFeedAlarm();
   renderHealthRail();
   renderTabs();
   renderFilterBar();
@@ -4508,8 +4606,12 @@ function capability(agent, action) {
   return (agent.controls || []).find((c) => c.action === action);
 }
 
-/* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone. */
-function renderCommandDock(agent, control = deriveControlState(agent)) {
+/* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone.
+   `alarm` is the feed-staleness verdict: on a frozen board every control here is
+   held and says so, because the snapshot's routing evidence is as old as the
+   rest of it. Defaulted (not passed by the caller) so the drawer call site stays
+   `renderCommandDock(agent, control)` and the dock is still testable in isolation. */
+function renderCommandDock(agent, control = deriveControlState(agent), alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt)) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   const interruptCap = capability(agent, "interrupt");
@@ -4519,15 +4621,19 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   }
 
   const safeLocked = [focusCap, instructCap].some((c) => c && !c.enabled);
-  const linkedReady = !safeLocked && control === "linked";
+  const held = Boolean(alarm);
+  const linkedReady = !safeLocked && !held && control === "linked";
   const dock = el("div", {
-    class: "command-dock" + (linkedReady ? " command-dock--linked" : ""),
+    class: "command-dock" + (linkedReady ? " command-dock--linked" : "") + (held ? " is-held" : ""),
     "aria-label": "Session controls",
   });
+  if (held) {
+    dock.append(el("p", { class: "command-dock-stale", role: "status", text: staleControlNote(alarm) }));
+  }
 
   // One lock narrative: the control banner owns the reason. The dock meta only
   // speaks when the link is live, and the send hint only when Send can send.
-  const showHint = Boolean(instructCap && instructCap.enabled);
+  const showHint = Boolean(instructCap && instructCap.enabled) && !held;
   if (linkedReady || showHint) {
     const meta = el("div", { class: "command-dock-meta" });
     meta.append(linkedReady
@@ -4550,14 +4656,17 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
   if (instructCap) {
     const key = agent.id + ":instruct";
     const busy = state.pending.has(key);
+    const sendable = instructCap.enabled && !held;
     const input = el("input", {
       type: "text",
-      placeholder: instructCap.enabled
-        ? "Instruct this agent…"
-        : (control === "quarantined"
-          ? "Resolve identity conflict to instruct…"
-          : "Instruction unavailable"),
-      disabled: instructCap.enabled ? null : "",
+      placeholder: held
+        ? "Held until the feed catches up…"
+        : instructCap.enabled
+          ? "Instruct this agent…"
+          : (control === "quarantined"
+            ? "Resolve identity conflict to instruct…"
+            : "Instruction unavailable"),
+      disabled: sendable ? null : "",
       value: state.drafts.get(agent.id) || "",
       "aria-label": "Instruction for " + agentName(agent),
       dataset: { fkey: "draft:" + agent.id },
@@ -4566,7 +4675,7 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
         if (!(e.key === "Enter" && (e.metaKey || e.ctrlKey))) return;
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !instructCap.enabled) return;
+        if (!text || busy || !sendable) return;
         sendControl(agent, "instruct", text);
       },
     });
@@ -4575,31 +4684,31 @@ function renderCommandDock(agent, control = deriveControlState(agent)) {
       onsubmit: (e) => {
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !instructCap.enabled) return;
+        if (!text || busy || !sendable) return;
         sendControl(agent, "instruct", text);
       },
     },
       input,
       el("button", {
         type: "submit", class: "btn primary command-send",
-        disabled: instructCap.enabled && !busy ? null : "",
+        disabled: sendable && !busy ? null : "",
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
       }, busy ? "Sending…" : "Send")));
   }
 
   const tools = el("div", { class: "command-dock-tools" });
-  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus"));
-  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt"));
+  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus", { held }));
+  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt", { held }));
   tools.append(el("span", { class: "command-dock-spacer" }));
   // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
   // the dock does not offer a destructive peer next to dead controls.
-  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive"));
+  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
   dock.append(tools);
   if (archiveCap && safeLocked) {
     dock.append(el("details", { class: "command-dock-more" },
       el("summary", { text: "More" }),
-      renderDockTool(agent, archiveCap, "archive")));
+      renderDockTool(agent, archiveCap, "archive", { held })));
   }
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
@@ -4617,6 +4726,10 @@ function renderDockTool(agent, cap, action, opts = {}) {
   const busy = state.pending.has(key);
   const label = ACTION_LABELS[action] || action;
   const isArchive = action === "archive";
+  // The head renders a copy of a dock tool without knowing about the feed, so a
+  // caller that does not pass `held` still gets the module verdict rather than a
+  // silently-live button on a frozen board.
+  const held = opts.held === undefined ? feedFrozen() : Boolean(opts.held);
   // Instance-scoped keys: the verdict head renders a copy of a dock tool, so
   // focus restore and the confirm strip must bind to the clicked instance —
   // never both surfaces at once. Busy/sendControl state stays shared via key.
@@ -4641,12 +4754,13 @@ function renderDockTool(agent, cap, action, opts = {}) {
 
   return el("button", {
     type: "button",
-    class: "dock-tool" + (isArchive ? " dock-tool-warn" : ""),
-    disabled: cap.enabled && !busy ? null : "",
+    class: "dock-tool" + (isArchive ? " dock-tool-warn" : "") + (held ? " is-held" : ""),
+    disabled: cap.enabled && !busy && !held ? null : "",
     "aria-busy": busy ? "true" : null,
-    title: cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
+    title: held ? "Held — the board is not current" : cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
     dataset: { fkey },
     onclick: () => {
+      if (held) return;
       if (NEEDS_CONFIRM.has(action)) {
         state.confirming = fkey;
         render();
@@ -5489,6 +5603,9 @@ function broadcastPaintSig(recipients, eligible, ui) {
   return [
     recipients.map(({ agent }) => agent.id + "=" + (broadcastEligible(agent) ? "1" : "0") + ":" + agentName(agent)).join(","),
     String(eligible.length),
+    // A board that goes stale mid-compose must repaint the dock so Send stops
+    // offering to fan a message out over four-day-old routing.
+    feedFrozen(ui) ? "held" : "",
     ui.broadcastResults
       ? [...ui.broadcastResults].map(([id, r]) => id + "=" + (r && r.ok ? "ok" : (r && r.error && r.error.code) || "err")).join(",")
       : "",
@@ -5514,8 +5631,10 @@ function renderBroadcastBar() {
   const recipients = selectedRecipients();
   const eligible = recipients.filter(({ agent }) => broadcastEligible(agent));
   const results = state.broadcastResults;
+  const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   if (paintUnchanged("broadcast", broadcastPaintSig(recipients, eligible, state))) return;
   bar.textContent = "";
+  if (alarm) bar.append(el("p", { class: "broadcast-note is-held", role: "status", text: staleControlNote(alarm) }));
 
   bar.append(el("div", { class: "broadcast-head" },
     icon("broadcast", { label: "Broadcast" }),
@@ -5546,10 +5665,10 @@ function renderBroadcastBar() {
   if (state.broadcastConfirming) {
     bar.append(el("div", { class: "broadcast-confirm", role: "group", "aria-label": "Confirm broadcast" },
       el("span", { text: `Send this instruction to ${eligible.length} ${eligible.length === 1 ? "agent" : "agents"}?` }),
-      el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => sendBroadcast() }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
+      el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending || alarm ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => { if (!alarm) sendBroadcast(); } }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
       el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, dataset: { fkey: "broadcast-cancel" }, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
   } else {
-    const canSend = eligible.length > 0 && instruction.trim().length > 0;
+    const canSend = !alarm && eligible.length > 0 && instruction.trim().length > 0;
     bar.append(el("div", { class: "broadcast-compose" },
       el("textarea", {
         placeholder: eligible.length ? "Instruction sent to every eligible recipient…" : "Select at least one eligible agent first",
@@ -5597,14 +5716,15 @@ function renderEmpty() {
   }
 }
 
-function tickClocks() {
+function tickClocks(frozen = feedFrozen(), now = Date.now()) {
   for (const node of document.querySelectorAll("[data-elapsed-base]")) {
-    const base = Number(node.dataset.elapsedBase);
-    const drift = Date.now() - Date.parse(node.dataset.elapsedFrom);
-    if (Number.isFinite(base) && Number.isFinite(drift)) {
-      node.textContent = fmtElapsed(base + Math.max(0, drift));
-    }
+    const text = elapsedTickText(node.dataset.elapsedBase, node.dataset.elapsedFrom, now, frozen);
+    if (text != null) node.textContent = text;
+    node.classList.toggle("is-frozen", frozen);
   }
+  // data-ago is NOT frozen: "12m ago" measures the distance from a real past
+  // moment to now, and that distance genuinely keeps growing while the feed is
+  // stuck. Freezing it would replace one lie with another.
   for (const node of document.querySelectorAll("[data-ago]")) {
     node.textContent = agoText(node.dataset.ago);
   }
