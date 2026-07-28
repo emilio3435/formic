@@ -1379,6 +1379,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
 .policy-chip .ico { width: 0.75rem; height: 0.75rem; }
+/* A dead process. The ONE row mark that gets alert ink rather than the dim
+   mono every other row fact uses (Rule 1: indicator ink, not a flood fill) —
+   "this stopped without finishing" is the difference between needs-me and done,
+   and it has to survive a glance across two hundred rows. */
+.row-died {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--failed) 55%, transparent);
+  border-radius: 4px;
+  background: var(--ember-soft);
+  font: 700 10px/1.4 var(--font-mono);
+  color: var(--failed);
+  white-space: nowrap;
+}
+.row-died .ico { width: 0.75rem; height: 0.75rem; flex: none; }
+.agent-row.is-died { box-shadow: inset 3px 0 var(--failed); }
 
 .tm-track { fill: var(--line); }
 .tm-fill { fill: var(--moss); }
@@ -1888,6 +1906,58 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: none; /* indicator ink + outline, never a fill */
 }
 .verdict-gate .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+/* Process liveness in the drawer head. All four states render here (the row
+   only marks "died"), so "unknown" is stated as unknown somewhere instead of
+   quietly reading as health. Only the dead state takes alert ink. */
+.verdict-liveness {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: fit-content;
+  padding: 0.16rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--faint);
+  background: none;
+}
+.verdict-liveness .ico { width: 0.85rem; height: 0.85rem; flex: none; }
+.verdict-liveness.liveness-running { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, transparent); }
+.verdict-liveness.liveness-exited { color: var(--faint); }
+.verdict-liveness.liveness-unknown { color: var(--faint); border-style: dashed; }
+.verdict-liveness.liveness-died {
+  color: var(--failed);
+  border-color: color-mix(in srgb, var(--failed) 55%, transparent);
+  background: var(--ember-soft);
+}
+
+/* Attention: acknowledge / dismiss / snooze. Sits directly under the verdict
+   head because it answers the head's own claim ("this session wants you"). */
+.attn-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+}
+.attn-block.is-asking {
+  border-color: color-mix(in srgb, var(--ember) 45%, transparent);
+  background: var(--ember-soft);
+}
+.attn-reason { margin: 0; font-size: 12.5px; font-weight: 650; color: var(--ink); }
+.attn-returned { margin: 0; font-size: 12px; font-weight: 650; color: var(--ember); }
+.attn-state { margin: 0; font-size: 12px; color: var(--faint); }
+.attn-error { margin: 0; font-size: 12px; font-weight: 650; color: var(--failed); }
+.attn-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+/* Investigation lifecycle levers beside Queue/Launch. Cancel takes alert ink
+   because it stops a running process; remove/rerun stay neutral. */
+.triage-cancel { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
+.triage-remove, .triage-rerun { color: var(--faint); }
 /* De-noised mismatch: the quiet line keeps a visible ember dot; the full
    sentence lives in the title tooltip. */
 .inspector-source-name.is-mismatch::before {

@@ -3520,6 +3520,8 @@ describe("FE-B: harness-backed client behavior", () => {
       "dw-provider--", "work-", "role-", "verdict-", "st-", "tri-kind-",
       "tri-live-", "depth-", "chat-turn--", "program-rollup-cell--",
       "widget-option-", "identity-step--", "control-", "is-", "dw-d",
+      // W4-B: the drawer composes "liveness-" + the normalized liveness word.
+      "liveness-",
     ];
     const declared = [...new Set(styles.match(/\.-?[_A-Za-z][-\w]*/g) ?? [])]
       .map((selector) => selector.slice(1));
