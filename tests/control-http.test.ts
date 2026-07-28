@@ -332,6 +332,95 @@ describe("fail-loud control execution", () => {
 });
 
 describe("same-origin loopback control HTTP boundary", () => {
+  test("routes an exact ID to its surface among similar agents across programs", async () => {
+    const runner = new StubRunner([]);
+    const requested = agent();
+    const similar = {
+      ...agent(),
+      id: "codex:test-session-2",
+      sourceSessionId: "test-session-2",
+      target: {
+        ...agent().target,
+        workspaceId: "WORKSPACE-SIMILAR",
+        surfaceId: "SURFACE-SIMILAR",
+        paneId: "PANE-SIMILAR",
+      },
+    };
+    const otherProvider = {
+      ...agent(),
+      id: "claude:test-session",
+      provider: "claude" as const,
+      sourceSessionId: "test-session",
+      target: {
+        ...agent().target,
+        workspaceId: "WORKSPACE-CLAUDE",
+        surfaceId: "SURFACE-CLAUDE",
+        paneId: "PANE-CLAUDE",
+      },
+    };
+    const crowded = snapshot();
+    crowded.totals = { live: 3, tracked: 3, attention: 0 };
+    crowded.programs = [
+      { id: "similar", name: "Similar", agents: [similar, otherProvider] },
+      { id: "requested", name: "Requested", agents: [requested] },
+    ];
+
+    const response = await handleControlRequest(
+      post(JSON.stringify({ action: "focus", agentId: requested.id })),
+      {
+        runner,
+        archiveStore: archiveStore(),
+        cmuxExecutable: "cmux",
+        getSnapshot: () => crowded,
+        now: () => Date.parse(crowded.generatedAt),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(runner.commands).toEqual([
+      [
+        "cmux",
+        "rpc",
+        "surface.focus",
+        JSON.stringify({ surface_id: "SURFACE-EXACT" }),
+      ],
+    ]);
+  });
+
+  test("a strict ID prefix is not an agent and never invokes cmux", async () => {
+    const runner = new StubRunner([]);
+    const similar = {
+      ...agent(),
+      id: "codex:test-session-2",
+      sourceSessionId: "test-session-2",
+      target: { ...agent().target, surfaceId: "SURFACE-SIMILAR" },
+    };
+    const crowded = snapshot();
+    crowded.totals = { live: 2, tracked: 2, attention: 0 };
+    crowded.programs = [{
+      id: "test-program",
+      name: "Test program",
+      agents: [similar, agent()],
+    }];
+
+    const response = await handleControlRequest(
+      post(JSON.stringify({ action: "focus", agentId: "codex:test" })),
+      {
+        runner,
+        archiveStore: archiveStore(),
+        getSnapshot: () => crowded,
+        now: () => Date.parse(crowded.generatedAt),
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_NOT_FOUND" },
+    });
+    expect(runner.commands).toHaveLength(0);
+  });
+
   test("a valid same-origin archive request succeeds without invoking cmux", async () => {
     const store = archiveStore();
     const runner = new StubRunner([]);

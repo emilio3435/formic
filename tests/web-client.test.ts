@@ -173,6 +173,12 @@ function newNode(tag = "div"): FakeNode {
   return makeNode(tag);
 }
 
+function requiredSlice(haystack: string, pattern: RegExp, label: string): string {
+  const match = haystack.match(pattern)?.[0];
+  if (!match) throw new Error(`Required ${label} source slice no longer matches`);
+  return match;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function textOf(node: any): string {
   if (!node || typeof node !== "object") return "";
@@ -823,10 +829,10 @@ describe("broadcast recipient eligibility", () => {
 describe("redesigned network contracts (source-level)", () => {
   test("program rename is presentation-only via GET/POST /api/program-aliases", () => {
     expect(source).toContain('fetch("/api/program-aliases"');
-    expect(source).toContain("function programName(program)");
-    expect(source).toContain("state.aliases");
-    // the source program id stays stable — the alias is a display label only
-    expect(source).toContain("id stays ");
+    const program = { id: "stable-source-id", name: "Source program" };
+    expect(M.presentationLabelKey({ kind: "program", programId: program.id }))
+      .toBe("program:stable-source-id");
+    expect(M.programName(program)).toBe("Source program");
   });
 
   test("labels hydrate from the existing loopback path and submit stable target payloads", () => {
@@ -840,34 +846,77 @@ describe("redesigned network contracts (source-level)", () => {
   });
 
   test("program labels use semantic keyboard controls with a caret that only expands", () => {
-    const fn = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}/)?.[0];
-    expect(fn).toBeDefined();
-    expect(fn).toContain('el("div", { class: "program-head" }');
-    expect(fn).toContain('class: "program-caret"');
-    expect(fn).toContain('class: "program-label"');
-    expect(fn).toContain('onclick: () => toggleProgram(program)');
-    expect(fn).not.toContain('role: "button"');
+    const program = { id: "p1", name: "P", agents: [agent()] };
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(
+      root,
+      [{ program, agents: program.agents }],
+      listUi({ snap: { schemaVersion: 1, programs: [program] } }),
+    ));
+    const head = byClass(root, "program-head");
+    const caret = byClass(root, "program-caret");
+    const label = byClass(root, "program-label");
+    expect(head).not.toBeNull();
+    expect(caret?.tagName).toBe("button");
+    expect(caret?.attributes.type).toBe("button");
+    expect(label?.tagName).toBe("button");
+    expect(label?.attributes.type).toBe("button");
+    expect(label?.attributes.role).toBeUndefined();
+
+    const form = withDom(() => M.renderLabelForm(
+      { kind: "program", programId: program.id },
+      {
+        inputKey: "rename-input:p1",
+        placeholder: "Display name",
+        ariaLabel: "New display name for P",
+        source: "Source program: P · id stays p1",
+      },
+    ));
+    const input = findAll(form, (node) => node.tagName === "input")[0];
+    const submit = buttonsOf(form).find((button) => button.attributes.type === "submit");
+    expect(form.tagName).toBe("form");
+    expect(input?.attributes.type).toBe("text");
+    expect(input?.attributes["aria-label"]).toBe("New display name for P");
+    expect(submit).toBeDefined();
     expect(source).toContain('onkeydown: (e) => { if (e.key === "Escape")');
-    expect(source).toContain('type: "submit"');
   });
 
   test("agent names track terminal titles and stay editable in the list", () => {
-    expect(source).toContain('agentLabelEligible = (agent) => Boolean(agent && agent.id)');
-    expect(source).toContain("function preferredRenameTarget(agent)");
-    expect(source).toContain("function terminalSourceName(agent)");
-    expect(source).toContain("workspaceTitle");
-    expect(source).toContain("cwdMismatch");
-    expect(source).toContain('!agent.target?.cwdMismatch');
-    // B2: the head renders this via quietSourceLine, no longer a text: ternary.
-    expect(source).toContain('"Source agent: " + sourceAgentName(agent)');
-    expect(source).toContain('const actionText = label ? "Edit" : item.kind === "agent" ? "Name agent"');
-    const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
-    expect(row).toBeDefined();
-    expect(row).toContain('class: "agent-rename"');
-    expect(row).toContain("preferredRenameTarget(agent)");
-    expect(row).toContain('role: "button"');
-    expect(row).toContain("agent-row-edit-wrap");
-    expect(row).not.toContain('return el("button"');
+    const linked = agent({
+      displayName: "Codex · ridge",
+      target: {
+        resolution: "exact",
+        workspaceId: "WORKSPACE-1",
+        surfaceId: "SURFACE-1",
+        workspaceTitle: "Ridge terminal",
+      },
+    });
+    expect(M.agentLabelEligible(linked)).toBe(true);
+    expect(M.agentLabelEligible(null)).toBe(false);
+    expect(M.terminalSourceName(linked)).toBe("Ridge terminal");
+    expect(M.preferredRenameTarget(linked)).toEqual({
+      kind: "workspace",
+      workspaceId: "WORKSPACE-1",
+    });
+    expect(M.agentName(linked)).toBe("Ridge terminal");
+    expect(M.agentName({
+      ...linked,
+      target: { ...linked.target, cwdMismatch: true },
+    })).toBe("Codex · ridge");
+
+    const program = { id: "p1", name: "P", agents: [linked] };
+    const row = withDom(() => M.renderAgentRow(linked, program));
+    expect(row.tagName).toBe("div");
+    expect(row.attributes.role).toBe("button");
+    expect(byClass(row, "agent-rename")?.tagName).toBe("button");
+    expect(M.agentRowSig(linked, listUi({
+      renaming: "workspace:WORKSPACE-1",
+    }), { depth: 0, childCount: 0, fullById: new Map() }))
+      .not.toBe(M.agentRowSig(linked, listUi(), {
+        depth: 0,
+        childCount: 0,
+        fullById: new Map(),
+      }));
   });
 
   test("broadcast posts only eligible recipients and never fabricates delivery", () => {
@@ -924,12 +973,23 @@ describe("calm program and agent list rendering", () => {
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
-    expect(source).toContain("Select to open the full message and session details in the inspector.");
-    expect(source).toContain('text: "Last human message"');
-    expect(source).toContain('class: "last-human-message"');
-    expect(source).toContain("function renderOperate(");
-    expect(source).toContain("function renderChat(");
-    expect(source).toContain("function renderEvidence(");
+    const message = "Review the full terminal transcript before dispatch.";
+    const selected = agent({ lastHumanMessage: message, lastAgentMessage: "Evidence checked." });
+    const program = { id: "p1", name: "P", agents: [selected] };
+    const row = withDom(() => M.renderAgentRow(selected, program));
+    expect(row.attributes["aria-label"]).toContain(
+      "Select to open the full message and session details in the inspector.",
+    );
+
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: selected, program });
+      return pane;
+    });
+    const humanMessage = byClass(drawer, "last-human-message");
+    expect(humanMessage).not.toBeNull();
+    expect(textOf(humanMessage)).toBe(message);
+    expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
   });
@@ -1705,6 +1765,10 @@ describe("fail-loud control invariants (source-level)", () => {
   });
 
   test("no dynamic content flows through innerHTML", () => {
+    const payload = '<img src=x onerror="globalThis.pwned=true">';
+    const node = withDom(() => M.el("p", { text: payload }));
+    expect(textOf(node)).toBe(payload);
+    expect(node.children).toHaveLength(0);
     expect(source).not.toMatch(/\.innerHTML\s*=/);
   });
 
@@ -1748,10 +1812,14 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     // B3: metrics are promoted to the instrument band under the verdict head —
     // Evidence no longer builds vitals (neither the old call nor the band), and
     // Operate never did.
-    const evidenceShelf = source.match(/function renderEvidenceShelf\([\s\S]*?\n}\n/)?.[0] || "";
+    const evidenceShelf = requiredSlice(
+      source,
+      /function renderEvidenceShelf\([\s\S]*?\n}\n/,
+      "renderEvidenceShelf",
+    );
     expect(evidenceShelf).not.toContain("renderVitals(agent)");
     expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n/)?.[0] || "";
+    const operate = requiredSlice(source, /function renderOperate\([\s\S]*?\n}\n/, "renderOperate");
     expect(operate).not.toContain("renderVitals(");
     expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
@@ -1786,13 +1854,44 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
   });
 
   test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {
-    expect(source).toContain("CWD_MISMATCH_HINT");
-    expect(source).toContain("READY_LINKED_HINT");
-    expect(source).toContain("LATEST_CALL_HINT");
-    expect(source).toContain("SESSION_TOTAL_HINT");
-    expect(source).toContain("session cwd ≠ pane folder");
-    expect(source).toContain("function controlLinkSentence(");
-    expect(source).toContain("copyIdButton(");
+    const evidence = withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      target: {
+        resolution: "exact",
+        workspaceId: "WORKSPACE-1",
+        surfaceId: "SURFACE-1",
+        paneId: "PANE-1",
+        workspaceTitle: "Ridge",
+        surfaceCwd: "/repos/pane",
+        cwdMismatch: true,
+      },
+      tokens: {
+        provenance: "observed",
+        scope: "latest-turn",
+        input: 100,
+        output: 25,
+        total: 125,
+        sessionTotal: 2_000,
+      },
+    })));
+    const hints = findAll(evidence, (node) => typeof node.attributes?.title === "string")
+      .map((node) => node.attributes.title);
+    expect(hints).toContain(
+      "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).",
+    );
+    expect(hints).toContain(
+      "Tokens for the latest model call only — not the cumulative session total.",
+    );
+    expect(hints).toContain(
+      "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.",
+    );
+    expect(textOf(evidence)).toContain("Linked to terminal: Ridge for Focus and Send");
+    expect(textOf(evidence)).toContain("session cwd ≠ pane folder");
+    expect(buttonsOf(evidence).map((button) => button.attributes.title)).toEqual([
+      "WORKSPACE-1",
+      "SURFACE-1",
+      "PANE-1",
+    ]);
   });
 
   test("Operate shows task only when meaningfully different from the human message", () => {
