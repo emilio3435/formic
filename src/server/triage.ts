@@ -12,12 +12,15 @@ import type {
 } from "../shared/types";
 
 const MAX_BODY_BYTES = 2_048;
+export const TRIAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_TRIAGE_ITEMS = 500;
 
 export interface TriageQueueStore {
   list(): readonly TriageQueueItem[];
   get(issueId: string): TriageQueueItem | undefined;
   add(recommendation: TriageRecommendation): Promise<TriageQueueItem>;
   start(issueId: string, runner: TriageInvestigationRunner): Promise<TriageQueueItem>;
+  remove(issueId: string): Promise<{ item: TriageQueueItem; cancelled: boolean } | undefined>;
   subscribe?(listener: (item: TriageQueueItem) => void): () => void;
 }
 
@@ -27,6 +30,7 @@ export interface InvestigationLaunch {
   model: string;
   pid?: number;
   completion: Promise<InvestigationResult>;
+  cancel?(): void | Promise<void>;
 }
 export interface TriageInvestigationRunner {
   launch(item: TriageQueueItem): Promise<InvestigationLaunch>;
@@ -164,6 +168,9 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
   protected readonly items = new Map<string, TriageQueueItem>();
   private mutationQueue: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(item: TriageQueueItem) => void>();
+  private readonly activeRuns = new Map<string, InvestigationLaunch>();
+
+  constructor(protected readonly now: () => number = Date.now) {}
 
   list(): readonly TriageQueueItem[] {
     return [...this.items.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -181,29 +188,29 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
   }
 
   async add(recommendation: TriageRecommendation): Promise<TriageQueueItem> {
-    const operation = this.mutationQueue.then(async () => {
+    return this.mutate(async () => {
       const existing = this.items.get(recommendation.issueId);
-      if (existing) return existing;
+      if (existing && (existing.state === "queued" || existing.state === "running")) return existing;
       const item: TriageQueueItem = {
         ...recommendation,
         id: `triage:${recommendation.issueId}`,
         state: "queued",
         createdAt: recommendation.generatedAt,
       };
-      await this.persist([...this.items.values(), item]);
-      this.items.set(recommendation.issueId, item);
+      await this.commit([
+        ...[...this.items.values()].filter((value) => value.issueId !== recommendation.issueId),
+        item,
+      ]);
       this.notify(item);
       return item;
     });
-    this.mutationQueue = operation.then(() => undefined, () => undefined);
-    return operation;
   }
 
   async start(issueId: string, runner: TriageInvestigationRunner): Promise<TriageQueueItem> {
     return this.mutate(async () => {
       const item = this.items.get(issueId);
       if (!item) throw new Error("Investigation is not queued");
-      if (item.state !== "queued") return item;
+      if (item.state !== "queued") throw new Error(`Investigation is ${item.state}; requeue it before running again`);
       const launch = await runner.launch(item);
       const running: TriageQueueItem = {
         ...item,
@@ -213,28 +220,63 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
         runModel: launch.model,
         pid: launch.pid,
       };
-      await this.persist([...this.items.values()].map((value) => value.issueId === issueId ? running : value));
-      this.items.set(issueId, running);
+      try {
+        await this.commit([...this.items.values()].map((value) => value.issueId === issueId ? running : value));
+      } catch (error) {
+        await launch.cancel?.();
+        throw error;
+      }
+      this.activeRuns.set(issueId, launch);
       this.notify(running);
-      void launch.completion.then((result) => this.finish(issueId, result));
+      void launch.completion.then(
+        (result) => this.finish(issueId, launch.runId, result),
+        (error) => this.finish(issueId, launch.runId, {
+          ok: false,
+          summary: `Investigation failed before reporting a result: ${error instanceof Error ? error.message : String(error)}`,
+        }),
+      );
       return running;
     });
   }
 
-  private async finish(issueId: string, result: InvestigationResult): Promise<void> {
+  async remove(issueId: string): Promise<{ item: TriageQueueItem; cancelled: boolean } | undefined> {
+    return this.mutate(async () => {
+      const item = this.items.get(issueId);
+      if (!item) return undefined;
+      const launch = this.activeRuns.get(issueId);
+      if (item.state === "running" && !launch?.cancel) {
+        const error = new Error("The active investigation has no safe cancellation handle.");
+        Object.assign(error, { code: "INVESTIGATION_CANCEL_UNAVAILABLE" });
+        throw error;
+      }
+      if (item.state === "running") await launch!.cancel!();
+      await this.commit([...this.items.values()].filter((value) => value.issueId !== issueId));
+      this.activeRuns.delete(issueId);
+      return { item, cancelled: item.state === "running" };
+    });
+  }
+
+  private async finish(issueId: string, runId: string, result: InvestigationResult): Promise<void> {
     await this.mutate(async () => {
       const item = this.items.get(issueId);
-      if (!item || item.state !== "running") return;
+      if (!item || item.state !== "running" || item.runId !== runId) return;
       const finished: TriageQueueItem = {
         ...item,
         state: result.ok ? "completed" : "blocked",
-        completedAt: new Date().toISOString(),
+        completedAt: new Date(this.now()).toISOString(),
         result: result.summary,
       };
-      await this.persist([...this.items.values()].map((value) => value.issueId === issueId ? finished : value));
-      this.items.set(issueId, finished);
+      await this.commit([...this.items.values()].map((value) => value.issueId === issueId ? finished : value));
+      this.activeRuns.delete(issueId);
       this.notify(finished);
     });
+  }
+
+  private async commit(items: readonly TriageQueueItem[]): Promise<void> {
+    const retained = retainTriageItems(items, this.now());
+    await this.persist(retained);
+    this.items.clear();
+    for (const item of retained) this.items.set(item.issueId, item);
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
@@ -247,27 +289,37 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
 }
 
 export class JsonTriageQueueStore extends MemoryTriageQueueStore {
-  private constructor(private readonly path: string) {
-    super();
+  private constructor(private readonly path: string, now: () => number) {
+    super(now);
   }
 
-  static async open(path: string): Promise<JsonTriageQueueStore> {
-    const store = new JsonTriageQueueStore(path);
+  static async open(path: string, now: () => number = Date.now): Promise<JsonTriageQueueStore> {
+    const store = new JsonTriageQueueStore(path, now);
     let recovered = false;
     try {
       const parsed = JSON.parse(await readFile(path, "utf8"));
       if (!Array.isArray(parsed)) throw new Error("triage queue must be an array");
       for (const item of parsed) {
         if (!isQueueItem(item)) throw new Error("triage queue contains an invalid item");
+        if (!isRetainedTriageItem(item, now())) {
+          recovered = true;
+          continue;
+        }
         if (item.state === "running") {
           store.items.set(item.issueId, {
             ...item,
             state: "blocked",
-            completedAt: new Date().toISOString(),
+            completedAt: new Date(now()).toISOString(),
             result: "The Ant Hill restarted before this investigation reported completion. Requeue from the current issue evidence.",
           });
           recovered = true;
         } else store.items.set(item.issueId, item);
+      }
+      const retained = retainTriageItems(store.list(), now());
+      if (retained.length !== store.items.size) {
+        store.items.clear();
+        for (const item of retained) store.items.set(item.issueId, item);
+        recovered = true;
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -288,6 +340,21 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
     await writeFile(temporary, `${JSON.stringify(items, null, 2)}\n`, "utf8");
     await rename(temporary, this.path);
   }
+}
+
+function isRetainedTriageItem(item: TriageQueueItem, nowMs: number): boolean {
+  const at = Date.parse(item.completedAt ?? item.createdAt);
+  return Number.isFinite(at) && nowMs - at <= TRIAGE_RETENTION_MS;
+}
+
+function retainTriageItems(items: readonly TriageQueueItem[], nowMs: number): TriageQueueItem[] {
+  return [...items]
+    .filter((item) => isRetainedTriageItem(item, nowMs))
+    .sort((left, right) =>
+      Number(right.state === "running") - Number(left.state === "running") ||
+      right.createdAt.localeCompare(left.createdAt),
+    )
+    .slice(0, MAX_TRIAGE_ITEMS);
 }
 
 function isQueueItem(value: unknown): value is TriageQueueItem {
@@ -330,6 +397,7 @@ export class NativeLunaInvestigationRunner implements TriageInvestigationRunner 
       this.active = false;
       throw error;
     }
+    let cancelled = false;
     const completion = (async (): Promise<InvestigationResult> => {
       let timedOut = false;
       const timeout = setTimeout(() => { timedOut = true; process.kill("SIGTERM"); }, 10 * 60_000);
@@ -338,14 +406,39 @@ export class NativeLunaInvestigationRunner implements TriageInvestigationRunner 
         const exitCode = await process.exited;
         let summary = "";
         try { summary = (await readFile(outputPath, "utf8")).trim(); } catch { /* missing result */ }
-        if (!summary) summary = timedOut ? "Investigation exceeded the 10-minute runtime limit." : stderr.trim() || `Investigation exited ${exitCode}`;
-        return { ok: !timedOut && exitCode === 0, summary: summary.slice(0, 8_000) };
+        if (!summary) {
+          summary = cancelled
+            ? "Investigation was cancelled by the operator."
+            : timedOut
+              ? "Investigation exceeded the 10-minute runtime limit."
+              : stderr.trim() || `Investigation exited ${exitCode}`;
+        }
+        return { ok: !cancelled && !timedOut && exitCode === 0, summary: summary.slice(0, 8_000) };
       } finally {
         clearTimeout(timeout);
         this.active = false;
       }
     })();
-    return { runId, model: "GPT-5.6 Luna · XHIGH · read-only", pid: process.pid, completion };
+    let cancellation: Promise<void> | undefined;
+    return {
+      runId,
+      model: "GPT-5.6 Luna · XHIGH · read-only",
+      pid: process.pid,
+      completion,
+      cancel: () => {
+        cancellation ??= (async () => {
+          cancelled = true;
+          process.kill("SIGTERM");
+          const exited = await Promise.race([
+            process.exited.then(() => true),
+            new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+          ]);
+          if (!exited) process.kill("SIGKILL");
+          await process.exited;
+        })();
+        return cancellation;
+      },
+    };
   }
 }
 
@@ -393,6 +486,18 @@ async function issueIdFrom(request: Request): Promise<string | Response> {
   return record.issueId;
 }
 
+function issueIdFromQuery(request: Request): string | Response {
+  if (!sameOriginLoopback(request)) {
+    return error(403, "ORIGIN_REJECTED", "Triage changes require an exact same-origin loopback Origin header.");
+  }
+  const url = new URL(request.url);
+  const issueId = url.searchParams.get("issueId");
+  if (!issueId?.trim() || issueId.length > 300 || [...url.searchParams.keys()].some((key) => key !== "issueId")) {
+    return error(400, "INVALID_TRIAGE_REQUEST", "Query must contain one non-empty issueId no longer than 300 characters.");
+  }
+  return issueId;
+}
+
 export async function handleTriageRequest(
   request: Request,
   snapshot: HubSnapshot,
@@ -403,6 +508,19 @@ export async function handleTriageRequest(
   if (url.pathname === "/api/triage/queue" && request.method === "GET") {
     return response({ ok: true, items: store.list() });
   }
+  if (url.pathname === "/api/triage/queue" && request.method === "DELETE") {
+    const issueId = issueIdFromQuery(request);
+    if (issueId instanceof Response) return issueId;
+    try {
+      const removed = await store.remove(issueId);
+      if (!removed) return error(404, "TRIAGE_ITEM_NOT_FOUND", "The issue has no queued investigation.");
+      return response({ ok: true, removed: removed.item, cancelled: removed.cancelled });
+    } catch (cause) {
+      const code = (cause as Error & { code?: string }).code;
+      if (code === "INVESTIGATION_CANCEL_UNAVAILABLE") return error(409, code, (cause as Error).message);
+      return error(500, "TRIAGE_QUEUE_WRITE_FAILED", `Could not update triage queue: ${(cause as Error).message}`);
+    }
+  }
   if (request.method !== "POST") return error(405, "METHOD_NOT_ALLOWED", "Use POST for triage generation or queueing.");
   const issueId = await issueIdFrom(request);
   if (issueId instanceof Response) return issueId;
@@ -412,7 +530,8 @@ export async function handleTriageRequest(
       return response({ ok: true, item: await store.start(issueId, runner) });
     } catch (cause) {
       const message = (cause as Error).message;
-      return error(message === "Investigation is not queued" ? 404 : 500, "INVESTIGATION_LAUNCH_FAILED", message);
+      const status = message === "Investigation is not queued" ? 404 : message.includes("requeue it") ? 409 : 500;
+      return error(status, "INVESTIGATION_LAUNCH_FAILED", message);
     }
   }
   const issue = snapshot.issues?.find((candidate) => candidate.id === issueId);
