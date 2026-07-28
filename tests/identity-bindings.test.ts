@@ -110,6 +110,7 @@ describe("sticky identity binding lifecycle", () => {
       target: { surfaceId: "SURFACE-HEALTH", workspaceId: "WORKSPACE-HEALTH", paneId: "PANE-HEALTH" },
       firstConfirmedAt: "2026-07-23T06:00:00.000Z",
       confirmedAt: "2026-07-23T06:00:00.000Z",
+      processIds: [4242],
     });
   });
 
@@ -160,6 +161,42 @@ describe("sticky identity binding lifecycle", () => {
     });
   });
 
+  test("a recorded PID distinguishes a live process from a disappeared process", async () => {
+    const store = new MemoryIdentityBindingStore();
+    await store.put({
+      sessionId: SESSION_ID,
+      provider: "omp",
+      target: { surfaceId: "SURFACE-A" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+      processIds: [4242],
+    });
+    const live = {
+      ...silentSurface("SURFACE-A"),
+      identityTrace: {
+        ...silentSurface("SURFACE-A").identityTrace!,
+        processes: [{ pid: 4242, command: "omp -p", recognizedAgentProcess: true }],
+      },
+    };
+
+    expect(bridgeAgentsWithBindings(store, [agent], [live])[0]).toMatchObject({
+      processIds: [4242],
+      processAlive: true,
+    });
+    expect(bridgeAgentsWithBindings(store, [agent], [silentSurface("SURFACE-A")])[0]).toMatchObject({
+      processIds: [4242],
+      processAlive: false,
+    });
+    expect(bridgeAgentsWithBindings(store, [agent], [], [4242])[0]).toMatchObject({
+      processIds: [4242],
+      processAlive: true,
+    });
+    expect(bridgeAgentsWithBindings(store, [agent], [], [9999])[0]).toMatchObject({
+      processIds: [4242],
+      processAlive: false,
+    });
+  });
+
   test("live evidence outranks a binding: a linked or reclaimed surface never gets bridged", async () => {
     const store = new MemoryIdentityBindingStore();
     await updateBindingsFromScan(store, [confirmedSurface("SURFACE-A")], "2026-07-23T06:00:00.000Z");
@@ -194,6 +231,7 @@ describe("sticky identity binding lifecycle", () => {
       target: { surfaceId: "SURFACE-B", workspaceId: "WORKSPACE-SURFACE-B", paneId: "PANE-SURFACE-B" },
       firstConfirmedAt: "2026-07-23T06:02:00.000Z",
       confirmedAt: "2026-07-23T06:02:00.000Z",
+      processIds: [4242],
     });
   });
 

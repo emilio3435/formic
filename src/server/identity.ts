@@ -161,13 +161,46 @@ function primaryOpenIdentity(
   return roots.length === 1 ? roots[0] : undefined;
 }
 
-function resolveCommandHint(hint: IdentityHint, agents: readonly CollectedAgent[]): IdentityHint | null {
-  if (hint.full) return hint;
-  const matches = agents.filter(
-    (agent) => agent.provider === hint.provider && agent.sourceSessionId.toLowerCase().startsWith(hint.value),
-  );
-  if (matches.length !== 1) return null;
-  return { provider: hint.provider, value: matches[0].sourceSessionId.toLowerCase(), full: true };
+interface CommandHintResolution {
+  hint?: IdentityHint;
+  rejectionReason?: string;
+}
+
+export interface IdentityCollectionResult extends CollectionResult<CmuxSurface[]> {
+  /** Present only when a completed process scan observed the live recognized-agent PID set. */
+  liveAgentProcessIds?: number[];
+}
+
+function resolveCommandHint(
+  hint: IdentityHint,
+  agents: readonly CollectedAgent[],
+): CommandHintResolution {
+  const matches = agents.filter((agent) => {
+    if (agent.provider !== hint.provider) return false;
+    const sourceId = agent.sourceSessionId.toLowerCase();
+    const runtimeId = agent.runtimeSessionId?.toLowerCase();
+    return hint.full
+      ? sourceId === hint.value || runtimeId === hint.value
+      : sourceId.startsWith(hint.value) || runtimeId?.startsWith(hint.value);
+  });
+  const active = matches.filter((agent) => agent.status === "running" || agent.status === "waiting");
+  const candidates = active.length > 0 ? active : matches;
+  if (candidates.length === 0) {
+    return { hint: hint.full ? hint : undefined };
+  }
+  if (candidates.length > 1) {
+    const label = hint.provider === "claude" ? "Claude" : hint.provider;
+    return {
+      rejectionReason: `multiple active ${label} sources (${candidates.length}) claim runtime session ${hint.value}`,
+    };
+  }
+  return {
+    hint: {
+      provider: hint.provider,
+      value: candidates[0].sourceSessionId.toLowerCase(),
+      full: true,
+    },
+  };
 }
 
 function baseTrace(
@@ -205,7 +238,7 @@ export async function enrichCmuxIdentity(
   surfaces: readonly CmuxSurface[],
   agents: readonly CollectedAgent[],
   runner: CommandRunner,
-): Promise<CollectionResult<CmuxSurface[]>> {
+): Promise<IdentityCollectionResult> {
   const errors: string[] = [];
   const readySurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
   const ttyNames = new Set(
@@ -281,7 +314,11 @@ export async function enrichCmuxIdentity(
       errors,
     };
   }
-  const processes = parseProcessTable(processResult.stdout).filter(
+  const allProcesses = parseProcessTable(processResult.stdout);
+  const liveAgentProcessIds = allProcesses
+    .filter((process) => isRecognizedAgentProcess(process.command))
+    .map(({ pid }) => pid);
+  const processes = allProcesses.filter(
     (process) => (process.tty !== undefined && ttyNames.has(process.tty)) || allAttributedPids.has(process.pid),
   );
   const processesByTty = new Map<string, ProcessRow[]>();
@@ -294,13 +331,13 @@ export async function enrichCmuxIdentity(
   const agentsByIdentity = new Map(
     agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
   );
-  const resolvedCommandHints = new Map<string, IdentityHint | null>();
-  const cachedCommandHint = (hint: IdentityHint): IdentityHint | null => {
+  const resolvedCommandHints = new Map<string, CommandHintResolution>();
+  const cachedCommandHint = (hint: IdentityHint): CommandHintResolution => {
     const key = `${identityKey(hint)}:${hint.full}`;
     if (!resolvedCommandHints.has(key)) {
       resolvedCommandHints.set(key, resolveCommandHint(hint, agents));
     }
-    return resolvedCommandHints.get(key) ?? null;
+    return resolvedCommandHints.get(key) ?? {};
   };
   const pids = [
     ...new Set(
@@ -323,7 +360,7 @@ export async function enrichCmuxIdentity(
         ? "open-session identity lookup timed out"
         : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`;
       errors.push(error);
-      return { value: failedProbeSurfaces(surfaces, error), errors };
+      return { value: failedProbeSurfaces(surfaces, error), errors, liveAgentProcessIds };
     }
   }
 
@@ -364,13 +401,17 @@ export async function enrichCmuxIdentity(
         }),
       );
       const commandHintEvidence: SurfaceCommandHintEvidence[] = surfaceProcesses.flatMap((process) =>
-        identitiesFromCommand(process.command).map((hint) => ({
-          pid: process.pid,
-          provider: hint.provider,
-          value: hint.value,
-          full: hint.full,
-          resolvedSessionId: cachedCommandHint(hint)?.value,
-        })),
+        identitiesFromCommand(process.command).map((hint) => {
+          const resolved = cachedCommandHint(hint);
+          return {
+            pid: process.pid,
+            provider: hint.provider,
+            value: hint.value,
+            full: hint.full,
+            resolvedSessionId: resolved.hint?.value,
+            rejectionReason: resolved.rejectionReason,
+          };
+        }),
       );
       const trace = (
         outcome: SurfaceIdentityTrace["outcome"],
@@ -428,6 +469,17 @@ export async function enrichCmuxIdentity(
       const commandHints = commandHintEvidence.flatMap((hint): IdentityHint[] =>
         hint.resolvedSessionId ? [{ provider: hint.provider, value: hint.resolvedSessionId, full: true }] : [],
       );
+      const rejectedCommandHint = commandHintEvidence.find((hint) => hint.rejectionReason);
+      if (rejectedCommandHint?.rejectionReason) {
+        const identityConflict = `cmux ${surface.surfaceId} refused command identity: ${rejectedCommandHint.rejectionReason}`;
+        errors.push(identityConflict);
+        return {
+          ...surface,
+          sourceSessionIds: [],
+          identityConflict,
+          identityTrace: trace("command-hint-conflict", [], identityConflict, attributionNotes),
+        };
+      }
       const commandIdentity = uniqueIdentity(commandHints);
       if (commandHints.length > 0 && !commandIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting recognized agent commands on ${tty}`;
@@ -452,5 +504,6 @@ export async function enrichCmuxIdentity(
           };
     }),
     errors,
+    liveAgentProcessIds,
   };
 }

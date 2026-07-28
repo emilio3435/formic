@@ -129,6 +129,70 @@ describe("TTY and open-session identity evidence", () => {
     ]);
   });
 
+  test("a Claude runtime session argument resolves to its unique active transcript source", async () => {
+    const runtimeSessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const claude: CollectedAgent = {
+      ...agent,
+      id: "claude:11111111-2222-3333-4444-555555555555",
+      provider: "claude",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+      runtimeSessionId,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: `202 ttys033 /Users/me/.local/bin/claude --resume ${runtimeSessionId}`,
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [claude], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([claude.sourceSessionId]);
+    expect(enriched.value[0]?.identityTrace).toMatchObject({
+      outcome: "command-hint-match",
+      commandHints: [{
+        pid: 202,
+        value: runtimeSessionId,
+        resolvedSessionId: claude.sourceSessionId,
+      }],
+    });
+  });
+
+  test("a Claude runtime session shared by active sources quarantines instead of guessing", async () => {
+    const runtimeSessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const first: CollectedAgent = {
+      ...agent,
+      id: "claude:11111111-2222-3333-4444-555555555555",
+      provider: "claude",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+      runtimeSessionId,
+    };
+    const second: CollectedAgent = {
+      ...first,
+      id: "claude:22222222-3333-4444-5555-666666666666",
+      sourceSessionId: "22222222-3333-4444-5555-666666666666",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: `202 ttys033 /Users/me/.local/bin/claude --resume ${runtimeSessionId}`,
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [first, second], runner);
+
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+    expect(enriched.value[0]?.identityConflict).toContain("multiple active Claude sources");
+    expect(enriched.value[0]?.identityTrace?.outcome).toBe("command-hint-conflict");
+  });
+
   test("a process lookup timeout is surfaced and fails identity enrichment closed", async () => {
     const runner = new SequenceRunner([
       { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },

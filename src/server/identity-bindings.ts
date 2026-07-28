@@ -21,6 +21,8 @@ export interface IdentityBinding {
   target: IdentityBindingTarget;
   firstConfirmedAt: string;
   confirmedAt: string;
+  /** Exact recognized agent PIDs observed when this binding was confirmed. */
+  processIds?: number[];
   /** A candidate new surface observed while the current target still stands. */
   pendingReassignment?: {
     target: IdentityBindingTarget;
@@ -75,6 +77,9 @@ function isIdentityBinding(value: unknown): value is IdentityBinding {
     isBindingTarget(binding.target) &&
     typeof binding.firstConfirmedAt === "string" &&
     typeof binding.confirmedAt === "string" &&
+    (binding.processIds === undefined ||
+      (Array.isArray(binding.processIds) &&
+        binding.processIds.every((pid) => Number.isInteger(pid) && pid > 0))) &&
     (binding.pendingReassignment === undefined ||
       (typeof binding.pendingReassignment === "object" &&
         binding.pendingReassignment !== null &&
@@ -189,8 +194,9 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
 
 /**
  * Record/refresh bindings from one completed identity scan. Only surfaces the
- * scan linked through open session files (lsof) count as confirmation —
- * command hints and carried-over cmux metadata never move a binding.
+ * scan linked through open session files or a uniquely resolved full command
+ * session ID count as confirmation. Carried-over cmux metadata never moves a
+ * binding.
  */
 export async function updateBindingsFromScan(
   store: IdentityBindingStore,
@@ -198,11 +204,15 @@ export async function updateBindingsFromScan(
   nowIso: string,
 ): Promise<{ errors: string[] }> {
   const errors: string[] = [];
-  const confirmed = new Map<string, { surface: CmuxSurface; provider?: Provider }>();
+  const confirmed = new Map<string, {
+    surface: CmuxSurface;
+    provider?: Provider;
+    processIds: number[];
+  }>();
   const contested = new Set<string>();
   for (const surface of surfaces) {
     const trace = surface.identityTrace;
-    if (!trace || trace.outcome !== "open-file-match") continue;
+    if (!trace || (trace.outcome !== "open-file-match" && trace.outcome !== "command-hint-match")) continue;
     if (surface.identityConflict || surface.sourceSessionIds.length !== 1) continue;
     const sessionId = surface.sourceSessionIds[0].toLowerCase();
     const existing = confirmed.get(sessionId);
@@ -212,13 +222,22 @@ export async function updateBindingsFromScan(
       contested.add(sessionId);
       continue;
     }
-    confirmed.set(sessionId, {
-      surface,
-      provider: trace.openFileMatches.find((match) => match.sessionId.toLowerCase() === sessionId)?.provider,
-    });
+    const openMatches = trace.openFileMatches.filter(
+      (match) => match.sessionId.toLowerCase() === sessionId,
+    );
+    const commandMatches = trace.commandHints.filter(
+      (hint) => hint.resolvedSessionId?.toLowerCase() === sessionId,
+    );
+    const provider = openMatches[0]?.provider ?? commandMatches[0]?.provider;
+    const processIds = [...new Set([
+      ...openMatches.map(({ pid }) => pid),
+      ...commandMatches.map(({ pid }) => pid),
+    ])];
+    if (!provider || processIds.length === 0) continue;
+    confirmed.set(sessionId, { surface, provider, processIds });
   }
   const updates: IdentityBinding[] = [];
-  for (const [sessionId, { surface, provider }] of confirmed) {
+  for (const [sessionId, { surface, provider, processIds }] of confirmed) {
     if (contested.has(sessionId)) continue;
     const observed: IdentityBindingTarget = {
       surfaceId: surface.surfaceId,
@@ -228,13 +247,14 @@ export async function updateBindingsFromScan(
     const existing = store.get(sessionId);
     let next: IdentityBinding;
     if (!existing) {
-      next = { sessionId, provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso };
+      next = { sessionId, provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso, processIds };
     } else if (existing.target.surfaceId === observed.surfaceId) {
       next = {
         ...existing,
         provider: provider ?? existing.provider,
         target: observed,
         confirmedAt: nowIso,
+        processIds,
         pendingReassignment: undefined,
       };
     } else {
@@ -243,7 +263,14 @@ export async function updateBindingsFromScan(
         : undefined;
       const scansAgreed = pending ? pending.scansAgreed + 1 : 1;
       next = scansAgreed >= REASSIGNMENT_CONFIRMATION_SCANS
-        ? { sessionId, provider: provider ?? existing.provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso }
+        ? {
+            sessionId,
+            provider: provider ?? existing.provider,
+            target: observed,
+            firstConfirmedAt: nowIso,
+            confirmedAt: nowIso,
+            processIds,
+          }
         : {
             ...existing,
             pendingReassignment: {
@@ -276,25 +303,49 @@ export function bridgeAgentsWithBindings(
   store: IdentityBindingStore,
   agents: readonly CollectedAgent[],
   surfaces: readonly CmuxSurface[],
+  liveAgentProcessIds?: readonly number[],
 ): CollectedAgent[] {
   const liveSessionIds = new Set(
     surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
   );
   const surfacesById = new Map(surfaces.map((surface) => [surface.surfaceId, surface]));
   return agents.map((agent) => {
-    if (agent.recordedTarget) return agent;
-    if (agent.status !== "running" && agent.status !== "waiting") return agent;
     const sessionId = agent.sourceSessionId.toLowerCase();
-    if (liveSessionIds.has(sessionId)) return agent;
     const binding = store.get(sessionId);
     if (!binding) return agent;
     const bound = surfacesById.get(binding.target.surfaceId);
+    const processIds = binding.processIds;
+    const trace = bound?.identityTrace;
+    const trustworthyProcessScan = Boolean(
+      trace && trace.outcome !== "probe-failed" && trace.outcome !== "no-tty",
+    );
+    const processAlive = processIds?.length
+      ? liveAgentProcessIds
+        ? processIds.some((pid) => liveAgentProcessIds.includes(pid))
+        : trace?.processes.some(({ pid }) => processIds.includes(pid))
+          ? true
+          : trustworthyProcessScan
+            ? false
+            : undefined
+      : undefined;
+    const transcriptOpen = processIds?.length && trace
+      ? trace.openFileMatches.some(({ pid }) => processIds.includes(pid))
+      : undefined;
+    const withProcessEvidence: CollectedAgent = {
+      ...agent,
+      processIds,
+      processAlive,
+      transcriptOpen,
+    };
+    if (agent.recordedTarget) return withProcessEvidence;
+    if (agent.status !== "running" && agent.status !== "waiting") return withProcessEvidence;
+    if (liveSessionIds.has(sessionId)) return withProcessEvidence;
     // The bound surface carrying exact evidence for a DIFFERENT session is a
     // contradiction, not a gap — never bridge over it. A conflicted surface
     // still gets the bridge so tier 1 quarantines it visibly.
-    if (bound && !bound.identityConflict && bound.sourceSessionIds.length > 0) return agent;
+    if (bound && !bound.identityConflict && bound.sourceSessionIds.length > 0) return withProcessEvidence;
     return {
-      ...agent,
+      ...withProcessEvidence,
       recordedTarget: {
         ...binding.target,
         reason: BINDING_BRIDGE_REASON,

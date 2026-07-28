@@ -144,6 +144,51 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs[0]?.agents[0]?.elapsedMs).toBe(5 * 60 * 1_000);
   });
 
+  test("process state distinguishes running, clean exit, death, and unknown without guessing", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:running", sourceSessionId: "running", processIds: [101], processAlive: true }),
+        collected({
+          id: "omp:exited",
+          provider: "omp",
+          sourceSessionId: "exited",
+          status: "archived",
+          transcriptEndedCleanly: true,
+        }),
+        collected({ id: "codex:died", sourceSessionId: "died", processIds: [202], processAlive: false }),
+        collected({ id: "claude:unknown", provider: "claude", sourceSessionId: "unknown" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const states = Object.fromEntries(
+      snapshot.programs.flatMap(({ agents }) => agents).map(({ id, processState }) => [id, processState]),
+    );
+
+    expect(states).toEqual({
+      "codex:running": "running",
+      "omp:exited": "exited",
+      "codex:died": "died",
+      "claude:unknown": "unknown",
+    });
+  });
+
+  test("identity traces are lazy for diagnostics and absent from snapshot JSON", () => {
+    const source = collected();
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{ ...uniqueSurface, sourceSessionIds: [source.sourceSessionId] }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs[0]!.agents[0]!;
+
+    expect(Object.getOwnPropertyDescriptor(agent, "identityTrace")?.get).toBeFunction();
+    expect(JSON.stringify(snapshot)).not.toContain("identityTrace");
+    expect(agent.identityTrace).toMatchObject({ matchedTier: "session", resolution: "exact" });
+  });
+
   test("archived sources outside the configured scan window stay out of the live snapshot", () => {
     const archived = [
       collected({
@@ -513,6 +558,41 @@ describe("snapshot control safety and SSE deduplication", () => {
     ]);
     expect(snapshot.totals.needsYou).toBe(1);
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+  });
+
+  test("identity-conflict issues link agents named by the conflicting process evidence", () => {
+    const first = collected();
+    const second = collected({
+      id: "codex:other-session",
+      sourceSessionId: "other-session",
+    });
+    const conflict = "cmux SURFACE-UNIQUE has conflicting open agent session files on ttys005";
+    const snapshot = buildSnapshot({
+      agents: [first, second],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [],
+        identityConflict: conflict,
+        identityTrace: {
+          surfaceId: uniqueSurface.surfaceId,
+          processes: [{ pid: 101, command: "codex", recognizedAgentProcess: true }],
+          openFileMatches: [
+            { pid: 101, path: `/tmp/${first.sourceSessionId}.jsonl`, provider: "codex", sessionId: first.sourceSessionId },
+            { pid: 101, path: `/tmp/${second.sourceSessionId}.jsonl`, provider: "codex", sessionId: second.sourceSessionId },
+          ],
+          commandHints: [],
+          outcome: "open-file-conflict",
+          sourceSessionIds: [],
+          identityConflict: conflict,
+        },
+      }],
+      cmuxErrors: [conflict],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.issues?.find(({ id }) => id === "system:cmux-identity-conflicts")?.affectedAgentIds)
+      .toEqual([first.id, second.id]);
   });
 
   test("native parent IDs and roles produce swarm-ready program rollups", () => {

@@ -1,6 +1,7 @@
 export type Provider = "codex" | "omp" | "claude" | "cursor";
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
+export type ProcessState = "running" | "exited" | "died" | "unknown";
 export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";
 export type AgentRole = "orchestrator" | "verifier" | "automation" | "frontend" | "backend" | "tester" | "agent";
@@ -103,6 +104,8 @@ export interface SurfaceCommandHintEvidence {
   full: boolean;
   /** Full session ID after prefix resolution; absent when no unique source matched. */
   resolvedSessionId?: string;
+  /** Why a provider runtime identity was refused instead of bound. */
+  rejectionReason?: string;
 }
 
 export type SurfaceIdentityOutcome =
@@ -159,6 +162,8 @@ export interface AgentSnapshot {
   status: AgentStatus;
   statusReason: string;
   activity?: ActivityState;
+  /** Process/transcript lifecycle evidence; unknown means the sources cannot distinguish it safely. */
+  processState?: ProcessState;
   outcome?: OutcomeState;
   controlState?: OperatorControlState;
   role?: AgentRole;

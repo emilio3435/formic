@@ -35,6 +35,7 @@ export class HubState {
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
   #cmuxReachable = false;
   #cmuxLastCheckedAt = new Date(0).toISOString();
+  #liveAgentProcessIds?: number[];
   #refreshing?: Promise<HubSnapshot>;
   #refreshStartedAtMs?: number;
   #cmuxRequested = false;
@@ -202,6 +203,9 @@ export class HubState {
         this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
         const enriched = await this.collectors.enrichIdentity(cmux.value, collectedAgents, this.runner);
         this.#surfaces = enriched.value;
+        this.#liveAgentProcessIds = enriched.liveAgentProcessIds
+          ? [...enriched.liveAgentProcessIds]
+          : undefined;
         identityErrors = enriched.errors;
         // Only completed identity scans confirm bindings; a failed write is an
         // operator-visible error, never a silent skip or a broken refresh loop.
@@ -224,7 +228,12 @@ export class HubState {
     ) as Record<Provider, string[]>;
     const built = this.#withSourceHealth(buildSnapshot({
       agents: this.bindingStore
-        ? bridgeAgentsWithBindings(this.bindingStore, collectedAgents, this.#surfaces)
+        ? bridgeAgentsWithBindings(
+            this.bindingStore,
+            collectedAgents,
+            this.#surfaces,
+            this.#liveAgentProcessIds,
+          )
         : collectedAgents,
       surfaces: this.#surfaces,
       notifications: this.#notifications,

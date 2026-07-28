@@ -13,6 +13,8 @@ export interface CollectedAgent {
   id: string;
   provider: Provider;
   sourceSessionId: string;
+  /** Provider runtime identity when it differs from the transcript's source identity. */
+  runtimeSessionId?: string;
   displayName: string;
   cwd?: string;
   model?: string;
@@ -34,6 +36,13 @@ export interface CollectedAgent {
   transcriptTail?: string;
   artifacts: Artifact[];
   gates: string[];
+  /** True only when the provider transcript contains an explicit session-exit record. */
+  transcriptEndedCleanly?: boolean;
+  /** Exact process IDs retained from a confirmed identity scan. */
+  processIds?: number[];
+  /** Current liveness of the retained process IDs; absent when no trustworthy scan checked them. */
+  processAlive?: boolean;
+  transcriptOpen?: boolean;
   allowCwdFallback?: boolean;
   recordedTarget?: {
     workspaceId?: string;
