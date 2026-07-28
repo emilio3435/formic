@@ -336,6 +336,64 @@ function deriveControlState(agent) {
   return t.resolution === "ambiguous" ? "quarantined" : "observed-only";
 }
 
+/* ---------- process liveness (additive, absent-first) ----------
+
+   A crashed agent and a cleanly finished one both simply stop, so "needs me"
+   and "done" look identical. A parallel backend lane is adding an additive
+   snapshot field that separates them; no snapshot this client has ever seen
+   carries it, so every rule below is written absent-first:
+
+     - absent  -> null, and NOTHING new is rendered. The board looks exactly as
+                  it does today. Absence is not evidence of death.
+     - present but a word we do not recognise -> "unknown". Guessing "died" from
+       a vocabulary we do not own is the one mistake that would make this
+       feature worse than not shipping it.
+
+   Two carriers are read (`processLiveness` and `liveness`) and either may be a
+   bare string or an object with `state`/`status`, because the emitting lane's
+   exact shape is not settled yet and reading one spelling would mean the
+   feature silently never appears. The word vocabulary is deliberately wide for
+   the same reason — including the `process-alive` / `process-gone` /
+   `no-evidence` spelling the collector lane proposed. */
+const LIVENESS_WORDS = {
+  running: "running", alive: "running", live: "running", "process-alive": "running",
+  up: "running", active: "running",
+  exited: "exited", "exited-clean": "exited", "clean-exit": "exited", clean: "exited",
+  finished: "exited", completed: "exited", complete: "exited", done: "exited",
+  died: "died", dead: "died", "process-gone": "died", gone: "died", crashed: "died",
+  killed: "died", terminated: "died",
+  unknown: "unknown", "no-evidence": "unknown", unclear: "unknown", indeterminate: "unknown",
+};
+
+const LIVENESS_VIEW = {
+  running: { label: "Process live", tone: "ok", detail: "The agent's process is still running." },
+  exited: { label: "Exited cleanly", tone: "calm", detail: "The process finished and its transcript ended cleanly — this one is done." },
+  died: { label: "Died", tone: "alert", detail: "The process is gone and nothing ended cleanly. This session stopped without finishing." },
+  unknown: { label: "Liveness unknown", tone: "quiet", detail: "There is not enough process evidence to say whether this one is alive." },
+};
+
+function livenessState(agent) {
+  const raw = agent && agent.processLiveness != null ? agent.processLiveness
+    : agent && agent.liveness != null ? agent.liveness
+      : null;
+  if (raw == null) return null;
+  const word = typeof raw === "string"
+    ? raw
+    : typeof raw === "object" && raw
+      ? (typeof raw.state === "string" ? raw.state : typeof raw.status === "string" ? raw.status : null)
+      : null;
+  if (typeof word !== "string" || !word.trim()) return "unknown";
+  return LIVENESS_WORDS[word.trim().toLowerCase()] || "unknown";
+}
+
+/* Null when the field is absent — every call site treats null as "render
+   nothing", which is what keeps an old snapshot looking exactly like today. */
+function livenessView(agent) {
+  const key = livenessState(agent);
+  if (!key) return null;
+  return { key, ...LIVENESS_VIEW[key] };
+}
+
 function deriveRollup(agents) {
   const act = (a) => deriveActivity(a);
   const out = (a) => deriveOutcome(a);
@@ -1514,6 +1572,13 @@ const state = {
   // every five seconds forever.
   actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
   actionsOpen: false,
+  // Operator attention verdicts (POST /api/attention). The snapshot carries the
+  // effect, never the record, so the server's own answer is kept here to name
+  // what was done. An expired snooze is dropped by attentionRecord(), which is
+  // what lets a returning alert read as a return.
+  attention: new Map(),        // agentId -> { action, updatedAt, snoozedUntil? }
+  attentionPending: new Set(), // agentId
+  attentionErrors: new Map(),  // agentId -> operator-facing sentence
   // Out-of-page attention. `seen` is null until the first snapshot is adopted,
   // which is what makes opening the page to a backlog silent.
   notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
@@ -2287,6 +2352,48 @@ async function triageIssue(issueId, action) {
   }
 }
 
+/* Cancel a running investigation, or drop a queued/finished record.
+
+   Both are the same route (DELETE /api/triage/queue?issueId=…) because they are
+   the same server operation; `intent` only decides what the operator is told.
+   A cancel has to visibly STOP the run, not grey out a button, so success is
+   read from the server's own `cancelled` flag and the queue + snapshot are
+   re-read before anything is claimed. The server refuses to cancel a run it has
+   no safe handle for (409) — that refusal is surfaced, never swallowed, because
+   a "cancelled" that left the process running is worse than no button. */
+async function removeTriageItem(issueId, intent = "remove") {
+  const key = intent + ":" + issueId;
+  if (state.triagePending.has(key)) return;
+  state.triagePending.add(key);
+  state.triageErrors.delete(issueId);
+  render();
+  try {
+    const res = await fetch("/api/triage/queue?issueId=" + encodeURIComponent(issueId), { method: "DELETE" });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    if (!res.ok || !body || body.ok !== true) {
+      throw new Error(body && body.error && body.error.message ? body.error.message : "HTTP " + res.status);
+    }
+    // The plan itself is deliberately KEPT: removing a run must not also erase
+    // the recommendation the operator is about to re-queue. A TriageQueueItem
+    // IS a recommendation, so on a page that never generated one locally (a
+    // reload mid-investigation) the removed item is what the plan has to come
+    // from — otherwise cancelling drops the operator back to "Triage this
+    // finding" and the analysis has to be paid for twice.
+    const removed = state.queueItems.find((item) => item.issueId === issueId);
+    if (removed && !state.triage.has(issueId)) state.triage.set(issueId, removed);
+    state.queueItems = state.queueItems.filter((item) => item.issueId !== issueId);
+    toast(body.cancelled ? "Investigation cancelled" : "Investigation record removed", "ok");
+    await fetchSnapshot();
+    await fetchTriageQueue();
+  } catch (err) {
+    state.triageErrors.set(issueId, err && err.message ? err.message : "Could not update the investigation queue");
+  } finally {
+    state.triagePending.delete(key);
+    render();
+  }
+}
+
 /* Parse freeform investigation result text into a brief-friendly shape.
    Luna may emit markdown headings, labeled lines, bullets, or a one-liner.
    Display-only — never mutates triage state. Graceful on unstructured text. */
@@ -2560,6 +2667,47 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
   return briefing;
 }
 
+/* The lifecycle levers beside Queue/Launch. Returns an array so the caller can
+   spread it — an empty array when there is no queue record at all, which keeps
+   an untriaged finding's row exactly as it was.
+
+     running            -> Cancel investigation (stops the process)
+     queued             -> Remove from queue
+     completed/blocked  -> Investigate again + Remove record
+
+   "Investigate again" re-POSTs /api/triage/queue: the server replaces any item
+   that is not queued or running, so the same call is both the first queue and
+   the rerun. No second route, no second vocabulary. */
+function triageLifecycleControls(issue, queueItem, queueing, ui = state) {
+  if (!queueItem) return [];
+  const id = issue.id;
+  const cancelling = ui.triagePending.has("cancel:" + id);
+  const removing = ui.triagePending.has("remove:" + id);
+  const lever = (kind, cls, label, busy, onclick) => el("button", {
+    type: "button",
+    class: "btn sm " + cls,
+    disabled: busy ? "" : null,
+    "aria-busy": busy ? "true" : null,
+    dataset: { fkey: "triage-" + kind + ":" + id },
+    onclick,
+  }, label);
+
+  if (queueItem.state === "running") {
+    return [lever("cancel", "triage-cancel", cancelling ? "Cancelling…" : "Cancel investigation", cancelling,
+      () => removeTriageItem(id, "cancel"))];
+  }
+  if (queueItem.state === "queued") {
+    return [lever("remove", "triage-remove", removing ? "Removing…" : "Remove from queue", removing,
+      () => removeTriageItem(id, "remove"))];
+  }
+  return [
+    lever("rerun", "triage-rerun", queueing ? "Requeueing…" : "Investigate again", queueing,
+      () => triageIssue(id, "queue")),
+    lever("remove", "triage-remove", removing ? "Removing…" : "Remove record", removing,
+      () => removeTriageItem(id, "remove")),
+  ];
+}
+
 function renderTriage(issue, ui = state) {
   const queueItem = ui.queueItems.find((item) => item.issueId === issue.id);
   // A queue item IS a recommendation (TriageQueueItem extends it), so a page
@@ -2645,6 +2793,12 @@ function renderTriage(issue, ui = state) {
           dataset: { fkey: "triage-run:" + issue.id },
           onclick: () => triageIssue(issue.id, "run"),
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
+        // Lifecycle. A finding used to be investigable exactly once, ever: a run
+        // that finished, or one launched by mistake, was a permanent record with
+        // no way back. Cancel is offered only while a run is live, and it stops
+        // the process rather than hiding the button; rerun re-queues from the
+        // same plan; remove clears a finished record.
+        ...triageLifecycleControls(issue, queueItem, queueing, ui),
         el("span", { class: "triage-queue-note", text: queueItem
           ? investigationView(queueItem.state).note
             + (queueItem.state === "running" ? " · " + (queueItem.runModel || "native Luna") : "")
@@ -3549,6 +3703,7 @@ function renderAgentRow(agent, program, opts = {}) {
   // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
   // sentence into the row tooltip + aria-label; the drawer still carries it too.
   const sourceDetail = fullSourceDetail(agent);
+  const liveness = livenessView(agent);
   const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
   const activate = () => {
@@ -3597,6 +3752,14 @@ function renderAgentRow(agent, program, opts = {}) {
       // A live-looking row that has gone quiet for >10min names how long — a dim
       // fact, never an alert (staleness is a nudge, not a status change).
       staleFact ? el("span", { class: "row-stale", title: "Last update " + agoText(agent.updatedAt), text: staleFact }) : null,
+      // Process liveness. The ROW only marks the one state that changes what the
+      // operator must do — a dead process — because a "Process live" chip on
+      // every working row is noise that would bury it. Every other state (and
+      // absence) leaves the row byte-identical to today; the drawer carries the
+      // full four-state fact, so `unknown` still reads as unknown somewhere.
+      liveness && liveness.key === "died"
+        ? el("span", { class: "row-died", title: liveness.detail }, icon("warning"), liveness.label)
+        : null,
       opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
@@ -3647,6 +3810,7 @@ function renderAgentRow(agent, program, opts = {}) {
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
     (outcome !== "healthy" ? " is-" + outcome : "") +
+    (liveness && liveness.key === "died" ? " is-died" : "") +
     (activity === "ended" ? " is-ended" : "") +
     (state.selecting ? " is-selecting" : "") +
     (checked ? " is-checked" : "") +
@@ -3672,7 +3836,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}. Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}. Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;
@@ -3876,6 +4040,19 @@ function inspectorPaintSig(sel, view, ui) {
       ].join(":")
       : "",
     lastAction ? lastAction.id + ":" + lastAction.outcome : "",
+    // Attention lives only on the client until the next snapshot lands, so
+    // without it the acknowledge/dismiss/snooze block would never repaint —
+    // the exact failure `state.identity` and `state.transcript` both had.
+    agent
+      ? [
+        ui.attentionPending && ui.attentionPending.has(agent.id) ? "1" : "0",
+        (ui.attentionErrors && ui.attentionErrors.get(agent.id)) || "",
+        (() => {
+          const record = attentionRecord(agent.id, ui);
+          return record ? record.action + ":" + (record.snoozedUntil || record.updatedAt || "") : "";
+        })(),
+      ].join(":")
+      : "",
     // A feed that freezes under an OPEN drawer changes nothing else the drawer
     // signs — generatedAt is not in here and the agent record is byte-identical
     // across a frozen refresh — so without this the dock would keep painting
@@ -4400,6 +4577,137 @@ function verdictGate(agent, outcome) {
     icon("warning"), text);
 }
 
+/* The drawer's process-liveness chip. Unlike the row this renders ALL FOUR
+   states, so `unknown` is stated as unknown somewhere instead of silently
+   looking like health. Null when the field is absent — the drawer head then
+   holds exactly the nodes it holds today. */
+function verdictLiveness(agent) {
+  const view = livenessView(agent);
+  if (!view) return null;
+  return el("span", {
+    class: "verdict-liveness liveness-" + view.key,
+    title: view.detail,
+    "aria-label": "Process: " + view.label + ". " + view.detail,
+  }, view.key === "died" ? icon("warning") : null, view.label);
+}
+
+/* ---------- attention: acknowledge / dismiss / snooze ----------
+
+   The board could show that an agent wanted a human but gave the operator no
+   way to answer it, so the same alert nagged forever and the signal stopped
+   meaning anything. The server now persists the three verdicts and expires a
+   snooze on its own (POST /api/attention {action, agentId[, until]}).
+
+   The snapshot carries the EFFECT, not the record: an acknowledged, dismissed
+   or snoozed agent simply stops being `status: "attention"`. So the client
+   keeps the server's own returned record to say what it did — and drops a
+   snooze the moment it runs out, which is exactly how an expired snooze
+   visibly comes back: the record disappears here at the same time the agent
+   returns to `attention` on the wire. */
+
+const ATTENTION_SNOOZE_MS = 60 * 60_000;
+
+const ATTENTION_ERRORS = {
+  ATTENTION_NOT_FOUND: "The server has no unread notification recorded for this session, so there is nothing to clear.",
+  UNSAFE_TARGET: "This session has no safely resolved terminal, so its attention state cannot be changed.",
+  AGENT_NOT_FOUND: "This session is no longer in the current snapshot.",
+  INVALID_SNOOZE_UNTIL: "The server rejected that snooze window.",
+  ORIGIN_REJECTED: "The server refused the change as cross-origin. Reload this page from the address the server serves.",
+};
+
+function attentionErrorText(status, body) {
+  const code = body && body.error && body.error.code;
+  if (!status) return "Could not reach the server to change this attention state.";
+  if (code && ATTENTION_ERRORS[code]) return ATTENTION_ERRORS[code];
+  const message = body && body.error && body.error.message;
+  return "Attention change failed"
+    + (code ? " [" + code + "]" : "")
+    + (message ? ": " + message : " (HTTP " + status + ")");
+}
+
+/* The live record for one agent, or null once a snooze has expired. Expiry is
+   evaluated here rather than on a timer so the fact cannot get stuck. */
+function attentionRecord(agentId, ui = state, now = Date.now()) {
+  const record = ui.attention && ui.attention.get(agentId);
+  if (!record) return null;
+  if (record.action !== "snooze") return record;
+  const until = Date.parse(record.snoozedUntil || "");
+  if (!Number.isFinite(until) || until <= now) return null;
+  return record;
+}
+
+function attentionStateText(record) {
+  if (!record) return "";
+  if (record.action === "acknowledge") return "Acknowledged — this alert will not ask again until the agent says something new.";
+  if (record.action === "dismiss") return "Dismissed — cleared from the needs-a-human set.";
+  return "Snoozed until " + issueTimestamp(record.snoozedUntil) + ".";
+}
+
+async function applyAttention(agentId, action, until) {
+  if (state.attentionPending.has(agentId)) return;
+  state.attentionPending.add(agentId);
+  state.attentionErrors.delete(agentId);
+  render();
+  try {
+    const res = await fetch("/api/attention", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(action === "snooze" ? { action, agentId, until } : { action, agentId }),
+    });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    if (!res.ok || !body || body.ok !== true || !body.state) {
+      state.attentionErrors.set(agentId, attentionErrorText(res.status, body));
+    } else {
+      state.attention.set(agentId, body.state);
+      // The server refreshes the snapshot before answering, so re-reading it is
+      // what makes the agent visibly leave the needs-a-human set.
+      await fetchSnapshot();
+    }
+  } catch {
+    state.attentionErrors.set(agentId, attentionErrorText(0, null));
+  } finally {
+    state.attentionPending.delete(agentId);
+    render();
+  }
+}
+
+function attentionButton(agent, action, label, until) {
+  return el("button", {
+    type: "button",
+    class: "btn sm attn-act",
+    disabled: state.attentionPending.has(agent.id) ? "" : null,
+    dataset: { fkey: "attn:" + agent.id + ":" + action },
+    onclick: () => applyAttention(agent.id, action, until),
+  }, label);
+}
+
+/* Null for an agent nobody is waiting on and with nothing recorded, so the
+   drawer is unchanged for the overwhelming majority of sessions. */
+function renderAttentionBlock(agent, ui = state, now = Date.now()) {
+  const asking = agent.status === "attention";
+  const record = attentionRecord(agent.id, ui, now);
+  const stale = ui.attention && ui.attention.get(agent.id) && !record;
+  const error = ui.attentionErrors && ui.attentionErrors.get(agent.id);
+  if (!asking && !record && !error) return null;
+
+  const block = el("section", { class: "attn-block" + (asking ? " is-asking" : ""), "aria-label": "Attention" });
+  if (asking) {
+    block.append(el("p", { class: "attn-reason", text: conciseText(agent.statusReason, 160) }));
+    // A snooze that ran out while the drawer was open: say so, rather than
+    // letting the alert quietly reappear as if it had never been answered.
+    if (stale) block.append(el("p", { class: "attn-returned", role: "status", text: "The snooze has run out — this session is asking again." }));
+    block.append(el("div", { class: "attn-actions" },
+      attentionButton(agent, "acknowledge", "Acknowledge"),
+      attentionButton(agent, "dismiss", "Dismiss"),
+      attentionButton(agent, "snooze", "Snooze 1 hour", new Date(now + ATTENTION_SNOOZE_MS).toISOString())));
+  } else if (record) {
+    block.append(el("p", { class: "attn-state", role: "status", text: attentionStateText(record) }));
+  }
+  if (error) block.append(el("p", { class: "attn-error", role: "alert", text: error }));
+  return block;
+}
+
 /* The single most-relevant action control for the verdict head. Reuses the
    dock's derivation (capability + renderDockTool) so head and dock behave
    identically. Focus (jump to the pane) leads; Interrupt only when it is the
@@ -4449,10 +4757,14 @@ function renderAgentDrawer(pane, view) {
         el("span", { class: "chip provider-" + agent.provider },
           providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
       renderStatusLine(agent, activity, outcome, control, policy),
+      verdictLiveness(agent),
       verdictGate(agent, outcome)),
     el("div", { class: "verdict-side" },
       closeButton(),
       headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
+
+  const attentionBlock = renderAttentionBlock(agent);
+  if (attentionBlock) pane.append(attentionBlock);
 
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
@@ -5411,6 +5723,21 @@ function normalizeTranscript(body) {
   };
 }
 
+/* Both read endpoints (GET /api/transcript, GET /api/actions) currently answer
+   403 ORIGIN_REJECTED in a browser, and no page code can fix it: a browser does
+   not attach an `Origin` header to a same-origin GET, and `Origin` is a
+   forbidden header name so fetch() cannot add one. Verified live against a
+   scratch server — every GET from the page is rejected while the identical
+   request from curl with `-H Origin:` succeeds. Say that plainly instead of
+   echoing a sentence about HTTP internals the operator cannot act on, and do
+   NOT say "not available in this build", which would send someone looking for a
+   deploy that has already happened. */
+function readEndpointOriginNote(what) {
+  return what + " are refused by the server (ORIGIN_REJECTED): it requires an Origin header "
+    + "that browsers never send on a same-origin GET. Nothing on this page can supply it — the "
+    + "server's read endpoints have to stop requiring one.";
+}
+
 /* Degrade honestly. This client ships ahead of the route, so the common failure
    is a 404 with no JSON envelope — which means "this build cannot show you a
    transcript", NOT "this agent has no transcript". Saying the second would be a
@@ -5420,6 +5747,7 @@ function transcriptFailureText(status, body) {
   const message = body && body.error && body.error.message;
   if (!status) return "Could not reach the server for this transcript.";
   if (code === "AGENT_NOT_FOUND") return "This session is no longer tracked, so its transcript cannot be resolved.";
+  if (code === "ORIGIN_REJECTED") return readEndpointOriginNote("Transcripts");
   if (status === 404 && !code) return "Transcript view is not available in this build.";
   return "Transcript unavailable"
     + (code ? " [" + code + "]" : "")
@@ -6094,6 +6422,7 @@ function actionsFailureText(status, body) {
   const code = body && body.error && body.error.code;
   const message = body && body.error && body.error.message;
   if (!status) return "Could not reach the server for the action log.";
+  if (code === "ORIGIN_REJECTED") return readEndpointOriginNote("Action-log reads");
   if (status === 404 && !code) return "The action log is not available in this build.";
   return "Action log unavailable"
     + (code ? " [" + code + "]" : "")
@@ -6682,6 +7011,44 @@ function boot() {
   void loadActions();
   connect();
 }
+
+/* ---------- test seam ----------
+
+   The hoisted block near the top of this file can only export function
+   declarations: `state` and the module's `const`s are declared below it, so
+   naming them there is a TDZ error. Everything that needed to be reached but
+   could not is exported HERE, after the whole module has evaluated.
+
+   Why it exists: twenty-two tests asserted that substrings appear in the raw
+   text of this file. Those tests gate the deploy and cannot fail when the
+   behaviour breaks — `sendControl` could stop requiring confirmation, or start
+   calling HTTP 200 a success, and every one of them would still pass. The
+   request/confirmation logic was private, so there was nothing else to assert.
+
+   The surface is deliberately narrow and honest: the request functions, the
+   module state they mutate, and the pure helpers behind the new surfaces. It is
+   NOT a general escape hatch, and `boot()` / `render()` never read it. Tests
+   that write `state` are responsible for restoring what they touched. */
+Object.assign(globalThis.TheAntHill, {
+  // The module's real state object. Exported because the confirmation strip,
+  // the pending set, the feedback map and the attention/triage records are all
+  // written by the request functions and read by the render functions — there
+  // is no way to assert the behaviour without both ends.
+  state,
+  // Request/confirmation logic. Each one is driven in tests with a fake fetch.
+  sendControl, sendBroadcast, recollectSnapshot, fetchSnapshot,
+  triageIssue, removeTriageItem, fetchTriageQueue,
+  fetchLabels, submitRename, startRename,
+  loadTranscript, loadActions, applyAttention,
+  toggleSelect, enterSelectMode, selectedRecipients,
+  // Surfaces added this wave, plus the const limits FE-C had to leave out.
+  livenessState, livenessView, verdictLiveness,
+  attentionRecord, attentionStateText, attentionErrorText, renderAttentionBlock,
+  triageLifecycleControls, readEndpointOriginNote,
+  TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_RENDER_CAP,
+  ACTIONS_DEFAULT_LIMIT, ACTIONS_MAX_LIMIT,
+  ATTENTION_SNOOZE_MS,
+});
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {
   boot();

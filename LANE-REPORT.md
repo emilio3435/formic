@@ -1,3 +1,321 @@
+# WAVE 4 / W4-B — connecting the client to what the backend actually shipped
+
+Date: 2026-07-28
+Branch: `ant-hill/w4-client-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/w4-client-20260728`
+Base: `f1ecbf3` (wave-3 merge)
+Files touched: `src/web/app.js`, `src/web/styles.css`, `tests/web-client.test.ts`, and this
+report. `src/web/index.html` needed no change. Nothing else — no `src/server/**`, no
+`scripts/**`, no `config/**`, no `package.json`.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **545 pass / 0 fail**, 2524 `expect()` calls, 30 files — no skips, no `.only`, no filtering |
+| Baseline before this lane | 535 pass |
+| Mutations applied to the finished code | **22 applied, 22 caught** (details below) |
+| Live QA | driven against a scratch server on **:4788** started from this worktree, in a real browser |
+| Pushed / merged / deployed / service restarted | **no** — four local commits; `ai.imaginethat.anthill` was never touched, :4701 confirmed still `running` and answering 200 |
+
+The scratch server was stopped when the lane finished (`lsof -ti :4788` → empty).
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `b4bc90c` | process liveness, attention verdicts, triage lifecycle, ORIGIN_REJECTED copy, the test seam |
+| `403f398` | six source-regex tests converted to behavioral ones + W4-B feature tests |
+| `1f8a9f5` | the dock/banner capability-reason guard converted to a rendered assertion |
+| `c1edad4` | the investigation-result CTA and briefing cap driven through `renderTriage` |
+
+---
+
+## Item 1 — live-verify the two endpoints FE-C built blind — **PARTLY FIXED, one half BLOCKED on `src/server/app.ts`**
+
+FE-C was right to flag this. Both endpoints exist and both work — **and neither is reachable
+from the browser.**
+
+### The blocker, proven three ways
+
+`src/server/app.ts:450` and `:463` require `sameOriginLoopback(request)`, which demands
+`request.headers.get("origin") === url.origin`. **A browser attaches no `Origin` header to a
+same-origin GET**, and `Origin` is a forbidden header name, so `fetch()` cannot add one. There
+is no client-side fix. Evidence:
+
+1. `curl` with no `Origin` → `403 ORIGIN_REJECTED`; the identical request with
+   `-H "Origin: http://127.0.0.1:4788"` → `200`.
+2. A real browser loading `http://127.0.0.1:4788/`: the boot fetch shows
+   `GET /api/actions?limit=100 → 403` in the network log, beside `/api/settings`,
+   `/api/snapshot`, `/api/program-aliases`, `/api/triage/queue` all at 200.
+3. From the page's own JS context: `fetch('/api/transcript?agent=…')` → `403
+   {"code":"ORIGIN_REJECTED"}`.
+
+**Routed fix (not mine — `src/server/app.ts`):** drop the `sameOriginLoopback` requirement for
+the two GET reads and keep the `isLoopback(url.hostname)` gate that already runs above them.
+The two routes are the only GETs in the file that require an `Origin`; `/api/snapshot`,
+`/api/events`, `/api/debug/identity` and `GET /api/triage/queue` do not, which is why those
+four work in the browser today and these two do not. Every POST/DELETE route is unaffected —
+browsers do send `Origin` on those, which is why attention and triage work end to end.
+
+### What I could fix, and did
+
+The client was telling the operator the wrong story. A 403 fell through to the generic branch
+and printed the server's own sentence about HTTP internals; the 404 branch would have said
+"not available in this build", which sends someone looking for a deploy that already happened.
+`readEndpointOriginNote()` now names it as a server-side refusal the page cannot supply.
+Neither degradation was removed: a build with no route still says so, and `AGENT_NOT_FOUND`
+still reads as a missing session.
+
+### What matched the contract, live
+
+Everything else. `GET /api/transcript?agent&limit` really returns
+`{ok, agentId, source, truncated, lines:[{at, role, text}]}` — a real Codex session returned 45
+lines across `user`/`assistant`/`tool` and an unmapped role that the client collapses to
+`unknown`, exactly as `normalizeTranscript` assumes. `GET /api/actions` returns
+`{ok, actions:[…]}`. Both limit ceilings match what the client clamps to (1000 / 500); asking
+for more is a `400 INVALID_LIMIT`, and `transcriptUrl(id, 5000)` / `actionsUrl(5000)` are pinned
+to never do that.
+
+### Two contract mismatches to route (both server-side)
+
+1. **`source` is nulled on the "unreadable file" path.** `debug-identity.ts:241-261` returns
+   `source: null` both when no transcript artifact exists AND when the file exists but yields no
+   readable turns or throws. FE-C deliberately wrote two different sentences for those two
+   cases — "No transcript file is recorded for this session" vs "The transcript file is present
+   but has no readable turns" — and the second is now **unreachable**, so a file the server
+   could not read reads to the operator as a file that does not exist. The client cannot tell
+   them apart; the server has to keep `source` on the readable-but-empty path.
+2. **`recordControlAction` ignores `instruct` without an `agentId`**, so a staged-not-submitted
+   broadcast never reaches the journal. Noted only; not verified end to end.
+
+## Item 2 — surface the triage lifecycle and attention state — **FIXED** (`b4bc90c`)
+
+Both were built against the real routes and then driven through the real UI in a browser.
+
+### Triage lifecycle
+
+`removeTriageItem(issueId, intent)` calls `DELETE /api/triage/queue?issueId=…`, which is the
+one server operation behind all three verbs; `intent` only decides what the operator is told.
+`triageLifecycleControls` offers exactly the lever that fits where the run actually is:
+
+- **running** → `Cancel investigation`
+- **queued** → `Remove from queue`
+- **completed / blocked** → `Investigate again` + `Remove record`
+
+`Investigate again` re-POSTs `/api/triage/queue`, because the server's `add()` replaces any item
+that is not queued or running — the first queue and the rerun are the same call, so there is no
+second route and no second vocabulary.
+
+**A cancel visibly stops the run.** Verified live, not asserted: I queued and launched a real
+investigation (`codex exec --model gpt-5.6-luna --sandbox read-only`, pid 35858), confirmed the
+process was alive, clicked **Cancel investigation** in the drawer, and the pid was gone, the
+queue was empty, and the toast read "Investigation cancelled". A server that has no safe
+cancellation handle answers `409 INVESTIGATION_CANCEL_UNAVAILABLE`; that refusal is surfaced and
+the item stays `running`, because a "cancelled" that left the process running is worse than no
+button at all.
+
+One thing I found by driving it rather than reading it: cancelling **erased the plan** on a page
+that had not generated one locally, dropping the operator back to "Triage this finding" and
+making them pay for the analysis twice. A `TriageQueueItem` *is* a recommendation, so the
+removed item is now kept as the plan. Re-verified live: queue → remove → the plan survives and
+`Queue investigation` comes back.
+
+### Attention
+
+`applyAttention(agentId, action, until)` POSTs `/api/attention` and then re-reads the snapshot,
+which is what makes the agent visibly leave the needs-a-human set instead of just greying a
+button. The drawer grows an attention block under the verdict head with **Acknowledge**,
+**Dismiss** and **Snooze 1 hour**, each with a `data-fkey`. All three server error codes get an
+operator sentence (`ATTENTION_NOT_FOUND`, `UNSAFE_TARGET`, `AGENT_NOT_FOUND`), and a failed
+change is never recorded as if it had worked.
+
+Verified live through the real UI: **Snooze 1 hour** on a waiting agent → `200` → the agent left
+`status: "attention"`, `totals.attention` went 11 → 10, and the drawer read "Snoozed until
+Jul 29, 12:01 AM".
+
+**An expired snooze visibly returns**, verified live end to end: a 35-second snooze on
+`codex:019faa79-c6ae-…` dropped it out of the attention set, and once the deadline passed the
+next collection put it back at `status: "attention"` with `totals.attention` 9 → 10. On the
+client side, `attentionRecord()` evaluates expiry on read rather than on a timer, so an expired
+snooze cannot get stuck; when the agent is asking again and a run-out snooze is on file, the
+block says "The snooze has run out — this session is asking again."
+
+The snapshot carries the **effect** of an attention verdict, never the record, so the server's
+own returned record is what the client keeps. `state.attention` / `attentionPending` /
+`attentionErrors` joined `inspectorPaintSig` — without that the block would never repaint, which
+is the exact failure `state.identity` and `state.transcript` each had.
+
+## Item 3 — render process liveness — **FIXED** (`b4bc90c`)
+
+The field does not exist in this worktree (confirmed: no agent in a live 104-agent snapshot
+carries it), and the parallel lane's own brief says only "an additive snapshot field" without
+naming it, so **both lanes are guessing**. I built for that rather than around it:
+
+- **Absent → `null`, and nothing new renders.** No chip, no row class, no aria text. A snapshot
+  without the field paints byte-identically to today. Absence is never evidence of death.
+- **A word this client does not own → `unknown`.** Never "died", never health.
+- Two carriers are read (`processLiveness`, `liveness`), each as a bare string or an object with
+  `state`/`status`, and the word list is wide on purpose — it includes the
+  `process-alive` / `process-gone` / `no-evidence` spelling the wave-3 collector lane proposed in
+  its own routed note. Reading one spelling would mean the feature silently never appears.
+- **The row marks only `died`**, with `.row-died` (alert ink, outlined, not a fill), an `is-died`
+  row class, and "Process: Died" in the accessible name. A "Process live" chip on every working
+  row would be noise that buries the one state that changes what the operator must do.
+- **The drawer states all four**, so `unknown` is stated as unknown somewhere instead of quietly
+  reading as health. The four labels are distinct words; a test pins that "Exited cleanly" can
+  never collapse into "Died".
+
+`agentRecordSig` is a whole-record JSON projection, so the new field is already inside both the
+row and drawer paint signatures with no change — FE-B's design paying off.
+
+**Not verified against real data.** No snapshot has ever carried the field. If the parallel lane
+emits a different field name or a different vocabulary, the normalizer needs one line added and
+nothing else; the failure mode is that the chip never appears, never that something is wrong.
+
+## Item 4 — model display names — **BLOCKED, unchanged from FE-B**
+
+FE-B's finding still holds after the wave-3 cost lane's edits.
+
+- `config/models.json` now has six keys — `claudeContextWindows`, `modelFamilyAliases`,
+  `cursorNativeFamilies`, `cursorRootModel`, and the cost lane's new `pricingVersion` and
+  `modelPricingUsdPerMillionTokens`. **None is a display label.**
+- A live `GET /api/snapshot` carries `controlHealth, generatedAt, issues, lookbackHours,
+  programs, pulse, recentlyResolved, scanWindowHours, schemaVersion, totals, triageSummaries`.
+  **No model config on the wire**, and no `/api/model-config` route exists.
+- `MODEL_CONFIG` is imported by `snapshot.ts` alone, and only for family classification.
+
+There is still no source of truth to consult, so `modelShort()`'s table is untouched. Inventing
+a second one is the thing this item exists to prevent. **Routed fix:** add a display-label field
+to `config/models.json`, expose it on `HubSnapshot` (or a small `GET /api/model-config`), and
+only then point `modelShort()` at it.
+
+## Item 5 — give the client tests a seam — **FIXED** (`403f398`, `1f8a9f5`, `c1edad4`)
+
+### The seam
+
+A second export block at the **bottom** of `app.js`, after the module has evaluated. The
+existing block near the top is hoisted above `state` and every `const`, so naming them there is
+a TDZ error — that is precisely why FE-C had to leave `TRANSCRIPT_*` and `CONN_LABELS` out with
+a comment. The new block exports the request/confirmation functions, the module `state` they
+mutate, and the pure helpers behind the new surfaces. `boot()` and `render()` never read it.
+
+Exporting mutable state is the trade FE-A, FE-B and FE-C each declined. I took it because the
+alternative is what the audit found: twenty-two tests asserting that substrings appear in the
+raw text of a file, gating the deploy, unable to fail. Tests that write `state` restore what
+they found (`withState`), and paint signatures are reset so a leftover one cannot silently skip
+the paint under test.
+
+Two supporting changes: the shared fake node now **records event listeners** (`el()` wires every
+handler through `addEventListener`, so without this no test can click anything the client
+builds), and the new lifecycle handlers return their promises to match the surrounding
+`renderTriage` idiom.
+
+### Eight tests converted, 37 source assertions replaced
+
+| Test | Was | Now |
+|---|---|---|
+| interrupt/archive require confirmation | 1 substring | the real dock tool is clicked; the first click arms and sends nothing, the confirm strip sends; Focus is proven *not* gated |
+| HTTP completion is never success | 2 substrings | four server answers driven (`200 {ok:true}`, `200 {}`, `200 {ok:false}`, `200` non-JSON) and the recorded feedback read |
+| broadcast posts only eligible recipients | 5 substrings | a locked and an ended recipient are excluded from the request; a per-recipient failure stays a failure and keeps the draft; a body with no `results` is an error |
+| labels hydrate and submit stable targets | 7 substrings | `fetchLabels` adopts `body.labels`, refuses a malformed envelope without wiping existing names; `submitRename` posts `{target,label}` with the stable key, and an empty label clears the alias |
+| degraded Refresh forces a recollect | 6 substrings | POST `/api/recollect` and the snapshot it adopts; a 500 falls back to `GET /api/snapshot` so the button never dead-ends |
+| triage separates recommend/queue/launch | 10 substrings | each of the three buttons is driven and only its own route is called |
+| the dock never echoes capability reasons | 7 substrings over 2 hand-sliced bodies | a real conflict reason is planted; the banner explains in its own words, the dock stays silent in text, titles and aria-labels |
+| blocked/verifying expose a primary button | 6 substrings | a blocked and a completed run are rendered and their levers read; a ten-bullet result proves the cap holds while the raw evidence survives |
+
+Nine pure-source tests remain, and I am leaving them deliberately: `no literal control bytes in
+the client source` and `meters use SVG geometry, never inline style` are genuine source lints
+(the second is a CSP property, not a rendered one); `live re-render preserves focus`, `the two
+summary-strip expansions are mutually exclusive` and `instance-scoped keys` assert inside
+`render()`/`boot()`, which the unit suite cannot enter without a real DOM; and `the broadcast
+dock chip renders the reason word` needs `renderBroadcastBar` exported, which FE-B and FE-C both
+declined and I agree with — it reads module state directly and unpicking it is a blast radius
+this lane did not need.
+
+### Mutations — 22 applied, 22 caught
+
+Each was applied alone to the finished code and the whole suite re-run.
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | the interrupt/archive confirm gate removed | caught |
+| 2 | `res.ok` treated as control success | caught |
+| 3 | broadcast posts every selected id, not the eligible ones | caught |
+| 4 | broadcast marks every recipient delivered | caught |
+| 5 | rename posts the label where the target belongs | caught |
+| 6 | degraded Refresh dead-ends instead of falling back | caught |
+| 7 | Triage silently queues as well as recommends | caught |
+| 8 | cancel/remove uses POST instead of DELETE | caught |
+| 9 | a refused (409) cancel is reported as cancelled | caught |
+| 10 | snooze sends `acknowledge` | caught |
+| 11 | a failed attention change is recorded as done | caught |
+| 12 | an expired snooze never expires | caught |
+| 13 | an unrecognised liveness word means `died` | caught |
+| 14 | an absent liveness field means `exited` | caught |
+| 15 | the row drops its died mark | caught |
+| 16 | the drawer hides an `unknown` verdict | caught |
+| 17 | ORIGIN_REJECTED reads as a missing build | caught |
+| 18 | attention leaves the drawer paint signature | caught |
+| 19 | the dock leaks the routing reason into a tool title | caught |
+| 20 | the banner pastes the resolver evidence at the operator | caught **after** I strengthened the test — see below |
+| 21 | a finished investigation offers prose only, no lever | caught |
+| 22 | the briefing bullet cap is lifted | caught |
+
+**Honest note on #20.** My first version of the converted dock test only asserted the banner
+*contained* the operator sentence, so a banner that also pasted the raw resolver evidence slipped
+through. The original source test had covered that direction (`banner).not.toContain(".reason")`)
+and my conversion had dropped it. I added `expect(textOf(banner)).not.toContain(reason)` and
+re-ran the mutation, which then failed the suite. I also discarded one candidate mutation that
+only introduced an unused local — it changes no observable behaviour, so a test suite is right
+not to catch it, and counting it would have been dishonest arithmetic.
+
+## Honest gaps
+
+- **Item 1 is half done.** The client half is finished and tested; the endpoints stay unreachable
+  from a browser until `src/server/app.ts` stops requiring an `Origin` header on those two GETs.
+  Until then the transcript viewer and the action log show a named refusal, not data.
+- **Liveness has never met real data**, because the field does not exist yet anywhere.
+- **The `completed → Investigate again` path was not driven live**, only against the real route's
+  documented semantics and in tests; a real completion needs a ten-minute Luna run.
+- **FE-C's DOM smoke harness was not in the repo.** Its own report says so ("it is a scratchpad
+  script, not a test"), so there was nothing to extend. The `withRequests` + listener-recording
+  harness in this lane is the committed successor and is the thing that found the cancel-erases-
+  the-plan bug — but a real jsdom-backed `boot()` test is still worth a lane of its own.
+- **No new `@keyframes`, no `animation:`.** The pinned inventory and the reduced-motion guard are
+  byte-identical.
+
+## What I deliberately left alone
+
+- **FE-A's live-input exclusions.** `drafts`, `renameDraft` and `broadcastDraft` are still out of
+  every paint signature, including the attention entry I added.
+- **`modelShort()`'s label table** — item 4 has no source of truth, and a second one is worse.
+- **The existing 800-char `transcriptTail`** and every FE-C degradation sentence except the
+  ORIGIN_REJECTED branch.
+- Everything outside my three source files and the test file.
+- Nothing pushed, merged, deployed, or restarted.
+
+## Out-of-scope observations
+
+1. **`src/server/app.ts:450,463` — the Origin requirement on two GETs.** Highest-value leftover
+   in this wave: two shipped features are dark because of it. Route it.
+2. **`debug-identity.ts:241-261` collapses "no transcript file" and "unreadable transcript file"
+   into the same `source: null`**, which makes the client's honest second sentence unreachable.
+3. **FE-C's leftovers are still open**: `scripts/anthill-deploy.sh:44` still certifies a wedged
+   server as LIVE by curling `/`; there is still no `GET /api/health` and no `#performRefresh`
+   deadline.
+4. **`renderHealthRail`, `renderTabs` and `renderFilterBar` still have no paint guard** —
+   FE-A's observation #1, unchanged for four waves now.
+
+---
+
+*Everything below this line is the previous program's record, carried forward unchanged — eleven lanes' reports.*
+
+---
+
+---
+
 # WAVE 4 / W4-D — health endpoint and deploy freshness
 
 Date: 2026-07-28
