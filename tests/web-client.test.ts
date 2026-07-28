@@ -53,6 +53,162 @@ function snapshot(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/* ---------------------------------------------------------------------------
+   FE-B shared render harness.
+
+   The client guards all DOM wiring behind `typeof document`, so a minimal fake
+   document lets its real render functions build real nodes through el()/icon().
+   Tests can then assert on what a surface RENDERS instead of on the source text
+   that builds it. The node is a linked list (firstChild/nextSibling/insertBefore/
+   remove) because the keyed row reconciler manipulates siblings directly.
+   ------------------------------------------------------------------------- */
+export interface FakeNode {
+  nodeType: number;
+  tagName: string;
+  className: string;
+  textContent: string;
+  hidden?: boolean;
+  id?: string;
+  dataset: Record<string, string>;
+  attributes: Record<string, string>;
+  classList: { add(...c: string[]): void; remove(...c: string[]): void; toggle(c: string, on?: boolean): void; contains(c: string): boolean };
+  children: FakeNode[];
+  parent: FakeNode | null;
+  value?: unknown;
+  readonly firstChild: FakeNode | null;
+  readonly nextSibling: FakeNode | null;
+  setAttribute(k: string, v: unknown): void;
+  hasAttribute(k: string): boolean;
+  addEventListener(): void;
+  append(...kids: unknown[]): void;
+  insertBefore(node: FakeNode, ref: FakeNode | null): void;
+  remove(): void;
+}
+
+function makeNode(tag: string): FakeNode {
+  const classes = new Set<string>();
+  const node = {
+    nodeType: 1,
+    tagName: tag,
+    textContent: "",
+    dataset: {} as Record<string, string>,
+    attributes: {} as Record<string, string>,
+    children: [] as FakeNode[],
+    parent: null as FakeNode | null,
+    get className() { return [...classes].join(" "); },
+    set className(v: string) {
+      classes.clear();
+      for (const c of String(v).split(/\s+/)) if (c) classes.add(c);
+    },
+    classList: {
+      add(...c: string[]) { for (const x of c) if (x) classes.add(x); },
+      remove(...c: string[]) { for (const x of c) classes.delete(x); },
+      toggle(c: string, on?: boolean) { if (on === undefined ? classes.has(c) : !on) classes.delete(c); else classes.add(c); },
+      contains(c: string) { return classes.has(c); },
+    },
+    // Render code asks for childNodes/childElementCount to decide whether a
+    // panel is empty; both are the same array in this DOM-less stand-in.
+    get childNodes(): FakeNode[] { return node.children; },
+    get childElementCount(): number { return node.children.length; },
+    get firstChild(): FakeNode | null { return node.children[0] || null; },
+    get nextSibling(): FakeNode | null {
+      if (!node.parent) return null;
+      const i = node.parent.children.indexOf(node as unknown as FakeNode);
+      return (i >= 0 && node.parent.children[i + 1]) || null;
+    },
+    setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    hasAttribute(k: string) { return k in node.attributes; },
+    addEventListener() {},
+    append(...kids: unknown[]) {
+      for (const kid of kids) {
+        if (kid == null) continue;
+        node.children.push(kid as FakeNode);
+        if (typeof kid === "object" && kid !== null && "parent" in (kid as FakeNode)) (kid as FakeNode).parent = node as unknown as FakeNode;
+      }
+    },
+    insertBefore(child: FakeNode, ref: FakeNode | null) {
+      if (child.parent) {
+        const at = child.parent.children.indexOf(child);
+        if (at >= 0) child.parent.children.splice(at, 1);
+      }
+      child.parent = node as unknown as FakeNode;
+      const i = ref ? node.children.indexOf(ref) : -1;
+      if (i === -1) node.children.push(child);
+      else node.children.splice(i, 0, child);
+    },
+    remove() {
+      if (!node.parent) return;
+      const at = node.parent.children.indexOf(node as unknown as FakeNode);
+      if (at >= 0) node.parent.children.splice(at, 1);
+      node.parent = null;
+    },
+  };
+  return node as unknown as FakeNode;
+}
+
+const domById = new Map<string, FakeNode>();
+function fakeDocument() {
+  domById.clear();
+  return {
+    createElement: (t: string) => makeNode(t),
+    createElementNS: (_ns: string, t: string) => makeNode(t),
+    createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    getElementById: (id: string) => {
+      if (!domById.has(id)) domById.set(id, makeNode("div"));
+      return domById.get(id) as FakeNode;
+    },
+    querySelectorAll: () => [] as unknown[],
+    querySelector: () => null,
+  };
+}
+
+function withDom<T>(fn: () => T): T {
+  (globalThis as unknown as { document: unknown }).document = fakeDocument();
+  try { return fn(); } finally {
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+}
+
+function newNode(tag = "div"): FakeNode {
+  return makeNode(tag);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function textOf(node: any): string {
+  if (!node || typeof node !== "object") return "";
+  if (node.nodeType === 3) return String(node.textContent || "");
+  let s = typeof node.textContent === "string" ? node.textContent : "";
+  for (const kid of node.children || []) s += textOf(kid);
+  return s;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findAll(node: any, pred: (n: any) => boolean, out: any[] = []): any[] {
+  if (!node || typeof node !== "object") return out;
+  if (pred(node)) out.push(node);
+  for (const kid of node.children || []) findAll(kid, pred, out);
+  return out;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const buttonsOf = (node: any) => findAll(node, (n) => n.tagName === "button");
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const allByClass = (node: any, token: string) =>
+  findAll(node, (n) => typeof n.className === "string" && n.className.split(/\s+/).includes(token));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const byClass = (node: any, token: string) => allByClass(node, token)[0] || null;
+
+/* The three drawer panels, rendered and flattened to text. */
+function panelTexts(a: Record<string, unknown>) {
+  return withDom(() => ({
+    operate: textOf(M.renderOperate(a, { id: "p", name: "P", agents: [] })),
+    chat: textOf(M.renderChat(a)),
+    evidence: textOf(M.renderEvidence(a)),
+  }));
+}
+
 describe("summary status and widgets", () => {
   test("maps live connection, source, and control evidence to one system verdict", () => {
     const healthy = snapshot();
@@ -186,22 +342,23 @@ describe("provider-aware row summaries", () => {
     expect(M.formatLastHumanMessage(agent())).toBe("No readable message yet");
   });
 
+  /* FE-B: this used to extract the three panels by matching source text between
+     landmark function names, which pinned file ordering rather than behavior.
+     It now renders the panels and reads what they actually show. */
   test("keeps the raw transcript tail in Chat/Evidence, not Operate", () => {
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
-      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
-      || "";
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
+    const TAIL = "RAW-TOOL-DUMP-9f2c";
+    const rich = agent({
+      lastHumanMessage: "ship the fix",
+      lastAgentMessage: "pushed the branch",
+      transcriptTail: TAIL,
+    });
+    const panels = panelTexts(rich);
     // Bookshelf seam: Chat shows readable You/Agent turns only — the raw
     // transcript tail is Evidence-only machinery behind the disclosure.
-    expect(operate).not.toContain("transcriptTail");
-    expect(chat).toContain("lastAgentMessage");
-    expect(chat).not.toContain("renderChatTurn(\"assistant\", agent.transcriptTail)");
-    expect(evidence).toContain("transcriptTail");
+    expect(panels.operate).not.toContain(TAIL);
+    expect(panels.chat).toContain("pushed the branch");
+    expect(panels.chat).not.toContain(TAIL);
+    expect(panels.evidence).toContain(TAIL);
   });
 });
 
@@ -1473,21 +1630,24 @@ describe("fail-loud control invariants (source-level)", () => {
     expect(source).not.toContain('absent: "not reported"');
     expect(source).not.toContain('absent: "not evaluated"');
     expect(source).not.toContain('absent: "none"');
-    // Cost is never a filler row in the drawer body.
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    const chat = source.match(/function renderChat\([\s\S]*?\n}\n\n\/\* Lineage spine/)?.[0]
-      || source.match(/function renderChat\([\s\S]*?\n}\n\nfunction lineageMeta/)?.[0]
-      || "";
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
-    expect(operate).not.toContain("agent.cost");
-    expect(chat).not.toContain("agent.cost");
-    expect(chat).not.toContain("agent.tests");
-    expect(chat).not.toContain("agent.gates");
-    expect(evidence).not.toContain("agent.cost");
+    // FE-B: cost/tests/gates are never filler rows in the drawer body — asserted
+    // by rendering the panels with all three present and reading the output,
+    // rather than by matching source text between landmark function names.
+    const loaded = agent({
+      cost: { totalUsd: 12.3456, provenance: "observed" },
+      tests: { passing: 7, failing: 1 },
+      gates: ["needs-review"],
+      lastHumanMessage: "ship the fix",
+      lastAgentMessage: "pushed",
+      transcriptTail: "tail",
+    });
+    const panels = panelTexts(loaded);
+    for (const [where, text] of Object.entries(panels)) {
+      expect(text, where + " must not render a cost row").not.toContain("12.34");
+      expect(text, where + " must not render a $ figure").not.toContain("$");
+    }
+    expect(panels.chat).not.toContain("needs-review");
+    expect(panels.chat).not.toContain("passing");
   });
 });
 
@@ -1524,16 +1684,22 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     expect(source).toContain('class: "names-disclosure"');
     expect(source).not.toContain('text: "Presentation labels"');
     expect(styles).toContain(".names-disclosure");
-    // Names live in Evidence, not always-on chrome above the tabs.
-    const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\n\/\* One calm status/)?.[0]
-      || source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n\nfunction renderStatusLine/)?.[0]
-      || "";
-    expect(drawer).not.toContain("renderPresentationLabels(");
-    expect(drawer).not.toContain("renderNamesDisclosure(");
-    const evidence = source.match(/function renderEvidence\([\s\S]*?\n}\n\n\/\* Legacy alias/)?.[0]
-      || source.match(/function renderEvidence\([\s\S]*?\n}\n\nfunction renderTechnical/)?.[0]
-      || "";
-    expect(evidence).toContain("renderNamesDisclosure(");
+    // FE-B: Names live in Evidence, not always-on chrome above the shelf —
+    // asserted against the rendered drawer, not against source adjacency.
+    const named = agent({ cwd: "/repos/x" });
+    const program = { id: "p", name: "P", agents: [named] };
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: named, program });
+      return pane;
+    });
+    // Evidence is collapsed by default, so the rename disclosure is not on screen.
+    expect(byClass(drawer, "names-disclosure")).toBeNull();
+    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
+    // …and it IS what Evidence carries once opened.
+    const evidence = withDom(() => M.renderEvidence(named));
+    expect(byClass(evidence, "names-disclosure")).not.toBeNull();
+    expect(withDom(() => M.renderNamesDisclosure(named))).not.toBeNull();
   });
 
   test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {
@@ -1547,12 +1713,20 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
   });
 
   test("Operate shows task only when meaningfully different from the human message", () => {
-    expect(source).toContain("function taskMeaningfullyDifferent(");
-    const operate = source.match(/function renderOperate\([\s\S]*?\n}\n\n\/\* renderSwarmSection/)?.[0]
-      || source.match(/function renderOperate\([\s\S]*?\n}\n\nfunction renderSwarmSection/)?.[0]
-      || "";
-    expect(operate).toContain("taskMeaningfullyDifferent(agent)");
-    expect(operate).toContain("renderOperateMeta(agent)");
+    // FE-B: rendered, not grepped. A task that merely restates the human message
+    // earns no second heading; a genuinely different one does.
+    const echoed = agent({ lastHumanMessage: "rebuild the collector", task: "Rebuild the collector." });
+    const distinct = agent({ lastHumanMessage: "rebuild the collector", task: "Port the SEM forecast rate limiter", model: "claude-opus-4-8" });
+    expect(M.taskMeaningfullyDifferent(echoed)).toBe(false);
+    expect(M.taskMeaningfullyDifferent(distinct)).toBe(true);
+    const echoedPanel = withDom(() => M.renderOperate(echoed, { id: "p", name: "P", agents: [] }));
+    expect(textOf(echoedPanel)).not.toContain("Task");
+    const distinctPanel = withDom(() => M.renderOperate(distinct, { id: "p", name: "P", agents: [] }));
+    expect(textOf(distinctPanel)).toContain("Task");
+    expect(textOf(distinctPanel)).toContain("Port the SEM forecast rate limiter");
+    // Operate still carries the identity meta row (role/model), not vitals.
+    expect(byClass(distinctPanel, "operate-meta")).not.toBeNull();
+    expect(textOf(byClass(distinctPanel, "operate-meta"))).toContain("opus 4.8");
   });
 });
 
@@ -3090,5 +3264,107 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     // An agent losing eligibility mid-compose must repaint its chip.
     const gone = [{ agent: agent({ status: "stale", controls: [] }), program }];
     expect(M.broadcastPaintSig(gone, [], ui())).not.toBe(base);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   WAVE 2 / FE-B — client cost, dead weight, and the quarantine dead end.
+
+   Everything below asserts on rendered DOM or on pure model functions. The
+   shared harness is the same DOM-less trick the C1/B2 blocks use, extended with
+   getElementById + a linked-list node so the keyed row reconciler can be driven
+   for real.
+   ------------------------------------------------------------------------- */
+describe("FE-B: harness-backed client behavior", () => {
+  /* -------- finding 11: the retry hint named a port it was not served on ---- */
+  test("(11) the unreachable hint names the address the page came from, not a hardcoded 4701", () => {
+    expect(M.serverUnreachableHint("127.0.0.1:4715"))
+      .toBe("Check that the Ant Hill server is running on 127.0.0.1:4715, then retry.");
+    // The production default still reads correctly — this is not a regression trade.
+    expect(M.serverUnreachableHint("127.0.0.1:4701")).toContain("127.0.0.1:4701");
+    // No internal version jargon in the one screen a broken instance shows.
+    expect(M.serverUnreachableHint("127.0.0.1:4702")).not.toContain("v3");
+    // A hostless context (file://) must not claim an address it does not know.
+    expect(M.serverUnreachableHint("")).toBe("Check that the Ant Hill server is running at this address, then retry.");
+  });
+
+  /* -------- finding 10: SVG <rect> has no title ATTRIBUTE ------------------- */
+  test("(10) usage bars carry a real SVG <title> child, so hovering reports the bucket", () => {
+    const points = [
+      { bucketStart: "2026-07-28T01:00:00.000Z", tokens: 12_000, provider: "claude" },
+      { bucketStart: "2026-07-28T02:00:00.000Z", tokens: 4_000, provider: "codex" },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chart: any = withDom(() => M.renderUsageSeriesChart(points));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rects = findAll(chart, (n: any) => n.tagName === "rect");
+    expect(rects.length).toBe(2);
+    for (const rect of rects) {
+      // The bug: setAttribute("title", …) on a <rect> renders nothing at all.
+      expect(rect.attributes.title).toBeUndefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const titles = (rect.children || []).filter((k: any) => k && k.tagName === "title");
+      expect(titles.length).toBe(1);
+      expect(String(titles[0].textContent)).toMatch(/tokens$/);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const first = (rects[0].children as any[])[0];
+    expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
+    expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
+    expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- findings 5 + 12: five unreachable render functions -------------
+     They were kept alive only by regexes that matched app.js's source TEXT —
+     function names, their ordering, even the blank lines between them. Those
+     assertions were replaced with the rendered-DOM ones above and below, and
+     the functions deleted. What the drawer actually builds is the contract. */
+  test("(5) the agent drawer builds Operate + Chat + the Evidence rail, and no swarm section", () => {
+    const a = agent({
+      lastHumanMessage: "ship it",
+      lastAgentMessage: "done",
+      cwd: "/repos/x",
+      controls: [{ action: "focus", enabled: true }, { action: "instruct", enabled: true }],
+    });
+    const program = { id: "p", name: "P", agents: [a] };
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
+      return pane;
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shelves = findAll(drawer, (n: any) => n.dataset && n.dataset.shelf).map((n) => n.dataset.shelf);
+    expect(shelves).toEqual(["operate", "chat"]);
+    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
+    // renderSwarmSection's output — the thing the "do not delete" comment was
+    // protecting — is nowhere in the drawer; renderLineageSpine superseded it.
+    expect(byClass(drawer, "swarm-section")).toBeNull();
+    expect(byClass(drawer, "swarm-link")).toBeNull();
+    // The command dock still owns the lock copy renderPrimaryActions claimed to
+    // keep "discoverable" — proof the alias carried nothing of its own.
+    expect(textOf(drawer)).toContain("Send");
+  });
+
+  /* -------- finding 9: the shadowed `state` identifier ---------------------- */
+  test("(9) modelPolicyView returns the same shape after the shadow rename", () => {
+    // The rename must be invisible at the boundary: violation → mismatch,
+    // unverified → unreported, and the summary keyed off the NORMALIZED state.
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "violation" } }))).toEqual({
+      state: "mismatch",
+      label: "Model mismatch",
+      expected: null,
+      summary: "The reported model is outside the approved model policy.",
+    });
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "unverified" } }))).toEqual({
+      state: "unreported",
+      label: "Model unreported",
+      expected: null,
+      summary: "The model is unavailable, so policy compliance cannot be verified.",
+    });
+    expect(M.modelPolicyView(agent({ modelPolicy: { state: "compliant" } })).summary)
+      .toBe("The reported model matches the approved model policy.");
+    // No identifier named `state` is declared inside the function any more.
+    const fn = source.match(/function modelPolicyView\(agent\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).not.toMatch(/\bconst state\b/);
   });
 });

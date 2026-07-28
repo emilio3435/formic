@@ -46,6 +46,15 @@ function svgChild(spec) {
   return node;
 }
 
+/* SVG has no `title` content attribute — a shape's tooltip and accessible name
+   come from a <title> CHILD element. setAttribute("title", …) on a <rect> is
+   inert, which is why the usage bars used to hover-report nothing. */
+function svgTitle(text) {
+  const node = document.createElementNS(SVGNS, "title");
+  node.textContent = text;
+  return node;
+}
+
 /* Instrument-panel glyph set — mixing-console / oscilloscope language rather than
    clinical warning-triangle + info slop. Marks are built from straight rails,
    nodes (LEDs), and peaks so severity reads as shape, not flood color. Angular
@@ -849,13 +858,16 @@ function cursorPolicyParts(health) {
 function modelPolicyView(agent) {
   const p = agent.modelPolicy;
   if (!p || !MODEL_POLICY_LABELS[p.state]) return null;
-  const state = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
+  // Never name this `state` — the module-level app-state singleton is what the
+  // rest of this file means by that identifier, and shadowing it here is a trap
+  // for the next edit that reaches for state.contextDisplay or state.aliases.
+  const policyState = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
   return {
-    state,
+    state: policyState,
     label: MODEL_POLICY_LABELS[p.state],
     expected: p.expected || null,
     summary: p.summary || (
-      state === "mismatch" ? "The reported model is outside the approved model policy."
+      policyState === "mismatch" ? "The reported model is outside the approved model policy."
       : p.state === "compliant" ? "The reported model matches the approved model policy."
       : "The model is unavailable, so policy compliance cannot be verified."),
   };
@@ -1145,6 +1157,8 @@ globalThis.TheAntHill = {
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
+  serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
+  renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
   el,
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
@@ -4231,12 +4245,6 @@ function renderDockTool(agent, cap, action, opts = {}) {
     busy ? label + "…" : label);
 }
 
-/* Kept as a thin alias so source-level tests that look for the primary-actions
-   contract still find controlUnavailableText wired through the dock path. */
-function renderPrimaryActions(agent) {
-  return renderCommandDock(agent, deriveControlState(agent));
-}
-
 function sourceWorkspaceLabel(target) {
   return target.workspaceTitle ? "terminal: " + target.workspaceTitle : "terminal workspace";
 }
@@ -4322,11 +4330,6 @@ function renderNamesDisclosure(agent) {
   },
     el("summary", { text: "Names" }),
     body);
-}
-
-/* Kept as a thin alias so source-level rename contracts still resolve. */
-function renderPresentationLabels(agent) {
-  return renderNamesDisclosure(agent) || el("span", { hidden: "" });
 }
 
 /* ---------- inspector: Operate · Chat · Evidence ---------- */
@@ -4498,42 +4501,6 @@ function renderOperate(agent, _program) {
     panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
   }
   return panel;
-}
-
-/* renderSwarmSection is superseded by renderLineageSpine in the Agent drawer
-   (P4), but it MUST stay defined immediately after renderOperate: a test
-   asserts the renderOperate…renderSwarmSection source adjacency. Do not
-   reorder or delete it. */
-function renderSwarmSection(agent, program) {
-  const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
-  const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
-  const parent = agent.parentAgentId ? fullById.get(agent.parentAgentId) : null;
-  if (!parent && !children.length && !agent.parentAgentId) return el("span", { hidden: "" });
-
-  const wrap = el("div", { class: "swarm-section" },
-    el("h3", { class: "section-title", text: "Swarm" }));
-
-  if (agent.parentAgentId) {
-    wrap.append(parent
-      ? el("button", {
-          type: "button", class: "swarm-link",
-          dataset: { fkey: "swarm:" + parent.id },
-          onclick: () => selectAgent(parent.id),
-        }, "↖ Orchestrator: " + agentName(parent))
-      : el("p", { class: "absent", text: "Orchestrator session is not tracked in this snapshot." }));
-  }
-
-  for (const child of children) {
-    const act = deriveActivity(child);
-    wrap.append(el("button", {
-      type: "button", class: "swarm-link",
-      dataset: { fkey: "swarm:" + child.id },
-      onclick: () => selectAgent(child.id),
-    },
-      el("span", { class: "act-glyph act-" + act, "aria-hidden": "true" }),
-      agentName(child) + " — " + ACTIVITY_LABELS[act]));
-  }
-  return wrap;
 }
 
 function renderChatTurn(role, text) {
@@ -4777,15 +4744,6 @@ function renderEvidence(agent) {
     panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
   }
   return panel;
-}
-
-/* Legacy alias — Evidence replaced Technical; keep the name discoverable in grep. */
-function renderTechnical(agent) {
-  return renderEvidence(agent);
-}
-
-function renderTarget(target) {
-  return renderControlLink(target);
 }
 
 /* Danger zone removed — Interrupt/Archive live in the command dock. */
@@ -5105,6 +5063,17 @@ function renderBroadcastBar() {
   if (state.broadcastError) bar.append(el("p", { class: "broadcast-note err", role: "alert", text: state.broadcastError }));
 }
 
+/* The one screen a broken instance shows must name the address it was actually
+   served from: MOUNTAIN_PORT, anthill-start.sh and anthill-preview.sh all bind
+   different ports, and a preview on :4715 telling the operator to go check
+   :4701 sends them to a healthy production process. "v3 server" was internal
+   versioning that means nothing to the reader. host is a parameter so the rule
+   is testable without a browser. */
+function serverUnreachableHint(host) {
+  const where = host ? "on " + host : "at this address";
+  return "Check that the Ant Hill server is running " + where + ", then retry.";
+}
+
 function renderEmpty() {
   const empty = $("empty-state");
   const retry = $("empty-retry");
@@ -5114,7 +5083,7 @@ function renderEmpty() {
   empty.hidden = false;
   if (!state.snap) {
     $("empty-message").textContent = "Can't reach the Ant Hill server.";
-    $("empty-hint").textContent = "Check that the v3 server is running on 127.0.0.1:4701, then retry.";
+    $("empty-hint").textContent = serverUnreachableHint(typeof location === "undefined" ? "" : location.host);
     retry.hidden = false;
   } else {
     $("empty-message").textContent = "The ant hill is still — no tracked agents.";
@@ -5209,6 +5178,11 @@ async function loadUsageData(force = false) {
   }
 }
 
+/* The one readable fact per bar: which bucket, how many tokens. */
+function usageBarTitle(bucket, tokens) {
+  return bucket + " · " + fmtTok(tokens) + " tokens";
+}
+
 function renderUsageSeriesChart(points) {
   const wrap = el("div", { class: "usage-series" });
   if (!points || !points.length) {
@@ -5238,7 +5212,7 @@ function renderUsageSeriesChart(points) {
       height: h,
       class: "usage-bar-rect",
     }]);
-    rect.setAttribute("title", bucket + " · " + fmtTok(tokens) + " tokens");
+    rect.append(svgTitle(usageBarTitle(bucket, tokens)));
     svg.append(rect);
   });
   wrap.append(svg);
