@@ -224,6 +224,30 @@ function identityUi(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/* A `state` stand-in for the list helpers (row/shell signatures, row plans). */
+function listUi(overrides: Record<string, unknown> = {}) {
+  return {
+    snap: null,
+    view: "now",
+    query: "",
+    facetProgram: "",
+    facetProvider: "",
+    lookbackHours: 24,
+    contextDisplay: "percent",
+    selecting: false,
+    selection: new Set<string>(),
+    selected: null,
+    selectedId: null,
+    programOverrides: new Map<string, string>(),
+    labels: new Map<string, string>(),
+    renaming: null,
+    renameDraft: "",
+    renamePending: false,
+    renameError: "",
+    ...overrides,
+  };
+}
+
 /* The three drawer panels, rendered and flattened to text. */
 function panelTexts(a: Record<string, unknown>) {
   return withDom(() => ({
@@ -855,12 +879,19 @@ describe("calm program and agent list rendering", () => {
 
   test("program lists share the five primary columns and keep secondary details out of the row grid", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
-    expect(source).toContain("return [renderAgentColumnHeader(), ...rows]");
-    // C1: the header now names the identity column plus the promoted instrument
+    /* FE-B: the row list is now a keyed PLAN reconciled into the program body
+       rather than an array appended wholesale, so this asserts on the plan the
+       list actually produces — the column header still leads it. */
+    const program = { id: "p1", name: "P", agents: [agent({ id: "codex:a1" }), agent({ id: "codex:a2" })] };
+    const plan = M.agentRowPlan(program, program.agents, listUi({ snap: { schemaVersion: 1, programs: [program] } }));
+    expect(plan.map((item: { key: string }) => item.key)).toEqual(["columns", "row:codex:a1", "row:codex:a2"]);
+    // C1: the header names the identity column plus the promoted instrument
     // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
+    const header = withDom(() => plan[0].build());
+    expect(header.className).toContain("agent-column-header");
     for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
-      expect(source).toContain(`text: "${label}"`);
+      expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
     expect(source).not.toContain("class: \"fact-age\"");
@@ -3336,6 +3367,204 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
     expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
     expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- finding 2: one agent's tick rebuilt the whole list -------------
+     The list guard was all-or-nothing: any visible agent's status, tokens or
+     summary moving invalidated one signature for the WHOLE list, and the next
+     paint ran root.textContent = "" and reconstructed every program and every
+     row (~27 elements each), taking the operator's text selection with it. */
+
+  const listProgram = (agents: unknown[]) => ({ id: "p1", name: "Prog", agents });
+  function planFor(agents: Record<string, unknown>[], over: Record<string, unknown> = {}) {
+    const program = listProgram(agents);
+    return M.agentRowPlan(program, agents, listUi({ snap: { schemaVersion: 1, programs: [program] }, ...over }));
+  }
+
+  test("(2) reconcileKeyed keeps the DOM node of every key whose signature held", () => {
+    const parent = newNode("div");
+    const cache = new Map();
+    const plan = (sigs: Record<string, string>) => Object.entries(sigs).map(([key, sig]) => ({
+      key, sig, build: () => newNode("div"),
+    }));
+
+    M.reconcileKeyed(parent, plan({ a: "1", b: "1", c: "1" }), cache);
+    const [a0, b0, c0] = parent.children;
+    expect(parent.children.length).toBe(3);
+
+    // Only b moved. a and c must be the SAME objects — that is the whole point:
+    // a node that is never detached keeps its selection, hover and focus.
+    M.reconcileKeyed(parent, plan({ a: "1", b: "2", c: "1" }), cache);
+    expect(parent.children[0]).toBe(a0);
+    expect(parent.children[1]).not.toBe(b0);
+    expect(parent.children[2]).toBe(c0);
+    const b1 = parent.children[1];
+
+    // Insertion lands in order without disturbing its neighbours.
+    M.reconcileKeyed(parent, plan({ a: "1", d: "1", b: "2", c: "1" }), cache);
+    expect(parent.children.length).toBe(4);
+    expect(parent.children[0]).toBe(a0);
+    expect(parent.children[2]).toBe(b1);
+    expect(parent.children[3]).toBe(c0);
+
+    // Removal drops exactly the missing key…
+    const kept = M.reconcileKeyed(parent, plan({ a: "1", c: "1" }), cache);
+    expect(parent.children.map((n: { tagName: string }) => n)).toEqual([a0, c0]);
+    expect([...kept]).toEqual(["a", "c"]);
+
+    // …and reordering moves nodes rather than rebuilding them.
+    M.reconcileKeyed(parent, plan({ c: "1", a: "1" }), cache);
+    expect(parent.children).toEqual([c0, a0]);
+  });
+
+  test("(2) a row signature moves only for the row that actually changed", () => {
+    const a = agent({ id: "codex:a1", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2", tokens: { provenance: "observed", total: 800 } });
+    const before = planFor([a, b]);
+    // The exact production tick the finding describes: one agent's token count
+    // advances on the 4s snapshot.
+    const after = planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b]);
+    expect(after[0].sig).toBe(before[0].sig); // column header
+    expect(after[1].sig).not.toBe(before[1].sig); // the agent that moved
+    expect(after[2].sig).toBe(before[2].sig); // …and nothing else
+    expect(after.map((i: { key: string }) => i.key)).toEqual(before.map((i: { key: string }) => i.key));
+  });
+
+  test("(2) the row signature still covers everything a row paints", () => {
+    const base = agent({ id: "codex:a1", elapsedMs: 60_000 });
+    const sig = (over: Record<string, unknown> = {}, ui: Record<string, unknown> = {}) =>
+      M.agentRowSig({ ...base, ...over }, listUi(ui), { depth: 0, childCount: 0, fullById: new Map() });
+    const start = sig();
+    const moves: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["status", { status: "attention" }, {}],
+      ["statusReason", { statusReason: "Waiting on review." }, {}],
+      ["model", { model: "claude-opus-4-8" }, {}],
+      ["tokens", { tokens: { provenance: "observed", total: 40_000, contextWindow: 200_000 } }, {}],
+      ["lastHumanMessage (row summary)", { lastHumanMessage: "ship the fix" }, {}],
+      ["role chip", { role: "verifier" }, {}],
+      ["model policy chip", { modelPolicy: { state: "violation", summary: "off policy" } }, {}],
+      ["cwd mismatch dot", { target: { resolution: "exact", surfaceId: "s1", cwdMismatch: true } }, {}],
+      ["terminal breadcrumb", { target: { resolution: "exact", surfaceId: "s1", workspaceTitle: "ridge" } }, {}],
+      ["staleness fact", { updatedAt: new Date(Date.now() - 40 * 60_000).toISOString() }, {}],
+      ["selection highlight", {}, { selectedId: "codex:a1" }],
+      ["select mode", {}, { selecting: true }],
+      ["checkbox", {}, { selecting: true, selection: new Set(["codex:a1"]) }],
+      ["rename form", {}, { renaming: M.presentationLabelKey(M.preferredRenameTarget(base)) }],
+      ["rename pending", {}, { renamePending: true }],
+      ["rename error", {}, { renameError: "Too long" }],
+      ["custom label", {}, { labels: new Map([["agent:codex:a1", "Ridge"]]) }],
+      ["context display toggle", {}, { contextDisplay: "tokens" }],
+    ];
+    for (const [why, over, ui] of moves) expect(sig(over, ui), why).not.toBe(start);
+
+    // The live elapsed clock is deliberately OUT: tickClocks rewrites it in
+    // place from data-elapsed-base, so letting it in would rebuild every row
+    // every 5s and undo the entire fix.
+    expect(sig({ elapsedMs: 61_000 })).toBe(start);
+    // Another agent's rename never touches this row.
+    expect(sig({}, { renaming: "agent:codex:other" })).toBe(start);
+  });
+
+  test("(2) a token tick leaves the program shell alone, so its rows stay attached", () => {
+    const a = agent({ id: "codex:a1", status: "running", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2", status: "running" });
+    const shell = (agents: Record<string, unknown>[], ui: Record<string, unknown> = {}) =>
+      M.programShellSig(listProgram(agents), agents, listUi(ui));
+    const base = shell([a, b]);
+    // The tick that used to rebuild everything now rebuilds nothing above the row.
+    expect(shell([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b])).toBe(base);
+    expect(shell([{ ...a, statusReason: "Still streaming." }, b])).toBe(base);
+    // What the shell DOES paint still moves it.
+    expect(shell([{ ...a, status: "attention" }, b])).not.toBe(base); // rollup counts
+    expect(shell([a, b], { programOverrides: new Map([["p1", "closed"]]) })).not.toBe(base); // caret
+    expect(shell([a, b], { labels: new Map([["program:p1", "Ridge"]]) })).not.toBe(base); // head label
+    expect(shell([a, b], { selecting: true })).not.toBe(base); // selection row
+    expect(shell([a, b], { renaming: "program:p1" })).not.toBe(base); // rename form
+    expect(shell([a], { })).not.toBe(base); // fewer visible agents
+  });
+
+  test("(2) end to end: a tick that changes one agent rebuilds one row", () => {
+    const a = agent({ id: "codex:a1", tokens: { provenance: "observed", total: 1200 } });
+    const b = agent({ id: "codex:a2" });
+    const c = agent({ id: "codex:a3" });
+    const body = newNode("div");
+    const cache = new Map();
+
+    withDom(() => M.reconcileKeyed(body, planFor([a, b, c]), cache));
+    expect(body.children.length).toBe(4); // header + 3 rows
+    const [header, rowA, rowB, rowC] = body.children;
+
+    withDom(() => M.reconcileKeyed(
+      body,
+      planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]),
+      cache,
+    ));
+    expect(body.children.length).toBe(4);
+    expect(body.children[0]).toBe(header);
+    expect(body.children[1]).not.toBe(rowA);
+    expect(body.children[2]).toBe(rowB);
+    expect(body.children[3]).toBe(rowC);
+    // The rebuilt row really is the one that moved, and it shows the new number.
+    expect(textOf(body.children[1])).toContain("40k");
+
+    // A repaint with nothing changed touches no node at all.
+    const settled = [...body.children];
+    withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]), cache));
+    expect(body.children).toEqual(settled);
+
+    // An agent leaving the view removes exactly its row.
+    withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, c]), cache));
+    expect(body.children.length).toBe(3);
+    expect(body.children[2]).toBe(rowC);
+  });
+
+  test("(2) the whole list path: a live tick repaints one row, not the list", () => {
+    /* Drives syncProgramList — the exact two-level path renderPrograms runs —
+       with real nodes, so this covers section reuse as well as row reuse. */
+    const mk = (id: string, over: Record<string, unknown> = {}) => agent({ id, status: "running", ...over });
+    const build = (a1Tokens: number, a3Status = "running") => {
+      const alpha = { id: "sync-alpha", name: "Alpha", agents: [mk("codex:s1", { tokens: { provenance: "observed", total: a1Tokens } }), mk("codex:s2")] };
+      const beta = { id: "sync-beta", name: "Beta", agents: [mk("codex:s3", { status: a3Status })] };
+      return [{ program: alpha, agents: alpha.agents }, { program: beta, agents: beta.agents }];
+    };
+    const root = newNode("div");
+    const ui = (visible: ReturnType<typeof build>) => listUi({
+      snap: { schemaVersion: 1, programs: visible.map((v) => v.program) },
+    });
+
+    let visible = build(1200);
+    const shown = withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(shown).toBe(3);
+    expect(root.children.length).toBe(2);
+    const [alphaSection, betaSection] = root.children;
+    const alphaBody = alphaSection.children[alphaSection.children.length - 1];
+    const betaBody = betaSection.children[betaSection.children.length - 1];
+    expect(alphaBody.children.length).toBe(3); // header + 2 rows
+    const [, rowS1, rowS2] = alphaBody.children;
+    const rowS3 = betaBody.children[1];
+
+    // A token tick on codex:s1 — the production case. Everything else must be
+    // the same node object it was, including both program sections.
+    visible = build(40_000);
+    withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(root.children[0]).toBe(alphaSection);
+    expect(root.children[1]).toBe(betaSection);
+    expect(alphaBody.children[1]).not.toBe(rowS1);
+    expect(alphaBody.children[2]).toBe(rowS2);
+    expect(betaBody.children[1]).toBe(rowS3);
+    expect(textOf(alphaBody.children[1])).toContain("40k");
+
+    // A status flip DOES move the program rollup, so Beta's shell is rebuilt —
+    // but its row node is re-adopted rather than reconstructed.
+    visible = build(40_000, "attention");
+    withDom(() => M.syncProgramList(root, visible, ui(visible)));
+    expect(root.children[0]).toBe(alphaSection);
+    expect(root.children[1]).not.toBe(betaSection);
+    const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
+    expect(newBetaBody.children.length).toBe(2);
+    expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
+    // Alpha is untouched by Beta's rebuild.
+    expect(alphaBody.children[2]).toBe(rowS2);
   });
 
   /* -------- finding 1: the quarantine dead end -----------------------------

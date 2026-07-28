@@ -1310,6 +1310,7 @@ globalThis.TheAntHill = {
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig,
+  reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
 };
 
 /* ---------- state ---------- */
@@ -2867,6 +2868,104 @@ function toggleProgram(program) {
   render();
 }
 
+/* ---------- keyed reconciliation ----------
+   The list guard used to be all-or-nothing: any visible agent's status, token
+   count or summary moving invalidated one signature for the WHOLE list, and the
+   next paint ran `root.textContent = ""` and rebuilt every program and every
+   row — ~27 elements per row, so ~5,400 destroyed and recreated at 200 visible
+   rows, every 4s, taking the operator's text selection and hover with them.
+
+   `plan` is [{ key, sig, build }]. A key whose signature is unchanged keeps its
+   existing DOM node, in place; only changed, added, removed and reordered keys
+   are touched. `cache` is a Map key -> { sig, node } that OUTLIVES its parent,
+   so even a rebuilt program section re-adopts its row nodes rather than
+   constructing them again. Returns the set of keys the plan claimed, so the
+   caller can prune the cache. */
+function reconcileKeyed(parent, plan, cache) {
+  const seen = new Set();
+  let cursor = parent.firstChild;
+  for (const item of plan) {
+    let entry = cache.get(item.key);
+    if (!entry || entry.sig !== item.sig) {
+      entry = { sig: item.sig, node: item.build() };
+      cache.set(item.key, entry);
+    }
+    seen.add(item.key);
+    if (cursor === entry.node) cursor = entry.node.nextSibling;
+    else parent.insertBefore(entry.node, cursor);
+  }
+  // Anything the plan did not claim has drifted to the tail by now.
+  while (cursor) {
+    const next = cursor.nextSibling;
+    cursor.remove();
+    cursor = next;
+  }
+  return seen;
+}
+
+const programSectionCache = new Map(); // programId -> { sig, node }
+const programBodies = new Map();       // programId -> the .program-agents node
+const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, node }
+
+/* Everything the program SHELL paints — head label, caret state, rollup cells,
+   the selection row and the rename form. Deliberately NOT the rows: a rollup
+   that has not moved must leave the section node alone so its rows stay
+   attached. renameDraft stays out for the same reason it stays out of every
+   other signature (live input); every external reset of it flips renamePending. */
+function programShellSig(program, agents, ui) {
+  const key = presentationLabelKey(programLabelTarget(program));
+  const pool = ui.selecting ? program.agents.filter(broadcastEligible) : [];
+  return [
+    program.id,
+    programName(program),
+    ui.labels.has(key) ? "1" : "0",
+    programOpen(program, ui) ? "open" : "shut",
+    programRollupCells(agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    ui.selecting ? "1" : "0",
+    ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
+    ui.renaming === key ? "1" : "0",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+  ].join("\u001f");
+}
+
+/* Everything ONE row paints. agentRecordSig is the same whole-record projection
+   the drawer uses, so a snapshot field added later is covered automatically;
+   the rest is the per-row slice of list state (this row's selection, checkbox
+   and rename form) plus its position in the swarm tree. The live elapsed clock
+   stays out — tickClocks rewrites it in place from data-elapsed-base — but the
+   >10min staleness fact does not tick, so it is in. */
+function agentRowSig(agent, ui, opts = {}) {
+  return [
+    agentRecordSig(agent),
+    rowStalenessText(agent),
+    ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
+    ui.labels.get(presentationLabelKey(preferredRenameTarget(agent))) || "",
+    ui.selectedId === agent.id ? "1" : "0",
+    ui.selecting ? "1" : "0",
+    ui.selection.has(agent.id) ? "1" : "0",
+    ui.renaming === presentationLabelKey(preferredRenameTarget(agent)) ? "1" : "0",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+    ui.contextDisplay || "",
+    String(opts.depth || 0),
+    String(opts.childCount || 0),
+    swarmNote(agent, opts) || "",
+  ].join("\u001f");
+}
+
+function swarmAnchorSig(agent, depth, activeChildren, ui) {
+  return [
+    agent.id,
+    agentName(agent),
+    agent.provider,
+    agent.model || "",
+    String(depth),
+    String(activeChildren),
+    ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
+  ].join("\u001f");
+}
+
 /* Signature ignores live elapsed clocks — status/message/model/context drive
    paint. It must also carry the state the list CONTROLS write, or every one of
    them reads as dead: toggleProgram only mutates programOverrides, and both
@@ -2904,6 +3003,39 @@ function programsPaintSig(visible, ui) {
   ].join("\u001f");
 }
 
+/* Two levels of keyed reconciliation instead of one wholesale rebuild: program
+   sections by program id, then rows by agent id inside each section body. Split
+   out of renderPrograms so the whole path can be driven directly in a test
+   without the module's state plumbing. Returns the visible agent count. */
+function syncProgramList(root, visible, ui = state) {
+  const keptSections = reconcileKeyed(root, visible.map(({ program, agents }) => ({
+    key: program.id,
+    sig: programShellSig(program, agents, ui),
+    build: () => renderProgram(program, agents),
+  })), programSectionCache);
+  for (const key of [...programSectionCache.keys()]) {
+    if (keptSections.has(key)) continue;
+    programSectionCache.delete(key);
+    programBodies.delete(key);
+  }
+
+  let shown = 0;
+  const keptRows = new Set();
+  for (const { program, agents } of visible) {
+    shown += agents.length;
+    const body = programBodies.get(program.id);
+    if (!body) continue;
+    // A collapsed program keeps its section but drops its rows; the row cache
+    // still holds them, so re-expanding costs a move rather than a rebuild.
+    const plan = programOpen(program, ui)
+      ? agentRowPlan(program, agents, ui).map((item) => ({ ...item, key: program.id + "\u001f" + item.key }))
+      : [];
+    for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
+  }
+  for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
+  return shown;
+}
+
 function renderPrograms() {
   const root = $("programs");
   const usage = $("usage-panel");
@@ -2924,6 +3056,9 @@ function renderPrograms() {
   if (!state.snap) {
     state.paintSig.programs = "empty";
     root.textContent = "";
+    programSectionCache.clear();
+    programBodies.clear();
+    agentRowCache.clear();
     renderScopeNote(0);
     return;
   }
@@ -2940,12 +3075,7 @@ function renderPrograms() {
     return;
   }
 
-  root.textContent = "";
-  let shown = 0;
-  for (const { program, agents } of visible) {
-    shown += agents.length;
-    root.append(renderProgram(program, agents));
-  }
+  const shown = syncProgramList(root, visible, state);
   renderScopeNote(shown);
 
   const tracked = totalsOf(state.snap).tracked;
@@ -3052,7 +3182,11 @@ function renderProgram(program, agents) {
       chosen ? el("span", { class: "program-select-note", text: `${chosen} of ${pool.length} selected` }) : null));
   }
   if (state.renaming === presentationLabelKey(programLabelTarget(program))) section.append(renderRenameForm(program));
-  section.append(el("div", { class: "program-agents", id: bodyId }, open ? renderAgentRows(program, agents) : null));
+  // The body is left empty on purpose: renderPrograms reconciles the rows into
+  // it by agent id, so a shell rebuild never destroys a row that has not moved.
+  const body = el("div", { class: "program-agents", id: bodyId });
+  programBodies.set(program.id, body);
+  section.append(body);
   return section;
 }
 
@@ -3090,7 +3224,11 @@ function renderLabelForm(target, opts) {
     state.renameError ? el("p", { class: "rename-error", role: "alert", text: state.renameError }) : null);
 }
 
-function renderAgentRows(program, agents) {
+/* The ordered row PLAN for one program: the column header, then the swarm tree
+   with a descriptor per node. Each descriptor is keyed by agent id and carries
+   its own signature, so reconcileKeyed can rebuild exactly the rows that moved.
+   `build` is a closure — nothing is constructed for a row that has not changed. */
+function agentRowPlan(program, agents, ui = state) {
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -3104,7 +3242,7 @@ function renderAgentRows(program, agents) {
     }
   }
   const { roots, children } = buildClusters(program.agents.filter((agent) => relevantIds.has(agent.id)));
-  const fullById = new Map(snapshotAgents(state.snap).map(({ agent }) => [agent.id, agent]));
+  const fullById = new Map(snapshotAgents(ui.snap).map(({ agent }) => [agent.id, agent]));
   const fullChildren = new Map();
   for (const a of fullById.values()) {
     if (a.parentAgentId) fullChildren.set(a.parentAgentId, [...(fullChildren.get(a.parentAgentId) || []), a.id]);
@@ -3115,16 +3253,27 @@ function renderAgentRows(program, agents) {
     return (fullChildren.get(id) || []).reduce((total, childId) => total + 1 + descendantCount(childId, seen), 0);
   };
 
-  const rows = [];
+  const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || []).filter((id) => relevantIds.has(id)).length;
-    rows.push(visibleIds.has(agent.id)
-      ? renderAgentRow(agent, program, { depth, childCount: descendantCount(agent.id), fullById })
-      : renderSwarmAnchor(agent, depth, visibleDescendants));
+    if (visibleIds.has(agent.id)) {
+      const opts = { depth, childCount: descendantCount(agent.id), fullById };
+      plan.push({
+        key: "row:" + agent.id,
+        sig: agentRowSig(agent, ui, opts),
+        build: () => renderAgentRow(agent, program, opts),
+      });
+    } else {
+      plan.push({
+        key: "anchor:" + agent.id,
+        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui),
+        build: () => renderSwarmAnchor(agent, depth, visibleDescendants),
+      });
+    }
     for (const child of children.get(agent.id) || []) appendTree(child, depth + 1);
   };
   for (const agent of roots) appendTree(agent, 0);
-  return [renderAgentColumnHeader(), ...rows];
+  return plan;
 }
 
 function renderAgentColumnHeader() {
