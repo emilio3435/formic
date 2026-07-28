@@ -1,4 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,12 +7,26 @@ import { Database } from "bun:sqlite";
 import {
   extractLastHumanMessage,
   extractLastMessageByRole,
+  readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const cursorStoreCache = new Map<string, { fingerprint: string; evidence: CursorStoreEvidence }>();
+const cursorTextCache = new Map<string, { fingerprint: string; contents: string; mtimeMs: number }>();
+const cursorTranscriptCache = new Map<string, { fingerprint: string; transcript: CursorTranscript }>();
+const cursorTranscriptPaths = new Map<string, string>();
+const cursorTrackingCache = new Map<string, { fingerprint: string; models: Map<string, string> }>();
+let cursorStateCache: {
+  path: string;
+  fingerprint: string;
+  database: Database;
+  sessionCwds: Map<string, string>;
+  hasComposerData: boolean;
+  composers: Map<string, CursorStoreEvidence>;
+} | undefined;
 
 interface CursorMeta {
   schemaVersion?: number;
@@ -19,6 +34,13 @@ interface CursorMeta {
   updatedAtMs?: number;
   cwd?: string;
   hasConversation?: boolean;
+}
+
+interface CursorTranscript {
+  task?: string;
+  transcriptTail?: string;
+  humanMessages: HumanMessageCandidate[];
+  turnStatus?: string;
 }
 
 export interface CursorStoreEvidence {
@@ -33,6 +55,7 @@ export interface CursorSessionInput {
   sessionId: string;
   metaJson: string;
   transcriptJsonl?: string;
+  transcript?: CursorTranscript;
   transcriptPath?: string;
   transcriptMtimeMs?: number;
   storeDbMtimeMs?: number;
@@ -48,6 +71,7 @@ export interface CursorChildSessionInput {
   parentSessionId: string;
   cwd: string;
   transcriptJsonl: string;
+  transcript?: CursorTranscript;
   transcriptPath: string;
   model?: string;
   updatedAtMs: number;
@@ -106,6 +130,36 @@ function cursorUserTask(text: string): string {
   return (wrappedQuery ?? text).replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "").trim();
 }
 
+function cursorTranscript(jsonl: string): CursorTranscript {
+  let task: string | undefined;
+  let transcriptTail: string | undefined;
+  let turnStatus: string | undefined;
+  let user: { index: number; candidate: HumanMessageCandidate } | undefined;
+  let assistant: { index: number; candidate: HumanMessageCandidate } | undefined;
+  for (const [index, row] of jsonlRecords(jsonl).entries()) {
+    const text = messageText(row);
+    if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
+    if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
+      const candidate: HumanMessageCandidate = { role: row.role, content: row.message.content };
+      if (readableHumanMessage("cursor", candidate.content)) {
+        if (candidate.role === "user") user = { index, candidate };
+        else assistant = { index, candidate };
+      }
+    }
+    if (row.role === "assistant" && text) transcriptTail = text;
+    if (row.type === "turn_ended" && typeof row.status === "string") turnStatus = row.status;
+  }
+  return {
+    task,
+    transcriptTail,
+    humanMessages: [user, assistant]
+      .filter((message): message is NonNullable<typeof message> => Boolean(message))
+      .sort((left, right) => left.index - right.index)
+      .map(({ candidate }) => candidate),
+    turnStatus,
+  };
+}
+
 export function parseCursorSession(input: CursorSessionInput): CollectedAgent | null {
   if (!UUID_PATTERN.test(input.sessionId)) return null;
   let meta: CursorMeta;
@@ -117,20 +171,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   if (meta.hasConversation === false || typeof meta.cwd !== "string") return null;
   if (input.store?.agentId && input.store.agentId !== input.sessionId) return null;
 
-  const rows = jsonlRecords(input.transcriptJsonl ?? "");
-  let task: string | undefined;
-  let transcriptTail: string | undefined;
-  const humanMessages: HumanMessageCandidate[] = [];
-  let turnStatus: string | undefined;
-  for (const row of rows) {
-    const text = messageText(row);
-    if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
-    if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
-      humanMessages.push({ role: row.role, content: row.message.content });
-    }
-    if (row.role === "assistant" && text) transcriptTail = text;
-    if (row.type === "turn_ended" && typeof row.status === "string") turnStatus = row.status;
-  }
+  const transcript = input.transcript ?? cursorTranscript(input.transcriptJsonl ?? "");
+  const { task, transcriptTail, humanMessages, turnStatus } = transcript;
 
   const createdAtMs = Number(meta.createdAtMs);
   const updatedAtMs = Number(meta.updatedAtMs);
@@ -210,20 +252,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
 
 export function parseCursorChildSession(input: CursorChildSessionInput): CollectedAgent | null {
   if (!UUID_PATTERN.test(input.sessionId) || !UUID_PATTERN.test(input.parentSessionId)) return null;
-  const rows = jsonlRecords(input.transcriptJsonl);
-  let task: string | undefined;
-  let transcriptTail: string | undefined;
-  const humanMessages: HumanMessageCandidate[] = [];
-  let turnStatus: string | undefined;
-  for (const row of rows) {
-    const text = messageText(row);
-    if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
-    if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
-      humanMessages.push({ role: row.role, content: row.message.content });
-    }
-    if (row.role === "assistant" && text) transcriptTail = text;
-    if (row.type === "turn_ended" && typeof row.status === "string") turnStatus = row.status;
-  }
+  const transcript = input.transcript ?? cursorTranscript(input.transcriptJsonl);
+  const { task, transcriptTail, humanMessages, turnStatus } = transcript;
 
   const nowMs = input.nowMs ?? Date.now();
   const ageMs = Math.max(0, nowMs - input.updatedAtMs);
@@ -300,12 +330,55 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-// Tertiary, last-resort model source: the "powered by (Cursor X.Y)" phrase only
-// ever appears in Grok system prompts, so it cannot see any other family.
-function cursorModelFromSystemMessage(content: unknown): string | undefined {
-  if (typeof content !== "string") return undefined;
-  const match = content.match(/powered by (Cursor\s+[A-Za-z][A-Za-z0-9 _-]*?\d(?:\.\d+)+)/i);
-  return match?.[1]?.trim();
+function syncFileFingerprint(path: string): string | undefined {
+  try {
+    const details = statSync(path);
+    return `${details.dev}:${details.ino}:${details.size}:${details.mtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function cursorStoreFingerprint(path: string): string | undefined {
+  const store = syncFileFingerprint(path);
+  if (!store) return undefined;
+  return `${store}|wal:${syncFileFingerprint(`${path}-wal`) ?? "absent"}`;
+}
+
+async function readCachedText(path: string): Promise<{ contents: string; fingerprint: string; mtimeMs: number }> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = await stat(path);
+    const fingerprint = `${before.dev}:${before.ino}:${before.size}:${before.mtimeMs}`;
+    const cached = cursorTextCache.get(path);
+    if (cached?.fingerprint === fingerprint) {
+      return { contents: cached.contents, fingerprint, mtimeMs: cached.mtimeMs };
+    }
+    const contents = await readFile(path, "utf8");
+    const after = await stat(path);
+    const afterFingerprint = `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}`;
+    if (fingerprint !== afterFingerprint) {
+      if (attempt === 0) continue;
+      throw new Error(`file changed while reading: ${path}`);
+    }
+    cursorTextCache.set(path, { fingerprint: afterFingerprint, contents, mtimeMs: after.mtimeMs });
+    return { contents, fingerprint: afterFingerprint, mtimeMs: after.mtimeMs };
+  }
+  throw new Error(`could not read stable file: ${path}`);
+}
+
+async function readCachedTranscript(path: string): Promise<{
+  contents: string;
+  transcript: CursorTranscript;
+  mtimeMs: number;
+}> {
+  const file = await readCachedText(path);
+  const cached = cursorTranscriptCache.get(path);
+  if (cached?.fingerprint === file.fingerprint) {
+    return { contents: file.contents, transcript: cached.transcript, mtimeMs: file.mtimeMs };
+  }
+  const transcript = cursorTranscript(file.contents);
+  cursorTranscriptCache.set(path, { fingerprint: file.fingerprint, transcript });
+  return { contents: file.contents, transcript, mtimeMs: file.mtimeMs };
 }
 
 // The authoritative per-turn model on a CLI assistant message lives on its content
@@ -328,15 +401,13 @@ function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
   const metadata = decodeHexJson(metaRow?.value);
   // PRIMARY: newer sessions persist the resolved model on meta key '0'.
   const lastUsedModel = nonEmptyString(metadata?.lastUsedModel);
-  // FALLBACK + tertiary: walk the content-addressed message blobs newest-first
-  // (rowid is append order). Prefer the newest assistant part modelName; keep the
-  // newest Grok system-prompt phrase only as a last resort.
+  // FALLBACK: walk the content-addressed message blobs newest-first (rowid is
+  // append order) and use only the real per-turn assistant model field.
   let blobModel: string | undefined;
-  let systemModel: string | undefined;
   if (!lastUsedModel) {
     const rows = database
-      .query("select data from blobs where substr(data, 1, 1) = x'7B' order by rowid desc")
-      .all() as { data: Uint8Array }[];
+      .query("select data from blobs order by rowid desc limit 200")
+      .iterate() as Iterable<{ data: Uint8Array }>;
     for (const row of rows) {
       let message: unknown;
       try {
@@ -348,7 +419,6 @@ function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
       const record = asRecord(message);
       if (!record) continue;
       if (!blobModel && record.role === "assistant") blobModel = contentPartModelName(record.content);
-      if (!systemModel && record.role === "system") systemModel = cursorModelFromSystemMessage(record.content);
       if (blobModel) break;
     }
   }
@@ -356,15 +426,19 @@ function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
     agentId: typeof metadata?.agentId === "string" ? metadata.agentId : undefined,
     name: typeof metadata?.name === "string" ? metadata.name : undefined,
     mode: typeof metadata?.mode === "string" ? metadata.mode : undefined,
-    model: lastUsedModel ?? blobModel ?? systemModel,
+    model: lastUsedModel ?? blobModel,
   };
 }
 
 export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
+  const fingerprint = cursorStoreFingerprint(path);
+  const cached = cursorStoreCache.get(path);
+  if (fingerprint && cached?.fingerprint === fingerprint) return { ...cached.evidence };
+  let evidence: CursorStoreEvidence;
   try {
     const database = new Database(path, { readonly: true });
     try {
-      return readCursorStoreEvidenceFrom(database);
+      evidence = readCursorStoreEvidenceFrom(database);
     } finally {
       database.close();
     }
@@ -377,7 +451,7 @@ export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
         readonly: true,
       });
       try {
-        return readCursorStoreEvidenceFrom(database);
+        evidence = readCursorStoreEvidenceFrom(database);
       } finally {
         database.close();
       }
@@ -385,6 +459,13 @@ export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
       throw error;
     }
   }
+  const afterFingerprint = cursorStoreFingerprint(path);
+  if (fingerprint && afterFingerprint === fingerprint) {
+    cursorStoreCache.set(path, { fingerprint, evidence });
+  } else {
+    cursorStoreCache.delete(path);
+  }
+  return { ...evidence };
 }
 
 async function directories(path: string): Promise<string[]> {
@@ -438,12 +519,71 @@ function guiSessionCwds(database: Database): Map<string, string> {
   return sessionCwds;
 }
 
-function latestCursorModel(database: Database | undefined, sessionId: string): string | undefined {
-  if (!database) return undefined;
-  const row = database.query(
-    "select model from ai_code_hashes where conversationId = ? and model is not null order by timestamp desc, rowid desc limit 1",
-  ).get(sessionId) as { model?: string } | null;
-  return typeof row?.model === "string" ? row.model : undefined;
+async function cursorStateEvidence(
+  home: string,
+  errors: string[],
+): Promise<typeof cursorStateCache> {
+  const path = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
+  if (!(await readableFile(path))) {
+    if (cursorStateCache?.path === path) {
+      cursorStateCache.database.close();
+      cursorStateCache = undefined;
+    }
+    return undefined;
+  }
+  const fingerprint = cursorStoreFingerprint(path);
+  if (fingerprint && cursorStateCache?.path === path && cursorStateCache.fingerprint === fingerprint) {
+    return cursorStateCache;
+  }
+  cursorStateCache?.database.close();
+  cursorStateCache = undefined;
+  let database: Database | undefined;
+  try {
+    database = new Database(path, { readonly: true });
+    cursorStateCache = {
+      path,
+      fingerprint: fingerprint ?? "",
+      database,
+      sessionCwds: guiSessionCwds(database),
+      hasComposerData: database
+        .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
+        .get() !== null,
+      composers: new Map(),
+    };
+    return cursorStateCache;
+  } catch (error) {
+    database?.close();
+    errors.push(`cursor GUI project state: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+function cursorTrackingModels(path: string): Map<string, string> {
+  const fingerprint = cursorStoreFingerprint(path);
+  const cached = cursorTrackingCache.get(path);
+  if (fingerprint && cached?.fingerprint === fingerprint) return cached.models;
+  const models = new Map<string, string>();
+  const database = new Database(path, { readonly: true });
+  try {
+    const rows = database.query(
+      "select conversationId, model from ai_code_hashes where conversationId is not null and model is not null order by timestamp desc, rowid desc",
+    ).iterate() as Iterable<{ conversationId?: string; model?: string }>;
+    for (const row of rows) {
+      if (typeof row.conversationId === "string" && typeof row.model === "string" &&
+        !models.has(row.conversationId)) {
+        models.set(row.conversationId, row.model);
+      }
+    }
+  } finally {
+    database.close();
+  }
+  const afterFingerprint = cursorStoreFingerprint(path);
+  if (fingerprint && afterFingerprint === fingerprint) {
+    cursorTrackingCache.set(path, { fingerprint, models });
+  } else {
+    cursorTrackingCache.delete(path);
+  }
+  return models;
 }
 
 // modelConfig.selectedModels[0].parameters is an [{id,value}] list carrying the
@@ -489,10 +629,22 @@ function composerModelForSession(database: Database, sessionId: string): CursorS
   };
 }
 
+function cachedComposerModel(
+  state: NonNullable<typeof cursorStateCache> | undefined,
+  sessionId: string,
+): CursorStoreEvidence {
+  if (!state?.hasComposerData) return {};
+  const cached = state.composers.get(sessionId);
+  if (cached) return cached;
+  const evidence = composerModelForSession(state.database, sessionId);
+  state.composers.set(sessionId, evidence);
+  return evidence;
+}
+
 async function cursorChildAgents(
   parent: CollectedAgent,
   transcriptPath: string | undefined,
-  tracking: Database | undefined,
+  trackingModels: ReadonlyMap<string, string>,
   nowMs: number,
   windowMs: number,
 ): Promise<CollectedAgent[]> {
@@ -504,47 +656,49 @@ async function cursorChildAgents(
   } catch {
     return [];
   }
-  const agents: CollectedAgent[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+  const agents = await Promise.all(entries.map(async (entry): Promise<CollectedAgent | null> => {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) return null;
     const sessionId = entry.name.slice(0, -".jsonl".length);
-    if (!UUID_PATTERN.test(sessionId)) continue;
+    if (!UUID_PATTERN.test(sessionId)) return null;
     const path = join(directory, entry.name);
     const file = await stat(path);
-    if (nowMs - file.mtimeMs > windowMs) continue;
-    const parsed = parseCursorChildSession({
+    if (nowMs - file.mtimeMs > windowMs) return null;
+    const evidence = await readCachedTranscript(path);
+    return parseCursorChildSession({
       sessionId,
       parentSessionId: parent.sourceSessionId,
       cwd: parent.cwd ?? homedir(),
-      transcriptJsonl: await readFile(path, "utf8"),
+      transcriptJsonl: evidence.contents,
+      transcript: evidence.transcript,
       transcriptPath: path,
-      model: latestCursorModel(tracking, sessionId),
+      model: trackingModels.get(sessionId),
       updatedAtMs: file.mtimeMs,
       nowMs,
     });
-    if (parsed) agents.push(parsed);
-  }
-  return agents;
+  }));
+  return agents.filter((agent): agent is CollectedAgent => Boolean(agent));
 }
 
 async function transcriptEvidence(
   transcriptPath: string | undefined,
-): Promise<{ transcriptJsonl?: string; subagentCount?: number; transcriptMtimeMs?: number }> {
+): Promise<{
+  transcriptJsonl?: string;
+  transcript?: CursorTranscript;
+  subagentCount?: number;
+  transcriptMtimeMs?: number;
+}> {
   if (!transcriptPath) return {};
-  const transcriptJsonl = await readFile(transcriptPath, "utf8");
-  let transcriptMtimeMs: number | undefined;
-  try {
-    transcriptMtimeMs = (await stat(transcriptPath)).mtimeMs;
-  } catch {
-    // A transcript we could read but not stat simply contributes no mtime signal.
-  }
+  const file = await readCachedTranscript(transcriptPath);
+  const transcriptJsonl = file.contents;
+  const transcript = file.transcript;
+  const transcriptMtimeMs = file.mtimeMs;
   try {
     const subagentCount = (await readdir(join(transcriptPath, "../subagents"), { withFileTypes: true }))
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .length;
-    return { transcriptJsonl, subagentCount, transcriptMtimeMs };
+    return { transcriptJsonl, transcript, subagentCount, transcriptMtimeMs };
   } catch {
-    return { transcriptJsonl, subagentCount: 0, transcriptMtimeMs };
+    return { transcriptJsonl, transcript, subagentCount: 0, transcriptMtimeMs };
   }
 }
 
@@ -553,6 +707,9 @@ async function findTranscript(
   sessionId: string,
   cwd?: string,
 ): Promise<string | undefined> {
+  const cached = cursorTranscriptPaths.get(sessionId);
+  if (cached && await readableFile(cached)) return cached;
+  cursorTranscriptPaths.delete(sessionId);
   const expectedProject = cwd?.replace(/^\/+/, "").replaceAll("/", "-");
   const orderedProjects = expectedProject
     ? [...projects].sort((left, right) =>
@@ -560,7 +717,10 @@ async function findTranscript(
     : projects;
   for (const project of orderedProjects) {
     const path = join(project, "agent-transcripts", sessionId, `${sessionId}.jsonl`);
-    if (await readableFile(path)) return path;
+    if (await readableFile(path)) {
+      cursorTranscriptPaths.set(sessionId, path);
+      return path;
+    }
   }
   return undefined;
 }
@@ -570,6 +730,7 @@ async function collectCursorGuiSessions(
   projects: readonly string[],
   nowMs: number,
   windowMs: number,
+  state: NonNullable<typeof cursorStateCache> | undefined,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -577,34 +738,15 @@ async function collectCursorGuiSessions(
   const conversationPath = join(globalStorage, "conversation-search.db");
   if (!(await readableFile(conversationPath))) return { value: agents, errors };
 
-  const statePath = join(globalStorage, "state.vscdb");
-  let sessionCwds = new Map<string, string>();
-  // state.vscdb also holds the authoritative per-session model (cursorDiskKV
-  // composerData), so the handle stays open through the conversation loop.
-  let state: Database | undefined;
-  let hasComposerData = false;
-  if (await readableFile(statePath)) {
-    try {
-      state = new Database(statePath, { readonly: true });
-      sessionCwds = guiSessionCwds(state);
-      hasComposerData = state
-        .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
-        .get() !== null;
-    } catch (error) {
-      errors.push(`cursor GUI project state: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  let tracking: Database | undefined;
+  let trackingModels = new Map<string, string>();
   const trackingPath = join(home, ".cursor", "ai-tracking", "ai-code-tracking.db");
   if (await readableFile(trackingPath)) {
     try {
-      tracking = new Database(trackingPath, { readonly: true });
+      trackingModels = cursorTrackingModels(trackingPath);
     } catch (error) {
       errors.push(`cursor GUI model tracking: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-
   let conversations: Database | undefined;
   try {
     conversations = new Database(conversationPath, { readonly: true });
@@ -613,14 +755,14 @@ async function collectCursorGuiSessions(
     ).all(nowMs - windowMs) as CursorConversationRow[];
     for (const row of rows) {
       if (typeof row.id !== "string" || !UUID_PATTERN.test(row.id)) continue;
-      const cwd = sessionCwds.get(row.id);
+      const cwd = state?.sessionCwds.get(row.id);
       const updatedAtMs = Number(row.updated_at);
       if (!cwd || !Number.isFinite(updatedAtMs)) continue;
       try {
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
         // PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
-        const composer = hasComposerData && state ? composerModelForSession(state, row.id) : {};
+        const composer = cachedComposerModel(state, row.id);
         const parsed = parseCursorSession({
           sessionId: row.id,
           metaJson: JSON.stringify({
@@ -630,13 +772,14 @@ async function collectCursorGuiSessions(
             hasConversation: true,
           }),
           transcriptJsonl: evidence.transcriptJsonl,
+          transcript: evidence.transcript,
           transcriptPath,
           transcriptMtimeMs: evidence.transcriptMtimeMs,
           subagentCount: evidence.subagentCount,
           store: {
             agentId: row.id,
             name: typeof row.title === "string" ? row.title : undefined,
-            model: composer.model ?? latestCursorModel(tracking, row.id),
+            model: composer.model ?? trackingModels.get(row.id),
             effort: composer.effort,
           },
           archived: row.is_archived === 1,
@@ -645,7 +788,7 @@ async function collectCursorGuiSessions(
         });
         if (parsed) {
           agents.push(parsed);
-          agents.push(...await cursorChildAgents(parsed, transcriptPath, tracking, nowMs, windowMs));
+          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs));
         }
       } catch (error) {
         errors.push(`cursor GUI ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -655,8 +798,6 @@ async function collectCursorGuiSessions(
     errors.push(`cursor GUI conversations: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     conversations?.close();
-    tracking?.close();
-    state?.close();
   }
   return { value: agents, errors };
 }
@@ -668,31 +809,21 @@ async function collectCursorGuiSessions(
 // model. Running here — after every entry path (chats store.db, agent-transcripts,
 // conversation-search, subagents) — leaves no path uncovered. Tokens are untouched.
 async function fillMissingCursorModels(
-  home: string,
+  state: NonNullable<typeof cursorStateCache> | undefined,
   agents: CollectedAgent[],
   errors: string[],
 ): Promise<void> {
   const missing = agents.filter((agent) => !agent.model);
-  if (missing.length === 0) return;
-  const statePath = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
-  if (!(await readableFile(statePath))) return;
-  let state: Database | undefined;
+  if (missing.length === 0 || !state?.hasComposerData) return;
   try {
-    state = new Database(statePath, { readonly: true });
-    const hasComposerData = state
-      .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
-      .get() !== null;
-    if (!hasComposerData) return;
     for (const agent of missing) {
-      const composer = composerModelForSession(state, agent.sourceSessionId);
+      const composer = cachedComposerModel(state, agent.sourceSessionId);
       if (!composer.model) continue;
       agent.model = composer.model;
       if (composer.effort && !agent.effort) agent.effort = composer.effort;
     }
   } catch (error) {
     errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    state?.close();
   }
 }
 
@@ -720,7 +851,7 @@ export async function collectCursorSessions(
       let metaJson: string;
       let meta: CursorMeta;
       try {
-        metaJson = await readFile(metaPath, "utf8");
+        metaJson = (await readCachedText(metaPath)).contents;
         meta = JSON.parse(metaJson);
       } catch (error) {
         errors.push(`cursor ${sessionId} metadata: ${error instanceof Error ? error.message : String(error)}`);
@@ -751,11 +882,12 @@ export async function collectCursorSessions(
 
       const transcriptPath = await findTranscript(projectDirectories, sessionId, meta.cwd);
       let transcriptJsonl: string | undefined;
+      let transcript: CursorTranscript | undefined;
       let subagentCount: number | undefined;
       let transcriptMtimeMs: number | undefined;
       if (transcriptPath) {
         try {
-          ({ transcriptJsonl, subagentCount, transcriptMtimeMs } = await transcriptEvidence(transcriptPath));
+          ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = await transcriptEvidence(transcriptPath));
         } catch (error) {
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -764,6 +896,7 @@ export async function collectCursorSessions(
         sessionId,
         metaJson,
         transcriptJsonl,
+        transcript,
         transcriptPath,
         transcriptMtimeMs,
         storeDbMtimeMs,
@@ -774,12 +907,13 @@ export async function collectCursorSessions(
       if (parsed) agents.push(parsed);
     }),
   );
-  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs);
+  const state = await cursorStateEvidence(home, errors);
+  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs, state);
   errors.push(...gui.errors);
   const knownIds = new Set(agents.map((agent) => agent.id));
   for (const agent of gui.value) {
     if (!knownIds.has(agent.id)) agents.push(agent);
   }
-  await fillMissingCursorModels(home, agents, errors);
+  await fillMissingCursorModels(state, agents, errors);
   return { value: agents, errors };
 }

@@ -10,7 +10,7 @@ export interface HumanMessageCandidate {
 
 const NON_HUMAN_PREFIX = /^(?:#\s*(?:AGENTS|CLAUDE)\.md instructions\b|<(?:(?:environment_context|recommended_plugins|subagent_notification|turn_aborted|permissions instructions|collaboration_mode|apps_instructions|plugins_instructions|skills_instructions|instructions)\b|file\b)|#{1,6}\s+session update\b)/i;
 const TOOL_LINE = /^(?:tool[ _-]?(?:call|use|result)|function[ _-]?(?:call|result))\b/i;
-const SHELL_LINE = /^(?:[$›]\s*|(?:bun|cargo|cat|cd|curl|find|git|grep|ls|make|node|npm|pnpm|pwd|rg|rm|sed|tsc|vitest|yarn)\s+|(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za-z]:[\\/]))/i;
+const SHELL_LINE = /^(?:[$›]\s*|(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za-z]:[\\/]))/i;
 const PATH_ONLY = /^(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za-z]:[\\/]|(?:src|tests|scripts|app|lib|packages)\/)[\w./@:-]+$/i;
 const DIFF_LINE = /^(?:diff --git\b|index [0-9a-f]+\.\.[0-9a-f]+|@@ .* @@|\+\+\+ |--- )/;
 const CITATION_ONLY = /^(?:(?:\[\^?\d+\]|【[^】]+】|\([^)]*\))\s*)+$/;
@@ -98,17 +98,15 @@ export function extractLastHumanMessage(
   provider: Provider,
   candidates: readonly HumanMessageCandidate[],
   task?: string,
-  statusReason?: string,
+  _statusReason?: string,
 ): string | null {
   for (const candidate of [...candidates].reverse()) {
     if (candidate.isMeta) continue;
     const message = readableHumanMessage(provider, candidate.content);
     if (message) return message;
   }
-  for (const fallback of [task, statusReason]) {
-    const message = typeof fallback === "string" ? readableText(fallback) : undefined;
-    if (message) return message;
-  }
+  const fallback = typeof task === "string" ? readableText(task) : undefined;
+  if (fallback) return fallback;
   return null;
 }
 

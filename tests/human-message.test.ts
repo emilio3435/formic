@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractLastHumanMessage,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -26,6 +27,39 @@ describe("readableHumanMessage — human, never machine language", () => {
     expect(out).not.toContain("`");
     expect(out).toContain("Refresh :4701");
     expect(out).toContain("1. v2 is retired");
+  });
+
+  test("keeps ordinary instructions that begin with command words", () => {
+    const prompts = [
+      "make the header sticky on scroll",
+      "find the bug in collectors.ts and fix it",
+      "cd into the worktree and run the tests",
+      "git rebase this onto main please",
+      "curl the endpoint and tell me what it returns",
+      "node is crashing on startup",
+      "ls the data dir and confirm",
+      "rm the stale worktrees when you're done",
+      "sed is mangling the file",
+      "cat the log and summarize",
+      "grep for the error string",
+      "npm install is failing",
+    ];
+
+    for (const prompt of prompts) {
+      expect(readableHumanMessage("codex", prompt)).toBe(prompt);
+    }
+    expect(readableHumanMessage("codex", "make it faster\nand also fix the flicker")).toBe(
+      "make it faster and also fix the flicker",
+    );
+  });
+
+  test("returns null instead of presenting collector status as a human message", () => {
+    expect(extractLastHumanMessage(
+      "claude",
+      [{ role: "user", content: "$ git diff --check" }],
+      undefined,
+      "No source activity in the last 3 minutes.",
+    )).toBeNull();
   });
 });
 
