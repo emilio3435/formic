@@ -2010,14 +2010,40 @@ describe("single lock narrative in the agent drawer", () => {
 });
 
 describe("investigation briefings lead with one wired action", () => {
+  /* W4-B: was six source substrings that could not fail if the CTA stopped
+     being rendered. Driven now through renderTriage, which is how a finished
+     investigation actually reaches the drawer. */
   test("blocked and verifying results expose a primary button, not prose only", () => {
-    expect(source).toContain("function investigationResultCta(");
-    expect(source).toContain('"Retriage from evidence"');
-    expect(source).toContain('"Check source now"');
-    const briefing = source.match(/function renderInvestigationResult\([\s\S]*?\n\}/)?.[0] ?? "";
-    expect(briefing).toContain("investigationResultCta(");
-    // Body cap: blockers first, at most three bullets; the rest stays in Raw.
-    expect(briefing).toContain("BRIEFING_MAX_BULLETS");
+    const issue = { id: "system:x", kind: "system", severity: "error", title: "T", summary: "s", affectedAgentIds: [] };
+    const item = (state: string, result: string) => ({
+      issueId: issue.id, id: "triage:system:x", generatedAt: "2026-07-22T03:00:00.000Z",
+      mode: "investigation", headline: "H", rationale: "R", affectedAgents: 1, affectedPrograms: 1,
+      providers: ["codex"], evidence: [], steps: [{ title: "s1", detail: "d1" }],
+      queueRecommended: true, createdAt: "2026-07-22T03:00:00.000Z",
+      startedAt: "2026-07-22T03:01:00.000Z", completedAt: "2026-07-22T03:09:00.000Z",
+      state, result,
+    });
+    const render = (state: string, result: string) => withDom(() => M.renderTriage(
+      issue, triageUi({ queueItems: [item(state, result)], triage: new Map([[issue.id, item(state, result)]]) })));
+
+    // Blocked: the operator gets a lever, not a paragraph to read and abandon.
+    const blocked = render("blocked", "Blocker: the cmux socket password is missing, so nothing could be probed.");
+    expect(buttonsOf(blocked).map((b: any) => textOf(b))).toContain("Retriage from evidence");
+    // Completed: the next act is confirming the finding actually cleared.
+    const done = render("completed", "Root cause: two sessions shared one TTY. Repair applied.");
+    expect(buttonsOf(done).map((b: any) => textOf(b))).toContain("Check source now");
+
+    // The briefing is capped — a wall of bullets is prose again. Ten bullets in,
+    // at most three reach the body, and the count is stated rather than dropped.
+    const raw = ["Findings:", ...Array.from({ length: 10 }, (_, index) => `- bullet ${index}`)].join("\n");
+    const many = render("completed", raw);
+    const shown = allByClass(many, "triage-briefing-list")
+      .flatMap((list: any) => list.children)
+      .filter((item: any) => textOf(item).startsWith("bullet ")).length;
+    expect(shown).toBeLessThanOrEqual(3);
+    expect(shown).toBeGreaterThan(0);
+    // Capping the body must never DROP evidence: the full text is still there.
+    expect(textOf(many)).toContain(raw);
   });
 });
 
