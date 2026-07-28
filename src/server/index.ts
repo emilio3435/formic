@@ -54,13 +54,16 @@ const mountainFetch = createMountainFetch({
 const server = Bun.serve({
   hostname: HOSTNAME,
   port: configuredPort,
+  idleTimeout: 120,
   fetch: mountainFetch,
 });
 
 let refreshNumber = 0;
 const refreshTimer = setInterval(() => {
   refreshNumber += 1;
-  void state.refresh({ cmux: refreshNumber % 5 === 0 });
+  void state.refresh({ cmux: refreshNumber % 5 === 0 }).catch((error) => {
+    console.error(`[HubState] scheduled refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 }, 4_000);
 
 let stopping = false;

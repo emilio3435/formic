@@ -25,6 +25,8 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   enrichIdentity: enrichCmuxIdentity,
 };
 
+const REFRESH_WATCHDOG_MS = 12_000;
+
 export class HubState {
   #snapshot: HubSnapshot;
   #pulse: PulseTracker;
@@ -34,6 +36,7 @@ export class HubState {
   #cmuxReachable = false;
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #refreshing?: Promise<HubSnapshot>;
+  #refreshStartedAtMs?: number;
   #cmuxRequested = false;
   #refreshingCmux = false;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
@@ -136,12 +139,26 @@ export class HubState {
   }
 
   async refresh(options: { cmux?: boolean } = {}): Promise<HubSnapshot> {
-    if (options.cmux && !this.#refreshingCmux) this.#cmuxRequested = true;
-    if (this.#refreshing) return this.#refreshing;
-    this.#refreshing = this.#drainRefreshes().finally(() => {
+    if (this.#refreshing) {
+      const pendingMs = Date.now() - (this.#refreshStartedAtMs ?? Date.now());
+      if (pendingMs <= REFRESH_WATCHDOG_MS) {
+        if (options.cmux && !this.#refreshingCmux) this.#cmuxRequested = true;
+        return this.#refreshing;
+      }
+      console.error(`[HubState] refresh watchdog dropped a pass pending for ${pendingMs}ms`);
       this.#refreshing = undefined;
+      this.#refreshStartedAtMs = undefined;
+      this.#refreshingCmux = false;
+    }
+    if (options.cmux) this.#cmuxRequested = true;
+    const refresh = this.#drainRefreshes().finally(() => {
+      if (this.#refreshing !== refresh) return;
+      this.#refreshing = undefined;
+      this.#refreshStartedAtMs = undefined;
     });
-    return this.#refreshing;
+    this.#refreshStartedAtMs = Date.now();
+    this.#refreshing = refresh;
+    return refresh;
   }
 
   async #drainRefreshes(): Promise<HubSnapshot> {
@@ -178,17 +195,29 @@ export class HubState {
     }
     const collectedAgents = providers.flatMap((provider) => sessions[provider].value);
     if (cmux) {
-      this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
-      const enriched = await this.collectors.enrichIdentity(cmux.value, collectedAgents, this.runner);
-      this.#surfaces = enriched.value;
-      this.#notifications = notifications?.value ?? [];
       this.#cmuxReachable = cmux.errors.length === 0;
-      // Only completed identity scans confirm bindings; a failed write is an
-      // operator-visible error, never a silent skip or a broken refresh loop.
-      const bindingErrors = this.bindingStore
-        ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
-        : [];
-      this.#cmuxErrors = [...cmux.errors, ...(notifications?.errors ?? []), ...enriched.errors, ...bindingErrors];
+      let identityErrors: string[] = [];
+      let bindingErrors: string[] = [];
+      if (this.#cmuxReachable) {
+        this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
+        const enriched = await this.collectors.enrichIdentity(cmux.value, collectedAgents, this.runner);
+        this.#surfaces = enriched.value;
+        identityErrors = enriched.errors;
+        // Only completed identity scans confirm bindings; a failed write is an
+        // operator-visible error, never a silent skip or a broken refresh loop.
+        bindingErrors = this.bindingStore
+          ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
+          : [];
+      }
+      if (notifications && notifications.errors.length === 0) {
+        this.#notifications = notifications.value;
+      }
+      this.#cmuxErrors = [
+        ...cmux.errors,
+        ...(notifications?.errors ?? []),
+        ...identityErrors,
+        ...bindingErrors,
+      ];
     }
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].errors]),

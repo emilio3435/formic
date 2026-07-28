@@ -1,6 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { HubState, type HubCollectors } from "../src/server/state";
-import type { ArchiveStore, CommandRunner } from "../src/server/types";
+import type {
+  ArchiveStore,
+  CmuxNotification,
+  CmuxSurface,
+  CollectedAgent,
+  CommandRunner,
+} from "../src/server/types";
 import type { TriageQueueSummary } from "../src/shared/types";
 
 const emptySessions = () => ({
@@ -83,6 +89,112 @@ describe("cmux collection time truth", () => {
     expect(sessionCalls).toBe(3);
     expect(cmuxCalls).toBe(1);
     expect(state.get().controlHealth.lastCheckedAt).toBe(checkedAt);
+  });
+
+  test("a failed cmux poll preserves the last confirmed surfaces and notifications without advancing check time", async () => {
+    const source: CollectedAgent = {
+      id: "codex:retained-session",
+      provider: "codex",
+      sourceSessionId: "retained-session",
+      displayName: "Retained session",
+      status: "attention",
+      statusReason: "Fixture needs attention.",
+      updatedAt: "2026-07-28T08:00:00.000Z",
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const surface: CmuxSurface = {
+      workspaceId: "WORKSPACE-RETAINED",
+      surfaceId: "SURFACE-RETAINED",
+      sourceSessionIds: [source.sourceSessionId],
+    };
+    const notification: CmuxNotification = {
+      id: "notification-retained",
+      surfaceId: surface.surfaceId,
+      createdAt: "2026-07-28T08:00:00.000Z",
+      title: "Needs review",
+    };
+    let failCmux = false;
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: [source], errors: [] },
+      }),
+      cmux: async () => failCmux
+        ? { value: [], errors: ["cmux terminal discovery timed out"] }
+        : { value: [surface], errors: [] },
+      notifications: async () => failCmux
+        ? { value: [], errors: ["cmux notification discovery timed out"] }
+        : { value: [notification], errors: [] },
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], collectors);
+
+    await state.refresh({ cmux: true });
+    const lastSuccessfulCheck = state.get().controlHealth.lastCheckedAt;
+    expect(state.surfaces()).toEqual([surface]);
+    expect(state.get().programs[0]?.agents[0]).toMatchObject({
+      outcome: "needs-you",
+      target: { surfaceId: surface.surfaceId, resolution: "exact" },
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    failCmux = true;
+    await state.refresh({ cmux: true });
+
+    expect(state.surfaces()).toEqual([surface]);
+    expect(state.get().controlHealth).toMatchObject({
+      cmuxReachable: false,
+      lastCheckedAt: lastSuccessfulCheck,
+      errors: [
+        "cmux terminal discovery timed out",
+        "cmux notification discovery timed out",
+      ],
+    });
+    expect(state.get().programs[0]?.agents[0]).toMatchObject({
+      outcome: "needs-you",
+      target: { surfaceId: surface.surfaceId, resolution: "exact" },
+    });
+  });
+
+  test("a refresh pending beyond three tick intervals is dropped so the next tick can complete", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let sessionCalls = 0;
+    const never = new Promise<never>(() => {});
+    const collectors: HubCollectors = {
+      sessions: async () => {
+        sessionCalls += 1;
+        if (sessionCalls === 1) await never;
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], collectors);
+
+    void state.refresh();
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    expect(sessionCalls).toBe(1);
+
+    nowMs += 12_001;
+    await state.refresh();
+
+    expect(sessionCalls).toBe(2);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining("refresh watchdog"));
+    now.mockRestore();
+    logged.mockRestore();
   });
 
   test("snapshot refreshes read current triage summaries", async () => {

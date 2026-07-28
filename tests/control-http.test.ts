@@ -127,6 +127,40 @@ describe("fail-loud control execution", () => {
     });
   });
 
+  test("a focus timeout returns 504 even when the subprocess reports exit zero", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+    ]);
+
+    const execution = await executeControl(
+      { action: "focus", agentId: "codex:test-session" },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(504);
+    expect(execution.response).toMatchObject({
+      ok: false,
+      error: { code: "CMUX_TIMEOUT", exitCode: 0 },
+    });
+  });
+
+  test("a send_text timeout returns 504 without attempting Enter", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(504);
+    expect(execution.response).toMatchObject({ error: { code: "CMUX_TIMEOUT" } });
+    expect(runner.commands).toHaveLength(1);
+  });
+
   test("an archive persistence failure is a structured non-2xx result", async () => {
     const runner = new StubRunner([]);
     const failingStore: ArchiveStore = {
@@ -233,6 +267,48 @@ describe("fail-loud control execution", () => {
         exitCode: 23,
       },
     });
+  });
+
+  test("two Enter timeouts report staged text as unsubmitted with a 504", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "first deadline", timedOut: true },
+      { exitCode: 0, stdout: "", stderr: "second deadline", timedOut: true },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(504);
+    expect(execution.response).toMatchObject({
+      ok: false,
+      error: { code: "TEXT_STAGED_NOT_SUBMITTED", stderr: "second deadline", exitCode: 0 },
+    });
+    expect(runner.commands).toHaveLength(3);
+  });
+
+  test("a timed-out first Enter is retried even when it reports exit zero", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const execution = await executeControl(
+      { action: "instruct", agentId: "codex:test-session", instruction: "Continue." },
+      agent(),
+      { runner, archiveStore: archiveStore(), cmuxExecutable: "cmux" },
+    );
+
+    expect(execution.status).toBe(200);
+    expect(runner.commands.map((command) => command[2])).toEqual([
+      "surface.send_text",
+      "surface.send_key",
+      "surface.send_key",
+    ]);
   });
 
   test("send_text failures retain CMUX_COMMAND_FAILED without attempting Enter", async () => {

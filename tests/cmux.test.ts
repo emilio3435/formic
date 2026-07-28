@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  collectCmux,
+  collectCmuxNotifications,
   DEFAULT_CMUX_EXECUTABLE,
   parseCmuxTerminals,
   runtimeCmuxExecutable,
 } from "../src/server/cmux";
+import type { CommandRunner } from "../src/server/types";
 
 function discovery(terminal: Record<string, unknown>): string {
   return JSON.stringify({ terminals: [{ surface_id: "SURFACE-1", ...terminal }] });
@@ -39,5 +42,27 @@ describe("runtime cmux executable", () => {
   test("uses a configured executable and otherwise preserves the default", () => {
     expect(runtimeCmuxExecutable("/opt/cmux/bin/cmux")).toBe("/opt/cmux/bin/cmux");
     expect(runtimeCmuxExecutable("  ")).toBe(DEFAULT_CMUX_EXECUTABLE);
+  });
+});
+
+describe("cmux timeout results", () => {
+  test("terminal and notification timeouts are errors rather than successful empty polls", async () => {
+    const commands: readonly string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        (commands as string[][]).push([...command]);
+        return { exitCode: 0, stdout: "", stderr: "", timedOut: true };
+      },
+    };
+
+    await expect(collectCmux(runner, "cmux")).resolves.toEqual({
+      value: [],
+      errors: ["cmux terminal discovery timed out"],
+    });
+    await expect(collectCmuxNotifications(runner, "cmux")).resolves.toEqual({
+      value: [],
+      errors: ["cmux notification discovery timed out"],
+    });
+    expect(commands).toHaveLength(2);
   });
 });

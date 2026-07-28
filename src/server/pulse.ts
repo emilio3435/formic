@@ -10,6 +10,7 @@ const BUCKET_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60_000;
 const STALL_THRESHOLD_MS = 15 * 60_000;
 const BURN_REFRESH_TTL_MS = 60_000;
+const BURN_REFRESH_TIMEOUT_MS = 20_000;
 const MAX_BUCKETS = 13;
 const MAX_PUBLISHED_BUCKETS = 12;
 
@@ -46,7 +47,11 @@ export class PulseTracker {
   #costNote?: string;
   #latestCursorUnknownCount = 0;
 
-  constructor(burnReader?: BurnReader, observedSinceMs = Date.now()) {
+  constructor(
+    burnReader?: BurnReader,
+    observedSinceMs = Date.now(),
+    private readonly burnRefreshTimeoutMs = BURN_REFRESH_TIMEOUT_MS,
+  ) {
     this.#observedSinceMs = observedSinceMs;
     this.#observedSince = new Date(observedSinceMs).toISOString();
     this.#burnReader = burnReader ?? (() => {
@@ -118,11 +123,19 @@ export class PulseTracker {
     if (this.#lastBurnRefreshMs !== undefined && nowMs - this.#lastBurnRefreshMs < BURN_REFRESH_TTL_MS) return;
     this.#lastBurnRefreshMs = nowMs;
     this.#burnRefreshInFlight = (async () => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        this.#applyBurnSummary(await this.#burnReader());
+        const summary = await Promise.race([
+          this.#burnReader(),
+          new Promise<undefined>((resolve) => {
+            timeout = setTimeout(() => resolve(undefined), this.burnRefreshTimeoutMs);
+          }),
+        ]);
+        this.#applyBurnSummary(summary);
       } catch {
         this.#applyBurnSummary(undefined);
       } finally {
+        if (timeout) clearTimeout(timeout);
         this.#burnRefreshInFlight = undefined;
       }
     })();

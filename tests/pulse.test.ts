@@ -186,6 +186,39 @@ describe("PulseTracker", () => {
     expect(tracker.report(base + 240_001).burn).toMatchObject({ costLastHourUsd: 1.24, costAsOf: changedAsOf });
   });
 
+  test("a burn reader deadline marks stale cost unavailable and permits a later retry", async () => {
+    let reads = 0;
+    const never = new Promise<never>(() => {});
+    const tracker = new PulseTracker(async () => {
+      reads += 1;
+      if (reads === 1) return usageSummary({ estimatedCostUsd: 1.25 });
+      if (reads === 2) return never;
+      return usageSummary({ estimatedCostUsd: 2.5, to: iso(base + 3 * 60_000) });
+    }, base, 20);
+
+    tracker.maybeRefreshBurnCost(base);
+    await flushBurnReader();
+    expect(tracker.report(base).burn).toMatchObject({
+      costLastHourUsd: 1.25,
+      costProvenance: "burnbar",
+    });
+
+    tracker.maybeRefreshBurnCost(base + 60_001);
+    await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    expect(tracker.report(base + 60_041).burn).toMatchObject({
+      costLastHourUsd: null,
+      costProvenance: "unavailable",
+    });
+
+    tracker.maybeRefreshBurnCost(base + 120_002);
+    await flushBurnReader();
+    expect(reads).toBe(3);
+    expect(tracker.report(base + 120_002).burn).toMatchObject({
+      costLastHourUsd: 2.5,
+      costProvenance: "burnbar",
+    });
+  });
+
   test("aligns five-minute buckets, publishes completed history only, counts each agent once, and caps history", () => {
     const tracker = new PulseTracker(undefined, base);
     expect(tracker.report(base + 1_000).activity.buckets).toEqual([]);
