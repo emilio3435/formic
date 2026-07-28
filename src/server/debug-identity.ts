@@ -34,6 +34,15 @@ function summarize(agent: AgentSnapshot): IdentityDebugSummary {
 }
 
 function surfaceView(surface: CmuxSurface): Record<string, unknown> {
+  const identityTrace = surface.identityTrace
+    ? {
+        ...surface.identityTrace,
+        processes: surface.identityTrace.processes.map((process) => ({
+          ...process,
+          command: "[redacted]",
+        })),
+      }
+    : undefined;
   return {
     surfaceId: surface.surfaceId,
     workspaceId: surface.workspaceId,
@@ -43,7 +52,7 @@ function surfaceView(surface: CmuxSurface): Record<string, unknown> {
     runtimeSurfaceReady: surface.runtimeSurfaceReady,
     sourceSessionIds: surface.sourceSessionIds,
     identityConflict: surface.identityConflict,
-    identityTrace: surface.identityTrace,
+    identityTrace,
   };
 }
 

@@ -25,13 +25,11 @@ afterEach(() => {
 });
 
 describe("cmux socket auth", () => {
-  test("cmuxCommand injects --password when configured", () => {
+  test("cmuxCommand keeps the inherited socket password out of argv", () => {
     process.env.CMUX_SOCKET_PASSWORD = "secret-token";
     resetCmuxAuthForTests();
     expect(cmuxCommand("/bin/cmux", ["rpc", "debug.terminals", "{}"])).toEqual([
       "/bin/cmux",
-      "--password",
-      "secret-token",
       "rpc",
       "debug.terminals",
       "{}",

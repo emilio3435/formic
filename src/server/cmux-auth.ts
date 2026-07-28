@@ -55,13 +55,8 @@ export function runningInsideCmux(): boolean {
   return Boolean(process.env.CMUX_SURFACE_ID?.trim() || process.env.CMUX_WORKSPACE_ID?.trim());
 }
 
-/**
- * Build a cmux argv. When a socket password is configured, inject `--password`
- * so Ant Hill can talk to cmux from outside a cmux pane (password mode).
- */
+/** Build cmux argv; the CLI reads CMUX_SOCKET_PASSWORD from the inherited environment. */
 export function cmuxCommand(executable: string, args: readonly string[]): string[] {
-  const password = cmuxSocketPassword();
-  if (password) return [executable, "--password", password, ...args];
   return [executable, ...args];
 }
 

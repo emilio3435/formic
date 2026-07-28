@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { createMountainFetch, emptySnapshot, type MountainAppState } from "../src/server/app";
+import {
+  createMountainFetch,
+  emptySnapshot,
+  MAX_SSE_BACKLOG_BYTES,
+  MAX_SSE_CLIENTS,
+  type MountainAppState,
+} from "../src/server/app";
 import { MemoryTriageQueueStore } from "../src/server/triage";
 import type { AgentSnapshot, HubSnapshot, OperatorIssue } from "../src/shared/types";
 import type { ArchiveStore, CommandRunner } from "../src/server/types";
 
-function lifecycleSnapshot(): HubSnapshot {
+function lifecycleSnapshot(generatedAt = new Date().toISOString()): HubSnapshot {
   const agent: AgentSnapshot = {
     id: "codex:control",
     provider: "codex",
@@ -31,8 +37,8 @@ function lifecycleSnapshot(): HubSnapshot {
   };
   return {
     schemaVersion: 1,
-    generatedAt: "2026-07-22T06:00:00.000Z",
-    controlHealth: { cmuxReachable: true, lastCheckedAt: "2026-07-22T06:00:00.000Z", errors: [], staleSources: [] },
+    generatedAt,
+    controlHealth: { cmuxReachable: true, lastCheckedAt: generatedAt, errors: [], staleSources: [] },
     totals: { live: 1, tracked: 1, attention: 0 },
     issues: [issue],
     programs: [{ id: "fixture", name: "Fixture", agents: [agent] }],
@@ -111,6 +117,97 @@ describe("SSE lifecycle", () => {
     expect((await fetch(new Request("http://127.0.0.1:4701/api/events"))).status).toBe(503);
 
     expect(() => fetch.dispose()).not.toThrow();
+  });
+
+  test("event streams keep the full snapshot wire contract on accepted state changes", async () => {
+    const initial = emptySnapshot();
+    let listener: ((snapshot: HubSnapshot) => void) | undefined;
+    const state: MountainAppState = {
+      get: () => initial,
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+      refresh: async () => initial,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/events"));
+    const reader = response.body!.getReader();
+    await reader.read();
+
+    const changed = {
+      ...initial,
+      totals: { ...initial.totals, tracked: initial.totals.tracked + 1 },
+    };
+    listener!(changed);
+    const event = String((await reader.read()).value);
+
+    expect(event).toStartWith("event: snapshot\ndata: ");
+    expect(JSON.parse(event.split("\ndata: ")[1]!.trim())).toEqual(changed);
+    fetch.dispose();
+  });
+
+  test("event streams reject clients beyond the admission cap", async () => {
+    const state: MountainAppState = {
+      get: emptySnapshot,
+      subscribe: () => () => {},
+      refresh: async () => emptySnapshot(),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const admitted = await Promise.all(
+      Array.from(
+        { length: MAX_SSE_CLIENTS },
+        () => fetch(new Request("http://127.0.0.1:4701/api/events")),
+      ),
+    );
+    const rejected = await fetch(new Request("http://127.0.0.1:4701/api/events"));
+
+    expect(admitted.every((response) => response.status === 200)).toBe(true);
+    expect(rejected.status).toBe(503);
+    expect(await rejected.text()).toBe("Too many event streams");
+    fetch.dispose();
+  });
+
+  test("a stalled event stream is dropped before another snapshot can grow its backlog", async () => {
+    const initial = lifecycleSnapshot();
+    initial.programs[0]!.agents[0]!.statusReason = "x".repeat(MAX_SSE_BACKLOG_BYTES);
+    let listener: ((snapshot: HubSnapshot) => void) | undefined;
+    const state: MountainAppState = {
+      get: () => initial,
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+      refresh: async () => initial,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/events"));
+
+    listener!({
+      ...initial,
+      programs: [{
+        ...initial.programs[0]!,
+        agents: [{ ...initial.programs[0]!.agents[0]!, statusReason: "changed" }],
+      }],
+    });
+
+    const reader = response.body!.getReader();
+    expect((await reader.read()).done).toBe(false);
+    expect((await reader.read()).done).toBe(true);
+    fetch.dispose();
   });
 
   test("successful control and triage actions mark verification and force a fresh cmux refresh", async () => {

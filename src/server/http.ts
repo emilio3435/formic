@@ -3,10 +3,12 @@ import { CONTROL_ACTIONS, executeControl, type ControlDependencies } from "./con
 
 export const MAX_CONTROL_BODY_BYTES = 16_384;
 export const MAX_INSTRUCTION_BYTES = 8_192;
+export const MAX_CONTROL_SNAPSHOT_AGE_MS = 30_000;
 
 export interface ControlHttpDependencies extends ControlDependencies {
   getSnapshot(): HubSnapshot;
   afterControl?(agentIds?: readonly string[]): void | Promise<void>;
+  now?(): number;
 }
 
 function json(value: unknown, status: number): Response {
@@ -86,6 +88,26 @@ export async function handleControlRequest(
   if (typeof parsed === "string") return requestError(400, "INVALID_CONTROL_REQUEST", parsed);
 
   const snapshot = dependencies.getSnapshot();
+  if (parsed.action !== "archive") {
+    const generatedAt = Date.parse(snapshot.generatedAt);
+    const ageMs = (dependencies.now?.() ?? Date.now()) - generatedAt;
+    if (!Number.isFinite(generatedAt) || ageMs > MAX_CONTROL_SNAPSHOT_AGE_MS) {
+      return json(
+        {
+          ok: false,
+          error: {
+            code: "STALE_SNAPSHOT",
+            message: Number.isFinite(generatedAt)
+              ? `Control routing evidence is ${Math.max(0, ageMs)}ms old; recollect before retrying.`
+              : "Control routing evidence has an invalid timestamp; recollect before retrying.",
+            ageMs: Number.isFinite(generatedAt) ? Math.max(0, ageMs) : null,
+            maxAgeMs: MAX_CONTROL_SNAPSHOT_AGE_MS,
+          },
+        },
+        409,
+      );
+    }
+  }
   const agent = snapshot.programs.flatMap((program) => program.agents).find((candidate) => candidate.id === parsed.agentId);
   if (!agent) return requestError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
   const execution = await executeControl(parsed, agent, dependencies);
