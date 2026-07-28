@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import type {
   AgentSnapshot,
   HubSnapshot,
@@ -5,6 +7,7 @@ import type {
   Provider,
   TargetResolution,
 } from "../shared/types";
+import { readableHumanMessage } from "./human-message";
 import type { CmuxSurface } from "./types";
 
 export interface IdentityDebugSummary {
@@ -125,4 +128,136 @@ export function identityDebugResponse(
     },
     { headers: responseHeaders },
   );
+}
+
+export interface TranscriptLine {
+  at: string | null;
+  role: "user" | "assistant" | "tool" | "system" | "unknown";
+  text: string;
+}
+
+function transcriptRole(value: unknown): TranscriptLine["role"] {
+  return value === "user" || value === "assistant" || value === "tool" || value === "system"
+    ? value
+    : "unknown";
+}
+
+function transcriptCandidate(
+  agent: AgentSnapshot,
+  row: Record<string, any>,
+): { at: unknown; role: unknown; content: unknown } | undefined {
+  if (agent.provider === "codex") {
+    const payload = row.payload ?? row;
+    if (row.type === "event_msg" && payload.type === "user_message") {
+      return { at: row.timestamp, role: "user", content: payload.message };
+    }
+    if (row.type !== "response_item") return undefined;
+    if (payload.type === "message") {
+      return { at: row.timestamp, role: payload.role, content: payload.content };
+    }
+    if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
+      return { at: row.timestamp, role: "tool", content: payload.output };
+    }
+    return undefined;
+  }
+  if (agent.provider === "omp") {
+    if (row.type !== "message") return undefined;
+    return {
+      at: row.timestamp ?? row.message?.timestamp,
+      role: row.message?.role,
+      content: row.message?.content,
+    };
+  }
+  if (agent.provider === "claude") {
+    if (!["user", "assistant", "system"].includes(String(row.type))) return undefined;
+    return {
+      at: row.timestamp ?? row.message?.timestamp,
+      role: row.message?.role ?? row.type,
+      content: row.message?.content ?? row.content,
+    };
+  }
+  if (row.message?.content === undefined && row.content === undefined) return undefined;
+  return {
+    at: row.timestamp ?? row.createdAt,
+    role: row.role ?? row.message?.role,
+    content: row.message?.content ?? row.content,
+  };
+}
+
+function transcriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const lines: TranscriptLine[] = [];
+  for (const raw of contents.split("\n")) {
+    if (!raw.trim()) continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const candidate = transcriptCandidate(agent, row as Record<string, any>);
+    if (!candidate) continue;
+    const text = readableHumanMessage(agent.provider, candidate.content);
+    if (!text) continue;
+    const timestamp = typeof candidate.at === "string" && Number.isFinite(Date.parse(candidate.at))
+      ? new Date(candidate.at).toISOString()
+      : null;
+    const line: TranscriptLine = { at: timestamp, role: transcriptRole(candidate.role), text };
+    const previous = lines.at(-1);
+    if (previous?.role === line.role && previous.text === line.text) continue;
+    lines.push(line);
+  }
+  return lines;
+}
+
+export async function transcriptResponse(
+  snapshot: HubSnapshot,
+  agentId: string,
+  limit: number,
+  headers: Readonly<Record<string, string>>,
+): Promise<Response> {
+  const responseHeaders = { ...headers, "cache-control": "no-store" };
+  const agent = snapshot.programs
+    .flatMap((program) => program.agents)
+    .find((candidate) => candidate.id === agentId);
+  if (!agent) {
+    return Response.json(
+      {
+        ok: false,
+        error: { code: "AGENT_NOT_FOUND", message: "The agent is not present in the current snapshot." },
+      },
+      { status: 404, headers: responseHeaders },
+    );
+  }
+  const source = agent.artifacts.find((artifact) => artifact.kind === "transcript")?.path;
+  if (!source || !isAbsolute(source)) {
+    return Response.json(
+      { ok: true, agentId, source: null, truncated: false, lines: [] },
+      { headers: responseHeaders },
+    );
+  }
+  try {
+    const lines = transcriptLines(agent, await readFile(source, "utf8"));
+    if (lines.length === 0) {
+      return Response.json(
+        { ok: true, agentId, source: null, truncated: false, lines: [] },
+        { headers: responseHeaders },
+      );
+    }
+    return Response.json(
+      {
+        ok: true,
+        agentId,
+        source,
+        truncated: lines.length > limit,
+        lines: lines.slice(-limit),
+      },
+      { headers: responseHeaders },
+    );
+  } catch {
+    return Response.json(
+      { ok: true, agentId, source: null, truncated: false, lines: [] },
+      { headers: responseHeaders },
+    );
+  }
 }

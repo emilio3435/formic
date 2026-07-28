@@ -1,8 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   collectCmux,
   collectCmuxNotifications,
   DEFAULT_CMUX_EXECUTABLE,
+  JsonAttentionStore,
+  MemoryAttentionStore,
   parseCmuxTerminals,
   runtimeCmuxExecutable,
 } from "../src/server/cmux";
@@ -64,6 +69,114 @@ describe("cmux timeout results", () => {
       errors: ["cmux notification discovery timed out"],
     });
     expect(commands).toHaveLength(2);
+  });
+});
+
+describe("persisted notification attention state", () => {
+  const first = {
+    id: "notice-1",
+    surfaceId: "SURFACE-1",
+    createdAt: "2026-07-28T09:00:00.000Z",
+    body: "First request",
+  };
+  const newer = {
+    ...first,
+    id: "notice-2",
+    createdAt: "2026-07-28T09:05:00.000Z",
+    body: "New request",
+  };
+
+  test("acknowledgement suppresses current notifications but not a newer one", async () => {
+    const store = new MemoryAttentionStore(() => Date.parse("2026-07-28T09:01:00.000Z"));
+    store.observe([first]);
+    await store.apply("SURFACE-1", "acknowledge");
+
+    expect(store.filter([first])).toEqual([]);
+    store.observe([first, newer]);
+    expect(store.filter([first, newer])).toEqual([newer]);
+  });
+
+  test("notification collection applies persisted acknowledgement before snapshot input", async () => {
+    const store = new MemoryAttentionStore(() => Date.parse("2026-07-28T09:01:00.000Z"));
+    const runner: CommandRunner = {
+      run: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify([{
+          id: first.id,
+          surface_id: first.surfaceId,
+          created_at: first.createdAt,
+          body: first.body,
+        }]),
+        stderr: "",
+        timedOut: false,
+      }),
+    };
+    const initial = await collectCmuxNotifications(runner, "cmux", store);
+    expect(initial.value).toHaveLength(1);
+    await store.apply(first.surfaceId, "acknowledge");
+
+    const acknowledged = await collectCmuxNotifications(runner, "cmux", store);
+    expect(acknowledged).toEqual({ value: [], errors: [] });
+  });
+
+  test("snooze expires from the clock without a clearing mutation", async () => {
+    let now = Date.parse("2026-07-28T09:01:00.000Z");
+    const store = new MemoryAttentionStore(() => now);
+    store.observe([first]);
+    await store.apply("SURFACE-1", "snooze", "2026-07-28T09:10:00.000Z");
+
+    expect(store.filter([first])).toEqual([]);
+    now = Date.parse("2026-07-28T09:10:00.001Z");
+    expect(store.filter([first])).toEqual([first]);
+  });
+
+  test("bounds persisted dispositions to the 500 newest surfaces", async () => {
+    let now = Date.parse("2026-07-28T09:01:00.000Z");
+    const store = new MemoryAttentionStore(() => now++);
+    for (let index = 0; index < 501; index += 1) {
+      const notification = {
+        id: `notice-${index}`,
+        surfaceId: `SURFACE-${index}`,
+        createdAt: new Date(now).toISOString(),
+      };
+      store.observe([notification]);
+      await store.apply(notification.surfaceId, "acknowledge");
+    }
+
+    expect(store.list()).toHaveLength(500);
+    expect(store.get("SURFACE-0")).toBeUndefined();
+    expect(store.get("SURFACE-500")).toBeDefined();
+  });
+
+  test("attention records survive reopen and corrupt state degrades loudly to empty", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-attention-"));
+    const path = join(directory, "attention.json");
+    const now = () => Date.parse("2026-07-28T09:01:00.000Z");
+    try {
+      const store = await JsonAttentionStore.open(path, now);
+      store.observe([first]);
+      await store.apply("SURFACE-1", "dismiss");
+      const reopened = await JsonAttentionStore.open(path, now);
+      expect(reopened.filter([first])).toEqual([]);
+
+      const expired = await JsonAttentionStore.open(
+        path,
+        () => now() + 8 * 24 * 60 * 60 * 1_000,
+      );
+      expect(expired.list()).toEqual([]);
+
+      await writeFile(path, "{");
+      const logged = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const recovered = await JsonAttentionStore.open(path, now);
+        expect(recovered.list()).toEqual([]);
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("Ignoring unreadable attention state"));
+      } finally {
+        logged.mockRestore();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

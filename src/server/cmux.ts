@@ -1,8 +1,191 @@
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { cmuxCommand } from "./cmux-auth";
 import type { CmuxNotification, CollectionResult, CmuxSurface, CommandRunner } from "./types";
 
 export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
+export const ATTENTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_ATTENTION_RECORDS = 500;
+
+export type AttentionAction = "acknowledge" | "dismiss" | "snooze";
+
+export interface AttentionRecord {
+  surfaceId: string;
+  action: AttentionAction;
+  updatedAt: string;
+  throughAt?: string;
+  notificationId?: string;
+  snoozedUntil?: string;
+}
+
+export interface AttentionStore {
+  list(): readonly AttentionRecord[];
+  get(surfaceId: string): AttentionRecord | undefined;
+  observe(notifications: readonly CmuxNotification[]): void;
+  apply(surfaceId: string, action: AttentionAction, snoozedUntil?: string): Promise<AttentionRecord>;
+  filter(notifications: readonly CmuxNotification[]): CmuxNotification[];
+}
+
+export class MemoryAttentionStore implements AttentionStore {
+  protected readonly records = new Map<string, AttentionRecord>();
+  private readonly latest = new Map<string, CmuxNotification>();
+  private mutationQueue: Promise<void> = Promise.resolve();
+
+  constructor(protected readonly now: () => number = Date.now) {}
+
+  list(): readonly AttentionRecord[] {
+    return [...this.records.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  get(surfaceId: string): AttentionRecord | undefined {
+    return this.records.get(surfaceId);
+  }
+
+  observe(notifications: readonly CmuxNotification[]): void {
+    for (const notification of notifications) {
+      const current = this.latest.get(notification.surfaceId);
+      if (!current || notification.createdAt > current.createdAt) {
+        this.latest.set(notification.surfaceId, notification);
+      }
+    }
+  }
+
+  async apply(
+    surfaceId: string,
+    action: AttentionAction,
+    snoozedUntil?: string,
+  ): Promise<AttentionRecord> {
+    return this.mutate(async () => {
+      const notification = this.latest.get(surfaceId);
+      if (!notification) {
+        const error = new Error("The agent has no observed unread cmux notification.");
+        Object.assign(error, { code: "ATTENTION_NOT_FOUND" });
+        throw error;
+      }
+      const untilMs = Date.parse(snoozedUntil ?? "");
+      if (
+        action === "snooze" &&
+        (!Number.isFinite(untilMs) || untilMs <= this.now() || untilMs > this.now() + ATTENTION_RETENTION_MS)
+      ) {
+        const error = new Error("Snooze requires a future timestamp no more than seven days away.");
+        Object.assign(error, { code: "INVALID_SNOOZE_UNTIL" });
+        throw error;
+      }
+      const updatedAt = new Date(this.now()).toISOString();
+      const record: AttentionRecord = action === "snooze"
+        ? { surfaceId, action, updatedAt, snoozedUntil }
+        : {
+            surfaceId,
+            action,
+            updatedAt,
+            throughAt: notification.createdAt,
+            notificationId: notification.id,
+          };
+      await this.commit([
+        ...this.list().filter((value) => value.surfaceId !== surfaceId),
+        record,
+      ]);
+      return record;
+    });
+  }
+
+  filter(notifications: readonly CmuxNotification[]): CmuxNotification[] {
+    const nowMs = this.now();
+    return notifications.filter((notification) => {
+      const record = this.records.get(notification.surfaceId);
+      if (!record) return true;
+      const snoozedUntil = Date.parse(record.snoozedUntil ?? "");
+      if (Number.isFinite(snoozedUntil) && snoozedUntil > nowMs) return false;
+      return !record.throughAt || notification.createdAt > record.throughAt;
+    });
+  }
+
+  private async commit(records: readonly AttentionRecord[]): Promise<void> {
+    const retained = retainAttentionRecords(records, this.now());
+    await this.persist(retained);
+    this.records.clear();
+    for (const record of retained) this.records.set(record.surfaceId, record);
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(operation);
+    this.mutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  protected async persist(_records: readonly AttentionRecord[]): Promise<void> {}
+}
+
+export class JsonAttentionStore extends MemoryAttentionStore {
+  private writeNumber = 0;
+
+  private constructor(private readonly path: string, now: () => number) {
+    super(now);
+  }
+
+  static async open(path: string, now: () => number = Date.now): Promise<JsonAttentionStore> {
+    const store = new JsonAttentionStore(path, now);
+    let pruned = false;
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf8"));
+      if (!Array.isArray(parsed)) throw new Error("attention state must be an array");
+      for (const value of parsed) {
+        if (!isAttentionRecord(value)) throw new Error("attention state contains an invalid record");
+      }
+      const retained = retainAttentionRecords(parsed, now());
+      pruned = retained.length !== parsed.length;
+      for (const record of retained) store.records.set(record.surfaceId, record);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        store.records.clear();
+        console.error(
+          `[JsonAttentionStore] Ignoring unreadable attention state at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (pruned) await store.persist(store.list());
+    return store;
+  }
+
+  protected override async persist(records: readonly AttentionRecord[]): Promise<void> {
+    await mkdir(dirname(this.path), { recursive: true });
+    this.writeNumber += 1;
+    const temporary = `${this.path}.${process.pid}.${this.writeNumber}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+    await rename(temporary, this.path);
+  }
+}
+
+function isAttentionRecord(value: unknown): value is AttentionRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<AttentionRecord>;
+  return typeof record.surfaceId === "string" &&
+    ["acknowledge", "dismiss", "snooze"].includes(String(record.action)) &&
+    typeof record.updatedAt === "string" &&
+    Number.isFinite(Date.parse(record.updatedAt)) &&
+    (record.throughAt === undefined || Number.isFinite(Date.parse(record.throughAt))) &&
+    (record.snoozedUntil === undefined || Number.isFinite(Date.parse(record.snoozedUntil))) &&
+    (record.action === "snooze"
+      ? typeof record.snoozedUntil === "string"
+      : typeof record.throughAt === "string");
+}
+
+function retainAttentionRecords(records: readonly AttentionRecord[], nowMs: number): AttentionRecord[] {
+  return [...records]
+    .filter((record) => nowMs - Date.parse(record.updatedAt) <= ATTENTION_RETENTION_MS)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, MAX_ATTENTION_RECORDS);
+}
+
+let defaultAttentionStorePromise: Promise<JsonAttentionStore> | undefined;
+
+export function defaultAttentionStore(): Promise<JsonAttentionStore> {
+  defaultAttentionStorePromise ??= JsonAttentionStore.open(
+    join(import.meta.dir, "../../data/attention-state.json"),
+  );
+  return defaultAttentionStorePromise;
+}
 
 export function runtimeCmuxExecutable(value = process.env.CMUX_EXECUTABLE): string {
   return value?.trim() || DEFAULT_CMUX_EXECUTABLE;
@@ -112,6 +295,7 @@ export function parseCmuxNotifications(output: string): CmuxNotification[] {
 export async function collectCmuxNotifications(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
+  attentionStore?: AttentionStore,
 ): Promise<CollectionResult<CmuxNotification[]>> {
   const result = await runner.run(cmuxCommand(executable, ["list-notifications", "--json"]), 10_000);
   if (result.timedOut) return { value: [], errors: ["cmux notification discovery timed out"] };
@@ -122,7 +306,10 @@ export async function collectCmuxNotifications(
     };
   }
   try {
-    return { value: parseCmuxNotifications(result.stdout), errors: [] };
+    const notifications = parseCmuxNotifications(result.stdout);
+    const store = attentionStore ?? await defaultAttentionStore();
+    store.observe(notifications);
+    return { value: store.filter(notifications), errors: [] };
   } catch (error) {
     return {
       value: [],
