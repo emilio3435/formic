@@ -3397,6 +3397,48 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toContain("12k");
   });
 
+  /* -------- finding 4: five copies of one enum, already disagreeing --------
+     `completed` read "Complete" on the plan chip, "complete · verifying" on the
+     queue button, "verifying" in the pulse row, "Verifying" in the drawer
+     eyebrow and "complete · waiting for fresh data" in the drawer status. */
+  test("(4) one investigation state reads with one word on every surface", () => {
+    const issue = { id: "system:1", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const item = (state: string) => ({
+      issueId: "system:1", state, headline: "Re-bind the sessions", mode: "investigate",
+      rationale: "why", steps: [{ title: "Read", detail: "d" }], queueRecommended: true,
+      createdAt: "2026-07-28T01:00:00.000Z", startedAt: "2026-07-28T01:01:00.000Z",
+    });
+    const triageText = (state: string) =>
+      textOf(withDom(() => M.renderTriage(issue, triageUi({ queueItems: [item(state)] }))));
+
+    // The state that was broken in four ways.
+    const completed = triageText("completed");
+    expect(completed).toContain("Verifying");                     // plan chip
+    expect(completed).toContain("✓ Investigation verifying");      // queue button
+    expect(completed).not.toContain("Complete");                   // the old chip word
+    expect(completed).not.toContain("complete · verifying");       // the old button text
+    const pulseRow = (state: string) =>
+      M.pulseStripModel({ schemaVersion: 1, programs: [], issues: [] }, "live", [item(state)]).findings[0];
+    expect(pulseRow("completed").work.label).toBe("Verifying");     // pulse row
+
+    // Every surface agrees for every state, and the four states stay distinct.
+    for (const [state, word] of [["queued", "Queued"], ["running", "Running"], ["completed", "Verifying"], ["blocked", "Blocked"]] as const) {
+      const view = M.investigationView(state);
+      expect(view.label, state).toBe(word);
+      expect(triageText(state), state).toContain(word);
+      expect(pulseRow(state).impact, state).toBe("Investigation " + word.toLowerCase());
+    }
+    const labels = Object.values(M.INVESTIGATION_STATE_VIEW as Record<string, { label: string }>).map((v) => v.label);
+    expect(new Set(labels).size).toBe(4);
+
+    // A sixth server state degrades to the server's own word CONSISTENTLY,
+    // instead of a confident wrong label on one surface and a raw enum on the next.
+    const unknown = M.investigationView("cancelled");
+    expect(unknown.label).toBe("cancelled");
+    expect(unknown.button).toBe("Investigation cancelled");
+    expect(triageText("cancelled")).toContain("Investigation cancelled");
+  });
+
   /* -------- finding 3: repaint-and-lose-focus ------------------------------
      render()'s focus-restore contract keys on data-fkey and nothing else, and
      renderFilterBar wipes the whole bar unconditionally on every paint. Chips

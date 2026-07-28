@@ -1249,6 +1249,54 @@ const WORK_STATE_VIEW = {
 
 // Progress 0–100 per work state (normative). blocked keeps a mid value but
 // its ember tone (not the %) carries the alarm.
+/* One server enum, one operator vocabulary. Every surface that names an
+   investigation state reads from here: the plan chip, the queue button and its
+   note, the pulse row's work state, the drawer eyebrow and the drawer status
+   sentence. Before this table `completed` read "Complete" on the chip,
+   "complete · verifying" on the button, "verifying" in the pulse row,
+   "Verifying" in the drawer eyebrow and "complete · waiting for fresh data" in
+   the drawer status — four different words for one state, on one board.
+   `work` maps into WORK_STATE_VIEW, which stays the downstream row vocabulary. */
+const INVESTIGATION_STATE_VIEW = {
+  queued: {
+    work: "queued", label: "Queued", tone: "cool",
+    button: "✓ Investigation queued",
+    note: "Queued and ready for explicit launch",
+    status: "queued and ready for explicit launch",
+  },
+  running: {
+    work: "investigating", label: "Running", tone: "warm",
+    button: "● Investigation running",
+    note: "Investigation running",
+    status: "running",
+  },
+  completed: {
+    work: "verifying", label: "Verifying", tone: "ok",
+    button: "✓ Investigation verifying",
+    note: "Investigation verifying · waiting for fresh data",
+    status: "verifying · waiting for fresh data",
+  },
+  blocked: {
+    work: "blocked", label: "Blocked", tone: "hot",
+    button: "! Investigation blocked",
+    note: "Investigation blocked · review result",
+    status: "blocked · review result",
+  },
+};
+
+/* A state the server adds later reads as its own word everywhere rather than
+   as a confident wrong label on one surface and a raw enum on the next. */
+function investigationView(stateKey) {
+  if (INVESTIGATION_STATE_VIEW[stateKey]) return INVESTIGATION_STATE_VIEW[stateKey];
+  const raw = String(stateKey || "queued");
+  return {
+    work: "queued", label: raw, tone: "cool",
+    button: "Investigation " + raw,
+    note: "Investigation " + raw,
+    status: raw,
+  };
+}
+
 const PROGRESS_BY_WORK = {
   needs: 0, watching: 0, triaging: 15, planned: 35, queued: 50,
   investigating: 70, verifying: 85, blocked: 70, cleared: 100,
@@ -1299,6 +1347,7 @@ globalThis.TheAntHill = {
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
+  INVESTIGATION_STATE_VIEW, investigationView,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -2408,11 +2457,7 @@ function renderTriage(issue, ui = state) {
     // shows instruments we actually know (runModel splits into model/effort/
     // access when the launcher reported them; nothing is fabricated).
     const qState = queueItem ? queueItem.state : null;
-    const live = qState === "running" ? { key: "running", label: "Running", tone: "warm" }
-      : qState === "queued" ? { key: "queued", label: "Queued", tone: "cool" }
-      : qState === "completed" ? { key: "complete", label: "Complete", tone: "ok" }
-      : qState === "blocked" ? { key: "blocked", label: "Blocked", tone: "hot" }
-      : { key: "ready", label: "Plan ready", tone: "cool" };
+    const live = qState ? investigationView(qState) : { label: "Plan ready", tone: "cool" };
     const inst = (value, label) => el("span", { class: "tri-inst" },
       el("span", { class: "tri-inst-v", text: value }),
       el("span", { class: "tri-inst-k", text: label }));
@@ -2460,10 +2505,7 @@ function renderTriage(issue, ui = state) {
           dataset: { fkey: "triage-queue:" + issue.id },
           onclick: () => triageIssue(issue.id, "queue"),
         }, queued
-          ? queueItem.state === "completed" ? "✓ Investigation complete · verifying"
-            : queueItem.state === "running" ? "● Investigation running"
-            : queueItem.state === "blocked" ? "! Investigation blocked"
-            : "✓ Investigation queued"
+          ? investigationView(queueItem.state).button
           : queueing ? "Queueing…" : "Queue investigation"),
         queueItem && queueItem.state === "queued" ? el("button", {
           type: "button",
@@ -2474,10 +2516,8 @@ function renderTriage(issue, ui = state) {
           onclick: () => triageIssue(issue.id, "run"),
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
-          ? queueItem.state === "running" ? "Investigation running · " + (queueItem.runModel || "native Luna")
-            : queueItem.state === "completed" ? "Investigation complete · waiting for fresh data"
-            : queueItem.state === "blocked" ? "Investigation blocked · review result"
-            : "Queued and ready for explicit launch"
+          ? investigationView(queueItem.state).note
+            + (queueItem.state === "running" ? " · " + (queueItem.runModel || "native Luna") : "")
           : "Queues a bounded investigation. Launch remains a separate operator action." })));
       if (queueItem && queueItem.result) {
         plan.append(renderInvestigationResult(queueItem.result, queueItem.state === "blocked" ? "blocked" : "completed",
@@ -2609,14 +2649,8 @@ function findingFromIssue(issue, kind, snap = state.snap) {
 }
 
 function findingFromQueueItem(item) {
-  const workKey = item.state === "running" ? "investigating"
-    : item.state === "completed" ? "verifying"
-    : item.state === "blocked" ? "blocked"
-    : "queued";
-  const work = WORK_STATE_VIEW[workKey === "investigating" ? "investigating"
-    : workKey === "verifying" ? "verifying"
-    : workKey === "blocked" ? "blocked"
-    : "queued"];
+  const view = investigationView(item.state);
+  const work = WORK_STATE_VIEW[view.work] || WORK_STATE_VIEW.queued;
   const scope = Number.isFinite(item.affectedAgents) && Number.isFinite(item.affectedPrograms)
     ? item.affectedAgents + " agents · " + item.affectedPrograms + " programs" : "";
   return {
@@ -2624,8 +2658,8 @@ function findingFromQueueItem(item) {
     id: item.issueId,
     title: item.headline,
     work,
-    impact: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
-    summary: "Investigation " + (INVESTIGATION_STATE_LABELS[item.state] || item.state).toLowerCase(),
+    impact: "Investigation " + view.label.toLowerCase(),
+    summary: "Investigation " + view.label.toLowerCase(),
     evidence: [scope, item.runModel || ""].filter(Boolean),
     since: item.startedAt || item.createdAt || null,
     progress: PROGRESS_BY_WORK[work.key] ?? 50,
@@ -3862,8 +3896,6 @@ function programRollupLine(program) {
       el("span", { class: "dw-rollup-label", text: c.label }))));
 }
 
-const INVESTIGATION_STATE_LABELS = { running: "Running", completed: "Verifying", blocked: "Blocked", queued: "Queued" };
-
 /* Impact summary — never dump hundreds of anonymous chips as "Affects (160)".
    Plain language first, program rollup second, optional short sample third. */
 function affectedImpact(issue, snap = state.snap) {
@@ -3995,10 +4027,10 @@ function renderAdvisoryDrawer(pane, view) {
 function renderInvestigationDrawer(pane, view) {
   const item = view.item;
   const running = item.state === "running";
-  const stateLabel = INVESTIGATION_STATE_LABELS[item.state] || "Queued";
+  const stateView = investigationView(item.state);
   drawerAccent(pane, "slate");
   pane.append(drawerVerdictHead({
-    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateLabel),
+    eyebrow: dwEyebrow("slate", "broadcast", "Investigation · " + stateView.label),
     title: item.headline,
     action: investigationHeadAction(item),
   }));
@@ -4006,10 +4038,7 @@ function renderInvestigationDrawer(pane, view) {
   const status = el("div", { class: "dw-status" });
   if (running) status.append(el("span", { class: "dw-pulse", "aria-hidden": "true" }));
   status.append(el("span", { text:
-    item.state === "running" ? "running · " + (item.runModel || "native Luna")
-    : item.state === "completed" ? "complete · waiting for fresh data"
-    : item.state === "blocked" ? "blocked · review result"
-    : "queued and ready for explicit launch" }));
+    stateView.status + (running ? " · " + (item.runModel || "native Luna") : "") }));
   pane.append(status);
 
   if (item.steps && item.steps.length) {
