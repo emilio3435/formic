@@ -3397,6 +3397,56 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toContain("12k");
   });
 
+  /* -------- finding 7: the same derivation, four times a paint -------------
+     affectedImpact rebuilt a Map of the WHOLE fleet once per issue, and
+     renderHealthRail drove that chain roughly four times per paint. */
+  test("(7) the fleet index is built once per snapshot, not once per issue", () => {
+    const agents = Array.from({ length: 40 }, (_, i) => agent({ id: "codex:a" + i }));
+    const issues = agents.slice(0, 12).map((a, i) => ({
+      id: "agent:" + a.id, kind: "agent", severity: i % 2 ? "warning" : "error",
+      title: "Issue " + i, summary: "s", affectedAgentIds: [a.id],
+    }));
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents }], issues });
+
+    // The mechanism: one index object, reused for the life of the snapshot.
+    const first = M.agentsById(snap);
+    expect(first.size).toBe(40);
+    expect(M.agentsById(snap)).toBe(first);
+
+    // Driving the real derivation chain does not replace it either — that is
+    // what made it O(issues × agents) per pass.
+    M.pulseStripModel(snap, "live", []);
+    for (const issue of issues) M.affectedImpact(issue, snap);
+    expect(M.agentsById(snap)).toBe(first);
+    // …and the answers are still right.
+    expect(M.affectedImpact(issues[0], snap).total).toBe(1);
+    expect(M.affectedImpact(issues[0], snap).plain).toContain("Touches 1 session");
+
+    // A new snapshot object gets a fresh index — no manual invalidation, so a
+    // stale board can never be served out of this cache.
+    const next = snapshot({ programs: [{ id: "p", name: "P", agents: agents.slice(0, 3) }] });
+    const nextIndex = M.agentsById(next);
+    expect(nextIndex).not.toBe(first);
+    expect(nextIndex.size).toBe(3);
+    expect(M.agentsById(null).size).toBe(0);
+  });
+
+  test("(7) pulseStripModel threads the context display so a paint derives each widget once", () => {
+    const withCtx = snapshot({
+      programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
+    });
+    const percentCell = M.pulseStripModel(withCtx, "live", [], "percent").cells.find((c: { id: string }) => c.id === "context-peak");
+    const tokenCell = M.pulseStripModel(withCtx, "live", [], "tokens").cells.find((c: { id: string }) => c.id === "context-peak");
+    expect(percentCell.data.value).toBe("25%");
+    expect(tokenCell.data.value).not.toBe("25%");
+    expect(tokenCell.data.value).toContain("50k");
+    // Weighting is unaffected by the display — the cell the signature and the
+    // renderer share is the same object either way.
+    expect(percentCell.weight).toBe(tokenCell.weight);
+    // The default is unchanged, so every existing caller keeps its behavior.
+    expect(M.pulseStripModel(withCtx, "live", []).cells.find((c: { id: string }) => c.id === "context-peak").data.value).toBe("25%");
+  });
+
   /* -------- finding 4: five copies of one enum, already disagreeing --------
      `completed` read "Complete" on the plan chip, "complete · verifying" on the
      queue button, "verifying" in the pulse row, "Verifying" in the drawer

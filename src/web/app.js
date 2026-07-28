@@ -1358,7 +1358,7 @@ globalThis.TheAntHill = {
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
-  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig,
+  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
@@ -1860,9 +1860,8 @@ function healthMicroChip(data) {
     icon(data.icon), data.value);
 }
 
-function renderSummaryWidget(id, weight = "normal") {
+function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
-  const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
   const cellClass = "reading-widget widget-" + id
     + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
   // A healthy control plane stays a trailing micro-chip; any degradation
@@ -1989,7 +1988,7 @@ function renderWidgetCustomizer() {
 /* Calm collapse — the whole strip is one moss line: verdict, shipping count,
    pulse numbers when the server reports them (graceful without them), a small
    activity sparkline, and the trailing health micro-chip. */
-function renderPulseCalm() {
+function renderPulseCalm(healthData) {
   const snap = state.snap;
   const totals = totalsOf(snap);
   const pulse = snap && snap.pulse;
@@ -2005,7 +2004,7 @@ function renderPulseCalm() {
     ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
     : null;
   if (spark) line.append(spark);
-  line.append(healthMicroChip(summaryWidgetData("health", snap, state.conn)));
+  line.append(healthMicroChip(healthData || summaryWidgetData("health", snap, state.conn)));
   return line;
 }
 
@@ -2019,7 +2018,11 @@ let pulseNeedsYouWas = 0;
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const model = pulseStripModel(state.snap, state.conn, state.queueItems);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay);
+  // One derivation per widget per paint. The signature, the cell and the calm
+  // line all read this map; each used to call summaryWidgetData again, and each
+  // of those calls re-derived the whole findings list underneath.
+  const dataById = new Map(model.cells.map((cell) => [cell.id, cell.data]));
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
@@ -2035,7 +2038,7 @@ function renderHealthRail() {
     // The calm line renders momentum/burn/health regardless of which widgets
     // are enabled, so sign its actual inputs — not the customized cell list.
     (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
-      const data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+      const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
   ].join("\u001f");
@@ -2053,11 +2056,11 @@ function renderHealthRail() {
 
   widgets.textContent = "";
   if (model.calm) {
-    widgets.append(renderPulseCalm());
+    widgets.append(renderPulseCalm(dataById.get("health")));
   } else {
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
-      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal"));
+      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal", dataById.get(id)));
     }
   }
   renderPulseFindings(model);
@@ -2614,14 +2617,17 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    no session near its context ceiling. cells carry the fixed-order weighting
    (urgency changes weight via cell-hot/cell-micro, never order); findings is
    the ordered inline-expansion list. */
-function pulseStripModel(snap, conn = "live", queueItems = []) {
+function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
   const peak = peakContext(snap);
   const calm = !!snap && !!attention && attention.count === 0
     && status.key === "operational" && !(peak && peak.pct >= 85);
+  // `display` is threaded so renderHealthRail can compute each widget's data
+  // ONCE and reuse it for the paint signature, the cell and the calm line —
+  // it used to derive the same three from scratch on every paint.
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
-    const data = summaryWidgetData(id, snap, conn, "percent", queueItems);
+    const data = summaryWidgetData(id, snap, conn, display, queueItems);
     const weight = id === "health"
       ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
@@ -3808,8 +3814,19 @@ function missingDrawer() {
   ];
 }
 
+/* An immutable snapshot yields the same index every time, but affectedImpact
+   rebuilt it once PER ISSUE — O(issues × agents) per pass, and renderHealthRail
+   drives several passes per paint. Keyed on the snapshot object itself, so
+   adopting a new snapshot invalidates it for free and nothing has to be cleared
+   by hand. Callers read it; nobody mutates it. */
+const agentIndexCache = new WeakMap();
 function agentsById(snap = state.snap) {
-  return new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  if (!snap || typeof snap !== "object") return new Map();
+  const cached = agentIndexCache.get(snap);
+  if (cached) return cached;
+  const index = new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  agentIndexCache.set(snap, index);
+  return index;
 }
 
 function drawerAccent(pane, kind) {
