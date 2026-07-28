@@ -58,16 +58,20 @@ export interface ResolvedAgentTarget {
   trace: IdentityTrace;
 }
 
-export function resolveAgentTargetWithTrace(
+function resolveAgentTargetInternal(
   agent: CollectedAgent,
   surfaces: readonly CmuxSurface[],
-  sources: readonly CollectedAgent[] = [agent],
-): ResolvedAgentTarget {
-  const steps: IdentityTraceStep[] = [];
+  sources: readonly CollectedAgent[],
+  includeTrace: boolean,
+): { target: CmuxTarget; trace?: IdentityTrace } {
+  const steps: IdentityTraceStep[] | undefined = includeTrace ? [] : undefined;
   const recorded = agent.recordedTarget;
-  const finish = (resolved: CmuxTarget, matchedTier?: IdentityTraceTier): ResolvedAgentTarget => ({
+  const finish = (resolved: CmuxTarget, matchedTier?: IdentityTraceTier): {
+    target: CmuxTarget;
+    trace?: IdentityTrace;
+  } => ({
     target: resolved,
-    trace: {
+    trace: steps ? {
       steps,
       matchedTier,
       resolution: resolved.resolution,
@@ -81,7 +85,7 @@ export function resolveAgentTargetWithTrace(
             confirmedAt: recorded.confirmedAt,
           }
         : undefined,
-    },
+    } : undefined,
   });
 
   const routableSurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
@@ -94,11 +98,11 @@ export function resolveAgentTargetWithTrace(
     );
     const quarantine = quarantined(matches);
     if (quarantine) {
-      steps.push({ tier: "recorded", outcome: "quarantined", detail: quarantine.reason ?? "Recorded surface has an identity conflict." });
+      steps?.push({ tier: "recorded", outcome: "quarantined", detail: quarantine.reason ?? "Recorded surface has an identity conflict." });
       return finish(quarantine);
     }
     if (matches.length === 1) {
-      steps.push({
+      steps?.push({
         tier: "recorded",
         outcome: "matched",
         detail: `Recorded cmux target IDs matched surface ${matches[0].surfaceId}${recorded.source === "binding" ? " via a persisted identity binding" : ""}.`,
@@ -109,12 +113,12 @@ export function resolveAgentTargetWithTrace(
       );
     }
     if (matches.length > 1) {
-      steps.push({ tier: "recorded", outcome: "ambiguous", detail: `Recorded cmux IDs matched ${matches.length} surfaces.` });
+      steps?.push({ tier: "recorded", outcome: "ambiguous", detail: `Recorded cmux IDs matched ${matches.length} surfaces.` });
       return finish({ resolution: "ambiguous", reason: "Recorded cmux IDs matched multiple surfaces; controls are disabled." });
     }
-    steps.push({ tier: "recorded", outcome: "no-match", detail: "Recorded cmux target IDs matched no ready surface; falling through to session evidence." });
+    steps?.push({ tier: "recorded", outcome: "no-match", detail: "Recorded cmux target IDs matched no ready surface; falling through to session evidence." });
   } else {
-    steps.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
+    steps?.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
   }
 
   const sessionMatches = routableSurfaces.filter((surface) =>
@@ -122,11 +126,11 @@ export function resolveAgentTargetWithTrace(
   );
   const sessionQuarantine = quarantined(sessionMatches);
   if (sessionQuarantine) {
-    steps.push({ tier: "session", outcome: "quarantined", detail: sessionQuarantine.reason ?? "Session-matched surface has an identity conflict." });
+    steps?.push({ tier: "session", outcome: "quarantined", detail: sessionQuarantine.reason ?? "Session-matched surface has an identity conflict." });
     return finish(sessionQuarantine);
   }
   if (sessionMatches.length === 1) {
-    steps.push({
+    steps?.push({
       tier: "session",
       outcome: "matched",
       detail: `Source session ID ${agent.sourceSessionId} recorded by cmux on surface ${sessionMatches[0].surfaceId}.`,
@@ -142,16 +146,16 @@ export function resolveAgentTargetWithTrace(
     );
   }
   if (sessionMatches.length > 1) {
-    steps.push({ tier: "session", outcome: "ambiguous", detail: `Source session ID appears on ${sessionMatches.length} cmux surfaces.` });
+    steps?.push({ tier: "session", outcome: "ambiguous", detail: `Source session ID appears on ${sessionMatches.length} cmux surfaces.` });
     return finish({
       resolution: "ambiguous",
       reason: `Source session ID appears on ${sessionMatches.length} cmux surfaces; controls are disabled.`,
     });
   }
-  steps.push({ tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." });
+  steps?.push({ tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." });
 
   if (agent.allowCwdFallback === false) {
-    steps.push({ tier: "cwd", outcome: "rejected", detail: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled." });
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled." });
     return finish({
       resolution: "missing",
       reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
@@ -159,11 +163,11 @@ export function resolveAgentTargetWithTrace(
   }
 
   if (!agent.cwd) {
-    steps.push({ tier: "cwd", outcome: "rejected", detail: "Source did not record a cwd." });
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: "Source did not record a cwd." });
     return finish({ resolution: "missing", reason: "Source did not record a cwd or exact cmux target." });
   }
   if (agent.parentSourceSessionId) {
-    steps.push({
+    steps?.push({
       tier: "cwd",
       outcome: "rejected",
       detail: `Child source ${agent.sourceSessionId} belongs to parent ${agent.parentSourceSessionId} and requires exact session evidence.`,
@@ -176,11 +180,11 @@ export function resolveAgentTargetWithTrace(
   const cwdMatches = routableSurfaces.filter((surface) => sameCwd(surface.cwd, agent.cwd));
   const cwdQuarantine = quarantined(cwdMatches);
   if (cwdQuarantine) {
-    steps.push({ tier: "cwd", outcome: "quarantined", detail: cwdQuarantine.reason ?? "A cwd-matched surface has an identity conflict." });
+    steps?.push({ tier: "cwd", outcome: "quarantined", detail: cwdQuarantine.reason ?? "A cwd-matched surface has an identity conflict." });
     return finish(cwdQuarantine);
   }
   if (!eligibleForCwdFallback(agent)) {
-    steps.push({ tier: "cwd", outcome: "rejected", detail: `cwd fallback requires a running or waiting source; source is ${agent.status}.` });
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: `cwd fallback requires a running or waiting source; source is ${agent.status}.` });
     return finish({
       resolution: "missing",
       reason: `cwd fallback requires a running or waiting source; source is ${agent.status}.`,
@@ -197,10 +201,10 @@ export function resolveAgentTargetWithTrace(
     // identity conflict. Only quarantine when a surface exists and ownership
     // would be a guess among multiple active sources.
     if (cwdMatches.length === 0) {
-      steps.push({ tier: "cwd", outcome: "no-match", detail: "No ready cmux surface shares this cwd." });
+      steps?.push({ tier: "cwd", outcome: "no-match", detail: "No ready cmux surface shares this cwd." });
       return finish({ resolution: "missing", reason: "No cmux surface matches this source session or cwd." });
     }
-    steps.push({ tier: "cwd", outcome: "ambiguous", detail: `${cwdSources.length} active sources share this cwd; cwd fallback requires exactly one.` });
+    steps?.push({ tier: "cwd", outcome: "ambiguous", detail: `${cwdSources.length} active sources share this cwd; cwd fallback requires exactly one.` });
     return finish({
       resolution: "ambiguous",
       reason: `${cwdSources.length} active sources share this cwd; cwd fallback requires exactly one and controls are disabled.`,
@@ -208,7 +212,7 @@ export function resolveAgentTargetWithTrace(
   }
   const eligibleSurfaces = cwdMatches.filter((surface) => surface.sourceSessionIds.length === 0);
   if (eligibleSurfaces.length === 1) {
-    steps.push({
+    steps?.push({
       tier: "cwd",
       outcome: "matched",
       detail: `This source is the only active one with cwd ${normalizeCwd(agent.cwd)}, and surface ${eligibleSurfaces[0].surfaceId} is the only unclaimed surface with that cwd.`,
@@ -224,21 +228,30 @@ export function resolveAgentTargetWithTrace(
     );
   }
   if (eligibleSurfaces.length > 1) {
-    steps.push({ tier: "cwd", outcome: "ambiguous", detail: `${eligibleSurfaces.length} unclaimed cmux surfaces share this cwd.` });
+    steps?.push({ tier: "cwd", outcome: "ambiguous", detail: `${eligibleSurfaces.length} unclaimed cmux surfaces share this cwd.` });
     return finish({
       resolution: "ambiguous",
       reason: `${eligibleSurfaces.length} unclaimed cmux surfaces share this cwd; controls are disabled.`,
     });
   }
   if (cwdMatches.length > 0) {
-    steps.push({ tier: "cwd", outcome: "rejected", detail: "All surfaces with this cwd already carry exact identity evidence for other sessions." });
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: "All surfaces with this cwd already carry exact identity evidence for other sessions." });
     return finish({
       resolution: "ambiguous",
       reason: "cmux surfaces for this cwd already carry exact identity evidence; cwd fallback is disabled.",
     });
   }
-  steps.push({ tier: "cwd", outcome: "no-match", detail: "No ready cmux surface shares this cwd." });
+  steps?.push({ tier: "cwd", outcome: "no-match", detail: "No ready cmux surface shares this cwd." });
   return finish({ resolution: "missing", reason: "No cmux surface matches this source session or cwd." });
+}
+
+export function resolveAgentTargetWithTrace(
+  agent: CollectedAgent,
+  surfaces: readonly CmuxSurface[],
+  sources: readonly CollectedAgent[] = [agent],
+): ResolvedAgentTarget {
+  const resolved = resolveAgentTargetInternal(agent, surfaces, sources, true);
+  return { target: resolved.target, trace: resolved.trace! };
 }
 
 export function resolveAgentTarget(
@@ -246,5 +259,5 @@ export function resolveAgentTarget(
   surfaces: readonly CmuxSurface[],
   sources: readonly CollectedAgent[] = [agent],
 ): CmuxTarget {
-  return resolveAgentTargetWithTrace(agent, surfaces, sources).target;
+  return resolveAgentTargetInternal(agent, surfaces, sources, false).target;
 }

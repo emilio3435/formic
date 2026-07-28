@@ -13,13 +13,14 @@ import type {
   OperatorControlState,
   OperatorIssue,
   OutcomeState,
+  ProcessState,
   ProgramSnapshot,
   ProgramRollup,
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
 import { MODEL_CONFIG, cursorNativeFamily } from "./model-config";
-import { resolveAgentTargetWithTrace } from "./targets";
+import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -176,6 +177,13 @@ function activityFor(agent: CollectedAgent, archived: boolean): ActivityState {
   return "unknown";
 }
 
+function processStateFor(agent: CollectedAgent): ProcessState {
+  if (agent.processAlive === true) return "running";
+  if (agent.transcriptEndedCleanly === true) return "exited";
+  if (agent.processAlive === false && agent.processIds?.length) return "died";
+  return "unknown";
+}
+
 function outcomeFor(agent: CollectedAgent, archived: boolean, hasNotification: boolean): OutcomeState {
   if (archived) return "healthy";
   const gates = agent.gates.join(" ");
@@ -302,12 +310,19 @@ function agentSortRank(agent: AgentSnapshot): number {
 
 function buildOperatorIssues(
   agents: readonly AgentSnapshot[],
+  surfaces: readonly CmuxSurface[],
   sourceErrors: SnapshotInput["sourceErrors"],
   cmuxErrors: readonly string[],
 ): OperatorIssue[] {
   const issues: OperatorIssue[] = [];
   const identityErrors = cmuxErrors.filter((error) => /conflicting open agent session files/i.test(error));
   if (identityErrors.length > 0) {
+    const conflictedSessionIds = new Set(
+      surfaces
+        .filter((surface) => surface.identityTrace?.outcome === "open-file-conflict")
+        .flatMap((surface) => surface.identityTrace?.openFileMatches ?? [])
+        .map(({ sessionId }) => sessionId.toLowerCase()),
+    );
     issues.push({
       id: "system:cmux-identity-conflicts",
       kind: "system",
@@ -315,7 +330,10 @@ function buildOperatorIssues(
       title: "CMUX identity conflicts",
       summary: `${identityErrors.length} ${identityErrors.length === 1 ? "surface has" : "surfaces have"} conflicting agent-session evidence. Controls remain quarantined until identity is unambiguous.`,
       affectedAgentIds: agents
-        .filter((agent) => agent.controlState === "quarantined" && agent.activity !== "ended")
+        .filter((agent) =>
+          agent.controlState === "quarantined" ||
+          conflictedSessionIds.has(agent.sourceSessionId.toLowerCase()),
+        )
         .map((agent) => agent.id),
       technicalDetails: identityErrors,
     });
@@ -519,7 +537,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   }
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
-    const { target, trace: identityTrace } = resolveAgentTargetWithTrace(source, input.surfaces, sources);
+    const target = resolveAgentTarget(source, input.surfaces, sources);
     const surface = target.surfaceId
       ? input.surfaces.find((candidate) => candidate.surfaceId === target.surfaceId)
       : undefined;
@@ -564,6 +582,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       status: archived ? "archived" : notification ? "attention" : source.status,
       statusReason: snapshotStatusReason,
       activity,
+      processState: processStateFor(source),
       outcome,
       controlState,
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
@@ -590,9 +609,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
-      identityTrace,
       controls: controlsFor(source, target, archived),
     };
+    Object.defineProperty(agent, "identityTrace", {
+      configurable: false,
+      enumerable: false,
+      get: () => resolveAgentTargetWithTrace(source, input.surfaces, sources).trace,
+    });
     const group = programs.get(program.id) ?? { ...program, agents: [] };
     group.agents.push(agent);
     programs.set(program.id, group);
@@ -628,7 +651,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const staleSources = (Object.entries(input.sourceErrors ?? {}) as [Provider, readonly string[]][])
     .filter(([, errors]) => errors.length > 0)
     .map(([provider]) => provider);
-  const sourceIssues = buildOperatorIssues(allAgents, input.sourceErrors, cmuxErrors);
+  const sourceIssues = buildOperatorIssues(allAgents, input.surfaces, input.sourceErrors, cmuxErrors);
   const { issues, recentlyResolved } = lifecycleIssues(sourceIssues, input, now);
   const degradedSources =
     ["codex", "claude", "cursor"].filter((provider) =>
@@ -685,11 +708,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
 export function snapshotFingerprint(snapshot: HubSnapshot): string {
   const { generatedAt: _generatedAt, controlHealth, ...stable } = snapshot;
   const { lastCheckedAt: _lastCheckedAt, ...stableHealth } = controlHealth;
-  // identityTrace is debug evidence — its detail (pids, commands, binding
-  // timestamps) must not push SSE snapshots when nothing user-visible changed.
+  // identityTrace is a non-enumerable lazy getter, so ordinary snapshot/SSE
+  // serialization never constructs or ships debug-only evidence.
   const programs = stable.programs.map((program) => ({
     ...program,
-    agents: program.agents.map(({ elapsedMs: _elapsedMs, identityTrace: _identityTrace, ...agent }) => agent),
+    agents: program.agents.map(({ elapsedMs: _elapsedMs, ...agent }) => agent),
   }));
   return JSON.stringify({ ...stable, programs, controlHealth: stableHealth });
 }

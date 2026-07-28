@@ -43,6 +43,7 @@ describe("collector identity and usage truth", () => {
     );
     expect(agent?.displayName).toBe("Health tester");
     expect(agent?.status).toBe("archived");
+    expect(agent?.transcriptEndedCleanly).toBeUndefined();
     expect(agent?.statusReason).toContain("Legacy OMP history");
     expect(agent?.tokens).toEqual({
       input: 570,
@@ -59,6 +60,55 @@ describe("collector identity and usage truth", () => {
       path: "/Users/emilionunezgarcia/.omp/agent/sessions/-Developer-hd-master-health-tester-v2-20260721/session.jsonl",
       kind: "transcript",
     }]);
+  });
+
+  test("an explicit OMP session exit is preserved as clean transcript termination", () => {
+    const agent = parseOmpJsonl([
+      JSON.stringify({
+        type: "session",
+        id: "11111111-2222-3333-4444-555555555555",
+        timestamp: "2026-07-21T23:00:00.000Z",
+        cwd: "/Users/me/project",
+      }),
+      JSON.stringify({
+        type: "custom",
+        timestamp: "2026-07-21T23:00:01.000Z",
+        data: { kind: "session_exit" },
+      }),
+    ].join("\n"), { nowMs });
+
+    expect(agent).toMatchObject({
+      status: "archived",
+      transcriptEndedCleanly: true,
+    });
+  });
+
+  test("Claude preserves its latest runtime session ID separately from the transcript source ID", () => {
+    const sourceSessionId = "11111111-2222-3333-4444-555555555555";
+    const runtimeSessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const agent = parseClaudeJsonl([
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-07-21T23:00:00.000Z",
+        sessionId: sourceSessionId,
+        session_id: sourceSessionId,
+        cwd: "/Users/me/project",
+        message: { role: "user", content: "Start the task." },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-07-21T23:00:01.000Z",
+        sessionId: sourceSessionId,
+        session_id: runtimeSessionId,
+        cwd: "/Users/me/project",
+        message: { role: "assistant", content: "Working." },
+      }),
+    ].join("\n"), { nowMs });
+
+    expect(agent).toMatchObject({
+      sourceSessionId,
+      runtimeSessionId,
+    });
   });
 
   test("OMP leaves token usage unknown when no assistant usage record exists", () => {

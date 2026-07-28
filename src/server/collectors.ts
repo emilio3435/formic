@@ -214,6 +214,7 @@ function makeAgent(input: {
   tokens: TokenUsage;
   transcriptTail?: string;
   parentSourceSessionId?: string;
+  runtimeSessionId?: string;
   threadDepth?: number;
   nickname?: string;
   humanMessages?: readonly HumanMessageCandidate[];
@@ -245,6 +246,7 @@ function makeAgent(input: {
     id: `${input.provider}:${input.sourceSessionId}`,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
+    runtimeSessionId: input.runtimeSessionId,
     // Identity first (folder / Home), task second. The prompt belongs in the
     // message lane — not as the agent/terminal name operators hunt for in cmux.
     displayName:
@@ -281,6 +283,7 @@ function makeAgent(input: {
         }]
       : [],
     gates: [],
+    transcriptEndedCleanly: input.exited === true || undefined,
   };
 }
 
@@ -491,6 +494,7 @@ function createClaudeParser(): IncrementalParser {
   let updatedAt: string | undefined;
   let model: string | undefined;
   let effort: string | undefined;
+  let runtimeSessionId: string | undefined;
   let task: string | undefined;
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
@@ -513,6 +517,12 @@ function createClaudeParser(): IncrementalParser {
           identity = row;
         }
         if (typeof row.cwd === "string") cwd = row.cwd;
+        if (
+          typeof row.session_id === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.session_id)
+        ) {
+          runtimeSessionId = row.session_id.toLowerCase();
+        }
         if (typeof row.effort === "string" && row.effort.trim()) effort = row.effort.trim();
         const timestamp = isoTimestamp(row.timestamp);
         if (timestamp) {
@@ -562,6 +572,7 @@ function createClaudeParser(): IncrementalParser {
       return makeAgent({
         provider: "claude",
         sourceSessionId: identity.sessionId,
+        runtimeSessionId,
         cwd,
         model,
         effort,
