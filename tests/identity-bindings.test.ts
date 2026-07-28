@@ -329,6 +329,32 @@ describe("durable binding store", () => {
     expect(reopened.get(SESSION_ID)).toEqual(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
   });
 
+  test("one scan persists all confirmed bindings with one atomic file write", async () => {
+    const { files, contents } = virtualFiles();
+    let writeCount = 0;
+    const countingFiles: BindingFileOperations = {
+      ...files,
+      writeText: async (path, value) => {
+        writeCount += 1;
+        contents.set(path, value);
+      },
+    };
+    const path = "/virtual/identity-bindings.json";
+    const store = await JsonIdentityBindingStore.open(
+      path,
+      countingFiles,
+      () => Date.parse("2026-07-23T06:00:00.000Z"),
+    );
+
+    await updateBindingsFromScan(store, [
+      confirmedSurface("SURFACE-A"),
+      confirmedSurface("SURFACE-B", "22222222-2222-4222-8222-222222222222"),
+    ], "2026-07-23T06:00:00.000Z");
+
+    expect(writeCount).toBe(1);
+    expect(JSON.parse(contents.get(path) ?? "[]")).toHaveLength(2);
+  });
+
   test("bindings older than the TTL are pruned on load and on save", async () => {
     const { files, contents } = virtualFiles();
     const path = "/virtual/identity-bindings.json";
