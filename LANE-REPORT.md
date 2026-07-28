@@ -1,3 +1,217 @@
+# WAVE 1 / FE-A — dead controls and the lying Live badge
+
+Date: 2026-07-28
+Branch: `ant-hill/fe-controls-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/fe-controls-20260728`
+Base: `8f4cf82`
+Commit: **`1f60418`** — `fix(web): make the client stop lying about freshness and revive dead controls`
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **381 pass / 0 fail**, 1667 expect() calls, 24 files — no skips, no `.only`, no filters |
+| Baseline before this lane | 367 pass / 0 fail (so 14 tests added, 0 existing tests changed or loosened) |
+| Files touched | `src/web/app.js`, `tests/web-client.test.ts` only |
+
+### The tests are not hollow
+
+Every new assertion was checked by mutation: the fix was reverted one bug at a
+time and the suite re-run. **12/12 mutations were caught**, including the exact
+original bugs (heartbeat-driven verdict, `setAttribute("value")` on a textarea,
+the agent-less inspector signature, the override-less programs signature, a
+`fetchFailed` nobody reads, a `CLOSED` stream nobody re-arms). No mutation
+slipped through.
+
+## Per-finding status
+
+### 1. Agent drawer paint signature contains zero agent state — **FIXED**
+
+CRITICAL. Extracted `inspectorPaintSig(sel, view, ui)` (app.js) and gave the
+agent branch what the drawer actually paints:
+
+- `agentRecordSig(agent)` — a JSON projection of the whole agent record rather
+  than a hand-listed field set, so a field added to the snapshot is covered
+  automatically instead of silently escaping the signature a year from now.
+  Fields the live clocks own (`elapsedMs`, `updatedAt`, `lastCheckedAt`,
+  `identityTrace`) are dropped, because `tickClocks()` rewrites those nodes in
+  place from `data-elapsed-base` / `data-ago` — letting them in would rebuild the
+  drawer every 4s and destroy the guard. Their *presence* is still tracked, so a
+  tile appearing for the first time does repaint.
+- `lineagePaintSig(agent, snap)` — ancestors + direct children, which the spine
+  renders.
+- Every interaction flag: `pending` (scoped to this agent), `feedback`,
+  `confirming` (instance-scoped, so head and dock copies stay distinct),
+  `renaming`, `renamePending`, `renameError`, `labelsLoading`, `labelLoadError`.
+
+Proven by `FE-A: paint signatures cover the state their surfaces render` →
+`(1) … every interaction flag its controls set`, `(1) … every agent field the
+drawer paints`, `(1) tick-driven clocks and live inputs deliberately do NOT move
+the signature`, `(1) the drawer tracks the lineage it paints`.
+
+**Deliberate deviation from the suggested fix:** `state.drafts` is *excluded*.
+Putting a live input's value into a paint signature is exactly the finding-3 bug
+in another costume — it would tear the instruct composer down mid-sentence on
+every SSE snapshot. `sendControl` is the only external writer of `drafts`, and it
+deletes the draft in the same breath as it clears `pending` and sets `feedback`,
+both of which *are* in the signature — so the composer still clears on success.
+There is a test pinning the exclusion.
+
+**`startRename`'s focus grab was left alone.** The audit suggested a
+`queueMicrotask` for it. It is not needed: `render()` is synchronous and the
+signature now changes when `state.renaming` is set, so the node exists by the
+time `querySelector` runs. Adding timing machinery would be speculative.
+
+### 2. "Live" badge driven by heartbeats — **FIXED**
+
+CRITICAL. Freshness now keys off `snapshot.generatedAt`, which the server already
+sends (no backend change, none permitted this wave).
+
+- `snapshotFreshness(generatedAt, now)` → `fresh` ≤ 15s, `lagging` ≤ 60s,
+  `stale` > 60s, `unknown` when there is nothing to measure. Future-dated
+  snapshots clamp to age 0 rather than reporting negative age.
+- `connVerdictFor({ open, lastEventAt, generatedAt, now })` is the whole rule,
+  pure and exported. Heartbeats are no longer an input to it.
+- The heartbeat listener and `es.onopen` now call `applyFreshnessVerdict()`
+  instead of forcing `setConn("live")`, so a heartbeat can lift *Reconnecting*
+  but can never clear a stale verdict.
+- `connLabelText(conn, generatedAt, now)` puts the real age in the badge as soon
+  as the data stops being fresh: `Live · snapshot 40s ago`,
+  `Stale feed · snapshot 4d ago`.
+
+Proven by `FE-A: snapshot freshness drives the connection verdict` — in
+particular `a heartbeat that just landed cannot make a frozen snapshot read as
+Live`, which asserts `lastEventAt === now` (a heartbeat one millisecond old,
+the exact production condition) with a 91-hour-old `generatedAt` yields `stale`.
+
+No new CSS was needed — `conn-stale` and `CONN_LABELS.stale` already existed. The
+`lagging` band deliberately does **not** get its own conn state, because a new
+state would need a `styles.css` rule and that file belongs to another lane; it
+surfaces through the age suffix in the badge instead.
+
+### 3. Broadcast textarea never shows its content — **FIXED**
+
+HIGH. Two independent causes, both fixed:
+
+- `el()` now assigns `value` as a **property** (`node.value = v`) instead of
+  falling through to `setAttribute`. `HTMLTextAreaElement` has no `value` content
+  attribute, so the old path set an inert unknown attribute and the box rendered
+  empty. On a freshly created `<input>` the property assignment is equivalent, so
+  the instruct composer and the rename input are unaffected.
+- `renderBroadcastBar` had no paint guard and wiped itself on every snapshot. It
+  now has one, via `broadcastPaintSig(recipients, eligible, ui)`, covering
+  recipient identity + eligibility, per-recipient results (distinguishing sent
+  from failed from gone), and the confirming/pending/error flags. The draft is
+  deliberately out, for the same reason as `state.drafts` above.
+
+Proven by `(3) el() assigns value as a property so a textarea actually shows its
+text` (asserts `node.value` is set **and** `node.attributes.value` is undefined,
+so it cannot pass on the old code path) and `(3) an idle snapshot does not tear
+down a live broadcast composer`.
+
+### 4. Program list signature omits expand/collapse and rename state — **FIXED**
+
+MEDIUM. Extracted `programsPaintSig(visible, ui)` and added `programOverrides`
+(serialized), `renaming`, `renamePending`, `renameError`, plus the resolved
+open/shut state and display name per program — the last two because
+`programOpen()` also reads the *unfiltered* agent list, which the per-agent part
+of the signature does not cover. `programOpen(program, ui = state)` gained an
+optional state argument purely so the signature is a pure function of its inputs
+and can be tested; every existing caller is unchanged.
+
+`renameDraft` is excluded, same live-input reasoning, and there is a test pinning
+that too. Proven by `(4) the program list signature moves for expand/collapse and
+rename state`, which also asserts open and closed are distinguishable from *each
+other*, not merely from the default.
+
+### 5. No recovery path when the SSE stream closes for good — **FIXED**
+
+MEDIUM. The 5s interval now calls `pollConnectionHealth()`, which:
+
+- re-arms a `CLOSED` (or absent) stream with exponential backoff capped at 30s —
+  `reconnectPlan(readyState, now, attempts, dueAt)`, pure and exported. A
+  `CONNECTING` stream is left alone (a retry is already in flight) and an `OPEN`
+  one resets the backoff so the next outage starts clean.
+- falls back to polling `/api/snapshot` once the feed has been unhealthy for
+  longer than one stale window, throttled to every 10s —
+  `fallbackPollDue(conn, now, changedAt, dueAt)`, also pure and exported.
+- re-renders the badge each tick so the snapshot-age suffix keeps counting up
+  while nothing else is painting.
+
+Proven by `FE-A: the dead SSE stream recovers instead of painting hours-old
+state`. Note the audit rated this PLAUSIBLE, not CONFIRMED — the *absence* of
+recovery was confirmed but the trigger (a non-2xx on `/api/events`) was not
+reproduced. This fix is therefore defensive; the pure rules are fully tested, but
+I have **not** observed a real permanently-CLOSED stream to confirm the end-to-end
+self-heal.
+
+### 6. `state.fetchFailed` written three times and never read — **FIXED (read, not deleted)**
+
+LOW. Now read in three places: `systemStatus(snap, conn, fetchFailed =
+state.fetchFailed)` degrades the verdict to Degraded (which is what puts the
+already-wired Refresh button on screen), the health widget sublabel names it
+("Last snapshot refresh failed — showing the previous good snapshot."), and
+`renderScopeNote` appends "· last refresh failed". The default-parameter form
+matches the existing `queueItems = state.queueItems` idiom in the same function
+and keeps all existing two-argument callers working.
+
+Proven by `FE-A: a failed snapshot refresh is visible instead of swallowed`.
+
+### 7. SSE path bypasses `applySnapshot` — **FIXED**
+
+LOW. `handleEventPayload` now resolves the envelope via a small exported
+`eventSnapshot(msg)` and calls `applySnapshot(snap)` inside a try/catch that
+falls back to `scheduleRefetch()`; the hand-copied four-line fork is gone and the
+comment above `applySnapshot` names the stream as a caller.
+
+**Partial test coverage — stated plainly.** `eventSnapshot` is tested for both
+envelope shapes and for unknown event kinds (`FE-A: every snapshot transport uses
+the one apply path`). The other half of the claim — *that the stream reaches
+`applySnapshot`* — is **not** covered by a behavioral test. Proving it requires
+driving `render()`, which touches ~20 elements by id plus `classList`,
+`scrollTop`, `querySelectorAll` and `CSS.escape`; this suite has no DOM harness,
+and the brief bans adding source-regex tests. Building that harness is a
+different piece of work from this finding and would have been scope creep. The
+change itself is a de-duplication with no behavior delta today (the skeptic
+confirmed the fork already performed an equivalent shape check), so the untested
+part is low risk — but it is untested, and I am not calling it otherwise.
+
+## What I deliberately left alone
+
+- **`startRename`'s `queueMicrotask`** — unnecessary once the signature repaints
+  (see finding 1).
+- **The existing source-regex tests** (`tests/web-client.test.ts:1774-1783` and
+  friends). None of them broke, so none were touched; a later lane owns them.
+- **Everything outside my two files.** No `src/server/**`, no `styles.css`, no
+  `scripts/**`, no `config/**`, no `package.json`, no docs.
+- **The `lagging` freshness band has no conn state of its own** — that would need
+  a `styles.css` rule, which is another lane's file.
+
+## Out-of-scope observations (not fixed, not mine)
+
+1. **`renderHealthRail` / `renderTabs` / `renderFilterBar` have no paint guard**
+   and rebuild on every snapshot, same class of cost as the broadcast bar had.
+   Not a correctness bug — no live input lives in them today — so I left them.
+2. **`tickClocks()` keeps extrapolating elapsed clocks from `data-elapsed-base`
+   regardless of the connection verdict.** With this lane's badge fix the
+   operator is at least *told* the data is stale, but the clocks beside it still
+   tick as if live. Freezing or dimming them when `conn === "stale"` would close
+   the loop; it needs a CSS or design decision, so it is not mine.
+3. **`agentRecordSig` stringifies the selected agent once per render.** For an
+   agent with a large `transcriptTail` that is a few KB of JSON per paint —
+   negligible against rebuilding the drawer, and it only runs for the one open
+   drawer, but worth knowing if drawer paint cost is ever profiled.
+4. **A malformed SSE event no longer promotes `conn` to "live".** Previously
+   `handleEventPayload` set live *before* parsing. This is arguably more honest
+   (a garbled event is not evidence of health) and the 5s poll corrects it within
+   one tick — but it is a small intentional behavior change, flagged here rather
+   than buried.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
 # Under-hood program lane reports — 2026-07-23
 
 # SOL under-hood backend quick wins
