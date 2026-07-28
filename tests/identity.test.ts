@@ -255,6 +255,79 @@ describe("TTY and open-session identity evidence", () => {
     expect(enriched.value[0]?.identityConflict).toBeUndefined();
   });
 
+  test("cmux process attribution recovers exact identity when terminal discovery omits the tty", async () => {
+    const parent: CollectedAgent = {
+      ...agent,
+      provider: "codex",
+      id: "codex:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    };
+    const child: CollectedAgent = {
+      ...parent,
+      id: "codex:11111111-2222-3333-4444-555555555555",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+      parentSourceSessionId: parent.sourceSessionId,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          windows: [{
+            workspaces: [{
+              surfaces: [{
+                processes: [{
+                  kind: "process",
+                  pid: 202,
+                  cmux_surface_id: surface.surfaceId,
+                }],
+              }],
+            }],
+          }],
+        }),
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: "202 ?? /Users/me/.local/bin/codex",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-00-00-019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-01-00-11111111-2222-3333-4444-555555555555.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity(
+      [{ ...surface, tty: undefined }],
+      [parent, child],
+      runner,
+    );
+
+    expect(enriched.errors).toEqual([]);
+    expect(runner.commands[0]).toEqual([
+      "/Applications/cmux.app/Contents/Resources/bin/cmux",
+      "rpc",
+      "system.top",
+      JSON.stringify({ all_windows: true, include_processes: true }),
+    ]);
+    expect(runner.commands[2]).toEqual(["/usr/sbin/lsof", "-a", "-p", "202", "-Fn"]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([parent.sourceSessionId]);
+    expect(enriched.value[0]?.identityTrace).toMatchObject({
+      outcome: "open-file-match",
+      processes: [{ pid: 202, recognizedAgentProcess: true }],
+      sourceSessionIds: [parent.sourceSessionId],
+    });
+    expect(enriched.value[0]?.identityTrace?.notes?.[0]).toContain("exact cmux process attribution");
+  });
+
   test("stale CMUX surfaces are cleared without becoming identity conflicts", async () => {
     const runner = new SequenceRunner([]);
     const enriched = await enrichCmuxIdentity(
