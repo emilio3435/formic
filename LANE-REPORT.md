@@ -1,3 +1,139 @@
+# WAVE 2 / BE-C Lane Report
+
+Branch: `ant-hill/be-boundary-20260728`
+
+Implementation commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+## Verification
+
+- `bunx tsc --noEmit`: PASS
+- `bun test`: PASS — 415 tests, 0 failures
+- Focused boundary suite: PASS — 53 tests, 0 failures
+- Skip/focus scan: `rg -n "\\.(skip|only)\\s*\\(" tests` returned no matches
+- `git diff --check`: PASS
+- No launchd service restart, push, merge, deployment, or live control action was performed.
+
+## Finding 1 — Rich routes bypass the loopback Host gate
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: `createMountainFetch` now rejects non-loopback hostnames before any API route or static-file route runs. The accepted hostnames remain `127.0.0.1`, `localhost`, and `[::1]`. The existing per-handler checks in files owned by other lanes were deliberately left in place.
+
+Proof: `tests/static-serving.test.ts` asserts 403 for a foreign host on `/`, `/api/snapshot`, `/api/events`, and `/api/debug/identity`.
+
+Left alone: redundant checks in `burnbar.ts`, `settings.ts`, and `program-aliases.ts`, because those files are outside this lane.
+
+## Finding 2 — Control requests trust an unbounded-age snapshot
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: cmux-targeting actions (`focus`, `instruct`, and `interrupt`) now reject routing evidence older than 30 seconds, or evidence with an invalid timestamp, with HTTP 409 and structured `STALE_SNAPSHOT` details (`ageMs` and `maxAgeMs`). The guard runs before agent lookup or `executeControl`, so no cmux command is attempted. `archive` remains available because it writes local archive state and does not target a terminal.
+
+Proof: `tests/control-http.test.ts` proves an instruct request at 30,001 ms is rejected without invoking the runner, and separately proves stale evidence does not block archive.
+
+Left alone: immediate target re-resolution would require `control.ts` and live surface collection, which this lane does not own. `/api/broadcast` needs the same freshness policy but is implemented in `broadcast.ts`, owned by the parallel CONTROL lane.
+
+## Finding 3 — The control plane has no authentication
+
+Status: **BLOCKED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a` contains only the agreed defense-in-depth Host and freshness gates; it does not add authentication.
+
+Blocker: the current exact-Origin check is browser CSRF protection, not caller authentication. A bearer token readable by the same macOS user does not provide a strong boundary against the cited same-UID agent/process threat, and the operator has not selected what compatibility or security tradeoff is acceptable.
+
+Test status: no authentication test was added because no authentication contract was selected or implemented. Existing `tests/control-http.test.ts` coverage continues to pin the current loopback and exact-Origin behavior.
+
+### Authentication options
+
+1. **Local capability token**
+   - Cost: generate/load a 32-byte credential, protect it at rest, add one shared verifier to every mutating route, add browser bootstrap and authorization headers, migrate local curl/scripts, and test expiry/rotation/error behavior.
+   - Breakage: existing local callers without the token receive 401. Serving the token from an unauthenticated local GET defeats the boundary. A `0600` token file is still readable by the same-UID processes named in the finding, so this mainly blocks accidental or uncredentialed callers rather than a compromised same-UID agent.
+2. **Human pairing or per-session approval**
+   - Cost: add an explicit browser pairing/approval flow and short-lived scoped capabilities for control operations.
+   - Breakage: unattended automation and page reloads need a renewal policy. It adds operator friction but makes ambient local access less useful.
+3. **OS-enforced separation**
+   - Cost: run the control broker as a separate user or privileged helper and use a Unix socket/native bridge with peer credentials and narrowly scoped cmux operations.
+   - Breakage: substantially more installation, launchd, ownership, and browser-bridge complexity. This is the strongest option against same-UID dashboard processes only if the agent sessions are moved to a different OS identity.
+4. **Accept the same-UID trust boundary**
+   - Cost: document that loopback plus exact Origin protects against browser attacks, while any process running as the operator is trusted.
+   - Breakage: none, but it explicitly accepts the audit's local-process risk.
+
+## Finding 4 — SSE re-broadcasts the whole snapshot
+
+Status: **BLOCKED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Compatible change: the retained fingerprint is now a compact SHA-256 digest instead of the full fingerprint JSON, and the current serialized snapshot event is reused for new connections. Accepted state changes still serialize once and fan out the same string to all clients.
+
+Proof: `tests/app-lifecycle.test.ts` proves accepted updates still deliver the current full `event: snapshot` payload, pinning compatibility with the existing client.
+
+Reason blocked: excluding ended agents or sending deltas would make the current `src/web/app.js` replace its complete state with an incomplete snapshot. The client is owned by another lane.
+
+### Proposed compatible migration contract
+
+- Keep `/api/events` unchanged for current clients.
+- Add `/api/events?v=2` with `event: live-snapshot`. Its payload keeps the `HubSnapshot` top-level metadata but includes only non-ended agents and an `endedAgentIds` transition list.
+- Add `GET /api/history?before=<cursor>&limit=<n>` returning immutable ended-agent pages plus stable program metadata.
+- The v2 client keeps active agents in a map, removes IDs listed in `endedAgentIds`, and fetches history only when History opens.
+- After the client lane ships and verifies v2, make it the default and retain v1 only for a bounded compatibility window.
+
+## Finding 5 — Static serving and security headers are untested
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: added `tests/static-serving.test.ts`; production static behavior did not need correction.
+
+Proof: the tests pin the exact CSP, `referrer-policy`, `x-content-type-options`, and `x-frame-options`; verify index, JavaScript, CSS, HTML, and fallback content types; verify HEAD has no body; and cover encoded traversal, normalized traversal, malformed escaping, and directory rejection.
+
+Left alone: no static-serving implementation was refactored because the audited live behavior was already correct.
+
+## Finding 6 — SSE fanout has no cap or backpressure
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: `/api/events` now admits at most 16 clients. Streams use byte-based accounting with a 2 MiB high-water mark; a client whose queue has exhausted that budget is removed, its heartbeat is cleared, and its stream is closed before another event is enqueued.
+
+Proof: `tests/app-lifecycle.test.ts` proves client 17 receives 503 and that a deliberately stalled over-budget reader receives its queued initial snapshot and is then closed rather than receiving another snapshot.
+
+## Finding 7 — cmux password appears in argv
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: `cmuxCommand` no longer adds `--password <secret>` to argv. The installed cmux CLI documents the precedence `--password`, then `CMUX_SOCKET_PASSWORD`, then Settings; Ant Hill already loads `CMUX_SOCKET_PASSWORD` into `process.env`, and `Bun.spawn` inherits that environment.
+
+Proof: `tests/cmux-auth.test.ts` configures a password and asserts the resulting argv contains only the executable and requested cmux arguments. `cmux --help` was checked locally for the environment-variable contract. No live authenticated RPC was sent because restarting or exercising the production control plane was prohibited.
+
+Left alone: `scripts/anthill-start.sh` and `scripts/setup-cmux-password.ts` still contain explicit `--password` uses and are outside this lane's ownership. A scripts owner must address those paths before claiming the repository has no password-bearing cmux argv anywhere.
+
+## Finding 8 — Identity debug endpoint exposes process command lines
+
+Status: **FIXED**
+
+Commit: `c1088c97d161d148df1b3049ea41bba7e722ab2a`
+
+Change: related surface traces returned by `/api/debug/identity` preserve PID and recognition evidence but replace every process command with `[redacted]`.
+
+Proof: `tests/debug-identity.test.ts` supplies a command containing a fake API-key argument, asserts the response contains `[redacted]`, and asserts the fake secret does not occur anywhere in the serialized response.
+
+Left alone: raw process evidence remains in the in-memory identity trace because `identity.ts` is owned by the parallel IDENTITY lane. The HTTP disclosure is closed; preventing raw argv from entering memory requires that lane.
+
+---
+
+*Everything below this line is the previous cumulative lane report, carried forward unchanged.*
+
+---
+
 # WAVE 1 / FE-A — dead controls and the lying Live badge
 
 Date: 2026-07-28
