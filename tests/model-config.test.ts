@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeContextWindow } from "../src/server/collectors";
@@ -16,13 +16,33 @@ describe("model knowledge config", () => {
   test("the shipped file preserves the compiled behavior", () => {
     const config = loadModelConfig(shippedPath);
 
-    expect(config).toEqual(DEFAULT_MODEL_CONFIG);
+    expect(config).toMatchObject(DEFAULT_MODEL_CONFIG);
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("gpt-5.6-sol-max", config)).toBe("gpt-5.6-sol");
     expect(modelFamily("fable-5-high", config)).toBe("claude-fable-5");
     // Composer families collapse to their version, not the shorter "composer-2".
     expect(modelFamily("composer-2.5-fast", config)).toBe("composer-2.5");
     expect(modelFamily("composer-2", config)).toBe("composer-2");
+  });
+
+  test("the shipped model facts include versioned non-negative pricing", () => {
+    const shipped = JSON.parse(readFileSync(shippedPath, "utf8")) as {
+      pricingVersion?: unknown;
+      modelPricingUsdPerMillionTokens?: Record<string, {
+        aliases?: unknown;
+        input?: unknown;
+        output?: unknown;
+        cacheRead?: unknown;
+        cacheCreation?: unknown;
+      }>;
+    };
+    expect(shipped.pricingVersion).toBe("2026-07-28");
+    const opus = shipped.modelPricingUsdPerMillionTokens?.["claude-opus-4-8"];
+    expect(opus?.aliases).toContain("claude-opus-4-8");
+    for (const amount of [opus?.input, opus?.output, opus?.cacheRead, opus?.cacheCreation]) {
+      expect(typeof amount).toBe("number");
+      expect(amount as number).toBeGreaterThanOrEqual(0);
+    }
   });
 
   test("Cursor-native families match Grok and Composer, not foreign models", () => {

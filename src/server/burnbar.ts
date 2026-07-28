@@ -19,15 +19,24 @@ export interface UsageSummary {
   ok: boolean;
   available: boolean;
   provenance: "burnbar" | "unavailable";
+  sourceHealth?: UsageSourceHealth;
   source: "burnbar";
   from: string;
   to: string;
   processedTokens: number | null;
   estimatedCostUsd: number | null;
+  costProvenance?: CostProvenance;
+  pricingVersion?: string;
   costKnown: boolean;
   invocations: number | null;
   burnRateTokensPerHour: number | null;
-  byProvider: Array<{ provider: string; tokens: number; costUsd: number | null; invocations: number }>;
+  byProvider: Array<{
+    provider: string;
+    tokens: number;
+    costUsd: number | null;
+    costProvenance?: CostProvenance;
+    invocations: number;
+  }>;
   error?: string;
 }
 
@@ -37,6 +46,8 @@ export interface UsageSeriesPoint {
   model: string;
   tokens: number;
   costUsd: number | null;
+  costProvenance: CostProvenance;
+  pricingVersion?: string;
   invocations: number;
 }
 
@@ -60,6 +71,8 @@ export interface UsageInvocation {
   projectName?: string;
   tokens: number | null;
   costUsd: number | null;
+  costProvenance: CostProvenance;
+  pricingVersion?: string;
   startTime: string;
   endTime?: string;
 }
@@ -74,6 +87,127 @@ export interface UsageInvocationsResponse {
   limit: number;
   invocations: UsageInvocation[];
   error?: string;
+}
+
+export type CostProvenance = "measured" | "derived_estimate" | "unknown";
+
+export interface UsageSourceHealth {
+  state: "healthy" | "not_installed" | "misconfigured" | "error";
+  message: string;
+}
+
+export interface ModelPrice {
+  aliases: string[];
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export interface PricingConfig {
+  pricingVersion: string;
+  modelPricingUsdPerMillionTokens: Record<string, ModelPrice>;
+}
+
+export interface CostInputs {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  measuredCostUsd: number | null;
+}
+
+export interface CostResult {
+  costUsd: number | null;
+  costProvenance: CostProvenance;
+  pricingVersion?: string;
+}
+
+const EMPTY_PRICING_CONFIG: PricingConfig = {
+  pricingVersion: "unavailable",
+  modelPricingUsdPerMillionTokens: {},
+};
+
+function loadPricingConfig(): PricingConfig {
+  try {
+    const value = JSON.parse(
+      readFileSync(join(import.meta.dir, "../../config/models.json"), "utf8"),
+    ) as Record<string, unknown>;
+    if (typeof value.pricingVersion !== "string" || !value.pricingVersion.trim()) {
+      return EMPTY_PRICING_CONFIG;
+    }
+    if (
+      !value.modelPricingUsdPerMillionTokens
+      || typeof value.modelPricingUsdPerMillionTokens !== "object"
+      || Array.isArray(value.modelPricingUsdPerMillionTokens)
+    ) {
+      return EMPTY_PRICING_CONFIG;
+    }
+    const prices: Record<string, ModelPrice> = {};
+    for (const [model, raw] of Object.entries(value.modelPricingUsdPerMillionTokens)) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return EMPTY_PRICING_CONFIG;
+      const price = raw as Record<string, unknown>;
+      const aliases = price.aliases;
+      const amounts = [price.input, price.output, price.cacheRead, price.cacheCreation];
+      if (
+        !Array.isArray(aliases)
+        || aliases.length === 0
+        || !aliases.every((alias) => typeof alias === "string" && alias.trim())
+        || !amounts.every((amount) => typeof amount === "number" && Number.isFinite(amount) && amount >= 0)
+      ) {
+        return EMPTY_PRICING_CONFIG;
+      }
+      prices[model] = {
+        aliases: aliases as string[],
+        input: price.input as number,
+        output: price.output as number,
+        cacheRead: price.cacheRead as number,
+        cacheCreation: price.cacheCreation as number,
+      };
+    }
+    return {
+      pricingVersion: value.pricingVersion,
+      modelPricingUsdPerMillionTokens: prices,
+    };
+  } catch {
+    return EMPTY_PRICING_CONFIG;
+  }
+}
+
+const PRICING_CONFIG = loadPricingConfig();
+
+function canonicalModel(model: string): string {
+  return model.split("/").at(-1)!.trim().toLowerCase().replace(/[ _]+/g, "-");
+}
+
+function modelPrice(model: string, config: PricingConfig): ModelPrice | undefined {
+  const canonical = canonicalModel(model);
+  return Object.values(config.modelPricingUsdPerMillionTokens).find((price) =>
+    price.aliases.some((alias) => canonical === alias || canonical.startsWith(`${alias}-`))
+  );
+}
+
+export function resolveUsageCost(
+  input: CostInputs,
+  config: PricingConfig = PRICING_CONFIG,
+): CostResult {
+  if (input.measuredCostUsd != null && Number.isFinite(input.measuredCostUsd)) {
+    return { costUsd: input.measuredCostUsd, costProvenance: "measured" };
+  }
+  const price = modelPrice(input.model, config);
+  if (!price) return { costUsd: null, costProvenance: "unknown" };
+  const costUsd = (
+    input.inputTokens * price.input
+    + input.outputTokens * price.output
+    + input.cacheReadTokens * price.cacheRead
+    + input.cacheCreationTokens * price.cacheCreation
+  ) / 1_000_000;
+  return {
+    costUsd,
+    costProvenance: "derived_estimate",
+    pricingVersion: config.pricingVersion,
+  };
 }
 
 export interface QuotaBucket {
@@ -253,16 +387,39 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+const HEALTHY_SOURCE: UsageSourceHealth = {
+  state: "healthy",
+  message: "OpenBurnBar cost source is available.",
+};
+
+function unavailableSource(error: string): UsageSourceHealth {
+  if (/database not found|SQLCipher dylib not found/i.test(error)) {
+    return {
+      state: "not_installed",
+      message: "Cost source not installed. Install OpenBurnBar with SQLCipher support.",
+    };
+  }
+  if (/encryption key|keychain|codec not active|wrong key/i.test(error)) {
+    return {
+      state: "misconfigured",
+      message: "OpenBurnBar is installed but its SQLCipher key is unavailable or invalid.",
+    };
+  }
+  return { state: "error", message: error };
+}
+
 function unavailableSummary(from: string, to: string, error: string): UsageSummary {
   return {
     ok: true,
     available: false,
     provenance: "unavailable",
+    sourceHealth: unavailableSource(error),
     source: "burnbar",
     from,
     to,
     processedTokens: null,
     estimatedCostUsd: null,
+    costProvenance: "unknown",
     costKnown: false,
     invocations: null,
     burnRateTokensPerHour: null,
@@ -276,30 +433,72 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     const rows = await runEncryptedQuery(
       `SELECT
          provider,
+         COALESCE(model, 'unknown') AS model,
          COUNT(*) AS invocations,
          SUM(COALESCE(totalTokens, 0)) AS tokens,
-         SUM(CASE WHEN cost IS NULL THEN NULL ELSE cost END) AS costSum,
-         SUM(CASE WHEN cost IS NULL THEN 1 ELSE 0 END) AS costMissing
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(inputTokens, 0) END) AS unpricedInputTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(outputTokens, 0) END) AS unpricedOutputTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheCreationTokens, 0) END) AS unpricedCacheCreationTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
-       GROUP BY provider
+       GROUP BY provider, model
        ORDER BY tokens DESC`,
       [from, to],
     );
-    const byProvider = rows.map((row) => {
+    const byModel = rows.map((row) => {
       const costMissing = num(row.costMissing) ?? 0;
-      const costSum = num(row.costSum);
+      const measuredCost = num(row.measuredCost) ?? 0;
+      const derived = resolveUsageCost({
+        model: str(row.model),
+        inputTokens: num(row.unpricedInputTokens) ?? 0,
+        outputTokens: num(row.unpricedOutputTokens) ?? 0,
+        cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
+        cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
+        measuredCostUsd: null,
+      });
+      const cost = costMissing === 0
+        ? { costUsd: measuredCost, costProvenance: "measured" as const }
+        : derived.costUsd == null
+          ? derived
+          : {
+            costUsd: measuredCost + derived.costUsd,
+            costProvenance: "derived_estimate" as const,
+            pricingVersion: derived.pricingVersion,
+          };
       return {
         provider: str(row.provider) || "unknown",
         tokens: num(row.tokens) ?? 0,
-        costUsd: costMissing > 0 ? null : costSum,
         invocations: num(row.invocations) ?? 0,
+        ...cost,
+      };
+    });
+    const providers = new Map<string, typeof byModel>();
+    for (const row of byModel) {
+      const group = providers.get(row.provider) ?? [];
+      group.push(row);
+      providers.set(row.provider, group);
+    }
+    const byProvider = [...providers].map(([provider, group]) => {
+      const unknown = group.some((row) => row.costUsd == null);
+      const derived = group.some((row) => row.costProvenance === "derived_estimate");
+      return {
+        provider,
+        tokens: group.reduce((sum, row) => sum + row.tokens, 0),
+        costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
+        costProvenance: unknown ? "unknown" as const
+          : derived ? "derived_estimate" as const
+          : "measured" as const,
+        invocations: group.reduce((sum, row) => sum + row.invocations, 0),
       };
     });
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
     const invocations = byProvider.reduce((sum, row) => sum + row.invocations, 0);
-    const anyCostMissing = byProvider.some((row) => row.costUsd == null && row.invocations > 0);
-    const estimatedCostUsd = anyCostMissing
+    const anyCostMissing = byProvider.some((row) => row.costUsd == null);
+    const anyCostDerived = byProvider.some((row) => row.costProvenance === "derived_estimate");
+    const estimatedCostUsd = invocations === 0 || anyCostMissing
       ? null
       : byProvider.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
     const hours = Math.max((Date.parse(to) - Date.parse(from)) / 3_600_000, 1 / 60);
@@ -307,11 +506,18 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       ok: true,
       available: true,
       provenance: "burnbar",
+      sourceHealth: HEALTHY_SOURCE,
       source: "burnbar",
       from,
       to,
       processedTokens,
       estimatedCostUsd,
+      costProvenance: estimatedCostUsd == null ? "unknown"
+        : anyCostDerived ? "derived_estimate"
+        : "measured",
+      ...(estimatedCostUsd != null && anyCostDerived
+        ? { pricingVersion: PRICING_CONFIG.pricingVersion }
+        : {}),
       costKnown: estimatedCostUsd != null,
       invocations,
       burnRateTokensPerHour: processedTokens / hours,
@@ -351,8 +557,12 @@ export async function getUsageSeries(
          provider,
          COALESCE(model, 'unknown') AS model,
          SUM(COALESCE(totalTokens, 0)) AS tokens,
-         SUM(CASE WHEN cost IS NULL THEN NULL ELSE cost END) AS costSum,
-         SUM(CASE WHEN cost IS NULL THEN 1 ELSE 0 END) AS costMissing,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(inputTokens, 0) END) AS unpricedInputTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(outputTokens, 0) END) AS unpricedOutputTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheCreationTokens, 0) END) AS unpricedCacheCreationTokens,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing,
          COUNT(*) AS invocations
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
@@ -370,12 +580,30 @@ export async function getUsageSeries(
       bucket,
       points: rows.map((row) => {
         const costMissing = num(row.costMissing) ?? 0;
+        const derived = resolveUsageCost({
+          model: str(row.model),
+          inputTokens: num(row.unpricedInputTokens) ?? 0,
+          outputTokens: num(row.unpricedOutputTokens) ?? 0,
+          cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
+          cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
+          measuredCostUsd: null,
+        });
+        const measuredCost = num(row.measuredCost) ?? 0;
+        const cost = costMissing === 0
+          ? { costUsd: measuredCost, costProvenance: "measured" as const }
+          : derived.costUsd == null
+            ? derived
+            : {
+              costUsd: measuredCost + derived.costUsd,
+              costProvenance: "derived_estimate" as const,
+              pricingVersion: derived.pricingVersion,
+            };
         return {
           bucketStart: str(row.bucketStart),
           provider: str(row.provider) || "unknown",
           model: str(row.model) || "unknown",
           tokens: num(row.tokens) ?? 0,
-          costUsd: costMissing > 0 ? null : num(row.costSum),
+          ...cost,
           invocations: num(row.invocations) ?? 0,
         };
       }),
@@ -403,7 +631,9 @@ export async function getUsageInvocations(
   const capped = Math.max(1, Math.min(limit, 500));
   try {
     const rows = await runEncryptedQuery(
-      `SELECT id, provider, model, sessionId, projectName, totalTokens, cost, startTime, endTime
+      `SELECT id, provider, model, sessionId, projectName, totalTokens,
+              inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
+              cost, provenanceConfidence, startTime, endTime
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
        ORDER BY startTime DESC
@@ -418,17 +648,27 @@ export async function getUsageInvocations(
       from,
       to,
       limit: capped,
-      invocations: rows.map((row) => ({
-        id: str(row.id),
-        provider: str(row.provider) || "unknown",
-        model: str(row.model) || "unknown",
-        sessionId: str(row.sessionId),
-        projectName: str(row.projectName) || undefined,
-        tokens: num(row.totalTokens),
-        costUsd: num(row.cost),
-        startTime: str(row.startTime),
-        endTime: str(row.endTime) || undefined,
-      })),
+      invocations: rows.map((row) => {
+        const model = str(row.model) || "unknown";
+        return {
+          id: str(row.id),
+          provider: str(row.provider) || "unknown",
+          model,
+          sessionId: str(row.sessionId),
+          projectName: str(row.projectName) || undefined,
+          tokens: num(row.totalTokens),
+          ...resolveUsageCost({
+            model,
+            inputTokens: num(row.inputTokens) ?? 0,
+            outputTokens: num(row.outputTokens) ?? 0,
+            cacheReadTokens: num(row.cacheReadTokens) ?? 0,
+            cacheCreationTokens: num(row.cacheCreationTokens) ?? 0,
+            measuredCostUsd: str(row.provenanceConfidence) === "exact" ? num(row.cost) : null,
+          }),
+          startTime: str(row.startTime),
+          endTime: str(row.endTime) || undefined,
+        };
+      }),
     };
   } catch (error) {
     return {
