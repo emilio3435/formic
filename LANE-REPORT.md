@@ -1,3 +1,125 @@
+# WAVE 4 / W4-A — Claude identity and process lifecycle
+
+Date: 2026-07-28
+Branch: `ant-hill/w4-identity-20260728`
+Implementation commit: `1b16dd6` (`fix: finish agent identity and process liveness`)
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **543 pass / 0 fail**, 2412 expect() calls across 30 files; unfiltered, no skipped or focused tests |
+| Focused owned tests | **80 pass / 0 fail** |
+| `git diff --check` | clean |
+| Scratch runtime | worktree server verified on `127.0.0.1:4789`; 4788 belonged to the CLIENT lane and was left untouched |
+| Production / publication | no restart, push, merge, deploy, or write to `the-mountain-main`; production `:4701` was queried read-only |
+
+The suite baseline was 535; this lane added eight regression tests.
+
+## 1. Claude sessions could not be identified — **FIXED**
+
+Measured provider truth showed that Claude exposes two identities in current CLI
+transcripts: the transcript/source `sessionId`, and a runtime `session_id` used
+by `claude --resume`. The collector now retains the latest runtime ID separately.
+An exact command UUID maps to the transcript source only when exactly one active
+source claims it. Multiple active claimants quarantine the surface and explain
+the refusal in `identityTrace`; no cwd or mtime relaxation was added.
+
+Live before/after measurements:
+
+| Provider / population | Build | exact | unique-cwd | ambiguous | missing |
+|---|---:|---:|---:|---:|---:|
+| Claude / all 15 | deployed `:4701` | 2 | 0 | 4 | 9 |
+| Claude / all 15 | scratch `:4789` | 3 | 0 | 4 | 8 |
+| Claude / running+waiting 4 | deployed `:4701` | 0 | 0 | 1 | 3 |
+| Claude / running+waiting 4 | scratch `:4789` | 2 | 0 | 0 | 2 |
+| Codex / all 89 | deployed `:4701` | 12 | 0 | 0 | 77 |
+| Codex / all 89 | scratch `:4789` | 12 | 0 | 0 | 77 |
+| Codex / running+waiting 3 | deployed `:4701` | 0 | 0 | 0 | 3 |
+| Codex / running+waiting 3 | scratch `:4789` | 0 | 0 | 0 | 3 |
+
+No OMP or Cursor agents were present in either sampled snapshot. The two live
+Claude recoveries were:
+
+- runtime `ef1c90c4-d0cb-43b7-adfe-c3c7ffa7584f` → source
+  `c3ebef38-ad96-48d8-a284-b6dcae0a081a`
+- runtime `4bdb04b7-7a39-4e73-bf8e-a2e54b5ca4fd` → source
+  `c0eb6d64-0781-4a03-8f08-3e4fbcf6ae3b`
+
+The scratch diagnostic endpoint showed the latter as
+`command-hint-match`, PID 54253, on surface
+`0BD51ED3-3354-4079-95AD-ED1FD64AC919`. The remaining active Claude SDK/fresh
+sources exposed no unique runtime-to-terminal evidence and correctly stayed
+`missing`.
+
+Proof:
+
+- `tests/collectors.test.ts` preserves the latest Claude runtime ID separately.
+- `tests/identity.test.ts` proves unique runtime-source recovery and
+  multi-claimant quarantine.
+- The existing sticky-binding conflict test remains green.
+
+## 2. A dead agent looked finished — **FIXED**
+
+Snapshots now emit additive `processState` truth:
+
+- `running`: a PID from an exact identity binding is present in the completed
+  live process scan.
+- `exited`: the provider transcript contains an explicit clean session exit.
+- `died`: confirmed PIDs are gone and no clean exit exists.
+- `unknown`: the evidence cannot distinguish the state.
+
+Exact PIDs are retained only from lsof-confirmed identity or a uniquely resolved
+full command-session UUID. A completed global `ps` scan checks those PIDs; probe
+failure yields `unknown`, not death. Existing status/activity meanings were not
+changed.
+
+The live scratch snapshot emitted the field for all 104 agents: 15 `running`,
+89 `unknown`, and no currently observed `exited` or `died` sessions. Tests prove
+the absent-PID and explicit-exit branches that the live sample did not happen to
+contain.
+
+Proof:
+
+- `tests/identity-bindings.test.ts` proves persisted PID liveness, including a
+  disappeared PID after its surface is gone.
+- `tests/collectors.test.ts` distinguishes an explicit OMP `session_exit` from
+  merely archived legacy history.
+- `tests/snapshot.test.ts` pins all four emitted states.
+
+## 3. Identity-conflict issue linked to zero agents — **FIXED**
+
+The issue builder now derives affected IDs from the conflicting surface's
+open-file evidence, rather than requiring target resolution to have already
+quarantined an agent. This links the card to both sessions even when the
+conflict deliberately clears `surface.sourceSessionIds`.
+
+Proof: `tests/snapshot.test.ts` — “identity-conflict issues link agents named by
+the conflicting process evidence”.
+
+## 4. Wave-2 eager identity traces — **FIXED**
+
+Normal target resolution now skips trace allocation. Snapshot agents expose a
+non-enumerable lazy `identityTrace` getter, so `/api/debug/identity` can construct
+the evidence on demand while snapshot/SSE serialization neither builds nor
+ships it. The scratch snapshot contained zero serialized `identityTrace` keys;
+the diagnostic endpoint still returned the full tier trail and surface evidence.
+
+Proof: `tests/snapshot.test.ts` — “identity traces are lazy for diagnostics and
+absent from snapshot JSON”; the full debug-identity suite remains green.
+
+## Honest limits / out-of-scope
+
+- A source with no exact PID history and no explicit exit remains `unknown`.
+- `src/server/archive.ts` is frozen in this wave and its durable explicit copies
+  do not retain the new internal PID/termination evidence. Once only that old
+  archive copy remains, `processState` falls back to `unknown`.
+- Port 4788 was owned by the parallel CLIENT lane (PID 81942), so this lane used
+  4789 and stopped only its own scratch servers.
+
+---
+
 # WAVE 3 / FE-C — the four things the operator could not do
 
 Date: 2026-07-28
