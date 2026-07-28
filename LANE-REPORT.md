@@ -1,3 +1,88 @@
+# WAVE 3 / BE-F — collector cost, Cursor truth, and agent liveness
+
+Implementation commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+## 1. Cursor collector has zero caching
+
+Status: **FIXED**
+
+Commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+- Cached `store.db` evidence by device, inode, size, mtime, and WAL fingerprint.
+- Cached `meta.json`, transcript reads/summaries, transcript paths, batched AI-tracking models, and `state.vscdb` session/composer evidence.
+- Proof: `tests/cursor.test.ts` — `caches unchanged stores and invalidates when their fingerprint changes`.
+- Live proof: a 168-hour collection over 305 Cursor agents measured 135.4 ms cold and 31.3 ms unchanged, with 0 errors. Before the final cache work, the unchanged run measured 1136.4 ms.
+- Left alone: settings, snapshot, client, and runtime-service files.
+
+## 2. Cursor store full-blob scan on every tick
+
+Status: **FIXED**
+
+Commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+- Replaced the non-sargable full-table materialization with a newest-first `LIMIT 200` iterator that stops at the first real assistant content-part model.
+- Unchanged stores return cached evidence without opening SQLite.
+- Proof: `tests/cursor.test.ts` — `bounds fallback blob inspection to the newest 200 records` and the cache invalidation test above.
+- Left alone: the pre-existing no-missing-model early return in `fillMissingCursorModels`.
+
+## 3. Active transcripts are re-read and re-parsed in full
+
+Status: **FIXED**
+
+Commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+- Added resumable OMP, Codex, and Claude folds with device, inode, size, mtime, byte offset, partial-line remainder, and parser state.
+- Reads only appended bytes for a stable growing file; resets on shrink, rotation/replacement, identity change, or same-size rewrite.
+- Holds a trailing non-newline record until a later append completes it.
+- Retains only the latest readable user and assistant messages while preserving exact cumulative usage state.
+- Proof: `tests/collectors.test.ts` — `incremental collection matches a full re-read across append, rotation, truncation, and replacement`; the same test proves partial-line buffering.
+- Left alone: public string-in/parser-out APIs; only file collection uses resumable state.
+
+## 4. Human-message filtering deletes ordinary English and falls back to status prose
+
+Status: **FIXED**
+
+Commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+- Shell filtering now requires an explicit prompt marker or path-shaped line, so prose beginning with command words survives.
+- `extractLastHumanMessage` may fall back to a readable task, never collector `statusReason`; absence returns `null`.
+- Proof: `tests/human-message.test.ts` — `keeps ordinary instructions that begin with command words` and `returns null instead of presenting collector status as a human message`; `tests/collectors.test.ts` — `empty Codex transcripts report no readable human message`.
+- Left alone: the client already renders the honest null state.
+
+## 5. Cursor model can be invented from system-prompt prose
+
+Status: **FIXED**
+
+Commit: `7087ff30d7f092d387ecaeff499fb8eca59b5f70`
+
+- Removed system-message prose inference.
+- Models now come only from persisted `lastUsedModel`, real assistant content-part `modelName`, composer data, or AI tracking; otherwise they remain unknown.
+- Proof: `tests/cursor.test.ts` — `does not invent a model id from English prose in a system prompt`; existing tests retain authoritative metadata and assistant content-part coverage.
+- Left alone: model-policy and client provenance code because inferred prose no longer enters the model field.
+
+## 6. No process liveness
+
+Status: **BLOCKED**
+
+Commit: none
+
+- The owned collectors receive no recorded PID, process-table result, open-file result, cmux surface identity trace, or transcript-open evidence.
+- The real `ps`/`lsof` evidence is produced in unowned `src/server/identity.ts`.
+- The additive wire field requires at least unowned `src/server/types.ts`, `src/shared/types.ts`, `src/server/state.ts`, and `src/server/snapshot.ts`.
+- Without those inputs, this lane cannot distinguish a live process, a clean exit, and a dead process across providers without guessing.
+- Test: none, because no liveness behavior was implemented. The routed integration test must inject PID/process/open-file evidence through identity/state and assert the additive snapshot field.
+- Left alone: all unowned identity, state, snapshot, shared-type, and client files.
+
+## BE-F validation
+
+- `bunx tsc --noEmit` — pass.
+- `bun test` — **472 pass, 0 fail, 0 skipped**, 2088 expectations across 29 files.
+- `git diff --check` — pass.
+- No `.skip`, `.only`, filtered tests, secret findings, push, merge, deploy, or service restart.
+- Scope: the six owned source/test files plus this required report; all prior content below is preserved.
+
+---
+
 # WAVE 2 / FE-B — client cost, dead weight, and the quarantine dead end
 
 Date: 2026-07-28
