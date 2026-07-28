@@ -1,3 +1,219 @@
+# WAVE 1 / FE-A — dead controls and the lying Live badge
+
+Date: 2026-07-28
+Branch: `ant-hill/fe-controls-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/fe-controls-20260728`
+Base: `8f4cf82`
+Commit: **`1f60418`** — `fix(web): make the client stop lying about freshness and revive dead controls`
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **381 pass / 0 fail**, 1667 expect() calls, 24 files — no skips, no `.only`, no filters |
+| Baseline before this lane | 367 pass / 0 fail (so 14 tests added, 0 existing tests changed or loosened) |
+| Files touched | `src/web/app.js`, `tests/web-client.test.ts` only |
+
+### The tests are not hollow
+
+Every new assertion was checked by mutation: the fix was reverted one bug at a
+time and the suite re-run. **12/12 mutations were caught**, including the exact
+original bugs (heartbeat-driven verdict, `setAttribute("value")` on a textarea,
+the agent-less inspector signature, the override-less programs signature, a
+`fetchFailed` nobody reads, a `CLOSED` stream nobody re-arms). No mutation
+slipped through.
+
+## Per-finding status
+
+### 1. Agent drawer paint signature contains zero agent state — **FIXED**
+
+CRITICAL. Extracted `inspectorPaintSig(sel, view, ui)` (app.js) and gave the
+agent branch what the drawer actually paints:
+
+- `agentRecordSig(agent)` — a JSON projection of the whole agent record rather
+  than a hand-listed field set, so a field added to the snapshot is covered
+  automatically instead of silently escaping the signature a year from now.
+  Fields the live clocks own (`elapsedMs`, `updatedAt`, `lastCheckedAt`,
+  `identityTrace`) are dropped, because `tickClocks()` rewrites those nodes in
+  place from `data-elapsed-base` / `data-ago` — letting them in would rebuild the
+  drawer every 4s and destroy the guard. Their *presence* is still tracked, so a
+  tile appearing for the first time does repaint.
+- `lineagePaintSig(agent, snap)` — ancestors + direct children, which the spine
+  renders.
+- Every interaction flag: `pending` (scoped to this agent), `feedback`,
+  `confirming` (instance-scoped, so head and dock copies stay distinct),
+  `renaming`, `renamePending`, `renameError`, `labelsLoading`, `labelLoadError`.
+
+Proven by `FE-A: paint signatures cover the state their surfaces render` →
+`(1) … every interaction flag its controls set`, `(1) … every agent field the
+drawer paints`, `(1) tick-driven clocks and live inputs deliberately do NOT move
+the signature`, `(1) the drawer tracks the lineage it paints`.
+
+**Deliberate deviation from the suggested fix:** `state.drafts` is *excluded*.
+Putting a live input's value into a paint signature is exactly the finding-3 bug
+in another costume — it would tear the instruct composer down mid-sentence on
+every SSE snapshot. `sendControl` is the only external writer of `drafts`, and it
+deletes the draft in the same breath as it clears `pending` and sets `feedback`,
+both of which *are* in the signature — so the composer still clears on success.
+There is a test pinning the exclusion.
+
+**`startRename`'s focus grab was left alone.** The audit suggested a
+`queueMicrotask` for it. It is not needed: `render()` is synchronous and the
+signature now changes when `state.renaming` is set, so the node exists by the
+time `querySelector` runs. Adding timing machinery would be speculative.
+
+### 2. "Live" badge driven by heartbeats — **FIXED**
+
+CRITICAL. Freshness now keys off `snapshot.generatedAt`, which the server already
+sends (no backend change, none permitted this wave).
+
+- `snapshotFreshness(generatedAt, now)` → `fresh` ≤ 15s, `lagging` ≤ 60s,
+  `stale` > 60s, `unknown` when there is nothing to measure. Future-dated
+  snapshots clamp to age 0 rather than reporting negative age.
+- `connVerdictFor({ open, lastEventAt, generatedAt, now })` is the whole rule,
+  pure and exported. Heartbeats are no longer an input to it.
+- The heartbeat listener and `es.onopen` now call `applyFreshnessVerdict()`
+  instead of forcing `setConn("live")`, so a heartbeat can lift *Reconnecting*
+  but can never clear a stale verdict.
+- `connLabelText(conn, generatedAt, now)` puts the real age in the badge as soon
+  as the data stops being fresh: `Live · snapshot 40s ago`,
+  `Stale feed · snapshot 4d ago`.
+
+Proven by `FE-A: snapshot freshness drives the connection verdict` — in
+particular `a heartbeat that just landed cannot make a frozen snapshot read as
+Live`, which asserts `lastEventAt === now` (a heartbeat one millisecond old,
+the exact production condition) with a 91-hour-old `generatedAt` yields `stale`.
+
+No new CSS was needed — `conn-stale` and `CONN_LABELS.stale` already existed. The
+`lagging` band deliberately does **not** get its own conn state, because a new
+state would need a `styles.css` rule and that file belongs to another lane; it
+surfaces through the age suffix in the badge instead.
+
+### 3. Broadcast textarea never shows its content — **FIXED**
+
+HIGH. Two independent causes, both fixed:
+
+- `el()` now assigns `value` as a **property** (`node.value = v`) instead of
+  falling through to `setAttribute`. `HTMLTextAreaElement` has no `value` content
+  attribute, so the old path set an inert unknown attribute and the box rendered
+  empty. On a freshly created `<input>` the property assignment is equivalent, so
+  the instruct composer and the rename input are unaffected.
+- `renderBroadcastBar` had no paint guard and wiped itself on every snapshot. It
+  now has one, via `broadcastPaintSig(recipients, eligible, ui)`, covering
+  recipient identity + eligibility, per-recipient results (distinguishing sent
+  from failed from gone), and the confirming/pending/error flags. The draft is
+  deliberately out, for the same reason as `state.drafts` above.
+
+Proven by `(3) el() assigns value as a property so a textarea actually shows its
+text` (asserts `node.value` is set **and** `node.attributes.value` is undefined,
+so it cannot pass on the old code path) and `(3) an idle snapshot does not tear
+down a live broadcast composer`.
+
+### 4. Program list signature omits expand/collapse and rename state — **FIXED**
+
+MEDIUM. Extracted `programsPaintSig(visible, ui)` and added `programOverrides`
+(serialized), `renaming`, `renamePending`, `renameError`, plus the resolved
+open/shut state and display name per program — the last two because
+`programOpen()` also reads the *unfiltered* agent list, which the per-agent part
+of the signature does not cover. `programOpen(program, ui = state)` gained an
+optional state argument purely so the signature is a pure function of its inputs
+and can be tested; every existing caller is unchanged.
+
+`renameDraft` is excluded, same live-input reasoning, and there is a test pinning
+that too. Proven by `(4) the program list signature moves for expand/collapse and
+rename state`, which also asserts open and closed are distinguishable from *each
+other*, not merely from the default.
+
+### 5. No recovery path when the SSE stream closes for good — **FIXED**
+
+MEDIUM. The 5s interval now calls `pollConnectionHealth()`, which:
+
+- re-arms a `CLOSED` (or absent) stream with exponential backoff capped at 30s —
+  `reconnectPlan(readyState, now, attempts, dueAt)`, pure and exported. A
+  `CONNECTING` stream is left alone (a retry is already in flight) and an `OPEN`
+  one resets the backoff so the next outage starts clean.
+- falls back to polling `/api/snapshot` once the feed has been unhealthy for
+  longer than one stale window, throttled to every 10s —
+  `fallbackPollDue(conn, now, changedAt, dueAt)`, also pure and exported.
+- re-renders the badge each tick so the snapshot-age suffix keeps counting up
+  while nothing else is painting.
+
+Proven by `FE-A: the dead SSE stream recovers instead of painting hours-old
+state`. Note the audit rated this PLAUSIBLE, not CONFIRMED — the *absence* of
+recovery was confirmed but the trigger (a non-2xx on `/api/events`) was not
+reproduced. This fix is therefore defensive; the pure rules are fully tested, but
+I have **not** observed a real permanently-CLOSED stream to confirm the end-to-end
+self-heal.
+
+### 6. `state.fetchFailed` written three times and never read — **FIXED (read, not deleted)**
+
+LOW. Now read in three places: `systemStatus(snap, conn, fetchFailed =
+state.fetchFailed)` degrades the verdict to Degraded (which is what puts the
+already-wired Refresh button on screen), the health widget sublabel names it
+("Last snapshot refresh failed — showing the previous good snapshot."), and
+`renderScopeNote` appends "· last refresh failed". The default-parameter form
+matches the existing `queueItems = state.queueItems` idiom in the same function
+and keeps all existing two-argument callers working.
+
+Proven by `FE-A: a failed snapshot refresh is visible instead of swallowed`.
+
+### 7. SSE path bypasses `applySnapshot` — **FIXED**
+
+LOW. `handleEventPayload` now resolves the envelope via a small exported
+`eventSnapshot(msg)` and calls `applySnapshot(snap)` inside a try/catch that
+falls back to `scheduleRefetch()`; the hand-copied four-line fork is gone and the
+comment above `applySnapshot` names the stream as a caller.
+
+**Partial test coverage — stated plainly.** `eventSnapshot` is tested for both
+envelope shapes and for unknown event kinds (`FE-A: every snapshot transport uses
+the one apply path`). The other half of the claim — *that the stream reaches
+`applySnapshot`* — is **not** covered by a behavioral test. Proving it requires
+driving `render()`, which touches ~20 elements by id plus `classList`,
+`scrollTop`, `querySelectorAll` and `CSS.escape`; this suite has no DOM harness,
+and the brief bans adding source-regex tests. Building that harness is a
+different piece of work from this finding and would have been scope creep. The
+change itself is a de-duplication with no behavior delta today (the skeptic
+confirmed the fork already performed an equivalent shape check), so the untested
+part is low risk — but it is untested, and I am not calling it otherwise.
+
+## What I deliberately left alone
+
+- **`startRename`'s `queueMicrotask`** — unnecessary once the signature repaints
+  (see finding 1).
+- **The existing source-regex tests** (`tests/web-client.test.ts:1774-1783` and
+  friends). None of them broke, so none were touched; a later lane owns them.
+- **Everything outside my two files.** No `src/server/**`, no `styles.css`, no
+  `scripts/**`, no `config/**`, no `package.json`, no docs.
+- **The `lagging` freshness band has no conn state of its own** — that would need
+  a `styles.css` rule, which is another lane's file.
+
+## Out-of-scope observations (not fixed, not mine)
+
+1. **`renderHealthRail` / `renderTabs` / `renderFilterBar` have no paint guard**
+   and rebuild on every snapshot, same class of cost as the broadcast bar had.
+   Not a correctness bug — no live input lives in them today — so I left them.
+2. **`tickClocks()` keeps extrapolating elapsed clocks from `data-elapsed-base`
+   regardless of the connection verdict.** With this lane's badge fix the
+   operator is at least *told* the data is stale, but the clocks beside it still
+   tick as if live. Freezing or dimming them when `conn === "stale"` would close
+   the loop; it needs a CSS or design decision, so it is not mine.
+3. **`agentRecordSig` stringifies the selected agent once per render.** For an
+   agent with a large `transcriptTail` that is a few KB of JSON per paint —
+   negligible against rebuilding the drawer, and it only runs for the one open
+   drawer, but worth knowing if drawer paint cost is ever profiled.
+4. **A malformed SSE event no longer promotes `conn` to "live".** Previously
+   `handleEventPayload` set live *before* parsing. This is arguably more honest
+   (a garbled event is not evidence of health) and the 5s poll corrects it within
+   one tick — but it is a small intentional behavior change, flagged here rather
+   than buried.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
 # BE-A runtime resilience lane report
 
 Branch: `ant-hill/be-runtime-20260728`
@@ -149,3 +365,307 @@ Changed production files: `src/server/command.ts`, `src/server/state.ts`,
 
 Changed test files only under `tests/**`. No other production, client, configuration,
 documentation, package, script, or shared-runtime file was changed.
+
+---
+
+# Under-hood program lane reports — 2026-07-23
+
+# SOL under-hood backend quick wins
+
+Date: 2026-07-23
+
+Branch: `ant-hill/sol-under-hood-20260723`
+
+Base: `f4320f8`
+
+## Changes
+
+1. `be05c31 fix: preserve unreported Codex models`
+   - Removed the synthetic `gpt-5.6-sol` fallback.
+   - Added a model-free Codex JSONL fixture and regression test.
+
+2. `fabe2a7 feat: load model knowledge from config`
+   - Added `config/models.json` for Claude context windows, model-family aliases, and the expected Cursor root model.
+   - Added a boot-time loader with compiled defaults for missing or malformed files.
+   - Kept the explicit Claude `[1m]` marker rule in collector code.
+   - Covered the shipped file, fallback behavior, and an overridden value reaching collector resolution.
+
+3. `9899850 fix: honor runtime cmux executable`
+   - Wired `CMUX_EXECUTABLE` through terminal/notification discovery and control/broadcast execution.
+   - Preserved `DEFAULT_CMUX_EXECUTABLE` when the environment value is absent or blank.
+
+4. `2027f3f fix: report staged instruction failures`
+   - Retried Enter once after text was staged.
+   - Added `TEXT_STAGED_NOT_SUBMITTED` with the retry's stderr and exit code after two Enter failures.
+   - Preserved `CMUX_COMMAND_FAILED` for `send_text` failures.
+
+5. `e9583ff fix: evict stale collector cache entries`
+   - Evicted provider cache entries absent from the current scan.
+   - Added a regression test that recreates a path with identical size/mtime and proves stale parsed data is not reused.
+
+## Verification
+
+- `bun run check` passed after every code commit:
+  - `be05c31`: 300 tests passed
+  - `fabe2a7`: 303 tests passed
+  - `9899850`: 306 tests passed
+  - `2027f3f`: 309 tests passed
+  - `e9583ff`: 310 tests passed
+- Final `bun run check`: typecheck passed; 310 tests passed, 0 failed.
+- `git diff --check f4320f8..HEAD`: passed.
+- `f4320f8` is an ancestor of the final code head.
+- No `src/web/*` files changed.
+
+## Discovered and deferred
+
+- The pre-existing modified `bun.lock` and untracked `LANE-BRIEF.md` were left untouched and excluded from all commits.
+- Loopback/origin-guard duplication remains unchanged for the body-restyle follow-up ticket.
+- No collector token or usage arithmetic was changed.
+- Nothing was pushed or merged.
+
+---
+
+# Lane Report — fable-identity-20260723
+
+Branch `ant-hill/fable-identity-20260723`, cut from main @ ea9966a. Goal: make the session↔surface identity chain inspectable and resilient (evidence trace, debug endpoint, sticky bindings, docs, tests).
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `80cd183` | feat(identity): retain per-surface and per-agent identity evidence traces |
+| `7c0e494` | feat(server): add read-only GET /api/debug/identity endpoint |
+| `d9d3191` | feat(identity): persist sticky session-to-surface bindings |
+| `a5f21f7` | docs: add ARCHITECTURE.md and fix README port drift (4702 → 4701) |
+| `(this)`  | chore: lane report |
+
+Not pushed; no merges. `bun.lock` has a pre-existing uncommitted modification from dep install — left untouched.
+
+## Evidence
+
+- `bun run check` green at every commit. Base: **295 pass**; final: **317 pass, 0 fail, 1329 expect() calls, 23 files** (`bunx tsc --noEmit` clean, TS strict).
+- 22 new tests, existing tests untouched: `tests/identity-trace.test.ts` (7 — surface evidence for lsof match/conflict/command hint; tier trace for exact, cwd fallback, duplicate-cwd ambiguity, quarantine), `tests/debug-identity.test.ts` (4 — list, single agent, unknown-agent 404, POST falls through to API 404), `tests/identity-bindings.test.ts` (10 — fresh confirm via real enrichment output, re-confirm refresh, bridge on silent scan, live-evidence-outranks-binding, two-scan reassignment, conflict-stays-quarantined-with-binding, conflicted scans never record, HubState wiring end-to-end, store reopen, TTL pruning on load/save, corrupt-file fail-loud), plus 1 wiring test through `HubState.refresh`.
+- Sample endpoint output (captured from a scratch run of the test fixture through `createMountainFetch`):
+
+```json
+GET /api/debug/identity
+{
+  "ok": true,
+  "agents": [{
+    "id": "claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    "provider": "claude", "resolution": "exact", "tier": "session",
+    "surfaceId": "SURFACE-HEALTH",
+    "quarantined": false, "cwdMismatch": false, "bindingBridged": false
+  }],
+  "surfaceCount": 1, "conflictedSurfaceIds": []
+}
+
+GET /api/debug/identity?agent=claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec
+{
+  "agent": { "...summary": "...", "target": { "resolution": "exact", "surfaceId": "SURFACE-HEALTH" },
+    "trace": { "matchedTier": "session", "steps": [
+      { "tier": "recorded", "outcome": "skipped", "detail": "No recorded cmux target IDs on this source." },
+      { "tier": "session", "outcome": "matched", "detail": "Source session ID 019f86c4-… recorded by cmux on surface SURFACE-HEALTH." } ] } },
+  "relatedSurfaces": [{ "surfaceId": "SURFACE-HEALTH", "tty": "ttys033",
+    "identityTrace": { "outcome": "open-file-match",
+      "processes": [{ "pid": 4242, "command": "claude --resume", "recognizedAgentProcess": true }],
+      "openFileMatches": [{ "pid": 4242, "path": "/Users/me/.claude/projects/p/019f86c4-….jsonl", "provider": "claude", "sessionId": "019f86c4-…" }] } }]
+}
+```
+
+## Design decisions
+
+1. **Traces are additive, resolution is untouched.** `resolveAgentTarget` became a thin wrapper over new `resolveAgentTargetWithTrace` so the returned `CmuxTarget` objects stay byte-identical (existing tests use exact `toEqual` on them). Surface evidence lives on `CmuxSurface.identityTrace`; the compact per-agent tier trace on `AgentSnapshot.identityTrace`. The full process/file dumps are NOT duplicated per agent — the debug endpoint joins agent trace + related surface traces at read time (via a new optional `MountainAppState.surfaces?()` accessor, implemented by `HubState`).
+2. **`identityTrace` is excluded from `snapshotFingerprint`** (like `elapsedMs`) so evidence detail (pids, binding timestamps) never churns SSE pushes.
+3. **Binding confirmation = lsof only.** Only surfaces whose trace outcome is `open-file-match` (single session, no conflict) record/refresh a binding; command hints and carried-over cmux metadata never move one. A session confirmed on two surfaces in one scan is contested and skipped.
+4. **Bridge rules (fail-safe by construction):** bridging sets `agent.recordedTarget` (with `source: "binding"`, `reason: "Recorded binding, live evidence absent this scan."`) only when the agent is running/waiting, has no recordedTarget of its own, and the scan produced NO live evidence for the session. Live evidence always wins. A bound surface carrying exact evidence for a *different* session is a contradiction, not a gap — never bridged. A bound surface with `identityConflict` IS still bridged so tier 1 quarantines it visibly (binding can never un-quarantine; verified by test).
+5. **Reassignment:** a scan showing the session exactly on a different surface increments `pendingReassignment` (reset if the candidate changes; cleared by re-confirmation of the current target); the binding moves only at 2 consecutive agreeing scans. A no-evidence scan leaves pending untouched (it neither agrees nor disagrees).
+6. **Store:** `JsonIdentityBindingStore` copies `archive.ts`'s atomic write-temp-rename + serialized write-queue pattern, with injected file ops and clock for tests; 7-day TTL pruning on load and on save; corrupt records fail `open()` loudly (archive convention). Binding write failures surface in `controlHealth.errors` instead of breaking the refresh loop.
+7. **`recordedTarget` extended** with optional `reason`/`source`/`confirmedAt` — the vehicle that makes targets.ts tier 1 live for active agents (previously dead code), exactly per the Luna diagnostic. Archive-written recordedTargets are unaffected.
+8. **Endpoint uses `?agent=`** (not a path segment) because agent IDs contain a colon (`claude:<uuid>`); GET-only, `SECURITY_HEADERS` passed in from app.ts (avoids an import cycle), `no-store`, additive ~3-line route block in app.ts.
+
+## Deferred / out of scope
+
+- No UI for the debug endpoint or traces (lane is server-only by constraint).
+- Bindings do not bridge sessions whose bound surface disappeared from discovery (tier 1 simply finds no match and falls through) — acceptable: cmux restart invalidates surface IDs anyway.
+- The bridge-skip on a reclaimed surface (decision 4) is documented in ARCHITECTURE.md but not annotated as an explicit trace step; the related-surface evidence in the debug endpoint makes it visible.
+- `collectors.ts`/`cursor.ts` token semantics, `control.ts` execution, triage/issue code, and all `src/web` files untouched per lane boundaries.
+
+---
+
+# Lane Report — opus-cursor-policy-20260723
+
+Branch `ant-hill/opus-cursor-policy-20260723`, cut from `main` @ 5b71f38. Goal:
+make the Cursor model policy and the row model display honest for Cursor's own
+model families, ahead of a sibling lane's model-extraction fix that will start
+reporting real strings (`composer-2.5-fast`, `composer-2`, `cursor-grok-4.5-high-fast`,
+`grok-4.5-fast-xhigh`, `claude-…`, `gpt-…-sol`, …). Nothing pushed.
+# Lane Report — cursor-model-20260723
+
+Branch `ant-hill/opus-cursor-model-20260723`, cut from main @ `5b71f38`. Goal: fix
+Cursor model detection using the fields the real stores persist, taking model
+coverage from ~15% to ~92% CLI / 100% GUI (incl. Composer models). Scope limited to
+`src/server/cursor.ts` + `tests/cursor.test.ts`.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `55a1695` | feat(model-config): `cursorNativeFamilies` list + `composer-2`/`composer-2.5` aliases + `cursorNativeFamily()` helper (config + defaults + tests) |
+| `2cc52fa` | feat(snapshot): `cursorModelPolicy` treats any Cursor-native family as compliant (+ tests) |
+| `02d4ff3` | feat(app): `modelShort` short forms for Composer and Grok (+ tests) |
+| `(this)`  | docs: lane report |
+
+## Behavior
+
+- **Config**: `cursorNativeFamilies = [grok-4.5, cursor-grok-4.5, composer-2, composer-2.5]`.
+  Matching mirrors the existing alias approach (exact or hyphen-bounded prefix),
+  so `composer-2.5-fast` resolves to `composer-2.5`, never `composer-2`. Compiled
+  `DEFAULT_MODEL_CONFIG` and the shipped `config/models.json` stay identical (the
+  `toEqual` test enforces it); missing/malformed file → compiled defaults, the
+  file-present/absent pattern preserved.
+- **Policy**: an observed model in ANY native family → `compliant`; a reported
+  non-native model → `mismatch`; missing model → `unreported`. The subagent
+  parent-inheritance branches (expected = parent model, `cursor-ai-tracking`
+  evidence, unverified-parent → unreported) are unchanged. Summaries name the
+  family that matched.
+- **Display**: `composer-2.5-fast → "composer 2.5 fast"`, `composer-2 → "composer 2"`,
+  `cursor-grok-4.5-high-fast → "grok 4.5"`, all within the existing 18-char bound
+  and mono style. Anthropic/Codex/Sol/Luna/Fable short forms unchanged. The bare
+  `["grok","grok"]` `MODEL_SHORT` entry was replaced by the versioned Grok branch.
+
+## Verification
+
+`bun run check` green: **350 pass / 0 fail** (344 base + 6 new), `tsc --noEmit`
+clean, TS strict, no `any`. New coverage: composer compliant, cursor-grok
+compliant, claude/gpt reported → mismatch, missing → unreported, config-absent
+defaults, `cursorNativeFamily` matching, and the `modelShort` cases.
+
+## DECISION AWAITING OWNER CONFIRMATION
+
+**"Composer counts as compliant native" is a DEFAULT, not a settled ruling —
+Emilio may veto.** If Composer should NOT be an approved native family, it is a
+one-line config reversal: remove `"composer-2"` and `"composer-2.5"` from
+`cursorNativeFamilies` in `config/models.json`. No code change needed — Composer
+sessions then read as `mismatch`. Aliases/short-forms can stay regardless so the
+names still render cleanly.
+
+## Out of scope / untouched
+
+- `bun.lock` (pre-existing uncommitted dep-install change) left untouched, not
+  buried in any commit.
+- No CSS, no render functions (active layout/sticky-header lane elsewhere).
+- README "Data truth" section was read for policy intent but not edited (outside
+  the allowed file set). Its wording still says "Grok-family … compliant" and
+  should be widened to "Cursor-native (Grok + Composer)" if this default holds.
+| `cfbf902` | feat(cursor): detect real models from live CLI and GUI stores |
+| `(this)`  | test(cursor): pin Cursor out of token/burn rollups + lane report |
+
+Not pushed; no merges. The pre-existing modified `bun.lock` (from dep install) was
+left untouched and excluded from all commits. No `src/server/types.ts` change was
+needed — `CollectedAgent.effort` already existed; the only new field is `effort` on
+the module-local `CursorStoreEvidence` in `cursor.ts`.
+
+## What changed
+
+**CLI** (`~/.cursor/chats/<hash>/<uuid>/store.db`), in `readCursorStoreEvidenceFrom`:
+1. PRIMARY: meta key `'0'` hex-JSON `lastUsedModel` (e.g. `grok-4.5`, `composer-2.5`),
+   present on newer sessions only (7/89 today); used when present.
+2. FALLBACK: newest assistant blob's `content[].providerOptions.cursor.modelName`
+   (e.g. `cursor-grok-4.5-high-fast`, `composer-2.5-fast`). Blobs (`data` byte `0x7B`)
+   walked newest-first by `rowid`; the model lives on content PARTS (`reasoning`/
+   `redacted-reasoning`/`text`), not on message-level `providerOptions.cursor` (which
+   holds only `modelProviderMessageId`/`requestId`).
+3. TERTIARY: the old `powered by (Cursor X.Y)` system-prompt regex, last resort only.
+
+**GUI** (`state.vscdb` → `cursorDiskKV`), in `collectCursorGuiSessions`:
+1. PRIMARY: `composerData:<conversationId>.modelConfig.modelName` (all families incl.
+   every Composer variant; sentinel `"default"` treated as unreported).
+   `modelConfig.selectedModels[0].parameters` (`[{id,value}]`) surfaces the `effort`
+   tier into the agent's `effort` field. The `state.vscdb` handle now stays open
+   through the loop; the `cursorDiskKV` table is probed via `sqlite_master` and the
+   query is guarded for older installs.
+2. FALLBACK: existing `ai-code-tracking.db` lookup (for `"default"` / missing table).
+
+External JSON parsed as `unknown` behind guards (`asRecord`, `nonEmptyString`,
+`contentPartModelName`, `composerEffort`); no `any` added. Live-store reads are
+read-only (`readonly:true`, with `immutable=1` only as a WAL-sidecar fallback).
+
+## Coverage evidence (measured on this machine, new code, read-only)
+
+| Surface | Metric | Result |
+|---|---|---|
+| CLI | store.db with a resolved model | **85 / 89 = 96%** (7 via `lastUsedModel`, 78 via blob/system) |
+| CLI | old baseline (system regex only) | 56 / 89 = 63% today |
+| GUI | local conversations with a `composerData` entry | **234 / 234 = 100%** |
+| GUI | explicit composerData model | 213 / 234 = 91% (21 `"default"` → ai-tracking) |
+
+The 4 unresolved CLI stores are sessions with no assistant blobs yet. Note the
+system-regex-only baseline measured 63% on today's Grok-heavy session mix, not the
+~15% the task cited (mix-dependent); either way it is a large, verifiable jump. GUI
+model coverage is effectively 100% via composerData + ai-tracking fallback.
+
+## Token / context-occupancy decision
+
+**Cursor tokens left fully untouched** — `{scope:"unknown", provenance:"unknown"}`,
+`cost: null`. Context occupancy (`contextTokensUsed`/`contextTokenLimit`, on 668/864
+composerData) is **NOT surfaced.** After tracing consumers: `snapshot.ts` rolls up
+usage off `tokens.total`; `pulse.ts` rolls up burn off `tokens.sessionTotal` +
+`provenance==="observed"` and already drops `provider==="cursor"`; and the renderer
+`src/web/app.js` prints `tokens.total / tokens.contextWindow` as **consumed** tokens.
+Any honest occupancy display needs a "used" figure, and the only carriers
+(`total`/`contextWindow`) are exactly what the renderer treats as billed usage — so a
+truthful occupancy surface would require a new field plus an `app.js` change, which is
+outside this lane's file scope. Rather than risk a context snapshot reading as billed
+tokens, occupancy stays out. A pin test locks the invariant (no numeric totals,
+unknown provenance) and asserts through `buildSnapshot` + `PulseTracker` that a
+working Cursor agent adds 0 to the token sum/median/reporting and lands in burn
+`coverage.unknown`, never `eligible`.
+
+## Verification
+
+`bun run check` — typecheck (strict) + full suite green: **349 pass, 0 fail**
+(344 base + 5 new Cursor tests). New tests: meta `lastUsedModel` wins over blob
+modelName; newest assistant blob modelName fallback detecting a Composer model; GUI
+`composerData` model + `effort` overriding ai-tracking; GUI `"default"` → ai-tracking
+fallback; plus the rollup-exclusion pin. The pre-existing WAL/mode-ro and GUI-fallback
+tests continue to pass unchanged.
+
+## Postmortem — live gap after deploy (subagent path missed)
+
+After landing, live measurement showed the gap barely moved: **137 / 163 Cursor
+agents were still model-less**, all with a fresh `updatedAt` (re-collected every tick,
+not stale archives). Root cause, verified by running the *actual* collector against
+the live home:
+
+- **All 137 blanks were subagents** — `parentSourceSessionId` set, 0 blank roots.
+  They are enumerated by `cursorChildAgents` (reads
+  `<project>/agent-transcripts/<parentId>/subagents/<childId>.jsonl`) →
+  `parseCursorChildSession`, whose model came **only** from `latestCursorModel`
+  (ai-code-tracking), which is silent for subagents.
+- The composerData PRIMARY lookup landed in the first commit was wired **only** into
+  the conversation-search-driven loop in `collectCursorGuiSessions` — subagents (and
+  any other blank) never reached it.
+- The sample `94c107d8-…` (coordinator's example) has no `~/.cursor/chats` dir, no
+  own `agent-transcripts` dir, and **no** conversation-search row — it is a subagent
+  whose transcript lives under its parent `3b191f66-…`'s `subagents/` folder, and its
+  model exists in `cursorDiskKV` as `composerData:94c107d8-…` = `cursor-grok-4.5-high-fast`.
+  (The coordinator's "glass membership" hypothesis pointed at the right *fix* — model
+  by session id — but the real *entry path* is the subagent transcript, not membership
+  enumeration; there is no membership-enumeration code path.)
+- **137 / 137 blanks were resolvable via `composerData:<childSessionId>`.**
+
+**Fix (commit `697e052`):** `fillMissingCursorModels` — a universal last-resort pass
+in `collectCursorSessions` that, after every entry path (chats store.db,
+agent-transcripts, conversation-search, subagents), fills any agent still missing a
+model + effort from `composerData:<sourceSessionId>`, keyed purely by session id.
+`guiComposerModel` was renamed `composerModelForSession` to reflect the shared,
+path-agnostic role. Tokens remain untouched (the pass only ever writes `model` /
+`effort`). GUI conversation-search sessions keep composerData as their PRIMARY source;
+this pass only touches sessions left blank.
+
+**Live re-run of the collector against the real home: 162 / 162 agents now carry a
+model (was 25 / 162); 0 blank.** Regression test added: a subagent absent from
+conversation-search, with no ai-tracking row, resolves its `model` and `effort`
+purely from `composerData`. Final `bun run check`: **356 pass, 0 fail** (typecheck
+strict clean).
