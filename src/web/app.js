@@ -1360,6 +1360,10 @@ globalThis.TheAntHill = {
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
   renderCommandDock, renderDockTool,
+  // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
+  // they are `const`s declared below this block. Assert the behavior instead.
+  transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
+  transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
@@ -1498,6 +1502,10 @@ const state = {
   // live on CmuxSurface, which /api/snapshot does not carry — so they are
   // fetched on demand from the read-only GET /api/debug/identity.
   identity: { agentId: null, loading: false, error: "", data: null },
+  // Inline transcript for the open drawer. Scoped to one agent id for the same
+  // reason `identity` is: a drawer switched mid-flight must never adopt the
+  // previous agent's transcript.
+  transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -3797,6 +3805,7 @@ function inspectorPaintSig(sel, view, ui) {
   const agent = view && view.kind === "agent" ? view.agent : null;
   const feedback = agent ? ui.feedback.get(agent.id) : null;
   const identity = ui.identity || {};
+  const transcript = ui.transcript || {};
   return [
     sel.kind, sel.id,
     view ? view.kind : "missing",
@@ -3826,6 +3835,20 @@ function inspectorPaintSig(sel, view, ui) {
         identity.loading ? "1" : "0",
         identity.error || "",
         identity.data ? JSON.stringify(surfaceCollisions(identity.data)) : "",
+      ].join(":")
+      : "",
+    // Same reason as identity: nothing else in the drawer moves when a fetched
+    // transcript lands, so without this it would never reach the screen. The
+    // line COUNT and the source stand in for the payload — the text is immutable
+    // once fetched, and hashing 1000 turns on every paint is not free.
+    agent && transcript.agentId === agent.id
+      ? [
+        transcript.loading ? "1" : "0",
+        transcript.error || "",
+        String(transcript.limit || ""),
+        transcript.data
+          ? transcript.data.lines.length + ":" + (transcript.data.source || "") + ":" + (transcript.data.truncated ? "1" : "0")
+          : "",
       ].join(":")
       : "",
   ].join("\u001f");
@@ -5285,7 +5308,195 @@ function renderSurfaceEvidence(agent, ui = state) {
   return wrap;
 }
 
-function renderEvidence(agent) {
+/* ---------- inspector: inline transcript ----------
+
+   Verifying "this lane says it is done — is that true?" used to mean copying a
+   path out of the drawer, switching to a terminal, jq-ing a JSONL and switching
+   back, per agent, across ~200 lanes. The snapshot only carries a fixed 800-char
+   tail (MAX_TRANSCRIPT_TAIL_CHARS), which is not enough to answer the question.
+
+   Contract (GET /api/transcript?agent=<id>&limit=<n>, built in a parallel lane):
+     { ok, agentId, source, truncated, lines: [{ at, role, text }] }
+   `text` is UNTRUSTED agent output. It rides textContent only, with no
+   exceptions — the source guard that forbids markup assignment covers this file
+   as a whole, and every string below goes through el({ text }). */
+
+const TRANSCRIPT_DEFAULT_LIMIT = 200;
+const TRANSCRIPT_MAX_LIMIT = 1000;         // the contract's hard cap
+const TRANSCRIPT_LIMIT_STEPS = [200, 500, 1000];
+// Painting a 1000-line transcript as 1000 nodes on every drawer repaint is how
+// an inspector becomes unusable. The window is the tail, which is the part the
+// operator is asking about; the count it is hiding is stated, never implied.
+const TRANSCRIPT_RENDER_CAP = 300;
+const TRANSCRIPT_ROLES = new Set(["user", "assistant", "tool", "system", "unknown"]);
+const TRANSCRIPT_ROLE_LABELS = {
+  user: "You", assistant: "Agent", tool: "Tool", system: "System", unknown: "—",
+};
+
+function clampTranscriptLimit(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return TRANSCRIPT_DEFAULT_LIMIT;
+  return Math.min(TRANSCRIPT_MAX_LIMIT, Math.max(1, v));
+}
+
+function nextTranscriptLimit(current) {
+  return TRANSCRIPT_LIMIT_STEPS.find((step) => step > clampTranscriptLimit(current)) || null;
+}
+
+function transcriptUrl(agentId, limit) {
+  return "/api/transcript?agent=" + encodeURIComponent(agentId) + "&limit=" + clampTranscriptLimit(limit);
+}
+
+/* The wire shape, defended. Everything in it is agent-derived: an unknown role
+   collapses to "unknown", a non-string `text` is dropped rather than String()-ed
+   into "[object Object]", and a missing `source` stays null instead of becoming
+   a plausible-looking path. Never invent content. */
+function normalizeTranscript(body) {
+  const rows = Array.isArray(body && body.lines) ? body.lines : [];
+  const lines = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || typeof row.text !== "string") continue;
+    lines.push({
+      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
+      role: TRANSCRIPT_ROLES.has(row.role) ? row.role : "unknown",
+      text: row.text,
+    });
+  }
+  return {
+    source: typeof body.source === "string" && body.source ? body.source : null,
+    truncated: body.truncated === true,
+    lines,
+  };
+}
+
+/* Degrade honestly. This client ships ahead of the route, so the common failure
+   is a 404 with no JSON envelope — which means "this build cannot show you a
+   transcript", NOT "this agent has no transcript". Saying the second would be a
+   lie the operator would act on. */
+function transcriptFailureText(status, body) {
+  const code = body && body.error && body.error.code;
+  const message = body && body.error && body.error.message;
+  if (!status) return "Could not reach the server for this transcript.";
+  if (code === "AGENT_NOT_FOUND") return "This session is no longer tracked, so its transcript cannot be resolved.";
+  if (status === 404 && !code) return "Transcript view is not available in this build.";
+  return "Transcript unavailable"
+    + (code ? " [" + code + "]" : "")
+    + (message ? ": " + message : " (HTTP " + status + ")");
+}
+
+function transcriptWindow(lines, cap = TRANSCRIPT_RENDER_CAP) {
+  const total = lines.length;
+  if (total <= cap) return { shown: lines, hidden: 0, total };
+  return { shown: lines.slice(total - cap), hidden: total - cap, total };
+}
+
+async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {
+  const want = clampTranscriptLimit(limit);
+  state.transcript = { agentId, loading: true, error: "", data: null, limit: want };
+  render();
+  let next;
+  try {
+    const res = await fetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    next = !res.ok || !body || body.ok !== true
+      ? { agentId, loading: false, error: transcriptFailureText(res.status, body), data: null, limit: want }
+      : { agentId, loading: false, error: "", data: normalizeTranscript(body), limit: want };
+  } catch {
+    next = { agentId, loading: false, error: transcriptFailureText(0, null), data: null, limit: want };
+  }
+  // The operator moved on — never paint one agent's transcript into another's drawer.
+  if (state.transcript.agentId !== agentId) return;
+  state.transcript = next;
+  render();
+}
+
+function transcriptLineNode(line) {
+  return el("div", { class: "tr-line", dataset: { role: line.role } },
+    el("div", { class: "tr-meta" },
+      el("span", { class: "tr-role", text: TRANSCRIPT_ROLE_LABELS[line.role] || line.role }),
+      line.at ? el("span", { class: "tr-at", title: line.at, text: agoText(line.at) }) : null),
+    // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+    el("p", { class: "tr-text", tabindex: "0", text: line.text }));
+}
+
+function renderTranscriptPanel(agent, ui = state) {
+  const view = (ui && ui.transcript) || {};
+  const mine = view.agentId === agent.id;
+  const section = el("section", { class: "transcript-view" },
+    el("h3", { class: "section-title", text: "Transcript" }));
+
+  if (!mine) {
+    section.append(el("button", {
+      type: "button", class: "btn sm transcript-load",
+      dataset: { fkey: "transcript-load:" + agent.id },
+      onclick: () => void loadTranscript(agent.id),
+    }, "Read the transcript"));
+    return section;
+  }
+
+  if (view.loading) {
+    // Bounded by construction: loadTranscript always resolves into data or an
+    // error, so this can never become a spinner that never resolves.
+    section.append(el("p", { class: "inspector-note", role: "status", text: "Reading the transcript…" }));
+    return section;
+  }
+
+  if (view.error) {
+    section.append(
+      el("p", { class: "inspector-note err", role: "status", text: view.error }),
+      el("button", {
+        type: "button", class: "btn sm transcript-load",
+        dataset: { fkey: "transcript-retry:" + agent.id },
+        onclick: () => void loadTranscript(agent.id, view.limit),
+      }, "Try again"));
+    return section;
+  }
+
+  const data = view.data || { lines: [], source: null, truncated: false };
+  const head = el("div", { class: "transcript-head" });
+  if (!data.lines.length) {
+    head.append(el("span", {
+      class: "transcript-source",
+      text: data.source
+        ? "The transcript file is present but has no readable turns."
+        : "No transcript file is recorded for this session.",
+    }));
+  } else {
+    const win = transcriptWindow(data.lines);
+    head.append(el("span", {
+      class: "transcript-source",
+      text: win.hidden
+        ? "Last " + win.shown.length + " of " + win.total + " loaded turns"
+        : win.total + (win.total === 1 ? " turn" : " turns"),
+    }));
+    if (data.truncated) head.append(el("span", { class: "transcript-more", text: "· older turns exist above this window" }));
+  }
+  if (data.source) head.append(el("code", { class: "transcript-source-path", text: data.source }));
+  head.append(el("button", {
+    type: "button", class: "btn sm transcript-load",
+    dataset: { fkey: "transcript-refresh:" + agent.id },
+    onclick: () => void loadTranscript(agent.id, view.limit),
+  }, "Refresh"));
+  const more = nextTranscriptLimit(view.limit);
+  if (more && data.truncated) {
+    head.append(el("button", {
+      type: "button", class: "btn sm transcript-load",
+      dataset: { fkey: "transcript-more:" + agent.id },
+      onclick: () => void loadTranscript(agent.id, more),
+    }, "Load " + more));
+  }
+  section.append(head);
+
+  if (data.lines.length) {
+    const log = el("div", { class: "transcript-log", tabindex: "0", "aria-label": "Transcript turns" });
+    for (const line of transcriptWindow(data.lines).shown) log.append(transcriptLineNode(line));
+    section.append(log);
+  }
+  return section;
+}
+
+function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
 
@@ -5358,6 +5569,10 @@ function renderEvidence(agent) {
       el("h3", { class: "section-title", text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
+
+  // The 800-char tail above is whatever the snapshot happened to carry; this is
+  // the part an operator can actually read a decision out of.
+  panel.append(renderTranscriptPanel(agent, ui));
 
   if (!panel.childNodes.length) {
     panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));

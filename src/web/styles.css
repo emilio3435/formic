@@ -2204,6 +2204,49 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 .transcript { margin: 0; padding: 0.6rem 0.7rem; max-height: 13rem; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* ---------- inline transcript ----------
+   Untrusted agent output rendered as text. The log scrolls inside its own box so
+   a long tail can never stretch the drawer, and role is carried on a data
+   attribute rather than a composed class so the stylesheet lint stays exact. */
+
+.transcript-view { display: flex; flex-direction: column; gap: 0.4rem; }
+.transcript-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+  font-size: 11.5px; color: var(--faint);
+}
+.transcript-source { font-weight: 650; color: var(--muted); }
+.transcript-more { color: var(--amber); }
+.transcript-source-path {
+  flex: 1 1 12rem; min-width: 0;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.transcript-log {
+  max-height: 22rem; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.tr-line { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.55rem; align-items: baseline; }
+.tr-meta { display: flex; flex-direction: column; gap: 0.05rem; min-width: 0; }
+.tr-role {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint);
+}
+.tr-line[data-role="user"] .tr-role { color: var(--slate); }
+.tr-line[data-role="assistant"] .tr-role { color: var(--moss); }
+.tr-line[data-role="tool"] .tr-role { color: var(--clay); }
+.tr-line[data-role="system"] .tr-role { color: var(--amber); }
+.tr-at { font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
+.tr-text {
+  margin: 0;
+  font-size: 12px; line-height: 1.5; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tr-line[data-role="tool"] .tr-text { font-family: var(--font-mono); font-size: 11px; }
+
 .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
 .artifact-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; font-size: 12.5px; }
 .artifact-kind { font-family: var(--font-mono); font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }

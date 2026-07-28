@@ -4274,3 +4274,182 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
       .toBe(M.broadcastPaintSig(recipients, recipients, fresh));
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Finding 2: reading what an agent actually did required leaving the dashboard.
+   The snapshot carries a fixed 800-char tail; the decision the operator makes
+   most often — "this lane claims done, is that true?" — cannot be made from it.
+
+   The route is being built in a parallel lane and does not exist here, so the
+   degrade path is as important as the happy path and is tested first.
+   ------------------------------------------------------------------------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transcriptUi(over: Record<string, unknown> = {}): any {
+  return { transcript: { agentId: null, loading: false, error: "", data: null, limit: 200, ...over } };
+}
+
+describe("FE-C: the transcript is readable inside the drawer", () => {
+  test("(2) the request names an agent and a bounded line budget — never a path", () => {
+    expect(M.transcriptUrl("claude:abc-123", 200)).toBe("/api/transcript?agent=claude%3Aabc-123&limit=200");
+    // The contract's hard max is 1000 and the floor is 1; a caller cannot widen it.
+    expect(M.transcriptUrl("a", 99999)).toContain("limit=1000");
+    expect(M.clampTranscriptLimit(0)).toBe(1);
+    expect(M.clampTranscriptLimit(5000)).toBe(1000);
+    expect(M.clampTranscriptLimit("nonsense")).toBe(200);
+    expect(M.clampTranscriptLimit(350)).toBe(350);
+    // "Load more" walks a fixed ladder and stops at the ceiling.
+    expect(M.nextTranscriptLimit(200)).toBe(500);
+    expect(M.nextTranscriptLimit(500)).toBe(1000);
+    expect(M.nextTranscriptLimit(1000)).toBeNull();
+  });
+
+  test("(2) a build without the route says so — it never claims the agent is silent", () => {
+    // The exact shape a server with no such route returns: 404, non-JSON body.
+    expect(M.transcriptFailureText(404, null)).toBe("Transcript view is not available in this build.");
+    // …which must NOT be confused with the contract's real 404.
+    expect(M.transcriptFailureText(404, { ok: false, error: { code: "AGENT_NOT_FOUND" } }))
+      .toContain("no longer tracked");
+    expect(M.transcriptFailureText(0, null)).toContain("Could not reach the server");
+    const other = M.transcriptFailureText(500, { ok: false, error: { code: "READ_FAILED", message: "EACCES" } });
+    expect(other).toContain("READ_FAILED");
+    expect(other).toContain("EACCES");
+    // Every degrade names the failure; none of them is silence or a spinner.
+    for (const text of [M.transcriptFailureText(404, null), M.transcriptFailureText(0, null), other]) {
+      expect(text.length).toBeGreaterThan(10);
+    }
+  });
+
+  test("(2) the wire payload is defended: no invented content, no invented source", () => {
+    const view = M.normalizeTranscript({
+      ok: true,
+      source: "/Users/e/.claude/projects/x/3de6d691.jsonl",
+      truncated: true,
+      lines: [
+        { at: "2026-07-28T09:12:03.114Z", role: "assistant", text: "pushed the branch" },
+        { at: "not-a-date", role: "wizard", text: "odd role and odd time" },
+        { at: null, role: "tool", text: "" },
+        { role: "user", text: { nope: 1 } },      // non-string text is dropped…
+        null,                                     // …as is a non-object row
+      ],
+    });
+    expect(view.source).toBe("/Users/e/.claude/projects/x/3de6d691.jsonl");
+    expect(view.truncated).toBe(true);
+    expect(view.lines).toHaveLength(3);
+    expect(view.lines[1].role).toBe("unknown");   // unknown role collapses, not passed through
+    expect(view.lines[1].at).toBeNull();          // an unparseable time becomes absent
+    expect(view.lines[2].text).toBe("");          // an empty turn is still a turn
+    // An honest empty answer stays empty — source null, zero lines, no filler.
+    const empty = M.normalizeTranscript({ ok: true, source: null, truncated: false, lines: [] });
+    expect(empty).toEqual({ source: null, truncated: false, lines: [] });
+    expect(M.normalizeTranscript({ ok: true }).lines).toEqual([]);
+  });
+
+  test("(2) a very long transcript is windowed, and says how much it is hiding", () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({ at: null, role: "assistant", text: "turn " + i }));
+    const win = M.transcriptWindow(many);
+    expect(win.shown).toHaveLength(300);          // the cap — never 1000 nodes
+    expect(win.hidden).toBe(700);
+    expect(win.total).toBe(1000);
+    expect(win.shown[299].text).toBe("turn 999"); // the window is the TAIL
+    // Under the cap nothing is hidden and nothing is copied away.
+    const few = many.slice(0, 12);
+    expect(M.transcriptWindow(few)).toEqual({ shown: few, hidden: 0, total: 12 });
+  });
+
+  test("(2) untrusted transcript text reaches the DOM as text, never as markup", () => {
+    const hostile = "<img src=x onerror=alert(1)> & <script>steal()</script>";
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderTranscriptPanel(a, transcriptUi({
+      agentId: a.id,
+      data: { source: "/tmp/t.jsonl", truncated: false, lines: [{ at: null, role: "assistant", text: hostile }] },
+    })));
+    const body = byClass(panel, "tr-text");
+    // el({ text }) assigns textContent. If it ever became an attribute or markup
+    // assignment, the string would not be the node's own textContent.
+    expect(body.textContent).toBe(hostile);
+    expect(body.children).toHaveLength(0);
+    expect(body.attributes.text).toBeUndefined();
+  });
+
+  test("(2) the drawer covers all four states: unloaded, empty, loaded, failed", () => {
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const render = (over: Record<string, unknown>): any =>
+      withDom(() => M.renderTranscriptPanel(a, transcriptUi(over)));
+
+    // Unloaded: one opt-in control, because fetching a transcript for every
+    // drawer open would hammer the server for a panel nobody asked for.
+    const idle = render({});
+    expect(textOf(idle)).toContain("Read the transcript");
+    expect(buttonsOf(idle)[0].dataset.fkey).toBe("transcript-load:codex:a1");
+
+    // Loading: a stated status, and loadTranscript always settles into data or
+    // an error, so this is never an endless spinner.
+    expect(textOf(render({ agentId: a.id, loading: true }))).toContain("Reading the transcript");
+
+    // Failed: the reason, plus a way out.
+    const failed = render({ agentId: a.id, error: "Transcript view is not available in this build." });
+    expect(textOf(failed)).toContain("not available in this build");
+    expect(buttonsOf(failed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey)).toEqual(["transcript-retry:codex:a1"]);
+
+    // Empty: honest about which kind of empty it is, and never invents a turn.
+    const noFile = render({ agentId: a.id, data: { source: null, truncated: false, lines: [] } });
+    expect(textOf(noFile)).toContain("No transcript file is recorded");
+    expect(allByClass(noFile, "tr-line")).toHaveLength(0);
+    const emptyFile = render({ agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [] } });
+    expect(textOf(emptyFile)).toContain("no readable turns");
+
+    // Loaded: the turns, the count, the source, and a bounded node count.
+    const lines = Array.from({ length: 400 }, (_, i) => ({ at: null, role: "assistant", text: "turn " + i }));
+    const loaded = render({ agentId: a.id, limit: 500, data: { source: "/tmp/t.jsonl", truncated: true, lines } });
+    expect(allByClass(loaded, "tr-line")).toHaveLength(300);
+    expect(textOf(loaded)).toContain("Last 300 of 400");
+    expect(textOf(loaded)).toContain("older turns exist above this window");
+    expect(textOf(loaded)).toContain("/tmp/t.jsonl");
+    // Refresh, and one step up the ladder — every repainted control keyed.
+    const keys = buttonsOf(loaded).map((b: { dataset: { fkey: string } }) => b.dataset.fkey);
+    expect(keys).toEqual(["transcript-refresh:codex:a1", "transcript-more:codex:a1"]);
+    // At the ceiling there is no "load more" to offer.
+    const maxed = render({ agentId: a.id, limit: 1000, data: { source: "/tmp/t.jsonl", truncated: true, lines } });
+    expect(buttonsOf(maxed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey))
+      .toEqual(["transcript-refresh:codex:a1"]);
+  });
+
+  test("(2) another agent's transcript never bleeds into this drawer", () => {
+    const a = agent();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderTranscriptPanel(a, transcriptUi({
+      agentId: "claude:someone-else",
+      data: { source: "/tmp/other.jsonl", truncated: false, lines: [{ at: null, role: "assistant", text: "NOT MINE" }] },
+    })));
+    expect(textOf(panel)).not.toContain("NOT MINE");
+    expect(textOf(panel)).toContain("Read the transcript");
+  });
+
+  test("(2) the panel lives in Evidence, and a landed fetch actually repaints it", () => {
+    const a = agent({ transcriptTail: "…tail" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const evidence: any = withDom(() => M.renderEvidence(a, transcriptUi()));
+    expect(byClass(evidence, "transcript-view")).not.toBeNull();
+
+    // Without the drawer signature tracking it, the fetched turns would sit in
+    // state and never reach the screen — the exact failure mode identity had.
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const base = M.inspectorPaintSig(sel, view, identityUi(transcriptUi()));
+    for (const [why, over] of [
+      ["loading", { agentId: a.id, loading: true }],
+      ["error", { agentId: a.id, error: "Transcript view is not available in this build." }],
+      ["landed", { agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [{ at: null, role: "user", text: "hi" }] } }],
+      ["widened", { agentId: a.id, limit: 500 }],
+    ] as [string, Record<string, unknown>][]) {
+      expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi(over))), why).not.toBe(base);
+    }
+    // A transcript belonging to a different agent must not move this signature.
+    expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi({
+      agentId: "claude:other", data: { source: "/x", truncated: false, lines: [] },
+    })))).toBe(base);
+  });
+});
