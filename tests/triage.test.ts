@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
+import { emptySnapshot } from "../src/server/app";
 import type {
   AgentSnapshot,
   HubSnapshot,
@@ -64,6 +65,13 @@ function post(path: string, issueId: string, origin = "http://127.0.0.1:4701"): 
     method: "POST",
     headers: { origin, "content-type": "application/json" },
     body: JSON.stringify({ issueId }),
+  });
+}
+
+function remove(issueId: string, origin = "http://127.0.0.1:4701"): Request {
+  return new Request(`http://127.0.0.1:4701/api/triage/queue?issueId=${encodeURIComponent(issueId)}`, {
+    method: "DELETE",
+    headers: { origin },
   });
 }
 
@@ -271,6 +279,86 @@ describe("operator triage recommendations", () => {
     expect(unsubscribe).toBeFunction();
   });
 
+  test("a completed finding can be requeued from fresh issue evidence", async () => {
+    const issueId = "system:recurring";
+    const store = new MemoryTriageQueueStore();
+    await store.add(recommendation(issueId));
+    const completed = store.get(issueId)!;
+    completed.state = "completed";
+    completed.completedAt = "2026-07-22T06:05:00.000Z";
+    completed.result = "Old incident evidence.";
+
+    const fresh = {
+      ...recommendation(issueId),
+      generatedAt: "2026-07-28T09:12:03.114Z",
+      evidence: ["Fresh incident evidence."],
+    };
+    const requeued = await store.add(fresh);
+
+    expect(requeued).toMatchObject({
+      issueId,
+      state: "queued",
+      createdAt: fresh.generatedAt,
+      evidence: fresh.evidence,
+    });
+    expect(requeued.completedAt).toBeUndefined();
+    expect(requeued.result).toBeUndefined();
+  });
+
+  test("DELETE cancels a running investigation before removing it", async () => {
+    const issueId = "system:cancellable";
+    const store = new MemoryTriageQueueStore();
+    await store.add(recommendation(issueId));
+    let cancelled = 0;
+    const runner: TriageInvestigationRunner = {
+      async launch() {
+        return {
+          runId: "run-cancellable",
+          model: "test",
+          completion: new Promise(() => {}),
+          cancel: async () => { cancelled += 1; },
+        };
+      },
+    };
+    await store.start(issueId, runner);
+
+    const response = await handleTriageRequest(remove(issueId), emptySnapshot(), store, runner);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      removed: { issueId, state: "running" },
+      cancelled: true,
+    });
+    expect(cancelled).toBe(1);
+    expect(store.get(issueId)).toBeUndefined();
+  });
+
+  test("DELETE refuses to hide a running investigation without a safe cancellation handle", async () => {
+    const issueId = "system:not-cancellable";
+    const store = new MemoryTriageQueueStore();
+    await store.add(recommendation(issueId));
+    const runner: TriageInvestigationRunner = {
+      async launch() {
+        return {
+          runId: "run-not-cancellable",
+          model: "test",
+          completion: new Promise(() => {}),
+        };
+      },
+    };
+    await store.start(issueId, runner);
+
+    const response = await handleTriageRequest(remove(issueId), emptySnapshot(), store, runner);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { code: "INVESTIGATION_CANCEL_UNAVAILABLE" },
+    });
+    expect(store.get(issueId)?.state).toBe("running");
+  });
+
   test("accepts an exact same-origin IPv6 loopback triage request", async () => {
     const value = agent("codex:ipv6", "alpha");
     const issue: OperatorIssue = {
@@ -343,6 +431,80 @@ describe("JSON triage queue durability", () => {
     }
   });
 
+  test("a completed JSON queue item is replaced by fresh evidence and survives reopen", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
+    const path = join(directory, "triage-queue.json");
+    const issueId = "system:recurring-json";
+    await writeFile(path, JSON.stringify([
+      queueItem({
+        issueId,
+        id: `triage:${issueId}`,
+        state: "completed",
+        completedAt: "2026-07-27T09:00:00.000Z",
+        result: "Old incident.",
+      }),
+    ]));
+    try {
+      const store = await JsonTriageQueueStore.open(
+        path,
+        () => Date.parse("2026-07-28T09:00:00.000Z"),
+      );
+      await store.add({
+        ...recommendation(issueId),
+        generatedAt: "2026-07-28T09:01:00.000Z",
+        evidence: ["Fresh incident."],
+      });
+      const reopened = await JsonTriageQueueStore.open(
+        path,
+        () => Date.parse("2026-07-28T09:02:00.000Z"),
+      );
+
+      expect(reopened.list()).toMatchObject([{
+        issueId,
+        state: "queued",
+        evidence: ["Fresh incident."],
+      }]);
+      expect(reopened.get(issueId)?.result).toBeUndefined();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("prunes terminal queue entries older than seven days on reopen", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
+    const path = join(directory, "triage-queue.json");
+    await writeFile(path, JSON.stringify([
+      queueItem({
+        state: "completed",
+        createdAt: "2026-07-01T00:00:00.000Z",
+        completedAt: "2026-07-01T00:05:00.000Z",
+      }),
+    ]));
+    try {
+      const store = await JsonTriageQueueStore.open(path, () => Date.parse("2026-07-28T00:00:00.000Z"));
+      expect(store.list()).toEqual([]);
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds the queue to the 500 newest findings", async () => {
+    let now = Date.parse("2026-07-28T00:00:00.000Z");
+    const store = new MemoryTriageQueueStore(() => now);
+    for (let index = 0; index < 501; index += 1) {
+      now += 1;
+      await store.add({
+        ...recommendation(`system:${index}`),
+        generatedAt: new Date(now).toISOString(),
+      });
+    }
+
+    expect(store.list()).toHaveLength(500);
+    expect(store.get("system:0")).toBeUndefined();
+    expect(store.get("system:500")).toBeDefined();
+  });
+
   test.each([
     ["invalid JSON", "{"],
     ["an invalid item after a valid item", JSON.stringify([queueItem(), { issueId: "broken" }])],
@@ -391,6 +553,37 @@ describe("native triage investigation guards", () => {
       );
       finish(0);
       await expect(first.completion).resolves.toMatchObject({ ok: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("native cancellation terminates the child process and waits for exit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-cancel-"));
+    let finish!: (exitCode: number) => void;
+    const exited = new Promise<number>((resolve) => { finish = resolve; });
+    const signals: string[] = [];
+    const process = {
+      pid: 42,
+      stderr: new ReadableStream({ start(controller) { controller.close(); } }),
+      exited,
+      kill: (signal: string) => {
+        signals.push(signal);
+        finish(143);
+      },
+    } as unknown as ReturnType<typeof Bun.spawn>;
+    try {
+      const runner = new NativeLunaInvestigationRunner(
+        directory,
+        join(directory, "output"),
+        (() => process) as typeof Bun.spawn,
+      );
+      const launch = await runner.launch(queueItem());
+
+      await launch.cancel?.();
+
+      expect(signals).toEqual(["SIGTERM"]);
+      await expect(launch.completion).resolves.toMatchObject({ ok: false });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

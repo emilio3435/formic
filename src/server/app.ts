@@ -1,10 +1,16 @@
-import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
-import { extname, join, resolve, sep } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import type { HubSnapshot, TriageQueueItem } from "../shared/types";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
-import { identityDebugResponse } from "./debug-identity";
+import {
+  defaultAttentionStore,
+  MemoryAttentionStore,
+  type AttentionAction,
+  type AttentionStore,
+} from "./cmux";
+import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
@@ -41,6 +47,148 @@ const SECURITY_HEADERS = {
 
 export const MAX_SSE_CLIENTS = 16;
 export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
+export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_ACTION_LOG_ENTRIES = 500;
+
+export type OperatorActionKind = "focus" | "instruct" | "interrupt" | "broadcast" | "archive";
+export type OperatorActionOutcome = "ok" | "failed" | "partial" | "staged";
+
+export interface OperatorAction {
+  id: string;
+  at: string;
+  kind: OperatorActionKind;
+  agentIds: string[];
+  outcome: OperatorActionOutcome;
+  detail: string;
+}
+
+export type NewOperatorAction = Omit<OperatorAction, "id" | "at">;
+
+export interface ActionLogStore {
+  list(limit: number): readonly OperatorAction[];
+  append(action: NewOperatorAction): Promise<OperatorAction>;
+}
+
+const ACTION_ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function createActionId(nowMs: number): string {
+  let timestamp = Math.floor(nowMs);
+  const time = Array.from({ length: 10 }, () => "0");
+  for (let index = time.length - 1; index >= 0; index -= 1) {
+    time[index] = ACTION_ID_ALPHABET[timestamp % 32]!;
+    timestamp = Math.floor(timestamp / 32);
+  }
+  const random = [...randomBytes(16)]
+    .map((value) => ACTION_ID_ALPHABET[value % 32])
+    .join("");
+  return `act_${time.join("")}${random}`;
+}
+
+export class MemoryActionLogStore implements ActionLogStore {
+  protected actions: OperatorAction[] = [];
+  private mutationQueue: Promise<void> = Promise.resolve();
+
+  constructor(
+    protected readonly now: () => number = Date.now,
+    private readonly createId: (nowMs: number) => string = createActionId,
+  ) {}
+
+  list(limit: number): readonly OperatorAction[] {
+    return this.actions.slice(0, limit);
+  }
+
+  append(action: NewOperatorAction): Promise<OperatorAction> {
+    return this.mutate(async () => {
+      const nowMs = this.now();
+      const item: OperatorAction = {
+        id: this.createId(nowMs),
+        at: new Date(nowMs).toISOString(),
+        ...action,
+      };
+      await this.commit([item, ...this.actions]);
+      return item;
+    });
+  }
+
+  protected async replace(actions: readonly OperatorAction[]): Promise<void> {
+    this.actions = retainActions(actions, this.now());
+  }
+
+  private async commit(actions: readonly OperatorAction[]): Promise<void> {
+    const retained = retainActions(actions, this.now());
+    await this.persist(retained);
+    this.actions = retained;
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(operation);
+    this.mutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  protected async persist(_actions: readonly OperatorAction[]): Promise<void> {}
+}
+
+export class JsonActionLogStore extends MemoryActionLogStore {
+  private writeNumber = 0;
+
+  private constructor(private readonly path: string, now: () => number) {
+    super(now);
+  }
+
+  static async open(path: string, now: () => number = Date.now): Promise<JsonActionLogStore> {
+    const store = new JsonActionLogStore(path, now);
+    let pruned = false;
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf8"));
+      if (!Array.isArray(parsed)) throw new Error("action log must be an array");
+      for (const value of parsed) {
+        if (!isOperatorAction(value)) throw new Error("action log contains an invalid entry");
+      }
+      const retained = retainActions(parsed, now());
+      pruned = retained.length !== parsed.length;
+      await store.replace(retained);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        await store.replace([]);
+        console.error(
+          `[JsonActionLogStore] Ignoring unreadable action log at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (pruned) await store.persist(store.list(MAX_ACTION_LOG_ENTRIES));
+    return store;
+  }
+
+  protected override async persist(actions: readonly OperatorAction[]): Promise<void> {
+    await mkdir(dirname(this.path), { recursive: true });
+    this.writeNumber += 1;
+    const temporary = `${this.path}.${process.pid}.${this.writeNumber}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(actions, null, 2)}\n`, "utf8");
+    await rename(temporary, this.path);
+  }
+}
+
+function isOperatorAction(value: unknown): value is OperatorAction {
+  if (!value || typeof value !== "object") return false;
+  const action = value as Partial<OperatorAction>;
+  return typeof action.id === "string" &&
+    action.id.startsWith("act_") &&
+    typeof action.at === "string" &&
+    Number.isFinite(Date.parse(action.at)) &&
+    ["focus", "instruct", "interrupt", "broadcast", "archive"].includes(String(action.kind)) &&
+    Array.isArray(action.agentIds) &&
+    action.agentIds.every((agentId) => typeof agentId === "string") &&
+    ["ok", "failed", "partial", "staged"].includes(String(action.outcome)) &&
+    typeof action.detail === "string";
+}
+
+function retainActions(actions: readonly OperatorAction[], nowMs: number): OperatorAction[] {
+  return [...actions]
+    .filter((action) => nowMs - Date.parse(action.at) <= ACTION_LOG_RETENTION_MS)
+    .sort((left, right) => right.at.localeCompare(left.at))
+    .slice(0, MAX_ACTION_LOG_ENTRIES);
+}
 
 function isLoopback(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
@@ -58,11 +206,14 @@ export interface MountainAppDependencies {
   state: MountainAppState;
   runner: CommandRunner;
   archiveStore: ArchiveStore;
+  actionLogStore?: ActionLogStore;
+  attentionStore?: AttentionStore;
   triageStore?: TriageQueueStore;
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
   cmuxExecutable?: string;
+  now?: () => number;
   webRoot: string;
 }
 
@@ -71,8 +222,137 @@ export interface MountainFetch {
   dispose(): void;
 }
 
+function responseError(status: number, code: string, message: string): Response {
+  return Response.json(
+    { ok: false, error: { code, message } },
+    { status, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+  );
+}
+
+function sameOriginLoopback(request: Request): boolean {
+  const url = new URL(request.url);
+  return isLoopback(url.hostname) && request.headers.get("origin") === url.origin;
+}
+
+function limitFrom(url: URL, fallback: number, maximum: number): number | Response {
+  const raw = url.searchParams.get("limit");
+  if (raw === null) return fallback;
+  if (!/^[1-9]\d*$/.test(raw) || Number(raw) > maximum) {
+    return responseError(400, "INVALID_LIMIT", `limit must be an integer between 1 and ${maximum}.`);
+  }
+  return Number(raw);
+}
+
+function defaultActionLogStore(webRoot: string): Promise<ActionLogStore> {
+  const productionWebRoot = resolve(import.meta.dir, "../web");
+  return resolve(webRoot) === productionWebRoot
+    ? JsonActionLogStore.open(resolve(productionWebRoot, "../../data/actions.json"))
+    : Promise.resolve(new MemoryActionLogStore());
+}
+
+async function jsonRecord(request: Request): Promise<Record<string, unknown> | undefined> {
+  try {
+    const value = await request.json();
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function actionResponse(response: Response): Promise<Record<string, any> | undefined> {
+  try {
+    const value = await response.clone().json();
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, any>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function appendAction(
+  store: ActionLogStore,
+  action: NewOperatorAction,
+): Promise<void> {
+  try {
+    await store.append(action);
+  } catch (error) {
+    console.error(
+      `[ActionLog] Could not persist ${action.kind}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function recordControlAction(
+  store: ActionLogStore,
+  requestBody: Record<string, unknown> | undefined,
+  response: Response,
+): Promise<void> {
+  const kind = requestBody?.action;
+  const agentId = requestBody?.agentId;
+  if (
+    !["focus", "instruct", "interrupt", "archive"].includes(String(kind)) ||
+    typeof agentId !== "string"
+  ) return;
+  const body = await actionResponse(response);
+  const code = typeof body?.error?.code === "string" ? body.error.code : undefined;
+  const message = typeof body?.error?.message === "string" ? body.error.message : undefined;
+  const outcome: OperatorActionOutcome = body?.ok === true
+    ? "ok"
+    : code === "TEXT_STAGED_NOT_SUBMITTED"
+      ? "staged"
+      : "failed";
+  const detail = outcome === "ok"
+    ? `${kind} completed for 1 agent`
+    : code
+      ? `${code}: ${message ?? "Control failed."}`
+      : `Control returned HTTP ${response.status}.`;
+  await appendAction(store, {
+    kind: kind as OperatorActionKind,
+    agentIds: [agentId],
+    outcome,
+    detail,
+  });
+}
+
+async function recordBroadcastAction(
+  store: ActionLogStore,
+  requestBody: Record<string, unknown> | undefined,
+  response: Response,
+): Promise<void> {
+  const agentIds = requestBody?.agentIds;
+  if (!Array.isArray(agentIds) || !agentIds.every((agentId) => typeof agentId === "string")) return;
+  const body = await actionResponse(response);
+  const sent = typeof body?.sent === "number" ? body.sent : 0;
+  const failed = typeof body?.failed === "number" ? body.failed : agentIds.length;
+  const outcome: OperatorActionOutcome = failed === 0 && body?.ok === true
+    ? "ok"
+    : sent > 0
+      ? "partial"
+      : "failed";
+  const detail = typeof body?.sent === "number" && typeof body?.failed === "number"
+    ? `${sent} of ${sent + failed} recipients delivered`
+    : `Broadcast returned HTTP ${response.status}.`;
+  await appendAction(store, {
+    kind: "broadcast",
+    agentIds: [...agentIds],
+    outcome,
+    detail,
+  });
+}
+
 export function createMountainFetch(dependencies: MountainAppDependencies): MountainFetch {
   const triageStore = dependencies.triageStore ?? new MemoryTriageQueueStore();
+  const actionLogStore = dependencies.actionLogStore
+    ? Promise.resolve(dependencies.actionLogStore)
+    : defaultActionLogStore(dependencies.webRoot);
+  const attentionStore = dependencies.attentionStore
+    ? Promise.resolve(dependencies.attentionStore)
+    : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+      ? defaultAttentionStore()
+      : Promise.resolve(new MemoryAttentionStore());
   let recollectInFlight: Promise<HubSnapshot> | undefined;
   const recollect = (): Promise<HubSnapshot> => {
     if (!recollectInFlight) {
@@ -159,9 +439,123 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   const fetch = (async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (!isLoopback(url.hostname)) {
+      if (url.pathname === "/api/transcript" || url.pathname === "/api/actions") {
+        return responseError(403, "ORIGIN_REJECTED", "Read endpoints require exact same-origin loopback access.");
+      }
       return new Response("Forbidden", { status: 403, headers: SECURITY_HEADERS });
     }
     if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
+    if (url.pathname === "/api/transcript") {
+      if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for transcript reads.");
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Transcript reads require an exact same-origin loopback Origin header.");
+      }
+      const agentId = url.searchParams.get("agent");
+      if (!agentId?.trim() || agentId.length > 300) {
+        return responseError(400, "INVALID_AGENT_ID", "agent must be a non-empty ID no longer than 300 characters.");
+      }
+      const limit = limitFrom(url, 200, 1_000);
+      if (limit instanceof Response) return limit;
+      return transcriptResponse(dependencies.state.get(), agentId, limit, SECURITY_HEADERS);
+    }
+    if (url.pathname === "/api/actions") {
+      if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Action-log reads require an exact same-origin loopback Origin header.");
+      }
+      const limit = limitFrom(url, 100, 500);
+      if (limit instanceof Response) return limit;
+      return Response.json(
+        { ok: true, actions: (await actionLogStore).list(limit) },
+        { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+      );
+    }
+    if (url.pathname === "/api/attention") {
+      if (request.method !== "POST") return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for attention changes.");
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Attention changes require an exact same-origin loopback Origin header.");
+      }
+      if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Attention changes require application/json.");
+      }
+      const text = await request.text();
+      if (new TextEncoder().encode(text).byteLength > 2_048) {
+        return responseError(413, "BODY_TOO_LARGE", "Attention body exceeds 2048 bytes.");
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        return responseError(400, "INVALID_JSON", "Attention body is not valid JSON.");
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return responseError(400, "INVALID_ATTENTION_REQUEST", "Body must be an attention action object.");
+      }
+      const record = body as Record<string, unknown>;
+      const action = record.action;
+      const agentId = record.agentId;
+      const keys = Object.keys(record);
+      if (
+        !["acknowledge", "dismiss", "snooze"].includes(String(action)) ||
+        typeof agentId !== "string" ||
+        !agentId.trim() ||
+        agentId.length > 300 ||
+        keys.some((key) => !["action", "agentId", "until"].includes(key)) ||
+        (action === "snooze" ? keys.length !== 3 : keys.length !== 2)
+      ) {
+        return responseError(
+          400,
+          "INVALID_ATTENTION_REQUEST",
+          "Body must contain agentId and acknowledge, dismiss, or snooze; snooze also requires until.",
+        );
+      }
+      let until: string | undefined;
+      if (action === "snooze") {
+        const nowMs = dependencies.now?.() ?? Date.now();
+        const untilMs = typeof record.until === "string" ? Date.parse(record.until) : Number.NaN;
+        if (!Number.isFinite(untilMs) || untilMs <= nowMs || untilMs > nowMs + ACTION_LOG_RETENTION_MS) {
+          return responseError(400, "INVALID_SNOOZE_UNTIL", "until must be a future ISO timestamp no more than seven days away.");
+        }
+        until = new Date(untilMs).toISOString();
+      }
+      const agent = dependencies.state.get().programs
+        .flatMap((program) => program.agents)
+        .find((candidate) => candidate.id === agentId);
+      if (!agent) return responseError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
+      if (
+        !agent.target.surfaceId ||
+        !["exact", "unique-cwd"].includes(agent.target.resolution)
+      ) {
+        return responseError(409, "UNSAFE_TARGET", "The agent has no safely resolved cmux surface.");
+      }
+      try {
+        const state = await (await attentionStore).apply(
+          agent.target.surfaceId,
+          action as AttentionAction,
+          until,
+        );
+        try {
+          await dependencies.state.refresh({ cmux: true });
+        } catch (error) {
+          return responseError(
+            500,
+            "ATTENTION_REFRESH_FAILED",
+            `Attention state was persisted, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        return Response.json(
+          { ok: true, agentId, state },
+          { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code;
+        return responseError(
+          code === "ATTENTION_NOT_FOUND" ? 404 : 500,
+          code ?? "ATTENTION_WRITE_FAILED",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     if (request.method === "POST" && url.pathname === "/api/recollect") {
       const origin = request.headers.get("origin");
       if (!origin || origin !== url.origin) {
@@ -242,7 +636,8 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       });
     }
     if (url.pathname === "/api/control") {
-      return handleControlRequest(request, {
+      const body = jsonRecord(request.clone());
+      const response = await handleControlRequest(request, {
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
@@ -252,9 +647,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           await dependencies.state.refresh({ cmux: true });
         },
       });
+      await recordControlAction(await actionLogStore, await body, response);
+      return response;
     }
     if (url.pathname === "/api/broadcast") {
-      return handleBroadcastRequest(request, {
+      const body = jsonRecord(request.clone());
+      const response = await handleBroadcastRequest(request, {
         getSnapshot: () => dependencies.state.get(),
         runner: dependencies.runner,
         archiveStore: dependencies.archiveStore,
@@ -264,6 +662,8 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           await dependencies.state.refresh({ cmux: true });
         },
       });
+      await recordBroadcastAction(await actionLogStore, await body, response);
+      return response;
     }
     if (url.pathname === "/api/program-aliases") {
       if (!dependencies.programAliasStore) return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
@@ -283,13 +683,21 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (["/api/triage/generate", "/api/triage/queue", "/api/triage/run"].includes(url.pathname)) {
       const triageBody = request.method === "POST" ? request.clone() : undefined;
       const response = await handleTriageRequest(request, dependencies.state.get(), triageStore, dependencies.triageRunner);
-      if (request.method === "POST" && response.ok && (url.pathname === "/api/triage/queue" || url.pathname === "/api/triage/run")) {
+      if (
+        response.ok &&
+        (url.pathname === "/api/triage/queue" || url.pathname === "/api/triage/run") &&
+        (request.method === "POST" || request.method === "DELETE")
+      ) {
         let issueId: string | undefined;
-        try {
-          const body = await triageBody?.json() as { issueId?: unknown };
-          if (typeof body.issueId === "string") issueId = body.issueId;
-        } catch {
-          // The triage handler already returned the authoritative parse error.
+        if (request.method === "DELETE") {
+          issueId = url.searchParams.get("issueId") ?? undefined;
+        } else {
+          try {
+            const body = await triageBody?.json() as { issueId?: unknown };
+            if (typeof body.issueId === "string") issueId = body.issueId;
+          } catch {
+            // The triage handler already returned the authoritative parse error.
+          }
         }
         const item = issueId ? triageStore.get(issueId) : undefined;
         if (item) await refreshForTriage(item);
