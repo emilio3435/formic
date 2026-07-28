@@ -33,6 +33,7 @@ export interface IdentityBindingStore {
   get(sessionId: string): IdentityBinding | undefined;
   list(): readonly IdentityBinding[];
   put(binding: IdentityBinding): Promise<void>;
+  putMany(bindings: readonly IdentityBinding[]): Promise<void>;
 }
 
 export interface BindingFileOperations {
@@ -131,16 +132,23 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
   }
 
   put(binding: IdentityBinding): Promise<void> {
-    const write = this.#writeQueue.then(() => this.#persist(binding));
+    return this.putMany([binding]);
+  }
+
+  putMany(bindings: readonly IdentityBinding[]): Promise<void> {
+    if (bindings.length === 0) return Promise.resolve();
+    const write = this.#writeQueue.then(() => this.#persist(bindings));
     // A failed write rejects its caller but does not poison later queued writes.
     this.#writeQueue = write.catch(() => {});
     return write;
   }
 
-  async #persist(binding: IdentityBinding): Promise<void> {
+  async #persist(bindings: readonly IdentityBinding[]): Promise<void> {
     const nowMs = this.now();
     const next = new Map(this.#bindings);
-    next.set(binding.sessionId.toLowerCase(), binding);
+    for (const binding of bindings) {
+      next.set(binding.sessionId.toLowerCase(), binding);
+    }
     // Prune on save so the file never accumulates departed sessions.
     for (const [key, value] of next) {
       if (!isFresh(value, nowMs)) next.delete(key);
@@ -170,6 +178,12 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
 
   async put(binding: IdentityBinding): Promise<void> {
     this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+  }
+
+  async putMany(bindings: readonly IdentityBinding[]): Promise<void> {
+    for (const binding of bindings) {
+      this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+    }
   }
 }
 
@@ -203,6 +217,7 @@ export async function updateBindingsFromScan(
       provider: trace.openFileMatches.find((match) => match.sessionId.toLowerCase() === sessionId)?.provider,
     });
   }
+  const updates: IdentityBinding[] = [];
   for (const [sessionId, { surface, provider }] of confirmed) {
     if (contested.has(sessionId)) continue;
     const observed: IdentityBindingTarget = {
@@ -238,13 +253,14 @@ export async function updateBindingsFromScan(
             },
           };
     }
-    try {
-      await store.put(next);
-    } catch (error) {
-      errors.push(
-        `identity binding write failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    updates.push(next);
+  }
+  try {
+    await store.putMany(updates);
+  } catch (error) {
+    errors.push(
+      `identity binding batch write failed for ${updates.length} sessions: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   return { errors };
 }

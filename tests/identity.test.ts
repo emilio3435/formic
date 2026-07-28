@@ -115,7 +115,7 @@ describe("TTY and open-session identity evidence", () => {
           "p202",
           "n/Users/me/.omp/agent/sessions/project/run_019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
         ].join("\n"),
-        stderr: "",
+        stderr: "lsof: WARNING: can't stat() an unstattable mount",
         timedOut: false,
       },
     ]);
@@ -141,7 +141,7 @@ describe("TTY and open-session identity evidence", () => {
     expect(enriched.value[0]?.identityTrace).toMatchObject({ outcome: "probe-failed" });
   });
 
-  test("an open-session lookup timeout is surfaced without inventing an identity", async () => {
+  test("a timed-out open-session lookup rejects truncated identity evidence and quarantines the surface", async () => {
     const runner = new SequenceRunner([
       {
         exitCode: 0,
@@ -149,13 +149,31 @@ describe("TTY and open-session identity evidence", () => {
         stderr: "",
         timedOut: false,
       },
-      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          "n/Users/me/.omp/agent/sessions/project/run_019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+        ].join("\n"),
+        stderr: "deadline",
+        timedOut: true,
+      },
     ]);
 
-    const enriched = await enrichCmuxIdentity([surface], [agent], runner);
+    const enriched = await enrichCmuxIdentity(
+      [{ ...surface, cwd: "/Users/me/project", sourceSessionIds: [agent.sourceSessionId] }],
+      [{ ...agent, cwd: "/Users/me/project" }],
+      runner,
+    );
 
     expect(enriched.errors).toEqual(["open-session identity lookup timed out"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+    expect(enriched.value[0]?.identityTrace).toMatchObject({
+      outcome: "probe-failed",
+      openFileMatches: [],
+      sourceSessionIds: [],
+    });
+    expect(resolveAgentTarget({ ...agent, cwd: "/Users/me/project" }, enriched.value).resolution).toBe("ambiguous");
   });
 
   test("conflicting allowlisted open sessions remain fail-closed", async () => {

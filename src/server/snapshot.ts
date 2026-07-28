@@ -496,7 +496,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const nowMs = now.getTime();
   const programs = new Map<string, ProgramSnapshot>();
   const newestById = new Map<string, CollectedAgent>();
-  for (const agent of [...(input.archiveStore.archivedAgents?.() ?? []), ...input.agents]) {
+  const archiveWindowMs = input.scanWindowHours === undefined
+    ? undefined
+    : Math.max(1, input.scanWindowHours) * 60 * 60 * 1_000;
+  const archivedAgents = (input.archiveStore.archivedAgents?.() ?? []).filter((agent) => {
+    if (archiveWindowMs === undefined) return true;
+    const updatedAtMs = Date.parse(agent.updatedAt);
+    return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs <= archiveWindowMs;
+  });
+  for (const agent of [...archivedAgents, ...input.agents]) {
     const existing = newestById.get(agent.id);
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);
   }
@@ -540,7 +548,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
-    const elapsedEndMs = archived && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
+    const ended = archived || source.status === "stale";
+    const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
     const activity = activityFor(source, archived);
     const outcome = outcomeFor(source, archived, Boolean(notification));
     const controlState = operatorControlState(target, archived || activity === "ended");

@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
+export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+
 export interface ArchiveFileOperations {
   readText(path: string): Promise<string>;
   makeDirectory(path: string): Promise<void>;
@@ -29,13 +31,15 @@ export class JsonArchiveStore implements ArchiveStore {
   private constructor(
     private readonly path: string,
     private readonly files: ArchiveFileOperations,
+    private readonly now: () => number,
   ) {}
 
   static async open(
     path: string,
     files: ArchiveFileOperations = nodeFileOperations,
+    now: () => number = Date.now,
   ): Promise<JsonArchiveStore> {
-    const store = new JsonArchiveStore(path, files);
+    const store = new JsonArchiveStore(path, files, now);
     try {
       const parsed = JSON.parse(await files.readText(path));
       if (Array.isArray(parsed)) {
@@ -43,6 +47,7 @@ export class JsonArchiveStore implements ArchiveStore {
           if (typeof value === "string") {
             store.#agentIds.add(value);
           } else if (isCollectedAgent(value)) {
+            if (!isFresh(value, now())) continue;
             store.#agentIds.add(value.id);
             store.#agents.set(value.id, value);
           } else {
@@ -77,6 +82,12 @@ export class JsonArchiveStore implements ArchiveStore {
     const nextAgentIds = new Set(this.#agentIds).add(agentId);
     const nextAgents = new Map(this.#agents);
     if (archivedAgent) nextAgents.set(agentId, archivedAgent);
+    for (const [id, value] of nextAgents) {
+      if (!isFresh(value, this.now())) {
+        nextAgents.delete(id);
+        nextAgentIds.delete(id);
+      }
+    }
     const persisted = [...nextAgentIds]
       .sort()
       .map((id) => nextAgents.get(id) ?? id);
@@ -86,8 +97,10 @@ export class JsonArchiveStore implements ArchiveStore {
     await this.files.writeText(temporaryPath, `${JSON.stringify(persisted, null, 2)}\n`);
     await this.files.rename(temporaryPath, this.path);
     // The in-memory state becomes visible only after the atomic rename commits.
-    this.#agentIds.add(agentId);
-    if (archivedAgent) this.#agents.set(agentId, archivedAgent);
+    this.#agentIds.clear();
+    for (const id of nextAgentIds) this.#agentIds.add(id);
+    this.#agents.clear();
+    for (const [id, value] of nextAgents) this.#agents.set(id, value);
   }
 }
 
@@ -130,11 +143,19 @@ function archiveCopy(agent: CollectedAgent): CollectedAgent {
     threadDepth: agent.threadDepth,
     nickname: agent.nickname,
     lastHumanMessage: agent.lastHumanMessage,
+    lastUserMessage: agent.lastUserMessage,
+    lastAgentMessage: agent.lastAgentMessage,
     transcriptTail: agent.transcriptTail,
     artifacts: agent.artifacts.map((artifact) => ({ ...artifact })),
     gates: [...agent.gates],
+    allowCwdFallback: agent.allowCwdFallback,
     recordedTarget: agent.recordedTarget ? { ...agent.recordedTarget } : undefined,
   };
+}
+
+function isFresh(agent: CollectedAgent, nowMs: number): boolean {
+  const updatedAtMs = Date.parse(agent.updatedAt);
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs <= ARCHIVE_RETENTION_MS;
 }
 
 function isCollectedAgent(value: unknown): value is CollectedAgent {
