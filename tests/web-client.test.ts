@@ -4605,3 +4605,132 @@ describe("FE-C: operator actions survive a reload, failures included", () => {
     expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.partial] })))).toBe(base);
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Finding 4: the operator had to keep the tab visible to learn an agent was
+   waiting. grep for Notification / document.title / favicon / vibrate / Audio
+   over app.js returned zero matches; the only attention affordances were the
+   in-page beacon and the Alerts tab count.
+
+   The firing RULE is the feature. A notifier that cries wolf gets muted, and
+   then the feature is worthless — so these tests are mostly about silence.
+   ------------------------------------------------------------------------- */
+
+describe("FE-C: an agent that starts waiting reaches the operator outside the tab", () => {
+  const waiting = (id: string) => agent({ id, status: "attention", outcome: "needs-you", displayName: id });
+  const calm = (id: string) => agent({ id, status: "running", outcome: "healthy", displayName: id });
+  const snapOf = (...agents: unknown[]) => snapshot({ programs: [{ id: "p", name: "P", agents }] });
+
+  test("(4) 'needs a human' is the board's own verdict, not a second definition", () => {
+    const snap = snapOf(
+      waiting("codex:1"),
+      agent({ id: "codex:2", outcome: "blocked" }),
+      agent({ id: "codex:3", outcome: "failed" }),
+      calm("codex:4"),
+      // An ended session is not waiting for anyone, whatever it last reported.
+      agent({ id: "codex:5", status: "archived", outcome: "needs-you" }),
+    );
+    expect(M.needsHumanIds(snap)).toEqual(["codex:1", "codex:2", "codex:3"]);
+    expect(M.needsHumanIds(snapOf(calm("codex:4")))).toEqual([]);
+    expect(M.needsHumanIds(null)).toEqual([]);
+  });
+
+  test("(4) it fires for a NEW waiter and stays silent for everything else", () => {
+    // The one case worth interrupting someone for.
+    const fired = M.notificationPlan(["codex:1"], ["codex:1", "codex:2"], (id: string) => "Lane " + id.slice(-1));
+    expect(fired.fire).toBe(true);
+    expect(fired.title).toBe("1 agent needs you");
+    expect(fired.body).toBe("Lane 2");
+
+    // Routine churn, all of which must be silent:
+    expect(M.notificationPlan(["codex:1"], ["codex:1"]).fire).toBe(false);              // unchanged
+    expect(M.notificationPlan(["codex:1", "codex:2"], ["codex:1"]).fire).toBe(false);   // one resolved
+    expect(M.notificationPlan(["codex:1"], []).fire).toBe(false);                       // all cleared
+    expect(M.notificationPlan([], []).fire).toBe(false);                                // quiet fleet
+    // Same agents, different order off the wire — not news.
+    expect(M.notificationPlan(["codex:1", "codex:2"], ["codex:2", "codex:1"]).fire).toBe(false);
+    // A swap (one clears, one starts) IS news about the one that started.
+    const swap = M.notificationPlan(["codex:1"], ["codex:2"]);
+    expect(swap.fire).toBe(true);
+    expect(swap.title).toBe("1 agent needs you");
+  });
+
+  test("(4) opening the page to a backlog is silent — a reload is not news", () => {
+    // This is what stops the feature being unusable on a fleet of 200: the first
+    // snapshot seeds the baseline, it does not announce it.
+    const first = M.notificationPlan(null, ["codex:1", "codex:2", "codex:3"]);
+    expect(first.fire).toBe(false);
+    expect(first.reason).toBe("seeded");
+    expect(first.ids).toEqual(["codex:1", "codex:2", "codex:3"]);
+    // Only what arrives AFTER the baseline is announced.
+    expect(M.notificationPlan(first.ids, ["codex:1", "codex:2", "codex:3"]).fire).toBe(false);
+    expect(M.notificationPlan(first.ids, ["codex:1", "codex:2", "codex:3", "codex:4"]).fire).toBe(true);
+  });
+
+  test("(4) a burst names a few agents and counts the rest instead of listing 40", () => {
+    const many = Array.from({ length: 40 }, (_, i) => "codex:" + i);
+    const plan = M.notificationPlan([], many, (id: string) => id.toUpperCase());
+    expect(plan.fire).toBe(true);
+    expect(plan.title).toBe("40 agents need you");
+    expect(plan.body).toBe("CODEX:0, CODEX:1, CODEX:10 and 37 more");
+    // An agent the snapshot no longer names keeps its id rather than vanishing.
+    expect(M.notificationPlan([], ["codex:gone"], () => null).body).toBe("codex:gone");
+  });
+
+  test("(4) delivery is gated: opted out, blocked and unsupported are all silent", () => {
+    const plan = M.notificationPlan(["codex:1"], ["codex:1", "codex:2"]);
+    const sent: { title: string; opts: { body: string; tag: string } }[] = [];
+    class FakeNotification {
+      constructor(title: string, opts: { body: string; tag: string }) { sent.push({ title, opts }); }
+    }
+    const granted = { enabled: true, permission: "granted" };
+
+    expect(M.deliverNotification(plan, granted, FakeNotification)).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].title).toBe(plan.title);
+    // One tag, so a second burst REPLACES the first instead of stacking a pile
+    // of notifications the operator has to dismiss.
+    expect(sent[0].opts.tag).toBe("anthill-needs-you");
+
+    // Every silent path, each with its own reason — never an ambiguous no-op.
+    expect(M.deliverNotification(plan, { enabled: false, permission: "granted" }, FakeNotification)).toBe("muted");
+    expect(M.deliverNotification(plan, { enabled: true, permission: "denied" }, FakeNotification)).toBe("not-granted");
+    expect(M.deliverNotification(plan, granted, null)).toBe("unsupported");
+    expect(M.deliverNotification({ fire: false, reason: "seeded" }, granted, FakeNotification)).toBe("seeded");
+    // A browser that refuses to construct one degrades, it does not throw.
+    const Broken = function Broken() { throw new Error("nope"); } as unknown as new () => unknown;
+    expect(M.deliverNotification(plan, granted, Broken)).toBe("refused");
+    expect(sent).toHaveLength(1); // nothing else was delivered
+  });
+
+  test("(4) the tab title carries the count without asking for anything", () => {
+    const base = "The Ant Hill — operator console";
+    expect(M.titleWithAlerts(base, 3)).toBe("(3) " + base);
+    expect(M.titleWithAlerts(base, 0)).toBe(base);
+    // Idempotent: repainting must not stack prefixes into "(3) (2) (1) …".
+    expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 2)).toBe("(2) " + base);
+    expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
+  });
+
+  test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
+    // The control states an operator can actually reach.
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Alerts off");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true))
+      .toMatchObject({ label: "Alerts on", pressed: true, disabled: false });
+    // Denied: stated once, disabled, no nagging and no repeated prompt.
+    const denied = M.notifyToggleView({ enabled: false, permission: "denied" }, true);
+    expect(denied.disabled).toBe(true);
+    expect(denied.label).toBe("Alerts blocked");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, false).disabled).toBe(true);
+
+    // The one requestPermission call in the client is inside the click handler.
+    // Asking on load is how a page gets denied permanently, which would disable
+    // the feature forever — so this is a placement rule, not a style rule.
+    expect(source.match(/requestPermission\(/g) ?? []).toHaveLength(1);
+    const toggle = source.match(/async function toggleNotifications\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(toggle).toContain("requestPermission(");
+    const bootFn = source.match(/function boot\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(bootFn).not.toContain("requestPermission(");
+    expect(bootFn).toContain('$("notify-toggle").addEventListener("click"');
+  });
+});

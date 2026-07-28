@@ -19,10 +19,15 @@
           <p class="eyebrow">Live multi-agent control room</p>
         </div>
       </div>
-      <p id="conn-badge" class="conn conn-connecting">
-        <span class="conn-dot" aria-hidden="true"></span>
-        <span id="conn-label">Connecting</span>
-      </p>
+      <div class="masthead-signals">
+        <!-- Opt-in out-of-page alerts. Permission is requested from this click
+             and nowhere else — never on load. -->
+        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Alerts off</button>
+        <p id="conn-badge" class="conn conn-connecting">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span id="conn-label">Connecting</span>
+        </p>
+      </div>
     </div>
   </header>
 

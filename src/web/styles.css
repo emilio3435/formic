@@ -192,6 +192,10 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--faint);
 }
 
+.masthead-signals { align-self: center; display: flex; align-items: center; gap: 0.5rem; }
+.notify-toggle { white-space: nowrap; }
+.notify-toggle.is-on { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); }
+
 .conn {
   align-self: center;
   margin: 0;

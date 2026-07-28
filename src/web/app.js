@@ -1366,6 +1366,7 @@ globalThis.TheAntHill = {
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
+  needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
@@ -1513,6 +1514,9 @@ const state = {
   // every five seconds forever.
   actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
   actionsOpen: false,
+  // Out-of-page attention. `seen` is null until the first snapshot is adopted,
+  // which is what makes opening the page to a backlog silent.
+  notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1637,6 +1641,9 @@ function applySnapshot(snap) {
   state.snap = snap;
   if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
   state.fetchFailed = false;
+  // Escalate before painting: the tab title and any notification are about the
+  // snapshot being adopted, and this is the only place a snapshot is adopted.
+  applyNotifications(snap);
   render();
 }
 
@@ -5815,6 +5822,162 @@ async function sendBroadcast() {
   }
 }
 
+/* ---------- out-of-page notification ----------
+
+   With ~200 sessions the operator is working in other windows. An agent that
+   starts waiting produced no signal outside the tab, so "needs you" agents sat
+   idle until someone happened to look — the unread-cmux signal the product
+   already collects was never escalated past the in-page beacon.
+
+   Two escalations, deliberately asymmetric in cost:
+     - the tab title, which needs no permission and cannot annoy anyone;
+     - a Notification, opt-in behind an explicit click, silent when denied.
+
+   The firing rule is the whole feature. A notifier that cries wolf gets muted
+   and then the feature is worthless, so this fires ONLY for an agent that has
+   newly entered the needs-a-human set. Not on count changes, not on an agent
+   leaving, not on the first paint (opening the page to six waiting agents is
+   not six pieces of news), and never on routine churn. */
+
+const NOTIFY_STORAGE_KEY = "mtn3-notify";
+const NOTIFY_NAME_LIMIT = 3;
+const NOTIFY_TAG = "anthill-needs-you";  // replaces its predecessor; never stacks
+
+/* Who actually needs a human — the same verdict the Alerts view and the beacon
+   read, so the notification can never disagree with the board it came from. */
+function needsHumanIds(snap) {
+  const ids = [];
+  for (const { agent } of snapshotAgents(snap)) {
+    if (deriveActivity(agent) === "ended") continue;
+    const outcome = deriveOutcome(agent);
+    if (outcome === "needs-you" || outcome === "blocked" || outcome === "failed") ids.push(agent.id);
+  }
+  return ids.sort();
+}
+
+/* Pure. `prev === null` means "we have not looked yet": seed the baseline and
+   stay silent, which is what stops a reload from announcing the whole backlog. */
+function notificationPlan(prev, next, nameFor = null) {
+  const ids = next.slice().sort();
+  if (prev === null || prev === undefined) return { fire: false, ids, reason: "seeded" };
+  const before = new Set(prev);
+  const fresh = ids.filter((id) => !before.has(id));
+  if (!fresh.length) return { fire: false, ids, reason: "no new agent needs you" };
+  const names = fresh.slice(0, NOTIFY_NAME_LIMIT).map((id) => (nameFor && nameFor(id)) || id);
+  const rest = fresh.length - names.length;
+  return {
+    fire: true,
+    ids,
+    reason: "new",
+    title: fresh.length === 1 ? "1 agent needs you" : fresh.length + " agents need you",
+    body: names.join(", ") + (rest > 0 ? " and " + rest + " more" : ""),
+  };
+}
+
+/* The zero-permission escalation: a background tab shows its own alert count. */
+function titleWithAlerts(base, count) {
+  const clean = String(base).replace(/^\(\d+\)\s*/, "");
+  return count > 0 ? "(" + count + ") " + clean : clean;
+}
+
+function notificationsSupported() {
+  return typeof Notification !== "undefined";
+}
+
+function loadNotifyPreference() {
+  try {
+    state.notify.enabled = localStorage.getItem(NOTIFY_STORAGE_KEY) === "on";
+  } catch { state.notify.enabled = false; }
+  if (notificationsSupported()) state.notify.permission = Notification.permission;
+  // Permission revoked in browser settings between sessions: the stored
+  // preference is stale, so do not carry a promise we cannot keep.
+  if (state.notify.enabled && state.notify.permission !== "granted") state.notify.enabled = false;
+}
+
+function saveNotifyPreference() {
+  try { localStorage.setItem(NOTIFY_STORAGE_KEY, state.notify.enabled ? "on" : "off"); }
+  catch { /* storage unavailable */ }
+}
+
+/* The ONLY place permission is requested, and it is reachable only from a click.
+   Never on load: an unprompted permission dialog is how a page gets denied
+   permanently, which would silently disable the feature forever. */
+async function toggleNotifications() {
+  if (state.notify.enabled) {
+    state.notify.enabled = false;
+    saveNotifyPreference();
+    renderNotifyToggle();
+    return;
+  }
+  if (!notificationsSupported()) { renderNotifyToggle(); return; }
+  let permission = Notification.permission;
+  if (permission === "default") {
+    try { permission = await Notification.requestPermission(); }
+    catch { permission = "denied"; }
+  }
+  state.notify.permission = permission;
+  state.notify.enabled = permission === "granted";
+  saveNotifyPreference();
+  renderNotifyToggle();
+}
+
+/* Denied is not an error state to shout about — the operator said no. The
+   control just reads "unavailable" and nothing else changes. */
+function notifyToggleView(notify, supported = notificationsSupported()) {
+  if (!supported) return { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." };
+  if (notify.permission === "denied") {
+    return { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." };
+  }
+  return notify.enabled
+    ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
+    : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
+}
+
+function renderNotifyToggle() {
+  const btn = $("notify-toggle");
+  if (!btn) return;
+  const view = notifyToggleView(state.notify);
+  btn.textContent = view.label;
+  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
+  btn.setAttribute("title", view.title);
+  if (view.disabled) btn.setAttribute("disabled", "");
+  else btn.removeAttribute("disabled");
+  btn.classList.toggle("is-on", view.pressed);
+}
+
+/* Delivery, kept separate from the decision so every gate is assertable without
+   a browser. Each refusal returns its own reason rather than a shared silence,
+   because "we chose not to" and "the browser refused" are different facts. */
+function deliverNotification(plan, notify, ctor) {
+  if (!plan.fire) return plan.reason;
+  if (!notify.enabled) return "muted";
+  if (!ctor) return "unsupported";
+  if (notify.permission !== "granted") return "not-granted";
+  try {
+    // eslint-disable-next-line no-new
+    new ctor(plan.title, { body: plan.body, tag: NOTIFY_TAG });
+    return "sent";
+  } catch { return "refused"; }
+}
+
+/* Called on every adopted snapshot. The title always updates — it costs no
+   permission and cannot annoy anyone. The Notification only fires when the plan
+   says a NEW agent needs a human AND the operator opted in; denied, unsupported
+   or muted all degrade to the title alone, silently. */
+function applyNotifications(snap = state.snap) {
+  const next = needsHumanIds(snap);
+  const byId = agentsById(snap);
+  const plan = notificationPlan(state.notify.seen, next, (id) => {
+    const found = byId.get(id);
+    return found ? agentName(found.agent) : null;
+  });
+  state.notify.seen = plan.ids;
+  if (typeof document !== "undefined") {
+    document.title = titleWithAlerts(state.notify.baseTitle || document.title, next.length);
+  }
+  return deliverNotification(plan, state.notify, notificationsSupported() ? Notification : null);
+}
+
 /* ---------- action log ----------
 
    What was broadcast, to whom, and whether it landed lived only in client
@@ -6420,7 +6583,12 @@ function boot() {
   loadOverrides();
   loadWidgetPreferences();
   loadLookback();
+  state.notify.baseTitle = document.title;
+  loadNotifyPreference();
+  renderNotifyToggle();
   void fetchSettings();
+
+  $("notify-toggle").addEventListener("click", () => void toggleNotifications());
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
