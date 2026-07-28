@@ -137,8 +137,6 @@ describe("burnbar usage bridge", () => {
     }
   });
 
-  test.skipIf(!canSqlcipher)("summary/invocations unlock via SQLCipher helper", async () => {
-
   test("missing encrypted storage stays explicitly unavailable without fabricating usage", async () => {
     const previous = {
       support: process.env.BURNBAR_SUPPORT_DIR,
