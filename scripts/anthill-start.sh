@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 MODE="auto"
-PORT="${MOUNTAIN_PORT:-4702}"
+PORT="${MOUNTAIN_PORT:-4701}"
 OPEN_BROWSER=1
 CMUX_BIN="${CMUX_EXECUTABLE:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 ENV_FILE="$ROOT/data/cmux-socket.env"
@@ -25,7 +25,7 @@ Start The Ant Hill (usually just: bun start)
   (default)     Auto: reuse if up, prefer cmux workspace, else this shell.
   --in-cmux     Force the dedicated cmux workspace path.
   --external    Force this shell (uses saved password for cmux access).
-  --port N      Bind port (default: 4702).
+  --port N      Bind port (default: 4701).
   --no-open     Do not open the browser.
   -h, --help    Show this help.
 
@@ -98,6 +98,9 @@ open_ui() {
 
 run_server_here() {
   export MOUNTAIN_PORT="$PORT"
+  if resolve_cmux_bin; then
+    export CMUX_EXECUTABLE="$CMUX_BIN"
+  fi
   load_password
   if [[ -n "${CMUX_SOCKET_PASSWORD:-}" ]]; then
     export CMUX_SOCKET_PASSWORD
@@ -118,17 +121,19 @@ resolve_cmux_bin() {
 }
 
 launch_in_cmux_workspace() {
+  local server_command
   if ! resolve_cmux_bin; then
     echo "cmux binary not found." >&2
     return 1
   fi
+  printf -v server_command 'MOUNTAIN_PORT=%q CMUX_EXECUTABLE=%q bun run start:server' "$PORT" "$CMUX_BIN"
   load_password
   echo "Launching dedicated cmux workspace: ${WORKSPACE_NAME}"
   cmux_cli new-workspace \
     --name "$WORKSPACE_NAME" \
     --description "Ant Hill ops server — leave this pane running" \
     --cwd "$ROOT" \
-    --command "MOUNTAIN_PORT=${PORT} bun run start:server" \
+    --command "$server_command" \
     --focus true
 }
 
