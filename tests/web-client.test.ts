@@ -224,6 +224,17 @@ function identityUi(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/* A `state` stand-in for renderTriage. */
+function triageUi(overrides: Record<string, unknown> = {}) {
+  return {
+    queueItems: [] as unknown[],
+    triage: new Map(),
+    triagePending: new Set<string>(),
+    triageErrors: new Map(),
+    ...overrides,
+  };
+}
+
 /* A `state` stand-in for the list helpers (row/shell signatures, row plans). */
 function listUi(overrides: Record<string, unknown> = {}) {
   return {
@@ -1618,9 +1629,26 @@ describe("state cards — two-line ledger rows, instrument brief, verdict result
     // The band never invents instruments: model/effort/access appear only
     // when the launcher reported runModel.
     expect(triage).toContain("queueItem.runModel");
-    // A reload mid-investigation must not regress to the Triage button: the
-    // queue item itself hydrates the recommendation.
-    expect(triage).toContain("state.triage.get(issue.id) || queueItem");
+    /* FE-B: a reload mid-investigation must not regress to the Triage button —
+       the queue item itself hydrates the recommendation. Asserted by rendering
+       with an empty local triage map and only a queue row, as a reload leaves it. */
+    const issue = { id: "system:1", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const queueItem = {
+      issueId: "system:1", state: "running", headline: "Re-bind the quarantined sessions",
+      mode: "investigate", rationale: "Two sessions share a terminal.",
+      steps: [{ title: "Read", detail: "Inspect the trace." }],
+      queueRecommended: true, runModel: "luna 5.6 · high", createdAt: "2026-07-28T01:00:00.000Z",
+      startedAt: "2026-07-28T01:01:00.000Z",
+    };
+    const rendered = withDom(() => M.renderTriage(issue, triageUi({ queueItems: [queueItem] })));
+    const text = textOf(rendered);
+    expect(text).not.toContain("Triage this finding");
+    expect(text).toContain("Re-bind the quarantined sessions");
+    expect(byClass(rendered, "tri-spine")).not.toBeNull();
+    // Both queue-row controls carry a data-fkey so focus survives a repaint.
+    const keys = buttonsOf(rendered).map((b) => b.dataset.fkey);
+    expect(keys).toContain("triage-queue:system:1");
+    expect(keys.every(Boolean)).toBe(true);
   });
 
   test("state-card CSS binds to the DOM app.js builds, and the replaced chrome is gone", () => {
@@ -3367,6 +3395,96 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
     expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
     expect(first.textContent).toContain("12k");
+  });
+
+  /* -------- finding 3: repaint-and-lose-focus ------------------------------
+     render()'s focus-restore contract keys on data-fkey and nothing else, and
+     renderFilterBar wipes the whole bar unconditionally on every paint. Chips
+     without an fkey were destroyed, nothing was restored, and a keyboard or
+     screen-reader operator was thrown back to <body> ~15 times a minute. */
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function focusKeysOf(node: any): string[] {
+    return buttonsOf(node).map((b: { dataset: Record<string, string> }) => b.dataset.fkey);
+  }
+
+  test("(3) filterChip carries the focus key it is given", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chip: any = withDom(() => M.filterChip("6h", true, () => {}, { fkey: "lookback:6" }));
+    expect(chip.tagName).toBe("button");
+    expect(chip.dataset.fkey).toBe("lookback:6");
+    expect(chip.attributes["aria-pressed"]).toBe("true");
+    // The key names the control, not its label, so it survives the label change
+    // that "Custom" → "Custom 12h" performs on the very chip being clicked.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const custom: any = withDom(() => M.filterChip("Custom 12h", true, () => {}, { fkey: "lookback:custom" }));
+    expect(custom.dataset.fkey).toBe("lookback:custom");
+  });
+
+  test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
+    const bar = () => domById.get("filter-bar");
+
+    // Idle/History: Lookback presets + All + Custom, then the Scan window.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", lookbackHours: 6, scanWindowHours: 36 }));
+      const keys = focusKeysOf(bar());
+      expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
+      expect(keys.every(Boolean)).toBe(true);
+      expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
+      expect(keys).toEqual(["lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom", "scan-window"]);
+    });
+
+    // Usage: the range chips, rebuilt on the same cadence.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "usage", usageRangeId: "24h", usageCustomHours: 24 }));
+      const keys = focusKeysOf(bar());
+      expect(keys).toEqual(["usage-range:1h", "usage-range:24h", "usage-range:7d", "usage-range:30d", "usage-range:custom"]);
+    });
+
+    // The key of the chip an operator is standing on does not move when the
+    // selection changes — otherwise focus restore finds nothing after the click.
+    const keyAt = (hours: number | null) => withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", lookbackHours: hours }));
+      return focusKeysOf(bar());
+    });
+    expect(keyAt(6)).toEqual(keyAt(24));
+    expect(keyAt(null)).toEqual(keyAt(6));
+  });
+
+  test("(3) the rename form and the usage panel keep their controls addressable", () => {
+    const target = { kind: "program", programId: "p1" };
+    const form = withDom(() => M.renderLabelForm(target, {
+      inputKey: "rename-input:p1", placeholder: "Display name", ariaLabel: "New display name", source: "Source program: P",
+    }));
+    const keys = focusKeysOf(form);
+    expect(keys).toEqual(["label-save:program:p1", "label-cancel:program:p1"]);
+    expect(keys.every(Boolean)).toBe(true);
+
+    // Usage: Retry on an unavailable BurnBar, and the session links in the table.
+    const failed = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "locked", usageWard: null, usageSeries: null, usageInvocations: null,
+        usageSummary: { available: false, error: "BurnBar database is locked." },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(focusKeysOf(failed)).toEqual(["usage-retry"]);
+
+    const table = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { points: [] },
+        usageInvocations: { invocations: [{ sessionId: "a1", provider: "codex", model: "gpt-5-codex", tokens: 10, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" }] },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(table)).toContain("Recent invocations");
+    /* The session-link button only exists when the invocation maps to an agent
+       in state.snap, which this suite cannot set; likewise the two confirm-strip
+       Cancel buttons are gated behind state.confirming / state.broadcastConfirming.
+       All three carry an fkey now, but they are covered by inspection, not here —
+       said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
   });
 
   /* -------- finding 2: one agent's tick rebuilt the whole list -------------

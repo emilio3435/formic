@@ -1311,6 +1311,7 @@ globalThis.TheAntHill = {
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
+  filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
 /* ---------- state ---------- */
@@ -2380,16 +2381,16 @@ function renderInvestigationResult(resultText, outcome, opts = {}) {
   return briefing;
 }
 
-function renderTriage(issue) {
-  const queueItem = state.queueItems.find((item) => item.issueId === issue.id);
+function renderTriage(issue, ui = state) {
+  const queueItem = ui.queueItems.find((item) => item.issueId === issue.id);
   // A queue item IS a recommendation (TriageQueueItem extends it), so a page
   // reload mid-investigation still shows the plan — not a stale Triage button.
-  const recommendation = state.triage.get(issue.id) || queueItem;
+  const recommendation = ui.triage.get(issue.id) || queueItem;
   const queued = !!queueItem;
-  const generating = state.triagePending.has("generate:" + issue.id);
-  const queueing = state.triagePending.has("queue:" + issue.id);
-  const launching = state.triagePending.has("run:" + issue.id);
-  const error = state.triageErrors.get(issue.id);
+  const generating = ui.triagePending.has("generate:" + issue.id);
+  const queueing = ui.triagePending.has("queue:" + issue.id);
+  const launching = ui.triagePending.has("run:" + issue.id);
+  const error = ui.triageErrors.get(issue.id);
   const wrap = el("div", { class: "triage-actions" });
 
   if (!recommendation) {
@@ -2456,6 +2457,7 @@ function renderTriage(issue) {
           class: "btn triage-queue",
           disabled: queued || queueing ? "" : null,
           "aria-busy": queueing ? "true" : null,
+          dataset: { fkey: "triage-queue:" + issue.id },
           onclick: () => triageIssue(issue.id, "queue"),
         }, queued
           ? queueItem.state === "completed" ? "✓ Investigation complete · verifying"
@@ -2468,6 +2470,7 @@ function renderTriage(issue) {
           class: "btn triage-run",
           disabled: launching ? "" : null,
           "aria-busy": launching ? "true" : null,
+          dataset: { fkey: "triage-run:" + issue.id },
           onclick: () => triageIssue(issue.id, "run"),
         }, launching ? "Launching…" : "Launch read-only Luna") : null,
         el("span", { class: "triage-queue-note", text: queueItem
@@ -2745,6 +2748,10 @@ function renderTabs() {
   if (search) search.disabled = state.view === "usage";
 }
 
+/* Every chip carries a data-fkey. renderFilterBar tears the whole bar down on
+   each paint, so without one a keyboard operator's focus fell to <body> roughly
+   fifteen times a minute — render()'s focus-restore contract keys on nothing
+   else. The key is stable across paints (it names the control, not the label). */
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
@@ -2752,30 +2759,31 @@ function filterChip(label, active, onclick, opts = {}) {
     "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
+    dataset: opts.fkey ? { fkey: opts.fkey } : null,
     onclick,
   }, label);
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
-function renderFilterBar() {
+function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
   bar.textContent = "";
-  if (state.view === "usage") {
+  if (ui.view === "usage") {
     bar.hidden = false;
     bar.setAttribute("aria-hidden", "false");
     bar.append(el("span", { class: "filter-lead", text: "Range" }));
     for (const preset of USAGE_RANGE_PRESETS) {
-      bar.append(filterChip(preset.label, state.usageRangeId === preset.id, () => {
+      bar.append(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
         state.usageRangeId = preset.id;
         state.usageCustomHours = preset.hours;
         void loadUsageData(true);
         render();
-      }));
+      }, { fkey: "usage-range:" + preset.id }));
     }
-    const customActive = state.usageRangeId === "custom";
+    const customActive = ui.usageRangeId === "custom";
     bar.append(filterChip(
-      customActive ? ("Custom " + state.usageCustomHours + "h") : "Custom",
+      customActive ? ("Custom " + ui.usageCustomHours + "h") : "Custom",
       customActive,
       () => {
         const raw = window.prompt("Usage range hours", String(state.usageCustomHours || 24));
@@ -2787,10 +2795,11 @@ function renderFilterBar() {
         void loadUsageData(true);
         render();
       },
+      { fkey: "usage-range:custom" },
     ));
     return;
   }
-  if (!lookbackApplies(state.view)) {
+  if (!lookbackApplies(ui.view)) {
     bar.hidden = true;
     bar.setAttribute("aria-hidden", "true");
     return;
@@ -2799,23 +2808,27 @@ function renderFilterBar() {
   bar.setAttribute("aria-hidden", "false");
   bar.append(el("span", { class: "filter-lead", text: "Lookback" }));
   for (const hours of LOOKBACK_PRESETS) {
-    bar.append(filterChip(hours + "h", state.lookbackHours === hours, () => setLookbackHours(hours)));
+    bar.append(filterChip(hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours), {
+      fkey: "lookback:" + hours,
+    }));
   }
-  bar.append(filterChip("All", state.lookbackHours == null, () => setLookbackHours(null), {
+  bar.append(filterChip("All", ui.lookbackHours == null, () => setLookbackHours(null), {
     title: "Show every session inside the collector scan window",
+    fkey: "lookback:all",
   }));
-  const customActive = state.lookbackHours != null && !LOOKBACK_PRESETS.includes(state.lookbackHours);
+  const customActive = ui.lookbackHours != null && !LOOKBACK_PRESETS.includes(ui.lookbackHours);
   bar.append(filterChip(
-    customActive ? ("Custom " + state.lookbackHours + "h") : "Custom",
+    customActive ? ("Custom " + ui.lookbackHours + "h") : "Custom",
     customActive,
     () => {
       const raw = window.prompt("Lookback hours", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
       if (raw == null) return;
       setLookbackHours(raw);
     },
+    { fkey: "lookback:custom" },
   ));
   bar.append(el("span", { class: "filter-lead", text: "Scan" }));
-  const scanHours = Number((state.snap && state.snap.scanWindowHours) || state.scanWindowHours) || 36;
+  const scanHours = Number((ui.snap && ui.snap.scanWindowHours) || ui.scanWindowHours) || 36;
   bar.append(filterChip(
     scanHours + "h window",
     false,
@@ -2824,7 +2837,7 @@ function renderFilterBar() {
       if (raw == null) return;
       void postScanWindow(raw);
     },
-    { disabled: state.settingsPending, title: "How far back collectors harvest sessions" },
+    { disabled: ui.settingsPending, title: "How far back collectors harvest sessions", fkey: "scan-window" },
   ));
 }
 
@@ -3217,9 +3230,9 @@ function renderLabelForm(target, opts) {
       oninput: (e) => { state.renameDraft = e.target.value; },
       onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); cancelRename(); } },
     }),
-    el("button", { type: "submit", class: "btn primary", disabled: state.renamePending ? "" : null, "aria-busy": state.renamePending ? "true" : null }, state.renamePending ? "Saving…" : "Save"),
-    el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => cancelRename() }, "Cancel"),
-    state.aliases.has(key) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, onclick: () => { state.renameDraft = ""; submitRename(target); } }, "Reset") : null,
+    el("button", { type: "submit", class: "btn primary", disabled: state.renamePending ? "" : null, "aria-busy": state.renamePending ? "true" : null, dataset: { fkey: "label-save:" + key } }, state.renamePending ? "Saving…" : "Save"),
+    el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, dataset: { fkey: "label-cancel:" + key }, onclick: () => cancelRename() }, "Cancel"),
+    state.aliases.has(key) ? el("button", { type: "button", class: "btn", disabled: state.renamePending ? "" : null, dataset: { fkey: "label-reset:" + key }, onclick: () => { state.renameDraft = ""; submitRename(target); } }, "Reset") : null,
     el("span", { class: "rename-source", text: opts.source }),
     state.renameError ? el("p", { class: "rename-error", role: "alert", text: state.renameError }) : null);
 }
@@ -4575,6 +4588,7 @@ function renderDockTool(agent, cap, action, opts = {}) {
       }, "Confirm"),
       el("button", {
         type: "button", class: "btn sm",
+        dataset: { fkey: confirmKey + ":cancel" },
         onclick: () => { state.confirming = null; render(); },
       }, "Cancel"));
   }
@@ -5487,7 +5501,7 @@ function renderBroadcastBar() {
     bar.append(el("div", { class: "broadcast-confirm", role: "group", "aria-label": "Confirm broadcast" },
       el("span", { text: `Send this instruction to ${eligible.length} ${eligible.length === 1 ? "agent" : "agents"}?` }),
       el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => sendBroadcast() }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
-      el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
+      el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, dataset: { fkey: "broadcast-cancel" }, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
   } else {
     const canSend = eligible.length > 0 && instruction.trim().length > 0;
     bar.append(el("div", { class: "broadcast-compose" },
@@ -5668,29 +5682,30 @@ function renderUsageSeriesChart(points) {
   return wrap;
 }
 
-function renderUsagePanel() {
+function renderUsagePanel(ui = state) {
   const root = $("usage-panel");
   if (!root) return;
   root.textContent = "";
-  if (state.usageLoading && !state.usageSummary) {
+  if (ui.usageLoading && !ui.usageSummary) {
     root.append(el("p", { class: "usage-empty", text: "Loading BurnBar usage…" }));
     return;
   }
-  const summary = state.usageSummary;
+  const summary = ui.usageSummary;
   if (!summary || summary.available === false) {
     root.append(el("div", { class: "usage-unavailable" },
       el("h2", { class: "usage-title", text: "Usage unavailable" }),
       el("p", {
-        text: (summary && summary.error) || state.usageError ||
+        text: (summary && summary.error) || ui.usageError ||
           "BurnBar database could not be unlocked. Quotas sidecar may still be readable separately.",
       }),
       el("button", {
         type: "button", class: "btn",
+        dataset: { fkey: "usage-retry" },
         onclick: () => void loadUsageData(true),
       }, "Retry")));
     // Still show quotas/ward soft data if present without inventing spend zeros.
-    if (state.usageWard && state.usageWard.quotaPressure && state.usageWard.quotaPressure.length) {
-      root.append(renderUsageWard(state.usageWard, true));
+    if (ui.usageWard && ui.usageWard.quotaPressure && ui.usageWard.quotaPressure.length) {
+      root.append(renderUsageWard(ui.usageWard, true));
     }
     return;
   }
@@ -5723,9 +5738,9 @@ function renderUsagePanel() {
 
   root.append(el("section", { class: "usage-section" },
     el("h2", { class: "usage-title", text: "Series" }),
-    renderUsageSeriesChart(state.usageSeries && state.usageSeries.points)));
+    renderUsageSeriesChart(ui.usageSeries && ui.usageSeries.points)));
 
-  root.append(renderUsageWard(state.usageWard, false));
+  root.append(renderUsageWard(ui.usageWard, false));
 
   const table = el("table", { class: "usage-table" });
   table.append(el("thead", {}, el("tr", {},
@@ -5736,7 +5751,7 @@ function renderUsagePanel() {
     el("th", { text: "Cost" }),
     el("th", { text: "Session" }))));
   const body = el("tbody");
-  const rows = (state.usageInvocations && state.usageInvocations.invocations) || [];
+  const rows = (ui.usageInvocations && ui.usageInvocations.invocations) || [];
   if (!rows.length) {
     body.append(el("tr", {}, el("td", { colspan: "6", text: "No invocations in this range." })));
   } else {
@@ -5745,6 +5760,7 @@ function renderUsagePanel() {
       const sessionCell = agentId
         ? el("button", {
           type: "button", class: "linkish",
+          dataset: { fkey: "usage-session:" + row.sessionId },
           onclick: () => {
             setView("now");
             selectEntity({ kind: "agent", id: agentId });
