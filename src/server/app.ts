@@ -47,6 +47,7 @@ const SECURITY_HEADERS = {
 
 export const MAX_SSE_CLIENTS = 16;
 export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
+export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ACTION_LOG_ENTRIES = 500;
 
@@ -590,6 +591,32 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     }
     if (request.method === "GET" && url.pathname === "/api/debug/identity") {
       return identityDebugResponse(url, dependencies.state.get(), dependencies.state.surfaces?.() ?? [], SECURITY_HEADERS);
+    }
+    if (url.pathname === "/api/health") {
+      if (request.method !== "GET") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for health reads.");
+      }
+      const snapshot = dependencies.state.get();
+      const generatedAtMs = Date.parse(snapshot.generatedAt);
+      const ageMs = Number.isFinite(generatedAtMs)
+        ? Math.max(0, (dependencies.now?.() ?? Date.now()) - generatedAtMs)
+        : null;
+      const healthy = ageMs !== null && ageMs <= MAX_HEALTH_SNAPSHOT_AGE_MS;
+      return Response.json(
+        {
+          ok: healthy,
+          verdict: healthy ? "healthy" : "stale",
+          snapshot: {
+            generatedAt: snapshot.generatedAt,
+            ageMs,
+            maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
+          },
+        },
+        {
+          status: healthy ? 200 : 503,
+          headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+        },
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/snapshot") {
       return Response.json(dependencies.state.get(), {

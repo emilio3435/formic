@@ -41,14 +41,14 @@ launchctl kickstart -k "gui/$(id -u)/$LABEL"
 echo "-> health check :$PROD_PORT"
 for _ in $(seq 1 10); do
   sleep 1
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROD_PORT/" || true)"
+  code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROD_PORT/api/health" || true)"
   if [ "$code" = "200" ]; then
-    echo "LIVE: :$PROD_PORT healthy at $HEAD_SHA."
+    echo "LIVE: :$PROD_PORT serving a fresh snapshot at $HEAD_SHA."
     exit 0
   fi
 done
 
-echo "UNHEALTHY: :$PROD_PORT did not return 200 after restart." >&2
+echo "UNHEALTHY: :$PROD_PORT did not report a fresh snapshot after restart." >&2
 echo "Roll back with:" >&2
 echo "  git -C \"$ROOT\" reset --hard <last-good-sha> && launchctl kickstart -k gui/$(id -u)/$LABEL" >&2
 exit 1

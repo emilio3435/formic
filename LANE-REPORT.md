@@ -1,3 +1,121 @@
+# WAVE 4 / W4-D — health endpoint and deploy freshness
+
+Date: 2026-07-28
+Branch: `ant-hill/w4-health-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/w4-health-20260728`
+Base: `f1ecbf3`
+
+Nothing was pushed, merged, deployed, or run against the production service or
+port 4701. The real-server probe used this worktree on scratch port 4798 and was
+stopped immediately afterward. Port 4788 was already owned by the parallel
+`w4-client-20260728` lane and was left untouched.
+
+## Item results
+
+### 1. Deploy reported LIVE for a dead server — FIXED
+
+- Added cheap `GET /api/health`. It reads only the cached snapshot and never
+  calls or awaits `state.refresh()`. The response reports `generatedAt`,
+  `ageMs`, the 60,000ms bound shared with the client, and an explicit verdict.
+  Snapshot age through 60 seconds returns 200/`healthy`; anything older or
+  unparseable returns 503/`stale`.
+- The existing app-wide loopback Host gate runs before the route. A regression
+  request to `http://ant-hill.example/api/health` returns 403.
+- `anthill-deploy.sh` now polls `/api/health` with a two-second curl deadline.
+  Only HTTP 200 prints LIVE; a stale 503 exhausts the bounded retry and reaches
+  the existing rollback command.
+- Regression proof:
+  - `tests/app-lifecycle.test.ts` uses a `refresh()` promise that never settles
+    and proves the endpoint still returns immediately without invoking it.
+  - `tests/anthill-deploy.test.ts` gives all ten probes a fake 503, proves the
+    URL is `/api/health`, proves LIVE is absent, and matches the complete
+    rollback command including uid and launchd label.
+- Real scratch-server output:
+
+```text
+The Ant Hill: http://127.0.0.1:4798 · inside cmux
+HTTP/1.1 200 OK
+Cache-Control: no-store
+{"ok":true,"verdict":"healthy","snapshot":{"generatedAt":"2026-07-28T20:50:48.981Z","ageMs":2316,"maxAgeMs":60000}}
+```
+
+Routed subfinding — **BLOCKED**: a hard deadline inside `#performRefresh`
+requires `src/server/state.ts`, which this lane is explicitly forbidden to
+touch. The endpoint/deploy path now detects the resulting stale snapshot, but
+it does not cancel the wedged collector. The STATE/IDENTITY owner should bound
+the collector aggregate in `#performRefresh`.
+
+### 2. Finish/re-verify the ops scripts — NOT-A-BUG
+
+The Wave 1 fixes still hold after all three merge waves. Neither script needed a
+new change. The hermetic fixtures remained under
+`/private/tmp/claude-501/anthill-ops-tests-*`; no real `data/`, launchd service,
+or listener was used.
+
+Captured before/after fixture evidence:
+
+```text
+hygiene before:
+  branch=feature/audit
+  plist="production plist sentinel"
+  launchctl calls=0
+hygiene after:
+  error: Hygiene worktree must be on 'main' (currently 'feature/audit'). Aborting.
+  plist="production plist sentinel"
+  launchctl calls=0
+
+preview before:
+  production data/archive.json="production state"
+preview during:
+  isolated data: /private/tmp/claude-501/anthill-ops-tests-*/preview-data-isolation/tmp/anthill-preview.*/data
+  fake bun cwd=/private/tmp/claude-501/anthill-ops-tests-*/preview-data-isolation/tmp/anthill-preview.*
+preview after:
+  production data/archive.json="production state"
+  remaining anthill-preview.* roots=[]
+```
+
+Actual terminal result:
+
+```text
+(pass) production-safe Ant Hill scripts > hygiene refuses a feature-branch worktree before rewriting its LaunchAgent plist
+(pass) production-safe Ant Hill scripts > preview writes only to its temporary data root and removes it after exit
+(pass) production-safe Ant Hill scripts > start propagates a PATH-resolved cmux executable to both server launch paths
+(pass) production-safe Ant Hill scripts > start keeps the existing no-cmux fallback and binds the canonical port
+
+4 pass
+0 fail
+19 expect() calls
+Ran 4 tests across 1 file.
+```
+
+Docs handoff — **BLOCKED by ownership**: in `QUICKSTART.md`, change the current
+fallback URL exactly from `http://127.0.0.1:4702` to
+`http://127.0.0.1:4701`. This lane did not edit QUICKSTART or README.
+
+### 3. Debug endpoint — NOT-A-BUG
+
+No new identity item was routed to this lane. `src/server/debug-identity.ts`
+was left byte-for-byte unchanged, and its existing four endpoint tests passed
+in the full suite.
+
+## Final verification
+
+- `bunx tsc --noEmit` — clean, no diagnostics.
+- `bun test` — **538 pass, 0 fail, 2408 expect() calls, 31 files**.
+  Baseline was 535, so this lane adds 3 tests. No skips, `.only`, todos, or
+  filters were used.
+- `bash -n scripts/anthill-deploy.sh scripts/anthill-hygiene.sh scripts/anthill-preview.sh scripts/anthill-start.sh`
+  — passed.
+- `bun test tests/anthill-scripts.test.ts` — 4 pass, 0 fail.
+- `git diff --check` — passed.
+- This fresh worktree initially had no `node_modules`; `bun install
+  --frozen-lockfile` installed the lockfile-pinned dependencies. `package.json`
+  and `bun.lock` are unchanged.
+
+---
+
+---
+
 # WAVE 4 / W4-A — Claude identity and process lifecycle
 
 Date: 2026-07-28
