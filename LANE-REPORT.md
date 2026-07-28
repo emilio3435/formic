@@ -1509,3 +1509,136 @@ Branch: `ant-hill/be-identity-20260728`
 ## Out-of-scope observations
 
 No additional out-of-scope defects were changed.
+
+---
+
+# WAVE 3 / BE-I — operator endpoints, triage lifecycle, attention state
+
+Date: 2026-07-28
+Branch: `ant-hill/be-endpoints-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/be-endpoints-20260728`
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **487 pass / 0 fail**, 2128 assertions across 30 files; full unfiltered run |
+| Skips / filters | no `.skip` or `.only` in `src` or `tests`; no filtered final run |
+| `git diff --check` | clean before commits |
+| Baseline | 467 passing; this lane added 20 tests |
+| Pushed / merged / deployed / service restart | **no** |
+
+The worktree initially had no installed dependencies. `bun install
+--frozen-lockfile` installed the lockfile-pinned dev dependencies; `package.json`
+and `bun.lock` remained unchanged.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `95bb75c` | persisted triage requeue, safe cancellation/removal, retention and bounds |
+| `05b6ec2` | transcript and action endpoints, action persistence/wiring, attention persistence/filtering/API |
+
+## Deliverables
+
+### 1. `GET /api/transcript` — **FIXED** (`05b6ec2`)
+
+- Implements the specified default 200 / hard max 1000 tail, structured
+  `AGENT_NOT_FOUND`, absolute source provenance, `truncated`, timestamp/role/text
+  lines, and honest `{ source: null, lines: [] }` behavior for absent,
+  unreadable, or non-human-readable transcripts.
+- Transcript text is extracted from the collector-provided transcript artifact
+  only and passed through the existing `readableHumanMessage` sanitizer. No
+  request-controlled path is accepted and no transcript content is fabricated.
+- Exact same-origin loopback Host and Origin gates apply before the file read.
+- Proof: `tests/operator-endpoints.test.ts` — “returns a sanitized tail with an
+  honest source and truncation flag”, “unknown agents are 404 and agents without
+  readable files return an honest empty result”, and “requires exact
+  same-origin loopback access and enforces the hard limit”.
+- Deliberately left alone: collectors and `human-message.ts` remain unchanged.
+
+### 2. `GET /api/actions` plus mutation wiring — **FIXED** (`05b6ec2`)
+
+- Wraps the frozen control and broadcast handlers at `app.ts`, then appends one
+  action from their authoritative response. Successful, failed, partial, and
+  `TEXT_STAGED_NOT_SUBMITTED` outcomes remain distinct.
+- Records only operator action metadata: kind, requested agent IDs, outcome,
+  and a server-generated one-line detail. It does not store instructions,
+  transcript text, cmux stderr, or agent output.
+- Uses `act_01…` sortable IDs, newest-first reads, default 100 / hard max 500,
+  a 500-entry ring bound, seven-day pruning, serialized atomic temp-write +
+  rename, and loud corrupt-file recovery to an empty log.
+- Production persistence is `data/actions.json`; tests inject memory/temp-file
+  stores and do not write production state.
+- Proof: `tests/operator-endpoints.test.ts` — staged + partial exactly-once
+  logging, successful + failed authoritative outcomes, 500-entry bound,
+  reopen/prune/corruption, and transcript/actions boundary tests.
+- Deliberately left alone: `control.ts`, `http.ts`, and `broadcast.ts`.
+
+### Finding 1 / Deliverable 3. Triage lifecycle — **BLOCKED end-to-end; backend implemented**
+(`95bb75c`, `05b6ec2`)
+
+Implemented in owned files:
+
+- Adding fresh evidence now replaces completed/blocked items with a new queued
+  item; queued/running adds remain idempotent.
+- `DELETE /api/triage/queue?issueId=…` dismisses queued/terminal items. For a
+  running item it first invokes a real runner cancellation handle, sends
+  `SIGTERM`, escalates to `SIGKILL` after two seconds, waits for process exit,
+  and only then removes the item. A runner without a cancellation handle gets a
+  loud 409 and remains visible.
+- A late completion is run-ID checked and cannot overwrite a removed or newer
+  run. Running rows still recover as blocked after restart. The queue is
+  atomically persisted, pruned after seven days, and bounded to 500 while
+  retaining a live running item.
+- Proof: `tests/triage.test.ts` — fresh memory and JSON requeue, real DELETE
+  cancellation/removal, refusal without a cancellation handle, native
+  termination/wait, restart recovery, pruning, cap, and corruption recovery.
+
+Blocked remainder:
+
+- The audit finding asks for dashboard Re-run/Dismiss/Cancel controls, but
+  `src/web/**` is explicitly owned by another lane and was not touched.
+- Removing a queue item cannot reset `HubState.#issueLifecycle` from
+  `verifying`/`blocked`; that state and its mutators live in frozen
+  `src/server/state.ts`. Requeue is correctly shown as queued because its fresh
+  queue summary outranks lifecycle decoration, but a standalone dismiss can
+  retain the prior lifecycle decoration until source evidence resolves.
+- No test claims those two out-of-scope behaviors are fixed. The orchestrator
+  must route the client controls and an explicit lifecycle-clear state method.
+
+### Finding 2 / Deliverable 4. Persisted attention acknowledgement/dismiss/snooze — **BLOCKED
+end-to-end; backend implemented** (`05b6ec2`)
+
+Implemented in owned files:
+
+- `POST /api/attention` accepts exact `{ agentId, action }` for acknowledge or
+  dismiss and `{ agentId, action: "snooze", until }` for snooze. It requires an
+  exact same-origin loopback request and a safely resolved cmux surface.
+- `cmux.ts` records the latest observed notification per surface. Acknowledge
+  and dismiss suppress through that notification timestamp while a newer
+  notification survives; snooze suppresses until its timestamp and expires
+  from the clock on a later scheduled cmux poll without a clearing mutation.
+- State survives restart in `data/attention-state.json`, uses atomic writes,
+  prunes after seven days, caps at 500 surfaces, and degrades loudly to empty on
+  corruption. The endpoint forces a cmux refresh after persistence.
+- Proof: `tests/cmux.test.ts` — current acknowledgement/newer-notification
+  behavior, collector integration before snapshot input, autonomous snooze
+  expiry, cap, reopen/prune/corruption; `tests/operator-endpoints.test.ts` —
+  persisted snooze plus immediate cmux refresh.
+
+Blocked remainder:
+
+- The finding is specifically “from the dashboard”. Client buttons and state
+  rendering require `src/web/**`, which this lane was forbidden to edit.
+- No guessed cmux mark-read RPC was added. The persisted local fallback is the
+  authoritative implementation until a documented cmux RPC is available.
+
+## Out-of-scope observations
+
+- The frozen issue-lifecycle store needs an explicit clear/reset method for a
+  dismissed triage item; deleting only the queue row cannot legally implement
+  that state transition in this lane.
+- The client lane must add the triage and attention affordances before either
+  audit finding can be called fixed from the operator's point of view.
