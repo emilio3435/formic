@@ -1364,6 +1364,8 @@ globalThis.TheAntHill = {
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
+  actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
+  actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
@@ -1506,6 +1508,11 @@ const state = {
   // reason `identity` is: a drawer switched mid-flight must never adopt the
   // previous agent's transcript.
   transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
+  // Persistent operator journal (GET /api/actions). `available` latches false on
+  // a build with no such route so a missing endpoint is asked for once, not
+  // every five seconds forever.
+  actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
+  actionsOpen: false,
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   pending: new Set(),     // `${agentId}:${action}`
@@ -1904,6 +1911,7 @@ function render() {
   renderTabs();
   renderFilterBar();
   renderPrograms();
+  renderActionsPanel();
   renderInspector();
   renderBroadcastBar();
   renderEmpty();
@@ -3806,6 +3814,9 @@ function inspectorPaintSig(sel, view, ui) {
   const feedback = agent ? ui.feedback.get(agent.id) : null;
   const identity = ui.identity || {};
   const transcript = ui.transcript || {};
+  // The dock prints this agent's last journalled action, so a new entry landing
+  // has to repaint the drawer or the fact stays wrong until something else moves.
+  const lastAction = agent ? lastActionFor(ui.actions && ui.actions.items, agent.id) : null;
   return [
     sel.kind, sel.id,
     view ? view.kind : "missing",
@@ -3851,6 +3862,7 @@ function inspectorPaintSig(sel, view, ui) {
           : "",
       ].join(":")
       : "",
+    lastAction ? lastAction.id + ":" + lastAction.outcome : "",
   ].join("\u001f");
 }
 
@@ -4634,7 +4646,7 @@ function capability(agent, action) {
    held and says so, because the snapshot's routing evidence is as old as the
    rest of it. Defaulted (not passed by the caller) so the drawer call site stays
    `renderCommandDock(agent, control)` and the dock is still testable in isolation. */
-function renderCommandDock(agent, control = deriveControlState(agent), alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt)) {
+function renderCommandDock(agent, control = deriveControlState(agent), alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt), actions = state.actions.items) {
   const focusCap = capability(agent, "focus");
   const instructCap = capability(agent, "instruct");
   const interruptCap = capability(agent, "interrupt");
@@ -4673,6 +4685,18 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
       role: "status",
       text: fb.message,
     }));
+  }
+
+  // "Did I already tell this lane to rebase?" — the journal's answer, next to
+  // the button that would send it again. Silent until the log has actually
+  // loaded: an unanswered endpoint must not read as "nothing was ever sent".
+  const last = lastActionFor(actions, agent.id);
+  if (last) {
+    const outcome = actionOutcomeView(last.outcome);
+    dock.append(el("p", { class: "command-dock-last", dataset: { tone: outcome.tone } },
+      (ACTION_KIND_LABELS[last.kind] || last.kind)
+      + (last.at ? " " + agoText(last.at) : "")
+      + " · " + outcome.label));
   }
 
   // Composer is the primary interaction — Focus no longer sits above a dead input.
@@ -5629,6 +5653,7 @@ async function sendControl(agent, action, instruction) {
   state.feedback.set(agent.id, { ...result, action });
   render();
   toast(result.message.split("\n")[0], result.ok ? "ok" : "err");
+  refreshActions(); // the server just journalled this attempt — success or not
 }
 
 /* ---------- presentation labels (source identities stay authoritative) ---------- */
@@ -5786,7 +5811,197 @@ async function sendBroadcast() {
   } finally {
     state.broadcastPending = false;
     render();
+    refreshActions(); // per-recipient outcomes now survive a reload
   }
+}
+
+/* ---------- action log ----------
+
+   What was broadcast, to whom, and whether it landed lived only in client
+   memory (state.broadcastResults) and died on reload. A broadcast reaches up to
+   50 agents and instruct is fire-and-forget text typed into a terminal, so after
+   a refresh the operator could not tell which lanes received an instruction,
+   which came back TEXT_STAGED_NOT_SUBMITTED, or whether they had already sent
+   it — and the natural recovery is to send it again, double-instructing lanes
+   that already got it.
+
+   Contract (GET /api/actions?limit=<n>, built in a parallel lane):
+     { ok, actions: [{ id, at, kind, agentIds, outcome, detail }] }   // newest first
+   This is an OPERATOR log, not a transcript: it never carries agent output. */
+
+const ACTIONS_DEFAULT_LIMIT = 100;
+const ACTIONS_MAX_LIMIT = 500;             // the contract's hard cap
+const ACTIONS_RENDER_CAP = 100;
+const ACTION_KINDS = new Set(["focus", "instruct", "interrupt", "broadcast", "archive"]);
+const ACTION_KIND_LABELS = {
+  focus: "Focus", instruct: "Send", interrupt: "Interrupt",
+  broadcast: "Broadcast", archive: "Archive",
+};
+/* A log that shows only successes is worse than no log: it reads as proof the
+   instruction landed. Every outcome the contract can return gets its own word. */
+const ACTION_OUTCOME_VIEW = {
+  ok: { label: "Delivered", tone: "ok" },
+  failed: { label: "Failed", tone: "err" },
+  partial: { label: "Partly delivered", tone: "warn" },
+  staged: { label: "Staged — not submitted", tone: "warn" },
+};
+
+function actionOutcomeView(outcome) {
+  // An outcome the server adds later reads as the server's own word rather than
+  // as a confident wrong label — the same rule investigationView follows.
+  return ACTION_OUTCOME_VIEW[outcome] || { label: String(outcome || "unknown"), tone: "warn" };
+}
+
+function clampActionsLimit(n) {
+  const v = Math.floor(Number(n));
+  if (!Number.isFinite(v)) return ACTIONS_DEFAULT_LIMIT;
+  return Math.min(ACTIONS_MAX_LIMIT, Math.max(1, v));
+}
+
+function actionsUrl(limit = ACTIONS_DEFAULT_LIMIT) {
+  return "/api/actions?limit=" + clampActionsLimit(limit);
+}
+
+function normalizeActions(body) {
+  const rows = Array.isArray(body && body.actions) ? body.actions : [];
+  const out = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    if (typeof row.id !== "string" || !row.id) continue;
+    if (!ACTION_KINDS.has(row.kind)) continue;
+    out.push({
+      id: row.id,
+      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
+      kind: row.kind,
+      agentIds: Array.isArray(row.agentIds) ? row.agentIds.filter((id) => typeof id === "string" && id) : [],
+      outcome: typeof row.outcome === "string" && row.outcome ? row.outcome : "unknown",
+      detail: typeof row.detail === "string" ? row.detail : "",
+    });
+  }
+  return out;
+}
+
+/* "Did I already tell these lanes to rebase?" — answered per agent, in the one
+   place where sending again is a click away. Newest-first is the contract, so
+   the first match is the most recent; sorting here would fight it. */
+function lastActionFor(actions, agentId) {
+  return (actions || []).find((a) => a.agentIds.includes(agentId)) || null;
+}
+
+/* Who it went to, without a wall of session ids. `nameFor` resolves what the
+   snapshot still knows; an agent that has since disappeared keeps its raw id
+   rather than being silently dropped from the record. */
+function actionRecipients(action, nameFor) {
+  const ids = action.agentIds || [];
+  if (!ids.length) return "no recipients";
+  if (ids.length > 3) return ids.length + " sessions";
+  return ids.map((id) => (nameFor && nameFor(id)) || id).join(", ");
+}
+
+async function loadActions(limit = ACTIONS_DEFAULT_LIMIT) {
+  state.actions = { ...state.actions, loading: true, error: "" };
+  render();
+  let next;
+  try {
+    const res = await fetch(actionsUrl(limit), { headers: { accept: "application/json" } });
+    let body = null;
+    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
+    next = !res.ok || !body || body.ok !== true
+      ? { loading: false, error: actionsFailureText(res.status, body), available: !(res.status === 404 && !(body && body.error)), items: [], fetchedAt: 0 }
+      : { loading: false, error: "", available: true, items: normalizeActions(body), fetchedAt: Date.now() };
+  } catch {
+    next = { loading: false, error: actionsFailureText(0, null), available: true, items: [], fetchedAt: 0 };
+  }
+  state.actions = next;
+  render();
+}
+
+function actionsFailureText(status, body) {
+  const code = body && body.error && body.error.code;
+  const message = body && body.error && body.error.message;
+  if (!status) return "Could not reach the server for the action log.";
+  if (status === 404 && !code) return "The action log is not available in this build.";
+  return "Action log unavailable"
+    + (code ? " [" + code + "]" : "")
+    + (message ? ": " + message : " (HTTP " + status + ")");
+}
+
+/* Refresh the journal after anything that writes to it, but only once the log
+   has proved it exists — a build without the route must not be polled forever. */
+function refreshActions() {
+  if (state.actions.available && state.actions.fetchedAt) void loadActions();
+}
+
+function actionRowNode(action, nameFor) {
+  const outcome = actionOutcomeView(action.outcome);
+  return el("div", { class: "action-row", dataset: { tone: outcome.tone } },
+    el("span", { class: "action-when", title: action.at || null, text: action.at ? agoText(action.at) : "time unknown" }),
+    el("span", { class: "action-kind", text: ACTION_KIND_LABELS[action.kind] || action.kind }),
+    el("span", { class: "action-who", text: actionRecipients(action, nameFor) }),
+    el("span", { class: "action-outcome", text: outcome.label }),
+    action.detail ? el("span", { class: "action-detail", text: action.detail }) : null);
+}
+
+function renderActionLog(ui = state, nameFor = null) {
+  const log = ui.actions || {};
+  const panel = el("div", { class: "action-log" },
+    el("div", { class: "action-log-head" },
+      el("h2", { class: "action-log-title", text: "Recent operator actions" }),
+      el("button", {
+        type: "button", class: "btn sm",
+        disabled: log.loading ? "" : null,
+        dataset: { fkey: "actions-refresh" },
+        onclick: () => void loadActions(),
+      }, log.loading ? "Loading…" : "Refresh")));
+
+  if (log.error) {
+    panel.append(el("p", { class: "action-log-note err", role: "status", text: log.error }));
+    return panel;
+  }
+  if (log.loading && !log.items.length) {
+    panel.append(el("p", { class: "action-log-note", role: "status", text: "Reading the action log…" }));
+    return panel;
+  }
+  if (!log.items.length) {
+    panel.append(el("p", {
+      class: "action-log-note",
+      text: "No operator actions recorded yet. Focus, Send, Interrupt, Archive and Broadcast are journalled here as they happen — including the ones that fail.",
+    }));
+    return panel;
+  }
+
+  const rows = log.items.slice(0, ACTIONS_RENDER_CAP);
+  const list = el("div", { class: "action-rows" });
+  for (const action of rows) list.append(actionRowNode(action, nameFor));
+  panel.append(list);
+  if (log.items.length > rows.length) {
+    panel.append(el("p", { class: "action-log-note", text: "Showing the most recent " + rows.length + " of " + log.items.length + " recorded actions." }));
+  }
+  return panel;
+}
+
+function renderActionsPanel() {
+  const panel = $("actions-panel");
+  const toggle = $("actions-toggle");
+  if (!panel) return;
+  const open = state.actionsOpen && state.view !== "usage";
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", open ? "true" : "false");
+    toggle.classList.toggle("is-open", open);
+  }
+  const log = state.actions;
+  const sig = [open ? "1" : "0", log.loading ? "1" : "0", log.error, String(log.fetchedAt),
+    log.items.map((a) => a.id + ":" + a.outcome).join(",")].join("|");
+  if (state.paintSig.actions === sig) return;
+  state.paintSig.actions = sig;
+  panel.textContent = "";
+  panel.hidden = !open;
+  if (!open) return;
+  const byId = agentsById(state.snap);
+  panel.append(renderActionLog(state, (id) => {
+    const found = byId.get(id);
+    return found ? agentName(found.agent) : null;
+  }));
 }
 
 /* ---------- misc UI ---------- */
@@ -6219,6 +6434,14 @@ function boot() {
 
   $("select-toggle").addEventListener("click", () => enterSelectMode(!state.selecting));
 
+  $("actions-toggle").addEventListener("click", () => {
+    state.actionsOpen = !state.actionsOpen;
+    // Re-read on open: another operator (or this one, in another tab) may have
+    // acted since the boot fetch.
+    if (state.actionsOpen && state.actions.available) void loadActions();
+    else render();
+  });
+
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
     // Exclusive with the findings ledger (both are chrome expansions) — opening
@@ -6274,6 +6497,9 @@ function boot() {
   fetchSnapshot();
   fetchLabels();
   fetchTriageQueue();
+  // One attempt at boot. It populates the drawer's "last action" fact, and on a
+  // build without the route it latches available=false so nothing retries it.
+  void loadActions();
   connect();
 }
 

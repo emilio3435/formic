@@ -4453,3 +4453,155 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     })))).toBe(base);
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Finding 3: what was broadcast, to whom, and whether it landed lived only in
+   client memory and died on reload. A broadcast reaches up to 50 agents and
+   instruct is fire-and-forget text typed into a terminal, so the natural
+   recovery after a refresh is to send it again — double-instructing lanes that
+   already got it.
+   ------------------------------------------------------------------------- */
+
+function actionsUi(over: Record<string, unknown> = {}) {
+  return { actions: { loading: false, error: "", available: true, items: [] as unknown[], fetchedAt: 1, ...over } };
+}
+
+const ACT = {
+  delivered: { id: "act_01", at: "2026-07-28T09:12:03.114Z", kind: "instruct", agentIds: ["codex:a1"], outcome: "ok", detail: "typed and submitted" },
+  staged: { id: "act_02", at: "2026-07-28T09:10:00.000Z", kind: "instruct", agentIds: ["codex:a1"], outcome: "staged", detail: "TEXT_STAGED_NOT_SUBMITTED" },
+  failed: { id: "act_03", at: "2026-07-28T09:05:00.000Z", kind: "broadcast", agentIds: ["codex:a1", "claude:b", "claude:c", "claude:d"], outcome: "failed", detail: "0 of 4 recipients delivered" },
+  partial: { id: "act_04", at: "2026-07-28T09:00:00.000Z", kind: "broadcast", agentIds: ["claude:b", "claude:c"], outcome: "partial", detail: "3 of 4 recipients delivered" },
+};
+
+describe("FE-C: operator actions survive a reload, failures included", () => {
+  test("(3) the request is bounded and the payload is defended", () => {
+    expect(M.actionsUrl()).toBe("/api/actions?limit=100");
+    expect(M.actionsUrl(9999)).toBe("/api/actions?limit=500");   // the contract's hard cap
+    expect(M.clampActionsLimit(0)).toBe(1);
+    expect(M.clampActionsLimit("x")).toBe(100);
+
+    const items = M.normalizeActions({
+      ok: true,
+      actions: [
+        ACT.delivered,
+        { ...ACT.staged, kind: "telepathy" },              // unknown kind: dropped
+        { ...ACT.failed, id: "" },                          // no id: dropped
+        { ...ACT.partial, at: "nonsense", agentIds: ["ok", 7, ""], outcome: "" },
+        null,
+      ],
+    });
+    expect(items.map((a: { id: string }) => a.id)).toEqual(["act_01", "act_04"]);
+    expect(items[1].at).toBeNull();                         // unparseable time → absent
+    expect(items[1].agentIds).toEqual(["ok"]);              // non-string ids dropped
+    expect(items[1].outcome).toBe("unknown");               // never silently "ok"
+    expect(M.normalizeActions({ ok: true }).length).toBe(0);
+  });
+
+  test("(3) every outcome the contract can return has its own word", () => {
+    expect(M.actionOutcomeView("ok").label).toBe("Delivered");
+    expect(M.actionOutcomeView("failed").label).toBe("Failed");
+    expect(M.actionOutcomeView("partial").label).toBe("Partly delivered");
+    // The one the operator most needs to see, and the reason a success-only log
+    // is worse than none: text sat in a terminal and was never submitted.
+    expect(M.actionOutcomeView("staged").label).toContain("not submitted");
+    // The four are distinct — no two states share a word.
+    const labels = ["ok", "failed", "partial", "staged"].map((o) => M.actionOutcomeView(o).label);
+    expect(new Set(labels).size).toBe(4);
+    // Tones separate the good from the bad, so scanning one column works.
+    expect(M.actionOutcomeView("ok").tone).toBe("ok");
+    expect(M.actionOutcomeView("failed").tone).toBe("err");
+    // An outcome the server adds later reads as the server's own word.
+    expect(M.actionOutcomeView("rejected").label).toBe("rejected");
+    expect(M.actionOutcomeView(undefined).label).toBe("unknown");
+  });
+
+  test("(3) the log renders newest-first with failures and staged fully visible", () => {
+    const items = [ACT.delivered, ACT.staged, ACT.failed, ACT.partial];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const panel: any = withDom(() => M.renderActionLog(actionsUi({ items }), (id: string) => (id === "codex:a1" ? "Ridge worker" : null)));
+    const rows = allByClass(panel, "action-row");
+    expect(rows).toHaveLength(4);
+    // Contract order is newest-first; the view must not resort and lose it. The
+    // detail strings are unique, so this pins position, not just membership.
+    expect(rows.map((r: unknown) => textOf(r).includes(ACT.delivered.detail))).toEqual([true, false, false, false]);
+    expect(items.map((a) => a.detail).every((d, i) => textOf(rows[i]).includes(d))).toBe(true);
+    const text = textOf(panel);
+    expect(text).toContain("Delivered");
+    expect(text).toContain("not submitted");
+    expect(text).toContain("Failed");
+    expect(text).toContain("Partly delivered");
+    // The failure's own words survive — "0 of 4 recipients delivered" is the
+    // whole point, and a log that dropped it would read as four successes.
+    expect(text).toContain("0 of 4 recipients delivered");
+    // Recipients resolve to names where the snapshot still knows them, and a
+    // fan-out collapses to a count instead of a wall of session ids.
+    expect(text).toContain("Ridge worker");
+    expect(text).toContain("4 sessions");
+    // Outcome tone rides a data attribute so one column is scannable.
+    expect(rows.map((r: { dataset: { tone: string } }) => r.dataset.tone)).toEqual(["ok", "warn", "err", "warn"]);
+  });
+
+  test("(3) recipients degrade honestly rather than dropping unknown sessions", () => {
+    expect(M.actionRecipients({ agentIds: [] }, () => "x")).toBe("no recipients");
+    // An agent gone from the snapshot keeps its raw id — never silently omitted
+    // from the record of who was instructed.
+    expect(M.actionRecipients({ agentIds: ["codex:gone"] }, () => null)).toBe("codex:gone");
+    expect(M.actionRecipients({ agentIds: ["a", "b", "c"] }, (id: string) => id.toUpperCase())).toBe("A, B, C");
+    expect(M.actionRecipients({ agentIds: ["a", "b", "c", "d"] }, () => "n")).toBe("4 sessions");
+  });
+
+  test("(3) an empty log, a loading log and a missing endpoint each read differently", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const render = (over: Record<string, unknown>): any => withDom(() => M.renderActionLog(actionsUi(over)));
+    // Empty is empty — and says what WILL appear, including the failures.
+    const empty = textOf(render({}));
+    expect(empty).toContain("No operator actions recorded yet");
+    expect(empty).toContain("including the ones that fail");
+    expect(textOf(render({ loading: true }))).toContain("Reading the action log");
+    // A build without the route says so; it never renders as "nothing happened".
+    const missing = textOf(render({ error: "The action log is not available in this build." }));
+    expect(missing).toContain("not available in this build");
+    expect(missing).not.toContain("No operator actions recorded yet");
+    expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
+    expect(M.actionsFailureText(0, null)).toContain("Could not reach the server");
+    expect(M.actionsFailureText(500, { error: { code: "LOG_CORRUPT" } })).toContain("LOG_CORRUPT");
+  });
+
+  test("(3) the dock answers 'did I already send this?' next to the button that resends", () => {
+    const live = agent({ controls: [{ action: "instruct", enabled: true }, { action: "focus", enabled: true }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withLog: any = withDom(() => M.renderCommandDock(live, "linked", null, [ACT.staged, ACT.delivered]));
+    const fact = byClass(withLog, "command-dock-last");
+    expect(fact).not.toBeNull();
+    // Newest-first: the staged one is the most recent, and staged is exactly the
+    // case where resending blindly is the wrong move.
+    expect(textOf(fact)).toContain("not submitted");
+    expect(fact.dataset.tone).toBe("warn");
+
+    // Silence before the log has loaded: an unanswered endpoint must never read
+    // as "nothing was ever sent to this agent".
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const noLog: any = withDom(() => M.renderCommandDock(live, "linked", null, []));
+    expect(byClass(noLog, "command-dock-last")).toBeNull();
+    // An action for a different agent is not this agent's history.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const other: any = withDom(() => M.renderCommandDock(live, "linked", null, [ACT.partial]));
+    expect(byClass(other, "command-dock-last")).toBeNull();
+    expect(M.lastActionFor([ACT.partial], "codex:a1")).toBeNull();
+    expect(M.lastActionFor([ACT.staged, ACT.delivered], "codex:a1").id).toBe("act_02");
+  });
+
+  test("(3) a new journal entry repaints the open drawer", () => {
+    const a = agent();
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const base = M.inspectorPaintSig(sel, view, identityUi(actionsUi()));
+    // A landed entry for this agent moves it…
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.delivered] })))).not.toBe(base);
+    // …and so does the SAME entry coming back with a different outcome.
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.delivered] }))))
+      .not.toBe(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [{ ...ACT.delivered, outcome: "failed" }] }))));
+    // Someone else's action does not.
+    expect(M.inspectorPaintSig(sel, view, identityUi(actionsUi({ items: [ACT.partial] })))).toBe(base);
+  });
+});
