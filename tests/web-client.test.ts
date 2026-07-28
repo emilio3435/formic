@@ -4260,6 +4260,22 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(frozen).toContain("Refresh");
   });
 
+  test("(1) a feed that freezes under an OPEN drawer repaints its held controls", () => {
+    // Found by driving the real boot path, not by reading the code: when the
+    // feed freezes, generatedAt is not in this signature and agentRecordSig is
+    // byte-identical across the frozen refresh, so the drawer never repainted —
+    // the dock kept offering live-looking Focus/Send over four-day-old routing.
+    const a = agent();
+    const sel = { kind: "agent", id: a.id };
+    const view = { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [] } };
+    const fresh = identityUi({ conn: "live", snap: { generatedAt: new Date().toISOString(), programs: [] } });
+    const stuck = identityUi({ conn: "live", snap: { generatedAt: FROZEN_AT, programs: [] } });
+    expect(M.inspectorPaintSig(sel, view, stuck)).not.toBe(M.inspectorPaintSig(sel, view, fresh));
+    // And an unreachable server is the same story.
+    expect(M.inspectorPaintSig(sel, view, identityUi({ ...fresh, conn: "offline" })))
+      .not.toBe(M.inspectorPaintSig(sel, view, fresh));
+  });
+
   test("(1) a board that freezes mid-compose repaints the broadcast dock", () => {
     const recipients = [{ agent: agent({ status: "running", controls: [{ action: "instruct", enabled: true }] }), program: { id: "p", name: "P", agents: [] } }];
     // broadcastPaintSig reads the wall clock (it is called during a real paint),

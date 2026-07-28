@@ -1532,7 +1532,10 @@ const state = {
   pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: "", actions: "" },
+  // `alarm` and `actions` start null, not "": their calm signature IS the empty
+  // string, so a "" seed would make the very first paint a no-op and leave both
+  // surfaces showing whatever markup they were served with.
+  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
 };
 state.aliases = state.labels;
 
@@ -1878,12 +1881,15 @@ function renderFeedAlarm() {
   if (!bar) return;
   const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   if (document.body) document.body.classList.toggle("feed-frozen", !!alarm);
+  // Visibility is set on EVERY paint, before the guard: the signature only
+  // decides whether the subtree is worth rebuilding, and a guard that can also
+  // suppress `hidden` is one seed-value collision away from a silent alarm.
+  bar.hidden = !alarm;
   const sig = alarm ? alarm.kind + "\u001f" + alarm.headline : "";
   if (state.paintSig.alarm === sig) return;
   state.paintSig.alarm = sig;
   bar.textContent = "";
   bar.className = "feed-alarm";
-  bar.hidden = !alarm;
   if (alarm) bar.append(feedAlarmNode(alarm));
 }
 
@@ -3870,6 +3876,11 @@ function inspectorPaintSig(sel, view, ui) {
       ].join(":")
       : "",
     lastAction ? lastAction.id + ":" + lastAction.outcome : "",
+    // A feed that freezes under an OPEN drawer changes nothing else the drawer
+    // signs — generatedAt is not in here and the agent record is byte-identical
+    // across a frozen refresh — so without this the dock would keep painting
+    // live-looking Focus/Send/Interrupt/Archive over four-day-old routing.
+    feedFrozen(ui) ? "held" : "",
   ].join("\u001f");
 }
 
@@ -6153,12 +6164,13 @@ function renderActionsPanel() {
     toggle.classList.toggle("is-open", open);
   }
   const log = state.actions;
+  // Same rule as the alarm: visibility every paint, rebuild only on change.
+  panel.hidden = !open;
   const sig = [open ? "1" : "0", log.loading ? "1" : "0", log.error, String(log.fetchedAt),
     log.items.map((a) => a.id + ":" + a.outcome).join(",")].join("|");
   if (state.paintSig.actions === sig) return;
   state.paintSig.actions = sig;
   panel.textContent = "";
-  panel.hidden = !open;
   if (!open) return;
   const byId = agentsById(state.snap);
   panel.append(renderActionLog(state, (id) => {
