@@ -1,3 +1,144 @@
+# WAVE 2 / BE-D Lane Report
+
+Branch: `ant-hill/be-control-20260728`
+
+Outcome: 6 FIXED, 3 BLOCKED by explicit file ownership.
+
+## Verification
+
+- `bunx tsc --noEmit`: PASS
+- `bun test`: PASS — 417 tests, 0 failures, 1,762 assertions across 27 files
+- Skips/filters: none (`rg '\.(skip|only)\(' tests` returned no matches)
+- `git diff --check`: PASS before commits
+- No service restart, push, merge, deployment, or live cmux control was performed.
+
+## 1. Multiline instructions are typed verbatim
+
+Status: **FIXED**
+
+Commit: `3594baed32952a49e0bc885b9c83ff6da679078b`
+
+`executeControl` now rejects any remaining CR/LF after trimming, before `surface.send_text`. Broadcast parsing rejects CR/LF with the precise `INVALID_INSTRUCTION` code before fanout.
+
+Proof:
+
+- `tests/control-safety.test.ts` — “rejects CR/LF instruction text before typing it into a terminal”
+- `tests/broadcast.test.ts` — “rejects multiline instructions before dispatch”
+
+Deliberately left alone: `src/server/http.ts` and `src/web/**` are owned by other lanes. The single-control HTTP path is still safe because it reaches the new `executeControl` guard; the broadcast path rejects during its owned parser.
+
+## 2. A timed-out Enter is retried
+
+Status: **BLOCKED**
+
+Commit: N/A
+
+The safe source change requires changing the Wave 1 regression at `tests/control-http.test.ts:293`, which explicitly asserts that a timed-out first Enter is retried and succeeds with three commands. `tests/control-http.test.ts` is outside this lane's ownership. Changing `src/server/control.ts` alone would intentionally break the mandatory full suite, so the unsafe retry remains unchanged for the orchestrator to route with ownership of that test.
+
+Required follow-up: on first Enter timeout, return `TEXT_STAGED_NOT_SUBMITTED` with an unknown-delivery message and do not issue a second Enter. Keep retry only for a known, non-timeout non-zero exit.
+
+Test needed in the owning lane: replace the contradictory test with one asserting status 504, the “may or may not have landed” message, and exactly two runner calls (`send_text`, one `send_key`).
+
+## 3. Production triage persistence and runner are untested; corrupt data bricks boot
+
+Status: **FIXED**
+
+Commit: `cc90090d03ae9bda16e5d1c064d6fc97f1b84a1f`
+
+`JsonTriageQueueStore.open` now logs a loud error, clears any partially loaded items, and returns an empty store for unreadable/corrupt data instead of throwing during boot. A valid persisted `running` item still recovers to `blocked` and is re-persisted. `NativeLunaInvestigationRunner` gained only an optional spawn seam so its guards can be tested without launching a real CLI.
+
+Proof in `tests/triage.test.ts`:
+
+- Missing file opens empty and add/reopen round-trips.
+- Persisted `running` recovers to `blocked` and the disk record is updated.
+- Invalid JSON opens empty and logs.
+- An invalid record after a valid record opens fully empty and logs, proving no half-load.
+- Missing investigation prompt rejects before spawn.
+- A second native launch rejects while the first is active.
+
+Deliberately left alone: the corrupt source file is not overwritten during fail-open recovery, preserving evidence for operator repair.
+
+## 4. Control error and HTTP boundary branches lack tests
+
+Status: **FIXED**
+
+Commit: `3594baed32952a49e0bc885b9c83ff6da679078b`
+
+Proof in `tests/control-safety.test.ts`:
+
+- Wrong-agent execution returns `AGENT_IDENTITY_MISMATCH` without running cmux.
+- Whitespace-only direct execution returns `INSTRUCTION_REQUIRED` without sending a bare Enter.
+- GET returns 405 `METHOD_NOT_ALLOWED`.
+- `text/plain` POST returns 415 `CONTENT_TYPE_REJECTED`.
+- An 8,193-byte instruction returns the 8 KiB instruction-cap error before cmux.
+
+The `CMUX_TIMEOUT` branch was already covered by Wave 1 at `tests/control-http.test.ts:130`. `INVALID_ACTION` has no runtime test by design: `ControlRequest.action` is a closed union and the branch is the TypeScript `never` exhaustiveness guard; reaching it requires an intentionally false cast, which would not test a supported contract.
+
+## 5. `collectCmux` outcomes and `cmuxReachable: false` lack server coverage
+
+Status: **FIXED**
+
+Commit: `51074bbf70bc15a0f0da34a62dd3445261710fd4`
+
+`tests/cmux.test.ts` now pins all four terminal-discovery outcomes: timeout, non-zero exit with stderr, invalid/schema-drift output, and valid parsed output. The valid case also proves the exact RPC argv and 10-second runner deadline.
+
+The state-health half was already fixed on this branch by Wave 1 commit `4f503767ae2c24911637265b3f46714d9ddc7b45`: `tests/state-health.test.ts:94` drives failed cmux and notification collectors, asserts `cmuxReachable: false`, retains last confirmed surfaces, and exposes both errors.
+
+No production source change was needed.
+
+## 6. Mid-fanout runner failure and recipient cap are untested
+
+Status: **FIXED**
+
+Commit: `3594baed32952a49e0bc885b9c83ff6da679078b`
+
+`tests/broadcast.test.ts` now scripts a failure on recipient 2 of 3 after text staging. It proves status 207, `TEXT_STAGED_NOT_SUBMITTED`, continued delivery to recipient 3, one `send_text` per recipient, and `afterControl` receiving only successful IDs. Separate boundary coverage proves 50 recipients are accepted and 51 are rejected before dispatch.
+
+Deliberately left alone: the client has no staged-text-specific retry UX, and `src/web/**` is outside this lane.
+
+## 7. Triage rejects valid IPv6 loopback
+
+Status: **FIXED**
+
+Commit: `cc90090d03ae9bda16e5d1c064d6fc97f1b84a1f`
+
+The triage hostname allowlist now uses WHATWG URL's bracketed `"[::1]"` form.
+
+Proof: `tests/triage.test.ts` — “accepts an exact same-origin IPv6 loopback triage request”.
+
+Deliberately left alone: no shared-helper extraction was made because the other handlers are outside this lane and already use the correct spelling.
+
+## 8. Investigation binary/model are hardcoded and undeclared
+
+Status: **BLOCKED**
+
+Commit: N/A
+
+The requested fix belongs in prohibited `config/**` and its loader, then must be passed through prohibited startup wiring. This lane cannot honestly claim the model or executable is configurable without editing those owned surfaces. The existing hardcoded `codex` and `gpt-5.6-luna` values remain.
+
+No regression test was added because there is no permitted implementation contract to test. Finding 3's Native runner tests cover only the existing prompt and single-flight guards.
+
+## 9. Investigate lacks a pre-click capability and documented prerequisite
+
+Status: **BLOCKED**
+
+Commit: N/A
+
+A visible pre-click unavailable reason requires capability data in prohibited server/snapshot wiring and a disabled state in prohibited `src/web/**`; documenting the prerequisite requires prohibited `QUICKSTART.md`. A `triage.ts` launch-time check alone would still fail only after clicking and would not satisfy this finding, so no partial workaround was shipped.
+
+No test can prove the requested visible pre-click behavior within this lane's permitted files.
+
+## Out-of-scope follow-up routing
+
+1. Route finding 2 with ownership of `tests/control-http.test.ts` alongside `src/server/control.ts`.
+2. Route findings 8/9 together with ownership of `config/models.json`, its loader/startup wiring, capability snapshot/API fields, `src/web/**`, and prerequisite documentation.
+
+---
+
+*Previous lane reports follow unchanged.*
+
+---
+
 # WAVE 2 / BE-C Lane Report
 
 Branch: `ant-hill/be-boundary-20260728`

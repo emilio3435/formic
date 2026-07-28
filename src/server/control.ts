@@ -109,6 +109,14 @@ export async function executeControl(
   } else if (request.action === "instruct") {
     const instruction = request.instruction?.trim();
     if (!instruction) return failure(request, 400, "INSTRUCTION_REQUIRED", "A non-empty instruction is required.");
+    if (/[\r\n]/.test(instruction)) {
+      return failure(
+        request,
+        400,
+        "INVALID_INSTRUCTION",
+        "Instruction must not contain carriage returns or newlines.",
+      );
+    }
     const textFailure = await runCommand(
       request,
       dependencies.runner,

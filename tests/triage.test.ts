@@ -1,9 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import type { AgentSnapshot, HubSnapshot, OperatorIssue } from "../src/shared/types";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, spyOn, test } from "bun:test";
+import type {
+  AgentSnapshot,
+  HubSnapshot,
+  OperatorIssue,
+  TriageQueueItem,
+  TriageRecommendation,
+} from "../src/shared/types";
 import {
   buildTriageRecommendation,
   handleTriageRequest,
+  JsonTriageQueueStore,
   MemoryTriageQueueStore,
+  NativeLunaInvestigationRunner,
   type InvestigationResult,
   type TriageInvestigationRunner,
 } from "../src/server/triage";
@@ -54,6 +65,34 @@ function post(path: string, issueId: string, origin = "http://127.0.0.1:4701"): 
     headers: { origin, "content-type": "application/json" },
     body: JSON.stringify({ issueId }),
   });
+}
+
+function recommendation(issueId = "system:persisted"): TriageRecommendation {
+  return {
+    issueId,
+    generatedAt: "2026-07-22T06:01:00.000Z",
+    mode: "investigation",
+    headline: "Investigate persisted evidence",
+    rationale: "The evidence needs a bounded investigation.",
+    affectedAgents: 1,
+    affectedPrograms: 1,
+    providers: ["codex"],
+    evidence: ["Persisted evidence"],
+    steps: [{ title: "Inspect", detail: "Inspect the persisted evidence." }],
+    queueRecommended: true,
+    investigationPrompt: "Goal: Inspect persisted evidence.\n\nStop when: The evidence is reconciled.",
+  };
+}
+
+function queueItem(overrides: Partial<TriageQueueItem> = {}): TriageQueueItem {
+  const value = recommendation();
+  return {
+    ...value,
+    id: `triage:${value.issueId}`,
+    state: "queued",
+    createdAt: value.generatedAt,
+    ...overrides,
+  };
 }
 
 describe("operator triage recommendations", () => {
@@ -230,5 +269,130 @@ describe("operator triage recommendations", () => {
     expect(transitions).toEqual(["queued", "running", "completed"]);
     expect(current.issues?.[0]?.lifecycle).toMatchObject({ state: "verifying" });
     expect(unsubscribe).toBeFunction();
+  });
+
+  test("accepts an exact same-origin IPv6 loopback triage request", async () => {
+    const value = agent("codex:ipv6", "alpha");
+    const issue: OperatorIssue = {
+      id: "agent:codex:ipv6",
+      kind: "agent",
+      severity: "warning",
+      title: "IPv6 triage",
+      summary: "The request arrived over IPv6 loopback.",
+      affectedAgentIds: [value.id],
+    };
+    const request = new Request("http://[::1]:4701/api/triage/generate", {
+      method: "POST",
+      headers: { origin: "http://[::1]:4701", "content-type": "application/json" },
+      body: JSON.stringify({ issueId: issue.id }),
+    });
+
+    const response = await handleTriageRequest(
+      request,
+      snapshot(issue, [value]),
+      new MemoryTriageQueueStore(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, recommendation: { issueId: issue.id } });
+  });
+});
+
+describe("JSON triage queue durability", () => {
+  test("a missing queue opens empty and persisted items survive reopen", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
+    const path = join(directory, "triage-queue.json");
+    try {
+      const store = await JsonTriageQueueStore.open(path);
+      expect(store.list()).toEqual([]);
+
+      const added = await store.add(recommendation());
+      const reopened = await JsonTriageQueueStore.open(path);
+      expect(reopened.list()).toEqual([added]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a running item recovers as blocked and the recovery is persisted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
+    const path = join(directory, "triage-queue.json");
+    await writeFile(path, JSON.stringify([queueItem({
+      state: "running",
+      startedAt: "2026-07-22T06:02:00.000Z",
+      runId: "run-before-restart",
+    })]));
+    try {
+      const store = await JsonTriageQueueStore.open(path);
+      expect(store.list()).toEqual([
+        expect.objectContaining({
+          state: "blocked",
+          runId: "run-before-restart",
+          completedAt: expect.any(String),
+          result: expect.stringContaining("restarted before this investigation reported completion"),
+        }),
+      ]);
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual([
+        expect.objectContaining({
+          state: "blocked",
+          result: expect.stringContaining("restarted before this investigation reported completion"),
+        }),
+      ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["invalid JSON", "{"],
+    ["an invalid item after a valid item", JSON.stringify([queueItem(), { issueId: "broken" }])],
+  ])("opens %s as an empty queue and logs the corruption", async (_label, contents) => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
+    const path = join(directory, "triage-queue.json");
+    await writeFile(path, contents);
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const store = await JsonTriageQueueStore.open(path);
+
+      expect(store.list()).toEqual([]);
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining(`Ignoring unreadable queue at ${path}`));
+    } finally {
+      logged.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("native triage investigation guards", () => {
+  test("rejects an item without an investigation prompt before spawning", async () => {
+    const runner = new NativeLunaInvestigationRunner("/tmp", "/tmp/anthill-unused-investigations");
+    await expect(runner.launch(queueItem({ investigationPrompt: undefined }))).rejects.toThrow(
+      "Queued item has no investigation prompt",
+    );
+  });
+
+  test("rejects a second launch while the first native investigation is active", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-runner-"));
+    let finish!: (exitCode: number) => void;
+    const exited = new Promise<number>((resolve) => { finish = resolve; });
+    const process = {
+      pid: 42,
+      stderr: new ReadableStream({ start(controller) { controller.close(); } }),
+      exited,
+      kill: () => {},
+    } as unknown as ReturnType<typeof Bun.spawn>;
+    const spawn = (() => process) as typeof Bun.spawn;
+    try {
+      const runner = new NativeLunaInvestigationRunner(directory, join(directory, "output"), spawn);
+      const first = await runner.launch(queueItem());
+
+      await expect(runner.launch(queueItem({ issueId: "system:second" }))).rejects.toThrow(
+        "One investigation is already running",
+      );
+      finish(0);
+      await expect(first.completion).resolves.toMatchObject({ ok: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

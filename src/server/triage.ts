@@ -270,7 +270,13 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
         } else store.items.set(item.issueId, item);
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        store.items.clear();
+        recovered = false;
+        console.error(
+          `[JsonTriageQueueStore] Ignoring unreadable queue at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     if (recovered) await store.persist(store.list());
     return store;
@@ -298,7 +304,11 @@ function isQueueItem(value: unknown): value is TriageQueueItem {
 export class NativeLunaInvestigationRunner implements TriageInvestigationRunner {
   private active = false;
 
-  constructor(private readonly cwd: string, private readonly outputRoot: string) {}
+  constructor(
+    private readonly cwd: string,
+    private readonly outputRoot: string,
+    private readonly spawn: typeof Bun.spawn = Bun.spawn,
+  ) {}
 
   async launch(item: TriageQueueItem): Promise<InvestigationLaunch> {
     if (!item.investigationPrompt) throw new Error("Queued item has no investigation prompt");
@@ -309,7 +319,7 @@ export class NativeLunaInvestigationRunner implements TriageInvestigationRunner 
     const outputPath = join(this.outputRoot, `${runId}.md`);
     let process: ReturnType<typeof Bun.spawn>;
     try {
-      process = Bun.spawn([
+      process = this.spawn([
         "codex", "exec", "--model", "gpt-5.6-luna",
         "-c", 'model_reasoning_effort="xhigh"',
         "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral",
@@ -353,7 +363,7 @@ function error(status: number, code: string, message: string): Response {
 function sameOriginLoopback(request: Request): boolean {
   const url = new URL(request.url);
   const origin = request.headers.get("origin");
-  return ["127.0.0.1", "localhost", "::1"].includes(url.hostname) && origin === url.origin;
+  return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && origin === url.origin;
 }
 
 async function issueIdFrom(request: Request): Promise<string | Response> {

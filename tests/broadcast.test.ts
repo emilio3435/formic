@@ -11,6 +11,17 @@ class RecordingRunner implements CommandRunner {
   }
 }
 
+class ScriptedRunner implements CommandRunner {
+  readonly commands: string[][] = [];
+
+  constructor(private readonly results: CommandResult[]) {}
+
+  async run(command: readonly string[]): Promise<CommandResult> {
+    this.commands.push([...command]);
+    return this.results.shift() ?? { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  }
+}
+
 const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
 
 function agent(id: string, surfaceId: string, instruct = true): AgentSnapshot {
@@ -80,6 +91,95 @@ describe("safe sequential broadcast", () => {
     ]);
     expect(runner.commands).toHaveLength(2);
     expect(refreshes).toBe(1);
+  });
+
+  test("reports a staged recipient failure, continues fanout, and refreshes only successful recipients", async () => {
+    const success = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    const runner = new ScriptedRunner([
+      success,
+      success,
+      success,
+      { exitCode: 7, stdout: "", stderr: "surface was busy", timedOut: false },
+      { exitCode: 23, stdout: "", stderr: "Enter rejected", timedOut: false },
+      success,
+      success,
+    ]);
+    const refreshed: string[][] = [];
+    const response = await handleBroadcastRequest(
+      post({ agentIds: ["first", "second", "third"], instruction: "Check in." }),
+      {
+        runner,
+        archiveStore,
+        cmuxExecutable: "cmux",
+        getSnapshot: () => snapshot([
+          agent("first", "S1"),
+          agent("second", "S2"),
+          agent("third", "S3"),
+        ]),
+        afterControl: (agentIds) => { refreshed.push([...(agentIds ?? [])]); },
+      },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(207);
+    expect(body).toMatchObject({ ok: false, partial: true, sent: 2, failed: 1 });
+    expect(body.results[1]).toMatchObject({
+      agentId: "second",
+      ok: false,
+      error: { code: "TEXT_STAGED_NOT_SUBMITTED", stderr: "Enter rejected", exitCode: 23 },
+    });
+    expect(runner.commands.filter((command) => command[2] === "surface.send_text")).toHaveLength(3);
+    expect(runner.commands.at(-2)?.[3]).toBe(JSON.stringify({ surface_id: "S3", text: "Check in." }));
+    expect(refreshed).toEqual([["first", "third"]]);
+  });
+
+  test("rejects multiline instructions before dispatch", async () => {
+    const runner = new RecordingRunner();
+    const response = await handleBroadcastRequest(
+      post({ agentIds: ["first"], instruction: "Inspect state.\nThen report." }),
+      {
+        runner,
+        archiveStore,
+        getSnapshot: () => snapshot([agent("first", "S1")]),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "INVALID_INSTRUCTION",
+        message: "instruction must not contain carriage returns or newlines.",
+      },
+    });
+    expect(runner.commands).toHaveLength(0);
+  });
+
+  test("accepts 50 unique recipients and rejects 51 before dispatch", async () => {
+    const agents = Array.from({ length: 51 }, (_, index) => agent(`agent-${index}`, `S${index}`));
+    const acceptedRunner = new RecordingRunner();
+    const accepted = await handleBroadcastRequest(
+      post({ agentIds: agents.slice(0, 50).map((value) => value.id), instruction: "Check in." }),
+      {
+        runner: acceptedRunner,
+        archiveStore,
+        getSnapshot: () => snapshot(agents),
+      },
+    );
+    const rejectedRunner = new RecordingRunner();
+    const rejected = await handleBroadcastRequest(
+      post({ agentIds: agents.map((value) => value.id), instruction: "Check in." }),
+      {
+        runner: rejectedRunner,
+        archiveStore,
+        getSnapshot: () => snapshot(agents),
+      },
+    );
+
+    expect(accepted.status).toBe(200);
+    expect(acceptedRunner.commands).toHaveLength(100);
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ error: { code: "INVALID_BROADCAST_REQUEST" } });
+    expect(rejectedRunner.commands).toHaveLength(0);
   });
 
   test.each([
