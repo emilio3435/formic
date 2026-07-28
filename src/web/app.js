@@ -17,6 +17,10 @@ function el(tag, attrs = {}, ...children) {
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
     else if (k === "dataset") Object.assign(node.dataset, v);
+    // <textarea> has no `value` content attribute — its value is its child text —
+    // so setAttribute("value", …) silently produces an empty box. Assign the
+    // property instead; on a freshly created <input> that is equivalent.
+    else if (k === "value") node.value = v;
     else if (k.startsWith("on") && typeof v === "function") {
       node.addEventListener(k.slice(2), v);
     } else node.setAttribute(k, v);
@@ -917,14 +921,17 @@ function reorderWidgetIds(ids, id, direction) {
   return ordered;
 }
 
-function systemStatus(snap, conn = "live") {
+function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
   if (!snap || conn === "offline") return { key: "offline", label: "Offline", tone: "offline" };
   const control = snap.controlHealth;
   const source = snap.totals && snap.totals.sourceHealth;
   const sourceDegraded = source && source.total > 0 && (source.degraded > 0 || source.healthy < source.total);
   const controlDegraded = !control || control.cmuxReachable !== true || control.errors?.length > 0 || control.staleSources?.length > 0;
   const feedDegraded = conn !== "live";
-  if (sourceDegraded || controlDegraded || feedDegraded) return { key: "degraded", label: "Degraded", tone: "degraded" };
+  // A snapshot poll that failed while a snapshot is already on screen used to be
+  // swallowed into a console.warn and a flag nobody read, leaving stale numbers
+  // looking authoritative. Degrade the verdict so the Refresh affordance appears.
+  if (sourceDegraded || controlDegraded || feedDegraded || fetchFailed) return { key: "degraded", label: "Degraded", tone: "degraded" };
   return { key: "operational", label: "Operational", tone: "ok" };
 }
 
@@ -970,11 +977,11 @@ function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
-function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems) {
+function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
     // trailing micro-chip; degraded promotes to a full cell with its reason.
-    const status = systemStatus(snap, conn);
+    const status = systemStatus(snap, conn, fetchFailed);
     const control = snap && snap.controlHealth;
     const source = snap && snap.totals && snap.totals.sourceHealth;
     const stale = (control && control.staleSources && control.staleSources.length) || 0;
@@ -989,6 +996,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
             ? `${source.healthy}/${source.total} sources healthy · controls reachable.`
             : "Sources and controls healthy.")
           : conn !== "live" ? "Live snapshot feed is not healthy."
+            : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
               ? "cmux unreachable — terminal titles and Focus/Send stay offline."
               : source && source.degraded > 0
@@ -1137,11 +1145,34 @@ globalThis.TheAntHill = {
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
+  el,
+  // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
+  // they are declared below it, so listing them here would be a TDZ error.
+  snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
+  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig,
 };
 
 /* ---------- state ---------- */
 
 const STALE_AFTER_MS = 60_000;
+
+/* Freshness is a property of the DATA, never of the transport. The server
+   heartbeats every 25s from a timer that knows nothing about the collector, so a
+   heartbeat proves only that the socket is open — it must never be able to make
+   a 91-hour-old snapshot read as "Live". Age is measured against
+   snapshot.generatedAt, which the server already sends. The collector refreshes
+   every 4s, so anything past SNAPSHOT_FRESH_MS is already behind; past
+   SNAPSHOT_STALE_MS the board is not showing "now" in any useful sense. */
+const SNAPSHOT_FRESH_MS = 15_000;
+const SNAPSHOT_STALE_MS = 60_000;
+
+function snapshotFreshness(generatedAt, now = Date.now()) {
+  const at = generatedAt ? Date.parse(generatedAt) : NaN;
+  if (!Number.isFinite(at)) return { state: "unknown", ageMs: null };
+  const ageMs = Math.max(0, now - at);
+  if (ageMs <= SNAPSHOT_FRESH_MS) return { state: "fresh", ageMs };
+  return { state: ageMs > SNAPSHOT_STALE_MS ? "stale" : "lagging", ageMs };
+}
 
 const state = {
   snap: null,
@@ -1203,7 +1234,7 @@ const state = {
   pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  paintSig: { programs: "", inspector: "", widgets: "" },
+  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "" },
 };
 state.aliases = state.labels;
 
@@ -1301,8 +1332,10 @@ function saveWidgetPreferences() {
 /* ---------- data flow ---------- */
 
 /* The one apply path a validated snapshot takes into the UI: shape-guard, adopt
-   it, sync the scan window, clear the failure flag, re-render. Both the GET poll
-   (fetchSnapshot) and the POST recollect feed through here so neither can drift. */
+   it, sync the scan window, clear the failure flag, re-render. The GET poll
+   (fetchSnapshot), the POST recollect and the SSE stream — which carries very
+   nearly every snapshot the UI ever paints — all feed through here, so a guard
+   added below actually applies to real traffic. */
 function applySnapshot(snap) {
   if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
     throw new Error("unexpected snapshot shape");
@@ -1349,42 +1382,112 @@ function scheduleRefetch() {
   refetchTimer = setTimeout(() => { refetchTimer = null; fetchSnapshot(); }, 400);
 }
 
+/* Both envelope shapes the stream uses: a bare snapshot, or one wrapped in
+   { snapshot }. Anything else is an unknown event kind, not a snapshot. */
+function eventSnapshot(msg) {
+  if (msg && msg.schemaVersion === 1) return msg;
+  return msg && msg.snapshot ? msg.snapshot : null;
+}
+
 function handleEventPayload(raw) {
   state.lastEventAt = Date.now();
-  if (state.conn !== "live") setConn("live");
   let msg;
   try { msg = JSON.parse(raw); } catch { scheduleRefetch(); return; }
-  const snap =
-    msg && msg.schemaVersion === 1 && Array.isArray(msg.programs) ? msg
-    : msg && msg.snapshot && msg.snapshot.schemaVersion === 1 ? msg.snapshot
-    : null;
-  if (snap) {
-    state.snap = snap;
-    if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
-    state.fetchFailed = false;
-    render();
-  } else {
-    scheduleRefetch(); // unknown event kind: treat as a nudge, refetch the truth
+  const snap = eventSnapshot(msg);
+  try {
+    applySnapshot(snap);
+  } catch {
+    scheduleRefetch(); // unknown event kind or bad shape: refetch the truth
   }
+  applyFreshnessVerdict();
 }
 
 let es = null;
 function connect() {
   es = new EventSource("/api/events");
-  es.onopen = () => { state.lastEventAt = Date.now(); setConn("live"); };
+  es.onopen = () => { state.lastEventAt = Date.now(); applyFreshnessVerdict(); };
   es.onerror = () => { setConn(state.snap ? "reconnecting" : "offline"); };
   es.onmessage = (e) => handleEventPayload(e.data);
   es.addEventListener("snapshot", (e) => handleEventPayload(e.data));
-  // Heartbeats only prove the feed is alive — no refetch, no snapshot re-render.
+  // Heartbeats only prove the pipe is open — no refetch, no snapshot re-render,
+  // and crucially no verdict of their own: a 25s heartbeat under a 60s threshold
+  // used to make setConn("stale") unreachable while the data sat frozen.
   es.addEventListener("heartbeat", () => {
     state.lastEventAt = Date.now();
-    if (state.conn !== "live") setConn("live");
+    applyFreshnessVerdict();
   });
+}
+
+/* The connection verdict, recomputed from evidence rather than from whichever
+   event happened to fire last. The socket owns the pessimistic states; once it
+   is open the AGE OF THE DATA decides between live and stale. Heartbeats are
+   deliberately not an input here — they are why a frozen board read as "Live".
+   Pure, and returns null when the socket is not open, so the rule is testable
+   without a live EventSource. */
+function connVerdictFor({ open, lastEventAt, generatedAt, now = Date.now() }) {
+  if (!open) return null; // onerror / the health poll own the pessimistic states
+  const silent = lastEventAt > 0 && now - lastEventAt > STALE_AFTER_MS;
+  return silent || snapshotFreshness(generatedAt, now).state === "stale" ? "stale" : "live";
+}
+
+function applyFreshnessVerdict() {
+  const next = connVerdictFor({
+    open: !!es && es.readyState === EventSource.OPEN,
+    lastEventAt: state.lastEventAt,
+    generatedAt: state.snap && state.snap.generatedAt,
+  });
+  if (next) setConn(next);
+}
+
+/* EventSource only auto-retries transport errors; a non-2xx status or a wrong
+   content-type parks it in CLOSED for good, and nothing else in the client
+   re-arms it (the manual retry button is hidden whenever any agent exists). This
+   poll owns recovery — with backoff so a server that is genuinely down is not
+   hammered — and falls back to polling /api/snapshot once the feed has been
+   unhealthy for longer than STALE_AFTER_MS, so the board can never sit painting
+   hours-old agent state under live-looking elapsed clocks. */
+let reconnectAttempts = 0;
+let nextReconnectAt = 0;
+let nextFallbackPollAt = 0;
+let connChangedAt = Date.now();
+
+/* readyState as raw numbers so the rule stays testable without an EventSource:
+   0 CONNECTING (a retry is already in flight, leave it), 1 OPEN (healthy, reset
+   the backoff), 2 CLOSED (dead for good — re-arm once the window has passed). */
+function reconnectPlan(readyState, now, attempts, dueAt) {
+  if (readyState === 1) return { reconnect: false, attempts: 0, dueAt: 0 };
+  if (readyState === 0 || now < dueAt) return { reconnect: false, attempts, dueAt };
+  const next = attempts + 1;
+  return { reconnect: true, attempts: next, dueAt: now + Math.min(30_000, 1_000 * 2 ** Math.min(next, 5)) };
+}
+
+/* Once the feed has been unhealthy for longer than one stale window, stop
+   trusting the stream to come back on its own and re-poll the snapshot. */
+function fallbackPollDue(conn, now, changedAt, dueAt) {
+  return conn !== "live" && now - changedAt > STALE_AFTER_MS && now >= dueAt;
+}
+
+function pollConnectionHealth(now = Date.now()) {
+  const plan = reconnectPlan(es ? es.readyState : 2, now, reconnectAttempts, nextReconnectAt);
+  reconnectAttempts = plan.attempts;
+  nextReconnectAt = plan.dueAt;
+  if (plan.reconnect) {
+    setConn(state.snap ? "reconnecting" : "offline");
+    if (es) es.close();
+    connect();
+  }
+  applyFreshnessVerdict();
+  if (fallbackPollDue(state.conn, now, connChangedAt, nextFallbackPollAt)) {
+    nextFallbackPollAt = now + 10_000;
+    void fetchSnapshot();
+  }
+  renderConn(); // keep the snapshot-age suffix ticking while nothing else paints
 }
 
 function setConn(next) {
   if (state.conn === next) return;
   state.conn = next;
+  connChangedAt = Date.now();
   renderConn();
 }
 
@@ -1398,10 +1501,20 @@ const CONN_LABELS = {
   offline: "Server unreachable",
 };
 
+/* The badge says how old the data is the moment it stops being fresh — a bare
+   green "Live" beside a four-day-old snapshot is the trust failure this replaces. */
+function connLabelText(conn, generatedAt, now = Date.now()) {
+  const base = CONN_LABELS[conn] || conn;
+  if (conn !== "live" && conn !== "stale") return base;
+  const fresh = snapshotFreshness(generatedAt, now);
+  if (fresh.state === "fresh" || fresh.state === "unknown") return base;
+  return base + " · snapshot " + fmtElapsed(fresh.ageMs) + " ago";
+}
+
 function renderConn() {
   const badge = $("conn-badge");
   badge.className = "conn conn-" + state.conn;
-  $("conn-label").textContent = CONN_LABELS[state.conn];
+  $("conn-label").textContent = connLabelText(state.conn, state.snap && state.snap.generatedAt);
   renderBeacon();
 }
 
@@ -2542,15 +2655,16 @@ function renderScopeNote(shown) {
     text += ` · lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`;
   }
   if (state.query || state.facetProgram || state.facetProvider) text += " · filters applied";
+  if (state.fetchFailed) text += " · last refresh failed";
   note.textContent = text;
 }
 
 /* ---------- program list ---------- */
 
-function programOpen(program) {
-  const override = state.programOverrides.get(program.id);
+function programOpen(program, ui = state) {
+  const override = ui.programOverrides.get(program.id);
   if (override) return override === "open";
-  if (state.view === "history") return false;
+  if (ui.view === "history") return false;
   const r = programRollup(program);
   return r.needsYou > 0 || r.working > 0;
 }
@@ -2559,6 +2673,43 @@ function toggleProgram(program) {
   state.programOverrides.set(program.id, programOpen(program) ? "closed" : "open");
   saveOverrides();
   render();
+}
+
+/* Signature ignores live elapsed clocks — status/message/model/context drive
+   paint. It must also carry the state the list CONTROLS write, or every one of
+   them reads as dead: toggleProgram only mutates programOverrides, and both
+   rename pencils only set renaming, so on a quiet fleet render() early-returned
+   and the caret never moved / the rename form never appeared. renameDraft stays
+   out on purpose — it is a live input, and every external reset of it flips
+   renamePending, which is in here. */
+function programsPaintSig(visible, ui) {
+  return [
+    ui.view,
+    ui.query,
+    ui.facetProgram,
+    ui.facetProvider,
+    ui.lookbackHours,
+    ui.selecting ? "1" : "0",
+    ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
+    [...ui.selection].join(","),
+    [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
+    ui.renaming || "",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+    visible.map(({ program, agents }) =>
+      program.id + "@" + (programOpen(program, ui) ? "open" : "shut")
+      + "~" + programName(program)
+      + ">" + agents.map((a) => [
+        a.id,
+        a.status,
+        a.statusReason || "",
+        a.model || "",
+        contextDisplayValue(a.tokens) || "",
+        rowSummary(a) || "",
+        ui.labels.get(presentationLabelKey(agentLabelTarget(a))) || "",
+      ].join(":")).join(","),
+    ).join("|"),
+  ].join("\u001f");
 }
 
 function renderPrograms() {
@@ -2592,29 +2743,7 @@ function renderPrograms() {
     if (!agents.length) continue;
     visible.push({ program, agents });
   }
-  // Signature ignores live elapsed clocks — status/message/model/context drive paint.
-  const sig = [
-    state.view,
-    state.query,
-    state.facetProgram,
-    state.facetProvider,
-    state.lookbackHours,
-    state.selecting ? "1" : "0",
-    state.selected ? state.selected.kind + ":" + state.selected.id : "",
-    [...state.selection].join(","),
-    visible.map(({ program, agents }) =>
-      program.id + ">" + agents.map((a) => [
-        a.id,
-        a.status,
-        a.statusReason || "",
-        a.model || "",
-        contextDisplayValue(a.tokens) || "",
-        rowSummary(a) || "",
-        state.labels.get(presentationLabelKey(agentLabelTarget(a))) || "",
-      ].join(":")).join(","),
-    ).join("|"),
-  ].join("\u001f");
-  if (paintUnchanged("programs", sig)) {
+  if (paintUnchanged("programs", programsPaintSig(visible, state))) {
     renderScopeNote(visible.reduce((n, row) => n + row.agents.length, 0));
     return;
   }
@@ -3112,6 +3241,88 @@ function findSelected() {
   return null;
 }
 
+/* ---------- inspector paint signature ---------- */
+
+/* Fields the live clocks own: tickClocks rewrites data-elapsed-base / data-ago
+   nodes in place every 5s, so letting them into a paint signature would rebuild
+   the drawer on every snapshot and defeat the guard. Their PRESENCE still
+   matters (a tile appears when elapsedMs stops being null), so the projection
+   keeps a presence marker for each. */
+const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "identityTrace"]);
+
+/* The agent drawer paints very nearly the whole agent record — status, gates,
+   model policy, tokens, cwd, git, messages, artifacts, transcript tail, target
+   routing and controls[] — so project the record itself rather than hand-listing
+   fields that then rot. A field added to the snapshot is covered automatically. */
+function agentRecordSig(agent) {
+  if (!agent) return "";
+  const body = JSON.stringify(agent, (key, value) => (AGENT_SIG_TICKED.has(key) ? undefined : value)) || "";
+  return body + "|" + (agent.elapsedMs == null ? "" : "e") + (agent.updatedAt ? "u" : "");
+}
+
+/* The lineage spine paints ancestors and direct children, so their identity and
+   activity are part of what this drawer shows — a subagent going idle must not
+   leave a stale glyph on an open drawer. */
+function lineagePaintSig(agent, snap) {
+  const byId = new Map(snapshotAgents(snap).map(({ agent: a }) => [a.id, a]));
+  const kin = (a) => a.id + ":" + a.status + ":" + (a.activity || "") + ":" + (a.role || "") + ":" + agentName(a);
+  const parts = [];
+  const seen = new Set([agent.id]);
+  let parent = agent.parentAgentId ? byId.get(agent.parentAgentId) : null;
+  if (agent.parentAgentId && !parent) parts.push("untracked:" + agent.parentAgentId);
+  while (parent && !seen.has(parent.id)) {
+    seen.add(parent.id);
+    parts.push(kin(parent));
+    parent = parent.parentAgentId ? byId.get(parent.parentAgentId) : null;
+  }
+  for (const a of byId.values()) if (a.parentAgentId === agent.id) parts.push(kin(a));
+  return parts.join(",");
+}
+
+/* Every piece of state a drawer body renders. The agent branch used to carry
+   only the entity kind/id and evidenceOpen — queueItem/triage/issue are all
+   undefined for an agent — so an open agent drawer never repainted: the
+   Interrupt/Archive confirm strips were unreachable, Send never showed its busy
+   state, and the body stayed frozen at the moment the drawer opened while the
+   row beside it updated every snapshot.
+
+   Live inputs are deliberately excluded (drafts, renameDraft): tearing a text
+   box down while it is being typed into is the very bug the broadcast composer
+   had. Both are only ever cleared externally alongside a flag that IS in the
+   signature (sendControl clears drafts as it clears pending and sets feedback;
+   submitRename flips renamePending), so exclusion cannot strand a stale value. */
+function inspectorPaintSig(sel, view, ui) {
+  const queueItem = ui.queueItems.find((item) => item.issueId === sel.id);
+  const triage = ui.triage.get(sel.id);
+  const triagePending = [...ui.triagePending].filter((key) => key.endsWith(":" + sel.id)).join(",");
+  const issue = view && (view.issue || view.item);
+  const agent = view && view.kind === "agent" ? view.agent : null;
+  const feedback = agent ? ui.feedback.get(agent.id) : null;
+  return [
+    sel.kind, sel.id,
+    view ? view.kind : "missing",
+    issue && issue.lifecycle ? issue.lifecycle.state : "",
+    issue && issue.workState || "",
+    issue && issue.progress != null ? String(issue.progress) : "",
+    queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
+    triage ? triage.generatedAt + ":" + triage.headline : "",
+    triagePending,
+    ui.evidenceOpen ? "1" : "0",
+    agent ? agentRecordSig(agent) : "",
+    agent ? lineagePaintSig(agent, ui.snap) : "",
+    agent && view.program ? programName(view.program) : "",
+    // Interaction flags the drawer controls read on every paint.
+    agent ? [...ui.pending].filter((key) => key.startsWith(agent.id + ":")).sort().join(",") : "",
+    agent && feedback ? (feedback.ok ? "ok" : "err") + ":" + feedback.action + ":" + feedback.message : "",
+    ui.confirming || "",
+    ui.renaming || "",
+    ui.renamePending ? "1" : "0",
+    ui.renameError || "",
+    ui.labelsLoading ? "1" : "0",
+    ui.labelLoadError || "",
+  ].join("\u001f");
+}
+
 /* Drawer router: one chassis, a distinct body per entity kind. selectEntity
    sets state.selected = {kind,id}; resolveSelection maps it to a live record and
    DRAWER_RENDERERS routes to the per-type body. Keeping this as renderInspector
@@ -3129,22 +3340,7 @@ function renderInspector() {
   }
 
   const view = resolveSelection(sel);
-  const queueItem = state.queueItems.find((item) => item.issueId === sel.id);
-  const triage = state.triage.get(sel.id);
-  const pending = [...state.triagePending].filter((key) => key.endsWith(":" + sel.id)).join(",");
-  const issue = view && (view.issue || view.item);
-  const sig = [
-    sel.kind, sel.id,
-    view ? view.kind : "missing",
-    issue && issue.lifecycle ? issue.lifecycle.state : "",
-    issue && issue.workState || "",
-    issue && issue.progress != null ? String(issue.progress) : "",
-    queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
-    triage ? triage.generatedAt + ":" + triage.headline : "",
-    pending,
-    state.evidenceOpen ? "1" : "0",
-  ].join("\u001f");
-  if (paintUnchanged("inspector", sig)) {
+  if (paintUnchanged("inspector", inspectorPaintSig(sel, view, state))) {
     pane.hidden = false;
     return;
   }
@@ -4821,18 +5017,42 @@ async function copyText(text) {
   }
 }
 
+/* Everything the dock paints, deliberately minus broadcastDraft: the composer is
+   a live input and tearing it down mid-sentence is the bug this guard exists to
+   stop. The one place that clears the draft externally (sendBroadcast success)
+   also writes broadcastResults and flips broadcastPending, so an external reset
+   can never be missed by leaving the draft out. */
+function broadcastPaintSig(recipients, eligible, ui) {
+  return [
+    recipients.map(({ agent }) => agent.id + "=" + (broadcastEligible(agent) ? "1" : "0") + ":" + agentName(agent)).join(","),
+    String(eligible.length),
+    ui.broadcastResults
+      ? [...ui.broadcastResults].map(([id, r]) => id + "=" + (r && r.ok ? "ok" : (r && r.error && r.error.code) || "err")).join(",")
+      : "",
+    ui.broadcastConfirming ? "1" : "0",
+    ui.broadcastPending ? "1" : "0",
+    ui.broadcastError || "",
+  ].join("\u001f");
+}
+
 /* Broadcast dock — appears only in selection mode. Recipients are previewed
    honestly: eligible (live + instruct-capable) vs unavailable, and per-recipient
    results after send are never smoothed over. */
 function renderBroadcastBar() {
   const bar = $("broadcast-bar");
-  bar.textContent = "";
-  if (!state.selecting) { bar.hidden = true; return; }
+  if (!state.selecting) {
+    state.paintSig.broadcast = "closed";
+    bar.textContent = "";
+    bar.hidden = true;
+    return;
+  }
   bar.hidden = false;
 
   const recipients = selectedRecipients();
   const eligible = recipients.filter(({ agent }) => broadcastEligible(agent));
   const results = state.broadcastResults;
+  if (paintUnchanged("broadcast", broadcastPaintSig(recipients, eligible, state))) return;
+  bar.textContent = "";
 
   bar.append(el("div", { class: "broadcast-head" },
     icon("broadcast", { label: "Broadcast" }),
@@ -5230,13 +5450,7 @@ function boot() {
   });
 
   setInterval(() => {
-    if (
-      es && es.readyState === EventSource.OPEN &&
-      state.conn === "live" &&
-      state.lastEventAt && Date.now() - state.lastEventAt > STALE_AFTER_MS
-    ) {
-      setConn("stale");
-    }
+    pollConnectionHealth();
     tickClocks();
     void fetchTriageQueue();
   }, 5000);

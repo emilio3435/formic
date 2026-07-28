@@ -2741,3 +2741,354 @@ describe("scroll shell: review fixes", () => {
     expect(styles).not.toContain(".program-rollup-cell.is-alerting { display: none");
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Wave 1 / FE-A — dead controls and the lying Live badge.
+
+   Every test below asserts BEHAVIOR (a returned verdict, a computed signature,
+   a built node), never a source substring: the bugs in this lane all survived a
+   suite that only grepped app.js text. Paint-signature tests follow one shape —
+   flip exactly one field and require the signature to move — because a signature
+   that omits a field is precisely how a control becomes a dead click.
+--------------------------------------------------------------------------- */
+describe("FE-A: snapshot freshness drives the connection verdict", () => {
+  const NOW = Date.parse("2026-07-28T12:00:00.000Z");
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+
+  test("freshness is measured on the data, in three honest bands", () => {
+    expect(M.snapshotFreshness(ago(4_000), NOW).state).toBe("fresh");
+    expect(M.snapshotFreshness(ago(15_000), NOW).state).toBe("fresh");   // inclusive edge
+    expect(M.snapshotFreshness(ago(15_001), NOW).state).toBe("lagging");
+    expect(M.snapshotFreshness(ago(60_000), NOW).state).toBe("lagging"); // inclusive edge
+    expect(M.snapshotFreshness(ago(60_001), NOW).state).toBe("stale");
+    expect(M.snapshotFreshness(ago(91 * 3_600_000), NOW)).toEqual({ state: "stale", ageMs: 91 * 3_600_000 });
+    // A clock skew that puts generatedAt in the future is not "negative age".
+    expect(M.snapshotFreshness(new Date(NOW + 5_000).toISOString(), NOW)).toEqual({ state: "fresh", ageMs: 0 });
+    // No verdict is claimed when there is nothing to measure.
+    for (const bad of [undefined, null, "", "not-a-date"]) {
+      expect(M.snapshotFreshness(bad, NOW)).toEqual({ state: "unknown", ageMs: null });
+    }
+  });
+
+  /* THE regression. Production served a 91-hour-old snapshot under a green
+     "Live" badge because the only staleness check read the heartbeat clock, and
+     the server heartbeats every 25s under a 60s threshold — so a heartbeat that
+     landed one millisecond ago (lastEventAt === now) always won. The verdict now
+     takes the heartbeat clock AND the data age, and the data age must be able to
+     override a perfectly healthy pipe. */
+  test("a heartbeat that just landed cannot make a frozen snapshot read as Live", () => {
+    expect(M.connVerdictFor({ open: true, lastEventAt: NOW, generatedAt: ago(91 * 3_600_000), now: NOW })).toBe("stale");
+    expect(M.connVerdictFor({ open: true, lastEventAt: NOW, generatedAt: ago(61_000), now: NOW })).toBe("stale");
+    // …and a fresh snapshot still reads Live, so the badge is not merely pessimistic.
+    expect(M.connVerdictFor({ open: true, lastEventAt: NOW, generatedAt: ago(3_000), now: NOW })).toBe("live");
+    // A silent socket (no event of any kind for a full stale window) is still stale
+    // even when the last snapshot it delivered was fresh at the time.
+    expect(M.connVerdictFor({ open: true, lastEventAt: NOW - 61_000, generatedAt: ago(3_000), now: NOW })).toBe("stale");
+    // Boot: the socket is open but no snapshot has landed — no stale claim yet.
+    expect(M.connVerdictFor({ open: true, lastEventAt: 0, generatedAt: null, now: NOW })).toBe("live");
+    // A closed/failed socket is owned by onerror and the health poll, not here.
+    expect(M.connVerdictFor({ open: false, lastEventAt: NOW, generatedAt: ago(3_000), now: NOW })).toBeNull();
+  });
+
+  test("the badge shows the actual snapshot age as soon as it stops being fresh", () => {
+    expect(M.connLabelText("live", ago(3_000), NOW)).toBe("Live");
+    expect(M.connLabelText("live", ago(40_000), NOW)).toBe("Live · snapshot 40s ago");
+    expect(M.connLabelText("stale", ago(91 * 3_600_000), NOW)).toBe("Stale feed · snapshot 4d ago");
+    // Nothing measurable → no fabricated age suffix.
+    expect(M.connLabelText("live", null, NOW)).toBe("Live");
+    expect(M.connLabelText("connecting", ago(91 * 3_600_000), NOW)).toBe("Connecting");
+    expect(M.connLabelText("offline", ago(91 * 3_600_000), NOW)).toBe("Server unreachable");
+  });
+});
+
+describe("FE-A: the dead SSE stream recovers instead of painting hours-old state", () => {
+  const NOW = 1_000_000;
+
+  test("a CLOSED stream is re-armed, with backoff, and OPEN resets the backoff", () => {
+    // 2 = CLOSED. EventSource never retries this state on its own.
+    const first = M.reconnectPlan(2, NOW, 0, 0);
+    expect(first.reconnect).toBe(true);
+    expect(first.attempts).toBe(1);
+    expect(first.dueAt).toBe(NOW + 2_000);
+    // Inside the backoff window the poll must not hammer a server that is down.
+    expect(M.reconnectPlan(2, NOW + 500, first.attempts, first.dueAt)).toEqual({
+      reconnect: false, attempts: 1, dueAt: first.dueAt,
+    });
+    // Backoff grows and then caps at 30s rather than running away.
+    expect(M.reconnectPlan(2, NOW, 1, 0).dueAt).toBe(NOW + 4_000);
+    expect(M.reconnectPlan(2, NOW, 9, 0).dueAt).toBe(NOW + 30_000);
+    // 0 = CONNECTING: a retry is already in flight, leave it alone.
+    expect(M.reconnectPlan(0, NOW, 3, 0)).toEqual({ reconnect: false, attempts: 3, dueAt: 0 });
+    // 1 = OPEN: healthy again, so the next outage starts from a clean backoff.
+    expect(M.reconnectPlan(1, NOW, 4, NOW + 30_000)).toEqual({ reconnect: false, attempts: 0, dueAt: 0 });
+  });
+
+  test("an unhealthy feed falls back to polling the snapshot, throttled", () => {
+    expect(M.fallbackPollDue("live", NOW, NOW - 600_000, 0)).toBe(false);      // healthy: never poll
+    expect(M.fallbackPollDue("stale", NOW, NOW - 61_000, 0)).toBe(true);       // wedged collector
+    expect(M.fallbackPollDue("reconnecting", NOW, NOW - 61_000, 0)).toBe(true);
+    expect(M.fallbackPollDue("reconnecting", NOW, NOW - 10_000, 0)).toBe(false); // give the stream a chance first
+    expect(M.fallbackPollDue("offline", NOW, NOW - 61_000, NOW + 5_000)).toBe(false); // throttle window
+  });
+});
+
+describe("FE-A: every snapshot transport uses the one apply path", () => {
+  test("both stream envelopes resolve to a snapshot; anything else is not one", () => {
+    const snap = snapshot();
+    expect(M.eventSnapshot(snap)).toBe(snap);                     // bare snapshot event
+    expect(M.eventSnapshot({ snapshot: snap })).toBe(snap);       // wrapped envelope
+    // Unknown event kinds resolve to null, which handleEventPayload turns into a
+    // refetch rather than adopting a half-understood payload.
+    expect(M.eventSnapshot({ type: "heartbeat" })).toBeNull();
+    expect(M.eventSnapshot({ schemaVersion: 2, programs: [] })).toBeNull();
+    expect(M.eventSnapshot(null)).toBeNull();
+    expect(M.eventSnapshot(undefined)).toBeNull();
+  });
+});
+
+describe("FE-A: a failed snapshot refresh is visible instead of swallowed", () => {
+  test("fetchFailed degrades the health verdict and names itself", () => {
+    const healthy = snapshot();
+    expect(M.systemStatus(healthy, "live", false).label).toBe("Operational");
+    expect(M.systemStatus(healthy, "live", true)).toMatchObject({ key: "degraded", label: "Degraded", tone: "degraded" });
+    // Degraded tone is what puts the existing Refresh affordance on screen.
+    const failed = M.summaryWidgetData("health", healthy, "live", "percent", [], true);
+    expect(failed.tone).toBe("degraded");
+    expect(failed.value).toBe("Degraded");
+    expect(failed.sublabel).toContain("refresh failed");
+    expect(M.summaryWidgetData("health", healthy, "live", "percent", [], false).sublabel).not.toContain("refresh failed");
+  });
+});
+
+describe("FE-A: paint signatures cover the state their surfaces render", () => {
+  /* A minimal document is only needed by the el() test; the signature helpers are
+     pure functions of (records, ui). */
+  function fakeDom() {
+    const make = (tag: string) => ({
+      nodeType: 1,
+      tagName: tag,
+      className: "",
+      textContent: "",
+      dataset: {} as Record<string, string>,
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
+      addEventListener() {},
+      append(...kids: unknown[]) { this.children.push(...kids); },
+    });
+    return {
+      createElement: (t: string) => make(t),
+      createElementNS: (_ns: string, t: string) => make(t),
+      createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
+    };
+  }
+  function withDom<T>(fn: () => T): T {
+    (globalThis as unknown as { document: unknown }).document = fakeDom();
+    try { return fn(); } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  }
+
+  // A stand-in for the module's `state`. The signature helpers take it as an
+  // argument precisely so a test can flip one field at a time.
+  function ui(overrides: Record<string, unknown> = {}) {
+    return {
+      snap: snapshot(),
+      queueItems: [] as unknown[],
+      triage: new Map(),
+      triagePending: new Set<string>(),
+      evidenceOpen: false,
+      pending: new Set<string>(),
+      feedback: new Map(),
+      drafts: new Map(),
+      confirming: null,
+      renaming: null,
+      renameDraft: "",
+      renamePending: false,
+      renameError: "",
+      labelsLoading: false,
+      labelLoadError: "",
+      view: "now",
+      query: "",
+      facetProgram: "",
+      facetProvider: "",
+      lookbackHours: 24,
+      selecting: false,
+      selected: null,
+      selection: new Set<string>(),
+      programOverrides: new Map<string, string>(),
+      labels: new Map<string, string>(),
+      broadcastResults: null,
+      broadcastConfirming: false,
+      broadcastPending: false,
+      broadcastError: "",
+      broadcastDraft: "",
+      ...overrides,
+    };
+  }
+
+  const SEL = { kind: "agent", id: "codex:a1" };
+  const program = { id: "p", name: "P", agents: [agent()] };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const agentView = (over: Record<string, unknown> = {}) => ({ kind: "agent", agent: agent(over) as any, program });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isig = (view: any, u: any) => M.inspectorPaintSig(SEL, view, u);
+
+  /* Finding 1. For an agent selection the old signature collapsed to
+     kind/id/"agent"/""/""/""/""/""/""/evidenceOpen — queueItem, triage and issue
+     are all undefined for an agent — so ONLY the evidence cog could ever move it.
+     render() therefore early-returned for an open agent drawer: clicking
+     Interrupt or Archive set state.confirming and repainted nothing, so the
+     confirm strip never existed and the button was unreachable. */
+  test("(1) the agent drawer signature moves for every interaction flag its controls set", () => {
+    const base = isig(agentView(), ui());
+    const moves: Array<[string, Record<string, unknown>]> = [
+      ["confirming (Interrupt/Archive confirm strip)", { confirming: "act:codex:a1:interrupt" }],
+      ["pending (Send busy state)", { pending: new Set(["codex:a1:instruct"]) }],
+      ["feedback (control result banner)", { feedback: new Map([["codex:a1", { ok: false, action: "instruct", message: "Send failed" }]]) }],
+      ["renaming (Evidence rename form)", { renaming: "agent:codex:a1" }],
+      ["renamePending", { renamePending: true }],
+      ["renameError", { renameError: "Keep the label under 80 characters." }],
+      ["labelsLoading", { labelsLoading: true }],
+      ["labelLoadError", { labelLoadError: "bad label response" }],
+      ["evidenceOpen (already covered before the fix)", { evidenceOpen: true }],
+    ];
+    for (const [why, over] of moves) {
+      expect(isig(agentView(), ui(over)), why).not.toBe(base);
+    }
+    // The confirm strip is instance-scoped, so two different instances of the
+    // same action must not share a signature.
+    expect(isig(agentView(), ui({ confirming: "head:act:codex:a1:interrupt" })))
+      .not.toBe(isig(agentView(), ui({ confirming: "act:codex:a1:interrupt" })));
+    // Another agent's pending work must not repaint this drawer.
+    expect(isig(agentView(), ui({ pending: new Set(["codex:other:instruct"]) }))).toBe(base);
+  });
+
+  test("(1) the agent drawer signature moves for every agent field the drawer paints", () => {
+    const base = isig(agentView(), ui());
+    const moves: Array<[string, Record<string, unknown>]> = [
+      ["status", { status: "attention" }],
+      ["statusReason", { statusReason: "Waiting on review." }],
+      ["model", { model: "claude-opus-4-8" }],
+      ["gates", { gates: ["needs-review"] }],
+      ["controls enablement", { controls: [{ action: "focus", enabled: false, reason: "no route" }] }],
+      ["tokens", { tokens: { provenance: "observed", total: 99_000, contextWindow: 200_000 } }],
+      ["lastHumanMessage", { lastHumanMessage: "ship the fix" }],
+      ["lastAgentMessage", { lastAgentMessage: "done" }],
+      ["transcriptTail", { transcriptTail: "…tail" }],
+      ["cwd", { cwd: "/repos/x" }],
+      ["target routing", { target: { resolution: "ambiguous", surfaceId: "s1", workspaceId: "w1" } }],
+      ["cwdMismatch", { target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true } }],
+      ["modelPolicy", { modelPolicy: { state: "violation", summary: "off policy" } }],
+      ["nextAction", { nextAction: "Review the diff" }],
+      ["artifacts", { artifacts: [{ kind: "file", label: "log", path: "/tmp/a.log" }] }],
+    ];
+    for (const [why, over] of moves) {
+      expect(isig(agentView(over), ui()), why).not.toBe(base);
+    }
+  });
+
+  /* The guard still has to earn its keep: the 4s snapshot cadence must not
+     strobe the drawer just because the live clocks moved, and a text box must
+     never be torn down while it is being typed into. */
+  test("(1) tick-driven clocks and live inputs deliberately do NOT move the signature", () => {
+    const base = isig(agentView({ elapsedMs: 60_000, updatedAt: "2026-07-22T03:00:00.000Z" }), ui());
+    // tickClocks() rewrites these in place from data-elapsed-base / data-ago.
+    expect(isig(agentView({ elapsedMs: 61_000, updatedAt: "2026-07-22T03:00:00.000Z" }), ui())).toBe(base);
+    expect(isig(agentView({ elapsedMs: 60_000, updatedAt: "2026-07-22T03:00:04.000Z" }), ui())).toBe(base);
+    // …but their PRESENCE still matters: a tile appears when the field arrives.
+    expect(isig(agentView({ updatedAt: "2026-07-22T03:00:00.000Z" }), ui())).not.toBe(base);
+    // The instruct composer keeps its text across snapshots.
+    expect(isig(agentView({ elapsedMs: 60_000, updatedAt: "2026-07-22T03:00:00.000Z" }),
+      ui({ drafts: new Map([["codex:a1", "half a sentence"]]) }))).toBe(base);
+  });
+
+  test("(1) the drawer tracks the lineage it paints, and non-agent drawers are unaffected", () => {
+    const parent = agent({ id: "codex:orch", status: "running" });
+    const child = agent({ id: "codex:kid", parentAgentId: "codex:a1", status: "running" });
+    const withKin = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ parentAgentId: "codex:orch" }), parent, child] }] });
+    const view = { kind: "agent", agent: agent({ parentAgentId: "codex:orch" }), program };
+    const base = isig(view, ui({ snap: withKin }));
+    const kidIdle = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ parentAgentId: "codex:orch" }), parent, agent({ id: "codex:kid", parentAgentId: "codex:a1", status: "waiting" })] }] });
+    expect(isig(view, ui({ snap: kidIdle }))).not.toBe(base);
+
+    // Non-agent drawers keep the signature they always had.
+    const issue = { id: "system:1", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [], workState: "open" };
+    const advisorySel = { kind: "advisory", id: "system:1" };
+    const advBase = M.inspectorPaintSig(advisorySel, { kind: "advisory", issue }, ui());
+    expect(M.inspectorPaintSig(advisorySel, { kind: "advisory", issue: { ...issue, workState: "acting" } }, ui())).not.toBe(advBase);
+    expect(M.inspectorPaintSig(advisorySel, null, ui())).not.toBe(advBase); // dropped from the snapshot
+  });
+
+  /* Finding 4. toggleProgram only writes programOverrides and both rename
+     pencils only write renaming, so on a quiet fleet render() early-returned and
+     the caret/rename form never appeared — and startRename's querySelector then
+     always found nothing to focus. */
+  test("(4) the program list signature moves for expand/collapse and rename state", () => {
+    const visible = [{ program, agents: [agent()] }];
+    const base = M.programsPaintSig(visible, ui());
+    expect(M.programsPaintSig(visible, ui({ programOverrides: new Map([["p", "closed"]]) }))).not.toBe(base);
+    expect(M.programsPaintSig(visible, ui({ programOverrides: new Map([["p", "open"]]) }))).not.toBe(base);
+    // Collapsed and expanded are distinguishable from each other, not just from base.
+    expect(M.programsPaintSig(visible, ui({ programOverrides: new Map([["p", "open"]]) })))
+      .not.toBe(M.programsPaintSig(visible, ui({ programOverrides: new Map([["p", "closed"]]) })));
+    expect(M.programsPaintSig(visible, ui({ renaming: "program:p" }))).not.toBe(base);
+    expect(M.programsPaintSig(visible, ui({ renamePending: true }))).not.toBe(base);
+    expect(M.programsPaintSig(visible, ui({ renameError: "Save failed" }))).not.toBe(base);
+    // The rename input keeps its text across snapshots (same reasoning as the
+    // broadcast composer); every external reset of it flips renamePending.
+    expect(M.programsPaintSig(visible, ui({ renameDraft: "half a name" }))).toBe(base);
+    // The fields the signature already covered still work.
+    expect(M.programsPaintSig(visible, ui({ query: "ridge" }))).not.toBe(base);
+    expect(M.programsPaintSig([{ program, agents: [agent({ status: "attention" })] }], ui())).not.toBe(base);
+  });
+
+  /* Finding 3. <textarea> has no `value` content attribute, so el()'s
+     setAttribute fallback produced a permanently empty composer — the operator
+     watched their broadcast text vanish on every 4s snapshot. */
+  test("(3) el() assigns value as a property so a textarea actually shows its text", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const area: any = withDom(() => M.el("textarea", { value: "restart the collector", "aria-label": "Broadcast instruction" }));
+    expect(area.tagName).toBe("textarea");
+    expect(area.value).toBe("restart the collector");
+    // Proof it is not the inert attribute the bug relied on.
+    expect(area.attributes.value).toBeUndefined();
+    expect(area.attributes["aria-label"]).toBe("Broadcast instruction"); // other attrs unchanged
+    // The instruct composer is an <input> and must round-trip identically.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const input: any = withDom(() => M.el("input", { type: "text", value: "focus pane 3" }));
+    expect(input.value).toBe("focus pane 3");
+    expect(input.attributes.type).toBe("text");
+    // A null value is still skipped entirely rather than assigned.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const empty: any = withDom(() => M.el("textarea", { value: null }));
+    expect(empty.value).toBeUndefined();
+  });
+
+  test("(3) an idle snapshot does not tear down a live broadcast composer", () => {
+    const recipients = [{ agent: agent(), program }];
+    const eligible = recipients;
+    const base = M.broadcastPaintSig(recipients, eligible, ui());
+    // Typing must not change the signature — that is what used to wipe the box
+    // every ~4s when the next SSE snapshot arrived.
+    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastDraft: "restart the collector" }))).toBe(base);
+    // Everything the dock actually paints does change it.
+    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastConfirming: true }))).not.toBe(base);
+    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastPending: true }))).not.toBe(base);
+    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastError: "Broadcast failed (HTTP 500)" }))).not.toBe(base);
+    expect(M.broadcastPaintSig(recipients, eligible, ui({
+      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
+    }))).not.toBe(base);
+    // Per-recipient outcomes are distinguished, not just presence.
+    expect(M.broadcastPaintSig(recipients, eligible, ui({
+      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
+    }))).not.toBe(M.broadcastPaintSig(recipients, eligible, ui({
+      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: false, error: { code: "AGENT_NOT_FOUND" } }]]),
+    })));
+    // Selection changes rebuild the recipient chips.
+    expect(M.broadcastPaintSig([], [], ui())).not.toBe(base);
+    // An agent losing eligibility mid-compose must repaint its chip.
+    const gone = [{ agent: agent({ status: "stale", controls: [] }), program }];
+    expect(M.broadcastPaintSig(gone, [], ui())).not.toBe(base);
+  });
+});
