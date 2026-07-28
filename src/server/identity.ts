@@ -119,13 +119,10 @@ function hasOpenAncestor(
 
 function primaryOpenIdentity(
   hints: readonly IdentityHint[],
-  agents: readonly CollectedAgent[],
+  agentsByIdentity: ReadonlyMap<string, CollectedAgent>,
 ): IdentityHint | undefined {
   const uniqueHints = [...new Map(hints.map((hint) => [identityKey(hint), hint])).values()];
   const openKeys = new Set(uniqueHints.map(identityKey));
-  const agentsByIdentity = new Map(
-    agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
-  );
   const roots = uniqueHints.filter(
     (hint) => !hasOpenAncestor(hint, openKeys, agentsByIdentity),
   );
@@ -157,6 +154,19 @@ function baseTrace(
     identityConflict: surface.identityConflict,
     notes,
   };
+}
+
+function failedProbeSurfaces(surfaces: readonly CmuxSurface[], error: string): CmuxSurface[] {
+  return surfaces.map((surface) => ({
+    ...surface,
+    sourceSessionIds: [],
+    identityConflict: error,
+    identityTrace: {
+      ...baseTrace(surface, "probe-failed", [error]),
+      sourceSessionIds: [],
+      identityConflict: error,
+    },
+  }));
 }
 
 export async function enrichCmuxIdentity(
@@ -197,11 +207,28 @@ export async function enrichCmuxIdentity(
       : `process identity lookup exited ${processResult.exitCode}: ${processResult.stderr.trim() || "no stderr"}`;
     errors.push(error);
     return {
-      value: surfaces.map((surface) => ({ ...surface, identityTrace: baseTrace(surface, "probe-failed", [error]) })),
+      value: failedProbeSurfaces(surfaces, error),
       errors,
     };
   }
   const processes = parseProcessTable(processResult.stdout).filter((process) => ttyNames.has(process.tty));
+  const processesByTty = new Map<string, ProcessRow[]>();
+  for (const process of processes) {
+    const ttyProcesses = processesByTty.get(process.tty) ?? [];
+    ttyProcesses.push(process);
+    processesByTty.set(process.tty, ttyProcesses);
+  }
+  const agentsByIdentity = new Map(
+    agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
+  );
+  const resolvedCommandHints = new Map<string, IdentityHint | null>();
+  const cachedCommandHint = (hint: IdentityHint): IdentityHint | null => {
+    const key = `${identityKey(hint)}:${hint.full}`;
+    if (!resolvedCommandHints.has(key)) {
+      resolvedCommandHints.set(key, resolveCommandHint(hint, agents));
+    }
+    return resolvedCommandHints.get(key) ?? null;
+  };
   const pids = [
     ...new Set(
       processes
@@ -218,16 +245,12 @@ export async function enrichCmuxIdentity(
     const hasUsableIdentityOutput = [...openFiles.values()]
       .flat()
       .some((path) => identityFromSessionPath(path) !== null);
-    if (
-      openFileResult.timedOut ||
-      openFileResult.stderr.trim() ||
-      (openFileResult.exitCode !== 0 && !hasUsableIdentityOutput)
-    ) {
-      errors.push(
-        openFileResult.timedOut
-          ? "open-session identity lookup timed out"
-          : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`,
-      );
+    if (openFileResult.timedOut || (openFileResult.exitCode !== 0 && !hasUsableIdentityOutput)) {
+      const error = openFileResult.timedOut
+        ? "open-session identity lookup timed out"
+        : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`;
+      errors.push(error);
+      return { value: failedProbeSurfaces(surfaces, error), errors };
     }
   }
 
@@ -243,7 +266,7 @@ export async function enrichCmuxIdentity(
       }
       if (!surface.tty) return { ...surface, identityTrace: baseTrace(surface, "no-tty") };
       const tty = surface.tty.replace(/^\/dev\//, "");
-      const ttyProcesses = processes.filter((process) => process.tty === tty);
+      const ttyProcesses = processesByTty.get(tty) ?? [];
       const processEvidence: SurfaceProcessEvidence[] = ttyProcesses.map((process) => ({
         pid: process.pid,
         command: process.command,
@@ -261,7 +284,7 @@ export async function enrichCmuxIdentity(
           provider: hint.provider,
           value: hint.value,
           full: hint.full,
-          resolvedSessionId: resolveCommandHint(hint, agents)?.value,
+          resolvedSessionId: cachedCommandHint(hint)?.value,
         })),
       );
       const trace = (
@@ -285,7 +308,7 @@ export async function enrichCmuxIdentity(
         value: match.sessionId,
         full: true,
       }));
-      const openIdentity = primaryOpenIdentity(openHints, agents);
+      const openIdentity = primaryOpenIdentity(openHints, agentsByIdentity);
       if (openHints.length > 0 && !openIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files on ${tty}`;
         errors.push(identityConflict);
