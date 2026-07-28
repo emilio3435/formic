@@ -2374,9 +2374,15 @@ async function removeTriageItem(issueId, intent = "remove") {
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "HTTP " + res.status);
     }
-    state.queueItems = state.queueItems.filter((item) => item.issueId !== issueId);
     // The plan itself is deliberately KEPT: removing a run must not also erase
-    // the recommendation the operator is about to re-queue.
+    // the recommendation the operator is about to re-queue. A TriageQueueItem
+    // IS a recommendation, so on a page that never generated one locally (a
+    // reload mid-investigation) the removed item is what the plan has to come
+    // from — otherwise cancelling drops the operator back to "Triage this
+    // finding" and the analysis has to be paid for twice.
+    const removed = state.queueItems.find((item) => item.issueId === issueId);
+    if (removed && !state.triage.has(issueId)) state.triage.set(issueId, removed);
+    state.queueItems = state.queueItems.filter((item) => item.issueId !== issueId);
     toast(body.cancelled ? "Investigation cancelled" : "Investigation record removed", "ok");
     await fetchSnapshot();
     await fetchTriageQueue();
@@ -2688,17 +2694,17 @@ function triageLifecycleControls(issue, queueItem, queueing, ui = state) {
 
   if (queueItem.state === "running") {
     return [lever("cancel", "triage-cancel", cancelling ? "Cancelling…" : "Cancel investigation", cancelling,
-      () => void removeTriageItem(id, "cancel"))];
+      () => removeTriageItem(id, "cancel"))];
   }
   if (queueItem.state === "queued") {
     return [lever("remove", "triage-remove", removing ? "Removing…" : "Remove from queue", removing,
-      () => void removeTriageItem(id, "remove"))];
+      () => removeTriageItem(id, "remove"))];
   }
   return [
     lever("rerun", "triage-rerun", queueing ? "Requeueing…" : "Investigate again", queueing,
-      () => void triageIssue(id, "queue")),
+      () => triageIssue(id, "queue")),
     lever("remove", "triage-remove", removing ? "Removing…" : "Remove record", removing,
-      () => void removeTriageItem(id, "remove")),
+      () => removeTriageItem(id, "remove")),
   ];
 }
 
@@ -4672,7 +4678,7 @@ function attentionButton(agent, action, label, until) {
     class: "btn sm attn-act",
     disabled: state.attentionPending.has(agent.id) ? "" : null,
     dataset: { fkey: "attn:" + agent.id + ":" + action },
-    onclick: () => void applyAttention(agent.id, action, until),
+    onclick: () => applyAttention(agent.id, action, until),
   }, label);
 }
 

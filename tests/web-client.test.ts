@@ -79,7 +79,10 @@ export interface FakeNode {
   readonly nextSibling: FakeNode | null;
   setAttribute(k: string, v: unknown): void;
   hasAttribute(k: string): boolean;
-  addEventListener(): void;
+  // el() wires every handler through addEventListener, so the harness has to
+  // record them or no test can click anything the client builds.
+  listeners: Record<string, Array<(event: unknown) => unknown>>;
+  addEventListener(type: string, fn: (event: unknown) => unknown): void;
   append(...kids: unknown[]): void;
   insertBefore(node: FakeNode, ref: FakeNode | null): void;
   remove(): void;
@@ -118,7 +121,10 @@ function makeNode(tag: string): FakeNode {
     },
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
     hasAttribute(k: string) { return k in node.attributes; },
-    addEventListener() {},
+    listeners: {} as Record<string, Array<(event: unknown) => unknown>>,
+    addEventListener(type: string, fn: (event: unknown) => unknown) {
+      (node.listeners[type] ??= []).push(fn);
+    },
     append(...kids: unknown[]) {
       for (const kid of kids) {
         if (kid == null) continue;
@@ -173,6 +179,84 @@ function newNode(tag = "div"): FakeNode {
   return makeNode(tag);
 }
 
+/* ---------------------------------------------------------------------------
+   W4-B request harness.
+
+   The client's request and confirmation logic was private, so the tests that
+   covered it asserted that substrings appear in the raw text of app.js. Those
+   tests gate the deploy and cannot fail when the behaviour breaks: sendControl
+   could stop requiring confirmation, or start treating HTTP 200 as success, and
+   every one of them would still pass.
+
+   app.js now exports the request functions and the module state they mutate.
+   This drives them for real against a fake `fetch` and the fake document, so
+   the assertions are about what the client SENDS and what it then BELIEVES.
+   ------------------------------------------------------------------------- */
+export interface FakeCall { url: string; method: string; body: any }
+type FakeReply = { status?: number; json?: unknown } | Error;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const G = globalThis as any;
+
+async function withRequests<T>(replies: FakeReply[], fn: (calls: FakeCall[]) => Promise<T> | T): Promise<T> {
+  const calls: FakeCall[] = [];
+  const realFetch = G.fetch;
+  const realDoc = G.document;
+  const realCss = G.CSS;
+  const document = fakeDocument() as Record<string, unknown>;
+  // render() toggles a class on document.body and restores focus through
+  // CSS.escape; neither exists in Bun, and both are on the real paint path.
+  document.body = makeNode("body");
+  G.document = document;
+  G.CSS = realCss ?? { escape: (s: string) => s };
+  let index = 0;
+  G.fetch = async (url: string, init: Record<string, any> = {}) => {
+    const reply = replies[Math.min(index, replies.length - 1)] ?? { status: 200, json: { ok: true } };
+    index += 1;
+    calls.push({
+      url: String(url),
+      method: String(init.method || "GET").toUpperCase(),
+      body: typeof init.body === "string" ? JSON.parse(init.body) : null,
+    });
+    if (reply instanceof Error) throw reply;
+    const status = reply.status ?? 200;
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        if (!("json" in reply)) throw new Error("response is not JSON");
+        return reply.json;
+      },
+    };
+  };
+  try {
+    return await fn(calls);
+  } finally {
+    G.fetch = realFetch;
+    if (realDoc === undefined) delete G.document; else G.document = realDoc;
+    if (realCss === undefined) delete G.CSS; else G.CSS = realCss;
+  }
+}
+
+/* The seam exports the REAL module state, so every test that writes it puts
+   back exactly what it found. Paint signatures are reset too: the guards early-
+   return on an unchanged signature, so a leftover one would silently skip the
+   very paint under test. */
+async function withState<T>(patch: Record<string, unknown>, fn: () => Promise<T> | T): Promise<T> {
+  const full = {
+    paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
+    ...patch,
+  };
+  const keys = Object.keys(full);
+  const saved = Object.fromEntries(keys.map((key) => [key, M.state[key]]));
+  Object.assign(M.state, full);
+  try {
+    return await fn();
+  } finally {
+    Object.assign(M.state, saved);
+  }
+}
+
 function requiredSlice(haystack: string, pattern: RegExp, label: string): string {
   const match = haystack.match(pattern)?.[0];
   if (!match) throw new Error(`Required ${label} source slice no longer matches`);
@@ -198,6 +282,19 @@ function findAll(node: any, pred: (n: any) => boolean, out: any[] = []): any[] {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const buttonsOf = (node: any) => findAll(node, (n) => n.tagName === "button");
+
+/* Fire a recorded handler. Returns whatever the handler returns, so an async
+   click can be awaited — the request functions are all async. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fire(node: any, type = "click", event: Record<string, unknown> = {}): Promise<void> {
+  const handlers = (node && node.listeners && node.listeners[type]) || [];
+  if (!handlers.length) throw new Error(`no ${type} handler on <${node && node.tagName}>`);
+  for (const handler of handlers) await handler({ preventDefault() {}, stopPropagation() {}, ...event });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const byFkey = (node: any, key: string) =>
+  findAll(node, (n) => n.dataset && n.dataset.fkey === key)[0] || null;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const allByClass = (node: any, token: string) =>
@@ -835,14 +932,61 @@ describe("redesigned network contracts (source-level)", () => {
     expect(M.programName(program)).toBe("Source program");
   });
 
-  test("labels hydrate from the existing loopback path and submit stable target payloads", () => {
-    expect(source).toContain("async function fetchLabels()");
-    expect(source).toContain("state.labelsLoading");
-    expect(source).toContain("state.labelsLoaded");
-    expect(source).toContain("body.labels");
-    expect(source).toContain("JSON.stringify({ target, label })");
-    expect(source).toContain("reset");
-    expect(source).toContain('fetchLabels();');
+  /* W4-B: was seven source substrings. They could not fail if fetchLabels
+     stopped reading `body.labels`, or if submitRename posted the display name
+     instead of the stable target. Both are the actual contract with the server,
+     so both are now driven. */
+  test("labels hydrate from the existing loopback path and submit stable target payloads", async () => {
+    const target = { kind: "program", programId: "p1" };
+    await withState({ labels: new Map(), aliases: new Map(), labelsLoaded: false, labelLoadError: "" }, async () => {
+      await withRequests([{ status: 200, json: { ok: true, labels: { "program:p1": "Ridge" } } }], async (calls) => {
+        await M.fetchLabels();
+        expect(calls.map((c) => [c.method, c.url])).toEqual([["GET", "/api/program-aliases"]]);
+        expect(M.state.labels.get("program:p1")).toBe("Ridge");
+        expect(M.state.labelsLoaded).toBe(true);
+      });
+    });
+
+    // A malformed envelope must not be adopted as "no labels" — that would
+    // silently wipe every custom name on the board.
+    await withState({ labels: new Map([["program:p1", "Ridge"]]), aliases: new Map(), labelsLoaded: false, labelLoadError: "" }, async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async () => {
+        await M.fetchLabels();
+        expect(M.state.labels.get("program:p1")).toBe("Ridge");
+        expect(M.state.labelLoadError).not.toBe("");
+      });
+    });
+
+    // The POST carries the stable presentation target, never the rendered name.
+    await withState({
+      snap: snapshot(), labels: new Map(), aliases: new Map(),
+      renaming: M.presentationLabelKey(target), renameDraft: "  Ridge crew  ",
+      renamePending: false, renameError: "",
+    }, async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        await M.submitRename(target);
+        expect(calls[0]!.method).toBe("POST");
+        expect(calls[0]!.url).toBe("/api/program-aliases");
+        expect(calls[0]!.body).toEqual({ target, label: "Ridge crew" });
+        expect(M.state.aliases.get("program:p1")).toBe("Ridge crew");
+        expect(M.state.renaming).toBeNull();
+      });
+    });
+
+    // An empty label is a reset, and it clears the stored alias rather than
+    // saving an empty string that would render as a blank name.
+    await withState({
+      snap: snapshot(), labels: new Map([["program:p1", "Ridge crew"]]),
+      aliases: new Map([["program:p1", "Ridge crew"]]),
+      renaming: M.presentationLabelKey(target), renameDraft: "   ",
+      renamePending: false, renameError: "",
+    }, async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        await M.submitRename(target);
+        expect(calls[0]!.body.label).toBe("");
+        expect(M.state.aliases.has("program:p1")).toBe(false);
+      });
+    });
   });
 
   test("program labels use semantic keyboard controls with a caret that only expands", () => {
@@ -919,14 +1063,52 @@ describe("redesigned network contracts (source-level)", () => {
       }));
   });
 
-  test("broadcast posts only eligible recipients and never fabricates delivery", () => {
-    expect(source).toContain('fetch("/api/broadcast"');
-    expect(source).toContain("agentIds: eligible.map");
-    expect(source).toContain("broadcastEligible");
-    // explicit confirmation gate before sending
-    expect(source).toContain("broadcastConfirming");
-    // honest per-recipient results, not a blanket success
-    expect(source).toContain("state.broadcastResults");
+  /* W4-B: was five source substrings that could not fail if sendBroadcast
+     started posting every selected id, or started calling a 200 a delivery.
+     Both are now asserted from the request it makes and the results it keeps. */
+  test("broadcast posts only eligible recipients and never fabricates delivery", async () => {
+    const live = agent({ id: "codex:live", controls: [{ action: "instruct", enabled: true }] });
+    const locked = agent({ id: "codex:locked", controls: [{ action: "instruct", enabled: false, reason: "quarantined" }] });
+    const ended = agent({ id: "codex:ended", status: "archived", controls: [{ action: "instruct", enabled: true }] });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [live, locked, ended] }] });
+
+    await withState({
+      snap, conn: "live", selecting: true,
+      selection: new Set([live.id, locked.id, ended.id]),
+      broadcastDraft: "rebase onto main", broadcastConfirming: true,
+      broadcastPending: false, broadcastResults: null, broadcastError: "",
+    }, async () => {
+      await withRequests([{
+        status: 200,
+        json: { ok: false, partial: true, sent: 0, failed: 1, results: [{ agentId: live.id, ok: false, error: { code: "CMUX_FAILED", message: "no pane" } }] },
+      }], async (calls) => {
+        await M.sendBroadcast();
+        // Only the eligible recipient is offered to the server; the locked and
+        // ended sessions are never counted as instructed.
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.url).toBe("/api/broadcast");
+        expect(calls[0]!.body.agentIds).toEqual([live.id]);
+        expect(calls[0]!.body.instruction).toBe("rebase onto main");
+        // A per-recipient failure is kept as a failure — never smoothed into
+        // "sent", and the composer keeps the text so it can be retried.
+        expect(M.state.broadcastResults.get(live.id).ok).toBe(false);
+        expect(M.state.broadcastDraft).toBe("rebase onto main");
+        expect(M.state.broadcastConfirming).toBe(false);
+      });
+    });
+
+    // A response with no per-recipient results is an error, not a success.
+    await withState({
+      snap, conn: "live", selecting: true, selection: new Set([live.id]),
+      broadcastDraft: "go", broadcastConfirming: true, broadcastPending: false,
+      broadcastResults: null, broadcastError: "",
+    }, async () => {
+      await withRequests([{ status: 200, json: { ok: true, sent: 1, failed: 0 } }], async () => {
+        await M.sendBroadcast();
+        expect(M.state.broadcastResults).toBeNull();
+        expect(M.state.broadcastError).toContain("Broadcast failed");
+      });
+    });
   });
 });
 
@@ -1353,20 +1535,36 @@ describe("operations canvas layout", () => {
     expect(styles).toContain(".reading-repair");
   });
 
-  test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", () => {
+  test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", async () => {
     // B1 built POST /api/recollect but the UI never consumed it: the button re-served
     // cache via fetchSnapshot. It now POSTs a fresh collection and applies the result
     // through fetchSnapshot's own apply path; a non-OK envelope (e.g. 500
     // RECOLLECT_FAILED) falls back to fetchSnapshot so Refresh is never a dead button.
-    expect(source).toContain("onclick: () => recollectSnapshot()");
-    const fn = source.match(/async function recollectSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fn).toContain('fetch("/api/recollect", { method: "POST"');
-    expect(fn).toContain("applySnapshot(");
-    expect(fn).toContain("await fetchSnapshot()");
-    // Both consumers apply through the one shared path — no forked apply logic.
-    expect(source).toContain("function applySnapshot(");
-    const fetchFn = source.match(/async function fetchSnapshot\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fetchFn).toContain("applySnapshot(");
+    // W4-B: was six source substrings that could not fail if the button went
+    // back to a GET. Driven now: the request it makes, the snapshot it adopts,
+    // and the fallback that keeps it from dead-ending.
+    const fresh = snapshot({ generatedAt: "2026-07-22T04:00:00.000Z" });
+    await withState({ snap: null, conn: "live", fetchFailed: true }, async () => {
+      await withRequests([{ status: 200, json: fresh }], async (calls) => {
+        await M.recollectSnapshot();
+        expect(calls.map((c) => [c.method, c.url])).toEqual([["POST", "/api/recollect"]]);
+        expect(M.state.snap.generatedAt).toBe(fresh.generatedAt);
+        expect(M.state.fetchFailed).toBe(false);
+      });
+    });
+
+    // A refused recollect must still re-serve the cache, not leave a dead button.
+    await withState({ snap: null, conn: "live", fetchFailed: false }, async () => {
+      await withRequests([
+        { status: 500, json: { ok: false, error: { code: "RECOLLECT_FAILED", message: "collector wedged" } } },
+        { status: 200, json: fresh },
+      ], async (calls) => {
+        await M.recollectSnapshot();
+        expect(calls.map((c) => [c.method, c.url]))
+          .toEqual([["POST", "/api/recollect"], ["GET", "/api/snapshot"]]);
+        expect(M.state.snap.generatedAt).toBe(fresh.generatedAt);
+      });
+    });
   });
 
   test("the degraded reason names how long since the source was last healthy, and stays silent when never healthy", () => {
@@ -1471,17 +1669,68 @@ describe("source hygiene", () => {
     expect(styles).toContain(".widget-move");
   });
 
-  test("interventions separate recommendation, queueing, and explicit read-only launch", () => {
-    expect(source).toContain('fetch("/api/triage/" + action');
-    expect(source).toContain('"Triage this finding"');
-    expect(source).toContain('"Queue investigation"');
-    expect(source).toContain('"Launch read-only Luna"');
-    expect(source).toContain("Launch remains a separate operator action.");
+  /* W4-B: was ten source substrings. They could not fail if a "Triage" click
+     started a run, so the separation — the whole point of the read-only gate —
+     is now asserted from the routes the buttons actually call. */
+  test("interventions separate recommendation, queueing, and explicit read-only launch", async () => {
+    const issue = { id: "system:x", kind: "system", severity: "error", title: "T", summary: "s", affectedAgentIds: [] };
+    const plan = {
+      issueId: issue.id, generatedAt: "2026-07-22T03:00:00.000Z", mode: "investigation",
+      headline: "H", rationale: "R", affectedAgents: 2, affectedPrograms: 1, providers: ["codex"],
+      evidence: [], steps: [{ title: "s1", detail: "d1" }], queueRecommended: true,
+    };
+
+    // Triage asks for a recommendation and NOTHING else runs.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map(), triagePending: new Set(), triageErrors: new Map(), queueItems: [],
+    }, async () => {
+      await withRequests([
+        { status: 200, json: { ok: true, recommendation: { ...plan, queueRecommended: false } } },
+      ], async (calls) => {
+        await M.triageIssue(issue.id, "generate");
+        expect(calls.map((c) => c.url)).toEqual(["/api/triage/generate"]);
+        expect(calls[0]!.body).toEqual({ issueId: issue.id });
+        expect(M.state.triage.get(issue.id).headline).toBe("H");
+        expect(M.state.queueItems).toEqual([]);
+      });
+    });
+
+    // Queueing is bounded and persistent; it still does not launch anything.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map([[issue.id, plan]]), triagePending: new Set(), triageErrors: new Map(), queueItems: [],
+    }, async () => {
+      await withRequests([
+        { status: 200, json: { ok: true, item: { ...plan, id: "triage:" + issue.id, state: "queued", createdAt: plan.generatedAt } } },
+        { status: 200, json: snapshot({ issues: [issue] }) },
+        { status: 200, json: { ok: true, items: [{ ...plan, id: "triage:" + issue.id, state: "queued", createdAt: plan.generatedAt }] } },
+      ], async (calls) => {
+        await M.triageIssue(issue.id, "queue");
+        expect(calls.map((c) => c.url)).toEqual(["/api/triage/queue", "/api/snapshot", "/api/triage/queue"]);
+        expect(M.state.queueItems.map((i: any) => i.state)).toEqual(["queued"]);
+      });
+    });
+
+    // Only the explicit Launch reaches /api/triage/run.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map([[issue.id, plan]]), triagePending: new Set(), triageErrors: new Map(),
+      queueItems: [{ ...plan, id: "triage:" + issue.id, state: "queued", createdAt: plan.generatedAt }],
+    }, async () => {
+      await withRequests([
+        { status: 200, json: { ok: true, item: { ...plan, id: "triage:" + issue.id, state: "running", createdAt: plan.generatedAt, runModel: "GPT-5.6 Luna · XHIGH · read-only" } } },
+        { status: 200, json: snapshot({ issues: [issue] }) },
+        { status: 200, json: { ok: true, items: [] } },
+      ], async (calls) => {
+        await M.triageIssue(issue.id, "run");
+        expect(calls[0]!.url).toBe("/api/triage/run");
+        expect(calls[0]!.method).toBe("POST");
+      });
+    });
+
+    // No spawn/execute route was ever invented for this.
     expect(source).not.toMatch(/\/api\/triage\/(spawn|execute)/);
-    expect(source).toContain("waiting for fresh data");
-    expect(source).toContain("waiting for a fresh source snapshot to clear the finding");
-    expect(source).toContain("await fetchSnapshot()");
-    expect(source).toContain("recentlyResolved");
   });
 
   test("the ham-fisted Subdue/Show buttons and ticket ticker are gone", () => {
@@ -1755,13 +2004,65 @@ describe("investigation briefings lead with one wired action", () => {
 });
 
 describe("fail-loud control invariants (source-level)", () => {
-  test("interrupt and archive require explicit confirmation", () => {
-    expect(source).toContain('const NEEDS_CONFIRM = new Set(["interrupt", "archive"])');
+  /* W4-B: was `expect(source).toContain('const NEEDS_CONFIRM = ...')`, which
+     could not fail if the gate were removed from the click handler. Now the
+     real dock tool is clicked and the real sendControl is watched. */
+  test("interrupt and archive require explicit confirmation", async () => {
+    const target = agent({ controls: [{ action: "interrupt", enabled: true }, { action: "focus", enabled: true }] });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [target] }] });
+
+    await withState({ snap, conn: "live", confirming: null, pending: new Set(), feedback: new Map() }, async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        const tool = M.renderDockTool(target, { action: "interrupt", enabled: true }, "interrupt", { held: false });
+        // The first click must arm a confirmation, not send anything.
+        await fire(tool);
+        expect(calls).toHaveLength(0);
+        expect(M.state.confirming).toBe("act:" + target.id + ":interrupt");
+
+        // The armed strip is what actually sends.
+        const strip = M.renderDockTool(target, { action: "interrupt", enabled: true }, "interrupt", { held: false });
+        const confirm = buttonsOf(strip).find((b: any) => textOf(b) === "Confirm");
+        expect(confirm).toBeDefined();
+        await fire(confirm);
+        expect(calls.map((c) => [c.method, c.url])).toEqual([["POST", "/api/control"]]);
+        expect(calls[0]!.body).toMatchObject({ action: "interrupt", agentId: target.id });
+      });
+    });
+
+    // Focus is NOT gated — a confirmation on every button is a confirmation on none.
+    await withState({ snap, conn: "live", confirming: null, pending: new Set(), feedback: new Map() }, async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        const tool = M.renderDockTool(target, { action: "focus", enabled: true }, "focus", { held: false });
+        await fire(tool);
+        expect(M.state.confirming).toBeNull();
+        expect(calls.map((c) => c.body.action)).toEqual(["focus"]);
+      });
+    });
   });
 
-  test("HTTP completion alone is never treated as control success", () => {
-    expect(source).toContain("HTTP completion alone is never success.");
-    expect(source).toContain('typeof body.ok === "boolean"');
+  /* W4-B: was two source substrings. A server that answers `200 {}` (or HTML,
+     or `200 {ok:false}`) must never be recorded as a success — that is the
+     whole invariant, and it is now asserted from the feedback the drawer
+     actually renders. */
+  test("HTTP completion alone is never treated as control success", async () => {
+    const target = agent();
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [target] }] });
+    const outcomes: Array<[FakeReply, boolean, string]> = [
+      [{ status: 200, json: { ok: true } }, true, "succeeded"],
+      [{ status: 200, json: {} }, false, "unexpected response"],
+      [{ status: 200, json: { ok: false, error: { code: "CMUX_FAILED", message: "no pane" } } }, false, "CMUX_FAILED"],
+      [{ status: 200 }, false, "unexpected response"], // 200 with a non-JSON body
+    ];
+    for (const [reply, ok, fragment] of outcomes) {
+      await withState({ snap, conn: "live", pending: new Set(), feedback: new Map(), drafts: new Map() }, async () => {
+        await withRequests([reply], async () => {
+          await M.sendControl(target, "instruct", "go");
+          const recorded = M.state.feedback.get(target.id);
+          expect(recorded.ok, JSON.stringify(reply)).toBe(ok);
+          expect(recorded.message).toContain(fragment);
+        });
+      });
+    }
   });
 
   test("no dynamic content flows through innerHTML", () => {
@@ -4849,5 +5150,350 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     const bootFn = source.match(/function boot\(\)[\s\S]*?\n\}/)?.[0] ?? "";
     expect(bootFn).not.toContain("requestPermission(");
     expect(bootFn).toContain('$("notify-toggle").addEventListener("click"');
+  });
+});
+
+/* ===========================================================================
+   WAVE 4 / W4-B — the client meets the endpoints that now exist.
+
+   Item 1 was live-verified against a scratch server on :4788 rather than a fake
+   fetch: both read endpoints answer 403 ORIGIN_REJECTED to a browser, because a
+   browser attaches no Origin header to a same-origin GET and `Origin` is a
+   forbidden header name so fetch() cannot add one. The client cannot fix that;
+   what it CAN do is say so honestly, which is what these tests pin.
+   ========================================================================= */
+describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
+  test("(1) ORIGIN_REJECTED reads as a server refusal, not as a missing build", () => {
+    const body = { ok: false, error: { code: "ORIGIN_REJECTED", message: "Transcript reads require an exact same-origin loopback Origin header." } };
+    const transcript = M.transcriptFailureText(403, body);
+    // Never the "this build" sentence: the route IS deployed, and sending the
+    // operator to look for a deploy that already happened is the expensive lie.
+    expect(transcript).not.toContain("not available in this build");
+    expect(transcript).toContain("ORIGIN_REJECTED");
+    expect(transcript).toContain("same-origin GET");
+    // Not a bare echo of the server's own sentence about HTTP internals.
+    expect(transcript).not.toBe(body.error.message);
+
+    const actions = M.actionsFailureText(403, { ok: false, error: { code: "ORIGIN_REJECTED", message: "Action-log reads require an exact same-origin loopback Origin header." } });
+    expect(actions).not.toContain("not available in this build");
+    expect(actions).toContain("same-origin GET");
+
+    // The other degradations are unchanged: a build with no route at all still
+    // says so, and a missing agent still reads as a missing agent.
+    expect(M.transcriptFailureText(404, null)).toBe("Transcript view is not available in this build.");
+    expect(M.transcriptFailureText(404, { ok: false, error: { code: "AGENT_NOT_FOUND", message: "gone" } }))
+      .toContain("no longer tracked");
+    expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
+  });
+
+  test("(1) the real /api/transcript envelope normalizes without loss", () => {
+    // Captured from the live route on :4788 (45 lines, 4 roles, absolute source
+    // path, truncated:false) — the shape FE-C built against, now confirmed.
+    const wire = {
+      ok: true,
+      agentId: "codex:a1",
+      source: "/Users/x/.codex/sessions/2026/07/28/rollout.jsonl",
+      truncated: false,
+      lines: [
+        { at: "2026-07-28T20:45:39.752Z", role: "user", text: "Memory You have access to a memory folder" },
+        { at: "2026-07-28T20:45:41.000Z", role: "tool", text: "ran ls" },
+        { at: null, role: "assistant", text: "done" },
+        { at: "2026-07-28T20:45:42.000Z", role: "reasoning", text: "collapses to unknown" },
+      ],
+    };
+    const view = M.normalizeTranscript(wire);
+    expect(view.source).toBe(wire.source);
+    expect(view.truncated).toBe(false);
+    expect(view.lines.map((l: any) => l.role)).toEqual(["user", "tool", "assistant", "unknown"]);
+    expect(view.lines[2]!.at).toBeNull();
+    // The server's limit ceiling is 1000 and the action log's is 500; asking for
+    // more is a 400 INVALID_LIMIT, so the client must never ask for more.
+    expect(M.transcriptUrl("codex:a1", 5000)).toBe("/api/transcript?agent=codex%3Aa1&limit=1000");
+    expect(M.actionsUrl(5000)).toBe("/api/actions?limit=500");
+  });
+
+  test("(3) liveness is absent-first and never infers death", () => {
+    // Absent: no verdict at all, so nothing new renders anywhere.
+    expect(M.livenessState(agent())).toBeNull();
+    expect(M.livenessView(agent())).toBeNull();
+
+    // Both carriers, string or object.
+    expect(M.livenessState(agent({ processLiveness: "died" }))).toBe("died");
+    expect(M.livenessState(agent({ liveness: "process-gone" }))).toBe("died");
+    expect(M.livenessState(agent({ processLiveness: { state: "running" } }))).toBe("running");
+    expect(M.livenessState(agent({ processLiveness: { status: "exited" } }))).toBe("exited");
+
+    // The full vocabulary the emitting lane might use.
+    for (const word of ["running", "alive", "process-alive", "up"]) {
+      expect(M.livenessState(agent({ processLiveness: word })), word).toBe("running");
+    }
+    for (const word of ["exited", "exited-clean", "finished", "completed", "done"]) {
+      expect(M.livenessState(agent({ processLiveness: word })), word).toBe("exited");
+    }
+    for (const word of ["died", "dead", "process-gone", "crashed", "killed", "terminated"]) {
+      expect(M.livenessState(agent({ processLiveness: word })), word).toBe("died");
+    }
+
+    // A word this client does not own is unknown — never death, and never health.
+    for (const word of ["zombie", "", "  ", "stopped-maybe", "no-evidence"]) {
+      expect(M.livenessState(agent({ processLiveness: word })), JSON.stringify(word)).toBe("unknown");
+    }
+    expect(M.livenessState(agent({ processLiveness: {} }))).toBe("unknown");
+    expect(M.livenessState(agent({ processLiveness: 7 }))).toBe("unknown");
+  });
+
+  test("(3) 'died' is unmistakable on the row; absence changes nothing", () => {
+    const program = { id: "p", name: "P" };
+    const calm = withDom(() => M.renderAgentRow(agent(), program));
+    const dead = withDom(() => M.renderAgentRow(agent({ processLiveness: "died" }), program));
+    const unclear = withDom(() => M.renderAgentRow(agent({ processLiveness: "unknown" }), program));
+
+    // Absent renders exactly what it renders today: no mark, no row class.
+    expect(byClass(calm, "row-died")).toBeNull();
+    expect(calm.className.split(/\s+/)).not.toContain("is-died");
+    expect(calm.attributes["aria-label"]).not.toContain("Process:");
+
+    // Died is marked in text, in the row class, and in the accessible name.
+    expect(textOf(byClass(dead, "row-died"))).toContain("Died");
+    expect(dead.className.split(/\s+/)).toContain("is-died");
+    expect(dead.attributes["aria-label"]).toContain("Process: Died");
+
+    // Unknown is never marked as death, but it is still stated to a reader.
+    expect(byClass(unclear, "row-died")).toBeNull();
+    expect(unclear.className.split(/\s+/)).not.toContain("is-died");
+    expect(unclear.attributes["aria-label"]).toContain("Process: Liveness unknown");
+  });
+
+  test("(3) the drawer states all four verdicts, so unknown reads as unknown", () => {
+    expect(withDom(() => M.verdictLiveness(agent()))).toBeNull();
+    const cases: Array<[string, string, string]> = [
+      ["running", "Process live", "liveness-running"],
+      ["exited", "Exited cleanly", "liveness-exited"],
+      ["died", "Died", "liveness-died"],
+      ["unknown", "Liveness unknown", "liveness-unknown"],
+    ];
+    for (const [word, label, cls] of cases) {
+      const chip = withDom(() => M.verdictLiveness(agent({ processLiveness: word })));
+      expect(textOf(chip), word).toContain(label);
+      expect(chip.className.split(/\s+/), word).toContain(cls);
+    }
+    // The four labels are distinct words — "exited" must never read like "died".
+    const labels = cases.map(([word]) => M.livenessView(agent({ processLiveness: word })).label);
+    expect(new Set(labels).size).toBe(4);
+  });
+
+  test("(2) attention: acknowledge, dismiss and snooze all reach the server", async () => {
+    const asking = agent({ status: "attention", statusReason: "Unread cmux notification: Codex — Permission" });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [asking] }] });
+    const record = { surfaceId: "s1", action: "acknowledge", updatedAt: "2026-07-22T03:00:00.000Z", throughAt: "2026-07-22T02:00:00.000Z" };
+
+    for (const action of ["acknowledge", "dismiss"]) {
+      await withState({
+        snap, conn: "live", attention: new Map(), attentionPending: new Set(), attentionErrors: new Map(),
+      }, async () => {
+        await withRequests([
+          { status: 200, json: { ok: true, agentId: asking.id, state: { ...record, action } } },
+          { status: 200, json: snap },
+        ], async (calls) => {
+          await M.applyAttention(asking.id, action);
+          expect(calls[0]!.method, action).toBe("POST");
+          expect(calls[0]!.url, action).toBe("/api/attention");
+          expect(calls[0]!.body, action).toEqual({ action, agentId: asking.id });
+          // The snapshot is re-read, which is what makes the agent visibly leave
+          // the needs-a-human set rather than just greying a button.
+          expect(calls[1]!.url, action).toBe("/api/snapshot");
+          expect(M.state.attention.get(asking.id).action, action).toBe(action);
+        });
+      });
+    }
+
+    // Snooze carries an `until`; the server rejects a body without one (400).
+    await withState({
+      snap, conn: "live", attention: new Map(), attentionPending: new Set(), attentionErrors: new Map(),
+    }, async () => {
+      const until = new Date(Date.parse("2026-07-22T04:00:00.000Z")).toISOString();
+      await withRequests([
+        { status: 200, json: { ok: true, agentId: asking.id, state: { surfaceId: "s1", action: "snooze", updatedAt: "2026-07-22T03:00:00.000Z", snoozedUntil: until } } },
+        { status: 200, json: snap },
+      ], async (calls) => {
+        await M.applyAttention(asking.id, "snooze", until);
+        expect(calls[0]!.body).toEqual({ action: "snooze", agentId: asking.id, until });
+      });
+    });
+  });
+
+  test("(2) attention failures are named, not swallowed", async () => {
+    const asking = agent({ status: "attention" });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [asking] }] });
+    const cases: Array<[number, string, string]> = [
+      [404, "ATTENTION_NOT_FOUND", "no unread notification recorded"],
+      [409, "UNSAFE_TARGET", "no safely resolved terminal"],
+      [404, "AGENT_NOT_FOUND", "no longer in the current snapshot"],
+    ];
+    for (const [status, code, fragment] of cases) {
+      await withState({
+        snap, conn: "live", attention: new Map(), attentionPending: new Set(), attentionErrors: new Map(),
+      }, async () => {
+        await withRequests([{ status, json: { ok: false, error: { code, message: "server prose" } } }], async () => {
+          await M.applyAttention(asking.id, "acknowledge");
+          expect(M.state.attentionErrors.get(asking.id), code).toContain(fragment);
+          // A failed change is never recorded as if it had worked.
+          expect(M.state.attention.has(asking.id), code).toBe(false);
+        });
+      });
+    }
+  });
+
+  test("(2) an expired snooze visibly returns", () => {
+    const asking = agent({ status: "attention", statusReason: "Unread cmux notification: Codex — Permission" });
+    const now = Date.parse("2026-07-22T03:00:00.000Z");
+    const live = { surfaceId: "s1", action: "snooze", updatedAt: "2026-07-22T02:00:00.000Z", snoozedUntil: "2026-07-22T04:00:00.000Z" };
+    const expired = { ...live, snoozedUntil: "2026-07-22T02:30:00.000Z" };
+
+    // While it holds, the record is live and states its deadline.
+    expect(M.attentionRecord(asking.id, { attention: new Map([[asking.id, live]]) }, now)).toEqual(live);
+    expect(M.attentionStateText(live)).toContain("Snoozed until");
+
+    // Once it runs out the record is gone — no timer, no stuck state.
+    expect(M.attentionRecord(asking.id, { attention: new Map([[asking.id, expired]]) }, now)).toBeNull();
+    // A malformed deadline is treated as expired, never as an eternal snooze.
+    expect(M.attentionRecord(asking.id, { attention: new Map([[asking.id, { ...live, snoozedUntil: "not a date" }]]) }, now)).toBeNull();
+
+    // And the drawer says so, rather than letting the alert quietly reappear.
+    const ui = { attention: new Map([[asking.id, expired]]), attentionPending: new Set(), attentionErrors: new Map() };
+    const returned = withDom(() => M.renderAttentionBlock(asking, ui, now));
+    expect(textOf(returned)).toContain("snooze has run out");
+    expect(buttonsOf(returned).map((b: any) => b.dataset.fkey)).toEqual([
+      "attn:" + asking.id + ":acknowledge",
+      "attn:" + asking.id + ":dismiss",
+      "attn:" + asking.id + ":snooze",
+    ]);
+
+    // A snooze still running shows the state, not the controls again.
+    const held = withDom(() => M.renderAttentionBlock(
+      agent({ status: "running" }),
+      { attention: new Map([["codex:a1", live]]), attentionPending: new Set(), attentionErrors: new Map() },
+      now,
+    ));
+    expect(textOf(held)).toContain("Snoozed until");
+    expect(buttonsOf(held)).toHaveLength(0);
+
+    // An agent nobody is waiting on, with nothing recorded, gets no block at all.
+    expect(withDom(() => M.renderAttentionBlock(agent(), { attention: new Map(), attentionPending: new Set(), attentionErrors: new Map() }, now))).toBeNull();
+  });
+
+  test("(2) triage lifecycle: cancel a run, remove a record, investigate again", async () => {
+    const issue = { id: "system:x", kind: "system", severity: "error", title: "T", summary: "s", affectedAgentIds: [] };
+    const base = {
+      issueId: issue.id, id: "triage:system:x", generatedAt: "2026-07-22T03:00:00.000Z",
+      mode: "investigation", headline: "H", rationale: "R", affectedAgents: 2, affectedPrograms: 1,
+      providers: ["codex"], evidence: [], steps: [{ title: "s1", detail: "d1" }],
+      queueRecommended: true, createdAt: "2026-07-22T03:00:00.000Z",
+    };
+    const ui = (state: string) => triageUi({ queueItems: [{ ...base, state }], triage: new Map([[issue.id, base]]) });
+
+    // The lever offered depends on where the run actually is.
+    const keys = (state: string) => buttonsOf(withDom(() => M.renderTriage(issue, ui(state))))
+      .map((b: any) => b.dataset.fkey).filter((k: string) => /^triage-(cancel|remove|rerun|run)/.test(k));
+    expect(keys("running")).toEqual(["triage-cancel:system:x"]);
+    expect(keys("queued")).toEqual(["triage-run:system:x", "triage-remove:system:x"]);
+    expect(keys("completed")).toEqual(["triage-rerun:system:x", "triage-remove:system:x"]);
+    expect(keys("blocked")).toEqual(["triage-rerun:system:x", "triage-remove:system:x"]);
+    // An untriaged finding grows no lifecycle chrome.
+    expect(M.triageLifecycleControls(issue, undefined, false, triageUi())).toEqual([]);
+
+    // Cancel stops the run: the server reports `cancelled`, the item leaves the
+    // queue, and the plan survives so it can be re-queued without re-analysing.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map(), triagePending: new Set(), triageErrors: new Map(),
+      queueItems: [{ ...base, state: "running", pid: 4321 }],
+    }, async () => {
+      await withRequests([
+        { status: 200, json: { ok: true, removed: { ...base, state: "running" }, cancelled: true } },
+        { status: 200, json: snapshot({ issues: [issue] }) },
+        { status: 200, json: { ok: true, items: [] } },
+      ], async (calls) => {
+        await M.removeTriageItem(issue.id, "cancel");
+        expect(calls[0]!.method).toBe("DELETE");
+        expect(calls[0]!.url).toBe("/api/triage/queue?issueId=system%3Ax");
+        expect(M.state.queueItems).toEqual([]);
+        expect(M.state.triage.get(issue.id).headline).toBe("H");
+        expect(M.state.triageErrors.has(issue.id)).toBe(false);
+      });
+    });
+
+    // A server that cannot safely cancel says so (409) — the client must NOT
+    // report a stopped run it did not stop.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map(), triagePending: new Set(), triageErrors: new Map(),
+      queueItems: [{ ...base, state: "running" }],
+    }, async () => {
+      await withRequests([{
+        status: 409,
+        json: { ok: false, error: { code: "INVESTIGATION_CANCEL_UNAVAILABLE", message: "The active investigation has no safe cancellation handle." } },
+      }], async () => {
+        await M.removeTriageItem(issue.id, "cancel");
+        expect(M.state.triageErrors.get(issue.id)).toContain("no safe cancellation handle");
+        expect(M.state.queueItems.map((i: any) => i.state)).toEqual(["running"]);
+      });
+    });
+
+    // "Investigate again" re-queues through the same route the first queue used;
+    // the server replaces a finished item, so no second vocabulary exists.
+    await withState({
+      snap: snapshot({ issues: [issue] }), conn: "live",
+      triage: new Map([[issue.id, base]]), triagePending: new Set(), triageErrors: new Map(),
+      queueItems: [{ ...base, state: "completed", result: "done" }],
+    }, async () => {
+      await withRequests([
+        { status: 200, json: { ok: true, item: { ...base, state: "queued" } } },
+        { status: 200, json: snapshot({ issues: [issue] }) },
+        { status: 200, json: { ok: true, items: [{ ...base, state: "queued" }] } },
+      ], async (calls) => {
+        const rerun = M.triageLifecycleControls(issue, { ...base, state: "completed" }, false, M.state)
+          .find((b: any) => b.dataset.fkey === "triage-rerun:system:x");
+        await fire(rerun);
+        expect(calls[0]!.url).toBe("/api/triage/queue");
+        expect(calls[0]!.method).toBe("POST");
+        expect(M.state.queueItems.map((i: any) => i.state)).toEqual(["queued"]);
+      });
+    });
+  });
+
+  /* FE-C's lesson: a surface that renders correctly in isolation and is never
+     mounted, or never repainted, is not shipped. Both halves are checked. */
+  test("(2)(3) both new surfaces are actually mounted in the drawer, and repaint", () => {
+    const asking = agent({ status: "attention", statusReason: "Unread cmux notification: Codex — Permission", processLiveness: "died" });
+    const program = { id: "p", name: "P", agents: [asking] };
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: asking, program }));
+    expect(byClass(pane, "verdict-liveness")).not.toBeNull();
+    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Died");
+    expect(byClass(pane, "attn-block")).not.toBeNull();
+    expect(buttonsOf(byClass(pane, "attn-block")).map((b: any) => textOf(b)))
+      .toEqual(["Acknowledge", "Dismiss", "Snooze 1 hour"]);
+
+    // A drawer with neither field and no attention keeps exactly its old shape.
+    const calmPane = newNode("div");
+    withDom(() => M.renderAgentDrawer(calmPane, { kind: "agent", agent: agent(), program: { id: "p", name: "P", agents: [agent()] } }));
+    expect(byClass(calmPane, "verdict-liveness")).toBeNull();
+    expect(byClass(calmPane, "attn-block")).toBeNull();
+
+    // Nothing else in the drawer moves when an attention verdict lands, so
+    // without it in the signature the block would never reach the screen —
+    // the exact failure state.identity and state.transcript both had.
+    const snap = snapshot({ programs: [program] });
+    const base = identityUi({ snap, attention: new Map(), attentionPending: new Set(), attentionErrors: new Map(), actions: { items: [] }, transcript: {} });
+    const sel = { kind: "agent", id: asking.id };
+    const view = { kind: "agent", agent: asking, program };
+    const before = M.inspectorPaintSig(sel, view, base);
+    const acked = M.inspectorPaintSig(sel, view, { ...base, attention: new Map([[asking.id, { action: "acknowledge", updatedAt: "2026-07-22T03:00:00.000Z" }]]) });
+    const failing = M.inspectorPaintSig(sel, view, { ...base, attentionErrors: new Map([[asking.id, "nope"]]) });
+    const busy = M.inspectorPaintSig(sel, view, { ...base, attentionPending: new Set([asking.id]) });
+    expect(acked).not.toBe(before);
+    expect(failing).not.toBe(before);
+    expect(busy).not.toBe(before);
   });
 });
