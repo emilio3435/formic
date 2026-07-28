@@ -10,15 +10,17 @@ A local-first, light-mode command center for direct Codex, Claude, and Cursor Ag
 bun start
 ```
 
-That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). Open <http://127.0.0.1:4701>.
+That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). It prints the address it bound — `bun start` defaults to <http://127.0.0.1:4702>, so it never collides with a production instance. Use whichever address it prints.
 
-**Once per machine** (already done on this Mac if `data/cmux-socket.env` exists):
+Ports: **4702** is `bun start`'s default; **4701** is the server's own default (`bun run start:server`) and the launchd production port — see `DEPLOY.md`.
+
+**Optional, once per machine** — only if you want Focus/Send:
 
 ```bash
 bun run setup:cmux
 ```
 
-That saves a local cmux password so Ant Hill can see terminal names and use Focus/Send even when started outside cmux. You should not need to think about it again.
+That saves a local cmux password so Ant Hill can see terminal names and use Focus/Send even when started outside cmux. It requires cmux to be installed. Without it, Ant Hill still starts and collects normally; the controls stay disabled and the header shows a cmux-degraded verdict.
 
 ## Safety model
 

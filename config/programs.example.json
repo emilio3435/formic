@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Optional. Groups agent sessions under program headings in the dashboard.",
+    "Copy to config/programs.json and edit — that file is gitignored, so your",
+    "project names stay on your machine. With no programs.json, sessions are",
+    "simply listed ungrouped.",
+    "",
+    "match: substrings tested against a session's working directory. Keep them",
+    "specific; a token like \"/api\" will claim unrelated folders."
+  ],
+  "programs": [
+    {
+      "id": "example-web-app",
+      "name": "Web App",
+      "purpose": "Ship and maintain the customer-facing site.",
+      "match": ["web-app", "/marketing-site"]
+    },
+    {
+      "id": "example-infra",
+      "name": "Infrastructure",
+      "purpose": "Keep deploys, monitoring, and CI healthy.",
+      "match": ["/infra", "terraform"]
+    }
+  ]
+}

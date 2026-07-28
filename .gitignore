@@ -6,3 +6,4 @@ data/
 .gstack/
 /data
 /node_modules
+config/programs.json
