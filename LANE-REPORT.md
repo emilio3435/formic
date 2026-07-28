@@ -1576,7 +1576,7 @@ and `bun.lock` remained unchanged.
   reopen/prune/corruption, and transcript/actions boundary tests.
 - Deliberately left alone: `control.ts`, `http.ts`, and `broadcast.ts`.
 
-### Finding 1 / Deliverable 3. Triage lifecycle — **BLOCKED end-to-end; backend implemented**
+### Finding 1 / Deliverable 3. Triage lifecycle — **BLOCKED** (backend implemented)
 (`95bb75c`, `05b6ec2`)
 
 Implemented in owned files:
@@ -1608,8 +1608,8 @@ Blocked remainder:
 - No test claims those two out-of-scope behaviors are fixed. The orchestrator
   must route the client controls and an explicit lifecycle-clear state method.
 
-### Finding 2 / Deliverable 4. Persisted attention acknowledgement/dismiss/snooze — **BLOCKED
-end-to-end; backend implemented** (`05b6ec2`)
+### Finding 2 / Deliverable 4. Persisted attention acknowledgement/dismiss/snooze — **BLOCKED** (backend implemented)
+(`05b6ec2`)
 
 Implemented in owned files:
 
