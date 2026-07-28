@@ -10,7 +10,7 @@ import {
 } from "../src/server/app";
 import { MemoryAttentionStore } from "../src/server/cmux";
 import type { AgentSnapshot, HubSnapshot } from "../src/shared/types";
-import type { ArchiveStore, CommandResult, CommandRunner } from "../src/server/types";
+import type { ArchiveStore, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
 
 const ORIGIN = "http://127.0.0.1:4701";
 
@@ -68,6 +68,7 @@ function app(
     attention?: MemoryAttentionStore;
     refreshes?: Array<{ cmux?: boolean } | undefined>;
     now?: () => number;
+    archiveStore?: ArchiveStore;
   } = {},
 ) {
   const refreshes = options.refreshes ?? [];
@@ -79,7 +80,7 @@ function app(
       return current;
     },
   };
-  const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+  const archiveStore: ArchiveStore = options.archiveStore ?? { has: () => false, archive: async () => {} };
   return createMountainFetch({
     state,
     runner: options.runner ?? new StubRunner(),
@@ -96,6 +97,18 @@ function get(path: string, origin = ORIGIN): Request {
 }
 
 describe("GET /api/transcript", () => {
+  test("allows browser-style GETs without Origin while the app-wide loopback gate rejects a foreign host", async () => {
+    const fetch = app(snapshot());
+    const browserGet = await fetch(new Request(`${ORIGIN}/api/transcript?agent=codex%3Atest-session`));
+    const foreignHost = await fetch(new Request(
+      "http://evil.example:4701/api/transcript?agent=codex%3Atest-session",
+    ));
+
+    expect(browserGet.status).toBe(200);
+    expect(foreignHost.status).toBe(403);
+    fetch.dispose();
+  });
+
   test("returns a sanitized tail with an honest source and truncation flag", async () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-transcript-"));
     const path = join(directory, "session.jsonl");
@@ -165,19 +178,30 @@ describe("GET /api/transcript", () => {
     fetch.dispose();
   });
 
-  test("requires exact same-origin loopback access and enforces the hard limit", async () => {
+  test("distinguishes a readable transcript with no turns from an unreadable source", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-empty-transcript-"));
+    const readablePath = join(directory, "empty.jsonl");
+    const unreadablePath = join(directory, "missing.jsonl");
+    await writeFile(readablePath, "");
+    const readableFetch = app(snapshot(readablePath));
+    const unreadableFetch = app(snapshot(unreadablePath));
+    try {
+      const readable = await readableFetch(get("/api/transcript?agent=codex%3Atest-session"));
+      const unreadable = await unreadableFetch(get("/api/transcript?agent=codex%3Atest-session"));
+
+      expect(await readable.json()).toMatchObject({ source: readablePath, lines: [] });
+      expect(await unreadable.json()).toMatchObject({ source: null, lines: [] });
+    } finally {
+      readableFetch.dispose();
+      unreadableFetch.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("enforces the hard limit", async () => {
     const fetch = app(snapshot());
-    const rejected = await fetch(get("/api/transcript?agent=codex%3Atest-session", "http://evil.example"));
-    const foreignHost = await fetch(new Request(
-      "http://evil.example:4701/api/transcript?agent=codex%3Atest-session",
-      { headers: { origin: "http://evil.example:4701" } },
-    ));
     const oversized = await fetch(get("/api/transcript?agent=codex%3Atest-session&limit=1001"));
 
-    expect(rejected.status).toBe(403);
-    expect(await rejected.json()).toMatchObject({ error: { code: "ORIGIN_REJECTED" } });
-    expect(foreignHost.status).toBe(403);
-    expect(await foreignHost.json()).toMatchObject({ error: { code: "ORIGIN_REJECTED" } });
     expect(oversized.status).toBe(400);
     expect(await oversized.json()).toMatchObject({ error: { code: "INVALID_LIMIT" } });
     fetch.dispose();
@@ -185,6 +209,16 @@ describe("GET /api/transcript", () => {
 });
 
 describe("operator action log", () => {
+  test("allows browser-style GETs without Origin while the app-wide loopback gate rejects a foreign host", async () => {
+    const fetch = app(snapshot());
+    const browserGet = await fetch(new Request(`${ORIGIN}/api/actions`));
+    const foreignHost = await fetch(new Request("http://evil.example:4701/api/actions"));
+
+    expect(browserGet.status).toBe(200);
+    expect(foreignHost.status).toBe(403);
+    fetch.dispose();
+  });
+
   test("records staged control failure and partial broadcast exactly once each, newest first", async () => {
     const actions = new MemoryActionLogStore(() => Date.parse("2026-07-28T09:12:03.114Z"));
     const runner = new StubRunner([
@@ -320,6 +354,47 @@ describe("operator action log", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("GET /api/history/export", () => {
+  test("downloads retained records with the bounded retention policy and no Origin requirement", async () => {
+    const retained: CollectedAgent = {
+      id: "codex:retained",
+      provider: "codex",
+      sourceSessionId: "retained",
+      displayName: "Retained session",
+      status: "archived",
+      statusReason: "Retained session history.",
+      updatedAt: "2026-07-28T09:00:00.000Z",
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const archiveStore: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [retained],
+    };
+    const fetch = app(snapshot(), {
+      archiveStore,
+      now: () => Date.parse("2026-07-28T10:00:00.000Z"),
+    });
+
+    const response = await fetch(new Request(`${ORIGIN}/api/history/export`));
+    const foreignHost = await fetch(new Request("http://evil.example:4701/api/history/export"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain("ant-hill-history-2026-07-28.json");
+    expect(await response.json()).toMatchObject({
+      schemaVersion: 1,
+      exportedAt: "2026-07-28T10:00:00.000Z",
+      retentionDays: 30,
+      maxRecords: 5_000,
+      agents: [{ id: retained.id }],
+    });
+    expect(foreignHost.status).toBe(403);
+    fetch.dispose();
   });
 });
 

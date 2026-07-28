@@ -189,7 +189,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(agent.identityTrace).toMatchObject({ matchedTier: "session", resolution: "exact" });
   });
 
-  test("archived sources outside the configured scan window stay out of the live snapshot", () => {
+  test("durable history survives the scan window without being counted as live work", () => {
     const archived = [
       collected({
         id: "codex:fresh-archive",
@@ -218,7 +218,9 @@ describe("snapshot control safety and SSE deduplication", () => {
 
     expect(snapshot.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toEqual([
       "codex:fresh-archive",
+      "codex:old-archive",
     ]);
+    expect(snapshot.totals.live).toBe(0);
   });
 
   test("a real routing change produces a new fingerprint and therefore an SSE update", () => {

@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   ARCHIVE_RETENTION_MS,
   JsonArchiveStore,
+  MAX_ARCHIVE_RECORDS,
   type ArchiveFileOperations,
 } from "../src/server/archive";
 import { buildSnapshot } from "../src/server/snapshot";
@@ -12,6 +13,64 @@ function missingFile(): NodeJS.ErrnoException {
 }
 
 describe("durable archive state", () => {
+  test("records observed sessions as retained history without treating them as operator-archived", async () => {
+    const contents = new Map<string, string>();
+    const files: ArchiveFileOperations = {
+      readText: async (path) => {
+        const value = contents.get(path);
+        if (value === undefined) throw missingFile();
+        return value;
+      },
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    const source: CollectedAgent = {
+      id: "codex:observed",
+      provider: "codex",
+      sourceSessionId: "observed",
+      displayName: "Observed session",
+      status: "running",
+      statusReason: "Source is active.",
+      updatedAt: "2026-07-23T20:00:00.000Z",
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const path = "/virtual/archive.json";
+    const store = await JsonArchiveStore.open(path, files);
+
+    await store.record([source]);
+    const reopened = await JsonArchiveStore.open(path, files, () => Date.parse(source.updatedAt));
+
+    expect(reopened.has(source.id)).toBeFalse();
+    expect(reopened.archivedAgents()).toEqual([
+      expect.objectContaining({
+        id: source.id,
+        status: "archived",
+        statusReason: "Retained session history.",
+      }),
+    ]);
+  });
+
+  test("a corrupt archive degrades to empty with a loud log", async () => {
+    const files: ArchiveFileOperations = {
+      readText: async () => "{",
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    };
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const store = await JsonArchiveStore.open("/virtual/archive.json", files);
+
+      expect(store.archivedAgents()).toEqual([]);
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining("Ignoring unreadable archive"));
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   test("persists enough source truth to render an archive after the live file leaves the scan window", async () => {
     const contents = new Map<string, string>();
     const files: ArchiveFileOperations = {
@@ -149,6 +208,37 @@ describe("durable archive state", () => {
     expect(store.archivedAgents().map(({ id }) => id)).toEqual([fresh.id]);
   });
 
+  test("an unchanged observation pass still enforces the time retention boundary", async () => {
+    let nowMs = Date.parse("2026-07-23T20:00:00.000Z");
+    const expiring: CollectedAgent = {
+      id: "codex:expiring-without-new-work",
+      provider: "codex",
+      sourceSessionId: "expiring-without-new-work",
+      displayName: "Expiring history",
+      status: "archived",
+      statusReason: "Retained session history.",
+      updatedAt: new Date(nowMs).toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const path = "/virtual/archive.json";
+    const contents = new Map([[path, JSON.stringify([{ ...expiring, archiveKind: "history" }])]]);
+    const files: ArchiveFileOperations = {
+      readText: async (target) => contents.get(target) ?? "[]",
+      makeDirectory: async () => {},
+      writeText: async (target, value) => { contents.set(target, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    const store = await JsonArchiveStore.open(path, files, () => nowMs);
+    nowMs += ARCHIVE_RETENTION_MS + 1;
+
+    await store.record([]);
+
+    expect(store.archivedAgents()).toEqual([]);
+    expect(JSON.parse(contents.get(path) ?? "[]")).toEqual([]);
+  });
+
   test("a rejected rename never makes the agent appear archived in memory", async () => {
     const files: ArchiveFileOperations = {
       readText: async () => { throw missingFile(); },
@@ -210,5 +300,37 @@ describe("durable archive state", () => {
     expect(store.has("omp:failed")).toBeFalse();
     expect(store.has("omp:committed")).toBeTrue();
     expect(JSON.parse(contents.get("/virtual/archive.json") ?? "[]")).toEqual(["omp:committed"]);
+  });
+
+  test("retained history is capped at the stated maximum", async () => {
+    const contents = new Map<string, string>();
+    const path = "/virtual/archive.json";
+    const nowMs = Date.parse("2026-07-23T20:00:00.000Z");
+    const files: ArchiveFileOperations = {
+      readText: async () => { throw missingFile(); },
+      makeDirectory: async () => {},
+      writeText: async (temporary, value) => { contents.set(temporary, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    const store = await JsonArchiveStore.open(path, files, () => nowMs);
+    const agents = Array.from({ length: MAX_ARCHIVE_RECORDS + 1 }, (_, index): CollectedAgent => ({
+      id: `codex:${index}`,
+      provider: "codex",
+      sourceSessionId: String(index),
+      displayName: `Session ${index}`,
+      status: "running",
+      statusReason: "Observed.",
+      updatedAt: new Date(nowMs - index).toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    }));
+
+    await store.record(agents);
+
+    expect(store.archivedAgents()).toHaveLength(MAX_ARCHIVE_RECORDS);
+    expect(JSON.parse(contents.get(path) ?? "[]")).toHaveLength(MAX_ARCHIVE_RECORDS);
+    expect(store.archivedAgents().some(({ id }) => id === "codex:0")).toBeTrue();
+    expect(store.archivedAgents().some(({ id }) => id === `codex:${MAX_ARCHIVE_RECORDS}`)).toBeFalse();
   });
 });

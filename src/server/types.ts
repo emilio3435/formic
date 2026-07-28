@@ -104,5 +104,6 @@ export interface CommandRunner {
 export interface ArchiveStore {
   has(agentId: string): boolean;
   archive(agentId: string, agent?: CollectedAgent): Promise<void>;
+  record?(agents: readonly CollectedAgent[]): Promise<void>;
   archivedAgents?(): readonly CollectedAgent[];
 }

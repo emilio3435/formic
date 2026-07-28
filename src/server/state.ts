@@ -26,6 +26,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 };
 
 const REFRESH_WATCHDOG_MS = 12_000;
+export const REFRESH_AGGREGATE_TIMEOUT_MS = 10_000;
 
 export class HubState {
   #snapshot: HubSnapshot;
@@ -63,6 +64,7 @@ export class HubState {
     private readonly burnReader?: () => Promise<UsageSummary>,
     private readonly cmuxExecutable = DEFAULT_CMUX_EXECUTABLE,
     private readonly bindingStore?: IdentityBindingStore,
+    private readonly refreshAggregateTimeoutMs = REFRESH_AGGREGATE_TIMEOUT_MS,
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
@@ -182,11 +184,87 @@ export class HubState {
     const providers: Provider[] = ["omp", "codex", "claude", "cursor"];
     this.#scanWindowHours = this.settingsReader?.().scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
-    const [sessions, cmux, notifications] = await Promise.all([
-      this.collectors.sessions(homedir(), windowMs),
-      options.cmux ? this.collectors.cmux(this.runner, this.cmuxExecutable) : Promise.resolve(undefined),
-      options.cmux ? this.collectors.notifications(this.runner, this.cmuxExecutable) : Promise.resolve(undefined),
+    type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
+    type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
+    type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
+    type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
+    let sessionsResult: SessionsResult | undefined;
+    let cmuxResult: CmuxResult | undefined;
+    let notificationsResult: NotificationsResult | undefined;
+    let identityResult: IdentityResult | undefined;
+    const collectionErrors: string[] = [];
+    const capture = async <T>(
+      label: string,
+      work: Promise<T>,
+      assign: (value: T) => void,
+    ): Promise<void> => {
+      try {
+        assign(await work);
+      } catch (error) {
+        collectionErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    let aggregateSettled = false;
+    const aggregate = Promise.all([
+      capture("session collection failed", this.collectors.sessions(homedir(), windowMs), (value) => {
+        sessionsResult = value;
+      }),
+      ...(options.cmux
+        ? [
+            capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable), (value) => {
+              cmuxResult = value;
+            }),
+            capture(
+              "cmux notification collection failed",
+              this.collectors.notifications(this.runner, this.cmuxExecutable),
+              (value) => {
+                notificationsResult = value;
+              },
+            ),
+          ]
+        : []),
+    ]).then(async () => {
+      const agents = sessionsResult
+        ? providers.flatMap((provider) => sessionsResult![provider].value)
+        : [];
+      if (options.cmux && cmuxResult?.errors.length === 0) {
+        await capture(
+          "cmux identity enrichment failed",
+          this.collectors.enrichIdentity(cmuxResult.value, agents, this.runner),
+          (value) => {
+            identityResult = value;
+          },
+        );
+      }
+      aggregateSettled = true;
+    });
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      aggregate,
+      new Promise<void>((resolve) => {
+        deadlineTimer = setTimeout(resolve, this.refreshAggregateTimeoutMs);
+      }),
     ]);
+    if (aggregateSettled && deadlineTimer) clearTimeout(deadlineTimer);
+    const deadlineError = `collector aggregate exceeded ${this.refreshAggregateTimeoutMs}ms deadline`;
+    if (!aggregateSettled) {
+      collectionErrors.push(deadlineError);
+      console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
+    }
+    const unavailableError = collectionErrors[0] ?? deadlineError;
+    const unavailableSessions = (): SessionsResult => ({
+      omp: { value: [], errors: [unavailableError] },
+      codex: { value: [], errors: [unavailableError] },
+      claude: { value: [], errors: [unavailableError] },
+      cursor: { value: [], errors: [unavailableError] },
+    });
+    const sessions = sessionsResult ?? unavailableSessions();
+    const cmux = options.cmux
+      ? cmuxResult ?? { value: [], errors: [unavailableError] }
+      : undefined;
+    const notifications = options.cmux
+      ? notificationsResult ?? { value: [], errors: [unavailableError] }
+      : undefined;
     const collectedAt = new Date().toISOString();
     for (const provider of providers) {
       const source = sessions[provider];
@@ -195,18 +273,30 @@ export class HubState {
         : { healthy: false, lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt };
     }
     const collectedAgents = providers.flatMap((provider) => sessions[provider].value);
+    let historyError: string | undefined;
+    try {
+      await this.archiveStore.record?.(collectedAgents);
+    } catch (error) {
+      historyError = `session history persistence failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`[HubState] ${historyError}`);
+    }
     if (cmux) {
       this.#cmuxReachable = cmux.errors.length === 0;
       let identityErrors: string[] = [];
       let bindingErrors: string[] = [];
       if (this.#cmuxReachable) {
         this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
-        const enriched = await this.collectors.enrichIdentity(cmux.value, collectedAgents, this.runner);
-        this.#surfaces = enriched.value;
-        this.#liveAgentProcessIds = enriched.liveAgentProcessIds
-          ? [...enriched.liveAgentProcessIds]
-          : undefined;
-        identityErrors = enriched.errors;
+        if (identityResult) {
+          this.#surfaces = identityResult.value;
+          this.#liveAgentProcessIds = identityResult.liveAgentProcessIds
+            ? [...identityResult.liveAgentProcessIds]
+            : undefined;
+          identityErrors = identityResult.errors;
+        } else if (cmux.errors.length === 0) {
+          identityErrors = [
+            collectionErrors.find((error) => error.startsWith("cmux identity enrichment failed")) ?? deadlineError,
+          ];
+        }
         // Only completed identity scans confirm bindings; a failed write is an
         // operator-visible error, never a silent skip or a broken refresh loop.
         bindingErrors = this.bindingStore
@@ -216,15 +306,23 @@ export class HubState {
       if (notifications && notifications.errors.length === 0) {
         this.#notifications = notifications.value;
       }
-      this.#cmuxErrors = [
+      this.#cmuxErrors = [...new Set([
         ...cmux.errors,
         ...(notifications?.errors ?? []),
         ...identityErrors,
         ...bindingErrors,
-      ];
+        ...collectionErrors,
+      ])];
     }
     const sourceErrors = Object.fromEntries(
-      providers.map((provider) => [provider, sessions[provider].errors]),
+      providers.map((provider) => [
+        provider,
+        [...new Set([
+          ...sessions[provider].errors,
+          ...(!sessionsResult ? collectionErrors : []),
+          ...(historyError ? [historyError] : []),
+        ])],
+      ]),
     ) as Record<Provider, string[]>;
     const built = this.#withSourceHealth(buildSnapshot({
       agents: this.bindingStore
