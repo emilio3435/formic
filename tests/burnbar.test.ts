@@ -18,6 +18,12 @@ const dylib =
   );
 
 const canSqlcipher = Boolean(dylib && Bun.file(dylib).size > 0);
+if (!canSqlcipher) {
+  console.warn(
+    `[burnbar.test] SKIPPED encrypted SQLCipher fixture: dylib unavailable at ${dylib || "(empty path)"}. `
+      + "The dependency-free unavailable contract will still run.",
+  );
+}
 
 describe("burnbar usage bridge", () => {
   const root = mkdtempSync(join(tmpdir(), "anthill-burnbar-"));
@@ -57,7 +63,70 @@ describe("burnbar usage bridge", () => {
     }
   });
 
-  test.skipIf(!canSqlcipher)("summary/invocations unlock via SQLCipher helper", async () => {
+  test("missing encrypted storage stays explicitly unavailable without fabricating usage", async () => {
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = root;
+    process.env.BURNBAR_DB_PATH = join(root, "missing.sqlite");
+    delete process.env.BURNBAR_DB_KEY;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = join(root, "missing-sqlcipher.dylib");
+    try {
+      const from = "2026-07-22T00:00:00.000Z";
+      const to = "2026-07-23T00:00:00.000Z";
+      const summary = await getUsageSummary(from, to);
+      expect(summary).toMatchObject({
+        ok: true,
+        available: false,
+        provenance: "unavailable",
+        source: "burnbar",
+        processedTokens: null,
+        estimatedCostUsd: null,
+        costKnown: false,
+        invocations: null,
+        byProvider: [],
+      });
+      expect(summary.error).toContain("BurnBar database not found");
+
+      const invocations = await getUsageInvocations(from, to, 10);
+      expect(invocations).toMatchObject({
+        ok: true,
+        available: false,
+        provenance: "unavailable",
+        source: "burnbar",
+        invocations: [],
+      });
+      expect(invocations.error).toContain("BurnBar database not found");
+
+      const response = await handleUsageRequest(
+        new Request(`http://127.0.0.1:4701/api/usage/summary?from=${from}&to=${to}`),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        available: false,
+        processedTokens: null,
+        estimatedCostUsd: null,
+      });
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  const sqlcipherTestName =
+    `summary/invocations unlock via SQLCipher helper${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(sqlcipherTestName, async () => {
     // Build the encrypted fixture in a child process so this test file never
     // calls Database.setCustomSQLite in the shared bun test worker.
     const createScript = join(root, "create-fixture.ts");
