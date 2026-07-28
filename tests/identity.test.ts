@@ -129,6 +129,35 @@ describe("TTY and open-session identity evidence", () => {
     ]);
   });
 
+  test("a process lookup timeout is surfaced and fails identity enrichment closed", async () => {
+    const runner = new SequenceRunner([
+      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [agent], runner);
+
+    expect(enriched.errors).toEqual(["process identity lookup timed out"]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+    expect(enriched.value[0]?.identityTrace).toMatchObject({ outcome: "probe-failed" });
+  });
+
+  test("an open-session lookup timeout is surfaced without inventing an identity", async () => {
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/omp -p",
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [agent], runner);
+
+    expect(enriched.errors).toEqual(["open-session identity lookup timed out"]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+  });
+
   test("conflicting allowlisted open sessions remain fail-closed", async () => {
     const runner = new SequenceRunner([
       {
