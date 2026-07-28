@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { JsonArchiveStore, type ArchiveFileOperations } from "../src/server/archive";
+import {
+  ARCHIVE_RETENTION_MS,
+  JsonArchiveStore,
+  type ArchiveFileOperations,
+} from "../src/server/archive";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
 
@@ -39,9 +43,13 @@ describe("durable archive state", () => {
       tokens: { provenance: "unknown" },
       cost: null,
       subagentCount: 0,
+      lastHumanMessage: "Review the final routing diff.",
+      lastUserMessage: "Please review the final routing diff.",
+      lastAgentMessage: "PASS with exact identity evidence.",
       transcriptTail: "PASS with exact identity evidence.",
       artifacts: [{ label: "Cursor transcript", path: "/Users/me/transcript.jsonl" }],
       gates: ["review passed"],
+      allowCwdFallback: false,
     };
     const path = "/virtual/archive.json";
     const store = await JsonArchiveStore.open(path, files);
@@ -65,8 +73,80 @@ describe("durable archive state", () => {
       cost: null,
       artifacts: source.artifacts,
       gates: source.gates,
+      lastUserMessage: source.lastUserMessage,
+      lastAgentMessage: source.lastAgentMessage,
     });
+    expect(reopened.archivedAgents()[0]?.allowCwdFallback).toBeFalse();
     expect(archived.controls.every((control) => !control.enabled)).toBeTrue();
+  });
+
+  test("agent archive records older than the retention window are pruned on load", async () => {
+    const nowMs = Date.parse("2026-07-23T20:00:00.000Z");
+    const fresh: CollectedAgent = {
+      id: "codex:fresh",
+      provider: "codex",
+      sourceSessionId: "fresh",
+      displayName: "Fresh archive",
+      status: "archived",
+      statusReason: "Archived by operator.",
+      updatedAt: new Date(nowMs - ARCHIVE_RETENTION_MS + 60_000).toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const stale = {
+      ...fresh,
+      id: "codex:stale",
+      sourceSessionId: "stale",
+      updatedAt: new Date(nowMs - ARCHIVE_RETENTION_MS - 60_000).toISOString(),
+    };
+    const files: ArchiveFileOperations = {
+      readText: async () => JSON.stringify([stale, fresh]),
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    };
+
+    const store = await JsonArchiveStore.open("/virtual/archive.json", files, () => nowMs);
+
+    expect(store.has(stale.id)).toBeFalse();
+    expect(store.archivedAgents().map(({ id }) => id)).toEqual([fresh.id]);
+  });
+
+  test("persisting a new archive prunes records that expired after load", async () => {
+    let nowMs = Date.parse("2026-07-23T20:00:00.000Z");
+    const expiring: CollectedAgent = {
+      id: "codex:expiring",
+      provider: "codex",
+      sourceSessionId: "expiring",
+      displayName: "Expiring archive",
+      status: "archived",
+      statusReason: "Archived by operator.",
+      updatedAt: new Date(nowMs).toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const contents = new Map([["/virtual/archive.json", JSON.stringify([expiring])]]);
+    const files: ArchiveFileOperations = {
+      readText: async (path) => contents.get(path) ?? "[]",
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    const store = await JsonArchiveStore.open("/virtual/archive.json", files, () => nowMs);
+    nowMs += ARCHIVE_RETENTION_MS + 60_000;
+    const fresh = {
+      ...expiring,
+      id: "codex:fresh",
+      sourceSessionId: "fresh",
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+
+    await store.archive(fresh.id, fresh);
+
+    expect(store.has(expiring.id)).toBeFalse();
+    expect(store.archivedAgents().map(({ id }) => id)).toEqual([fresh.id]);
   });
 
   test("a rejected rename never makes the agent appear archived in memory", async () => {

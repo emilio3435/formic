@@ -129,6 +129,53 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshotFingerprint(nextTick)).toBe(snapshotFingerprint(first));
   });
 
+  test("stale elapsed time stops at the last observed activity", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected({
+        status: "stale",
+        startedAt: "2026-07-21T20:00:00.000Z",
+        updatedAt: "2026-07-21T20:05:00.000Z",
+      })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-23T20:00:00.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.elapsedMs).toBe(5 * 60 * 1_000);
+  });
+
+  test("archived sources outside the configured scan window stay out of the live snapshot", () => {
+    const archived = [
+      collected({
+        id: "codex:fresh-archive",
+        sourceSessionId: "fresh-archive",
+        status: "archived",
+        updatedAt: "2026-07-23T19:00:00.000Z",
+      }),
+      collected({
+        id: "codex:old-archive",
+        sourceSessionId: "old-archive",
+        status: "archived",
+        updatedAt: "2026-07-20T19:00:00.000Z",
+      }),
+    ];
+    const snapshot = buildSnapshot({
+      agents: [],
+      surfaces: [],
+      archiveStore: {
+        has: (id) => archived.some((agent) => agent.id === id),
+        archive: async () => {},
+        archivedAgents: () => archived,
+      },
+      scanWindowHours: 36,
+      now: new Date("2026-07-23T20:00:00.000Z"),
+    });
+
+    expect(snapshot.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toEqual([
+      "codex:fresh-archive",
+    ]);
+  });
+
   test("a real routing change produces a new fingerprint and therefore an SSE update", () => {
     const withoutTarget = buildSnapshot({
       agents: [collected()],
