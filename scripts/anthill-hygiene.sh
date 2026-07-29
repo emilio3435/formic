@@ -33,7 +33,9 @@ need git
 [[ -n "${BUN_BIN}" && -x "${BUN_BIN}" ]] || die "bun not found (set BUN_BIN)"
 [[ -d "${REPO}" ]] || die "repo not found: ${REPO}"
 [[ -f "${SERVER_ENTRY}" ]] || die "server entry not found: ${SERVER_ENTRY}"
-[[ -f "${PROGRAMS_JSON}" ]] || die "programs.json not found: ${PROGRAMS_JSON}"
+# config/programs.json is optional and gitignored — it holds machine-local
+# project names, so a fresh clone legitimately has none. Absence means
+# "sessions render ungrouped", not "broken install", so it must not abort.
 
 BRANCH="$(git -C "${REPO}" branch --show-current 2>/dev/null || true)"
 if [[ "${BRANCH}" != "main" ]]; then
@@ -175,6 +177,11 @@ ensure_server() {
 }
 
 check_programs_json() {
+  if [[ ! -f "${PROGRAMS_JSON}" ]]; then
+    printf 'programs.json: absent — sessions render ungrouped.\n'
+    printf '  Optional. To group them: cp config/programs.example.json config/programs.json\n'
+    return 0
+  fi
   python3 - <<'PY' "${PROGRAMS_JSON}" || return 1
 import json, sys
 path = sys.argv[1]
