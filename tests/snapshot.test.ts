@@ -44,6 +44,21 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("ships config-owned model display labels on the snapshot wire", () => {
+    const snapshot = buildSnapshot({
+      agents: [],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.modelConfig?.displayLabels).toMatchObject({
+      "claude-opus-4-8": "opus 4.8",
+      "gpt-5.6-sol": "sol 5.6",
+      "grok-4.5": "grok 4.5",
+    });
+  });
+
   test.each([
     {
       label: "ambiguous",
