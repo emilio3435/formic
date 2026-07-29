@@ -1,3 +1,372 @@
+# WAVE 5 / W5-B — making the liveness feature visible, and proving the read routes against a real server
+
+Date: 2026-07-29
+Branch: `ant-hill/w5-client-20260728`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/w5-client-20260728`
+Base: `4c80cde` (wave-5 server merge)
+Files touched: `src/web/app.js`, `tests/web-client.test.ts`, and this report.
+`src/web/styles.css` and `src/web/index.html` needed no change. Nothing else — no
+`src/server/**`, no `scripts/**`, no `config/**`, no `package.json`.
+
+## Disposition
+
+| Item | Result |
+|---|---|
+| 1. Liveness invisible because of a field-name mismatch | **FIXED** |
+| 2. Model display names | **BLOCKED — still no label on the wire, duplicate left alone** |
+| 3. The browser paths that were 403ing | **VERIFIED live + one stale-copy fix** |
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **568 pass, 5 pre-existing triage failures**, 2,635 `expect()` calls, 31 files |
+| Baseline on this branch before the lane | 561 pass / the same 5 failures (so 7 tests added, 0 new failures) |
+| The 5 failures | all in `tests/triage.test.ts`, the real-clock retention time bomb W5-C owns. Zero failures in `tests/web-client.test.ts` (255 → 262 pass, 0 fail) |
+| Skips / `.only` / filtering | none. The one conditional test in the suite (`test.skipIf` for SQLCipher in `burnbar.test.ts`) **ran**: 8 pass / 0 fail / 0 skipped |
+| Mutations | **14 applied, 14 caught** |
+| `git diff --check` | clean |
+| Live server | my own scratch instance, `MOUNTAIN_PORT=4792 bun run start:server`, from this worktree; stopped at the end of the lane |
+| Real browser | headless Chromium against `:4792` |
+| Production | `ai.imaginethat.anthill` on `:4701` never restarted, kickstarted, or written to. Nothing pushed, merged or deployed |
+
+`node_modules` was absent; `bun install --frozen-lockfile` installed the
+lockfile-pinned dev dependencies. `package.json` and `bun.lock` are unchanged.
+
+## Commits
+
+| Commit | Scope |
+|---|---|
+| `043a721` | `processState` as the liveness carrier of record + the ORIGIN_REJECTED copy + 7 tests |
+
+---
+
+## Item 1 — the liveness feature was invisible — **FIXED** (`043a721`)
+
+Confirmed the mismatch at both ends before touching anything.
+
+- **Server:** `src/shared/types.ts:4` declares `ProcessState = "running" | "exited" | "died" | "unknown"`
+  and `src/server/snapshot.ts:578` writes it onto every agent as `processState`.
+- **Client:** `livenessState()` read `processLiveness`, then `liveness`, and nothing else. Against a
+  live 97-agent snapshot it returned `null` for **all 97**. The row mark, the drawer chip and the
+  accessible name were all correct code that nothing ever reached.
+
+The fix is the carrier chain. `processState` is read **first**, because an agent carrying both can
+only mean something is mid-migration and the real emitter has to win:
+
+```js
+const raw = agent && agent.processState != null ? agent.processState
+  : agent && agent.processLiveness != null ? agent.processLiveness
+    : agent && agent.liveness != null ? agent.liveness
+      : null;
+```
+
+Everything the brief said to preserve is preserved, and each is pinned by a test and a mutation:
+
+- **absent → `null`, nothing new renders.** `null`, `undefined`, and a record with no such key all
+  return `null`; the row keeps its old class list and its aria-label contains no `Process:` segment.
+- **an unrecognised word → `unknown`.** `zombie`, `stopped`, `""`, `"  "`, `7`, `{}`, `[]` all read
+  `unknown`, never `died`.
+- **death is never inferred from absence.**
+- `processLiveness` and `liveness` still work on their own, as bare strings or `{state}`/`{status}`
+  objects, and the wide word list is untouched.
+
+`agentRecordSig` is a whole-record JSON projection and `processState` is not in `AGENT_SIG_TICKED`,
+so the field was already inside both the row and drawer paint signatures — no signature change was
+needed, which is W4-B's design paying off exactly as it was meant to.
+
+### Proven end to end against real data
+
+A probe script drove the real client module (`src/web/app.js`) against the real server on `:4792`
+with no fake `fetch` at all — real snapshot in, real render functions, real nodes out:
+
+```text
+=== live snapshot: 97 agents, generatedAt 2026-07-29T06:57:11.305Z ===
+livenessState() over live agents: {"running":14,"unknown":83}
+PASS  liveness reads a real snapshot at all — 97 of 97 agents resolved
+PASS  verdictLiveness renders for a live 'running' agent
+PASS  the chip says 'Process live' — "Process live"
+PASS  the chip carries its state class — verdict-liveness liveness-running
+PASS  the drawer for a live agent shows the liveness block — Process live
+PASS  a running agent's row is NOT marked died
+PASS  an 'unknown' live agent states unknown rather than health — "Liveness unknown"
+PASS  stripping processState from a real record renders nothing new
+```
+
+And in a **real browser** loading `http://127.0.0.1:4792/`, read straight off the live DOM:
+
+```text
+agent-row aria-label: "anthill-w5-clock-0728. Status: Working · Alert. Process: Process live. …"
+agent-row aria-label: "Codex · w5-clock-20260728. Status: Working. Process: Liveness unknown. …"
+.verdict-liveness → class "verdict-liveness liveness-running"
+                    text  "Process live"
+                    aria  "Process: Process live. The agent's process is still running."
+```
+
+Before this commit every one of those `Process:` segments and the chip itself were absent.
+
+### What live data says about the feature, honestly
+
+The distribution over 97 real agents, by provider and activity:
+
+| count | provider | activity | processState |
+|---|---|---|---|
+| 69 | codex | ended | unknown |
+| 11 | claude | ended | unknown |
+| 9 | codex | **ended** | **running** |
+| 2 | codex | working | running |
+| 2 | claude | idle | running |
+| 1 | claude | working | running |
+| 2 | — | working / idle | unknown |
+
+Two things worth saying out loud:
+
+1. **The 9 `ended` + `running` agents are exactly what this feature is for** — sessions the board
+   calls finished whose process is in fact still alive. That signal was on the wire and nobody
+   could see it.
+2. **No agent in any live snapshot I took carried `died` or `exited`.** `processStateFor` only says
+   `died` when `processAlive === false` **and** `processIds` is non-empty, and only says `exited` on
+   `transcriptEndedCleanly`; 82 of 97 agents carry neither `processAlive` nor `processIds` at all.
+   So the `died` row mark and the `Exited cleanly` chip are **correct in tests and in the browser
+   with a planted record, but have never met a real one.** If those two states matter, the gap is on
+   the collector side, not here.
+
+Also honest: 83 of 97 drawers now read "Liveness unknown". That is W4-B's deliberate call (state
+`unknown` as unknown rather than let it read as health) and I did not undo it, but at this ratio the
+chip is close to noise. Flagging it as a design question, not changing it.
+
+## Item 2 — model display names — **BLOCKED, unchanged, duplicate left alone**
+
+Re-checked after the pricing lane's edits, and the answer has not moved. There is still no display
+label anywhere, so there is nothing to consume.
+
+- `config/models.json` now has **six** keys: `claudeContextWindows`, `modelFamilyAliases`,
+  `cursorNativeFamilies`, `cursorRootModel`, and the cost lane's `pricingVersion` and
+  `modelPricingUsdPerMillionTokens`. The pricing block's `aliases` are **wire ids**
+  (`"claude-opus-4-8"`, `"claude-opus-4-8[1m]"`), not labels — using them would print the same
+  string `modelShort()` exists to shorten.
+- `src/server/model-config.ts`'s `ModelConfig` interface has four fields, none a label, and
+  `isModelConfig()` would not carry one through even if it were added to the JSON.
+- Live `GET /api/snapshot` top-level keys: `controlHealth, generatedAt, issues, lookbackHours,
+  programs, pulse, recentlyResolved, scanWindowHours, schemaVersion, totals, triageSummaries`.
+  The only snapshot key matching `/model|label|display/` anywhere in the tree is
+  `totals.cursorModelHealth`, which is `{compliant, mismatch, unreported, total}` — a health count,
+  not labels.
+- No route serves it: `/api/model-config`, `/api/models` and `/api/config` all **404** on the live
+  server.
+
+So `modelShort()`'s table is untouched. Inventing a second source of truth is the thing this item
+exists to prevent, and it would still be inventing one.
+
+**Routed fix (server + config, unchanged from FE-B and W4-B):** add a display-label map to
+`config/models.json`, widen `ModelConfig`/`isModelConfig` to carry it, expose it on `HubSnapshot` or
+behind a small `GET /api/model-config`, and only then point `modelShort()` at it with the current
+table as the fallback. This is the third wave this has been reported; it is a ~20-line server change
+and it will keep coming back until someone takes it.
+
+## Item 3 — the browser paths — **VERIFIED live, one stale sentence fixed**
+
+### Both routes are genuinely reachable from a browser now
+
+W4-B's blocker is gone. Proven three ways, all against `:4792`.
+
+`curl` with **no `Origin` header at all**, which is what a browser sends:
+
+```text
+GET /api/actions?limit=100          -> 200
+GET /api/transcript?agent=…&limit=100 -> 200
+GET /api/health                     -> 200
+GET /api/history/export             -> 200
+Host: evil.example on /api/transcript -> 403 ORIGIN_REJECTED   (the host gate still holds)
+```
+
+The **real browser's own network log** on page load, which is the request W4-B watched fail:
+
+```text
+GET http://127.0.0.1:4792/api/settings        → 200
+GET http://127.0.0.1:4792/api/snapshot        → 200 (338180B)
+GET http://127.0.0.1:4792/api/program-aliases → 200
+GET http://127.0.0.1:4792/api/triage/queue    → 200
+GET http://127.0.0.1:4792/api/actions?limit=100 → 200 (491B)     ← was 403
+GET http://127.0.0.1:4792/api/events          → 200
+```
+
+No console errors on load.
+
+### The transcript viewer loads and renders
+
+Driven through the real UI in the browser: open a Codex agent's drawer → open the **Evidence**
+shelf (the panel lives inside `renderEvidence`, not on the default shelf) → click **Read the
+transcript**.
+
+```text
+GET /api/transcript?agent=codex%3A019faca3-…&limit=200 → 200 (12171B)
+.transcript-head : "44 turns/Users/emilionunezgarcia/.codex/sessions/2026/07/29/rollout-….jsonl Refresh"
+.tr-line count   : 44
+role labels seen : "—", "You", "Agent", "Tool"
+first turn text  : "Memory You have access to a memory folder with guidance from prior runs…"
+error note       : none
+```
+
+Everything FE-C built blind matches the wire: the envelope is
+`{ok, agentId, source, truncated, lines:[{at, role, text}]}`, the absolute source path survives
+verbatim, the limit the client asks for (200) is inside the server's 1000 ceiling, and an unknown
+agent id comes back `404 AGENT_NOT_FOUND` and reads as *"This session is no longer tracked, so its
+transcript cannot be resolved."* — not as a missing build.
+
+Across 30 real agents / 957 real turns the role split is
+`tool 563, assistant 278, user 76, unknown 32, system 8`. The `unknown` ones (3.3%) render with the
+`—` label — but that is the **server's own** `role: "unknown"`, emitted by `transcriptRole()` in
+`debug-identity.ts` for rows it cannot map, not a client mis-parse. Client and server agree; I left
+it alone.
+
+### The action log loads and renders
+
+The journal was empty on a fresh scratch server, so I made two entries **without touching any
+terminal**: `POST /api/control` twice against an agent id that does not exist. The server refuses
+with `AGENT_NOT_FOUND` before any cmux command is constructed, and `recordControlAction` journals
+refusals — a real failure record with zero side effects.
+
+Rendered in the real browser, log toggled open:
+
+```text
+#actions-panel hidden : false
+.action-row count     : 2
+text: "Recent operator actions Refresh
+       79s ago Interrupt codex:w5b-probe-not-a-real-agent Failed
+         AGENT_NOT_FOUND: The agent is not present in the current snapshot.
+       79s ago Focus     codex:w5b-probe-not-a-real-agent Failed
+         AGENT_NOT_FOUND: The agent is not present in the current snapshot."
+```
+
+The failure keeps its own detail string, the raw id of an agent the snapshot cannot name survives
+rather than being dropped, and `Failed` is a distinct word from `Delivered`. The contract matches
+exactly: server kinds are `focus | instruct | interrupt | broadcast | archive` and outcomes are
+`ok | failed | partial | staged`, which are precisely the client's `ACTION_KINDS` and
+`ACTION_OUTCOME_VIEW` keys.
+
+### The one thing that did not match: the ORIGIN_REJECTED copy
+
+`readEndpointOriginNote()` told the operator:
+
+> "…it requires an Origin header that browsers never send on a same-origin GET. Nothing on this page
+> can supply it — **the server's read endpoints have to stop requiring one.**"
+
+That was true when W4-B wrote it and is false now — they *did* stop requiring one. Left as-is it
+sends someone to route a server fix that has already shipped, which is the same expensive lie as
+"not available in this build", just pointed at a different team. The code still exists and now means
+something entirely different: `src/server/app.ts:444` returns it when `url.hostname` is not loopback,
+i.e. the page reached the server under some other name. So the copy names the address, which is the
+only thing the operator can act on:
+
+> "…these reads are served only over a loopback address, and this page reached the server under
+> another hostname. Open the board at 127.0.0.1 or localhost."
+
+One existing W4-B assertion (`toContain("same-origin GET")`) had to change with it. It was
+**replaced, not loosened** — it now requires `"loopback"`, and the full new copy is pinned by a
+dedicated W5-B test that also asserts the old sentence can never come back.
+
+## Tests added — 7
+
+All in `tests/web-client.test.ts`, in a new `W5-B: the wire, as the server actually speaks it`
+block, extending W4-B's `withRequests` / `withDom` / `withState` harness rather than inventing
+another. Every payload quoted in them was captured **verbatim off the live server**, not written to
+the contract — including a `role: "unknown"` line the old hand-written fixture did not have.
+
+| Test | What it pins |
+|---|---|
+| `processState is a liveness carrier, with the server's own four words` | the four `ProcessState` values map to the four client keys and four distinct labels |
+| `processState wins over the legacy carriers` | precedence when a record carries both, and that the aliases still work alone |
+| `processState keeps the absent-first rules` | `null`/`undefined`/absent → `null`; 7 junk values → `unknown`, never `died` |
+| `a real processState reaches the row and the drawer` | `is-died` + `Process: Died` on the row, no `Process:` at all when absent, `Liveness unknown` stated in the drawer |
+| `the live transcript route loads and renders through the real client path` | the live envelope through `loadTranscript` → `renderTranscriptPanel`: 4 line nodes, the real absolute source path, no error note, the limit the server accepts |
+| `the live action-log route loads and renders every real outcome` | the live envelope through `loadActions` → `renderActionLog`: 2 rows, `Failed`, the server's own detail, the raw unnamed id, `fetchedAt > 0` |
+| `ORIGIN_REJECTED names the address, not a server change that already landed` | the new copy, and that the three old/false sentences can never return |
+
+### Mutations — 14 applied, 14 caught
+
+Each applied alone to the finished code, the client suite re-run, then reverted.
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | `processState` is not a carrier at all (the original bug, restored) | caught (4 fail) |
+| 2 | `processState` read last, so a legacy field shadows the real one | caught |
+| 3 | an absent `processState` is treated as present | caught (6 fail) |
+| 4 | an unrecognised liveness word means `died` | caught |
+| 5 | `livenessView` invents `unknown` when the field is absent | caught (5 fail) |
+| 6 | the row drops its `is-died` mark | caught |
+| 7 | the drawer hides an `unknown` verdict | caught |
+| 8 | ORIGIN_REJECTED reverts to routing a fix that already shipped | caught |
+| 9 | the real transcript source path is dropped | caught |
+| 10 | a successful action-log read leaves `fetchedAt` at 0 (so `refreshActions` never fires again) | caught |
+| 11 | an agent the snapshot no longer names is dropped from the journal record | caught |
+| 12 | a failure's own detail is summarised away | caught |
+| 13 | the client asks for a limit above the server's transcript ceiling | caught |
+| 14 | a failed action renders as delivered | caught |
+
+## Honest gaps
+
+- **`died` and `exited` have still never met real data.** Both render correctly with a planted
+  record in tests and in the browser, but no live snapshot I took contained either value — see the
+  distribution table under item 1. The failure mode if the collector's evidence never arrives is
+  that the chip stays `unknown`, never that something is wrong.
+- **The action log's other three outcomes are untested against real data.** I could produce real
+  `failed` records safely; `ok`, `partial` and `staged` all require actually driving a live cmux
+  terminal, which this lane will not do. Their rendering is covered by tests and by the contract in
+  `src/server/app.ts:55-56`, not by a live record.
+- **No client UI for `GET /api/history/export`.** W5-A shipped the route and noted the client half
+  was the next lane's. It was not in my three items and I did not add it. The route answers 200 with
+  `{schemaVersion, exportedAt, retentionDays: 30, maxRecords: 5000, agents: […96]}` and a
+  `Content-Disposition: attachment` header, so a download control is a small, well-specified piece of
+  work for whoever picks it up.
+- **`GET /api/health` has no client consumer either.** Same reasoning; the client's staleness alarm
+  already keys off snapshot age, which is the same fact, so this is for the deploy script
+  (`scripts/anthill-deploy.sh:44`, still curling `/`) rather than for the page.
+- **No jsdom-backed `boot()` test.** `boot()` is not exported and runs at import time, so the
+  committed suite still cannot enter it. The live probe script drives the real render functions with
+  a real fake document and real network, and it is what proved item 1 — but it lives in this
+  session's scratchpad, not in the repo, because it needs a running server.
+
+## What I deliberately left alone
+
+- **FE-A's live-input exclusions.** `drafts`, `renameDraft` and `broadcastDraft` are still out of
+  every paint signature. I added no signature entries at all — `processState` was already covered by
+  `agentRecordSig`'s whole-record projection.
+- **`modelShort()`'s label table** — item 2 still has no source of truth.
+- **The drawer stating `unknown` for 83 of 97 agents** — W4-B's documented decision. Flagged above,
+  not undone.
+- **The `—` label on server-emitted `role: "unknown"` turns** — client and server agree; 3.3% of
+  real turns.
+- **`processLiveness` / `liveness` and the wide word list.** Kept as tolerated aliases per the brief.
+- **No new `@keyframes`, no `animation:`, no `innerHTML`.** The pinned inventory and the
+  reduced-motion guard are byte-identical, and every transcript and journal string still goes through
+  `el({ text })`.
+- Everything outside `src/web/app.js`, `tests/web-client.test.ts` and this report.
+- Nothing pushed, merged, deployed, or restarted. `:4701` was never queried with side effects.
+
+## Out-of-scope observations (not fixed, not mine)
+
+1. **`processStateFor` (`src/server/snapshot.ts:180`) can only produce `died`/`exited` for agents
+   that carry `processAlive` / `processIds` / `transcriptEndedCleanly`, and 82 of 97 live agents
+   carry none of them.** Two of the feature's four states are therefore currently unreachable in
+   production. The client is ready for them; the evidence is the gap.
+2. **Model display names still need the server + config change** (item 2). Third wave reported.
+3. **`scripts/anthill-deploy.sh:44` still certifies a wedged server as LIVE** by curling `/`.
+   `GET /api/health` now exists and returns a real `{ok, verdict, snapshot:{ageMs, maxAgeMs}}` —
+   pointing the script at it is a one-line change and closes a finding that has been open since
+   wave 3.
+4. **`renderHealthRail`, `renderTabs` and `renderFilterBar` still have no paint guard** — FE-A's
+   observation #1, unchanged for five waves.
+5. **`recordControlAction` still ignores `instruct` without an `agentId`** (W4-B's routed note), so a
+   staged-not-submitted broadcast never reaches the journal. Still true; I did not exercise it.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged — seventeen lanes' reports.*
+
+---
+
 # WAVE 5 / W5-A — browser reads, bounded refreshes, and durable history
 
 Date: 2026-07-28
