@@ -103,6 +103,12 @@ function queueItem(overrides: Partial<TriageQueueItem> = {}): TriageQueueItem {
   };
 }
 
+// The fixtures above carry fixed 2026-07-22 timestamps while triage retention
+// (TRIAGE_RETENTION_MS = 7 days) is measured against the store's clock. Pin the
+// clock just past the newest fixture so these assertions exercise retention logic
+// instead of silently expiring seven days after the file was written.
+const FIXED_NOW = () => Date.parse("2026-07-28T10:00:00.000Z");
+
 describe("operator triage recommendations", () => {
   test("broad overlapping identity evidence recommends a bounded investigation", () => {
     const agents = [
@@ -281,7 +287,7 @@ describe("operator triage recommendations", () => {
 
   test("a completed finding can be requeued from fresh issue evidence", async () => {
     const issueId = "system:recurring";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(FIXED_NOW);
     await store.add(recommendation(issueId));
     const completed = store.get(issueId)!;
     completed.state = "completed";
@@ -307,7 +313,7 @@ describe("operator triage recommendations", () => {
 
   test("DELETE cancels a running investigation before removing it", async () => {
     const issueId = "system:cancellable";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(FIXED_NOW);
     await store.add(recommendation(issueId));
     let cancelled = 0;
     const runner: TriageInvestigationRunner = {
@@ -336,7 +342,7 @@ describe("operator triage recommendations", () => {
 
   test("DELETE refuses to hide a running investigation without a safe cancellation handle", async () => {
     const issueId = "system:not-cancellable";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(FIXED_NOW);
     await store.add(recommendation(issueId));
     const runner: TriageInvestigationRunner = {
       async launch() {
@@ -391,11 +397,11 @@ describe("JSON triage queue durability", () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
     const path = join(directory, "triage-queue.json");
     try {
-      const store = await JsonTriageQueueStore.open(path);
+      const store = await JsonTriageQueueStore.open(path, FIXED_NOW);
       expect(store.list()).toEqual([]);
 
       const added = await store.add(recommendation());
-      const reopened = await JsonTriageQueueStore.open(path);
+      const reopened = await JsonTriageQueueStore.open(path, FIXED_NOW);
       expect(reopened.list()).toEqual([added]);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -411,7 +417,7 @@ describe("JSON triage queue durability", () => {
       runId: "run-before-restart",
     })]));
     try {
-      const store = await JsonTriageQueueStore.open(path);
+      const store = await JsonTriageQueueStore.open(path, FIXED_NOW);
       expect(store.list()).toEqual([
         expect.objectContaining({
           state: "blocked",
