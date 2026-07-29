@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import type { HubSnapshot, TriageQueueItem } from "../shared/types";
+import type { AgentSnapshot, HubSnapshot, ProgramSnapshot, TriageQueueItem } from "../shared/types";
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
@@ -200,8 +200,51 @@ function compactSnapshotFingerprint(snapshot: HubSnapshot): string {
   return createHash("sha256").update(snapshotFingerprint(snapshot)).digest("base64url");
 }
 
-function snapshotEvent(snapshot: HubSnapshot): string {
-  return `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+interface SnapshotDeltaProgram extends Omit<ProgramSnapshot, "agents"> {
+  agentIds: string[];
+  agents: AgentSnapshot[];
+}
+
+interface SnapshotDelta {
+  schemaVersion: 1;
+  baseSequence: number;
+  sequence: number;
+  snapshot: Omit<HubSnapshot, "programs">;
+  programs: SnapshotDeltaProgram[];
+}
+
+function snapshotEvent(snapshot: HubSnapshot, sequence: number): string {
+  return `id: ${sequence}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`;
+}
+
+function snapshotDelta(
+  previous: HubSnapshot,
+  next: HubSnapshot,
+  baseSequence: number,
+  sequence: number,
+): SnapshotDelta {
+  const previousPrograms = new Map(previous.programs.map((program) => [program.id, program]));
+  const programs = next.programs.map((program): SnapshotDeltaProgram => {
+    const previousAgents = new Map(
+      (previousPrograms.get(program.id)?.agents ?? []).map((agent) => [agent.id, agent]),
+    );
+    const changedAgents = program.agents.filter((agent) => {
+      const previousAgent = previousAgents.get(agent.id);
+      return !previousAgent || JSON.stringify(previousAgent) !== JSON.stringify(agent);
+    });
+    const { agents: _agents, ...programFields } = program;
+    return {
+      ...programFields,
+      agentIds: program.agents.map((agent) => agent.id),
+      agents: changedAgents,
+    };
+  });
+  const { programs: _programs, ...snapshot } = next;
+  return { schemaVersion: 1, baseSequence, sequence, snapshot, programs };
+}
+
+function snapshotDeltaEvent(delta: SnapshotDelta): string {
+  return `id: ${delta.sequence}\nevent: snapshot-delta\ndata: ${JSON.stringify(delta)}\n\n`;
 }
 
 export interface MountainAppDependencies {
@@ -426,15 +469,23 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   void hydrateTriageLifecycle();
   const initialSnapshot = dependencies.state.get();
   let fingerprint = compactSnapshotFingerprint(initialSnapshot);
-  let currentSnapshotEvent = snapshotEvent(initialSnapshot);
+  let currentSnapshot = initialSnapshot;
+  let snapshotSequence = 0;
+  let currentSnapshotEvent = snapshotEvent(initialSnapshot, snapshotSequence);
   let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
     const nextFingerprint = compactSnapshotFingerprint(snapshot);
     if (nextFingerprint === fingerprint) return;
+    const baseSequence = snapshotSequence;
+    snapshotSequence += 1;
+    const deltaEvent = snapshotDeltaEvent(
+      snapshotDelta(currentSnapshot, snapshot, baseSequence, snapshotSequence),
+    );
     fingerprint = nextFingerprint;
-    currentSnapshotEvent = snapshotEvent(snapshot);
+    currentSnapshot = snapshot;
+    currentSnapshotEvent = snapshotEvent(snapshot, snapshotSequence);
     for (const client of clients) {
-      enqueueClient(client, currentSnapshotEvent);
+      enqueueClient(client, deltaEvent);
     }
   });
 
@@ -589,7 +640,11 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       try {
         const snapshot = await recollect();
         return Response.json(snapshot, {
-          headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+          headers: {
+            ...SECURITY_HEADERS,
+            "cache-control": "no-store",
+            "x-ant-hill-snapshot-sequence": String(snapshotSequence),
+          },
         });
       } catch (error) {
         return Response.json(
@@ -634,8 +689,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       );
     }
     if (request.method === "GET" && url.pathname === "/api/snapshot") {
-      return Response.json(dependencies.state.get(), {
-        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      return Response.json(currentSnapshot, {
+        headers: {
+          ...SECURITY_HEADERS,
+          "cache-control": "no-store",
+          "x-ant-hill-snapshot-sequence": String(snapshotSequence),
+        },
       });
     }
     if (request.method === "GET" && url.pathname === "/api/events") {
