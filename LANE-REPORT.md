@@ -1,3 +1,91 @@
+# WAVE 5 / W5-C — deterministic retention clocks
+
+Date: 2026-07-29
+Branch: `ant-hill/w5-clock-20260728`
+Implementation commit: `3001aa7`
+
+## Disposition
+
+| Item | Result |
+|---|---|
+| Five triage failures caused by July fixtures crossing the real seven-day clock | **FIXED** |
+| Exact triage retention boundary coverage | **FIXED** |
+| Two archive/history tests with the same longer-fuse defect | **FIXED** |
+| Action-log age prune and 500-entry cap | **NOT-A-BUG** — injected clock is used by production decisions and fixed by retention tests |
+| Archive/history 30-day prune and 5,000-record cap | **NOT-A-BUG** — production clock is injected and policy tests control it |
+| Attention retention and snooze-until expiry | **NOT-A-BUG** — store/API clocks are injected and expiry tests advance a fixed clock |
+| Identity-binding seven-day prune | **NOT-A-BUG** — load/save use an injected clock and tests pin it |
+| Recently-resolved issue TTL and pulse completion/burn windows | **NOT-A-BUG** — decision time is passed explicitly in tests |
+| Remaining server/client wall-clock uses | **NOT-A-BUG** — runtime observation/display/ID timestamps, or tests derived relative to the current clock |
+| `Date.UTC` comparisons against fixtures | **NOT-A-BUG** — no occurrences found |
+| Ownership handoffs | None; no **BLOCKED** clock defect was found |
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| Reproduction before repair | **24 pass / 5 fail** across `triage.test.ts` and `archive.test.ts`; exactly the five supplied failures |
+| Targeted tests after repair | **29 pass / 0 fail**, 82 `expect()` calls |
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **566 pass / 0 fail**, 2,580 `expect()` calls, 31 files |
+| Skips / filtering | no filtering and no `.only`; the existing conditional SQLCipher test ran and passed |
+| `git diff --check` | clean |
+| Push / merge / deploy / launchd restart | none |
+
+This worktree initially had no `node_modules`. `bun install --frozen-lockfile` installed
+the lockfile-pinned dependencies needed for the TypeScript gate. `package.json` and
+`bun.lock` are unchanged.
+
+## Triage clock bomb — **FIXED**
+
+The queue stores already exposed the right production seam: `now: () => number = Date.now`.
+The five failing tests did not use it, so their fixed `2026-07-22` records were compared
+with the day the suite happened to run. All five now pass the shared fixed instant
+`2026-07-28T09:12:03.114Z` into the real store path. Investigation `startedAt` now uses
+that same store clock instead of bypassing it with `new Date()`.
+
+The missing boundary test writes two completed records relative to that fixed instant:
+
+- exactly `TRIAGE_RETENTION_MS` old is retained;
+- `TRIAGE_RETENTION_MS + 1 ms` old is pruned;
+- the rewritten JSON file contains only the retained record.
+
+This defuses the bomb independently of calendar date: neither record is dated by “today,”
+and both sides of the policy are computed from the injected `TRIAGE_NOW_MS`.
+
+## Longer-fuse sweep
+
+Two archive tests opened/persisted hardcoded July agents with the default production clock.
+They passed now but would begin pruning their fixtures after 30 days. Both now use fixed
+providers for initial persistence and reopen. The archive implementation itself needed no
+change because load, record, and commit already use its injected clock.
+
+The remaining policies are deterministic:
+
+- action log: `MemoryActionLogStore`/`JsonActionLogStore.open` own an injected clock; the
+  retention test advances a fixed `now`;
+- archive/history: the 30-day and 5,000-record tests derive timestamps from fixed `nowMs`;
+- attention: record retention and snooze expiry use `MemoryAttentionStore.now`; tests move
+  a fixed clock across expiry;
+- identity bindings: load/save pruning uses the injected store clock; the TTL test derives
+  fresh/stale records from fixed `nowMs`;
+- recently resolved issues: `buildSnapshot` accepts a fixed `Date`;
+- pulse: observation/report/pruning receive explicit millisecond instants and tests use one
+  shared base.
+
+The broader `Date.now()` / zero-argument `new Date()` sweep found runtime collection
+timestamps, state/watchdog timing, heartbeat/export timestamps, generated IDs/temp names,
+and client display/connection clocks. None combine a fixed calendar fixture with a real
+clock in an asserted expiry/retention decision. Client freshness/snooze helpers accept
+explicit `now` in their boundary tests; tests that exercise the real default derive their
+fixtures relative to the current clock.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
 # WAVE 5 / W5-A — browser reads, bounded refreshes, and durable history
 
 Date: 2026-07-28
