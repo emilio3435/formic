@@ -5214,13 +5214,17 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // operator to look for a deploy that already happened is the expensive lie.
     expect(transcript).not.toContain("not available in this build");
     expect(transcript).toContain("ORIGIN_REJECTED");
-    expect(transcript).toContain("same-origin GET");
+    // W5-B: was `toContain("same-origin GET")`. The server stopped requiring an
+    // Origin header on these two GETs, so that sentence became false; the code
+    // now means "you reached the server under a non-loopback hostname". The
+    // replacement copy is pinned in full by the W5-B block below.
+    expect(transcript).toContain("loopback");
     // Not a bare echo of the server's own sentence about HTTP internals.
     expect(transcript).not.toBe(body.error.message);
 
     const actions = M.actionsFailureText(403, { ok: false, error: { code: "ORIGIN_REJECTED", message: "Action-log reads require an exact same-origin loopback Origin header." } });
     expect(actions).not.toContain("not available in this build");
-    expect(actions).toContain("same-origin GET");
+    expect(actions).toContain("loopback");
 
     // The other degradations are unchanged: a build with no route at all still
     // says so, and a missing agent still reads as a missing agent.
@@ -5539,5 +5543,202 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     expect(acked).not.toBe(before);
     expect(failing).not.toBe(before);
     expect(busy).not.toBe(before);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   W5-B.
+
+   Every payload quoted in this block was captured VERBATIM off a live server
+   started from this worktree on 127.0.0.1:4792, not hand-written to the
+   contract. The previous lane could only test the transcript viewer and the
+   action log against a fake `fetch`, and the lane after it could not test them
+   at all because both routes answered 403 to every browser. Both are now
+   reachable, so these tests pin the client against what the server really
+   sends.
+   ------------------------------------------------------------------------- */
+describe("W5-B: the wire, as the server actually speaks it", () => {
+  /* The whole liveness feature was dark: the server emits `processState` and
+     the client read only `processLiveness` / `liveness`, so livenessState()
+     returned null for all 96 agents in a live snapshot and nothing rendered. */
+  test("(1) processState is a liveness carrier, with the server's own four words", () => {
+    // src/shared/types.ts: ProcessState = "running" | "exited" | "died" | "unknown".
+    const wire: Array<["running" | "exited" | "died" | "unknown", string]> = [
+      ["running", "Process live"],
+      ["exited", "Exited cleanly"],
+      ["died", "Died"],
+      ["unknown", "Liveness unknown"],
+    ];
+    for (const [word, label] of wire) {
+      expect(M.livenessState(agent({ processState: word })), word).toBe(word);
+      expect(M.livenessView(agent({ processState: word })).label, word).toBe(label);
+    }
+    // The four labels stay four distinct words: "Exited cleanly" collapsing
+    // into "Died" is the one confusion this feature exists to remove.
+    expect(new Set(wire.map(([w]) => M.livenessView(agent({ processState: w })).label)).size).toBe(4);
+  });
+
+  test("(1) processState wins over the legacy carriers", () => {
+    // Both carriers on one record can only happen while something is migrating.
+    // Read the field the server actually emits, never the guess it replaced.
+    expect(M.livenessState(agent({ processState: "died", processLiveness: "running" }))).toBe("died");
+    expect(M.livenessState(agent({ processState: "running", liveness: "process-gone" }))).toBe("running");
+    // The aliases still work on their own — dropping them would buy nothing and
+    // would re-open exactly the failure this test exists for.
+    expect(M.livenessState(agent({ processLiveness: "died" }))).toBe("died");
+    expect(M.livenessState(agent({ liveness: "process-gone" }))).toBe("died");
+  });
+
+  test("(1) processState keeps the absent-first rules", () => {
+    // Absent: nothing new renders. A snapshot without the field paints as before.
+    expect(M.livenessState(agent())).toBeNull();
+    expect(M.livenessState(agent({ processState: null }))).toBeNull();
+    expect(M.livenessState(agent({ processState: undefined }))).toBeNull();
+    // A word this client does not own is never read as death.
+    for (const word of ["zombie", "stopped", "", "  ", 7, {}, []]) {
+      expect(M.livenessState(agent({ processState: word })), JSON.stringify(word)).toBe("unknown");
+    }
+  });
+
+  test("(1) a real processState reaches the row and the drawer", () => {
+    const program = { id: "p", name: "P", agents: [] as unknown[] };
+
+    // The row marks only death, and it must be driven by the REAL carrier —
+    // reading processLiveness alone left every dead process unmarked.
+    const dead = withDom(() => M.renderAgentRow(agent({ processState: "died" }), program));
+    expect(dead.className).toContain("is-died");
+    expect(dead.attributes["aria-label"]).toContain("Process: Died");
+
+    const alive = withDom(() => M.renderAgentRow(agent({ processState: "running" }), program));
+    expect(alive.className).not.toContain("is-died");
+    expect(alive.attributes["aria-label"]).toContain("Process: Process live");
+
+    // Absent stays byte-identical to the pre-feature row: no mark, no aria text.
+    const bare = withDom(() => M.renderAgentRow(agent(), program));
+    expect(bare.className).not.toContain("is-died");
+    expect(bare.attributes["aria-label"]).not.toContain("Process:");
+
+    // The drawer states all four, so "unknown" is stated as unknown somewhere
+    // rather than quietly reading as health.
+    const unclear = agent({ processState: "unknown" });
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: unclear, program: { id: "p", name: "P", agents: [unclear] } }));
+    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Liveness unknown");
+  });
+
+  /* The route that used to 403 every browser now answers. This is a verbatim
+     slice of what it returned for a real Codex session on :4792 — including a
+     `role: "unknown"` the SERVER itself emits for an unmapped row, which the
+     old hand-written fixture did not have. */
+  const LIVE_TRANSCRIPT = {
+    ok: true,
+    agentId: "codex:019faca3-5c0b-71b1-9501-d27671ba2083",
+    source: "/Users/emilionunezgarcia/.codex/sessions/2026/07/29/rollout-2026-07-29T08-50-14-019faca3-5c0b-71b1-9501-d27671ba2083.jsonl",
+    truncated: false,
+    lines: [
+      { at: "2026-07-29T06:50:18.291Z", role: "unknown", text: "Memory You have access to a memory folder with guidance from" },
+      { at: "2026-07-29T06:50:18.359Z", role: "user", text: "WAVE 5 / W5-C — the suite has a time bomb" },
+      { at: "2026-07-29T06:50:29.866Z", role: "assistant", text: "I'll treat the diagnosed triage clock leak as the primary fi" },
+      { at: "2026-07-29T06:51:02.100Z", role: "tool", text: "ran bun test" },
+    ],
+  };
+
+  test("(3) the live transcript route loads and renders through the real client path", async () => {
+    const who = agent({ id: LIVE_TRANSCRIPT.agentId });
+    const program = { id: "p", name: "P", agents: [who] };
+    await withState({ snap: snapshot({ programs: [program] }), transcript: {} }, async () => {
+      await withRequests([{ status: 200, json: LIVE_TRANSCRIPT }], async (calls) => {
+        await M.loadTranscript(who.id);
+        // The client must ask for a limit the server will accept: its ceiling
+        // is 1000 and anything above it is a 400 INVALID_LIMIT.
+        expect(calls[0]!.method).toBe("GET");
+        expect(calls[0]!.url).toBe("/api/transcript?agent=" + encodeURIComponent(who.id) + "&limit=200");
+        // Settled into data, never a spinner and never a named failure.
+        expect(M.state.transcript.loading).toBe(false);
+        expect(M.state.transcript.error).toBe("");
+
+        const panel = withDom(() => M.renderTranscriptPanel(who, M.state));
+        expect(byClass(panel, "err")).toBeNull();
+        expect(allByClass(panel, "tr-line")).toHaveLength(4);
+        // The real absolute source path reaches the operator verbatim.
+        expect(textOf(byClass(panel, "transcript-source-path"))).toBe(LIVE_TRANSCRIPT.source);
+        expect(textOf(byClass(panel, "transcript-source"))).toBe("4 turns");
+        // Untrusted agent text, rendered as text.
+        expect(textOf(panel)).toContain("WAVE 5 / W5-C — the suite has a time bomb");
+      });
+    });
+  });
+
+  test("(3) the live action-log route loads and renders every real outcome", async () => {
+    // Verbatim from :4792 after two refused control attempts. A journal that
+    // showed only successes would read as proof the instruction landed.
+    const live = {
+      ok: true,
+      actions: [
+        {
+          id: "act_01KYPANEX9M7N7TMPX77ESF6MN",
+          at: "2026-07-29T06:58:18.153Z",
+          kind: "interrupt",
+          agentIds: ["codex:w5b-probe-not-a-real-agent"],
+          outcome: "failed",
+          detail: "AGENT_NOT_FOUND: The agent is not present in the current snapshot.",
+        },
+        {
+          id: "act_01KYPANEX22GXBHQ0QA06PFVRH",
+          at: "2026-07-29T06:58:18.146Z",
+          kind: "focus",
+          agentIds: ["codex:w5b-probe-not-a-real-agent"],
+          outcome: "failed",
+          detail: "AGENT_NOT_FOUND: The agent is not present in the current snapshot.",
+        },
+      ],
+    };
+    await withState({ snap: snapshot(), actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 } }, async () => {
+      await withRequests([{ status: 200, json: live }], async (calls) => {
+        await M.loadActions();
+        expect(calls[0]!.url).toBe("/api/actions?limit=100");
+        expect(M.state.actions.error).toBe("");
+        // fetchedAt is what lets a later control refresh the journal at all;
+        // the 403 era left it 0 forever, so refreshActions() never fired.
+        expect(M.state.actions.fetchedAt).toBeGreaterThan(0);
+        expect(M.state.actions.items).toHaveLength(2);
+
+        const panel = withDom(() => M.renderActionLog(M.state, null));
+        expect(byClass(panel, "action-log-note")).toBeNull();
+        expect(allByClass(panel, "action-row")).toHaveLength(2);
+        const first = allByClass(panel, "action-row")[0];
+        expect(textOf(byClass(first, "action-kind"))).toBe("Interrupt");
+        expect(textOf(byClass(first, "action-outcome"))).toBe("Failed");
+        // The server's own reason survives to the screen, not summarised away.
+        expect(textOf(byClass(first, "action-detail"))).toBe(live.actions[0]!.detail);
+        // An agent the snapshot no longer names keeps its raw id rather than
+        // vanishing from the record of who was instructed.
+        expect(textOf(byClass(first, "action-who"))).toBe("codex:w5b-probe-not-a-real-agent");
+      });
+    });
+  });
+
+  /* The routes stopped requiring an `Origin` header, so the client's
+     explanation of ORIGIN_REJECTED became a lie in the opposite direction:
+     it told the operator to go and get a server fix that had already shipped. */
+  test("(3) ORIGIN_REJECTED names the address, not a server change that already landed", () => {
+    const body = { ok: false, error: { code: "ORIGIN_REJECTED", message: "Read endpoints require exact same-origin loopback access." } };
+    for (const text of [M.transcriptFailureText(403, body), M.actionsFailureText(403, body)]) {
+      // The one thing the operator can act on.
+      expect(text).toContain("127.0.0.1");
+      expect(text).toContain("loopback");
+      expect(text).toContain("ORIGIN_REJECTED");
+      // Not a routed fix that has shipped, and not a deploy that has happened.
+      expect(text).not.toContain("have to stop requiring");
+      expect(text).not.toContain("same-origin GET");
+      expect(text).not.toContain("not available in this build");
+      // Not a bare echo of the server's own sentence about HTTP internals.
+      expect(text).not.toBe(body.error.message);
+    }
+    // Every other degradation is untouched.
+    expect(M.transcriptFailureText(404, null)).toBe("Transcript view is not available in this build.");
+    expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
+    expect(M.transcriptFailureText(404, { ok: false, error: { code: "AGENT_NOT_FOUND", message: "gone" } }))
+      .toContain("no longer tracked");
   });
 });

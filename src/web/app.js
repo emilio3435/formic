@@ -339,22 +339,29 @@ function deriveControlState(agent) {
 /* ---------- process liveness (additive, absent-first) ----------
 
    A crashed agent and a cleanly finished one both simply stop, so "needs me"
-   and "done" look identical. A parallel backend lane is adding an additive
-   snapshot field that separates them; no snapshot this client has ever seen
-   carries it, so every rule below is written absent-first:
+   and "done" look identical. The backend now separates them and the field it
+   emits is `processState`, carrying exactly "running" | "exited" | "died" |
+   "unknown" (src/shared/types.ts). This client was written before that name was
+   settled and read only `processLiveness` / `liveness`, so the whole feature
+   rendered nothing against real snapshots; `processState` is read FIRST now and
+   is the carrier of record. Verified against a live snapshot: 96 agents, 14
+   `running`, 82 `unknown`.
+
+   The absent-first rules are unchanged, because they are what makes this safe
+   to ship ahead of, or behind, any emitter:
 
      - absent  -> null, and NOTHING new is rendered. The board looks exactly as
-                  it does today. Absence is not evidence of death.
+                  it does before the field exists. Absence is not evidence of
+                  death.
      - present but a word we do not recognise -> "unknown". Guessing "died" from
        a vocabulary we do not own is the one mistake that would make this
        feature worse than not shipping it.
 
-   Two carriers are read (`processLiveness` and `liveness`) and either may be a
-   bare string or an object with `state`/`status`, because the emitting lane's
-   exact shape is not settled yet and reading one spelling would mean the
-   feature silently never appears. The word vocabulary is deliberately wide for
-   the same reason — including the `process-alive` / `process-gone` /
-   `no-evidence` spelling the collector lane proposed. */
+   `processLiveness` and `liveness` are kept as tolerated aliases (a bare string
+   or an object with `state`/`status`), and the word vocabulary stays wide —
+   including the `process-alive` / `process-gone` / `no-evidence` spelling the
+   collector lane proposed. Dropping them would buy nothing and would re-open the
+   exact failure this comment records. */
 const LIVENESS_WORDS = {
   running: "running", alive: "running", live: "running", "process-alive": "running",
   up: "running", active: "running",
@@ -373,9 +380,12 @@ const LIVENESS_VIEW = {
 };
 
 function livenessState(agent) {
-  const raw = agent && agent.processLiveness != null ? agent.processLiveness
-    : agent && agent.liveness != null ? agent.liveness
-      : null;
+  // `processState` first: it is the field the server actually emits, so an
+  // agent that carries both must be read off the real one.
+  const raw = agent && agent.processState != null ? agent.processState
+    : agent && agent.processLiveness != null ? agent.processLiveness
+      : agent && agent.liveness != null ? agent.liveness
+        : null;
   if (raw == null) return null;
   const word = typeof raw === "string"
     ? raw
@@ -5723,19 +5733,24 @@ function normalizeTranscript(body) {
   };
 }
 
-/* Both read endpoints (GET /api/transcript, GET /api/actions) currently answer
-   403 ORIGIN_REJECTED in a browser, and no page code can fix it: a browser does
-   not attach an `Origin` header to a same-origin GET, and `Origin` is a
-   forbidden header name so fetch() cannot add one. Verified live against a
-   scratch server — every GET from the page is rejected while the identical
-   request from curl with `-H Origin:` succeeds. Say that plainly instead of
-   echoing a sentence about HTTP internals the operator cannot act on, and do
-   NOT say "not available in this build", which would send someone looking for a
-   deploy that has already happened. */
+/* Why this refusal gets its own sentence.
+
+   These two GETs used to demand an `Origin` header that a browser never sends
+   on a same-origin GET, so both features were dark in the browser and only
+   worked from curl. That is FIXED on the server: verified live, both routes
+   answer 200 to a request with no `Origin` at all.
+
+   The code still exists, and now means something entirely different — the
+   routes are served only over a loopback hostname, so a page that reached the
+   server by any other name gets it. So the copy must NOT still tell the
+   operator that "the server's read endpoints have to stop requiring one": that
+   would send them to route a fix that has already shipped, which is the same
+   expensive lie as "not available in this build", pointed at a different team.
+   Name the address instead — it is the one thing they can act on. */
 function readEndpointOriginNote(what) {
-  return what + " are refused by the server (ORIGIN_REJECTED): it requires an Origin header "
-    + "that browsers never send on a same-origin GET. Nothing on this page can supply it — the "
-    + "server's read endpoints have to stop requiring one.";
+  return what + " are refused by the server (ORIGIN_REJECTED): these reads are served only over a "
+    + "loopback address, and this page reached the server under another hostname. Open the board at "
+    + "127.0.0.1 or localhost.";
 }
 
 /* Degrade honestly. This client ships ahead of the route, so the common failure
