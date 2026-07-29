@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { MemoryArchiveStore } from "../src/server/archive";
 import { HubState, type HubCollectors } from "../src/server/state";
 import type {
   ArchiveStore,
@@ -167,11 +168,12 @@ describe("cmux collection time truth", () => {
     const now = spyOn(Date, "now").mockImplementation(() => nowMs);
     const logged = spyOn(console, "error").mockImplementation(() => {});
     let sessionCalls = 0;
-    const never = new Promise<never>(() => {});
+    let releaseFirst!: () => void;
+    const firstSessionScan = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const collectors: HubCollectors = {
       sessions: async () => {
         sessionCalls += 1;
-        if (sessionCalls === 1) await never;
+        if (sessionCalls === 1) await firstSessionScan;
         return emptySessions();
       },
       cmux: async () => ({ value: [], errors: [] }),
@@ -184,17 +186,110 @@ describe("cmux collection time truth", () => {
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
     const state = new HubState(runner, archiveStore, [], collectors);
 
-    void state.refresh();
+    const droppedRefresh = state.refresh();
     for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
     expect(sessionCalls).toBe(1);
 
     nowMs += 12_001;
     await state.refresh();
+    releaseFirst();
+    await droppedRefresh;
 
     expect(sessionCalls).toBe(2);
     expect(logged).toHaveBeenCalledWith(expect.stringContaining("refresh watchdog"));
     now.mockRestore();
     logged.mockRestore();
+  });
+
+  test("the collector aggregate deadline publishes partial source truth with visible degradation", async () => {
+    const source: CollectedAgent = {
+      id: "codex:partial",
+      provider: "codex",
+      sourceSessionId: "partial",
+      displayName: "Completed before aggregate deadline",
+      status: "waiting",
+      statusReason: "Fixture completed collection.",
+      updatedAt: new Date().toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const never = new Promise<never>(() => {});
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: [source], errors: [] },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => never,
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      5,
+    );
+
+    const snapshot = await state.refresh({ cmux: true });
+
+    expect(snapshot.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toEqual([source.id]);
+    expect(snapshot.controlHealth.cmuxReachable).toBeTrue();
+    expect(snapshot.controlHealth.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining("collector aggregate exceeded 5ms deadline"),
+    ]));
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining("publishing partial snapshot"));
+    logged.mockRestore();
+  });
+
+  test("observed sessions survive later scans as ended history and never count as live", async () => {
+    const source: CollectedAgent = {
+      id: "codex:durable-history",
+      provider: "codex",
+      sourceSessionId: "durable-history",
+      displayName: "Durable history",
+      status: "running",
+      statusReason: "Source is active.",
+      updatedAt: new Date().toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    let includeSource = true;
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: includeSource ? [source] : [], errors: [] },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const state = new HubState(runner, new MemoryArchiveStore(), [], collectors);
+
+    const live = await state.refresh();
+    includeSource = false;
+    const retained = await state.refresh();
+
+    expect(live.totals.live).toBe(1);
+    expect(retained.programs.flatMap(({ agents }) => agents)).toEqual([
+      expect.objectContaining({ id: source.id, status: "archived", activity: "ended" }),
+    ]);
+    expect(retained.totals.live).toBe(0);
   });
 
   test("snapshot refreshes read current triage summaries", async () => {

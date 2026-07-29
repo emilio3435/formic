@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import type { HubSnapshot, TriageQueueItem } from "../shared/types";
+import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
 import {
@@ -448,9 +449,6 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     if (disposed) return new Response("Server is shutting down", { status: 503, headers: SECURITY_HEADERS });
     if (url.pathname === "/api/transcript") {
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for transcript reads.");
-      if (!sameOriginLoopback(request)) {
-        return responseError(403, "ORIGIN_REJECTED", "Transcript reads require an exact same-origin loopback Origin header.");
-      }
       const agentId = url.searchParams.get("agent");
       if (!agentId?.trim() || agentId.length > 300) {
         return responseError(400, "INVALID_AGENT_ID", "agent must be a non-empty ID no longer than 300 characters.");
@@ -461,14 +459,31 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     }
     if (url.pathname === "/api/actions") {
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");
-      if (!sameOriginLoopback(request)) {
-        return responseError(403, "ORIGIN_REJECTED", "Action-log reads require an exact same-origin loopback Origin header.");
-      }
       const limit = limitFrom(url, 100, 500);
       if (limit instanceof Response) return limit;
       return Response.json(
         { ok: true, actions: (await actionLogStore).list(limit) },
         { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+      );
+    }
+    if (url.pathname === "/api/history/export") {
+      if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for history exports.");
+      const exportedAt = new Date(dependencies.now?.() ?? Date.now()).toISOString();
+      return Response.json(
+        {
+          schemaVersion: 1,
+          exportedAt,
+          retentionDays: ARCHIVE_RETENTION_MS / (24 * 60 * 60 * 1_000),
+          maxRecords: MAX_ARCHIVE_RECORDS,
+          agents: dependencies.archiveStore.archivedAgents?.() ?? [],
+        },
+        {
+          headers: {
+            ...SECURITY_HEADERS,
+            "cache-control": "no-store",
+            "content-disposition": `attachment; filename="ant-hill-history-${exportedAt.slice(0, 10)}.json"`,
+          },
+        },
       );
     }
     if (url.pathname === "/api/attention") {

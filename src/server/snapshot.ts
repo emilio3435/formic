@@ -514,14 +514,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const nowMs = now.getTime();
   const programs = new Map<string, ProgramSnapshot>();
   const newestById = new Map<string, CollectedAgent>();
-  const archiveWindowMs = input.scanWindowHours === undefined
-    ? undefined
-    : Math.max(1, input.scanWindowHours) * 60 * 60 * 1_000;
-  const archivedAgents = (input.archiveStore.archivedAgents?.() ?? []).filter((agent) => {
-    if (archiveWindowMs === undefined) return true;
-    const updatedAtMs = Date.parse(agent.updatedAt);
-    return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs <= archiveWindowMs;
-  });
+  const archivedAgents = input.archiveStore.archivedAgents?.() ?? [];
   for (const agent of [...archivedAgents, ...input.agents]) {
     const existing = newestById.get(agent.id);
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);

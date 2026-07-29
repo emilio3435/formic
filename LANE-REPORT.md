@@ -1,3 +1,116 @@
+# WAVE 5 / W5-A — browser reads, bounded refreshes, and durable history
+
+Date: 2026-07-28
+Branch: `ant-hill/w5-server-20260728`
+Implementation commit: `bac6f56`
+
+## Disposition
+
+| Item | Result |
+|---|---|
+| 1. Browser GETs for transcript and actions | **FIXED** |
+| 2. Empty versus unreadable transcript source | **FIXED** |
+| 3. Collector aggregate deadline | **FIXED** |
+| 4. History that survives the scan window | **FIXED** |
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **566 pass / 0 fail**, 2,580 `expect()` calls, 31 files |
+| Baseline supplied for this lane | 556 pass; this lane added 10 regression tests |
+| Skips / filtering | no observed skips and no filtering; the existing conditional SQLCipher test ran and passed; no `.only` markers |
+| `git diff --check` | clean |
+| Scratch runtime | isolated server on `127.0.0.1:48731`, stopped after verification |
+| Push / merge / deploy / launchd restart | none |
+
+The worktree initially had no `node_modules`; `bun install --frozen-lockfile` installed the
+lockfile-pinned dependencies. `package.json` and `bun.lock` are unchanged.
+
+## Item 1 — browser GETs were universally rejected — **FIXED**
+
+Removed `sameOriginLoopback` only from `GET /api/transcript` and `GET /api/actions`. The
+app-wide loopback host gate remains above both routes, and every mutating route retains its
+same-origin check.
+
+Regression tests send no `Origin` header and require 200 from both routes, then send a foreign
+host and require 403. Scratch runtime proof, also without `Origin`:
+
+```text
+actions_no_origin=200
+transcript_no_origin=200
+foreign_host=403
+```
+
+## Item 2 — readable empty files were reported as absent — **FIXED**
+
+`transcriptResponse` now preserves the honest absolute `source` when the file was read
+successfully but yielded no readable turns. Missing or unreadable files still return
+`source: null`; no source path is invented.
+
+The regression test drives an empty readable JSONL file and a missing file through the real
+endpoint and requires the two different envelopes.
+
+## Item 3 — collector work could starve the refresh tick — **FIXED**
+
+The session/cmux/notification/identity aggregate now has a 10-second deadline, below the
+existing 12-second watchdog. At the deadline, `HubState` publishes whatever pieces completed,
+preserves prior cmux surfaces when identity enrichment did not complete, adds concrete health
+errors, and logs that it published a partial snapshot. Late collector promises cannot mutate
+the published state. The runner deadline and refresh watchdog are unchanged.
+
+The regression test leaves notification collection unresolved while session and cmux
+collection complete. Refresh returns after a 5 ms injected test deadline with the collected
+session present and a visible deadline error.
+
+## Item 4 — session history died with provider scan retention — **FIXED**
+
+The existing atomic `archive.json` store is now the one persistence path for both explicit
+operator archives and automatically observed session history. Live observations win over
+same-timestamp retained copies; once the source leaves the scan, the retained copy renders as
+ended/archived and is never counted in `totals.live`.
+
+Retention policy:
+
+- keep the newest records for 30 days;
+- cap the archive at 5,000 records;
+- enforce both limits even on an observation pass with no new sessions;
+- open corrupt/invalid JSON as empty and log a loud `console.error`, never fail boot.
+
+Export is JSON at `GET /api/history/export`, with `Content-Disposition: attachment` plus
+`retentionDays` and `maxRecords` metadata. JSON was chosen because it preserves the compact
+typed record without lossy column flattening and is directly keepable/scriptable by the
+operator. Scratch runtime proof:
+
+```text
+history_export=200
+retentionDays=30
+maxRecords=5000
+agent_count=104
+Content-Disposition: attachment; filename="ant-hill-history-2026-07-28.json"
+```
+
+Tests cover persistence/reopen, legacy explicit archives, corrupt-file recovery, time pruning
+without new work, the 5,000-record cap, scan disappearance, the live-count invariant, export
+metadata, attachment headers, and the foreign-host gate.
+
+## Honest limits
+
+- The aggregate deadline releases the refresh and ignores late results; provider filesystem
+  APIs do not expose an abort handle, so the underlying promise is not forcibly cancelled.
+- No client UI was added for the export route because `src/web/**` is owned by the following
+  lane.
+- Sandboxed launch attempts on 4791 and 4792 returned `EADDRINUSE` without exposing a
+  listener. The isolated runtime check used 48731 with the required bind permission and
+  stopped only that scratch server.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
 # WAVE 4 / W4-B — connecting the client to what the backend actually shipped
 
 Date: 2026-07-28

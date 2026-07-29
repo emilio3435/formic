@@ -3,6 +3,10 @@ import { dirname } from "node:path";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
 export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+export const MAX_ARCHIVE_RECORDS = 5_000;
+
+type ArchiveKind = "operator" | "history";
+type StoredAgent = CollectedAgent & { archiveKind?: ArchiveKind };
 
 export interface ArchiveFileOperations {
   readText(path: string): Promise<string>;
@@ -24,7 +28,7 @@ const nodeFileOperations: ArchiveFileOperations = {
 
 export class JsonArchiveStore implements ArchiveStore {
   readonly #agentIds = new Set<string>();
-  readonly #agents = new Map<string, CollectedAgent>();
+  readonly #agents = new Map<string, StoredAgent>();
   #writeQueue: Promise<void> = Promise.resolve();
   #writeNumber = 0;
 
@@ -47,16 +51,28 @@ export class JsonArchiveStore implements ArchiveStore {
           if (typeof value === "string") {
             store.#agentIds.add(value);
           } else if (isCollectedAgent(value)) {
+            const stored = value as StoredAgent;
+            if (stored.archiveKind && stored.archiveKind !== "operator" && stored.archiveKind !== "history") {
+              throw new Error("archive file contains an invalid archive kind");
+            }
             if (!isFresh(value, now())) continue;
-            store.#agentIds.add(value.id);
-            store.#agents.set(value.id, value);
+            if (stored.archiveKind !== "history") store.#agentIds.add(value.id);
+            store.#agents.set(value.id, stored);
           } else {
             throw new Error("archive file contains an invalid agent record");
           }
         }
+      } else {
+        throw new Error("archive file must contain an array");
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        store.#agentIds.clear();
+        store.#agents.clear();
+        console.error(
+          `[JsonArchiveStore] Ignoring unreadable archive at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     return store;
   }
@@ -66,31 +82,72 @@ export class JsonArchiveStore implements ArchiveStore {
   }
 
   archivedAgents(): readonly CollectedAgent[] {
-    return [...this.#agents.values()];
+    return [...this.#agents.values()].map(publicCopy);
   }
 
   archive(agentId: string, agent?: CollectedAgent): Promise<void> {
-    const write = this.#writeQueue.then(() => this.#persist(agentId, agent));
+    return this.#enqueue(() => this.#persistArchive(agentId, agent));
+  }
+
+  record(agents: readonly CollectedAgent[]): Promise<void> {
+    return this.#enqueue(() => this.#persistHistory(agents));
+  }
+
+  #enqueue(operation: () => Promise<void>): Promise<void> {
+    const write = this.#writeQueue.then(operation);
     // A failed write rejects its caller but does not poison later queued writes.
     this.#writeQueue = write.catch(() => {});
     return write;
   }
 
-  async #persist(agentId: string, agent?: CollectedAgent): Promise<void> {
-    const archivedAgent = agent ? archiveCopy(agent) : undefined;
-    if (this.#agentIds.has(agentId) && (!archivedAgent || this.#agents.has(agentId))) return;
+  async #persistArchive(agentId: string, agent?: CollectedAgent): Promise<void> {
+    const archivedAgent = agent ? archiveCopy(agent, "operator") : undefined;
+    const existing = this.#agents.get(agentId);
+    if (
+      this.#agentIds.has(agentId) &&
+      (!archivedAgent || (existing?.archiveKind === "operator" && sameAgent(existing, archivedAgent)))
+    ) return;
     const nextAgentIds = new Set(this.#agentIds).add(agentId);
     const nextAgents = new Map(this.#agents);
     if (archivedAgent) nextAgents.set(agentId, archivedAgent);
-    for (const [id, value] of nextAgents) {
-      if (!isFresh(value, this.now())) {
-        nextAgents.delete(id);
-        nextAgentIds.delete(id);
-      }
+    else if (existing) nextAgents.set(agentId, archiveCopy(existing, "operator"));
+    await this.#commit(nextAgentIds, nextAgents);
+  }
+
+  async #persistHistory(agents: readonly CollectedAgent[]): Promise<void> {
+    const nextAgentIds = new Set(this.#agentIds);
+    const nextAgents = new Map(this.#agents);
+    let changed = false;
+    for (const agent of agents) {
+      const copy = archiveCopy(agent, nextAgentIds.has(agent.id) ? "operator" : "history");
+      const existing = nextAgents.get(agent.id);
+      if (existing && sameAgent(existing, copy)) continue;
+      nextAgents.set(agent.id, copy);
+      changed = true;
     }
-    const persisted = [...nextAgentIds]
+    const needsPrune = nextAgents.size + [...nextAgentIds].filter((id) => !nextAgents.has(id)).length >
+      MAX_ARCHIVE_RECORDS || [...nextAgents.values()].some((agent) => !isFresh(agent, this.now()));
+    if (!changed && !needsPrune) return;
+    await this.#commit(nextAgentIds, nextAgents);
+  }
+
+  async #commit(agentIds: Set<string>, agents: Map<string, StoredAgent>): Promise<void> {
+    const retainedAgents = [...agents.values()]
+      .filter((agent) => isFresh(agent, this.now()))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
+      .slice(0, MAX_ARCHIVE_RECORDS);
+    const retainedAgentIds = new Set(
+      retainedAgents
+        .filter((agent) => agent.archiveKind !== "history")
+        .map((agent) => agent.id),
+    );
+    const remaining = MAX_ARCHIVE_RECORDS - retainedAgents.length;
+    const plainIds = [...agentIds]
+      .filter((id) => !agents.has(id))
       .sort()
-      .map((id) => nextAgents.get(id) ?? id);
+      .slice(0, remaining);
+    for (const id of plainIds) retainedAgentIds.add(id);
+    const persisted: Array<string | StoredAgent> = [...retainedAgents, ...plainIds];
     await this.files.makeDirectory(dirname(this.path));
     this.#writeNumber += 1;
     const temporaryPath = `${this.path}.${process.pid}.${this.#writeNumber}.tmp`;
@@ -98,31 +155,37 @@ export class JsonArchiveStore implements ArchiveStore {
     await this.files.rename(temporaryPath, this.path);
     // The in-memory state becomes visible only after the atomic rename commits.
     this.#agentIds.clear();
-    for (const id of nextAgentIds) this.#agentIds.add(id);
+    for (const id of retainedAgentIds) this.#agentIds.add(id);
     this.#agents.clear();
-    for (const [id, value] of nextAgents) this.#agents.set(id, value);
+    for (const value of retainedAgents) this.#agents.set(value.id, value);
   }
 }
 
 export class MemoryArchiveStore implements ArchiveStore {
   readonly #agentIds = new Set<string>();
-  readonly #agents = new Map<string, CollectedAgent>();
+  readonly #agents = new Map<string, StoredAgent>();
 
   has(agentId: string): boolean {
     return this.#agentIds.has(agentId);
   }
 
   archivedAgents(): readonly CollectedAgent[] {
-    return [...this.#agents.values()];
+    return [...this.#agents.values()].map(publicCopy);
   }
 
   async archive(agentId: string, agent?: CollectedAgent): Promise<void> {
     this.#agentIds.add(agentId);
-    if (agent) this.#agents.set(agentId, archiveCopy(agent));
+    if (agent) this.#agents.set(agentId, archiveCopy(agent, "operator"));
+  }
+
+  async record(agents: readonly CollectedAgent[]): Promise<void> {
+    for (const agent of agents) {
+      this.#agents.set(agent.id, archiveCopy(agent, this.#agentIds.has(agent.id) ? "operator" : "history"));
+    }
   }
 }
 
-function archiveCopy(agent: CollectedAgent): CollectedAgent {
+function archiveCopy(agent: CollectedAgent, archiveKind: ArchiveKind): StoredAgent {
   return {
     id: agent.id,
     provider: agent.provider,
@@ -133,7 +196,7 @@ function archiveCopy(agent: CollectedAgent): CollectedAgent {
     effort: agent.effort,
     task: agent.task,
     status: "archived",
-    statusReason: "Archived by operator.",
+    statusReason: archiveKind === "operator" ? "Archived by operator." : "Retained session history.",
     startedAt: agent.startedAt,
     updatedAt: agent.updatedAt,
     tokens: { ...agent.tokens },
@@ -150,7 +213,17 @@ function archiveCopy(agent: CollectedAgent): CollectedAgent {
     gates: [...agent.gates],
     allowCwdFallback: agent.allowCwdFallback,
     recordedTarget: agent.recordedTarget ? { ...agent.recordedTarget } : undefined,
+    archiveKind,
   };
+}
+
+function publicCopy(agent: StoredAgent): CollectedAgent {
+  const { archiveKind: _, ...copy } = agent;
+  return copy;
+}
+
+function sameAgent(left: StoredAgent, right: StoredAgent): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function isFresh(agent: CollectedAgent, nowMs: number): boolean {

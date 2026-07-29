@@ -240,7 +240,7 @@ export async function transcriptResponse(
     const lines = transcriptLines(agent, await readFile(source, "utf8"));
     if (lines.length === 0) {
       return Response.json(
-        { ok: true, agentId, source: null, truncated: false, lines: [] },
+        { ok: true, agentId, source, truncated: false, lines: [] },
         { headers: responseHeaders },
       );
     }
