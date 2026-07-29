@@ -96,6 +96,11 @@ describe("TTY and open-session identity evidence", () => {
     expect(enriched.value[0]?.sourceSessionIds).not.toContain(
       "11111111-2222-3333-4444-555555555555",
     );
+    expect(agent).toMatchObject({
+      processIds: [4242],
+      processAlive: true,
+      transcriptOpen: true,
+    });
   });
 
   test("partial allowlisted lsof output remains usable when a target PID races away", async () => {
@@ -160,6 +165,34 @@ describe("TTY and open-session identity evidence", () => {
         resolvedSessionId: claude.sourceSessionId,
       }],
     });
+    expect(claude).toMatchObject({
+      processIds: [202],
+      processAlive: true,
+    });
+  });
+
+  test("a completed process scan marks retained exact PIDs absent without guessing on probe failure", async () => {
+    const retained: CollectedAgent = {
+      ...agent,
+      processIds: [999],
+      processAlive: true,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/omp -p",
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    await enrichCmuxIdentity([surface], [retained], runner);
+
+    expect(retained).toMatchObject({
+      processIds: [999],
+      processAlive: false,
+    });
   });
 
   test("a Claude runtime session shared by active sources quarantines instead of guessing", async () => {
@@ -194,15 +227,17 @@ describe("TTY and open-session identity evidence", () => {
   });
 
   test("a process lookup timeout is surfaced and fails identity enrichment closed", async () => {
+    const retained = { ...agent, processIds: [4242], processAlive: true };
     const runner = new SequenceRunner([
       { exitCode: 0, stdout: "", stderr: "deadline", timedOut: true },
     ]);
 
-    const enriched = await enrichCmuxIdentity([surface], [agent], runner);
+    const enriched = await enrichCmuxIdentity([surface], [retained], runner);
 
     expect(enriched.errors).toEqual(["process identity lookup timed out"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
     expect(enriched.value[0]?.identityTrace).toMatchObject({ outcome: "probe-failed" });
+    expect(retained.processAlive).toBeTrue();
   });
 
   test("a timed-out open-session lookup rejects truncated identity evidence and quarantines the surface", async () => {
@@ -286,6 +321,9 @@ describe("TTY and open-session identity evidence", () => {
       provider: "codex",
       id: "codex:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
       sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      processIds: undefined,
+      processAlive: undefined,
+      transcriptOpen: undefined,
     };
     const child: CollectedAgent = {
       ...parent,
@@ -317,6 +355,8 @@ describe("TTY and open-session identity evidence", () => {
     expect(enriched.errors).toEqual([]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([parent.sourceSessionId]);
     expect(enriched.value[0]?.identityConflict).toBeUndefined();
+    expect(parent).toMatchObject({ processIds: [202], processAlive: true });
+    expect(child.processIds).toBeUndefined();
   });
 
   test("cmux process attribution recovers exact identity when terminal discovery omits the tty", async () => {

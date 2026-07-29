@@ -36,7 +36,7 @@ export interface CollectedAgent {
   transcriptTail?: string;
   artifacts: Artifact[];
   gates: string[];
-  /** True only when the provider transcript contains an explicit session-exit record. */
+  /** True only when the latest provider turn contains an explicit clean-completion record. */
   transcriptEndedCleanly?: boolean;
   /** Exact process IDs retained from a confirmed identity scan. */
   processIds?: number[];

@@ -111,6 +111,53 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("Codex clean completion applies only to the latest turn", () => {
+    const sessionId = "11111111-2222-3333-4444-555555555555";
+    const row = (type: string, payload: object) => JSON.stringify({
+      type,
+      timestamp: "2026-07-21T23:00:00.000Z",
+      payload,
+    });
+    const completed = parseCodexJsonl([
+      row("session_meta", { id: sessionId, cwd: "/Users/me/project" }),
+      row("event_msg", { type: "user_message", message: "Finish this task." }),
+      row("event_msg", { type: "task_complete" }),
+    ].join("\n"), { nowMs });
+    const continued = parseCodexJsonl([
+      row("session_meta", { id: sessionId, cwd: "/Users/me/project" }),
+      row("event_msg", { type: "user_message", message: "Finish this task." }),
+      row("event_msg", { type: "task_complete" }),
+      row("event_msg", { type: "user_message", message: "Start another task." }),
+    ].join("\n"), { nowMs });
+
+    expect(completed?.transcriptEndedCleanly).toBeTrue();
+    expect(continued?.transcriptEndedCleanly).toBeUndefined();
+  });
+
+  test("Claude end_turn completion applies only until the next user turn", () => {
+    const sessionId = "11111111-2222-3333-4444-555555555555";
+    const row = (type: string, message: object) => JSON.stringify({
+      type,
+      sessionId,
+      session_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      cwd: "/Users/me/project",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      message,
+    });
+    const completed = parseClaudeJsonl([
+      row("user", { role: "user", content: "Finish this task." }),
+      row("assistant", { role: "assistant", content: "Done.", stop_reason: "end_turn" }),
+    ].join("\n"), { nowMs });
+    const continued = parseClaudeJsonl([
+      row("user", { role: "user", content: "Finish this task." }),
+      row("assistant", { role: "assistant", content: "Done.", stop_reason: "end_turn" }),
+      row("user", { role: "user", content: "Start another task." }),
+    ].join("\n"), { nowMs });
+
+    expect(completed?.transcriptEndedCleanly).toBeTrue();
+    expect(continued?.transcriptEndedCleanly).toBeUndefined();
+  });
+
   test("OMP leaves token usage unknown when no assistant usage record exists", () => {
     const agent = parseOmpJsonl([
       JSON.stringify({
@@ -549,6 +596,37 @@ describe("collector identity and usage truth", () => {
     writeFileSync(path, `${transcript("session-b")}\n`);
     utimesSync(path, fixedTime, fixedTime);
     expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-b");
+  });
+
+  test("incremental appends retain exact process evidence for the next identity scan", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-process-"));
+    const sessions = join(home, ".codex", "sessions");
+    const path = join(sessions, "session.jsonl");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(path, `${JSON.stringify({
+      type: "session_meta",
+      timestamp: new Date().toISOString(),
+      payload: {
+        id: "11111111-2222-3333-4444-555555555555",
+        cwd: "/tmp/project",
+      },
+    })}\n`);
+    const first = (await collectSessions(home)).codex.value[0]!;
+    first.processIds = [4242];
+    first.processAlive = true;
+
+    appendFileSync(path, `${JSON.stringify({
+      type: "event_msg",
+      timestamp: new Date().toISOString(),
+      payload: { type: "task_complete" },
+    })}\n`);
+    const updated = (await collectSessions(home)).codex.value[0];
+
+    expect(updated).toMatchObject({
+      processIds: [4242],
+      processAlive: true,
+      transcriptEndedCleanly: true,
+    });
   });
 
   test("incremental collection matches a full re-read across append, rotation, truncation, and replacement", async () => {
