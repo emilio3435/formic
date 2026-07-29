@@ -2048,3 +2048,5 @@ Usable routes moved from one weak cwd fallback to ten exact session routes. This
 - Four scratch surfaces remained quarantined because their open files reduced to conflicting root identities. Choosing among them would violate the fail-closed requirement.
 - No production service, main worktree, endpoint, collector, configuration, package manifest, or web file was changed.
 - No push, merge, deployment, or launchd action was performed.
+
+> **Security:** Ant Hill trusts every process running as your macOS user; read [SECURITY.md](SECURITY.md) before enabling terminal control.
