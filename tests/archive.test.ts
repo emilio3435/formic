@@ -38,10 +38,11 @@ describe("durable archive state", () => {
       gates: [],
     };
     const path = "/virtual/archive.json";
-    const store = await JsonArchiveStore.open(path, files);
+    const now = () => Date.parse(source.updatedAt);
+    const store = await JsonArchiveStore.open(path, files, now);
 
     await store.record([source]);
-    const reopened = await JsonArchiveStore.open(path, files, () => Date.parse(source.updatedAt));
+    const reopened = await JsonArchiveStore.open(path, files, now);
 
     expect(reopened.has(source.id)).toBeFalse();
     expect(reopened.archivedAgents()).toEqual([
@@ -111,10 +112,11 @@ describe("durable archive state", () => {
       allowCwdFallback: false,
     };
     const path = "/virtual/archive.json";
-    const store = await JsonArchiveStore.open(path, files);
+    const now = () => Date.parse("2026-07-23T20:00:00.000Z");
+    const store = await JsonArchiveStore.open(path, files, now);
 
     await store.archive(source.id, source);
-    const reopened = await JsonArchiveStore.open(path, files);
+    const reopened = await JsonArchiveStore.open(path, files, now);
     const snapshot = buildSnapshot({
       agents: [],
       surfaces: [],

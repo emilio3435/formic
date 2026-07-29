@@ -16,9 +16,13 @@ import {
   JsonTriageQueueStore,
   MemoryTriageQueueStore,
   NativeLunaInvestigationRunner,
+  TRIAGE_RETENTION_MS,
   type InvestigationResult,
   type TriageInvestigationRunner,
 } from "../src/server/triage";
+
+const TRIAGE_NOW_MS = Date.parse("2026-07-28T09:12:03.114Z");
+const triageNow = () => TRIAGE_NOW_MS;
 
 function agent(id: string, programId: string, provider: AgentSnapshot["provider"] = "codex"): AgentSnapshot {
   return {
@@ -247,7 +251,7 @@ describe("operator triage recommendations", () => {
         verificationStartedAt: "2026-07-22T06:01:00.000Z",
       },
     }, agents);
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(triageNow);
     const transitions: string[] = [];
     const unsubscribe = store.subscribe?.((item) => transitions.push(item.state));
     await handleTriageRequest(post("/api/triage/queue", issue.id), current, store);
@@ -267,7 +271,15 @@ describe("operator triage recommendations", () => {
     };
 
     const started = await handleTriageRequest(post("/api/triage/run", issue.id), current, store, runner);
-    expect(await started.json()).toMatchObject({ ok: true, item: { state: "running", runId: "run-1", pid: 42 } });
+    expect(await started.json()).toMatchObject({
+      ok: true,
+      item: {
+        state: "running",
+        startedAt: new Date(TRIAGE_NOW_MS).toISOString(),
+        runId: "run-1",
+        pid: 42,
+      },
+    });
     await handleTriageRequest(post("/api/triage/run", issue.id), current, store, runner);
     expect(launches).toBe(1);
 
@@ -281,7 +293,7 @@ describe("operator triage recommendations", () => {
 
   test("a completed finding can be requeued from fresh issue evidence", async () => {
     const issueId = "system:recurring";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(triageNow);
     await store.add(recommendation(issueId));
     const completed = store.get(issueId)!;
     completed.state = "completed";
@@ -307,7 +319,7 @@ describe("operator triage recommendations", () => {
 
   test("DELETE cancels a running investigation before removing it", async () => {
     const issueId = "system:cancellable";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(triageNow);
     await store.add(recommendation(issueId));
     let cancelled = 0;
     const runner: TriageInvestigationRunner = {
@@ -336,7 +348,7 @@ describe("operator triage recommendations", () => {
 
   test("DELETE refuses to hide a running investigation without a safe cancellation handle", async () => {
     const issueId = "system:not-cancellable";
-    const store = new MemoryTriageQueueStore();
+    const store = new MemoryTriageQueueStore(triageNow);
     await store.add(recommendation(issueId));
     const runner: TriageInvestigationRunner = {
       async launch() {
@@ -391,11 +403,11 @@ describe("JSON triage queue durability", () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
     const path = join(directory, "triage-queue.json");
     try {
-      const store = await JsonTriageQueueStore.open(path);
+      const store = await JsonTriageQueueStore.open(path, triageNow);
       expect(store.list()).toEqual([]);
 
       const added = await store.add(recommendation());
-      const reopened = await JsonTriageQueueStore.open(path);
+      const reopened = await JsonTriageQueueStore.open(path, triageNow);
       expect(reopened.list()).toEqual([added]);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -411,7 +423,7 @@ describe("JSON triage queue durability", () => {
       runId: "run-before-restart",
     })]));
     try {
-      const store = await JsonTriageQueueStore.open(path);
+      const store = await JsonTriageQueueStore.open(path, triageNow);
       expect(store.list()).toEqual([
         expect.objectContaining({
           state: "blocked",
@@ -470,20 +482,33 @@ describe("JSON triage queue durability", () => {
     }
   });
 
-  test("prunes terminal queue entries older than seven days on reopen", async () => {
+  test("keeps the exact retention boundary and prunes one millisecond beyond it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-triage-"));
     const path = join(directory, "triage-queue.json");
+    const retainedAt = new Date(TRIAGE_NOW_MS - TRIAGE_RETENTION_MS).toISOString();
+    const prunedAt = new Date(TRIAGE_NOW_MS - TRIAGE_RETENTION_MS - 1).toISOString();
     await writeFile(path, JSON.stringify([
       queueItem({
+        issueId: "system:retained-at-boundary",
+        id: "triage:system:retained-at-boundary",
         state: "completed",
-        createdAt: "2026-07-01T00:00:00.000Z",
-        completedAt: "2026-07-01T00:05:00.000Z",
+        createdAt: retainedAt,
+        completedAt: retainedAt,
+      }),
+      queueItem({
+        issueId: "system:pruned-beyond-boundary",
+        id: "triage:system:pruned-beyond-boundary",
+        state: "completed",
+        createdAt: prunedAt,
+        completedAt: prunedAt,
       }),
     ]));
     try {
-      const store = await JsonTriageQueueStore.open(path, () => Date.parse("2026-07-28T00:00:00.000Z"));
-      expect(store.list()).toEqual([]);
-      expect(JSON.parse(await readFile(path, "utf8"))).toEqual([]);
+      const store = await JsonTriageQueueStore.open(path, triageNow);
+      expect(store.list().map(({ issueId }) => issueId)).toEqual(["system:retained-at-boundary"]);
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual([
+        expect.objectContaining({ issueId: "system:retained-at-boundary" }),
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
