@@ -215,7 +215,7 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
       const running: TriageQueueItem = {
         ...item,
         state: "running",
-        startedAt: new Date().toISOString(),
+        startedAt: new Date(this.now()).toISOString(),
         runId: launch.runId,
         runModel: launch.model,
         pid: launch.pid,
