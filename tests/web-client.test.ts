@@ -241,6 +241,56 @@ async function withRequests<T>(replies: FakeReply[], fn: (calls: FakeCall[]) => 
   }
 }
 
+describe("client request deadlines", () => {
+  test("a request that never settles rejects before it can leave the dashboard waiting", async () => {
+    const realFetch = G.fetch;
+    G.fetch = (_url: string, init: Record<string, any>) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+    try {
+      const recovered = await Promise.race([
+        M.apiFetch("/api/snapshot", {}, 5).then(() => null, (error: Error) => error),
+        Bun.sleep(100).then(() => null),
+      ]);
+      expect(recovered).toBeInstanceOf(Error);
+    } finally {
+      G.fetch = realFetch;
+    }
+  });
+
+  test("timeouts name their endpoint and differ from network failures", async () => {
+    const realFetch = G.fetch;
+    try {
+      G.fetch = (_url: string, init: Record<string, any>) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+      const timeout = await M.apiFetch("/api/snapshot", {}, 5).catch((error: Error) => error);
+      G.fetch = async () => { throw new Error("connection refused"); };
+      const network = await M.apiFetch("/api/snapshot", {}, 5).catch((error: Error) => error);
+
+      expect(timeout.message).toBe("/api/snapshot timed out after 0.005s");
+      expect(network.message).toBe("/api/snapshot request failed: connection refused");
+      expect(network.message).not.toBe(timeout.message);
+    } finally {
+      G.fetch = realFetch;
+    }
+  });
+
+  test("a snapshot request failure still marks the feed as failed", async () => {
+    await withState({ snap: null, conn: "live", fetchFailed: false }, async () => {
+      await withRequests([new Error("connection refused")], async () => {
+        await M.fetchSnapshot();
+        expect(M.state.fetchFailed).toBe(true);
+        expect(M.state.conn).toBe("offline");
+      });
+    });
+  });
+
+  test("only apiFetch calls fetch directly", () => {
+    expect(source.match(/\bfetch\(/g)).toHaveLength(1);
+  });
+});
+
 /* The seam exports the REAL module state, so every test that writes it puts
    back exactly what it found. Paint signatures are reset too: the guards early-
    return on an unchanged signature, so a leftover one would silently skip the
@@ -1078,7 +1128,7 @@ describe("broadcast recipient eligibility", () => {
 
 describe("redesigned network contracts (source-level)", () => {
   test("program rename is presentation-only via GET/POST /api/program-aliases", () => {
-    expect(source).toContain('fetch("/api/program-aliases"');
+    expect(source).toContain('apiFetch("/api/program-aliases"');
     const program = { id: "stable-source-id", name: "Source program" };
     expect(M.presentationLabelKey({ kind: "program", programId: program.id }))
       .toBe("program:stable-source-id");

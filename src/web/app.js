@@ -1736,9 +1736,26 @@ function setLookbackHours(hours) {
   render();
 }
 
+const API_READ_TIMEOUT_MS = 10_000;
+const API_TRANSCRIPT_TIMEOUT_MS = 30_000;
+const API_WRITE_TIMEOUT_MS = 30_000;
+
+// A hung loopback socket otherwise never reaches the request's recovery path.
+async function apiFetch(url, options = {}, timeoutMs = API_READ_TIMEOUT_MS) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  try {
+    return await fetch(url, { ...options, signal });
+  } catch (error) {
+    const endpoint = String(url);
+    if (timeout.aborted) throw new Error(endpoint + " timed out after " + (timeoutMs / 1000) + "s");
+    throw new Error(endpoint + " request failed: " + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
 async function fetchSettings() {
   try {
-    const res = await fetch("/api/settings", { headers: { accept: "application/json" } });
+    const res = await apiFetch("/api/settings", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     if (!res.ok) throw new Error("settings " + res.status);
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
@@ -1755,11 +1772,11 @@ async function postScanWindow(hours) {
   state.settingsPending = true;
   renderFilterBar();
   try {
-    const res = await fetch("/api/settings", {
+    const res = await apiFetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ scanWindowHours: clamped }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     const body = await res.json().catch(() => ({}));
     if (!res.ok || !body.ok) throw new Error((body.error && body.error.message) || ("settings " + res.status));
     state.scanWindowHours = Number(body.scanWindowHours) || clamped;
@@ -1826,7 +1843,7 @@ function applySnapshot(snap, sequence = null) {
 
 async function fetchSnapshot() {
   try {
-    const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
+    const res = await apiFetch("/api/snapshot", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const sequence = res.headers && res.headers.get
       ? res.headers.get("x-ant-hill-snapshot-sequence")
@@ -1849,7 +1866,7 @@ async function fetchSnapshot() {
    or a network error falls back to fetchSnapshot so Refresh is never a dead button. */
 async function recollectSnapshot() {
   try {
-    const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
+    const res = await apiFetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } }, API_WRITE_TIMEOUT_MS);
     if (!res.ok) { await fetchSnapshot(); return; }
     const sequence = res.headers && res.headers.get
       ? res.headers.get("x-ant-hill-snapshot-sequence")
@@ -1868,9 +1885,9 @@ async function loadIdentityEvidence(agentId) {
   render();
   let next;
   try {
-    const res = await fetch("/api/debug/identity?agent=" + encodeURIComponent(agentId), {
+    const res = await apiFetch("/api/debug/identity?agent=" + encodeURIComponent(agentId), {
       headers: { accept: "application/json" },
-    });
+    }, API_READ_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
     if (!res.ok || !body || body.ok !== true) {
@@ -2175,11 +2192,11 @@ function feedAlarmNode(alarm) {
    or miss entirely (a wedged server can keep a socket open). */
 const SERVER_HEALTH_POLL_MS = 15_000;
 
-async function pollServerHealth(fetchImpl = typeof fetch === "function" ? fetch : null) {
+async function pollServerHealth(fetchImpl = typeof fetch === "function" ? apiFetch : null) {
   if (!fetchImpl) return null;
   let next;
   try {
-    const res = await fetchImpl("/api/health", { headers: { accept: "application/json" } });
+    const res = await fetchImpl("/api/health", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     if (!res || res.ok !== true) {
       next = { ok: false, verdict: "unreachable", detail: "Health check returned " + ((res && res.status) || "no response") + "." };
     } else {
@@ -2602,7 +2619,7 @@ function issueLifecycleNote(issue) {
 
 async function fetchTriageQueue() {
   try {
-    const res = await fetch("/api/triage/queue", { headers: { accept: "application/json" } });
+    const res = await apiFetch("/api/triage/queue", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
@@ -2619,11 +2636,11 @@ async function triageIssue(issueId, action) {
   state.triageErrors.delete(issueId);
   renderHealthRail();
   try {
-    const res = await fetch("/api/triage/" + action, {
+    const res = await apiFetch("/api/triage/" + action, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ issueId }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "HTTP " + res.status);
@@ -2670,7 +2687,7 @@ async function removeTriageItem(issueId, intent = "remove") {
   state.triageErrors.delete(issueId);
   render();
   try {
-    const res = await fetch("/api/triage/queue?issueId=" + encodeURIComponent(issueId), { method: "DELETE" });
+    const res = await apiFetch("/api/triage/queue?issueId=" + encodeURIComponent(issueId), { method: "DELETE" }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
     if (!res.ok || !body || body.ok !== true) {
@@ -4968,11 +4985,11 @@ async function applyAttention(agentId, action, until) {
   state.attentionErrors.delete(agentId);
   render();
   try {
-    const res = await fetch("/api/attention", {
+    const res = await apiFetch("/api/attention", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(action === "snooze" ? { action, agentId, until } : { action, agentId }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
     if (!res.ok || !body || body.ok !== true || !body.state) {
@@ -6090,7 +6107,7 @@ async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {
   render();
   let next;
   try {
-    const res = await fetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } });
+    const res = await apiFetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } }, API_TRANSCRIPT_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
     next = !res.ok || !body || body.ok !== true
@@ -6287,11 +6304,11 @@ async function sendControl(agent, action, instruction) {
 
   let result;
   try {
-    const res = await fetch("/api/control", {
+    const res = await apiFetch("/api/control", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, agentId: agent.id, instruction }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
 
@@ -6332,7 +6349,7 @@ async function fetchLabels() {
   state.labelsLoading = true;
   state.labelLoadError = "";
   try {
-    const res = await fetch("/api/program-aliases", { headers: { accept: "application/json" } });
+    const res = await apiFetch("/api/program-aliases", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || typeof body.labels !== "object") throw new Error("bad label response");
     state.labels = new Map(Object.entries(body.labels));
@@ -6374,11 +6391,11 @@ async function submitRename(target) {
   state.renameError = "";
   render();
   try {
-    const res = await fetch("/api/program-aliases", {
+    const res = await apiFetch("/api/program-aliases", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ target, label }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     const body = await res.json().catch(() => null);
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
@@ -6457,11 +6474,11 @@ async function sendBroadcast() {
   state.broadcastError = "";
   render();
   try {
-    const res = await fetch("/api/broadcast", {
+    const res = await apiFetch("/api/broadcast", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ agentIds: eligible.map(({ agent }) => agent.id), instruction }),
-    });
+    }, API_WRITE_TIMEOUT_MS);
     const body = await res.json().catch(() => null);
     if (!body || !Array.isArray(body.results)) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "Broadcast failed (HTTP " + res.status + ")");
@@ -6748,7 +6765,7 @@ async function loadActions(limit = ACTIONS_DEFAULT_LIMIT) {
   render();
   let next;
   try {
-    const res = await fetch(actionsUrl(limit), { headers: { accept: "application/json" } });
+    const res = await apiFetch(actionsUrl(limit), { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
     next = !res.ok || !body || body.ok !== true
@@ -7055,10 +7072,10 @@ async function loadUsageData(force = false) {
   const bucket = usageRangeHours() > 48 ? "1d" : "1h";
   try {
     const [summaryRes, seriesRes, wardRes, invRes] = await Promise.all([
-      fetch("/api/usage/summary?" + q),
-      fetch("/api/usage/series?" + q + "&bucket=" + bucket),
-      fetch("/api/usage/ward?" + q),
-      fetch("/api/usage/invocations?" + q + "&limit=40"),
+      apiFetch("/api/usage/summary?" + q, {}, API_READ_TIMEOUT_MS),
+      apiFetch("/api/usage/series?" + q + "&bucket=" + bucket, {}, API_READ_TIMEOUT_MS),
+      apiFetch("/api/usage/ward?" + q, {}, API_READ_TIMEOUT_MS),
+      apiFetch("/api/usage/invocations?" + q + "&limit=40", {}, API_READ_TIMEOUT_MS),
     ]);
     state.usageSummary = await summaryRes.json();
     state.usageSeries = await seriesRes.json();
@@ -7401,7 +7418,7 @@ Object.assign(globalThis.TheAntHill, {
   // is no way to assert the behaviour without both ends.
   state,
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
-  sendControl, sendBroadcast, recollectSnapshot, fetchSnapshot,
+  apiFetch, sendControl, sendBroadcast, recollectSnapshot, fetchSnapshot,
   applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
@@ -7415,7 +7432,7 @@ Object.assign(globalThis.TheAntHill, {
   triageLifecycleControls, readEndpointOriginNote,
   TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_RENDER_CAP,
   ACTIONS_DEFAULT_LIMIT, ACTIONS_MAX_LIMIT,
-  ATTENTION_SNOOZE_MS,
+  ATTENTION_SNOOZE_MS, API_READ_TIMEOUT_MS, API_TRANSCRIPT_TIMEOUT_MS, API_WRITE_TIMEOUT_MS,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {
