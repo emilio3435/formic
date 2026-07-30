@@ -558,6 +558,39 @@ describe("views split Now from History", () => {
     expect(M.viewMatches("history", endedAndFine)).toBe(true);
   });
 
+  /* alerting() is the one verdict behind Now, Alerts, the program expander and
+     the notifier. It has to answer two opposite failures at once: a session that
+     stopped transcribing while its process runs on IS waiting on a human, and a
+     long-archived session's last verdict is NOT. Liveness evidence is what tells
+     them apart — which is why this is gated on processState rather than on the
+     outcome alone. */
+  test("alerting() frees a live-but-silent session without resurrecting archived ones", () => {
+    // The live-snapshot case: transcript stopped, process still running.
+    expect(M.alerting(agent({
+      status: "attention", activity: "ended", outcome: "needs-you", processState: "running",
+    }))).toBe(true);
+
+    // The guard. Same outcome, no evidence the process survives — this is a
+    // stale verdict on a finished session and must stay in History.
+    expect(M.alerting(agent({ status: "archived", activity: "ended", outcome: "needs-you" }))).toBe(false);
+    expect(M.alerting(agent({
+      status: "archived", activity: "ended", outcome: "failed", processState: "unknown",
+    }))).toBe(false);
+    expect(M.alerting(agent({
+      status: "archived", activity: "ended", outcome: "failed", processState: "died",
+    }))).toBe(false);
+
+    // Live sessions never needed liveness evidence to alert.
+    expect(M.alerting(agent({ status: "attention", outcome: "needs-you" }))).toBe(true);
+    expect(M.alerting(agent({ status: "running", outcome: "healthy" }))).toBe(false);
+
+    // And the views inherit it rather than restating it — the disagreement
+    // between Now and Alerts is what let these agents hide in the first place.
+    const revived = agent({ status: "attention", activity: "ended", outcome: "needs-you", processState: "running" });
+    expect(M.viewMatches("now", revived)).toBe(true);
+    expect(M.viewMatches("needs-you", revived)).toBe(true);
+  });
+
   test("Needs you contains only live unhealthy sessions", () => {
     expect(M.viewMatches("needs-you", agent({ status: "attention" }))).toBe(true);
     expect(M.viewMatches("needs-you", agent({ status: "running" }))).toBe(false);
@@ -5305,6 +5338,35 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // Idempotent: repainting must not stack prefixes into "(3) (2) (1) …".
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 2)).toBe("(2) " + base);
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
+  });
+
+  /* F3: "Alerts off" sat silently beside four waiting agents. The button
+     reported the delivery channel and never the backlog, so muting the channel
+     also hid the work. The count must therefore survive every muted state. */
+  test("(4) the waiting count rides every toggle state, muted and blocked included", () => {
+    const off = M.notifyToggleView({ enabled: false, permission: "default" }, true, 4);
+    expect(off.label).toBe("Alerts off");
+    expect(off.count).toBe(4);
+    expect(off.ariaLabel).toBe("Alerts off, 4 agents waiting on you");
+    expect(off.title).toContain("4 waiting on you");
+
+    // Blocked and unsupported are exactly the states where the operator has no
+    // other channel — hiding the number there is the worst case, not a spared one.
+    expect(M.notifyToggleView({ enabled: false, permission: "denied" }, true, 4).count).toBe(4);
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, false, 4).count).toBe(4);
+
+    // A quiet fleet stays quiet: no badge, no count noise in the label or title.
+    const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
+    expect(calmView.count).toBe(0);
+    expect(calmView.ariaLabel).toBe("Alerts on");
+    expect(calmView.title).not.toContain("waiting on you");
+    // Singular reads as English, not "1 agents".
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
+      .toBe("Alerts off, 1 agent waiting on you");
+
+    // The badge is a real node carrying the digit, not text glued onto the label.
+    expect(source).toContain('class: "notify-badge"');
+    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.ariaLabel\)/);
   });
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {

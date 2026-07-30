@@ -431,6 +431,27 @@ function livenessView(agent) {
   return { key, ...LIVENESS_VIEW[key] };
 }
 
+/* Is this agent asking for a human RIGHT NOW — the single verdict the "now" and
+   Alerts views, the program expander and the notifier all read, so they can
+   never disagree about the same agent.
+
+   `activity: "ended"` means the transcript stopped, NOT that the process is
+   gone. A live snapshot carried two sessions reading ended while processState
+   was still "running" and status was "attention" — genuinely waiting on a
+   person, yet absent from every default view.
+
+   The liveness check is what keeps this honest in the other direction. Letting
+   any ended-and-unhealthy agent alert would resurrect stale verdicts from
+   archived sessions and flood Now with finished failures. So an ended agent
+   alerts only on POSITIVE evidence its process is still there; absent or
+   unknown liveness stays in History, which is the absent-first rule the
+   liveness block above already commits to. */
+function alerting(agent) {
+  if (deriveOutcome(agent) === "healthy") return false;
+  if (deriveActivity(agent) !== "ended") return true;
+  return livenessState(agent) === "running";
+}
+
 function deriveRollup(agents) {
   const act = (a) => deriveActivity(a);
   const out = (a) => deriveOutcome(a);
@@ -854,13 +875,10 @@ function viewMatches(view, agent) {
   const act = deriveActivity(agent);
   const out = deriveOutcome(agent);
   switch (view) {
-    /* An alert outranks the activity clock. Gating "now" on act !== "ended"
-       hid agents the operator most needs: a session can read `ended` (its
-       transcript stopped) while its process is still `running` and it sits at
-       status "attention" — waiting on a human. Those rows appeared in NO
-       default view. Alerted agents belong here whatever the activity says. */
-    case "now": return act === "working" || out !== "healthy";
-    case "needs-you": return act !== "ended" && out !== "healthy";
+    // Both read the shared alerting() verdict, so Now and Alerts can never
+    // disagree about whether a given agent is waiting on a person.
+    case "now": return act === "working" || alerting(agent);
+    case "needs-you": return alerting(agent);
     case "working": return act === "working";
     case "idle": return act === "idle";
     case "history": return act === "ended";
@@ -1430,7 +1448,7 @@ const FINDING_VISUAL = {
 globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
   controlUnavailableText,
-  totalsOf, issuesOf, viewMatches, matchesQuery, buildClusters, tokenSummary,
+  totalsOf, issuesOf, alerting, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
@@ -3304,14 +3322,13 @@ function programOpen(program, ui = state) {
   if (override) return override === "open";
   if (ui.view === "history") return false;
   const r = programRollup(program);
-  /* The rollup alone is not enough to decide this. programRollup prefers the
-     SERVER's rollup, whose needsYou counts only non-ended agents — so a program
-     holding an agent that reads `ended` while its process still runs and its
-     status is "attention" reports needsYou: 0 and stays collapsed. The row then
-     passes the "now" filter and still never paints. Ask the agents directly for
-     the alert case; the rollup keeps answering for working/needsYou. */
-  return r.needsYou > 0 || r.working > 0
-    || program.agents.some((a) => deriveOutcome(a) !== "healthy");
+  /* The rollup alone cannot decide this. programRollup prefers the SERVER's
+     rollup, whose needsYou counts only non-ended agents — so a program holding
+     an agent that reads `ended` while its process still runs reports
+     needsYou: 0 and stays collapsed. The row then clears the "now" filter and
+     still never paints. Ask alerting() directly for that case; the rollup keeps
+     answering for working/needsYou. */
+  return r.needsYou > 0 || r.working > 0 || program.agents.some(alerting);
 }
 
 function toggleProgram(program) {
@@ -6320,11 +6337,9 @@ const NOTIFY_TAG = "anthill-needs-you";  // replaces its predecessor; never stac
    read, so the notification can never disagree with the board it came from. */
 function needsHumanIds(snap) {
   const ids = [];
-  for (const { agent } of snapshotAgents(snap)) {
-    if (deriveActivity(agent) === "ended") continue;
-    const outcome = deriveOutcome(agent);
-    if (outcome === "needs-you" || outcome === "blocked" || outcome === "failed") ids.push(agent.id);
-  }
+  // alerting() is that verdict — sharing it is what stops the notifier from
+  // announcing a different set of agents than the Alerts view shows.
+  for (const { agent } of snapshotAgents(snap)) if (alerting(agent)) ids.push(agent.id);
   return ids.sort();
 }
 
@@ -6396,26 +6411,47 @@ async function toggleNotifications() {
 
 /* Denied is not an error state to shout about — the operator said no. The
    control just reads "unavailable" and nothing else changes. */
-function notifyToggleView(notify, supported = notificationsSupported()) {
-  if (!supported) return { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." };
-  if (notify.permission === "denied") {
-    return { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." };
-  }
-  return notify.enabled
-    ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
-    : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
+/* `count` is how many agents are waiting on a human right now, and it rides on
+   EVERY branch — muted, blocked and unsupported included. "Alerts off" sitting
+   silently beside four waiting agents was the whole defect: the button reported
+   the delivery channel and never the backlog. Turning notifications off is a
+   choice about interruption, not a reason to stop showing the number. */
+function notifyToggleView(notify, supported = notificationsSupported(), count = 0) {
+  const n = Number.isFinite(count) && count > 0 ? count : 0;
+  const suffix = n ? ` · ${n} waiting on you` : "";
+  const view = !supported
+    ? { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
+    : notify.permission === "denied"
+      ? { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." }
+      : notify.enabled
+        ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
+        : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
+  return {
+    ...view,
+    count: n,
+    title: view.title + suffix,
+    // The button's accessible name carries the backlog too — a screen reader
+    // must not have to infer it from a bare digit beside the label.
+    ariaLabel: view.label + (n ? `, ${n} agent${n === 1 ? "" : "s"} waiting on you` : ""),
+  };
 }
 
 function renderNotifyToggle() {
   const btn = $("notify-toggle");
   if (!btn) return;
-  const view = notifyToggleView(state.notify);
+  const view = notifyToggleView(state.notify, notificationsSupported(), needsHumanIds(state.snap).length);
   btn.textContent = view.label;
+  // The count is its own node rather than text appended to the label, so it can
+  // take the ember treatment the tab counts already use and stays out of the
+  // button's text content.
+  if (view.count) btn.append(el("span", { class: "notify-badge", "aria-hidden": "true", text: String(view.count) }));
   btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
   btn.setAttribute("title", view.title);
+  btn.setAttribute("aria-label", view.ariaLabel);
   if (view.disabled) btn.setAttribute("disabled", "");
   else btn.removeAttribute("disabled");
   btn.classList.toggle("is-on", view.pressed);
+  btn.classList.toggle("is-alerting", view.count > 0);
 }
 
 /* Delivery, kept separate from the decision so every gate is assertable without

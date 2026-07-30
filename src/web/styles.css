@@ -196,6 +196,24 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 .notify-toggle { white-space: nowrap; }
 .notify-toggle.is-on { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); }
 
+/* The waiting-on-you count, in the same ember ink the tab counts use (.view-tab
+   .count.is-alerting) so one alert vocabulary runs across the console. It rides
+   the muted button too — that is the point: silencing delivery must not silence
+   the backlog. The border keeps it legible against .is-on's moss. */
+.notify-toggle .notify-badge {
+  margin-left: 0.4rem;
+  padding: 0 0.34rem;
+  border: 1px solid color-mix(in srgb, var(--ember) 40%, transparent);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.85em;
+  line-height: 1.45;
+  color: var(--ember);
+  background: color-mix(in srgb, var(--ember) 12%, transparent);
+}
+.notify-toggle.is-alerting { border-color: color-mix(in srgb, var(--ember) 45%, var(--line-strong)); }
+
 .conn {
   align-self: center;
   margin: 0;
