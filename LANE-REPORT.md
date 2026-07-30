@@ -1,3 +1,147 @@
+# WAVE 6 / W6-A — final server gaps
+
+Date: 2026-07-29
+Branch: `ant-hill/w6-server-20260729`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/w6-server-20260729`
+Base: `84527fc`
+
+## Disposition
+
+| Item | Result | Commit |
+|---|---|---|
+| 1. Broadcast freshness gate | **FIXED** | `b5f18cd` |
+| 2. Production liveness evidence | **FIXED** | `6b82c44` |
+| 3. Config-owned model display names | **FIXED server half; client consumption intentionally left to its owner** | `d74d48d` |
+
+No forbidden source file was edited. Nothing was pushed, merged, deployed, or
+written to the production worktree. The `ai.imaginethat.anthill` LaunchAgent was
+never restarted. The scratch server ran only from this worktree on `:4793` and
+was stopped after measurement.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **580 pass, 0 fail**, 2,663 `expect()` calls across 31 files |
+| Skips / `.only` / filtering | none; unfiltered suite plus an empty explicit `.skip` / `.only` scan |
+| `git diff --check` | clean |
+| Scratch server | required before/after measurements completed; server stopped |
+
+`node_modules` was absent. `bun install --frozen-lockfile` installed the exact
+locked dependencies; `package.json` and `bun.lock` are unchanged.
+
+## Item 1 — broadcast freshness — **FIXED**
+
+`/api/broadcast` now reads the snapshot once and applies
+`MAX_CONTROL_SNAPSHOT_AGE_MS` before recipient lookup or any call to
+`executeControl`. The policy and response match `/api/control`: 30 seconds,
+HTTP 409, `STALE_SNAPSHOT`, `ageMs`, `maxAgeMs`, the same invalid-timestamp
+handling, and the same message text. The regression test supplies 30,001 ms-old
+routing evidence, asserts the complete structured response, and proves the
+command runner received zero commands.
+
+`SECURITY.md` is outside this lane's ownership and was deliberately not edited.
+Its present-tense gap at lines 44-46 is now stale. Replace the existing freshness
+section with:
+
+> **Fresh target evidence for terminal control.** Before `focus`, `instruct`,
+> `interrupt`, or `/api/broadcast`, Ant Hill rejects a snapshot older than 30
+> seconds. This prevents old routing evidence from targeting one or many
+> terminals after the observed state has gone stale. `archive` is exempt
+> because it changes Ant Hill's local data, not cmux.
+
+## Item 2 — liveness evidence — **FIXED**
+
+### Evidence added
+
+- Codex `task_complete` and Claude assistant `stop_reason: "end_turn"` are clean
+  completion evidence for the latest turn. A later user turn clears that
+  evidence, so an old completion cannot hide a later crash.
+- A completed identity scan now checks all recognized agent PIDs. Codex rollout
+  files supply exact source IDs; Claude runtime IDs resolve through the existing
+  unique, fail-closed runtime-session route.
+- One process is attributed only to its unique root source. Open guardian/child
+  rollout descriptors do not make completed child agents look independently
+  alive.
+- Exact PID evidence survives incremental transcript appends. A later completed
+  process scan sets `processAlive: false` only when every retained PID is absent.
+  Process or `lsof` probe failure preserves the prior verdict and never implies
+  death.
+
+Tests cover both provider completion markers, later-turn reset, Codex open-file
+PID evidence, Claude runtime-ID PID evidence, parent/child root reduction,
+incremental retention, retained-PID disappearance, and probe-failure ambiguity.
+The existing snapshot test proves those inputs produce all four wire states.
+
+### Required live measurement
+
+The dataset changed while agents were active, so counts include both total and
+snapshot timestamp rather than pretending the samples are identical.
+
+| Measurement | Total | running | exited | died | unknown |
+|---|---:|---:|---:|---:|---:|
+| Before, `2026-07-29T07:16:19.987Z` | 101 | 16 | 0 | 0 | 85 |
+| After, `2026-07-29T07:25:36.846Z` | 102 | 16 | 73 | 0 | 13 |
+| Follow-up incremental refresh, `2026-07-29T07:25:44.850Z` | 102 | 16 | 74 | 0 | 12 |
+
+The first corrected after-sample split was:
+
+- Claude: 3 running, 4 exited, 10 unknown.
+- Codex: 13 running, 69 exited, 3 unknown.
+
+No retained exact PID disappeared during the live measurement, so the honest
+live `died` count is zero. That state is now reachable when a confirmed PID
+later disappears without a clean completion; the regression tests exercise the
+required evidence transition. The remaining 13 unknowns in the first after
+sample had neither a unique root PID nor a latest clean-completion marker.
+
+### The “ended but running” rows
+
+The reported signal is real, not a PID or status-derivation error. Before the
+change there were nine such rows. For a sampled row,
+`codex:019faa9e-2cc2-7a22-8763-4d77ef61a3f4`, retained PID `50750` was still a
+live Codex process on `ttys023`, while the transcript ended with an explicit
+`task_complete`.
+
+Neither field is wrong: board `activity: "ended"` means the recorded task/turn
+completed; `processState: "running"` means the reusable terminal process remains
+alive for another prompt. Treating the board's “Ended” label as a process-exit
+claim would be wrong, but the server keeps these as separate dimensions. The
+final sample had 13 such root sessions as live terminals changed.
+
+## Item 3 — model display names — **FIXED server half**
+
+`config/models.json` now owns `modelDisplayLabels`. `ModelConfig` and
+`isModelConfig` require a non-empty string-to-string map; malformed label data
+falls back to the complete compiled default instead of reaching the wire. New
+labels therefore remain config edits, not TypeScript conditionals.
+
+Every real snapshot now exposes the same config as:
+
+```json
+{
+  "modelConfig": {
+    "displayLabels": {
+      "claude-fable-5": "fable 5",
+      "claude-opus-4-8": "opus 4.8",
+      "claude-sonnet-5": "sonnet 5",
+      "composer-2": "composer 2",
+      "composer-2.5": "composer 2.5",
+      "gpt-5.6-luna": "luna 5.6",
+      "gpt-5.6-sol": "sol 5.6",
+      "grok-4.5": "grok 4.5"
+    }
+  }
+}
+```
+
+The scratch snapshot verified that exact object on the wire. Client consumption
+remains intentionally untouched because `src/web/**` and
+`tests/web-client.test.ts` belong to the parallel TRANSPORT lane.
+
+---
+
 # WAVE 5 / W5-B — making the liveness feature visible, and proving the read routes against a real server
 
 Date: 2026-07-29
@@ -3090,4 +3234,3 @@ Usable routes moved from one weak cwd fallback to ten exact session routes. This
 - No push, merge, deployment, or launchd action was performed.
 
 ---
-

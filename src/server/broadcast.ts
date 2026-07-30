@@ -1,10 +1,15 @@
 import type { BroadcastRequest, BroadcastResponse, HubSnapshot } from "../shared/types";
 import { executeControl, type ControlDependencies } from "./control";
-import { MAX_CONTROL_BODY_BYTES, MAX_INSTRUCTION_BYTES } from "./http";
+import {
+  MAX_CONTROL_BODY_BYTES,
+  MAX_CONTROL_SNAPSHOT_AGE_MS,
+  MAX_INSTRUCTION_BYTES,
+} from "./http";
 
 export interface BroadcastDependencies extends ControlDependencies {
   getSnapshot(): HubSnapshot;
   afterControl?(agentIds?: readonly string[]): void | Promise<void>;
+  now?(): number;
 }
 
 function response(value: unknown, status: number): Response {
@@ -75,7 +80,27 @@ export async function handleBroadcastRequest(request: Request, dependencies: Bro
   const parsed = parse(raw);
   if ("code" in parsed) return error(400, parsed.code, parsed.message);
 
-  const agents = new Map(dependencies.getSnapshot().programs.flatMap((program) => program.agents).map((agent) => [agent.id, agent]));
+  const snapshot = dependencies.getSnapshot();
+  const generatedAt = Date.parse(snapshot.generatedAt);
+  const ageMs = (dependencies.now?.() ?? Date.now()) - generatedAt;
+  if (!Number.isFinite(generatedAt) || ageMs > MAX_CONTROL_SNAPSHOT_AGE_MS) {
+    return response(
+      {
+        ok: false,
+        error: {
+          code: "STALE_SNAPSHOT",
+          message: Number.isFinite(generatedAt)
+            ? `Control routing evidence is ${Math.max(0, ageMs)}ms old; recollect before retrying.`
+            : "Control routing evidence has an invalid timestamp; recollect before retrying.",
+          ageMs: Number.isFinite(generatedAt) ? Math.max(0, ageMs) : null,
+          maxAgeMs: MAX_CONTROL_SNAPSHOT_AGE_MS,
+        },
+      },
+      409,
+    );
+  }
+
+  const agents = new Map(snapshot.programs.flatMap((program) => program.agents).map((agent) => [agent.id, agent]));
   const results: BroadcastResponse["results"] = [];
   for (const agentId of parsed.agentIds) {
     const agent = agents.get(agentId);

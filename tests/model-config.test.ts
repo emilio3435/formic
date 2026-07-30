@@ -17,6 +17,16 @@ describe("model knowledge config", () => {
     const config = loadModelConfig(shippedPath);
 
     expect(config).toMatchObject(DEFAULT_MODEL_CONFIG);
+    expect(config.modelDisplayLabels).toEqual({
+      "claude-fable-5": "fable 5",
+      "claude-opus-4-8": "opus 4.8",
+      "claude-sonnet-5": "sonnet 5",
+      "composer-2": "composer 2",
+      "composer-2.5": "composer 2.5",
+      "gpt-5.6-luna": "luna 5.6",
+      "gpt-5.6-sol": "sol 5.6",
+      "grok-4.5": "grok 4.5",
+    });
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("gpt-5.6-sol-max", config)).toBe("gpt-5.6-sol");
     expect(modelFamily("fable-5-high", config)).toBe("claude-fable-5");
@@ -75,6 +85,17 @@ describe("model knowledge config", () => {
 
     expect(loadModelConfig(join(directory, "missing.json"))).toBe(DEFAULT_MODEL_CONFIG);
     expect(loadModelConfig(malformedPath)).toBe(DEFAULT_MODEL_CONFIG);
+  });
+
+  test("invalid display labels reject the whole config instead of leaking malformed wire data", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mountain-models-"));
+    const path = join(directory, "models.json");
+    writeFileSync(path, JSON.stringify({
+      ...DEFAULT_MODEL_CONFIG,
+      modelDisplayLabels: { "gpt-5.6-sol": "" },
+    }));
+
+    expect(loadModelConfig(path)).toBe(DEFAULT_MODEL_CONFIG);
   });
 
   test("an overridden context window flows through collector resolution", () => {

@@ -341,7 +341,7 @@ export async function enrichCmuxIdentity(
   };
   const pids = [
     ...new Set(
-      processes
+      allProcesses
         .filter((process) => isRecognizedAgentProcess(process.command))
         .map((process) => process.pid),
     ),
@@ -361,6 +361,45 @@ export async function enrichCmuxIdentity(
         : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`;
       errors.push(error);
       return { value: failedProbeSurfaces(surfaces, error), errors, liveAgentProcessIds };
+    }
+  }
+
+  const processIdsByAgent = new Map<string, Set<number>>();
+  const transcriptOpenAgents = new Set<string>();
+  const addProcessEvidence = (key: string, pid: number, transcriptOpen = false): void => {
+    if (!agentsByIdentity.has(key)) return;
+    const processIds = processIdsByAgent.get(key) ?? new Set<number>();
+    processIds.add(pid);
+    processIdsByAgent.set(key, processIds);
+    if (transcriptOpen) transcriptOpenAgents.add(key);
+  };
+  for (const [pid, paths] of openFiles) {
+    const openIdentity = primaryOpenIdentity(
+      paths.flatMap((path) => {
+        const hint = identityFromSessionPath(path);
+        return hint ? [hint] : [];
+      }),
+      agentsByIdentity,
+    );
+    if (openIdentity) addProcessEvidence(identityKey(openIdentity), pid, true);
+  }
+  for (const process of allProcesses) {
+    for (const hint of identitiesFromCommand(process.command)) {
+      const resolved = cachedCommandHint(hint).hint;
+      if (resolved) addProcessEvidence(identityKey(resolved), process.pid);
+    }
+  }
+  const liveProcessIds = new Set(liveAgentProcessIds);
+  for (const agent of agents) {
+    const key = `${agent.provider}:${agent.sourceSessionId.toLowerCase()}`;
+    const observed = processIdsByAgent.get(key);
+    if (observed?.size) {
+      agent.processIds = [...observed].sort((left, right) => left - right);
+      agent.processAlive = true;
+      agent.transcriptOpen = transcriptOpenAgents.has(key);
+    } else if (agent.processIds?.length) {
+      agent.processAlive = agent.processIds.some((pid) => liveProcessIds.has(pid));
+      agent.transcriptOpen = false;
     }
   }
 
