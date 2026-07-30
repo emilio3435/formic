@@ -270,6 +270,33 @@ const providerLabel = (p) => PROVIDER_LABELS[p] || p;
 const ACTIVITY_LABELS = { working: "Working", idle: "Idle", ended: "Ended", unknown: "Unknown" };
 const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Alert", blocked: "Blocked", failed: "Failed" };
 const CONTROL_LABELS = { linked: "Linked", "observed-only": "Observed only", quarantined: "Quarantined" };
+
+/* ---------- watch-only row mark ----------
+
+   The Access column was dropped in 9d79c76 (instrument cluster) and left no
+   sighted equivalent: control state survived only in the row aria-label, so an
+   operator could not see which rows are watch-only without opening a drawer.
+   This restores it as a dot, on the `source-mismatch-dot` precedent — a mark
+   plus a title/aria sentence, never a column.
+
+   A dot on EVERY row carries no information, so it is shown only where it
+   changes what the operator can do:
+     - quarantined       always. Ambiguous identity is a real, fixable problem.
+     - observed-only     only when control could otherwise have worked: cmux is
+                         reachable and the session has not ended.
+   Suppressed when cmux is unreachable (the header already says controls are
+   offline fleet-wide — per-row dots would just restate it on every row) and on
+   ended sessions (a finished session is uncontrollable by definition, and
+   deriveControlState reports every one of them as observed-only). */
+function watchOnlyMark(control, activity, snap) {
+  if (control === "quarantined") {
+    return { key: "quarantined", label: "Controls quarantined", hint: CONTROL_HINTS.quarantined };
+  }
+  if (control !== "observed-only" || activity === "ended") return null;
+  const health = snap && snap.controlHealth;
+  if (!health || health.cmuxReachable !== true) return null;
+  return { key: "observed", label: "Watch only", hint: CONTROL_HINTS["observed-only"] };
+}
 const CONTROL_HINTS = {
   linked: "This session is linked to an exact cmux target; controls route safely.",
   "observed-only": "This session is visible but has no safe control route; controls stay disabled.",
@@ -3687,6 +3714,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
+  const watchOnly = watchOnlyMark(control, activity, state.snap);
   const policy = modelPolicyView(agent);
   const role = roleView(agent.role);
   const selected = state.selectedId === agent.id;
@@ -3751,6 +3779,16 @@ function renderAgentRow(agent, program, opts = {}) {
           role: "img",
           "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
           title: sourceDetail || CWD_MISMATCH_HINT,
+        })
+        : null,
+      // Watch-only mark: the Access column's sighted replacement. See
+      // watchOnlyMark() for why it stays silent on most rows.
+      watchOnly
+        ? el("span", {
+          class: "control-dot is-" + watchOnly.key,
+          role: "img",
+          "aria-label": watchOnly.label + ". " + watchOnly.hint,
+          title: watchOnly.label + " — " + watchOnly.hint,
         })
         : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,

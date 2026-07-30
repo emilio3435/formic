@@ -1328,8 +1328,70 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(findByClass(calmRow, "source-mismatch-dot")).toBeNull();
   });
 
+  test("(c2) watch-only rows carry a dot instead of an Access column, and only when it informs", () => {
+    // The Access column was dropped with the instrument cluster (9d79c76) and left
+    // control state visible only to screen readers. These assertions pin the
+    // replacement: a dot where control is genuinely unavailable, silence where a
+    // dot on every row would say nothing. Each case states WHY it renders or not,
+    // so weakening the suppression rule fails here instead of shipping row noise.
+    const reachable = { controlHealth: { cmuxReachable: true, errors: [], staleSources: [] } };
+    const unreachable = { controlHealth: { cmuxReachable: false, errors: ["cmux discovery failed"], staleSources: [] } };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const previousSnap = (M.state as any).snap;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dotFor = (overrides: Record<string, unknown>, snap: unknown): any => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (M.state as any).snap = snap;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row: any = withDom(() => M.renderAgentRow(agent(overrides) as any, program));
+      return findByClass(row, "control-dot");
+    };
+    try {
+      // Controllable session: nothing to warn about, so no mark.
+      expect(dotFor({ controlState: "linked" }, reachable)).toBeNull();
+
+      // Watch-only while control DOES work elsewhere — the informative case.
+      const watch = dotFor({ controlState: "observed-only" }, reachable);
+      expect(watch).not.toBeNull();
+      expect(watch.className).toContain("is-observed");
+      // The sentence must survive somewhere reachable, since the column is gone.
+      expect(watch.attributes["aria-label"]).toContain("Watch only");
+      expect(watch.attributes.title).toBeTruthy();
+
+      // cmux unreachable: the header already reports controls offline fleet-wide,
+      // so marking every row would restate it N times. Must stay silent.
+      expect(dotFor({ controlState: "observed-only" }, unreachable)).toBeNull();
+
+      // An ended session is uncontrollable by definition — not news.
+      // "stale" and "archived" are the two statuses deriveActivity maps to ended.
+      expect(dotFor({ controlState: "observed-only", status: "stale" }, reachable)).toBeNull();
+      expect(dotFor({ controlState: "observed-only", status: "archived" }, reachable)).toBeNull();
+
+      // Quarantine is a real, fixable identity conflict: always marked, and it
+      // must survive cmux being unreachable, unlike plain watch-only.
+      for (const snap of [reachable, unreachable]) {
+        const quarantined = dotFor({ controlState: "quarantined" }, snap);
+        expect(quarantined).not.toBeNull();
+        expect(quarantined.className).toContain("is-quarantined");
+        expect(quarantined.attributes["aria-label"]).toContain("quarantined");
+      }
+
+      // Both inks exist and differ, so the dot's meaning is carried by more than
+      // position in the row.
+      expect(styles).toContain(".control-dot.is-observed");
+      expect(styles).toContain(".control-dot.is-quarantined");
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (M.state as any).snap = previousSnap;
+    }
+  });
+
   test("(d) the column header names the promoted instrument columns", () => {
     expect(source).toContain("function renderAgentColumnHeader()");
+    // The Access column stays dropped — the row dot above is its replacement.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const noAccess: any = withDom(() => M.renderAgentColumnHeader());
+    expect(textOf(noAccess)).not.toContain("Access");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const header: any = withDom(() => M.renderAgentColumnHeader());
     const text = textOf(header);

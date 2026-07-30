@@ -1257,6 +1257,27 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--ember);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 22%, transparent);
 }
+/* Watch-only mark — the Access column's replacement. Same geometry as
+   .source-mismatch-dot so the row's dot vocabulary stays one shape; the ink
+   carries the difference. Quarantined is a problem to fix (failed ink); plain
+   watch-only is a neutral fact (clay), deliberately quiet so it reads as
+   information rather than an alert. Hollow vs filled also separates them for
+   anyone who cannot distinguish the hues. */
+.control-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+.control-dot.is-observed {
+  background: transparent;
+  border: 1.5px solid var(--clay);
+}
+.control-dot.is-quarantined {
+  background: var(--failed);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--failed) 22%, transparent);
+}
+
 /* Status column shows the activity word, colored by state (no separate dot). */
 .row-state {
   display: inline-flex;
