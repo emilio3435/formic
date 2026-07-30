@@ -1552,6 +1552,10 @@ function staleControlNote(alarm) {
 
 const state = {
   snap: null,
+  // Sequence of the whole snapshot in `snap`. A delta is eligible only when
+  // its baseSequence matches this exactly; null means only a full snapshot can
+  // establish a safe base.
+  snapshotSequence: null,
   fetchFailed: false,
   conn: "connecting", // connecting | live | reconnecting | stale | offline
   // The server's own /api/health verdict. null until first polled; stays null
@@ -1742,11 +1746,18 @@ function saveWidgetPreferences() {
    (fetchSnapshot), the POST recollect and the SSE stream — which carries very
    nearly every snapshot the UI ever paints — all feed through here, so a guard
    added below actually applies to real traffic. */
-function applySnapshot(snap) {
+function snapshotSequenceFrom(value) {
+  if (value == null || value === "") return null;
+  const sequence = Number(value);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+function applySnapshot(snap, sequence = null) {
   if (!snap || snap.schemaVersion !== 1 || !Array.isArray(snap.programs)) {
     throw new Error("unexpected snapshot shape");
   }
   state.snap = snap;
+  state.snapshotSequence = snapshotSequenceFrom(sequence);
   if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
   state.fetchFailed = false;
   // Escalate before painting: the tab title and any notification are about the
@@ -1759,7 +1770,10 @@ async function fetchSnapshot() {
   try {
     const res = await fetch("/api/snapshot", { headers: { accept: "application/json" } });
     if (!res.ok) throw new Error("HTTP " + res.status);
-    applySnapshot(await res.json());
+    const sequence = res.headers && res.headers.get
+      ? res.headers.get("x-ant-hill-snapshot-sequence")
+      : null;
+    applySnapshot(await res.json(), sequence);
   } catch (err) {
     state.fetchFailed = true;
     if (!state.snap) {
@@ -1779,7 +1793,10 @@ async function recollectSnapshot() {
   try {
     const res = await fetch("/api/recollect", { method: "POST", headers: { accept: "application/json" } });
     if (!res.ok) { await fetchSnapshot(); return; }
-    applySnapshot(await res.json());
+    const sequence = res.headers && res.headers.get
+      ? res.headers.get("x-ant-hill-snapshot-sequence")
+      : null;
+    applySnapshot(await res.json(), sequence);
   } catch {
     await fetchSnapshot();
   }
@@ -1818,22 +1835,108 @@ function scheduleRefetch() {
   refetchTimer = setTimeout(() => { refetchTimer = null; fetchSnapshot(); }, 400);
 }
 
-/* Both envelope shapes the stream uses: a bare snapshot, or one wrapped in
+/* Both full-snapshot envelope shapes: a bare snapshot, or one wrapped in
    { snapshot }. Anything else is an unknown event kind, not a snapshot. */
 function eventSnapshot(msg) {
   if (msg && msg.schemaVersion === 1) return msg;
   return msg && msg.snapshot ? msg.snapshot : null;
 }
 
-function handleEventPayload(raw) {
+/* Rebuild a complete candidate without mutating the base. Program metadata and
+   ordering are authoritative in every delta; agent records may come from the
+   validated base only when the delta names their ids. A missing id is a broken
+   delta, never permission to paint a partial board. */
+function applySnapshotDelta(base, delta, currentSequence) {
+  if (!base || base.schemaVersion !== 1 || !Array.isArray(base.programs)) {
+    throw new Error("snapshot delta has no complete base");
+  }
+  if (!delta || delta.schemaVersion !== 1 ||
+      !Number.isSafeInteger(delta.baseSequence) ||
+      !Number.isSafeInteger(delta.sequence) ||
+      delta.baseSequence !== currentSequence ||
+      delta.sequence !== delta.baseSequence + 1 ||
+      !delta.snapshot || delta.snapshot.schemaVersion !== 1 ||
+      Object.prototype.hasOwnProperty.call(delta.snapshot, "programs") ||
+      !Array.isArray(delta.programs)) {
+    throw new Error("snapshot delta sequence or shape is invalid");
+  }
+
+  const basePrograms = new Map(base.programs.map((program) => [program.id, program]));
+  const seenPrograms = new Set();
+  const programs = delta.programs.map((wireProgram) => {
+    if (!wireProgram || typeof wireProgram.id !== "string" ||
+        seenPrograms.has(wireProgram.id) ||
+        !Array.isArray(wireProgram.agentIds) ||
+        !Array.isArray(wireProgram.agents)) {
+      throw new Error("snapshot delta program is invalid");
+    }
+    seenPrograms.add(wireProgram.id);
+    const baseAgents = new Map(
+      (basePrograms.get(wireProgram.id)?.agents || []).map((item) => [item.id, item]),
+    );
+    const changedAgents = new Map();
+    const allowedIds = new Set(wireProgram.agentIds);
+    for (const item of wireProgram.agents) {
+      if (!item || typeof item.id !== "string" ||
+          changedAgents.has(item.id) || !allowedIds.has(item.id)) {
+        throw new Error("snapshot delta agent is invalid");
+      }
+      changedAgents.set(item.id, item);
+    }
+    const seenAgents = new Set();
+    const agents = wireProgram.agentIds.map((id) => {
+      if (typeof id !== "string" || seenAgents.has(id)) {
+        throw new Error("snapshot delta agent order is invalid");
+      }
+      seenAgents.add(id);
+      const item = changedAgents.get(id) || baseAgents.get(id);
+      if (!item) throw new Error("snapshot delta omitted an agent record");
+      return item;
+    });
+    const { agentIds: _agentIds, agents: _agents, ...program } = wireProgram;
+    return { ...program, agents };
+  });
+
+  const candidate = { ...delta.snapshot, programs };
+  if (candidate.schemaVersion !== 1) throw new Error("snapshot delta produced an invalid snapshot");
+  return candidate;
+}
+
+function handleEventPayload(raw, eventSequence = null) {
   state.lastEventAt = Date.now();
   let msg;
   try { msg = JSON.parse(raw); } catch { scheduleRefetch(); return; }
   const snap = eventSnapshot(msg);
   try {
-    applySnapshot(snap);
+    applySnapshot(snap, eventSequence);
   } catch {
     scheduleRefetch(); // unknown event kind or bad shape: refetch the truth
+  }
+  applyFreshnessVerdict();
+}
+
+let snapshotRecoveryInFlight = null;
+function recoverFullSnapshot() {
+  if (!snapshotRecoveryInFlight) {
+    snapshotRecoveryInFlight = fetchSnapshot().finally(() => {
+      snapshotRecoveryInFlight = null;
+    });
+  }
+  return snapshotRecoveryInFlight;
+}
+
+async function handleDeltaPayload(raw, eventSequence = null) {
+  state.lastEventAt = Date.now();
+  try {
+    const delta = JSON.parse(raw);
+    const sequence = snapshotSequenceFrom(eventSequence);
+    if (sequence === null || sequence !== delta.sequence) {
+      throw new Error("snapshot delta event id does not match its sequence");
+    }
+    const next = applySnapshotDelta(state.snap, delta, state.snapshotSequence);
+    applySnapshot(next, sequence);
+  } catch {
+    await recoverFullSnapshot();
   }
   applyFreshnessVerdict();
 }
@@ -1843,8 +1946,9 @@ function connect() {
   es = new EventSource("/api/events");
   es.onopen = () => { state.lastEventAt = Date.now(); applyFreshnessVerdict(); };
   es.onerror = () => { setConn(state.snap ? "reconnecting" : "offline"); };
-  es.onmessage = (e) => handleEventPayload(e.data);
-  es.addEventListener("snapshot", (e) => handleEventPayload(e.data));
+  es.onmessage = (e) => handleEventPayload(e.data, e.lastEventId);
+  es.addEventListener("snapshot", (e) => handleEventPayload(e.data, e.lastEventId));
+  es.addEventListener("snapshot-delta", (e) => void handleDeltaPayload(e.data, e.lastEventId));
   // Heartbeats only prove the pipe is open — no refetch, no snapshot re-render,
   // and crucially no verdict of their own: a 25s heartbeat under a 60s threshold
   // used to make setConn("stale") unreachable while the data sat frozen.
@@ -1918,6 +2022,21 @@ function pollConnectionHealth(now = Date.now()) {
     void fetchSnapshot();
   }
   renderConn(); // keep the snapshot-age suffix ticking while nothing else paints
+}
+
+/* Snapshot age can cross the stale threshold precisely while no snapshot is
+   arriving. Repaint the alarm and any open control surfaces from the 5s clock,
+   so silence itself can visibly hold stale routing controls. Their paint
+   signatures keep healthy ticks as no-ops. */
+function refreshStalenessSurfaces() {
+  renderFeedAlarm();
+  if (state.selected) renderInspector();
+  if (state.selecting) renderBroadcastBar();
+}
+
+function tickFreshnessSurfaces() {
+  tickClocks();
+  refreshStalenessSurfaces();
 }
 
 function setConn(next) {
@@ -7052,6 +7171,12 @@ const bootIntervals = [];
 
 function stopBoot() {
   while (bootIntervals.length) clearInterval(bootIntervals.pop());
+  // The stream is part of boot: leaving it open kept a live EventSource (and a
+  // stale readyState read) alive after stopBoot() claimed to have stopped.
+  if (es) {
+    try { es.close(); } catch { /* already closed */ }
+    es = null;
+  }
 }
 
 function boot() {
@@ -7133,7 +7258,7 @@ function boot() {
 
   bootIntervals.push(setInterval(() => {
     pollConnectionHealth();
-    tickClocks();
+    tickFreshnessSurfaces();
     void fetchTriageQueue();
   }, 5000));
 
@@ -7175,6 +7300,7 @@ Object.assign(globalThis.TheAntHill, {
   state,
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
   sendControl, sendBroadcast, recollectSnapshot, fetchSnapshot,
+  applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
   loadTranscript, loadActions, applyAttention,

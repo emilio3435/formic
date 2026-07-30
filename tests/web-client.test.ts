@@ -193,7 +193,7 @@ function newNode(tag = "div"): FakeNode {
    the assertions are about what the client SENDS and what it then BELIEVES.
    ------------------------------------------------------------------------- */
 export interface FakeCall { url: string; method: string; body: any }
-type FakeReply = { status?: number; json?: unknown } | Error;
+type FakeReply = { status?: number; json?: unknown; headers?: Record<string, string> } | Error;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const G = globalThis as any;
@@ -223,6 +223,9 @@ async function withRequests<T>(replies: FakeReply[], fn: (calls: FakeCall[]) => 
     return {
       ok: status >= 200 && status < 300,
       status,
+      headers: {
+        get: (name: string) => reply.headers?.[name.toLowerCase()] ?? null,
+      },
       json: async () => {
         if (!("json" in reply)) throw new Error("response is not JSON");
         return reply.json;
@@ -5922,5 +5925,186 @@ describe("boot() is exported and drives the real startup path", () => {
       if (realLS === undefined) delete G.localStorage; else G.localStorage = realLS;
       M.state.serverHealth = null;
     }
+  });
+});
+
+describe("W6-B: sequenced snapshot deltas stay complete", () => {
+  function transportFixture() {
+    const active = agent({ id: "codex:active", sourceSessionId: "active" });
+    const ended = agent({
+      id: "codex:ended",
+      sourceSessionId: "ended",
+      status: "archived",
+      statusReason: "Retained history",
+      transcriptTail: "immutable retained payload",
+    });
+    const base = snapshot({
+      generatedAt: "2026-07-29T08:00:00.000Z",
+      programs: [{ id: "p", name: "P", purpose: "Transport", agents: [active, ended] }],
+    });
+    const changedActive = { ...active, statusReason: "New active evidence" };
+    const next = snapshot({
+      generatedAt: "2026-07-29T08:00:04.000Z",
+      programs: [{ id: "p", name: "P", purpose: "Transport", agents: [changedActive, ended] }],
+    });
+    const { programs: _programs, ...head } = next;
+    const delta = {
+      schemaVersion: 1,
+      baseSequence: 7,
+      sequence: 8,
+      snapshot: head,
+      programs: [{
+        id: "p",
+        name: "P",
+        purpose: "Transport",
+        agentIds: ["codex:active", "codex:ended"],
+        agents: [changedActive],
+      }],
+    };
+    return { base, next, delta };
+  }
+
+  test("an ordered delta reconstructs the exact whole snapshot before adoption", () => {
+    const { base, next, delta } = transportFixture();
+    const reconstructed = M.applySnapshotDelta(base, delta, 7);
+
+    expect(reconstructed).toEqual(next);
+    expect(reconstructed.programs[0].agents[1]).toBe(base.programs[0].agents[1]);
+    expect(reconstructed.generatedAt).toBe("2026-07-29T08:00:04.000Z");
+
+    const { programs: _programs, ...laterHead } = {
+      ...next,
+      generatedAt: "2026-07-29T08:00:08.000Z",
+    };
+    const removed = M.applySnapshotDelta(reconstructed, {
+      schemaVersion: 1,
+      baseSequence: 8,
+      sequence: 9,
+      snapshot: laterHead,
+      programs: [{
+        id: "p",
+        name: "P renamed",
+        agentIds: ["codex:active"],
+        agents: [],
+      }],
+    }, 8);
+    expect(removed.programs).toEqual([{
+      id: "p",
+      name: "P renamed",
+      agents: [next.programs[0].agents[0]],
+    }]);
+  });
+
+  test("the first full SSE event paints immediately and establishes the delta base", async () => {
+    const { base, next, delta } = transportFixture();
+
+    await withState({ snap: null, snapshotSequence: null }, async () => {
+      await withRequests([], async (calls) => {
+        M.handleEventPayload(JSON.stringify(base), "7");
+        await M.handleDeltaPayload(JSON.stringify(delta), "8");
+
+        expect(calls).toHaveLength(0);
+        expect(M.state.snap).toEqual(next);
+        expect(M.state.snapshotSequence).toBe(8);
+      });
+    });
+  });
+
+  test("a gap, replay, malformed order, or unresolved agent rejects the whole delta", () => {
+    const { base, delta } = transportFixture();
+
+    expect(() => M.applySnapshotDelta(base, delta, 6)).toThrow();
+    expect(() => M.applySnapshotDelta(base, delta, 8)).toThrow();
+    expect(() => M.applySnapshotDelta(base, { ...delta, sequence: 9 }, 7)).toThrow();
+    expect(() => M.applySnapshotDelta(base, {
+      ...delta,
+      programs: [{ ...delta.programs[0], agents: [], agentIds: ["codex:missing"] }],
+    }, 7)).toThrow();
+    expect(base.programs[0].agents.map((item: { id: string }) => item.id))
+      .toEqual(["codex:active", "codex:ended"]);
+  });
+
+  test("a sequence gap requests a full snapshot and never adopts the partial payload", async () => {
+    const { base, next, delta } = transportFixture();
+    const gapped = {
+      ...delta,
+      baseSequence: 8,
+      sequence: 9,
+      snapshot: { ...delta.snapshot, generatedAt: "2026-07-29T08:00:08.000Z" },
+      programs: [{
+        ...delta.programs[0],
+        agentIds: ["codex:active"],
+      }],
+    };
+
+    await withState({ snap: base, snapshotSequence: 7 }, async () => {
+      await withRequests([{
+        status: 200,
+        json: next,
+        headers: { "x-ant-hill-snapshot-sequence": "9" },
+      }], async (calls) => {
+        await M.handleDeltaPayload(JSON.stringify(gapped), "9");
+
+        expect(calls.map((call) => [call.method, call.url])).toEqual([["GET", "/api/snapshot"]]);
+        expect(M.state.snap).toEqual(next);
+        expect(M.state.snapshotSequence).toBe(9);
+        expect(M.state.snap.programs[0].agents.map((item: { id: string }) => item.id))
+          .toEqual(["codex:active", "codex:ended"]);
+      });
+    });
+  });
+
+  test("an SSE id that disagrees with the delta sequence requests a full snapshot", async () => {
+    const { base, next, delta } = transportFixture();
+
+    await withState({ snap: base, snapshotSequence: 7 }, async () => {
+      await withRequests([{
+        status: 200,
+        json: next,
+        headers: { "x-ant-hill-snapshot-sequence": "9" },
+      }], async (calls) => {
+        await M.handleDeltaPayload(JSON.stringify(delta), "9");
+
+        expect(calls.map((call) => call.url)).toEqual(["/api/snapshot"]);
+        expect(M.state.snapshotSequence).toBe(9);
+        expect(M.state.snap).toEqual(next);
+      });
+    });
+  });
+
+  test("delta generatedAt remains the freshness clock when the feed goes quiet", async () => {
+    const { base, delta } = transportFixture();
+    const generatedAt = Date.parse(delta.snapshot.generatedAt);
+
+    await withState({ snap: base, snapshotSequence: 7 }, async () => {
+      await withRequests([], async (calls) => {
+        await M.handleDeltaPayload(JSON.stringify(delta), "8");
+
+        expect(calls).toHaveLength(0);
+        expect(M.state.snap.generatedAt).toBe(delta.snapshot.generatedAt);
+        expect(M.connVerdictFor({
+          open: true,
+          lastEventAt: generatedAt,
+          generatedAt: M.state.snap.generatedAt,
+          now: generatedAt + 60_001,
+        })).toBe("stale");
+      });
+    });
+  });
+
+  test("the quiet-feed clock repaints the alarm without waiting for another snapshot", async () => {
+    const stale = snapshot({ generatedAt: new Date(Date.now() - 61_000).toISOString() });
+
+    await withState({ snap: stale, conn: "reconnecting", selected: null, selecting: false }, async () => {
+      await withRequests([], async (calls) => {
+        M.tickFreshnessSurfaces();
+
+        const alarm = domById.get("feed-alarm")!;
+        expect(calls).toHaveLength(0);
+        expect(alarm.hidden).toBe(false);
+        expect(textOf(alarm)).toContain("Feed frozen");
+        expect((G.document.body as FakeNode).classList.contains("feed-frozen")).toBe(true);
+      });
+    });
   });
 });
