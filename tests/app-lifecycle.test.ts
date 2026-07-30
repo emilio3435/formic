@@ -192,7 +192,7 @@ describe("SSE lifecycle", () => {
     expect(() => fetch.dispose()).not.toThrow();
   });
 
-  test("event streams keep the full snapshot wire contract on accepted state changes", async () => {
+  test("event streams bootstrap and reconnect with a sequenced full snapshot", async () => {
     const initial = emptySnapshot();
     let listener: ((snapshot: HubSnapshot) => void) | undefined;
     const state: MountainAppState = {
@@ -210,17 +210,91 @@ describe("SSE lifecycle", () => {
     const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
     const response = await fetch(new Request("http://127.0.0.1:4701/api/events"));
     const reader = response.body!.getReader();
-    await reader.read();
+    const first = String((await reader.read()).value);
+
+    expect(first).toStartWith("id: 0\nevent: snapshot\ndata: ");
+    expect(JSON.parse(first.split("\ndata: ")[1]!.trim())).toEqual(initial);
 
     const changed = {
       ...initial,
       totals: { ...initial.totals, tracked: initial.totals.tracked + 1 },
     };
     listener!(changed);
-    const event = String((await reader.read()).value);
+    await reader.read();
 
-    expect(event).toStartWith("event: snapshot\ndata: ");
-    expect(JSON.parse(event.split("\ndata: ")[1]!.trim())).toEqual(changed);
+    const reconnected = await fetch(new Request("http://127.0.0.1:4701/api/events"));
+    const reconnectEvent = String((await reconnected.body!.getReader().read()).value);
+
+    expect(reconnectEvent).toStartWith("id: 1\nevent: snapshot\ndata: ");
+    expect(JSON.parse(reconnectEvent.split("\ndata: ")[1]!.trim())).toEqual(changed);
+    fetch.dispose();
+  });
+
+  test("event streams send ordered deltas without repeating immutable ended agents", async () => {
+    const initial = lifecycleSnapshot("2026-07-29T08:00:00.000Z");
+    const ended = {
+      ...initial.programs[0]!.agents[0]!,
+      id: "codex:ended",
+      sourceSessionId: "ended",
+      displayName: "Ended fixture",
+      status: "archived" as const,
+      statusReason: "x".repeat(500_000),
+      transcriptTail: "y".repeat(500_000),
+      controls: [],
+    };
+    initial.programs[0]!.agents.push(ended);
+    let listener: ((snapshot: HubSnapshot) => void) | undefined;
+    const state: MountainAppState = {
+      get: () => initial,
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+      refresh: async () => initial,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/events"));
+    const reader = response.body!.getReader();
+    const fullEvent = String((await reader.read()).value);
+
+    const changed: HubSnapshot = {
+      ...initial,
+      generatedAt: "2026-07-29T08:00:04.000Z",
+      programs: [{
+        ...initial.programs[0]!,
+        agents: [
+          { ...initial.programs[0]!.agents[0]!, statusReason: "Active fixture changed." },
+          ended,
+        ],
+      }],
+    };
+    listener!(changed);
+    const deltaEvent = String((await reader.read()).value);
+    const delta = JSON.parse(deltaEvent.split("\ndata: ")[1]!.trim());
+
+    expect(deltaEvent).toStartWith("id: 1\nevent: snapshot-delta\ndata: ");
+    expect(delta).toMatchObject({
+      schemaVersion: 1,
+      baseSequence: 0,
+      sequence: 1,
+      snapshot: { generatedAt: changed.generatedAt },
+      programs: [{
+        id: "fixture",
+        agentIds: ["codex:control", "codex:ended"],
+        agents: [{ id: "codex:control", statusReason: "Active fixture changed." }],
+      }],
+    });
+    expect(delta.programs[0].agents.map((agent: AgentSnapshot) => agent.id)).toEqual(["codex:control"]);
+    expect(deltaEvent).not.toContain("y".repeat(100));
+    expect(new TextEncoder().encode(deltaEvent).byteLength)
+      .toBeLessThan(new TextEncoder().encode(fullEvent).byteLength / 20);
+
+    const snapshotResponse = await fetch(new Request("http://127.0.0.1:4701/api/snapshot"));
+    expect(snapshotResponse.headers.get("x-ant-hill-snapshot-sequence")).toBe("1");
     fetch.dispose();
   });
 

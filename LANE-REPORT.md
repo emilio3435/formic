@@ -1,3 +1,187 @@
+# WAVE 6 / W6-B — sequenced SSE deltas, end to end
+
+Date: 2026-07-29
+Branch: `ant-hill/w6-transport-20260729`
+Worktree: `/Users/emilionunezgarcia/Developer/the-mountain-lanes/w6-transport-20260729`
+Base: `84527fc`
+Files touched: `src/server/app.ts`, `src/web/app.js`,
+`tests/app-lifecycle.test.ts`, `tests/web-client.test.ts`, and this report.
+`src/web/styles.css` and `src/web/index.html` needed no change. No other
+`src/server/**`, shared type, config, script, documentation, or package file was
+changed.
+
+## Disposition
+
+**FIXED.** The first event and every reconnect still receive a complete
+`event: snapshot`. Accepted changes after that use `event: snapshot-delta`,
+with an SSE sequence and enough ordering metadata to reconstruct a complete
+snapshot before it is adopted. A gap, replay, malformed delta, mismatched SSE
+`id`, or unresolved agent record causes a full `GET /api/snapshot`; no partial
+candidate reaches `state.snap` or `render()`.
+
+## Actual bytes on the real board
+
+Measured in a real Chromium page against the lane's scratch server on
+`127.0.0.1:4794`, using `TextEncoder` over the actual EventSource `data`
+payloads. The board had 100 tracked agents / 13 live agents.
+
+| Payload | Actual UTF-8 bytes |
+|---|---:|
+| Before: full snapshot payload the old update path re-sent | **350,794** |
+| After: eight consecutive delta updates | **69,103–69,427** |
+| After: mean delta | **69,184** |
+| Mean saved per accepted update | **281,610 bytes** |
+| Reduction | **80.28%** |
+
+The "before" value is the real complete `event: snapshot` payload captured from
+the same server/browser run. Before this lane, accepted updates called the same
+full-snapshot serializer for every client, so that is the update body being
+replaced. A later reconnect full snapshot was 351,173 bytes, consistent with the
+live board changing during the run.
+
+This did not reach the audit's theoretical 97.6% because correctness metadata
+and current work are still sent: every delta carries the full non-program
+snapshot fields, full program metadata, ordered agent IDs, and full records for
+agents that actually changed. It omits the large unchanged retained records,
+which is where the measured 80.28% saving comes from.
+
+## Wire contract
+
+- Full bootstrap/recovery:
+  `id: <sequence>`, `event: snapshot`, `data: <complete HubSnapshot>`.
+- Delta:
+  `baseSequence`, `sequence`, full top-level snapshot fields excluding
+  `programs`, then ordered program descriptors with `agentIds` plus full records
+  only for changed/new agents.
+- `GET /api/snapshot` and successful `POST /api/recollect` return
+  `x-ant-hill-snapshot-sequence`, so an HTTP recovery has a safe base for the
+  next delta.
+- A new EventSource always gets the current full snapshot. Sequence restarts at
+  zero with a server process, which is safe because reconnect first replaces
+  the client base with that process's full event.
+- The client builds the candidate off-screen, rejects duplicate program/agent
+  IDs and missing records, and calls the existing single `applySnapshot` path
+  only after the candidate is complete.
+
+## Real reconnect and completeness proof
+
+The browser was live at sequence 36 with 100 agent IDs. I stopped only the
+scratch server, observed `Reconnecting…`, then restarted that scratch server on
+4794. An independent EventSource probe and the application both received a new
+complete `event: snapshot` at sequence 0 before deltas 1, 2, and onward.
+
+At sequence 6, the client snapshot and a fresh `GET /api/snapshot` had:
+
+```text
+browser agent count = 100
+wire agent count    = 100
+sorted agent IDs    = exact match
+client sequence     = 6
+HTTP header sequence= 6
+connection verdict  = Live
+```
+
+This proves restart/reconnect recovery on the actual browser path, not only the
+pure merge helper.
+
+## Staleness alarm: one live bug found and fixed
+
+The first real quiet-feed run exposed an existing repaint gap: at 76.2 seconds
+without a stream, `snapshot.generatedAt` was stale but the full-width alarm was
+still hidden. The 5-second boot clock repainted the connection label and clocks,
+not the alarm or open control surfaces; waiting for the next snapshot is
+impossible in the failure being announced.
+
+The 5-second freshness tick now repaints the guarded alarm plus any open
+inspector/broadcast controls. Live re-verification after stopping only the
+scratch server:
+
+```text
+connection       = Reconnecting…
+snapshot age     = 80,286 ms
+alarm hidden     = false
+headline         = Feed frozen — last snapshot 78s ago
+body.feed-frozen = true
+Refresh now      = visible
+detail           = Controls are held
+```
+
+`snapshot.generatedAt` remains the freshness source for both full snapshots and
+reconstructed deltas. Live input values remain outside paint signatures; no
+signature inventory was widened.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `bunx tsc --noEmit` | clean |
+| `bun test` | **581 pass / 0 fail**, 2,680 `expect()` calls, 31 files |
+| Baseline | 573 pass; **8 net tests added** |
+| Skips / `.only` / filtering | none added; final run was unfiltered |
+| Owned transport/client suites | 275 pass / 0 fail |
+| Mutations | **14 applied, 14 caught** |
+| `git diff --check` | clean |
+| Real browser | shared headless Chromium against `http://127.0.0.1:4794/` |
+| Scratch server | started/stopped only on 4794; `lsof` empty at close |
+| Production | 4701 never restarted, kickstarted, written, or deployed |
+
+`node_modules` was absent. `bun install --frozen-lockfile` installed only the
+lockfile-pinned development dependencies. `package.json` and `bun.lock` are
+unchanged. The scratch server's ignored `data/archive.json` and
+`data/identity-bindings.json` were removed after shutdown.
+
+## Mutations — 14 applied, 14 caught
+
+Each mutation was applied alone, the relevant owned suite was run, and the
+source was restored before the next mutation.
+
+| # | Mutation | Result |
+|---:|---|---|
+| 1 | later updates send the cached full snapshot instead of a delta | caught |
+| 2 | every retained agent is repeated in each delta | caught |
+| 3 | changed active agents are omitted from the delta | caught |
+| 4 | the server sequence jumps by two | caught |
+| 5 | the full HTTP recovery advertises sequence zero | caught |
+| 6 | a full SSE snapshot does not establish the client sequence | caught |
+| 7 | the client ignores `baseSequence` gaps/replays | caught |
+| 8 | the client accepts a non-adjacent next sequence | caught |
+| 9 | an unresolved delta agent is fabricated instead of rejected | caught |
+| 10 | reconstructed snapshots retain old top-level fields / `generatedAt` | caught |
+| 11 | a mismatched SSE `id` is ignored | caught |
+| 12 | invalid deltas do not request a full snapshot | caught |
+| 13 | the client ignores the HTTP recovery sequence header | caught |
+| 14 | the 5-second freshness tick stops repainting the alarm | caught |
+
+Honest mutation note: the first version of #14 deleted the call from `boot()` but
+left a helper-only test green. That escape was **not counted**. I moved the
+staleness behavior behind the exact `tickFreshnessSurfaces()` unit called by
+`boot()`, drove that unit through the existing DOM/request harness, re-applied
+the mutation, and it then failed the suite.
+
+## Fanout and backpressure
+
+No additional fanout change was needed. This base already has
+`MAX_SSE_CLIENTS = 16`, a 2 MiB byte-sized stream high-water mark, and
+drop-on-`desiredSize <= 0`, with lifecycle tests for admission and stalled
+clients. Those controls predate this lane and remain byte-for-byte in behavior.
+The smaller delta reduces how quickly a slow client reaches the existing limit,
+but does not change its policy.
+
+## Boundaries
+
+- No `innerHTML`; this transport work adds no agent-controlled rendering path.
+- No framework, bundler, CSS, HTML, shared type, or unowned server edit.
+- No live-input field was added to a paint signature.
+- No push, merge, deploy, or production-service action.
+
+---
+
+*Everything below this line is the previous program's report, carried forward unchanged.*
+
+---
+
+---
+
 # WAVE 6 / W6-A — final server gaps
 
 Date: 2026-07-29
