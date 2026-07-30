@@ -415,6 +415,50 @@ describe("summary status and widgets", () => {
     expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
   });
 
+  /* F2: the BURN card read "cost unavailable" because the cost source returns
+     null, and that is the correct render of an unknown — but nothing pinned it
+     down. The failure worth guarding is not the missing number, it is a missing
+     number quietly becoming $0.00: a fleet that looks free is worse than one
+     that admits it does not know. */
+  test("BURN shows a dollar figure when cost is reported and never invents $0.00", () => {
+    const burnSnap = (burn: Record<string, unknown>) => snapshot({
+      pulse: { burn: { tokensPerMin: 840, windowMs: 600_000, coverage: { reporting: 7, eligible: 7 }, ...burn } },
+    });
+
+    const priced = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 12.5 }), "live", "percent", [], false);
+    expect(priced.sublabel).toContain("$12.50 last hour");
+    expect(priced.value).toBe("840");
+
+    // Unknown cost states its ignorance and never renders as free.
+    const unknown = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: null }), "live", "percent", [], false);
+    expect(unknown.sublabel).toContain("cost unavailable");
+    expect(unknown.sublabel).not.toContain("$");
+
+    // A real zero is a real number and must survive as one.
+    const free = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 0 }), "live", "percent", [], false);
+    expect(free.sublabel).toContain("$0.00 last hour");
+    expect(free.sublabel).not.toContain("unavailable");
+
+    // Token throughput is independent of cost: no price must not blank the rate.
+    expect(unknown.value).toBe("840");
+    expect(unknown.tone).toBe("ok");
+  });
+
+  /* Claude transcripts report observed totals with no context-window size, so a
+     truthful percentage is impossible for them. Showing the absolute count is
+     the honest answer; a fabricated denominator would misreport a 1M-context
+     session by roughly 5x. 45 of 139 agents on the live board are in this state. */
+  test("CTX falls back to an absolute count rather than inventing a denominator", () => {
+    const noWindow = { provenance: "observed", scope: "latest-turn", total: 47_432 };
+    expect(M.contextDisplayValue(noWindow, "percent")).toBe("47k tokens");
+    expect(M.contextDisplayValue(noWindow, "percent")).not.toContain("%");
+    expect(M.contextUsage(noWindow)).toBeNull();
+
+    // And the moment the backend does report a window, the percentage appears
+    // with no client change — this is the contract between the two lanes.
+    expect(M.contextDisplayValue({ ...noWindow, contextWindow: 258_400 }, "percent")).toBe("18%");
+  });
+
   test("keeps the 5-widget Pulse catalog, needs-you pin, and persisted order valid", () => {
     expect(M.DEFAULT_WIDGET_IDS).toEqual(["needs-you", "momentum", "burn", "context-peak", "health"]);
     expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
