@@ -5447,6 +5447,15 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // The badge is a real node carrying the digit, not text glued onto the label.
     expect(source).toContain('class: "notify-badge"');
     expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.ariaLabel\)/);
+
+    /* Placement rule, not style — this is the bug the unit tests above could
+       not see. The toggle used to paint once in boot() and on click, which was
+       fine for pure preference state. Now that it carries a snapshot-derived
+       count it MUST paint inside render(), because boot() runs before the first
+       snapshot exists: the count was always 0 and the badge never appeared on
+       the real page even though every assertion above passed. */
+    const renderFn = source.match(/\nfunction render\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(renderFn).toContain("renderNotifyToggle()");
   });
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
