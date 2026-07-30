@@ -537,6 +537,27 @@ describe("views split Now from History", () => {
     expect(M.viewMatches("history", done)).toBe(true);
   });
 
+  /* Regression: an alert outranks the activity clock. A live snapshot carried
+     two agents reading activity "ended" (transcript stopped) whose process was
+     still `running` and whose status was "attention" — waiting on a human. The
+     old `act !== "ended"` gate hid them from Now AND from Alerts, so a session
+     needing a human appeared in no default view. Now must key off the alert. */
+  test("Now keeps an alerted agent even when its activity reads ended", () => {
+    const strandedButAlerting = agent({
+      status: "attention",
+      activity: "ended",
+      outcome: "needs-you",
+      processState: "running",
+    });
+    expect(M.viewMatches("now", strandedButAlerting)).toBe(true);
+
+    // The guard that makes this safe: an ended agent with nothing wrong stays
+    // in History, so Now cannot silt up with the 100+ finished sessions.
+    const endedAndFine = agent({ status: "archived", activity: "ended", outcome: "healthy" });
+    expect(M.viewMatches("now", endedAndFine)).toBe(false);
+    expect(M.viewMatches("history", endedAndFine)).toBe(true);
+  });
+
   test("Needs you contains only live unhealthy sessions", () => {
     expect(M.viewMatches("needs-you", agent({ status: "attention" }))).toBe(true);
     expect(M.viewMatches("needs-you", agent({ status: "running" }))).toBe(false);
@@ -4324,6 +4345,56 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* Regression: the alerted row that passed the filter and still never painted.
+     programRollup prefers the SERVER's rollup, and the server counts needsYou
+     over non-ended agents only. A live snapshot carried two programs whose agent
+     read activity "ended" (transcript stopped) while its process was still
+     running and its status was "attention" — server rollup needsYou: 0, so the
+     program stayed collapsed and the row was dropped from the plan. The agent
+     cleared the "now" filter and was invisible anyway. */
+  test("(3) a program holding an alerted agent expands even when its server rollup says needsYou: 0", () => {
+    const stranded = agent({
+      id: "codex:w6-server",
+      displayName: "Codex · w6-server",
+      status: "attention",
+      activity: "ended",
+      outcome: "needs-you",
+      processState: "running",
+    });
+    const program = {
+      id: "cwd-w6-server",
+      name: "w6-server",
+      agents: [stranded],
+      // Verbatim shape the server emitted for this program.
+      rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+    };
+
+    expect(M.viewMatches("now", stranded)).toBe(true); // clears the filter...
+    expect(M.programOpen(program, listUi())).toBe(true); // ...and now also paints.
+
+    const root = newNode("div");
+    const visible = [{ program, agents: [stranded] }];
+    const shown = withDom(() => M.syncProgramList(root, visible, listUi({
+      snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(shown).toBe(1);
+    const body = root.children[0].children[root.children[0].children.length - 1];
+    expect(body.children.length).toBe(2); // column header + the rescued row
+    const rowText = textOf(body.children[1]);
+    expect(rowText).toContain("Codex · w6-server");
+    expect(rowText).toContain("Alert"); // and it reads as needing a human
+
+    // The guard: a program of finished, healthy agents still collapses, so this
+    // cannot expand the 60+ done programs on a real board.
+    const quiet = {
+      id: "cwd-done",
+      name: "done",
+      agents: [agent({ id: "codex:done", status: "archived", activity: "ended", outcome: "healthy" })],
+      rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+    };
+    expect(M.programOpen(quiet, listUi())).toBe(false);
   });
 
   /* -------- finding 1: the quarantine dead end -----------------------------

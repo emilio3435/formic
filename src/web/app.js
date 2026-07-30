@@ -854,7 +854,12 @@ function viewMatches(view, agent) {
   const act = deriveActivity(agent);
   const out = deriveOutcome(agent);
   switch (view) {
-    case "now": return act === "working" || (act !== "ended" && out !== "healthy");
+    /* An alert outranks the activity clock. Gating "now" on act !== "ended"
+       hid agents the operator most needs: a session can read `ended` (its
+       transcript stopped) while its process is still `running` and it sits at
+       status "attention" — waiting on a human. Those rows appeared in NO
+       default view. Alerted agents belong here whatever the activity says. */
+    case "now": return act === "working" || out !== "healthy";
     case "needs-you": return act !== "ended" && out !== "healthy";
     case "working": return act === "working";
     case "idle": return act === "idle";
@@ -3299,7 +3304,14 @@ function programOpen(program, ui = state) {
   if (override) return override === "open";
   if (ui.view === "history") return false;
   const r = programRollup(program);
-  return r.needsYou > 0 || r.working > 0;
+  /* The rollup alone is not enough to decide this. programRollup prefers the
+     SERVER's rollup, whose needsYou counts only non-ended agents — so a program
+     holding an agent that reads `ended` while its process still runs and its
+     status is "attention" reports needsYou: 0 and stays collapsed. The row then
+     passes the "now" filter and still never paints. Ask the agents directly for
+     the alert case; the rollup keeps answering for working/needsYou. */
+  return r.needsYou > 0 || r.working > 0
+    || program.agents.some((a) => deriveOutcome(a) !== "healthy");
 }
 
 function toggleProgram(program) {
