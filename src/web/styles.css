@@ -1257,6 +1257,27 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--ember);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 22%, transparent);
 }
+/* Server-health mark — the server's own /api/health verdict, beside the
+   connection badge that carries this browser's view. Hidden entirely while the
+   server calls itself healthy, so it is a mark that only ever means trouble:
+   amber when the server disowns its snapshot, ember when it stops answering. */
+.server-health {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-left: 0.5rem;
+  align-self: center;
+}
+.server-health.is-stale {
+  background: var(--amber);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 22%, transparent);
+}
+.server-health.is-unreachable {
+  background: var(--failed);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--failed) 22%, transparent);
+}
+
 /* Watch-only mark — the Access column's replacement. Same geometry as
    .source-mismatch-dot so the row's dot vocabulary stays one shape; the ink
    carries the difference. Quarantined is a problem to fix (failed ink); plain

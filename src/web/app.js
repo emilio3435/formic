@@ -1554,6 +1554,9 @@ const state = {
   snap: null,
   fetchFailed: false,
   conn: "connecting", // connecting | live | reconnecting | stale | offline
+  // The server's own /api/health verdict. null until first polled; stays null
+  // in any environment without fetch, so the mark simply never speaks.
+  serverHealth: null,
   lastEventAt: 0,
   view: "now",
   query: "",
@@ -1978,6 +1981,72 @@ function feedAlarmNode(alarm) {
    masthead and the summary, in the operator's reading path, carrying the age and
    the one action that can fix it. `feed-frozen` on <body> is what lets the rest
    of the board grey itself out in the same beat. */
+/* ---------- server health probe (/api/health) ----------
+
+   The connection badge reports what THIS browser sees over SSE; the feed alarm
+   reports staleness the client computes from `snapshot.generatedAt`. Both are
+   client-side readings. `/api/health` is the server's own verdict on its own
+   snapshot, and it is the same signal scripts/anthill-deploy.sh gates a deploy
+   on — so an operator watching the dashboard now sees exactly what the deploy
+   health check sees.
+
+   Deliberately quiet: while the server agrees it is healthy this renders
+   nothing, because the two surfaces above already carry every healthy-state
+   fact and a third green light would just be a third thing to read. It speaks
+   only when the server disowns its own snapshot (verdict "stale") or stops
+   answering at all — the two cases the client-side readings can disagree with
+   or miss entirely (a wedged server can keep a socket open). */
+const SERVER_HEALTH_POLL_MS = 15_000;
+
+async function pollServerHealth(fetchImpl = typeof fetch === "function" ? fetch : null) {
+  if (!fetchImpl) return null;
+  let next;
+  try {
+    const res = await fetchImpl("/api/health", { headers: { accept: "application/json" } });
+    if (!res || res.ok !== true) {
+      next = { ok: false, verdict: "unreachable", detail: "Health check returned " + ((res && res.status) || "no response") + "." };
+    } else {
+      const body = await res.json();
+      next = body && body.ok === true
+        ? { ok: true, verdict: "healthy", detail: "" }
+        : {
+          ok: false,
+          verdict: (body && body.verdict) || "stale",
+          detail: "The server reports its own snapshot as "
+            + ((body && body.verdict) || "stale")
+            + (body && body.snapshot && Number.isFinite(body.snapshot.ageMs)
+              ? " (" + fmtElapsed(body.snapshot.ageMs) + " old)." : "."),
+        };
+    }
+  } catch {
+    // A refused/aborted request is itself the finding: the server is not answering.
+    next = { ok: false, verdict: "unreachable", detail: "The server did not answer its health check." };
+  }
+  state.serverHealth = next;
+  renderServerHealth();
+  return next;
+}
+
+function renderServerHealth() {
+  const node = $("server-health");
+  if (!node) return;
+  const health = state.serverHealth;
+  // Absent (not yet polled) and healthy both render nothing — see the note above.
+  const speak = !!health && health.ok !== true;
+  node.hidden = !speak;
+  if (!speak) {
+    node.className = "server-health";
+    node.textContent = "";
+    node.removeAttribute?.("title");
+    return;
+  }
+  node.className = "server-health is-" + (health.verdict === "unreachable" ? "unreachable" : "stale");
+  node.textContent = "";
+  node.setAttribute("role", "img");
+  node.setAttribute("title", "Server health: " + health.verdict + " — " + health.detail);
+  node.setAttribute("aria-label", "Server health: " + health.verdict + ". " + health.detail);
+}
+
 function renderFeedAlarm() {
   const bar = $("feed-alarm");
   if (!bar) return;
@@ -6971,7 +7040,19 @@ function renderUsageWard(ward, quotasOnly) {
   return section;
 }
 
-/* ---------- boot ---------- */
+/* ---------- boot ----------
+
+   boot() is exported and its timers are tracked so a test can drive the real
+   startup path instead of asserting against the source text of this file. The
+   guarded call at the bottom of the module still runs it exactly once in a
+   browser; nothing about page behaviour changes. stopBoot() exists purely so a
+   test can leave no interval running behind it. */
+
+const bootIntervals = [];
+
+function stopBoot() {
+  while (bootIntervals.length) clearInterval(bootIntervals.pop());
+}
 
 function boot() {
   loadOverrides();
@@ -7050,11 +7131,11 @@ function boot() {
     }
   });
 
-  setInterval(() => {
+  bootIntervals.push(setInterval(() => {
     pollConnectionHealth();
     tickClocks();
     void fetchTriageQueue();
-  }, 5000);
+  }, 5000));
 
   fetchSnapshot();
   fetchLabels();
@@ -7062,6 +7143,10 @@ function boot() {
   // One attempt at boot. It populates the drawer's "last action" fact, and on a
   // build without the route it latches available=false so nothing retries it.
   void loadActions();
+  // The server's own health verdict, on its own slower clock: it is a whole
+  // extra request, and a wedged server is not a sub-15s event.
+  void pollServerHealth();
+  bootIntervals.push(setInterval(() => { void pollServerHealth(); }, SERVER_HEALTH_POLL_MS));
   connect();
 }
 
@@ -7095,6 +7180,8 @@ Object.assign(globalThis.TheAntHill, {
   loadTranscript, loadActions, applyAttention,
   toggleSelect, enterSelectMode, selectedRecipients,
   // Surfaces added this wave, plus the const limits FE-C had to leave out.
+  // Startup path + the server-health probe, driven for real by tests.
+  boot, stopBoot, pollServerHealth, renderServerHealth, SERVER_HEALTH_POLL_MS,
   livenessState, livenessView, verdictLiveness,
   attentionRecord, attentionStateText, attentionErrorText, renderAttentionBlock,
   triageLifecycleControls, readEndpointOriginNote,

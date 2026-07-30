@@ -5804,3 +5804,123 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
       .toContain("no longer tracked");
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Server health probe + the real startup path.
+
+   Two gaps this closes. (1) /api/health had no client surface at all: the
+   endpoint gates scripts/anthill-deploy.sh but nothing on the board read it, so
+   the operator and the deploy could disagree about whether the server was
+   healthy. (2) boot() was unreachable from tests — not exported, and it runs
+   only behind a document/window guard — so the startup path was covered by
+   source-text assertions that cannot fail when the wiring breaks.
+
+   These drive both for real against the fake document and a fake fetch.
+   ------------------------------------------------------------------------- */
+describe("server health probe (/api/health)", () => {
+  test("stays silent while the server calls itself healthy", async () => {
+    await withRequests([{ status: 200, json: { ok: true, verdict: "healthy", snapshot: { ageMs: 900, maxAgeMs: 60000 } } }], async (calls) => {
+      const result = await M.pollServerHealth();
+      expect(calls[0].url).toContain("/api/health");
+      expect(result.ok).toBe(true);
+      // The connection badge and feed alarm already carry every healthy-state
+      // fact; a third green light would be a third thing to read. Hidden is the
+      // contract, not an accident of styling.
+      expect(M.state.serverHealth.ok).toBe(true);
+      const node = (globalThis as unknown as { document: any }).document.getElementById("server-health");
+      expect(node.hidden).toBe(true);
+    });
+    M.state.serverHealth = null;
+  });
+
+  test("speaks when the server disowns its own snapshot", async () => {
+    await withRequests([{ status: 200, json: { ok: false, verdict: "stale", snapshot: { ageMs: 240000, maxAgeMs: 60000 } } }], async () => {
+      const result = await M.pollServerHealth();
+      expect(result.ok).toBe(false);
+      expect(result.verdict).toBe("stale");
+      const node = (globalThis as unknown as { document: any }).document.getElementById("server-health");
+      expect(node.hidden).toBe(false);
+      expect(node.className).toContain("is-stale");
+      // The age must reach the operator, not just the boolean.
+      expect(node.attributes.title).toContain("stale");
+      expect(node.attributes["aria-label"]).toBeTruthy();
+    });
+    M.state.serverHealth = null;
+  });
+
+  test("a non-200 and a refused request both read as unreachable", async () => {
+    await withRequests([{ status: 503 }], async () => {
+      const result = await M.pollServerHealth();
+      expect(result.ok).toBe(false);
+      expect(result.verdict).toBe("unreachable");
+      const node = (globalThis as unknown as { document: any }).document.getElementById("server-health");
+      expect(node.className).toContain("is-unreachable");
+    });
+    await withRequests([new Error("connection refused")], async () => {
+      // A thrown request is itself the finding — it must not crash the poller.
+      const result = await M.pollServerHealth();
+      expect(result.ok).toBe(false);
+      expect(result.verdict).toBe("unreachable");
+    });
+    M.state.serverHealth = null;
+  });
+
+  test("both inks are defined and the markup slot exists", () => {
+    expect(styles).toContain(".server-health.is-stale");
+    expect(styles).toContain(".server-health.is-unreachable");
+    expect(html).toContain('id="server-health"');
+  });
+});
+
+describe("boot() is exported and drives the real startup path", () => {
+  test("boot wires the page, polls health, and stopBoot leaves no timers", async () => {
+    expect(typeof M.boot).toBe("function");
+    expect(typeof M.stopBoot).toBe("function");
+
+    // EventSource and localStorage are the two browser globals boot() needs that
+    // Bun does not provide. Stub them narrowly rather than adding a DOM library:
+    // this project has zero dependencies by design.
+    const G = globalThis as unknown as Record<string, any>;
+    const realES = G.EventSource;
+    const realLS = G.localStorage;
+    const store = new Map<string, string>();
+    G.localStorage = {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+    };
+    let opened = 0;
+    G.EventSource = class {
+      static OPEN = 1;
+      readyState = 1;
+      constructor() { opened += 1; }
+      addEventListener() {}
+      close() {}
+    };
+    try {
+      await withRequests([{ status: 200, json: { ok: true, verdict: "healthy", snapshot: { ageMs: 10, maxAgeMs: 60000 } } }], async (calls) => {
+        const doc = (globalThis as unknown as { document: any }).document;
+        doc.title = "The Ant Hill";
+        doc.addEventListener = () => {};
+        M.boot();
+        // boot() deliberately fires several requests without awaiting them, so
+        // let them settle while the fake document still exists — otherwise the
+        // harness tears down mid-flight and the client renders into nothing.
+        await Bun.sleep(10);
+        // The startup path must actually reach the network and the transport,
+        // which is exactly what a source-text assertion could never prove.
+        expect(opened).toBe(1);
+        const urls = calls.map((c) => c.url).join(" ");
+        expect(urls).toContain("/api/snapshot");
+        expect(urls).toContain("/api/health");
+        // Title is captured before any notification rewrites it.
+        expect(M.state.notify.baseTitle).toBe("The Ant Hill");
+      });
+    } finally {
+      M.stopBoot();
+      if (realES === undefined) delete G.EventSource; else G.EventSource = realES;
+      if (realLS === undefined) delete G.localStorage; else G.localStorage = realLS;
+      M.state.serverHealth = null;
+    }
+  });
+});

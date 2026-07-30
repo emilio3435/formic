@@ -27,6 +27,11 @@
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-label">Connecting</span>
         </p>
+        <!-- The server's OWN health verdict from /api/health, distinct from the
+             connection badge beside it (which reports this browser's SSE view).
+             Silent while the two agree; only speaks when the server disowns its
+             own snapshot or stops answering. -->
+        <span id="server-health" class="server-health" hidden></span>
       </div>
     </div>
   </header>
