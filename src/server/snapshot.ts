@@ -681,6 +681,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const snapshot: HubSnapshot = {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
+    modelConfig: {
+      displayLabels: MODEL_CONFIG.modelDisplayLabels,
+    },
     scanWindowHours,
     lookbackHours: scanWindowHours,
     controlHealth: {

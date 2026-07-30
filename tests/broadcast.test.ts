@@ -36,9 +36,9 @@ function agent(id: string, surfaceId: string, instruct = true): AgentSnapshot {
   };
 }
 
-function snapshot(agents: AgentSnapshot[]): HubSnapshot {
+function snapshot(agents: AgentSnapshot[], generatedAt = new Date().toISOString()): HubSnapshot {
   return {
-    schemaVersion: 1, generatedAt: "2026-07-22T07:00:00.000Z",
+    schemaVersion: 1, generatedAt,
     controlHealth: { cmuxReachable: true, lastCheckedAt: "2026-07-22T07:00:00.000Z", errors: [], staleSources: [] },
     totals: { live: agents.length, tracked: agents.length, attention: 0 },
     programs: [{ id: "program", name: "Program", agents }],
@@ -53,6 +53,35 @@ function post(body: unknown): Request {
 }
 
 describe("safe sequential broadcast", () => {
+  test("rejects stale routing evidence before constructing any cmux command", async () => {
+    const runner = new RecordingRunner();
+    const now = Date.parse("2026-07-22T07:00:31.001Z");
+    const response = await handleBroadcastRequest(
+      post({ agentIds: ["first", "second"], instruction: "Check in." }),
+      {
+        runner,
+        archiveStore,
+        getSnapshot: () => snapshot(
+          [agent("first", "S1"), agent("second", "S2")],
+          "2026-07-22T07:00:01.000Z",
+        ),
+        now: () => now,
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: {
+        code: "STALE_SNAPSHOT",
+        message: "Control routing evidence is 30001ms old; recollect before retrying.",
+        ageMs: 30_001,
+        maxAgeMs: 30_000,
+      },
+    });
+    expect(runner.commands).toEqual([]);
+  });
+
   test("sends the same instruction sequentially and refreshes exactly once", async () => {
     const runner = new RecordingRunner();
     let refreshes = 0;

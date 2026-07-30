@@ -350,6 +350,9 @@ export interface ControlHealth {
 export interface HubSnapshot {
   schemaVersion: 1;
   generatedAt: string;
+  modelConfig?: {
+    displayLabels: Record<string, string>;
+  };
   /** Collector scan window in hours (how far back sources are harvested). */
   scanWindowHours?: number;
   /** Alias of scanWindowHours for provenance labeling. */

@@ -4,6 +4,7 @@ import { join } from "node:path";
 export interface ModelConfig {
   claudeContextWindows: Record<string, number>;
   modelFamilyAliases: Record<string, string[]>;
+  modelDisplayLabels: Record<string, string>;
   cursorNativeFamilies: string[];
   cursorRootModel: string;
 }
@@ -21,6 +22,16 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "gpt-5.6-sol": ["gpt-5.6-sol"],
     "claude-fable-5": ["claude-fable-5", "fable-5"],
   },
+  modelDisplayLabels: {
+    "claude-fable-5": "fable 5",
+    "claude-opus-4-8": "opus 4.8",
+    "claude-sonnet-5": "sonnet 5",
+    "composer-2": "composer 2",
+    "composer-2.5": "composer 2.5",
+    "gpt-5.6-luna": "luna 5.6",
+    "gpt-5.6-sol": "sol 5.6",
+    "grok-4.5": "grok 4.5",
+  },
   // Cursor's own model families. A session running any of these is compliant
   // with Cursor-native routing; reported non-native models are violations.
   cursorNativeFamilies: ["grok-4.5", "cursor-grok-4.5", "composer-2", "composer-2.5"],
@@ -34,6 +45,8 @@ function isModelConfig(value: unknown): value is ModelConfig {
     Array.isArray(config.claudeContextWindows)) return false;
   if (!config.modelFamilyAliases || typeof config.modelFamilyAliases !== "object" ||
     Array.isArray(config.modelFamilyAliases)) return false;
+  if (!config.modelDisplayLabels || typeof config.modelDisplayLabels !== "object" ||
+    Array.isArray(config.modelDisplayLabels)) return false;
   if (typeof config.cursorRootModel !== "string" || !config.cursorRootModel.trim()) return false;
   if (!Object.values(config.claudeContextWindows).every(
     (window) => typeof window === "number" && Number.isFinite(window) && window > 0,
@@ -42,6 +55,12 @@ function isModelConfig(value: unknown): value is ModelConfig {
     !config.cursorNativeFamilies.every((family) => typeof family === "string" && family.trim())) {
     return false;
   }
+  if (!Object.entries(config.modelDisplayLabels).every(
+    ([model, label]) =>
+      model.trim() &&
+      typeof label === "string" &&
+      label.trim(),
+  )) return false;
   return Object.entries(config.modelFamilyAliases).every(
     ([family, aliases]) =>
       family.trim() &&

@@ -11,6 +11,16 @@
     "gpt-5.6-sol": ["gpt-5.6-sol"],
     "claude-fable-5": ["claude-fable-5", "fable-5"]
   },
+  "modelDisplayLabels": {
+    "claude-fable-5": "fable 5",
+    "claude-opus-4-8": "opus 4.8",
+    "claude-sonnet-5": "sonnet 5",
+    "composer-2": "composer 2",
+    "composer-2.5": "composer 2.5",
+    "gpt-5.6-luna": "luna 5.6",
+    "gpt-5.6-sol": "sol 5.6",
+    "grok-4.5": "grok 4.5"
+  },
   "cursorNativeFamilies": ["grok-4.5", "cursor-grok-4.5", "composer-2", "composer-2.5"],
   "cursorRootModel": "Grok 4.5 Fast",
   "pricingVersion": "2026-07-28",

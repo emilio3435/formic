@@ -375,6 +375,7 @@ function createCodexParser(): IncrementalParser {
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
   let tokens: TokenUsage = { provenance: "unknown" };
+  let exited = false;
   let index = 0;
 
   return {
@@ -387,9 +388,11 @@ function createCodexParser(): IncrementalParser {
         const payload = row.payload ?? row;
         if (typeof payload.effort === "string" && payload.effort.trim()) effort = payload.effort.trim();
         if (row.type === "event_msg" && payload.type === "user_message") {
+          exited = false;
           task = nextTask(task, payload.message);
           recordHumanMessage("codex", messages, { role: "user", content: payload.message }, rowIndex);
         }
+        if (row.type === "event_msg" && payload.type === "task_complete") exited = true;
         if (payload.type === "token_count" && payload.info?.total_token_usage) {
           const sessionUsage = payload.info.total_token_usage;
           const usage = payload.info.last_token_usage ?? sessionUsage;
@@ -410,7 +413,10 @@ function createCodexParser(): IncrementalParser {
         }
         if (row.type === "response_item" && payload.type === "message") {
           const text = plainText(payload.content);
-          if (payload.role === "user") task = nextTask(task, payload.content);
+          if (payload.role === "user") {
+            exited = false;
+            task = nextTask(task, payload.content);
+          }
           if (payload.role === "user" || payload.role === "assistant") {
             recordHumanMessage("codex", messages, {
               role: payload.role,
@@ -453,6 +459,7 @@ function createCodexParser(): IncrementalParser {
         nickname,
         transcriptTail: tail,
         humanMessages: humanMessages(messages),
+        exited,
         meta,
       });
     },
@@ -506,6 +513,7 @@ function createClaudeParser(): IncrementalParser {
     cacheCreationInput: number;
   }>();
   let anonymousUsage = 0;
+  let exited = false;
   let index = 0;
 
   return {
@@ -531,9 +539,11 @@ function createClaudeParser(): IncrementalParser {
         }
         const text = plainText(row.message?.content);
         if (row.type === "user") {
+          if (row.isMeta !== true) exited = false;
           if (isTaskBoundary(row.message?.content)) task = undefined;
           else if (row.isMeta !== true) task = task ?? userTask(row.message?.content);
         }
+        if (row.type === "assistant" && row.message?.stop_reason === "end_turn") exited = true;
         if (text) tail = text;
         if ((row.type === "user" || row.type === "assistant") &&
           (row.message?.role === "user" || row.message?.role === "assistant")) {
@@ -593,6 +603,7 @@ function createClaudeParser(): IncrementalParser {
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
         humanMessages: humanMessages(messages),
+        exited,
         meta,
       });
     },
@@ -656,6 +667,19 @@ async function readFileRange(path: string, offset: number, length: number): Prom
   } finally {
     await handle.close();
   }
+}
+
+function retainProcessEvidence(
+  agent: CollectedAgent | null,
+  previous: CollectedAgent | null | undefined,
+): CollectedAgent | null {
+  if (!agent || !previous?.processIds?.length) return agent;
+  return {
+    ...agent,
+    processIds: [...previous.processIds],
+    processAlive: previous.processAlive,
+    transcriptOpen: previous.transcriptOpen,
+  };
 }
 
 async function collectProvider(
@@ -723,7 +747,10 @@ async function collectProvider(
         }
         const complete = completeJsonRecords(Buffer.concat([prefix, chunk]));
         incremental.append(complete.rows);
-        const parsed = incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs });
+        const parsed = retainProcessEvidence(
+          incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs }),
+          canAppend ? cached.agent : undefined,
+        );
         fileCache.set(path, {
           provider,
           dev: details.dev,
