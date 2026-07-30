@@ -18,6 +18,33 @@ const emptySessions = () => ({
 });
 
 describe("cmux collection time truth", () => {
+  test("boot and issue decoration retain a coherent, current pulse across repeated reads", () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, []);
+
+    const boot = state.get();
+    expect(boot.pulse?.momentum).toMatchObject({
+      completionsLastHour: 0,
+      observedWindowMs: 0,
+    });
+    expect(state.get().pulse?.momentum.completionsLastHour).toBe(boot.pulse?.momentum.completionsLastHour);
+
+    nowMs += 20 * 60_000;
+    state.markIssueVerifying("system:cmux-control");
+    const decorated = state.get();
+    expect(decorated.pulse?.momentum).toMatchObject({
+      completionsLastHour: 0,
+      observedWindowMs: 20 * 60_000,
+    });
+    expect(state.get().pulse?.momentum.completionsLastHour).toBe(decorated.pulse?.momentum.completionsLastHour);
+    now.mockRestore();
+  });
+
   test("passes the runtime executable to terminal and notification discovery", async () => {
     const executables: string[] = [];
     const collectors: HubCollectors = {

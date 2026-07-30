@@ -68,7 +68,7 @@ export class HubState {
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
     this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
-    this.#snapshot = this.#withSourceHealth(buildSnapshot({
+    const initialSnapshot = this.#withSourceHealth(buildSnapshot({
       agents: [],
       surfaces: [],
       archiveStore,
@@ -81,6 +81,7 @@ export class HubState {
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
     }));
+    this.#snapshot = withPulse(initialSnapshot, this.#pulse.report(Date.now()));
   }
 
   get(): HubSnapshot {
@@ -122,10 +123,11 @@ export class HubState {
       issue.id === issueId ? { ...issue, lifecycle } : issue,
     );
     if (issues.every((issue, index) => issue === this.#snapshot.issues?.[index])) return;
-    this.#snapshot = withIssueDecoration(
+    const decorated = withIssueDecoration(
       { ...this.#snapshot, issues },
       this.triageReader?.() ?? this.#snapshot.triageSummaries,
     );
+    this.#snapshot = withPulse(decorated, this.#pulse.report(Date.now()));
     for (const listener of this.#listeners) listener(this.#snapshot);
   }
 

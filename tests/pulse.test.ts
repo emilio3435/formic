@@ -95,6 +95,18 @@ describe("PulseTracker", () => {
     expect(tracker.report(base + HOUR_MS + 3_000).momentum.completionsLastHour).toBe(0);
   });
 
+  test("uses the agent completion time rather than the later observation time", () => {
+    const tracker = new PulseTracker(undefined, base);
+    tracker.observe(snapshot([agent({ updatedAt: iso(base) })]), base);
+    tracker.observe(
+      snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + 60_000) })]),
+      base + 50 * 60_000,
+    );
+
+    expect(tracker.report(base + 50 * 60_000).momentum.completionsLastHour).toBe(1);
+    expect(tracker.report(base + HOUR_MS + 60_001).momentum.completionsLastHour).toBe(0);
+  });
+
   test("includes only healthy live sessions quiet for at least fifteen minutes", () => {
     const now = base + HOUR_MS;
     const tracker = new PulseTracker(undefined, base);

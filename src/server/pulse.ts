@@ -80,8 +80,13 @@ export class PulseTracker {
       const completed = previous?.lastActivity === "working"
         && (agent.activity === "idle" || agent.activity === "ended");
       if (completed) {
-        this.#completions.push(nowMs);
-        currentBucket.completions += 1;
+        const completionAtMs = Number.isFinite(lastUpdatedAtMs)
+          ? Math.min(lastUpdatedAtMs, nowMs)
+          : nowMs;
+        if (completionAtMs >= nowMs - HOUR_MS) {
+          this.#completions.push(completionAtMs);
+          this.#ensureBucket(Math.floor(completionAtMs / BUCKET_MS) * BUCKET_MS).completions += 1;
+        }
       }
 
       if (
