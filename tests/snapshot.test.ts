@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildSnapshot,
   impactSummaryFor,
@@ -7,9 +9,18 @@ import {
   withIssueDecoration,
   withPulse,
 } from "../src/server/snapshot";
+import { parseOmpJsonl } from "../src/server/collectors";
+import {
+  bridgeAgentsWithBindings,
+  MemoryIdentityBindingStore,
+  updateBindingsFromScan,
+} from "../src/server/identity-bindings";
 import { PulseTracker } from "../src/server/pulse";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
 import type { HubPulse, IssueLifecycle, OperatorIssue } from "../src/shared/types";
+
+const fixture = (name: string): string =>
+  readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
 
 const archiveStore: ArchiveStore = {
   has: () => false,
@@ -1007,4 +1018,232 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshotFingerprint(laterWithPulse)).toBe(snapshotFingerprint(firstWithPulse));
   });
 
+});
+
+/* ---------------------------------------------------------------------------
+   W5-B follow-up.
+
+   The four ProcessState values already had a test, but it hand-set
+   `processAlive` / `transcriptEndedCleanly` on the CollectedAgent — so it
+   exercised processStateFor() and nothing that PRODUCES those fields. Measured
+   against a live fleet, `exited` and `died` never appeared: 82 of 97 agents
+   carried no process evidence at all. These tests drive the real producers —
+   the OMP parser and the identity-binding bridge — into buildSnapshot, so the
+   chain that has to work in production is the chain under test.
+   ------------------------------------------------------------------------- */
+describe("process liveness, produced by the real collector and binding paths", () => {
+  const BOUND_SESSION = "019f86c4-1558-7000-aeb8-26e2cfd0e8ec";
+
+  function boundSurface(overrides: Partial<CmuxSurface["identityTrace"]> = {}): CmuxSurface {
+    return {
+      surfaceId: "SURFACE-BOUND",
+      workspaceId: "WORKSPACE-BOUND",
+      paneId: "PANE-BOUND",
+      tty: "ttys033",
+      sourceSessionIds: [BOUND_SESSION],
+      identityTrace: {
+        surfaceId: "SURFACE-BOUND",
+        tty: "ttys033",
+        processes: [{ pid: 4242, command: "codex resume", recognizedAgentProcess: true }],
+        openFileMatches: [{
+          pid: 4242,
+          path: `/Users/me/.codex/sessions/rollout-${BOUND_SESSION}.jsonl`,
+          provider: "codex",
+          sessionId: BOUND_SESSION,
+        }],
+        commandHints: [],
+        outcome: "open-file-match",
+        sourceSessionIds: [BOUND_SESSION],
+        ...overrides,
+      },
+    };
+  }
+
+  const boundAgent = (overrides: Partial<CollectedAgent> = {}): CollectedAgent => collected({
+    id: `codex:${BOUND_SESSION}`,
+    sourceSessionId: BOUND_SESSION,
+    ...overrides,
+  });
+
+  test("a recorded session exit reaches processState 'exited' through the real OMP parser", () => {
+    // The real fixture plus the one row under test. `exited` is detected in
+    // exactly one place in the whole collector (createOmpParser's
+    // `row.type === "custom" && row.data?.kind === "session_exit"`), so this is
+    // the only path by which any agent can ever read "exited".
+    const source = parseOmpJsonl(
+      `${fixture("omp-session.jsonl")}\n${JSON.stringify({
+        type: "custom",
+        timestamp: "2026-07-21T22:21:00.000Z",
+        data: { kind: "session_exit" },
+      })}`,
+      { sourcePath: "/Users/me/.omp/agent/sessions/p/session.jsonl", nowMs: Date.parse("2026-07-21T23:31:00.000Z") },
+    );
+    // Produced, not planted.
+    expect(source?.transcriptEndedCleanly).toBe(true);
+
+    const snapshot = buildSnapshot({
+      agents: [source!],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:31:00.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0]!;
+    expect(agent.processState).toBe("exited");
+    // A clean exit is an ending, and it stays one.
+    expect(agent.activity).toBe("ended");
+  });
+
+  test("a crashed process in a still-open terminal reaches 'died' through the real binding bridge", async () => {
+    const store = new MemoryIdentityBindingStore();
+    // Scan 1: lsof confirms the session on pid 4242, so the binding records it.
+    await updateBindingsFromScan(store, [boundSurface()], "2026-07-23T06:00:00.000Z");
+    expect(store.get(BOUND_SESSION)?.processIds).toEqual([4242]);
+
+    // Scan 2: the terminal is still open and still probes cleanly, but 4242 is
+    // gone from it. That is the one shape that can honestly mean "died".
+    const crashed = boundSurface({ processes: [], openFileMatches: [], outcome: "no-evidence" });
+    const [bridged] = bridgeAgentsWithBindings(store, [boundAgent()], [crashed]);
+    expect(bridged).toMatchObject({ processIds: [4242], processAlive: false });
+
+    const snapshot = buildSnapshot({
+      agents: [bridged!],
+      surfaces: [crashed],
+      archiveStore,
+      now: new Date("2026-07-23T06:01:00.000Z"),
+    });
+    expect(snapshot.programs.flatMap(({ agents }) => agents)[0]!.processState).toBe("died");
+  });
+
+  test("a terminal that has gone reports unknown, and is never accused of dying", async () => {
+    const store = new MemoryIdentityBindingStore();
+    await updateBindingsFromScan(store, [boundSurface()], "2026-07-23T06:00:00.000Z");
+
+    // The bound surface is absent from this scan — the terminal closed. There is
+    // no trustworthy process scan to read, so there is no verdict to give. This
+    // is the shape 82 of 97 live agents were in; if `trustworthyProcessScan`
+    // ever collapses, every one of them starts reading as a dead process.
+    const [bridged] = bridgeAgentsWithBindings(store, [boundAgent()], []);
+    expect(bridged!.processIds).toEqual([4242]);
+    expect(bridged!.processAlive).toBeUndefined();
+
+    const snapshot = buildSnapshot({
+      agents: [bridged!],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-23T06:01:00.000Z"),
+    });
+    expect(snapshot.programs.flatMap(({ agents }) => agents)[0]!.processState).toBe("unknown");
+  });
+
+  test("death is never claimed without knowing which process died", () => {
+    // processAlive false with no pids on file is not evidence of a death; it is
+    // an absent binding. Reading it as "died" would invent a corpse.
+    const snapshot = buildSnapshot({
+      agents: [boundAgent({ processAlive: false, processIds: [] })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-23T06:01:00.000Z"),
+    });
+    expect(snapshot.programs.flatMap(({ agents }) => agents)[0]!.processState).toBe("unknown");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   W5-B follow-up: the "ended + running" ghosts.
+
+   `statusFrom()` marks a transcript `stale` after 45 silent minutes, at parse
+   time, before any process evidence exists. activityFor() turned that into
+   "ended", and operatorControlState() turns "ended" into `observed-only` — so a
+   session that was alive, linked and holding an unread notification was filed
+   as history with its controls removed, while its own controls[] array still
+   said focus/instruct were enabled. Measured live: 4 ghosts, 6 agents in that
+   contradiction, 3 of them asking for a human.
+   ------------------------------------------------------------------------- */
+describe("a stale transcript is silence, not an ending", () => {
+  const staleSession = (overrides: Partial<CollectedAgent> = {}): CollectedAgent => collected({
+    id: "codex:quiet-but-alive",
+    sourceSessionId: "quiet-but-alive",
+    status: "stale",
+    statusReason: "No source activity in the last 45 minutes.",
+    updatedAt: "2026-07-21T22:00:00.000Z",
+    ...overrides,
+  });
+
+  const linkedSurface = { ...uniqueSurface, sourceSessionIds: ["quiet-but-alive"] };
+
+  function build(agent: CollectedAgent) {
+    const snapshot = buildSnapshot({
+      agents: [agent],
+      surfaces: [linkedSurface],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    return snapshot.programs.flatMap(({ agents }) => agents)[0]!;
+  }
+
+  test("a provably live process keeps a quiet session idle, linked and controllable", () => {
+    const live = build(staleSession({ processIds: [4242], processAlive: true }));
+
+    expect(live.activity).toBe("idle");
+    expect(live.processState).toBe("running");
+    // The whole point: the controls come back. `observed-only` here contradicted
+    // the agent's own controls[], which reported focus/instruct as enabled.
+    expect(live.controlState).toBe("linked");
+    expect(live.controls.find(({ action }) => action === "instruct")?.enabled).toBe(true);
+    // And the operator is no longer sent to history to find a running session.
+    expect(live.nextAction).not.toContain("history");
+  });
+
+  test("the elapsed clock keeps running for a session that never ended", () => {
+    const live = build(staleSession({ processIds: [4242], processAlive: true }));
+    const ghost = build(staleSession());
+
+    // Frozen at the last transcript write for a real ending...
+    expect(ghost.elapsedMs).toBe(Date.parse("2026-07-21T22:00:00.000Z") - Date.parse("2026-07-21T20:00:00.000Z"));
+    // ...and still running for a session that is merely quiet.
+    expect(live.elapsedMs).toBe(Date.parse("2026-07-21T23:00:30.000Z") - Date.parse("2026-07-21T20:00:00.000Z"));
+    expect(live.elapsedMs).toBeGreaterThan(ghost.elapsedMs!);
+  });
+
+  test("absent liveness evidence still ends a quiet session", () => {
+    // Absent-first, unchanged. This is every agent whose terminal has gone, and
+    // it is the majority of the fleet — silence alone must still read as ended.
+    const ghost = build(staleSession());
+    expect(ghost.processState).toBe("unknown");
+    expect(ghost.activity).toBe("ended");
+    expect(ghost.controlState).toBe("observed-only");
+
+    // A process the scan proved is GONE ends the session too — only positive
+    // evidence of life can keep it open.
+    const dead = build(staleSession({ processIds: [4242], processAlive: false }));
+    expect(dead.processState).toBe("died");
+    expect(dead.activity).toBe("ended");
+  });
+
+  test("a recorded session exit still ends the session, whatever the pid table says", () => {
+    // `archived` is the source saying "this session is over". It outranks a
+    // live pid, which after an exit is a shell, not an agent.
+    const exited = build(staleSession({
+      status: "archived",
+      transcriptEndedCleanly: true,
+      processIds: [4242],
+      processAlive: true,
+    }));
+    expect(exited.activity).toBe("ended");
+  });
+
+  test("the rescued sessions move out of history and into the live totals", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        staleSession({ id: "codex:alive-1", sourceSessionId: "alive-1", processIds: [1], processAlive: true }),
+        staleSession({ id: "codex:alive-2", sourceSessionId: "alive-2", processIds: [2], processAlive: true }),
+        staleSession({ id: "codex:really-ended", sourceSessionId: "really-ended" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    // Two quiet-but-alive sessions are live; only the evidence-free one is history.
+    expect(snapshot.totals).toMatchObject({ idle: 2, ended: 1, history: 1 });
+  });
 });

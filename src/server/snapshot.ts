@@ -171,7 +171,27 @@ function controlsFor(agent: CollectedAgent, target: AgentSnapshot["target"], arc
 }
 
 function activityFor(agent: CollectedAgent, archived: boolean): ActivityState {
-  if (archived || agent.status === "archived" || agent.status === "stale") return "ended";
+  if (archived || agent.status === "archived") return "ended";
+  /* `stale` is not an ending. It is `statusFrom()` observing that the transcript
+     has not been written for 45 minutes, decided at parse time, before any
+     process evidence exists on the record. A session that is waiting at a
+     prompt, blocked on a long build, or wedged writes nothing for 45 minutes
+     and is alive in all three cases.
+
+     Calling that "ended" is not a cosmetic mislabel — it costs the operator the
+     controls. `operatorControlState(target, activity === "ended")` downgrades
+     the agent to `observed-only` while its own `controls[]` array still reports
+     focus/instruct as ENABLED, and `nextActionFor` sends the operator to
+     "Review this session in history." Measured on a live fleet: 6 agents in
+     that contradiction, 3 of them holding an unread cmux notification — asking
+     for a human from a session the board had filed as finished.
+
+     So silence plus a PROVABLY live process is idle, not ended. Absent-first is
+     preserved exactly: `processAlive` undefined still reads "ended", which is
+     every agent whose terminal has gone. Only positive evidence moves the
+     verdict, and only `archived` — a session exit the source actually recorded
+     — can still end a session outright. */
+  if (agent.status === "stale") return agent.processAlive === true ? "idle" : "ended";
   if (agent.status === "running") return "working";
   if (agent.status === "waiting" || agent.status === "attention") return "idle";
   return "unknown";
@@ -575,9 +595,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
-    const ended = archived || source.status === "stale";
-    const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
     const activity = activityFor(source, archived);
+    // Freeze the elapsed clock only for a session that really ended. This used
+    // to re-derive `archived || status === "stale"` independently of
+    // activityFor, so a live-but-quiet session had its clock frozen by the same
+    // inference that mislabelled it — one verdict, read in two places.
+    const ended = activity === "ended";
+    const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
     const outcome = outcomeFor(source, archived, Boolean(notification));
     const controlState = operatorControlState(target, archived || activity === "ended");
     const contextPct = contextPctFor(source);
