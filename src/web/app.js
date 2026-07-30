@@ -2150,6 +2150,11 @@ function render() {
   renderConn();
   renderFeedAlarm();
   renderHealthRail();
+  // The toggle now carries a snapshot-derived count, so it has to repaint with
+  // the board. It used to be painted once in boot() and on click, which was
+  // fine while the label was pure preference state — but boot() runs before the
+  // first snapshot, so the badge would have been stuck at zero forever.
+  renderNotifyToggle();
   renderTabs();
   renderFilterBar();
   renderPrograms();
