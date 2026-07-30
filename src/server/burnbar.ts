@@ -387,6 +387,17 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+/**
+ * OpenBurnBar's GRDB Date values are UTC text in `yyyy-MM-dd HH:mm:ss.SSS`
+ * form. Keep query bounds in that form: SQLite compares DATETIME TEXT
+ * lexicographically, so ISO `T...Z` bounds exclude those rows.
+ */
+export function toBurnBarTimestamp(timestamp: string): string {
+  const milliseconds = Date.parse(timestamp);
+  if (!Number.isFinite(milliseconds)) throw new Error("Invalid ISO timestamp.");
+  return new Date(milliseconds).toISOString().replace("T", " ").replace("Z", "");
+}
+
 const HEALTHY_SOURCE: UsageSourceHealth = {
   state: "healthy",
   message: "OpenBurnBar cost source is available.",
@@ -430,6 +441,7 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
 
 export async function getUsageSummary(from: string, to: string): Promise<UsageSummary> {
   try {
+    const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
     const rows = await runEncryptedQuery(
       `SELECT
          provider,
@@ -446,7 +458,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
        WHERE startTime >= ? AND startTime < ?
        GROUP BY provider, model
        ORDER BY tokens DESC`,
-      [from, to],
+      [dbFrom, dbTo],
     );
     const byModel = rows.map((row) => {
       const costMissing = num(row.costMissing) ?? 0;
@@ -551,6 +563,7 @@ export async function getUsageSeries(
     };
   }
   try {
+    const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
     const rows = await runEncryptedQuery(
       `SELECT
          ${bucketSql} AS bucketStart,
@@ -568,7 +581,7 @@ export async function getUsageSeries(
        WHERE startTime >= ? AND startTime < ?
        GROUP BY bucketStart, provider, model
        ORDER BY bucketStart ASC, provider ASC, model ASC`,
-      [from, to],
+      [dbFrom, dbTo],
     );
     return {
       ok: true,
@@ -630,6 +643,7 @@ export async function getUsageInvocations(
 ): Promise<UsageInvocationsResponse> {
   const capped = Math.max(1, Math.min(limit, 500));
   try {
+    const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
     const rows = await runEncryptedQuery(
       `SELECT id, provider, model, sessionId, projectName, totalTokens,
               inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
@@ -638,7 +652,7 @@ export async function getUsageInvocations(
        WHERE startTime >= ? AND startTime < ?
        ORDER BY startTime DESC
        LIMIT ?`,
-      [from, to, capped],
+      [dbFrom, dbTo, capped],
     );
     return {
       ok: true,
@@ -747,6 +761,11 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
   const duration = Math.max(toMs - fromMs, 60_000);
   const baselineFrom = new Date(fromMs - duration).toISOString();
   try {
+    const [dbFrom, dbTo, dbBaselineFrom] = [
+      toBurnBarTimestamp(from),
+      toBurnBarTimestamp(to),
+      toBurnBarTimestamp(baselineFrom),
+    ];
     const [current, baseline, quotas] = await Promise.all([
       runEncryptedQuery(
         `SELECT provider, COALESCE(model, 'unknown') AS model,
@@ -754,7 +773,7 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
          FROM token_usage
          WHERE startTime >= ? AND startTime < ?
          GROUP BY provider, model`,
-        [from, to],
+        [dbFrom, dbTo],
       ),
       runEncryptedQuery(
         `SELECT provider, COALESCE(model, 'unknown') AS model,
@@ -762,7 +781,7 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
          FROM token_usage
          WHERE startTime >= ? AND startTime < ?
          GROUP BY provider, model`,
-        [baselineFrom, from],
+        [dbBaselineFrom, dbFrom],
       ),
       getUsageQuotas(),
     ]);
