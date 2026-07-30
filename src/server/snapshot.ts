@@ -269,6 +269,22 @@ function effortFor(agent: CollectedAgent): string | undefined {
   return undefined;
 }
 
+function contextPctFor(agent: CollectedAgent): number | undefined {
+  const { contextWindow, provenance, scope, sessionTotal } = agent.tokens;
+  if (
+    provenance !== "observed" ||
+    scope === "unknown" ||
+    !Number.isFinite(contextWindow) ||
+    !Number.isFinite(sessionTotal) ||
+    !contextWindow ||
+    !sessionTotal ||
+    contextWindow < 0 ||
+    sessionTotal < 0 ||
+    sessionTotal > contextWindow
+  ) return undefined;
+  return Math.round((sessionTotal / contextWindow) * 100);
+}
+
 function nextActionFor(
   activity: ActivityState,
   outcome: OutcomeState,
@@ -564,6 +580,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const activity = activityFor(source, archived);
     const outcome = outcomeFor(source, archived, Boolean(notification));
     const controlState = operatorControlState(target, archived || activity === "ended");
+    const contextPct = contextPctFor(source);
     const snapshotStatusReason = archived
       ? "Archived by source or operator."
       : notificationSummary
@@ -580,6 +597,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       controlState,
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
+      ...(contextPct === undefined ? {} : { contextPct }),
       nextAction: nextActionFor(activity, outcome, controlState),
       modelPolicy: cursorModelPolicy(source, sourcesById),
       parentAgentId: source.parentSourceSessionId
