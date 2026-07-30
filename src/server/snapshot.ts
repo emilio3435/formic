@@ -681,6 +681,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     : tokenValues.length % 2 === 1
       ? tokenValues[(tokenValues.length - 1) / 2]
       : Math.round((tokenValues[tokenValues.length / 2 - 1]! + tokenValues[tokenValues.length / 2]!) / 2);
+  const contextValues = liveAgents
+    .map((agent) => agent.contextPct)
+    .filter((value): value is number => typeof value === "number")
+    .sort((left, right) => left - right);
+  const contextPeak = contextValues.length === 0 ? undefined : contextValues[contextValues.length - 1];
+  const contextMedian = contextValues.length === 0
+    ? undefined
+    : contextValues.length % 2 === 1
+      ? contextValues[(contextValues.length - 1) / 2]
+      : Math.round((contextValues[contextValues.length / 2 - 1]! + contextValues[contextValues.length / 2]!) / 2);
   const sourceErrors = Object.values(input.sourceErrors ?? {}).flat();
   const cmuxErrors = [...(input.cmuxErrors ?? [])];
   const staleSources = (Object.entries(input.sourceErrors ?? {}) as [Provider, readonly string[]][])
@@ -710,6 +720,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     },
     scanWindowHours,
     lookbackHours: scanWindowHours,
+    contextPeak,
+    contextMedian,
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? cmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),

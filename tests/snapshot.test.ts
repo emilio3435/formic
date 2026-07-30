@@ -404,6 +404,70 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.totals.tokenMedian).toBe(42);
   });
 
+  test("reports peak and median context across live agents", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 50 } }),
+        collected({ id: "codex:high", sourceSessionId: "high", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 90 } }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBe(90);
+    expect(snapshot.contextMedian).toBe(50);
+  });
+
+  test("leaves context peak and median undefined without live context reports", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected(),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBeUndefined();
+    expect(snapshot.contextMedian).toBeUndefined();
+  });
+
+  test("excludes ended and archived agents from context peak and median", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 40 } }),
+        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 100 } }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBe(40);
+    expect(snapshot.contextMedian).toBe(30);
+  });
+
+  test("rounds the even live-agent context median", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 10 } }),
+        collected({ id: "codex:twenty", sourceSessionId: "twenty", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
+        collected({ id: "codex:seventy", sourceSessionId: "seventy", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 70 } }),
+        collected({ id: "codex:eighty", sourceSessionId: "eighty", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 80 } }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBe(80);
+    expect(snapshot.contextMedian).toBe(45);
+  });
+
   test("Cursor model policy distinguishes Grok, non-Grok, and unreported sessions", () => {
     const snapshot = buildSnapshot({
       agents: [
