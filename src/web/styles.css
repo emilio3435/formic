@@ -385,6 +385,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
+/* Degraded severity class, ahead of the reason. Blocking takes ember (the
+   intervention ink used everywhere an operator is actually stuck); stale and
+   advisory take amber, because the board still works. A mono chip like
+   .reading-repair below rather than a banner — this is a qualifier on a
+   sentence, not an alarm. */
+.health-severity {
+  margin-right: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+.health-severity-blocking { color: var(--ember); background: var(--ember-soft); }
 /* Degraded verdict's inline repair: re-pull the latest snapshot evidence.
    A quiet mono instrument chip — the amber ink signals status without a filled
    hospital-banner flood. */

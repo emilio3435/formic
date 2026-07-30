@@ -1209,6 +1209,41 @@ function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
   return { key: "operational", label: "Operational", tone: "ok" };
 }
 
+/* "Degraded" answers WHETHER something is wrong and never the only question an
+   operator actually has: am I blocked, or is this cosmetic? Those are wildly
+   different — cmux unreachable means Focus and Send are dead and no amount of
+   waiting helps, while 15 identity-conflict warnings mean the board is fully
+   usable and someone should tidy up later. Both rendered the same word.
+
+   Three classes, most severe first. Returns null when nothing is wrong, so the
+   Operational card is untouched. */
+const DEGRADED_SEVERITY = {
+  blocking: { key: "blocking", label: "Blocking", detail: "Operator actions are unavailable." },
+  stale: { key: "stale", label: "Stale", detail: "Numbers on screen may no longer be true." },
+  advisory: { key: "advisory", label: "Advisory", detail: "The board is usable; evidence needs tidying." },
+};
+
+function degradedSeverity(snap, conn = "live", fetchFailed = state.fetchFailed) {
+  if (systemStatus(snap, conn, fetchFailed).key === "operational") return null;
+  const control = snap && snap.controlHealth;
+  // Blocking: the control plane is gone, so Focus/Send cannot route at all.
+  // This is the one state where waiting does not help.
+  if (!snap || conn === "offline" || !control || control.cmuxReachable !== true) {
+    return { ...DEGRADED_SEVERITY.blocking, detail: !snap || conn === "offline"
+      ? "No snapshot connection — the board is not live."
+      : "cmux unreachable — Focus and Send cannot route." };
+  }
+  // Stale: controls work, but the numbers being read may be out of date. Wrong
+  // data an operator trusts is worse than data it knows to distrust.
+  if (conn !== "live" || fetchFailed) {
+    return { ...DEGRADED_SEVERITY.stale, detail: fetchFailed
+      ? "Last refresh failed — showing the previous good snapshot."
+      : "Live snapshot feed is not healthy." };
+  }
+  // Advisory: everything an operator does still works.
+  return DEGRADED_SEVERITY.advisory;
+}
+
 function attentionSummary(snap) {
   if (!snap) return null;
   const findings = issuesOf(snap);
@@ -1466,7 +1501,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
@@ -2224,7 +2259,21 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   const reason = degraded ? topSourceIssue(state.snap) : null;
   const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  subNode.append(el("span", { text: (reason ? reason.title : data.sublabel) + sinceNote + snapNote }));
+  /* The severity class leads, because "am I blocked?" is the question the bare
+     word Degraded never answered. It carries its own consequence sentence, so
+     the reason that follows explains WHAT is wrong rather than having to imply
+     how much it matters. */
+  const severity = degraded ? degradedSeverity(state.snap) : null;
+  if (severity) {
+    subNode.append(el("span", {
+      class: "health-severity health-severity-" + severity.key,
+      title: severity.detail,
+      text: severity.label,
+    }));
+  }
+  subNode.append(el("span", {
+    text: (severity ? severity.detail + " " : "") + (reason ? reason.title : data.sublabel) + sinceNote + snapNote,
+  }));
   if (degraded) {
     subNode.append(el("button", {
       type: "button",

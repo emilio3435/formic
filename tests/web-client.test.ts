@@ -381,6 +381,40 @@ describe("summary status and widgets", () => {
     expect(M.systemStatus(null, "offline").label).toBe("Offline");
   });
 
+  /* F3: "Degraded" said something is wrong and never the question an operator
+     actually has — am I blocked, or is this cosmetic? cmux unreachable (Focus
+     and Send dead) and 15 tidy-up warnings both rendered the same word. */
+  test("a Degraded verdict says whether the operator is blocked or merely informed", () => {
+    const healthy = snapshot();
+    expect(M.degradedSeverity(healthy, "live", false)).toBeNull(); // Operational is untouched
+
+    // Blocking: the control plane is gone, so no operator action can route.
+    const noCmux = snapshot({ controlHealth: { ...healthy.controlHealth, cmuxReachable: false } });
+    expect(M.degradedSeverity(noCmux, "live", false)).toMatchObject({ key: "blocking", label: "Blocking" });
+    expect(M.degradedSeverity(noCmux, "live", false).detail).toContain("Focus and Send");
+    expect(M.degradedSeverity(null, "offline", false)).toMatchObject({ key: "blocking" });
+
+    // Stale: controls work, but the numbers may have moved on. Distinct from
+    // blocking, because the fix is a refresh rather than repairing the plane.
+    expect(M.degradedSeverity(healthy, "stale", false)).toMatchObject({ key: "stale" });
+    expect(M.degradedSeverity(healthy, "live", true)).toMatchObject({ key: "stale" });
+    expect(M.degradedSeverity(healthy, "live", true).detail).toContain("previous good snapshot");
+
+    // Advisory: the live case — cmux reachable, everything usable, evidence
+    // just needs tidying. This must NOT read as blocking.
+    const noisy = snapshot({ controlHealth: { ...healthy.controlHealth, errors: ["conflicting session files"] } });
+    const advisory = M.degradedSeverity(noisy, "live", false);
+    expect(advisory).toMatchObject({ key: "advisory", label: "Advisory" });
+    expect(advisory.detail).toContain("usable");
+
+    // Severity outranks reason: a blocked board says so even when the loudest
+    // finding is a mere warning, which is the case that misled operators.
+    const blockedAndNoisy = snapshot({
+      controlHealth: { ...healthy.controlHealth, cmuxReachable: false, errors: ["conflicting session files"] },
+    });
+    expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
+  });
+
   test("keeps the 5-widget Pulse catalog, needs-you pin, and persisted order valid", () => {
     expect(M.DEFAULT_WIDGET_IDS).toEqual(["needs-you", "momentum", "burn", "context-peak", "health"]);
     expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
@@ -3983,6 +4017,8 @@ describe("FE-B: harness-backed client behavior", () => {
       "widget-option-", "identity-step--", "control-", "is-", "dw-d",
       // W4-B: the drawer composes "liveness-" + the normalized liveness word.
       "liveness-",
+      // F3: the health card composes "health-severity-" + the severity key.
+      "health-severity-",
     ];
     const declared = [...new Set(styles.match(/\.-?[_A-Za-z][-\w]*/g) ?? [])]
       .map((selector) => selector.slice(1));
