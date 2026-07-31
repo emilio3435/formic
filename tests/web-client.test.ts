@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /* app.js guards all DOM wiring behind a `typeof document` check and exposes its
@@ -15,7 +15,12 @@ beforeAll(async () => {
   // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
   await import("../src/web/app.js");
   M = (globalThis as unknown as { TheAntHill: unknown }).TheAntHill;
-  source = readFileSync(join(import.meta.dir, "../src/web/app.js"), "utf8");
+  const webDir = join(import.meta.dir, "../src/web");
+  source = readdirSync(webDir)
+    .filter((name) => name.endsWith(".js"))
+    .sort()
+    .map((name) => readFileSync(join(webDir, name), "utf8"))
+    .join("\n");
   html = readFileSync(join(import.meta.dir, "../src/web/index.html"), "utf8");
   styles = readFileSync(join(import.meta.dir, "../src/web/styles.css"), "utf8");
 });

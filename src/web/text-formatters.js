@@ -1,0 +1,59 @@
+/* Small text and elapsed-time formatters with no application-state dependency. */
+
+export const fmtTok = (n) =>
+  n >= 1e9 ? (n / 1e9).toFixed(2) + "B"
+  : n >= 1e6 ? (n / 1e6).toFixed(1) + "M"
+  : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+
+export function fmtElapsed(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
+  const s = ms / 1000;
+  if (s < 90) return Math.round(s) + "s";
+  if (s < 5400) return Math.round(s / 60) + "m";
+  if (s < 129600) return (s / 3600).toFixed(1) + "h";
+  return Math.round(s / 86400) + "d";
+}
+
+export function agoText(iso) {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "—";
+  return fmtElapsed(Date.now() - t) + " ago";
+}
+
+const MODEL_SHORT = [
+  ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"],
+];
+// Anthropic families whose transcript id carries a version we want to keep
+// (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
+const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku"];
+export function modelShort(m) {
+  if (!m) return null;
+  const low = m.toLowerCase();
+  for (const fam of ANTHROPIC_VERSIONED) {
+    const at = low.indexOf(fam);
+    if (at === -1) continue;
+    // Trailing version group right after the family (e.g. "-4-8" → "4.8").
+    const ver = low.slice(at + fam.length).match(/^[-_](\d+(?:[-_]\d+)*)/);
+    return ver ? fam + " " + ver[1].replace(/[-_]/g, ".") : fam;
+  }
+  // Cursor-native Grok: keep the recognizable family + dotted version, dropping
+  // effort/fast qualifiers (e.g. cursor-grok-4.5-high-fast → "grok 4.5").
+  const grokAt = low.indexOf("grok");
+  if (grokAt !== -1) {
+    const ver = low.slice(grokAt + 4).match(/^-(\d+(?:\.\d+)*)/);
+    return ver ? "grok " + ver[1] : "grok";
+  }
+  // Cursor-native Composer: flatten to "composer <version> <qualifier>" within
+  // the 18-char bound (e.g. composer-2.5-fast → "composer 2.5 fast").
+  const composerAt = low.indexOf("composer");
+  if (composerAt !== -1) {
+    const flat = low.slice(composerAt).replace(/[-_]/g, " ");
+    return flat.length > 18 ? flat.slice(0, 17) + "…" : flat;
+  }
+  for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
+  return m.length > 18 ? m.slice(0, 17) + "…" : m;
+}
+
+export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP" };
+export const providerLabel = (p) => PROVIDER_LABELS[p] || p;
