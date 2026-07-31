@@ -189,8 +189,19 @@ describe("GET /api/transcript", () => {
       const readable = await readableFetch(get("/api/transcript?agent=codex%3Atest-session"));
       const unreadable = await unreadableFetch(get("/api/transcript?agent=codex%3Atest-session"));
 
+      /* Both are empty; only one is silent by choice. The unreadable case used
+         to null its source, which made it byte-identical to "this agent has no
+         transcript artifact" — the endpoint asserting no evidence exists when
+         it merely failed to reach it. The path we tried is kept and the failure
+         is named, so the distinction this test claims is one the payload can
+         actually carry. */
       expect(await readable.json()).toMatchObject({ source: readablePath, lines: [] });
-      expect(await unreadable.json()).toMatchObject({ source: null, lines: [] });
+      const unreadableBody = await unreadable.json();
+      expect(unreadableBody).toMatchObject({ source: unreadablePath, lines: [] });
+      expect(unreadableBody.error).toBe("The transcript file is no longer present.");
+      // A genuinely empty transcript must not acquire a phantom failure.
+      expect((await readableFetch(get("/api/transcript?agent=codex%3Atest-session")).then((r) => r.json())).error)
+        .toBeUndefined();
     } finally {
       readableFetch.dispose();
       unreadableFetch.dispose();
