@@ -81,6 +81,7 @@ describe("health endpoint", () => {
         ageMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
         maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
       },
+      data: { complete: true, staleSources: [], cmuxReachable: true, controlErrors: 0 },
     });
 
     current = lifecycleSnapshot(new Date(now - MAX_HEALTH_SNAPSHOT_AGE_MS - 1).toISOString());
@@ -95,6 +96,75 @@ describe("health endpoint", () => {
       },
     });
     expect(refreshes).toBe(0);
+    fetch.dispose();
+  });
+
+  /* A collector that times out still leaves a freshly generated snapshot, so
+     the age check alone answered "healthy" over a board missing a provider. The
+     process really is live, so `ok` must stay true and the supervisor must not
+     restart it — but a monitor has to be able to see that the DATA is partial. */
+  test("a fresh snapshot with a failed collector stays live but reports incomplete data", async () => {
+    const now = Date.parse("2026-07-28T12:00:00.000Z");
+    const degraded = lifecycleSnapshot(new Date(now).toISOString());
+    degraded.controlHealth = {
+      cmuxReachable: true,
+      lastCheckedAt: new Date(now).toISOString(),
+      errors: ["codex sessions: EACCES"],
+      staleSources: ["codex"],
+    };
+    const state: MountainAppState = {
+      get: () => degraded,
+      subscribe: () => () => {},
+      refresh: async () => degraded,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({
+      state, runner, archiveStore, now: () => now, webRoot: import.meta.dir,
+    });
+
+    const response = await fetch(new Request("http://127.0.0.1:4701/api/health"));
+    const body = await response.json();
+
+    // The process is alive and the snapshot is current: do not flap the service.
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.verdict).toBe("healthy");
+    // But the board is missing codex, and a monitor must be able to tell.
+    expect(body.data.complete).toBe(false);
+    expect(body.data.staleSources).toEqual(["codex"]);
+    expect(body.data.controlErrors).toBe(1);
+    fetch.dispose();
+  });
+
+  test("an unreachable control plane is incomplete data, not a dead process", async () => {
+    const now = Date.parse("2026-07-28T12:00:00.000Z");
+    const offline = lifecycleSnapshot(new Date(now).toISOString());
+    offline.controlHealth = {
+      cmuxReachable: false,
+      lastCheckedAt: new Date(now).toISOString(),
+      errors: ["cmux unreachable"],
+      staleSources: [],
+    };
+    const state: MountainAppState = {
+      get: () => offline,
+      subscribe: () => () => {},
+      refresh: async () => offline,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({
+      state, runner, archiveStore, now: () => now, webRoot: import.meta.dir,
+    });
+
+    const body = await (await fetch(new Request("http://127.0.0.1:4701/api/health"))).json();
+    expect(body.ok).toBe(true);
+    expect(body.data.complete).toBe(false);
+    expect(body.data.cmuxReachable).toBe(false);
     fetch.dispose();
   });
 

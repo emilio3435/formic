@@ -684,6 +684,19 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         ? Math.max(0, (dependencies.now?.() ?? Date.now()) - generatedAtMs)
         : null;
       const healthy = ageMs !== null && ageMs <= MAX_HEALTH_SNAPSHOT_AGE_MS;
+      /* Freshness is not completeness. A collector that times out or errors
+         still leaves a freshly generated snapshot behind, so a partial or empty
+         board answered "healthy" for the next 60 seconds and liveness
+         monitoring reported green over data that was missing.
+         `ok` deliberately stays a liveness verdict — a supervisor must not
+         restart a perfectly live process because one provider hiccupped — so
+         the data verdict rides alongside it instead of collapsing into it.
+         Read from staleSources and cmuxReachable rather than the sourceHealth
+         scalars: those count a different population than their own byProvider
+         map, which is a separate unresolved defect this must not inherit. */
+      const staleSources = snapshot.controlHealth?.staleSources ?? [];
+      const cmuxReachable = snapshot.controlHealth?.cmuxReachable ?? null;
+      const controlErrors = snapshot.controlHealth?.errors?.length ?? 0;
       return Response.json(
         {
           ok: healthy,
@@ -692,6 +705,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             generatedAt: snapshot.generatedAt,
             ageMs,
             maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
+          },
+          data: {
+            complete: staleSources.length === 0 && cmuxReachable !== false,
+            staleSources: [...staleSources],
+            cmuxReachable,
+            controlErrors,
           },
         },
         {
