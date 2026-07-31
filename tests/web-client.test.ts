@@ -3861,9 +3861,97 @@ describe("FE-A: a failed snapshot refresh is visible instead of swallowed", () =
     // Degraded tone is what puts the existing Refresh affordance on screen.
     const failed = M.summaryWidgetData("health", healthy, "live", "percent", [], true);
     expect(failed.tone).toBe("degraded");
-    expect(failed.value).toBe("Degraded");
+    // The card headlines the SEVERITY, not the generic verdict — a failed
+    // refresh is the "Stale" kind, which is what the operator needs to read.
+    expect(failed.value).toBe("Stale");
     expect(failed.sublabel).toContain("refresh failed");
     expect(M.summaryWidgetData("health", healthy, "live", "percent", [], false).sublabel).not.toContain("refresh failed");
+  });
+});
+
+/* Screenshot on the live board: the HEALTH card's headline read "Degraded" in
+   amber, and directly beneath it a badge read ADVISORY over the sentence "The
+   board is usable; evidence needs tidying." The card argued with itself, and an
+   advisory carried the identical visual weight as an unreachable control plane.
+   The headline has to be the severity it is actually reporting. */
+describe("the health card's headline agrees with its own severity", () => {
+  const advisory = () => snapshot({
+    totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      sourceHealth: { healthy: 1, degraded: 1, total: 2 } },
+  });
+
+  test("an advisory says Advisory, not Degraded", () => {
+    const snap = advisory();
+    // The underlying system verdict is unchanged — it is the CARD that lied.
+    expect(M.systemStatus(snap, "live", false).label).toBe("Degraded");
+    expect(M.degradedSeverity(snap, "live", false).key).toBe("advisory");
+
+    const card = M.summaryWidgetData("health", snap, "live", "percent", [], false);
+    expect(card.value).toBe("Advisory");
+    expect(card.value).not.toBe("Degraded");
+    expect(card.tone).toBe("advisory");
+    // The consequence sentence travels with the data so the card can render it
+    // without asking degradedSeverity a second question.
+    expect(card.severityKey).toBe("advisory");
+    expect(card.severityDetail).toContain("usable");
+    expect(card.sublabel).toContain("degraded source");
+  });
+
+  test("a blocking or stale problem keeps its full weight", () => {
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    const blockedCard = M.summaryWidgetData("health", blocked, "live", "percent", [], false);
+    expect(blockedCard.value).toBe("Blocked");
+    expect(blockedCard.tone).toBe("degraded");
+
+    const stale = M.summaryWidgetData("health", snapshot(), "live", "percent", [], true);
+    expect(stale.value).toBe("Stale");
+    expect(stale.tone).toBe("degraded");
+    expect(stale.sublabel).toContain("refresh failed");
+
+    // Offline and Operational are untouched.
+    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
+    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("Operational");
+  });
+
+  test("an advisory is rendered lighter than a real degradation", () => {
+    const weightOf = (snap: unknown, failed: boolean) =>
+      M.pulseStripModel(snap, "live", [], "percent", "").cells.find((c: { id: string }) => c.id === "health").weight;
+    // Advisory shrinks to the micro cell — the same weight a healthy board gets,
+    // because in both cases there is nothing for the operator to do right now.
+    expect(weightOf(advisory(), false)).toBe("micro");
+    // A blocking problem stays full size.
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(weightOf(blocked, false)).toBe("normal");
+  });
+
+  test("shrinking the advisory cell does not delete its explanation", async () => {
+    // At micro weight the health cell is just a chip, so the consequence
+    // sentence has nowhere to live but the title. Losing the alarm must not
+    // also lose the reason.
+    let chip: any;
+    await withState({ snap: advisory() }, () => withDom(() => {
+      chip = M.renderSummaryWidget("health", "micro",
+        M.summaryWidgetData("health", advisory(), "live", "percent", [], false));
+    }));
+    expect(textOf(chip)).toContain("Advisory");
+    expect(textOf(chip)).not.toContain("AdvisoryAdvisory"); // the old duplicate badge
+    // The chip itself is the only node left, so read its title directly.
+    expect(chip.children[0].attributes.title).toContain("usable");
+  });
+
+  test("a full-weight degradation states its severity once, not twice", async () => {
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    let card: any;
+    await withState({ snap: blocked }, () => withDom(() => {
+      card = M.renderSummaryWidget("health", "normal",
+        M.summaryWidgetData("health", blocked, "live", "percent", [], false));
+    }));
+    const text = textOf(card);
+    expect(text).toContain("Blocked");
+    // The removed badge rendered the severity label a second time in caps.
+    expect(text).not.toContain("BLOCKING");
+    // The consequence sentence survives at full weight, in the body.
+    expect(text).toContain("Focus and Send");
   });
 });
 

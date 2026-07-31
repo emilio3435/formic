@@ -1024,8 +1024,16 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const source = snap && snap.totals && snap.totals.sourceHealth;
     const stale = (control && control.staleSources && control.staleSources.length) || 0;
     const errors = (control && control.errors && control.errors.length) || 0;
+    /* The card used to headline the bare word "Degraded" for all three
+       severities, then contradict itself one line down with an ADVISORY badge
+       and the sentence "the board is usable" — an advisory shouting in the same
+       amber as an unreachable control plane. The headline IS the severity now,
+       so the two cannot disagree, and `advisory` gets its own tone so the strip
+       can render it at the weight it deserves. */
+    const severity = status.key === "degraded" ? degradedSeverity(snap, conn, fetchFailed) : null;
+    const SEVERITY_HEADLINE = { blocking: "Blocked", stale: "Stale", advisory: "Advisory" };
     return {
-      value: status.label,
+      value: (severity && SEVERITY_HEADLINE[severity.key]) || status.label,
       unit: "",
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
@@ -1040,8 +1048,12 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
               : source && source.degraded > 0
                 ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
                 : "Source or control evidence needs review.",
-      tone: status.tone,
+      // An advisory is not an alarm: it takes its own tone so the strip shrinks
+      // it to a micro cell instead of sizing it like a blocked control plane.
+      tone: severity && severity.key === "advisory" ? "advisory" : status.tone,
       icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
+      severityKey: severity ? severity.key : null,
+      severityDetail: severity ? severity.detail : "",
     };
   }
   if (!snap) return noDataWidget("Waiting for the first snapshot.");
@@ -1242,7 +1254,7 @@ globalThis.TheAntHill = {
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
   preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
-  renderAgentRow, renderAgentColumnHeader,
+  renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText,
@@ -2121,7 +2133,11 @@ function widgetLabelNode(id, label) {
 /* Compact verdict chip — the health cell's OK form (trailing micro-chip on
    both the stressed grid and the calm line). */
 function healthMicroChip(data) {
-  return el("span", { class: "verdict-chip verdict-" + data.tone, title: data.sublabel },
+  /* An advisory rides at micro too, so this chip is the ONLY place its
+     consequence sentence can still be read — carry it, or shrinking the cell
+     would silently delete the explanation along with the alarm. */
+  const detail = [data.severityDetail, data.sublabel].filter(Boolean).join(" ");
+  return el("span", { class: "verdict-chip verdict-" + data.tone, title: detail || data.sublabel },
     icon(data.icon), data.value);
 }
 
@@ -2164,24 +2180,18 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   }
   // A Degraded verdict names its reason (the top live finding) beside the chip
   // and exposes the existing refresh control right there.
-  const degraded = id === "health" && data.tone === "degraded";
+  const degraded = id === "health" && (data.tone === "degraded" || data.tone === "advisory");
   const reason = degraded ? topSourceIssue(state.snap) : null;
   const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  /* The severity class leads, because "am I blocked?" is the question the bare
-     word Degraded never answered. It carries its own consequence sentence, so
-     the reason that follows explains WHAT is wrong rather than having to imply
-     how much it matters. */
-  const severity = degraded ? degradedSeverity(state.snap) : null;
-  if (severity) {
-    subNode.append(el("span", {
-      class: "health-severity health-severity-" + severity.key,
-      title: severity.detail,
-      text: severity.label,
-    }));
-  }
+  /* The severity badge used to lead this line because the headline was the bare
+     word "Degraded" and could not answer "am I blocked?". The headline is the
+     severity itself now, so repeating it here just printed ADVISORY under
+     Advisory. The consequence sentence is the part that was carrying the
+     information, and it stays. */
   subNode.append(el("span", {
-    text: (severity ? severity.detail + " " : "") + (reason ? reason.title : data.sublabel) + sinceNote + snapNote,
+    text: (data.severityDetail ? data.severityDetail + " " : "")
+      + (reason ? reason.title : data.sublabel) + sinceNote + snapNote,
   }));
   if (degraded) {
     subNode.append(el("button", {
@@ -3009,8 +3019,10 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
   // it used to derive the same three from scratch on every paint.
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
     const data = summaryWidgetData(id, snap, conn, display, queueItems, undefined, queueError);
+    // An advisory rides at micro alongside "ok": in both cases there is nothing
+    // for the operator to do right now, which is what cell weight communicates.
     const weight = id === "health"
-      ? (data.tone === "ok" ? "micro" : "normal")
+      ? (data.tone === "ok" || data.tone === "advisory" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
     return { id, weight, data };
   });
