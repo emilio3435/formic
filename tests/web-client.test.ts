@@ -3960,6 +3960,81 @@ describe("the health card's headline agrees with its own severity", () => {
    behind it. The dock is position: sticky over scrolling content, and its
    background mixed --surface with TRANSPARENT — so the text passed through the
    bar instead of behind it. A sticky bar that overlaps content must be opaque. */
+/* Screenshot from the live board: 56 rows all reading "Claude · the-mountain-main"
+   — same provider, same working directory, several on the same model — with
+   nothing on the row to tell one live agent from another. The name is genuinely
+   not unique; the session id is. */
+describe("rows with identical names carry a disambiguator", () => {
+  const twin = (id: string, session: string) => agent({
+    id, sourceSessionId: session, provider: "claude", displayName: "Claude · the-mountain-main",
+  });
+
+  test("sessionTag is short, stable, and derived from the session's own identity", () => {
+    expect(M.sessionTag(twin("claude:9b66776a", "9b66776a-e6c3-4a73-937e-2079b4b92084"))).toBe("2079b4b92084".slice(-8));
+    // Stable across calls — a disambiguator that moves is worse than none.
+    const a = twin("claude:x", "60224113-57b0-4948-94bb-6a8f10019216");
+    expect(M.sessionTag(a)).toBe(M.sessionTag(a));
+    // Falls back to the agent id when no session id was reported, and never
+    // invents one for an agent with neither.
+    expect(M.sessionTag({ id: "codex:abcdef12-3456" })).toBeTruthy();
+    expect(M.sessionTag(null)).toBe("");
+    expect(M.sessionTag({})).toBe("");
+  });
+
+  /* The bug the first implementation shipped with. Codex issues UUIDv7, whose
+     leading segment is a TIMESTAMP: four real sessions started in the same
+     minute all tagged "#019fb496" and told the operator nothing. These ids are
+     verbatim from the live board. */
+  test("sessions that share a UUIDv7 timestamp prefix still get distinct tags", () => {
+    const realCodexIds = [
+      "019fb496-eb57-7430-8c2c-dec15174ebc5",
+      "019fb496-d560-7950-a3e7-71290fde77fd",
+      "019fb496-e025-72b1-aba3-09500a01b2aa",
+      "019fb496-f419-70b0-acba-2a371519f037",
+    ];
+    // Every one of these shares the first segment — that is the whole point.
+    expect(new Set(realCodexIds.map((id) => id.split("-")[0])).size).toBe(1);
+    const tags = realCodexIds.map((id) => M.sessionTag(twin("codex:" + id, id)));
+    expect(new Set(tags).size).toBe(realCodexIds.length); // all four distinct
+    expect(tags.every((t: string) => t.length === 8)).toBe(true);
+  });
+
+  test("ambiguousNames flags only the names that actually repeat", () => {
+    const board = [
+      twin("claude:1", "aaaaaaaa-1"), twin("claude:2", "bbbbbbbb-2"),
+      agent({ id: "codex:3", displayName: "Codex · solo" }),
+    ];
+    const names = M.ambiguousNames(board);
+    expect(names.has("Claude · the-mountain-main")).toBe(true);
+    expect(names.has("Codex · solo")).toBe(false); // a unique name stays clean
+    expect(M.ambiguousNames([board[2]]).size).toBe(0);
+  });
+
+  test("the row shows the tag only when its name is ambiguous", () => {
+    const program = { id: "p", name: "P" };
+    const dup = twin("claude:1", "9b66776a-e6c3-4a73");
+    const ambiguous = M.ambiguousNames([dup, twin("claude:2", "60224113-57b0-4948")]);
+
+    const marked = withDom(() => M.renderAgentRow(dup, program, { ambiguousNames: ambiguous }));
+    expect(textOf(marked)).toContain(M.sessionTag(dup));
+    // It is reachable to a screen reader as a disambiguator, not decoration.
+    expect(marked.attributes["aria-label"]).toContain(M.sessionTag(dup));
+
+    // A row whose name is unique must not be cluttered with a hash.
+    const clean = withDom(() => M.renderAgentRow(dup, program, { ambiguousNames: new Set() }));
+    expect(textOf(clean)).not.toContain(M.sessionTag(dup));
+  });
+
+  test("ambiguity is part of the row signature, so the tag can appear and vanish", () => {
+    const dup = twin("claude:1", "9b66776a-e6c3");
+    const ui = listUi();
+    const withTag = M.agentRowSig(dup, ui, { ambiguousNames: new Set(["Claude · the-mountain-main"]) });
+    const withoutTag = M.agentRowSig(dup, ui, { ambiguousNames: new Set() });
+    // Without this the row keeps its cached node when a twin appears or leaves.
+    expect(withTag).not.toBe(withoutTag);
+  });
+});
+
 describe("the command dock does not paint over the text it sits above", () => {
   // Declarations only — a comment explaining why transparency was removed must
   // not read as transparency still being there.

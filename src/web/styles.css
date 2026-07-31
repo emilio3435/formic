@@ -1420,6 +1420,18 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .agent-rename .ico { width: 0.9rem; height: 0.9rem; }
 .row-identity-tags { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.12rem; }
+/* Session tag on rows whose display name is shared. Mono and quiet: it is a
+   handle for telling twins apart, not a status — it must never compete with the
+   alert rails or the instrument cluster for attention. */
+.row-session-tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+}
 .role-chip {
   display: inline-flex;
   align-items: center;

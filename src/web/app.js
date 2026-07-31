@@ -526,6 +526,48 @@ function preferredRenameTarget(agent) {
   return agentLabelTarget(agent);
 }
 
+/* ---------- disambiguating identical rows ----------
+
+   A live board carried 56 rows all reading "Claude · the-mountain-main": same
+   provider, same working directory, several on the same model, nothing on the
+   row to tell one from another. The name is genuinely not unique — one folder
+   can hold any number of concurrent sessions — so no naming rule fixes this.
+   The session id IS unique, and it is what the drawer, Evidence and every
+   copy-id button already speak, so a short form of it is the disambiguator.
+
+   Shown ONLY on rows whose name repeats: a hash on every row would be noise on
+   a board where most names are already distinct. */
+function sessionTag(agent) {
+  if (!agent) return "";
+  const raw = agent.sourceSessionId || String(agent.id || "").split(":").slice(1).join(":") || "";
+  const trimmed = String(raw).trim();
+  if (!trimmed) return "";
+  /* The TAIL, not the head. Codex issues UUIDv7, whose leading segment is a
+     timestamp — every session started in the same minute shares it. Tagging by
+     prefix produced "#019fb496" on four different rows and disambiguated
+     nothing; on the live board 20 of 27 duplicate-name groups collided that way.
+     The trailing segment is the random part, so it is what actually separates
+     two sessions. Verified against 213 live agents: no collisions. */
+  const segments = trimmed.split("-").filter(Boolean);
+  const tail = segments.length ? segments[segments.length - 1] : trimmed;
+  return tail.slice(-8);
+}
+
+/* Names that appear more than once across the agents given. Built once per
+   paint from the whole board, not per program — two twins in different programs
+   are exactly as confusing as two in the same one. */
+function ambiguousNames(agents) {
+  const seen = new Map();
+  for (const agent of agents || []) {
+    const name = agentName(agent);
+    if (!name) continue;
+    seen.set(name, (seen.get(name) || 0) + 1);
+  }
+  const repeated = new Set();
+  for (const [name, count] of seen) if (count > 1) repeated.add(name);
+  return repeated;
+}
+
 function agentName(agent) {
   if (!agent) return "";
   const agentLabel = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
@@ -1251,7 +1293,7 @@ globalThis.TheAntHill = {
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
-  sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
+  sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
   preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
@@ -3427,6 +3469,10 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.contextDisplay || "",
     String(opts.depth || 0),
     String(opts.childCount || 0),
+    // Whether this row is showing a session tag. Without it the row keeps its
+    // cached node when a twin arrives or leaves, so the tag would never appear
+    // and never go away.
+    opts.ambiguousNames && opts.ambiguousNames.has(agentName(agent)) ? "amb" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -3724,6 +3770,9 @@ function agentRowPlan(program, agents, ui = state) {
   }
   const { roots, children } = buildClusters(program.agents.filter((agent) => relevantIds.has(agent.id)));
   const fullById = new Map(snapshotAgents(ui.snap).map(({ agent }) => [agent.id, agent]));
+  // Computed from the WHOLE board, not this program: two twins in different
+  // programs are exactly as confusing as two in the same one.
+  const ambiguous = ambiguousNames([...fullById.values()]);
   const fullChildren = new Map();
   for (const a of fullById.values()) {
     if (a.parentAgentId) fullChildren.set(a.parentAgentId, [...(fullChildren.get(a.parentAgentId) || []), a.id]);
@@ -3738,7 +3787,7 @@ function agentRowPlan(program, agents, ui = state) {
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || []).filter((id) => relevantIds.has(id)).length;
     if (visibleIds.has(agent.id)) {
-      const opts = { depth, childCount: descendantCount(agent.id), fullById };
+      const opts = { depth, childCount: descendantCount(agent.id), fullById, ambiguousNames: ambiguous };
       plan.push({
         key: "row:" + agent.id,
         sig: agentRowSig(agent, ui, opts),
@@ -3842,6 +3891,12 @@ function renderAgentRow(agent, program, opts = {}) {
   const nameKey = presentationLabelKey(nameTarget);
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
+  /* Empty unless another visible row carries this exact name — see sessionTag.
+     opts.ambiguousNames is absent on the drawer/preview call paths, which is
+     why this defaults to no tag rather than to computing one. */
+  const nameTag = opts.ambiguousNames && opts.ambiguousNames.has(displayName)
+    ? sessionTag(agent)
+    : "";
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
@@ -3880,6 +3935,17 @@ function renderAgentRow(agent, program, opts = {}) {
         },
       }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
+      /* Session tag, only when this row's name is not unique on the board. It
+         rides the existing identity-tags line rather than adding a row, and it
+         is the same short id the drawer and the copy-id buttons speak, so an
+         operator can carry it between the two. */
+      nameTag
+        ? el("span", {
+          class: "row-session-tag",
+          title: "Session " + nameTag + " — this display name is shared by other rows.",
+          text: "#" + nameTag,
+        })
+        : null,
       // De-noised: only the cwd-mismatch state keeps a visible mark — a small
       // ember dot with an accessible label. The full sentence rides the row
       // tooltip + aria-label and the drawer; no naming prose on the row.
@@ -3994,7 +4060,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;
