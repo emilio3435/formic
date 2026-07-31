@@ -2152,9 +2152,27 @@ body.feed-frozen .programs { opacity: 0.62; }
   margin-right: calc(-1 * var(--inspector-pad-x));
   padding: 0.7rem var(--inspector-pad-x) 1rem;
   border-top: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 55%, transparent), var(--raise) 32%);
+  /* OPAQUE, deliberately. This bar is sticky over scrolling drawer content, and
+     its background used to mix --surface with `transparent` — so the OPERATE
+     panel's text showed THROUGH the bar and collided with the "Ready · linked"
+     chip, leaving the last human message unreadable. Content has to pass behind
+     a sticky overlay, never through it. */
+  background: var(--raise);
   box-shadow: 0 -12px 28px -22px rgba(18, 24, 32, 0.4);
   display: flex; flex-direction: column; gap: 0.45rem;
+}
+/* The soft top edge the old gradient provided, moved ABOVE the bar. It fades the
+   scrolling content on approach instead of revealing it through the controls,
+   which is the part the gradient was actually good at. */
+.command-dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.25rem;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--raise));
 }
 /* Linked dock: a moss hairline marks the live control link; the lock story
    stays with the control banner, so the dock never repeats it. */

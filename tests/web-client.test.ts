@@ -3955,6 +3955,38 @@ describe("the health card's headline agrees with its own severity", () => {
   });
 });
 
+/* Screenshot from the live board: in the drawer, the "Ready · linked" chip sat
+   ON TOP of the OPERATE panel's text, leaving the last human message unreadable
+   behind it. The dock is position: sticky over scrolling content, and its
+   background mixed --surface with TRANSPARENT — so the text passed through the
+   bar instead of behind it. A sticky bar that overlaps content must be opaque. */
+describe("the command dock does not paint over the text it sits above", () => {
+  // Declarations only — a comment explaining why transparency was removed must
+  // not read as transparency still being there.
+  const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const dockRule = () => stripComments(styles.match(/\.command-dock\s*\{[^}]*\}/)?.[0] ?? "");
+
+  test("the sticky dock is opaque, so scrolling content passes behind it", () => {
+    const rule = dockRule();
+    expect(rule).not.toBe("");
+    // It really is a sticky overlay — that is what makes opacity load-bearing.
+    expect(rule).toContain("position: sticky");
+    // No transparency in the dock's own background, at any stop.
+    expect(rule).not.toContain("transparent");
+    expect(rule).toMatch(/background:\s*var\(--raise\)/);
+  });
+
+  test("the soft top edge survives as a scrim above the bar, not through it", () => {
+    // The gradient was doing real visual work; it moves ABOVE the dock so it
+    // fades the scrolling content instead of revealing it through the controls.
+    const scrim = styles.match(/\.command-dock::before\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(scrim).not.toBe("");
+    expect(scrim).toContain("bottom: 100%");     // sits above the bar
+    expect(scrim).toContain("pointer-events: none"); // never eats a click
+    expect(scrim).toContain("transparent");      // the fade itself
+  });
+});
+
 describe("FE-A: paint signatures cover the state their surfaces render", () => {
   /* A minimal document is only needed by the el() test; the signature helpers are
      pure functions of (records, ui). */
