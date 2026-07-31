@@ -4188,6 +4188,48 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(M.pulseStripModel(withCtx, "live", []).cells.find((c: { id: string }) => c.id === "context-peak").data.value).toBe("25%");
   });
 
+  /* The CONTEXT PEAK card read "No data" while the server had the answer. The
+     card decided whether it existed by walking per-agent tokens client-side; the
+     server now reports contextPeak/contextMedian at the top level, derived from
+     the same contextPct the CTX column reads. Peak alone also hides the shape of
+     the fleet — one agent at 90% reads identically to every agent at 90% — so
+     the median is what makes the number interpretable. */
+  test("(8) CONTEXT PEAK reports the server's peak and median", () => {
+    const withCtx = snapshot({
+      contextPeak: 74,
+      contextMedian: 31,
+      programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
+    });
+    const data = M.summaryWidgetData("context-peak", withCtx, "live", "percent");
+    expect(data.value).toBe("74%"); // server's number wins over the client's 25%
+    expect(data.sublabel).toContain("Peak 74% · Median 31%");
+    expect(data.meterPct).toBe(74);
+    expect(data.tone).toBe("ok");
+
+    // The card must survive a snapshot the client walk finds nothing in — the
+    // exact case that printed "No data" over a reported peak.
+    const serverOnly = snapshot({
+      contextPeak: 91,
+      contextMedian: 12,
+      programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "reported", total: 10 } })] }],
+    });
+    const bare = M.summaryWidgetData("context-peak", serverOnly, "live", "percent");
+    expect(bare.value).toBe("91%");
+    expect(bare.value).not.toBe("No data");
+    expect(bare.sublabel).toContain("Peak 91% · Median 12%");
+    expect(bare.tone).toBe("hot"); // 91% is a real ceiling warning
+
+    // Tokens display still reads the peak agent's own totals, not a percentage.
+    expect(M.summaryWidgetData("context-peak", withCtx, "live", "tokens").value).toContain("50k");
+
+    // No server fields and no client evidence is still an honest "No data" —
+    // the card never invents a number.
+    const empty = snapshot({
+      programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "reported", total: 10 } })] }],
+    });
+    expect(M.summaryWidgetData("context-peak", empty, "live", "percent").value).toBe("No data");
+  });
+
   /* -------- finding 4: five copies of one enum, already disagreeing --------
      `completed` read "Complete" on the plan chip, "complete · verifying" on the
      queue button, "verifying" in the pulse row, "Verifying" in the drawer

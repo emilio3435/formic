@@ -1077,15 +1077,30 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   }
   if (id === "context-peak") {
     const peak = peakContext(snap);
-    if (!peak) return noDataWidget("No live context reports.");
+    /* The server reports contextPeak/contextMedian at the top level, derived from
+       the same per-agent contextPct the CTX column reads. Prefer them: the client
+       walk below computes its own percentage from tokens.total, so two
+       derivations of one number drift, and the walk also decided whether the card
+       EXISTED — a snapshot it found nothing in printed "No data" while the server
+       had the answer sitting in the payload.
+
+       The walk is still what the tokens display and the meter's per-agent linkage
+       need, so it stays; it just no longer gets a vote on the headline. */
+    const reported = Number.isFinite(snap.contextPeak) ? snap.contextPeak : null;
+    const median = Number.isFinite(snap.contextMedian) ? snap.contextMedian : null;
+    if (!peak && reported == null) return noDataWidget("No live context reports.");
+    const pct = reported != null ? reported : peak.pct;
     const coverage = totals.tokenReporting != null && totals.tokenEligible != null
       ? ` · ${totals.tokenReporting}/${totals.tokenEligible} reporting` : "";
+    /* Peak alone hides the shape of the fleet: one agent at 90% and every agent
+       at 90% are the same headline and very different situations. */
+    const spread = median != null ? `Peak ${pct}% · Median ${median}%` : "Highest observed";
     return {
-      value: contextDisplayValue(peak.agent.tokens, display),
-      unit: display === "percent" ? "peak window" : "",
-      sublabel: "Highest observed" + coverage,
-      tone: peak.pct >= 85 ? "hot" : "ok",
-      meterPct: peak.pct,
+      value: peak && display === "tokens" ? contextDisplayValue(peak.agent.tokens, display) : pct + "%",
+      unit: display === "tokens" && peak ? "" : "peak window",
+      sublabel: spread + coverage,
+      tone: pct >= 85 ? "hot" : "ok",
+      meterPct: pct,
     };
   }
   return noDataWidget("Widget evidence is not available.");
