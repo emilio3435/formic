@@ -6,6 +6,7 @@ import {
   getUsageInvocations,
   getUsageQuotas,
   getUsageSummary,
+  getUsageWard,
   handleUsageRequest,
   isEncryptedSqliteFile,
   resolveUsageCost,
@@ -287,6 +288,78 @@ db.close();
         if (value == null) delete process.env[name];
         else process.env[name] = value;
       }
+    }
+  });
+
+  /* The ward answers from two independent sources: spikes from the encrypted
+     database and quota pressure from the provider_quotas.json sidecar. The
+     sidecar's own reader is careful to report available:false with a reason,
+     but the ward used to drop that on the floor — `(quotas.quotas ?? [])` — and
+     return available:true with an empty quotaPressure. An unreadable sidecar
+     therefore reached the operator as "no quota buckets above 75%": a clean
+     bill of health issued by code that never managed to look. */
+  const wardTestName =
+    `an unreadable quotas sidecar is reported even when the spike query succeeds${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(wardTestName, async () => {
+    /* The bug lives on the SUCCESS path, so the spike query has to actually
+       work: a ward that fell into its catch would report unavailable for
+       unrelated reasons and prove nothing. Build a real encrypted fixture, then
+       break only the sidecar. */
+    const wardRoot = mkdtempSync(join(tmpdir(), "anthill-ward-quotas-"));
+    const wardDb = join(wardRoot, "openburnbar.sqlite");
+    const createScript = join(wardRoot, "create-ward-fixture.ts");
+    writeFileSync(
+      createScript,
+      `
+import { Database } from "bun:sqlite";
+Database.setCustomSQLite(${JSON.stringify(dylib)});
+const db = new Database(${JSON.stringify(wardDb)}, { create: true });
+db.run("PRAGMA key = '${key}'");
+db.run(\`CREATE TABLE token_usage (
+  id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
+db.run(\`INSERT INTO token_usage VALUES
+  ('w1','Claude Code','sess-w','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000')\`);
+db.close();
+`,
+    );
+    expect(Bun.spawnSync(["bun", createScript], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+
+    // Valid JSON, wrong shape: parsed and rejected by the sidecar reader, which
+    // is the failure most likely to survive unnoticed.
+    writeFileSync(join(wardRoot, "provider_quotas.json"), JSON.stringify({ nope: true }));
+
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = wardRoot;
+    process.env.BURNBAR_DB_PATH = wardDb;
+    process.env.BURNBAR_DB_KEY = key;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = dylib;
+    try {
+      const ward = await getUsageWard("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+      // The spike half genuinely worked...
+      expect(ward.available).toBe(true);
+      // ...so an empty quotaPressure here is exactly the sentence the operator
+      // must NOT be allowed to read as "nothing above 75%".
+      expect(ward.quotaPressure).toEqual([]);
+      expect(ward.quotas.available).toBe(false);
+      expect(ward.quotas.error ?? "").not.toBe("");
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(wardRoot, { recursive: true, force: true });
     }
   });
 

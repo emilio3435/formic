@@ -255,6 +255,13 @@ export interface UsageWardResponse {
   to: string;
   spikes: UsageSpike[];
   quotaPressure: Array<{ provider: string; label: string; usedPercent: number; resetsAt?: string }>;
+  /* The ward answers from two independent sources: spikes from the encrypted
+     database, quota pressure from the provider_quotas.json sidecar. Either can
+     fail alone, so a single `available` cannot describe both — an unreadable
+     sidecar used to be flattened into an empty quotaPressure under
+     available:true, which reads as "no quota pressure" rather than "we could
+     not look". Spike availability stays on `available`; quotas report here. */
+  quotas: { available: boolean; error?: string };
   error?: string;
 }
 
@@ -827,6 +834,9 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       to,
       spikes: spikes.slice(0, 12),
       quotaPressure: quotaPressure.slice(0, 12),
+      quotas: quotas.available
+        ? { available: true }
+        : { available: false, error: quotas.error },
     };
   } catch (error) {
     return {
@@ -838,6 +848,8 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       to,
       spikes: [],
       quotaPressure: [],
+      // The database failed before the sidecar was ever consulted.
+      quotas: { available: false, error: "Quotas were not read." },
       error: error instanceof Error ? error.message : String(error),
     };
   }
