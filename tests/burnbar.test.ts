@@ -363,6 +363,71 @@ db.close();
     }
   });
 
+  const tieTestName =
+    `invocations sharing a timestamp are cut by a defined order${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(tieTestName, async () => {
+    /* Three rows share one startTime and the limit keeps two, so the tie alone
+       decides who is shown. Ids are inserted deliberately out of order so scan
+       order and id order disagree: with no tie-breaker the query returns the
+       first two it happens to scan, which is not a promise the endpoint can
+       keep across reads. */
+    const tieRoot = mkdtempSync(join(tmpdir(), "anthill-tie-"));
+    const tieDb = join(tieRoot, "openburnbar.sqlite");
+    const createScript = join(tieRoot, "create-tie-fixture.ts");
+    writeFileSync(
+      createScript,
+      `
+import { Database } from "bun:sqlite";
+Database.setCustomSQLite(${JSON.stringify(dylib)});
+const db = new Database(${JSON.stringify(tieDb)}, { create: true });
+db.run("PRAGMA key = '${key}'");
+db.run(\`CREATE TABLE token_usage (
+  id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
+db.run(\`INSERT INTO token_usage VALUES
+  ('tie-a','Codex','s','proj','m',1,1,0,0,2,0,'exact','2026-07-22 10:00:00.000','2026-07-22 10:00:01.000'),
+  ('tie-c','Codex','s','proj','m',1,1,0,0,2,0,'exact','2026-07-22 10:00:00.000','2026-07-22 10:00:01.000'),
+  ('tie-b','Codex','s','proj','m',1,1,0,0,2,0,'exact','2026-07-22 10:00:00.000','2026-07-22 10:00:01.000')\`);
+db.close();
+`,
+    );
+    expect(Bun.spawnSync(["bun", createScript], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = tieRoot;
+    process.env.BURNBAR_DB_PATH = tieDb;
+    process.env.BURNBAR_DB_KEY = key;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = dylib;
+    try {
+      const first = await getUsageInvocations("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z", 2);
+      expect(first.available).toBe(true);
+      expect(first.invocations).toHaveLength(2);
+      // The order is defined by the query, not by the scan: highest ids win.
+      expect(first.invocations.map((row) => row.id)).toEqual(["tie-c", "tie-b"]);
+
+      // And it is repeatable — the point of having a tie-breaker at all.
+      const second = await getUsageInvocations("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z", 2);
+      expect(second.invocations.map((row) => row.id)).toEqual(first.invocations.map((row) => row.id));
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(tieRoot, { recursive: true, force: true });
+    }
+  });
+
   test("usage endpoints reject non-loopback hosts", async () => {
     const response = await handleUsageRequest(
       new Request("http://example.com/api/usage/summary?from=2026-07-22T00:00:00.000Z&to=2026-07-23T00:00:00.000Z"),

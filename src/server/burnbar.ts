@@ -657,7 +657,12 @@ export async function getUsageInvocations(
               cost, provenanceConfidence, startTime, endTime
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
-       ORDER BY startTime DESC
+       -- id breaks startTime ties. Without it, rows sharing a timestamp are
+       -- ordered by whatever the scan happens to produce, so which of them
+       -- survives LIMIT is undefined: "recent invocations" could change
+       -- membership between two identical reads, and a row could sit just
+       -- outside the window forever while its twin was always shown.
+       ORDER BY startTime DESC, id DESC
        LIMIT ?`,
       [dbFrom, dbTo, capped],
     );
