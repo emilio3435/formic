@@ -5903,7 +5903,8 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // Unknown is never marked as death, but it is still stated to a reader.
     expect(byClass(unclear, "row-died")).toBeNull();
     expect(unclear.className.split(/\s+/)).not.toContain("is-died");
-    expect(unclear.attributes["aria-label"]).toContain("Process: Liveness unknown");
+    // agent() is `running`, so its unknown is the still-to-be-probed reading.
+    expect(unclear.attributes["aria-label"]).toContain("Process: Awaiting first check");
   });
 
   test("(3) the drawer states all four verdicts, so unknown reads as unknown", () => {
@@ -5912,7 +5913,7 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
       ["running", "Process live", "liveness-running"],
       ["exited", "Exited cleanly", "liveness-exited"],
       ["died", "Died", "liveness-died"],
-      ["unknown", "Liveness unknown", "liveness-unknown"],
+      ["unknown", "Awaiting first check", "liveness-unknown"],
     ];
     for (const [word, label, cls] of cases) {
       const chip = withDom(() => M.verdictLiveness(agent({ processLiveness: word })));
@@ -5922,6 +5923,34 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // The four labels are distinct words — "exited" must never read like "died".
     const labels = cases.map(([word]) => M.livenessView(agent({ processLiveness: word })).label);
     expect(new Set(labels).size).toBe(4);
+  });
+
+  /* One wire value, two different facts. On the live board 135 of the 140
+     `unknown` agents are ended sessions: nothing will ever probe them again, so
+     "Awaiting first check" would send the operator off to wait for a check that
+     is never coming. Only a session still on the board is actually awaiting one. */
+  test("(3b) unknown liveness distinguishes a pending check from one that will never come", () => {
+    const pending = M.livenessView(agent({ processState: "unknown", status: "running", activity: "working" }));
+    expect(pending.label).toBe("Awaiting first check");
+    expect(pending.detail).toContain("No process check has reported");
+
+    const finished = M.livenessView(agent({ processState: "unknown", status: "archived", activity: "ended" }));
+    expect(finished.label).toBe("No process evidence");
+    expect(finished.detail).toContain("cannot be recovered");
+    expect(finished.label).not.toContain("Awaiting"); // never promise a check
+
+    // Same key either way, so the chip's styling and every selector still match.
+    expect(pending.key).toBe("unknown");
+    expect(finished.key).toBe("unknown");
+    expect(pending.tone).toBe(finished.tone);
+
+    // The three states that ARE evidence are unaffected by activity.
+    for (const [word, label] of [["running", "Process live"], ["exited", "Exited cleanly"], ["died", "Died"]]) {
+      expect(M.livenessView(agent({ processState: word, activity: "ended" })).label).toBe(label);
+      expect(M.livenessView(agent({ processState: word, activity: "working" })).label).toBe(label);
+    }
+    // Absence is still absence — no chip, no claim.
+    expect(M.livenessView(agent())).toBeNull();
   });
 
   test("(2) attention: acknowledge, dismiss and snooze all reach the server", async () => {
@@ -6161,7 +6190,9 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
       ["running", "Process live"],
       ["exited", "Exited cleanly"],
       ["died", "Died"],
-      ["unknown", "Liveness unknown"],
+      // agent() is `running`, so unknown reads as the pending-probe case; the
+      // ended reading is covered by (3b).
+      ["unknown", "Awaiting first check"],
     ];
     for (const [word, label] of wire) {
       expect(M.livenessState(agent({ processState: word })), word).toBe(word);
@@ -6217,7 +6248,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     const unclear = agent({ processState: "unknown" });
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: unclear, program: { id: "p", name: "P", agents: [unclear] } }));
-    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Liveness unknown");
+    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Awaiting first check");
   });
 
   /* The route that used to 403 every browser now answers. This is a verbatim

@@ -147,7 +147,20 @@ const LIVENESS_VIEW = {
   running: { label: "Process live", tone: "ok", detail: "The agent's process is still running." },
   exited: { label: "Exited cleanly", tone: "calm", detail: "The process finished and its transcript ended cleanly — this one is done." },
   died: { label: "Died", tone: "alert", detail: "The process is gone and nothing ended cleanly. This session stopped without finishing." },
-  unknown: { label: "Liveness unknown", tone: "quiet", detail: "There is not enough process evidence to say whether this one is alive." },
+  /* "Liveness unknown" named the tool's gap rather than the world's state, and
+     read as a defect. For an agent still on the board, unknown means the prober
+     has not reported yet — ordinary and temporary, so say that. */
+  unknown: { label: "Awaiting first check", tone: "quiet", detail: "No process check has reported for this session yet." },
+};
+
+/* The same wire value on an ENDED session is a different fact: nothing is going
+   to check it, so "awaiting" would send the operator off to wait for something
+   that is never coming. On the live board this is not an edge case — 135 of the
+   140 unknowns are ended sessions. */
+const LIVENESS_ENDED_UNKNOWN = {
+  label: "No process evidence",
+  tone: "quiet",
+  detail: "This session ended without process evidence, so whether it finished cleanly or crashed cannot be recovered.",
 };
 
 function livenessState(agent) {
@@ -172,6 +185,11 @@ function livenessState(agent) {
 function livenessView(agent) {
   const key = livenessState(agent);
   if (!key) return null;
+  // Same wire value, two different facts — see LIVENESS_ENDED_UNKNOWN. The key
+  // is untouched, so the chip's styling and every existing selector still match.
+  if (key === "unknown" && deriveActivity(agent) === "ended") {
+    return { key, ...LIVENESS_ENDED_UNKNOWN };
+  }
   return { key, ...LIVENESS_VIEW[key] };
 }
 
