@@ -261,18 +261,39 @@ export class PulseTracker {
       && Number.isFinite(summary.estimatedCostUsd)
       ? Math.round(summary.estimatedCostUsd * 100) / 100
       : null;
-    if (this.#costInitialized && roundedCost === this.#costLastHourUsd) return;
-
     const cursorMissingInvocations = summary?.byProvider
       .filter(({ provider, costUsd, invocations }) => /cursor/i.test(provider) && costUsd === null)
       .reduce((total, row) => total + row.invocations, 0) ?? 0;
     const cursorUnknownCount = Math.max(this.#latestCursorUnknownCount, cursorMissingInvocations);
+
+    /* Why the cost is missing, in words the card can print. burn.coverage counts
+       agents reporting token totals — it is the coverage OF tokensPerMin and has
+       never described the cost, which comes from a different source entirely
+       (the encrypted BurnBar database). With no reason to show beside "cost
+       unavailable", the BURN card put the token coverage there instead, so a
+       real 37k/min rate, an unavailable cost and "9/9 reporting" appeared in one
+       sentence and read as three claims about the same number. Give the cost its
+       own reason so nothing has to be borrowed. */
+    const costNote = roundedCost === null
+      ? summary === undefined
+        ? "Cost source has not been read yet."
+        : summary.available === false
+          ? summary.error ?? "Cost source is unavailable."
+          : "No priced invocations in this window."
+      : cursorUnknownCount > 0
+        ? `${cursorUnknownCount} Cursor ${cursorUnknownCount === 1 ? "session reports" : "sessions report"} no billing data`
+        : undefined;
+
+    // The figure AND its explanation both count as displayed state: a read that
+    // returns the same dollar total for a new reason still changes the card.
+    if (this.#costInitialized
+      && roundedCost === this.#costLastHourUsd
+      && costNote === this.#costNote) return;
+
     this.#costLastHourUsd = roundedCost;
     this.#costProvenance = roundedCost === null ? "unavailable" : "burnbar";
     this.#costAsOf = roundedCost === null ? undefined : summary?.to;
-    this.#costNote = cursorUnknownCount > 0
-      ? `${cursorUnknownCount} Cursor ${cursorUnknownCount === 1 ? "session reports" : "sessions report"} no billing data`
-      : undefined;
+    this.#costNote = costNote;
     this.#costInitialized = true;
   }
 }

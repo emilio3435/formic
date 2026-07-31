@@ -198,6 +198,54 @@ describe("PulseTracker", () => {
     expect(tracker.report(base + 240_001).burn).toMatchObject({ costLastHourUsd: 1.24, costAsOf: changedAsOf });
   });
 
+  /* The BURN card was seen reporting 37k/min, "cost unavailable" and
+     "9 of 9 reporting" at once. All three numbers were individually true, but
+     burn.coverage counts agents reporting TOKEN totals — it is the coverage of
+     tokensPerMin and never described the cost, which comes from the encrypted
+     BurnBar database instead. With no reason to print beside "cost
+     unavailable", the card reached for the token coverage. The payload now
+     carries the cost's own reason, so the two are never conflated again. */
+  test("an unavailable cost states its own reason rather than leaving the card to borrow coverage", async () => {
+    const tracker = new PulseTracker(
+      async () => usageSummary({
+        available: false,
+        provenance: "unavailable",
+        estimatedCostUsd: null,
+        costKnown: false,
+        error: "BurnBar database not found",
+      }),
+      base,
+    );
+    // A fleet whose tokens ARE fully covered: this is the exact shape that made
+    // the card contradict itself.
+    tracker.observe(snapshot([agent({ tokens: { sessionTotal: 1_000, provenance: "observed" } })]), base);
+    tracker.maybeRefreshBurnCost(base);
+    await flushBurnReader();
+
+    const burn = tracker.report(base + 1_000).burn;
+    expect(burn.costLastHourUsd).toBeNull();
+    expect(burn.costProvenance).toBe("unavailable");
+    // The cost explains itself...
+    expect(burn.costNote).toBe("BurnBar database not found");
+    // ...while coverage keeps describing the token rate, its actual subject.
+    expect(burn.coverage).toMatchObject({ reporting: 1, eligible: 1 });
+  });
+
+  test("a priced window with no cost reports the absence of priced invocations, not a source failure", async () => {
+    const tracker = new PulseTracker(
+      async () => usageSummary({ available: true, estimatedCostUsd: null, costKnown: false }),
+      base,
+    );
+    tracker.maybeRefreshBurnCost(base);
+    await flushBurnReader();
+
+    const burn = tracker.report(base + 1_000).burn;
+    expect(burn.costLastHourUsd).toBeNull();
+    // A reachable source that priced nothing is a different fact from a source
+    // that could not be read, and the operator acts differently on each.
+    expect(burn.costNote).toBe("No priced invocations in this window.");
+  });
+
   test("a burn reader deadline marks stale cost unavailable and permits a later retry", async () => {
     let reads = 0;
     const never = new Promise<never>(() => {});
