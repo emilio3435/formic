@@ -42,8 +42,12 @@ cd ~/anthill && bun start
 ```
 
 It prints the address it bound (`bun start` defaults to
-<http://127.0.0.1:4702>) and opens your browser there. Leave that terminal
+<http://127.0.0.1:4701>) and opens your browser there. Leave that terminal
 running — closing it stops the server.
+
+4701 is also the port the production instance uses. If one is already
+running, `bun start` detects it and just opens the browser instead of
+starting a second server.
 
 Without cmux installed you'll see:
 

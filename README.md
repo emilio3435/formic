@@ -10,9 +10,9 @@ A local-first, light-mode command center for direct Codex, Claude, and Cursor Ag
 bun start
 ```
 
-That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). It prints the address it bound — `bun start` defaults to <http://127.0.0.1:4702>, so it never collides with a production instance. Use whichever address it prints.
+That one command: reuses Ant Hill if it’s already up, otherwise starts it (prefers a cmux workspace, falls back to this shell). It prints the address it bound — `bun start` defaults to <http://127.0.0.1:4701>, which is also the launchd production port. If production is already up, `bun start` reuses it rather than starting a second server. For an isolated copy, use `bash scripts/anthill-preview.sh` (4710–4719) or `MOUNTAIN_PORT=4710 bun start`. Use whichever address it prints.
 
-Ports: **4702** is `bun start`'s default; **4701** is the server's own default (`bun run start:server`) and the launchd production port — see `DEPLOY.md`.
+Ports: **4701** is the default for both `bun start` and `bun run start:server`, and is the launchd production port — see `DEPLOY.md`, which forbids launching anything on 4701 by hand. Previews use **4710–4719** via `scripts/anthill-preview.sh`.
 
 **Optional, once per machine** — only if you want Focus/Send:
 
