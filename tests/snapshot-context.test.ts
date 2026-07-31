@@ -34,10 +34,11 @@ function contextPctFor(tokens: CollectedAgent["tokens"]): unknown {
 }
 
 describe("snapshot context utilization", () => {
-  test("derives contextPct from observed session tokens and the context window", () => {
+  test("derives contextPct from observed latest-turn tokens and the context window", () => {
     expect(contextPctFor({
       contextWindow: 200_000,
-      sessionTotal: 125_000,
+      total: 125_000,
+      sessionTotal: 9_000_000,
       scope: "latest-turn",
       provenance: "observed",
     })).toBe(63);
@@ -45,6 +46,7 @@ describe("snapshot context utilization", () => {
 
   test("leaves contextPct unknown when the context window is absent", () => {
     expect(contextPctFor({
+      total: 125_000,
       sessionTotal: 125_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -52,11 +54,11 @@ describe("snapshot context utilization", () => {
   });
 
   test.each([
-    { contextWindow: 200_000, sessionTotal: 0, scope: "latest-turn", provenance: "observed" } as const,
+    { contextWindow: 200_000, total: 0, sessionTotal: 125_000, scope: "latest-turn", provenance: "observed" } as const,
     { contextWindow: 200_000, scope: "latest-turn", provenance: "observed" } as const,
     { contextWindow: 200_000, sessionTotal: 125_000, scope: "unknown", provenance: "observed" } as const,
-    { contextWindow: 200_000, sessionTotal: 250_000, scope: "latest-turn", provenance: "observed" } as const,
-  ])("leaves contextPct unknown without a usable session token total", (tokens) => {
+    { contextWindow: 200_000, total: 250_000, sessionTotal: 125_000, scope: "latest-turn", provenance: "observed" } as const,
+  ])("leaves contextPct unknown without a usable latest-turn token total", (tokens) => {
     expect(contextPctFor(tokens)).toBeUndefined();
   });
 });

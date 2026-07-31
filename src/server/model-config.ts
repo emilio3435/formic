@@ -11,7 +11,9 @@ export interface ModelConfig {
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   claudeContextWindows: {
+    "opus-5": 1_000_000,
     "opus-4-8": 1_000_000,
+    "opus-4-7": 1_000_000,
     "sonnet-5": 1_000_000,
     "fable-5": 1_000_000,
   },

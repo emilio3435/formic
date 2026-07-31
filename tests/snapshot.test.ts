@@ -420,6 +420,89 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.contextMedian).toBe(50);
   });
 
+  test("uses the latest turn for latest-turn context", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          tokens: {
+            total: 25,
+            sessionTotal: 900,
+            contextWindow: 100,
+            scope: "latest-turn",
+            provenance: "observed",
+          },
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(25);
+  });
+
+  test("uses the session total for session context", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          tokens: {
+            total: 25,
+            sessionTotal: 60,
+            contextWindow: 100,
+            scope: "session",
+            provenance: "observed",
+          },
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(60);
+  });
+
+  test("rejects latest-turn context that exceeds its window", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          tokens: {
+            total: 101,
+            sessionTotal: 25,
+            contextWindow: 100,
+            scope: "latest-turn",
+            provenance: "observed",
+          },
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBeUndefined();
+  });
+
+  test("requires observed provenance for context", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          tokens: {
+            total: 25,
+            contextWindow: 100,
+            scope: "latest-turn",
+            provenance: "estimated",
+          },
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBeUndefined();
+  });
+
   test("leaves context peak and median undefined without live context reports", () => {
     const snapshot = buildSnapshot({
       agents: [

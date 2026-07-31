@@ -290,19 +290,20 @@ function effortFor(agent: CollectedAgent): string | undefined {
 }
 
 function contextPctFor(agent: CollectedAgent): number | undefined {
-  const { contextWindow, provenance, scope, sessionTotal } = agent.tokens;
+  const { contextWindow, provenance, scope, total, sessionTotal } = agent.tokens;
+  const numerator = scope === "latest-turn" ? total : sessionTotal;
   if (
     provenance !== "observed" ||
     scope === "unknown" ||
     !Number.isFinite(contextWindow) ||
-    !Number.isFinite(sessionTotal) ||
+    !Number.isFinite(numerator) ||
     !contextWindow ||
-    !sessionTotal ||
+    !numerator ||
     contextWindow < 0 ||
-    sessionTotal < 0 ||
-    sessionTotal > contextWindow
+    numerator < 0 ||
+    numerator > contextWindow
   ) return undefined;
-  return Math.round((sessionTotal / contextWindow) * 100);
+  return Math.round((numerator / contextWindow) * 100);
 }
 
 function nextActionFor(

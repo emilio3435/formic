@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  claudeContextWindow,
   collectSessions,
   parseClaudeJsonl,
   parseCodexJsonl,
@@ -455,7 +456,7 @@ describe("collector identity and usage truth", () => {
     });
   });
 
-  test("Claude derives the 1M context window for Opus 4.8, Sonnet 5, and Fable 5, undefined otherwise", () => {
+  test("Claude derives the 1M context window for supported models, undefined otherwise", () => {
     const row = (model: string) => JSON.stringify({
       type: "assistant",
       sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
@@ -470,6 +471,8 @@ describe("collector identity and usage truth", () => {
       },
     });
 
+    expect(claudeContextWindow("claude-opus-5")).toBe(1_000_000);
+    expect(claudeContextWindow("claude-opus-4-7")).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-opus-4-8"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-opus-4-8[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     expect(parseClaudeJsonl(row("claude-sonnet-5"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
@@ -477,7 +480,6 @@ describe("collector identity and usage truth", () => {
     // An explicit [1m] marker is honored even for a model not in the table (ground truth).
     expect(parseClaudeJsonl(row("claude-haiku-5[1m]"), { nowMs })?.tokens.contextWindow).toBe(1_000_000);
     // Unknown / not-yet-confirmed windows stay undefined so the UI shows an honest token count.
-    expect(parseClaudeJsonl(row("claude-opus-4-7"), { nowMs })?.tokens.contextWindow).toBeUndefined();
     expect(parseClaudeJsonl(row("claude-haiku-5"), { nowMs })?.tokens.contextWindow).toBeUndefined();
   });
 
