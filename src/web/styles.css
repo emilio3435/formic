@@ -2794,6 +2794,48 @@ body.feed-frozen .programs { opacity: 0.62; }
   cursor: pointer;
 }
 
+/* ---------- first-paint skeleton ----------
+   Stands in for the board while the first snapshot is in flight. It mimics the
+   real grid — a program head bar over rows of name + instrument cluster — so the
+   layout does not jump when real rows replace it. Neutral --line grey only: a
+   placeholder must never borrow a status ink, or a blank board reads as a fleet
+   verdict for as long as the request takes. */
+.board-skeleton { padding: 0.25rem 0 0; }
+.board-skeleton .sk-head {
+  height: 1.5rem;
+  margin: 0.75rem 0 0.35rem;
+  border-radius: 4px;
+  background: var(--sand);
+  max-width: 18rem;
+}
+.board-skeleton .sk-head:first-of-type { margin-top: 0; }
+.board-skeleton .sk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--line);
+}
+.board-skeleton .sk-bar {
+  height: 0.7rem;
+  border-radius: 3px;
+  background: var(--line);
+  animation: sk-pulse 1.6s ease-in-out infinite;
+}
+.board-skeleton .sk-name { flex: 0 1 22rem; min-width: 8rem; }
+.board-skeleton .sk-meta { flex: 0 0 7rem; opacity: 0.7; }
+/* Staggered so the board reads as loading rather than as one blinking block. */
+.board-skeleton .sk-row:nth-child(3) .sk-bar { animation-delay: 0.12s; }
+.board-skeleton .sk-row:nth-child(4) .sk-bar { animation-delay: 0.24s; }
+.board-skeleton .sk-row:nth-child(6) .sk-bar { animation-delay: 0.36s; }
+.board-skeleton .sk-row:nth-child(7) .sk-bar { animation-delay: 0.48s; }
+
+@keyframes sk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 /* ---------- motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {

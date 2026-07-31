@@ -84,6 +84,23 @@
           <p id="scope-note" class="scope-note" aria-live="polite"></p>
         </section>
 
+        <!-- First-paint placeholder. Deliberately NOT hidden in the markup: the
+             client is a deferred module and boot() does not paint until the
+             first /api/snapshot resolves, so the board sat blank until then.
+             This shows the shape of the board immediately, before app.js runs,
+             and the client hides it the moment the first snapshot lands — or
+             fails, which is #empty-state's job to explain. -->
+        <div id="board-skeleton" class="board-skeleton" role="status" aria-label="Loading agents">
+          <span class="visually-hidden">Loading agents…</span>
+          <div class="sk-head" aria-hidden="true"></div>
+          <div class="sk-row" aria-hidden="true"><span class="sk-bar sk-name"></span><span class="sk-bar sk-meta"></span></div>
+          <div class="sk-row" aria-hidden="true"><span class="sk-bar sk-name"></span><span class="sk-bar sk-meta"></span></div>
+          <div class="sk-row" aria-hidden="true"><span class="sk-bar sk-name"></span><span class="sk-bar sk-meta"></span></div>
+          <div class="sk-head" aria-hidden="true"></div>
+          <div class="sk-row" aria-hidden="true"><span class="sk-bar sk-name"></span><span class="sk-bar sk-meta"></span></div>
+          <div class="sk-row" aria-hidden="true"><span class="sk-bar sk-name"></span><span class="sk-bar sk-meta"></span></div>
+        </div>
+
         <section id="programs" class="programs" aria-label="Programs and agents"></section>
         <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
 

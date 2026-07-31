@@ -3477,7 +3477,10 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     expect(reduced).toContain("transition: none !important");
     // The full existing animation set the guard covers.
     const keyframes = [...styles.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]).sort();
-    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "status-pulse", "sun-pulse"]);
+    // sk-pulse is the first-paint skeleton shimmer; it is inside the universal
+    // guard above like every other one, which is what this list exists to force
+    // a new animation's author to confirm.
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "status-pulse", "sun-pulse"]);
     // Every live `animation:` usage keys off one of those keyframes — none escapes.
     const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
     expect(new Set(animated)).toEqual(new Set(keyframes));
@@ -4561,6 +4564,69 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* -------- first-paint skeleton ------------------------------------------
+     boot() paints nothing until the first /api/snapshot resolves, so the board
+     was blank for the length of that request — and any render() triggered in
+     that window (a view tab, a keystroke in search) fell through to
+     "Can't reach the Ant Hill server", a guess dressed as a diagnosis. */
+  test("(10) the skeleton holds the board until the first snapshot resolves", async () => {
+    // The fake document replaces the global inside withDom, so its nodes are
+    // reached the same way the server-health test does it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const node = (id: string) => (globalThis as unknown as { document: any }).document.getElementById(id);
+
+    expect(M.firstLoadPending({ snap: null, fetchFailed: false })).toBe(true);
+    expect(M.firstLoadPending({ snap: snapshot(), fetchFailed: false })).toBe(false);
+    // A failed first fetch is NOT still loading — otherwise a dead server sits
+    // under a shimmer forever instead of showing its retry.
+    expect(M.firstLoadPending({ snap: null, fetchFailed: true })).toBe(false);
+    expect(M.firstLoadPending({ snap: snapshot(), fetchFailed: true })).toBe(false);
+
+    // In flight: skeleton up, and no premature "can't reach the server".
+    await withState({ snap: null, fetchFailed: false }, () => withDom(() => {
+      M.renderSkeleton();
+      M.renderEmpty();
+      expect(node("board-skeleton").hidden).toBe(false);
+      expect(node("empty-state").hidden).toBe(true);
+    }));
+
+    // Failed: skeleton down, the real diagnosis and its retry up.
+    await withState({ snap: null, fetchFailed: true }, () => withDom(() => {
+      M.renderSkeleton();
+      M.renderEmpty();
+      expect(node("board-skeleton").hidden).toBe(true);
+      expect(node("empty-state").hidden).toBe(false);
+      expect(node("empty-message").textContent).toContain("Can't reach");
+      expect(node("empty-retry").hidden).toBe(false);
+    }));
+
+    // Loaded: skeleton down, board owns the space.
+    await withState({ snap: snapshot(), fetchFailed: false }, () => withDom(() => {
+      M.renderSkeleton();
+      M.renderEmpty();
+      expect(node("board-skeleton").hidden).toBe(true);
+      expect(node("empty-state").hidden).toBe(true);
+    }));
+  });
+
+  test("(10b) the skeleton ships visible in the markup and never borrows a status ink", () => {
+    /* It must paint before app.js parses — the client is a deferred module, so a
+       hidden-by-default skeleton would appear only after the very request it
+       exists to cover. */
+    const node = html.match(/<div id="board-skeleton"[^>]*>/)?.[0] ?? "";
+    expect(node).not.toBe("");
+    expect(node).not.toContain("hidden");
+    expect(node).toContain('role="status"');
+    expect(html).toContain("Loading agents…"); // announced, not just drawn
+    expect(styles).toContain(".board-skeleton");
+    /* A placeholder that borrowed --ember/--moss/--needs would read as a fleet
+       verdict for as long as the request took. Greys only. */
+    const block = styles.slice(styles.indexOf(".board-skeleton"), styles.indexOf("@keyframes sk-pulse"));
+    for (const ink of ["--ember", "--moss", "--needs", "--blocked", "--failed", "--amber"]) {
+      expect(block).not.toContain(ink);
+    }
   });
 
   /* -------- arrow-key row navigation --------------------------------------

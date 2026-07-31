@@ -1250,7 +1250,7 @@ globalThis.TheAntHill = {
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
   // block, exactly the TDZ hazard the comment above describes. The behavior it
   // gates is asserted through handleRowNavigation instead.
-  nextRowIndex, handleRowNavigation,
+  nextRowIndex, handleRowNavigation, firstLoadPending, renderSkeleton, renderEmpty,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
@@ -2027,6 +2027,7 @@ function render() {
   renderActionsPanel();
   renderInspector();
   renderBroadcastBar();
+  renderSkeleton();
   renderEmpty();
 
   // Rebuilding the list momentarily collapses pane height, which clamps the
@@ -6783,9 +6784,33 @@ function serverUnreachableHint(host) {
   return "Check that the Ant Hill server is running " + where + ", then retry.";
 }
 
+/* The board is blank until the first snapshot resolves: the client is a deferred
+   module and boot() paints nothing before fetchSnapshot() returns. index.html
+   therefore ships the skeleton VISIBLE, so the shape of the board is on screen
+   before app.js has even parsed; this is only what takes it back down.
+
+   fetchFailed is the whole distinction. Without it an unreachable server would
+   sit under a shimmering placeholder indefinitely, which reads as "still
+   loading" rather than "this is broken" — #empty-state owns that message and
+   its retry button. */
+function firstLoadPending(ui = state) {
+  return !ui.snap && !ui.fetchFailed;
+}
+
+function renderSkeleton() {
+  const skeleton = $("board-skeleton");
+  if (!skeleton) return;
+  skeleton.hidden = !firstLoadPending();
+}
+
 function renderEmpty() {
   const empty = $("empty-state");
   const retry = $("empty-retry");
+  /* Nothing has come back yet, so there is no finding to report. Any render()
+     triggered before the first response — a view tab, a keystroke in search —
+     used to fall through to "Can't reach the Ant Hill server", which is a guess
+     dressed as a diagnosis. The skeleton holds the space instead. */
+  if (firstLoadPending()) { empty.hidden = true; return; }
   const hasAgents = state.snap && state.snap.programs.some((p) => p.agents.length);
   if (hasAgents) { empty.hidden = true; return; }
 
