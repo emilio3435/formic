@@ -414,6 +414,9 @@ export async function enrichCmuxIdentity(
         };
       }
       const tty = surface.tty?.replace(/^\/dev\//, "");
+      // Terminal discovery can omit the tty entirely; naming a location we never
+      // learned rendered every conflict as "... on undefined" on the health card.
+      const conflictLocation = tty ? ` on ${tty}` : "";
       const exactPids = attributedPids.get(surface.surfaceId);
       const surfaceProcesses = tty
         ? processesByTty.get(tty) ?? []
@@ -475,7 +478,7 @@ export async function enrichCmuxIdentity(
       }));
       const openIdentity = primaryOpenIdentity(openHints, agentsByIdentity);
       if (openHints.length > 0 && !openIdentity) {
-        const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files on ${tty}`;
+        const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files${conflictLocation}`;
         errors.push(identityConflict);
         return {
           ...surface,
@@ -521,7 +524,7 @@ export async function enrichCmuxIdentity(
       }
       const commandIdentity = uniqueIdentity(commandHints);
       if (commandHints.length > 0 && !commandIdentity) {
-        const identityConflict = `cmux ${surface.surfaceId} has conflicting recognized agent commands on ${tty}`;
+        const identityConflict = `cmux ${surface.surfaceId} has conflicting recognized agent commands${conflictLocation}`;
         errors.push(identityConflict);
         return {
           ...surface,

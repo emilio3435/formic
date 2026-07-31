@@ -317,7 +317,7 @@ export function bridgeAgentsWithBindings(
     const processIds = binding.processIds;
     const trace = bound?.identityTrace;
     const trustworthyProcessScan = Boolean(
-      trace && trace.outcome !== "probe-failed" && trace.outcome !== "no-tty",
+      trace && trace.outcome !== "probe-failed" && trace.outcome !== "no-tty" && trace.outcome !== "stale-surface",
     );
     const processAlive = processIds?.length
       ? liveAgentProcessIds

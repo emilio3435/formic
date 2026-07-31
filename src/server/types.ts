@@ -25,6 +25,8 @@ export interface CollectedAgent {
   startedAt?: string;
   updatedAt: string;
   tokens: TokenUsage;
+  /** Observed session token occupancy as a percentage of the reported context window. */
+  contextPct?: number;
   cost?: CostUsage | null;
   subagentCount?: number;
   parentSourceSessionId?: string;

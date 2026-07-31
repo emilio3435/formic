@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /* app.js guards all DOM wiring behind a `typeof document` check and exposes its
@@ -15,7 +15,12 @@ beforeAll(async () => {
   // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
   await import("../src/web/app.js");
   M = (globalThis as unknown as { TheAntHill: unknown }).TheAntHill;
-  source = readFileSync(join(import.meta.dir, "../src/web/app.js"), "utf8");
+  const webDir = join(import.meta.dir, "../src/web");
+  source = readdirSync(webDir)
+    .filter((name) => name.endsWith(".js"))
+    .sort()
+    .map((name) => readFileSync(join(webDir, name), "utf8"))
+    .join("\n");
   html = readFileSync(join(import.meta.dir, "../src/web/index.html"), "utf8");
   styles = readFileSync(join(import.meta.dir, "../src/web/styles.css"), "utf8");
 });
@@ -241,6 +246,56 @@ async function withRequests<T>(replies: FakeReply[], fn: (calls: FakeCall[]) => 
   }
 }
 
+describe("client request deadlines", () => {
+  test("a request that never settles rejects before it can leave the dashboard waiting", async () => {
+    const realFetch = G.fetch;
+    G.fetch = (_url: string, init: Record<string, any>) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+    try {
+      const recovered = await Promise.race([
+        M.apiFetch("/api/snapshot", {}, 5).then(() => null, (error: Error) => error),
+        Bun.sleep(100).then(() => null),
+      ]);
+      expect(recovered).toBeInstanceOf(Error);
+    } finally {
+      G.fetch = realFetch;
+    }
+  });
+
+  test("timeouts name their endpoint and differ from network failures", async () => {
+    const realFetch = G.fetch;
+    try {
+      G.fetch = (_url: string, init: Record<string, any>) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+      const timeout = await M.apiFetch("/api/snapshot", {}, 5).catch((error: Error) => error);
+      G.fetch = async () => { throw new Error("connection refused"); };
+      const network = await M.apiFetch("/api/snapshot", {}, 5).catch((error: Error) => error);
+
+      expect(timeout.message).toBe("/api/snapshot timed out after 0.005s");
+      expect(network.message).toBe("/api/snapshot request failed: connection refused");
+      expect(network.message).not.toBe(timeout.message);
+    } finally {
+      G.fetch = realFetch;
+    }
+  });
+
+  test("a snapshot request failure still marks the feed as failed", async () => {
+    await withState({ snap: null, conn: "live", fetchFailed: false }, async () => {
+      await withRequests([new Error("connection refused")], async () => {
+        await M.fetchSnapshot();
+        expect(M.state.fetchFailed).toBe(true);
+        expect(M.state.conn).toBe("offline");
+      });
+    });
+  });
+
+  test("only apiFetch calls fetch directly", () => {
+    expect(source.match(/\bfetch\(/g)).toHaveLength(1);
+  });
+});
+
 /* The seam exports the REAL module state, so every test that writes it puts
    back exactly what it found. Paint signatures are reset too: the guards early-
    return on an unchanged signature, so a leftover one would silently skip the
@@ -382,6 +437,84 @@ describe("summary status and widgets", () => {
     expect(M.systemStatus(snapshot({ controlHealth: { ...healthy.controlHealth, cmuxReachable: false } }), "live").label).toBe("Degraded");
     expect(M.systemStatus(healthy, "stale").label).toBe("Degraded");
     expect(M.systemStatus(null, "offline").label).toBe("Offline");
+  });
+
+  /* F3: "Degraded" said something is wrong and never the question an operator
+     actually has — am I blocked, or is this cosmetic? cmux unreachable (Focus
+     and Send dead) and 15 tidy-up warnings both rendered the same word. */
+  test("a Degraded verdict says whether the operator is blocked or merely informed", () => {
+    const healthy = snapshot();
+    expect(M.degradedSeverity(healthy, "live", false)).toBeNull(); // Operational is untouched
+
+    // Blocking: the control plane is gone, so no operator action can route.
+    const noCmux = snapshot({ controlHealth: { ...healthy.controlHealth, cmuxReachable: false } });
+    expect(M.degradedSeverity(noCmux, "live", false)).toMatchObject({ key: "blocking", label: "Blocking" });
+    expect(M.degradedSeverity(noCmux, "live", false).detail).toContain("Focus and Send");
+    expect(M.degradedSeverity(null, "offline", false)).toMatchObject({ key: "blocking" });
+
+    // Stale: controls work, but the numbers may have moved on. Distinct from
+    // blocking, because the fix is a refresh rather than repairing the plane.
+    expect(M.degradedSeverity(healthy, "stale", false)).toMatchObject({ key: "stale" });
+    expect(M.degradedSeverity(healthy, "live", true)).toMatchObject({ key: "stale" });
+    expect(M.degradedSeverity(healthy, "live", true).detail).toContain("previous good snapshot");
+
+    // Advisory: the live case — cmux reachable, everything usable, evidence
+    // just needs tidying. This must NOT read as blocking.
+    const noisy = snapshot({ controlHealth: { ...healthy.controlHealth, errors: ["conflicting session files"] } });
+    const advisory = M.degradedSeverity(noisy, "live", false);
+    expect(advisory).toMatchObject({ key: "advisory", label: "Advisory" });
+    expect(advisory.detail).toContain("usable");
+
+    // Severity outranks reason: a blocked board says so even when the loudest
+    // finding is a mere warning, which is the case that misled operators.
+    const blockedAndNoisy = snapshot({
+      controlHealth: { ...healthy.controlHealth, cmuxReachable: false, errors: ["conflicting session files"] },
+    });
+    expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
+  });
+
+  /* F2: the BURN card read "cost unavailable" because the cost source returns
+     null, and that is the correct render of an unknown — but nothing pinned it
+     down. The failure worth guarding is not the missing number, it is a missing
+     number quietly becoming $0.00: a fleet that looks free is worse than one
+     that admits it does not know. */
+  test("BURN shows a dollar figure when cost is reported and never invents $0.00", () => {
+    const burnSnap = (burn: Record<string, unknown>) => snapshot({
+      pulse: { burn: { tokensPerMin: 840, windowMs: 600_000, coverage: { reporting: 7, eligible: 7 }, ...burn } },
+    });
+
+    const priced = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 12.5 }), "live", "percent", [], false);
+    expect(priced.sublabel).toContain("$12.50 last hour");
+    expect(priced.value).toBe("840");
+
+    // Unknown cost states its ignorance and never renders as free.
+    const unknown = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: null }), "live", "percent", [], false);
+    expect(unknown.sublabel).toContain("cost unavailable");
+    expect(unknown.sublabel).not.toContain("$");
+
+    // A real zero is a real number and must survive as one.
+    const free = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 0 }), "live", "percent", [], false);
+    expect(free.sublabel).toContain("$0.00 last hour");
+    expect(free.sublabel).not.toContain("unavailable");
+
+    // Token throughput is independent of cost: no price must not blank the rate.
+    expect(unknown.value).toBe("840");
+    expect(unknown.tone).toBe("ok");
+  });
+
+  /* Claude transcripts report observed totals with no context-window size, so a
+     truthful percentage is impossible for them. Showing the absolute count is
+     the honest answer; a fabricated denominator would misreport a 1M-context
+     session by roughly 5x. 45 of 139 agents on the live board are in this state. */
+  test("CTX falls back to an absolute count rather than inventing a denominator", () => {
+    const noWindow = { provenance: "observed", scope: "latest-turn", total: 47_432 };
+    expect(M.contextDisplayValue(noWindow, "percent")).toBe("47k tokens");
+    expect(M.contextDisplayValue(noWindow, "percent")).not.toContain("%");
+    expect(M.contextUsage(noWindow)).toBeNull();
+
+    // And the moment the backend does report a window, the percentage appears
+    // with no client change — this is the contract between the two lanes.
+    expect(M.contextDisplayValue({ ...noWindow, contextWindow: 258_400 }, "percent")).toBe("18%");
   });
 
   test("keeps the 5-widget Pulse catalog, needs-you pin, and persisted order valid", () => {
@@ -538,6 +671,60 @@ describe("views split Now from History", () => {
     expect(M.viewMatches("now", done)).toBe(false);
     expect(M.viewMatches("history", live)).toBe(false);
     expect(M.viewMatches("history", done)).toBe(true);
+  });
+
+  /* Regression: an alert outranks the activity clock. A live snapshot carried
+     two agents reading activity "ended" (transcript stopped) whose process was
+     still `running` and whose status was "attention" — waiting on a human. The
+     old `act !== "ended"` gate hid them from Now AND from Alerts, so a session
+     needing a human appeared in no default view. Now must key off the alert. */
+  test("Now keeps an alerted agent even when its activity reads ended", () => {
+    const strandedButAlerting = agent({
+      status: "attention",
+      activity: "ended",
+      outcome: "needs-you",
+      processState: "running",
+    });
+    expect(M.viewMatches("now", strandedButAlerting)).toBe(true);
+
+    // The guard that makes this safe: an ended agent with nothing wrong stays
+    // in History, so Now cannot silt up with the 100+ finished sessions.
+    const endedAndFine = agent({ status: "archived", activity: "ended", outcome: "healthy" });
+    expect(M.viewMatches("now", endedAndFine)).toBe(false);
+    expect(M.viewMatches("history", endedAndFine)).toBe(true);
+  });
+
+  /* alerting() is the one verdict behind Now, Alerts, the program expander and
+     the notifier. It has to answer two opposite failures at once: a session that
+     stopped transcribing while its process runs on IS waiting on a human, and a
+     long-archived session's last verdict is NOT. Liveness evidence is what tells
+     them apart — which is why this is gated on processState rather than on the
+     outcome alone. */
+  test("alerting() frees a live-but-silent session without resurrecting archived ones", () => {
+    // The live-snapshot case: transcript stopped, process still running.
+    expect(M.alerting(agent({
+      status: "attention", activity: "ended", outcome: "needs-you", processState: "running",
+    }))).toBe(true);
+
+    // The guard. Same outcome, no evidence the process survives — this is a
+    // stale verdict on a finished session and must stay in History.
+    expect(M.alerting(agent({ status: "archived", activity: "ended", outcome: "needs-you" }))).toBe(false);
+    expect(M.alerting(agent({
+      status: "archived", activity: "ended", outcome: "failed", processState: "unknown",
+    }))).toBe(false);
+    expect(M.alerting(agent({
+      status: "archived", activity: "ended", outcome: "failed", processState: "died",
+    }))).toBe(false);
+
+    // Live sessions never needed liveness evidence to alert.
+    expect(M.alerting(agent({ status: "attention", outcome: "needs-you" }))).toBe(true);
+    expect(M.alerting(agent({ status: "running", outcome: "healthy" }))).toBe(false);
+
+    // And the views inherit it rather than restating it — the disagreement
+    // between Now and Alerts is what let these agents hide in the first place.
+    const revived = agent({ status: "attention", activity: "ended", outcome: "needs-you", processState: "running" });
+    expect(M.viewMatches("now", revived)).toBe(true);
+    expect(M.viewMatches("needs-you", revived)).toBe(true);
   });
 
   test("Needs you contains only live unhealthy sessions", () => {
@@ -946,7 +1133,7 @@ describe("broadcast recipient eligibility", () => {
 
 describe("redesigned network contracts (source-level)", () => {
   test("program rename is presentation-only via GET/POST /api/program-aliases", () => {
-    expect(source).toContain('fetch("/api/program-aliases"');
+    expect(source).toContain('apiFetch("/api/program-aliases"');
     const program = { id: "stable-source-id", name: "Source program" };
     expect(M.presentationLabelKey({ kind: "program", programId: program.id }))
       .toBe("program:stable-source-id");
@@ -3932,6 +4119,8 @@ describe("FE-B: harness-backed client behavior", () => {
       "widget-option-", "identity-step--", "control-", "is-", "dw-d",
       // W4-B: the drawer composes "liveness-" + the normalized liveness word.
       "liveness-",
+      // F3: the health card composes "health-severity-" + the severity key.
+      "health-severity-",
     ];
     const declared = [...new Set(styles.match(/\.-?[_A-Za-z][-\w]*/g) ?? [])]
       .map((selector) => selector.slice(1));
@@ -4327,6 +4516,56 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* Regression: the alerted row that passed the filter and still never painted.
+     programRollup prefers the SERVER's rollup, and the server counts needsYou
+     over non-ended agents only. A live snapshot carried two programs whose agent
+     read activity "ended" (transcript stopped) while its process was still
+     running and its status was "attention" — server rollup needsYou: 0, so the
+     program stayed collapsed and the row was dropped from the plan. The agent
+     cleared the "now" filter and was invisible anyway. */
+  test("(3) a program holding an alerted agent expands even when its server rollup says needsYou: 0", () => {
+    const stranded = agent({
+      id: "codex:w6-server",
+      displayName: "Codex · w6-server",
+      status: "attention",
+      activity: "ended",
+      outcome: "needs-you",
+      processState: "running",
+    });
+    const program = {
+      id: "cwd-w6-server",
+      name: "w6-server",
+      agents: [stranded],
+      // Verbatim shape the server emitted for this program.
+      rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+    };
+
+    expect(M.viewMatches("now", stranded)).toBe(true); // clears the filter...
+    expect(M.programOpen(program, listUi())).toBe(true); // ...and now also paints.
+
+    const root = newNode("div");
+    const visible = [{ program, agents: [stranded] }];
+    const shown = withDom(() => M.syncProgramList(root, visible, listUi({
+      snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(shown).toBe(1);
+    const body = root.children[0].children[root.children[0].children.length - 1];
+    expect(body.children.length).toBe(2); // column header + the rescued row
+    const rowText = textOf(body.children[1]);
+    expect(rowText).toContain("Codex · w6-server");
+    expect(rowText).toContain("Alert"); // and it reads as needing a human
+
+    // The guard: a program of finished, healthy agents still collapses, so this
+    // cannot expand the 60+ done programs on a real board.
+    const quiet = {
+      id: "cwd-done",
+      name: "done",
+      agents: [agent({ id: "codex:done", status: "archived", activity: "ended", outcome: "healthy" })],
+      rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+    };
+    expect(M.programOpen(quiet, listUi())).toBe(false);
   });
 
   /* -------- finding 1: the quarantine dead end -----------------------------
@@ -5237,6 +5476,44 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // Idempotent: repainting must not stack prefixes into "(3) (2) (1) …".
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 2)).toBe("(2) " + base);
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
+  });
+
+  /* F3: "Alerts off" sat silently beside four waiting agents. The button
+     reported the delivery channel and never the backlog, so muting the channel
+     also hid the work. The count must therefore survive every muted state. */
+  test("(4) the waiting count rides every toggle state, muted and blocked included", () => {
+    const off = M.notifyToggleView({ enabled: false, permission: "default" }, true, 4);
+    expect(off.label).toBe("Alerts off");
+    expect(off.count).toBe(4);
+    expect(off.ariaLabel).toBe("Alerts off, 4 agents waiting on you");
+    expect(off.title).toContain("4 waiting on you");
+
+    // Blocked and unsupported are exactly the states where the operator has no
+    // other channel — hiding the number there is the worst case, not a spared one.
+    expect(M.notifyToggleView({ enabled: false, permission: "denied" }, true, 4).count).toBe(4);
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, false, 4).count).toBe(4);
+
+    // A quiet fleet stays quiet: no badge, no count noise in the label or title.
+    const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
+    expect(calmView.count).toBe(0);
+    expect(calmView.ariaLabel).toBe("Alerts on");
+    expect(calmView.title).not.toContain("waiting on you");
+    // Singular reads as English, not "1 agents".
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
+      .toBe("Alerts off, 1 agent waiting on you");
+
+    // The badge is a real node carrying the digit, not text glued onto the label.
+    expect(source).toContain('class: "notify-badge"');
+    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.ariaLabel\)/);
+
+    /* Placement rule, not style — this is the bug the unit tests above could
+       not see. The toggle used to paint once in boot() and on click, which was
+       fine for pure preference state. Now that it carries a snapshot-derived
+       count it MUST paint inside render(), because boot() runs before the first
+       snapshot exists: the count was always 0 and the badge never appeared on
+       the real page even though every assertion above passed. */
+    const renderFn = source.match(/\nfunction render\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(renderFn).toContain("renderNotifyToggle()");
   });
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {

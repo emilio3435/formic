@@ -9,6 +9,7 @@ import {
   handleUsageRequest,
   isEncryptedSqliteFile,
   resolveUsageCost,
+  toBurnBarTimestamp,
 } from "../src/server/burnbar";
 
 const dylib =
@@ -40,6 +41,11 @@ describe("burnbar usage bridge", () => {
     writeFileSync(join(root, "cipher.sqlite"), "not-a-sqlite-header!!");
     expect(isEncryptedSqliteFile(join(root, "plain.sqlite"))).toBe(false);
     expect(isEncryptedSqliteFile(join(root, "cipher.sqlite"))).toBe(true);
+  });
+
+  test("normalizes ISO window bounds to OpenBurnBar's UTC SQLite format", () => {
+    expect(toBurnBarTimestamp("2026-07-30T15:00:00.123Z")).toBe("2026-07-30 15:00:00.123");
+    expect(toBurnBarTimestamp("2026-07-30T17:00:00.123+02:00")).toBe("2026-07-30 15:00:00.123");
   });
 
   test("reads quotas sidecar without inventing spend", async () => {
@@ -216,9 +222,9 @@ db.run(\`CREATE TABLE token_usage (
   inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
   totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
 db.run(\`INSERT INTO token_usage VALUES
-  ('1','Claude Code','sess-a','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22T10:00:00.000Z','2026-07-22T10:01:00.000Z'),
-  ('2','Codex','sess-b','proj','unpriced-model',1500,500,0,0,2000,0,'low_confidence_estimate','2026-07-22T11:00:00.000Z','2026-07-22T11:01:00.000Z'),
-  ('3','Claude Code','sess-c','proj','claude-opus-4-8',800,200,0,0,1000,99,'low_confidence_estimate','2026-07-23T10:00:00.000Z','2026-07-23T10:01:00.000Z')\`);
+  ('1','Claude Code','sess-a','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
+  ('2','Codex','sess-b','proj','unpriced-model',1500,500,0,0,2000,0,'low_confidence_estimate','2026-07-22 11:00:00.000','2026-07-22 11:01:00.000'),
+  ('3','Claude Code','sess-c','proj','claude-opus-4-8',800,200,0,0,1000,99,'low_confidence_estimate','2026-07-23 10:00:00.000','2026-07-23 10:01:00.000')\`);
 db.close();
 `,
     );

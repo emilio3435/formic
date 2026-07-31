@@ -289,6 +289,23 @@ function effortFor(agent: CollectedAgent): string | undefined {
   return undefined;
 }
 
+function contextPctFor(agent: CollectedAgent): number | undefined {
+  const { contextWindow, provenance, scope, total, sessionTotal } = agent.tokens;
+  const numerator = scope === "latest-turn" ? total : sessionTotal;
+  if (
+    provenance !== "observed" ||
+    scope === "unknown" ||
+    !Number.isFinite(contextWindow) ||
+    !Number.isFinite(numerator) ||
+    !contextWindow ||
+    !numerator ||
+    contextWindow < 0 ||
+    numerator < 0 ||
+    numerator > contextWindow
+  ) return undefined;
+  return Math.round((numerator / contextWindow) * 100);
+}
+
 function nextActionFor(
   activity: ActivityState,
   outcome: OutcomeState,
@@ -588,6 +605,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
     const outcome = outcomeFor(source, archived, Boolean(notification));
     const controlState = operatorControlState(target, archived || activity === "ended");
+    const contextPct = contextPctFor(source);
     const snapshotStatusReason = archived
       ? "Archived by source or operator."
       : notificationSummary
@@ -604,6 +622,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       controlState,
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
+      ...(contextPct === undefined ? {} : { contextPct }),
       nextAction: nextActionFor(activity, outcome, controlState),
       modelPolicy: cursorModelPolicy(source, sourcesById),
       parentAgentId: source.parentSourceSessionId
@@ -663,6 +682,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     : tokenValues.length % 2 === 1
       ? tokenValues[(tokenValues.length - 1) / 2]
       : Math.round((tokenValues[tokenValues.length / 2 - 1]! + tokenValues[tokenValues.length / 2]!) / 2);
+  const contextValues = liveAgents
+    .map((agent) => agent.contextPct)
+    .filter((value): value is number => typeof value === "number")
+    .sort((left, right) => left - right);
+  const contextPeak = contextValues.length === 0 ? undefined : contextValues[contextValues.length - 1];
+  const contextMedian = contextValues.length === 0
+    ? undefined
+    : contextValues.length % 2 === 1
+      ? contextValues[(contextValues.length - 1) / 2]
+      : Math.round((contextValues[contextValues.length / 2 - 1]! + contextValues[contextValues.length / 2]!) / 2);
   const sourceErrors = Object.values(input.sourceErrors ?? {}).flat();
   const cmuxErrors = [...(input.cmuxErrors ?? [])];
   const staleSources = (Object.entries(input.sourceErrors ?? {}) as [Provider, readonly string[]][])
@@ -692,6 +721,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     },
     scanWindowHours,
     lookbackHours: scanWindowHours,
+    contextPeak,
+    contextMedian,
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? cmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),

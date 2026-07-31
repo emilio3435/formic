@@ -275,6 +275,44 @@ describe("TTY and open-session identity evidence", () => {
     expect(resolveAgentTarget({ ...agent, cwd: "/Users/me/project" }, enriched.value).resolution).toBe("ambiguous");
   });
 
+  test("a conflict on a tty-less surface names no location instead of 'undefined'", async () => {
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([{ kind: "process", cmux_surface_id: "SURFACE-NOTTY", pid: 202 }]),
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: "202 ?? /Users/me/.local/bin/omp -p",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          "n/Users/me/.omp/agent/sessions/project/run_019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+          "n/Users/me/.omp/agent/sessions/project/run_11111111-2222-3333-4444-555555555555.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity(
+      [{ ...surface, surfaceId: "SURFACE-NOTTY", tty: undefined, sourceSessionIds: [agent.sourceSessionId] }],
+      [agent],
+      runner,
+    );
+
+    const conflict = enriched.value[0]?.identityConflict;
+    expect(conflict).toBe("cmux SURFACE-NOTTY has conflicting open agent session files");
+    expect(conflict).not.toContain("undefined");
+    expect(enriched.errors.some((error) => error.includes("undefined"))).toBeFalse();
+  });
+
   test("conflicting allowlisted open sessions remain fail-closed", async () => {
     const runner = new SequenceRunner([
       {

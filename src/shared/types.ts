@@ -182,6 +182,8 @@ export interface AgentSnapshot {
   updatedAt: string;
   elapsedMs?: number;
   tokens: TokenUsage;
+  /** Observed session token occupancy as a percentage of the reported context window. */
+  contextPct?: number;
   cost?: CostUsage | null;
   subagentCount?: number;
   transcriptTail?: string;
@@ -357,6 +359,8 @@ export interface HubSnapshot {
   scanWindowHours?: number;
   /** Alias of scanWindowHours for provenance labeling. */
   lookbackHours?: number;
+  contextPeak?: number;
+  contextMedian?: number;
   controlHealth: ControlHealth;
   totals: {
     live: number;
