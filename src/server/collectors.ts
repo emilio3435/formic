@@ -616,14 +616,29 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
   return parser.result(meta);
 }
 
-async function recentJsonlFiles(root: string, maxDepth: number, windowMs: number): Promise<string[]> {
+/* Returns the files it could see AND what stopped it seeing more. A bare catch
+   here turned a permissions or I/O failure into an empty file list, which reads
+   downstream as a provider that simply has no sessions — a healthy, empty
+   fleet. An absent directory really is "this provider never ran here"; every
+   other failure is evidence we lost and must degrade the source. */
+async function recentJsonlFiles(
+  root: string,
+  maxDepth: number,
+  windowMs: number,
+): Promise<CollectionResult<string[]>> {
   const files: string[] = [];
+  const errors: string[] = [];
   const nowMs = Date.now();
+  const absent = (error: unknown): boolean =>
+    (error as NodeJS.ErrnoException).code === "ENOENT";
+  const describe = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
   async function walk(directory: string, depth: number): Promise<void> {
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (!absent(error)) errors.push(`${directory}: ${describe(error)}`);
       return;
     }
     await Promise.all(
@@ -634,14 +649,15 @@ async function recentJsonlFiles(root: string, maxDepth: number, windowMs: number
         try {
           const details = await stat(path);
           if (nowMs - details.mtimeMs <= windowMs) files.push(path);
-        } catch {
-          // A source disappearing during a scan is harmless.
+        } catch (error) {
+          // A source disappearing mid-scan is harmless; unreadable is not.
+          if (!absent(error)) errors.push(`${path}: ${describe(error)}`);
         }
       }),
     );
   }
   await walk(root, maxDepth);
-  return files;
+  return { value: files, errors };
 }
 
 function completeJsonRecords(buffer: Buffer): { rows: JsonRecord[]; remainder: Buffer } {
@@ -691,7 +707,9 @@ async function collectProvider(
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
-  const files = await recentJsonlFiles(root, depth, windowMs);
+  const scan = await recentJsonlFiles(root, depth, windowMs);
+  const files = scan.value;
+  for (const error of scan.errors) errors.push(`${provider} ${error}`);
   const currentPaths = new Set(files);
   for (const [path, cached] of fileCache) {
     if (cached.provider === provider && !currentPaths.has(path)) fileCache.delete(path);

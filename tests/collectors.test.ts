@@ -684,4 +684,29 @@ describe("collector identity and usage truth", () => {
     renameSync(replacement, path);
     await expectMatchesFullRead();
   });
+
+  /* A directory we cannot scan is not a provider with no sessions. The walk
+     used to swallow every readdir failure and return [], so a permissions or
+     I/O fault reported zero agents AND zero errors — which state.ts reads as a
+     healthy source, putting a confident empty fleet on the board. */
+  test("an unscannable sessions directory degrades the source instead of reporting zero agents", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-unreadable-"));
+    // A plain file where the sessions directory belongs: readdir gives ENOTDIR,
+    // which is a real fault, unlike the ENOENT of a provider that never ran.
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "sessions"), "not a directory");
+
+    const codex = (await collectSessions(home)).codex;
+    expect(codex.value).toEqual([]);
+    expect(codex.errors.length).toBeGreaterThan(0);
+    expect(codex.errors.join(" ")).toContain("codex");
+  });
+
+  test("a provider that has never run stays silent rather than reporting an error", async () => {
+    // ENOENT is the normal state before a provider writes its first session.
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-absent-"));
+    const codex = (await collectSessions(home)).codex;
+    expect(codex.value).toEqual([]);
+    expect(codex.errors).toEqual([]);
+  });
 });
