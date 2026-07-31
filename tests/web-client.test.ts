@@ -3219,10 +3219,13 @@ describe("program-header at-a-glance rollups (C2)", () => {
     // renderProgram delegates its header rollup to the shared builder and keeps no
     // parallel arithmetic; the old rollupParts text summary is gone.
     const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(rp).toContain("programHeadRollup(agents)");
+    // Delegation is the contract; WHICH list it rolls up is asserted behaviorally
+    // in "a filtered view leaves the program header counting the whole program".
+    expect(rp).toContain("programHeadRollup(");
     expect(rp).not.toContain("deriveRollup(agents)");
     expect(source).not.toContain("rollupParts");
   });
+
 
   test("(e) rollup data rides the header's accessible text (extends the drawer aria pattern)", () => {
     const agents = [
@@ -4087,7 +4090,7 @@ describe("FE-B: harness-backed client behavior", () => {
       { bucketStart: "2026-07-28T02:00:00.000Z", tokens: 4_000, provider: "codex" },
     ];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart: any = withDom(() => M.renderUsageSeriesChart(points));
+    const chart: any = withDom(() => M.renderUsageSeriesChart({ available: true, points }));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rects = findAll(chart, (n: any) => n.tagName === "rect");
     expect(rects.length).toBe(2);
@@ -4368,6 +4371,48 @@ describe("FE-B: harness-backed client behavior", () => {
        said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
   });
 
+  /* A failed BurnBar query answers {ok:true, available:false, points:[]}. The
+     panel used to read only .points/.invocations, so a SQLCipher failure drew an
+     empty chart and an empty table — reporting "you spent nothing" when the
+     truth was "the database never answered". Summary and ward already checked
+     availability; series and invocations did not. These two assert the operator
+     is told the difference, and fail if either guard is dropped again. */
+  test("an unavailable usage series says so instead of drawing an empty chart", () => {
+    const failed = withDom(() =>
+      M.renderUsageSeriesChart({ available: false, points: [], error: "unable to open database file" }));
+    expect(textOf(failed)).toContain("unable to open database file");
+    expect(textOf(failed)).not.toContain("No series points in this range.");
+
+    // A genuinely empty range must still read as empty, not as a failure.
+    const empty = withDom(() => M.renderUsageSeriesChart({ available: true, points: [] }));
+    expect(textOf(empty)).toContain("No series points in this range.");
+  });
+
+  test("an unavailable invocations query says so instead of reporting zero activity", () => {
+    const failed = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: false, invocations: [], error: "database is locked" },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(failed)).toContain("database is locked");
+    expect(textOf(failed)).not.toContain("No invocations in this range.");
+
+    const quiet = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 0, invocations: 0, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: true, invocations: [] },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(quiet)).toContain("No invocations in this range.");
+  });
+
   /* -------- finding 2: one agent's tick rebuilt the whole list -------------
      The list guard was all-or-nothing: any visible agent's status, tokens or
      summary moving invalidated one signature for the WHOLE list, and the next
@@ -4564,6 +4609,36 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* A filter is a lens on the board, not a change to what a program contains.
+     The header used to roll up the FILTERED list while the drawer used the full
+     program, so under the default Now filter a program holding 32 agents
+     announced "1 agent" — the header contradicting its own drawer on screen.
+     The shell signature has to watch the full program for the same reason, or a
+     change outside the active filter would never repaint the header. */
+  test("a filtered view leaves the program header counting the whole program", () => {
+    const mk = (id: string, over: Record<string, unknown> = {}) => agent({ id, status: "running", ...over });
+    const all = [mk("codex:f1"), mk("codex:f2", { status: "idle" }), mk("codex:f3", { status: "idle" })];
+    const program = { id: "filtered", name: "Filtered", agents: all };
+    // The active filter keeps one row; the program still holds three.
+    const visible = [{ program, agents: [all[0]!] }];
+    const root = newNode("div");
+    const ui = listUi({ snap: { schemaVersion: 1, programs: [program] } });
+
+    const shown = withDom(() => M.syncProgramList(root, visible, ui));
+
+    expect(shown).toBe(1); // the body lists only what the filter kept
+    // section = [visually-hidden h2, head, ...body]; the rollup rides the head.
+    const head = root.children[0].children[1];
+    expect(textOf(head)).toContain("3agents");
+    expect(textOf(head)).not.toContain("1agent");
+
+    // The signature must move when the program changes outside the filter,
+    // otherwise the corrected header would cache and go stale.
+    const grown = { ...program, agents: [...all, mk("codex:f4", { status: "idle" })] };
+    expect(M.programShellSig(grown, [all[0]!], ui))
+      .not.toBe(M.programShellSig(program, [all[0]!], ui));
   });
 
   /* -------- first-paint skeleton ------------------------------------------

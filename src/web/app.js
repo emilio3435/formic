@@ -3335,7 +3335,9 @@ function programShellSig(program, agents, ui) {
     programName(program),
     ui.labels.has(key) ? "1" : "0",
     programOpen(program, ui) ? "open" : "shut",
-    programRollupCells(agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    // Header counts the whole program, so the signature must watch the whole
+    // program too — otherwise a change outside the active filter never repaints.
+    programRollupCells(program.agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
     ui.selecting ? "1" : "0",
     ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
     ui.renaming === key ? "1" : "0",
@@ -3542,7 +3544,11 @@ function programHeadRollup(agents) {
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const rollup = programHeadRollup(agents);
+  /* The header describes the PROGRAM; the body lists the agents the active
+     filter kept. Rolling up the filtered list made the header disagree with its
+     own drawer — "1 agent" above a program holding 32 — because a filter is a
+     lens on the board, not a change to what the program contains. */
+  const rollup = programHeadRollup(program.agents);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -6936,8 +6942,17 @@ function usageBarTitle(bucket, tokens) {
   return bucket + " · " + fmtTok(tokens) + " tokens";
 }
 
-function renderUsageSeriesChart(points) {
+/* Takes the whole series envelope, not just its points, because a failed
+   BurnBar query answers with available:false AND points:[]. Drawing that as an
+   empty chart tells the operator they spent nothing in this range when the
+   truth is the database never answered. Unavailable is not zero. */
+function renderUsageSeriesChart(series) {
   const wrap = el("div", { class: "usage-series" });
+  if (series && series.available === false) {
+    wrap.append(el("p", { class: "usage-empty", text: series.error || "Series data unavailable." }));
+    return wrap;
+  }
+  const points = series && series.points;
   if (!points || !points.length) {
     wrap.append(el("p", { class: "usage-empty", text: "No series points in this range." }));
     return wrap;
@@ -7032,7 +7047,7 @@ function renderUsagePanel(ui = state) {
 
   root.append(el("section", { class: "usage-section" },
     el("h2", { class: "usage-title", text: "Series" }),
-    renderUsageSeriesChart(ui.usageSeries && ui.usageSeries.points)));
+    renderUsageSeriesChart(ui.usageSeries)));
 
   root.append(renderUsageWard(ui.usageWard, false));
 
@@ -7045,8 +7060,15 @@ function renderUsagePanel(ui = state) {
     el("th", { text: "Cost" }),
     el("th", { text: "Session" }))));
   const body = el("tbody");
-  const rows = (ui.usageInvocations && ui.usageInvocations.invocations) || [];
-  if (!rows.length) {
+  const invocations = ui.usageInvocations;
+  const rows = (invocations && invocations.invocations) || [];
+  // Same rule as the series: a query that failed is not a range that was quiet.
+  if (invocations && invocations.available === false) {
+    body.append(el("tr", {}, el("td", {
+      colspan: "6",
+      text: invocations.error || "Invocation data unavailable.",
+    })));
+  } else if (!rows.length) {
     body.append(el("tr", {}, el("td", { colspan: "6", text: "No invocations in this range." })));
   } else {
     for (const row of rows) {
