@@ -416,6 +416,28 @@ describe("durable binding store", () => {
     ]);
   });
 
+  /* Load and save were the only two places freshness was checked, so a binding
+     could pass its TTL mid-process and keep answering lookups until something
+     happened to write. bridgeAgentsWithBindings trusts store.get() as a
+     recorded target, so that stale answer routes controls at a cmux surface
+     that may since have been recycled. */
+  test("a binding that expires while the process runs stops answering lookups", async () => {
+    const { files } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    const confirmedAtMs = Date.parse("2026-07-23T06:00:00.000Z");
+    let nowMs = confirmedAtMs;
+    const store = await JsonIdentityBindingStore.open(path, files, () => nowMs);
+
+    await store.put(binding(SESSION_ID, new Date(confirmedAtMs).toISOString()));
+    expect(store.get(SESSION_ID)).toBeDefined();
+    expect(store.list()).toHaveLength(1);
+
+    // Nothing writes in this window; only the clock crosses the TTL.
+    nowMs = confirmedAtMs + IDENTITY_BINDING_TTL_MS + 60_000;
+    expect(store.get(SESSION_ID)).toBeUndefined();
+    expect(store.list()).toEqual([]);
+  });
+
   test("a corrupt binding record fails open() loudly instead of half-loading", async () => {
     const { files, contents } = virtualFiles();
     const path = "/virtual/identity-bindings.json";

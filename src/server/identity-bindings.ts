@@ -128,11 +128,26 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
     return store;
   }
 
+  /* Freshness was enforced on load and on save but never on read, so a binding
+     that passed its TTL while the process stayed up — and no scan happened to
+     write — kept answering lookups. bridgeAgentsWithBindings takes that stale
+     answer as a recorded target, which is how a live session comes to look
+     exactly linked to a recycled cmux surface and controls route to the wrong
+     pane. An expired binding is not weaker evidence; it is no evidence. */
   get(sessionId: string): IdentityBinding | undefined {
-    return this.#bindings.get(sessionId.toLowerCase());
+    const key = sessionId.toLowerCase();
+    const binding = this.#bindings.get(key);
+    if (!binding) return undefined;
+    if (isFresh(binding, this.now())) return binding;
+    this.#bindings.delete(key);
+    return undefined;
   }
 
   list(): readonly IdentityBinding[] {
+    const nowMs = this.now();
+    for (const [key, binding] of [...this.#bindings]) {
+      if (!isFresh(binding, nowMs)) this.#bindings.delete(key);
+    }
     return [...this.#bindings.values()];
   }
 
