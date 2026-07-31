@@ -118,6 +118,56 @@ describe("health endpoint", () => {
   });
 });
 
+/* /api/health reads state.get() while /api/snapshot serves a cached object the
+   subscriber only replaced on a material change. Because the fingerprint drops
+   generatedAt, lastCheckedAt and elapsedMs, a quiet fleet froze the served
+   snapshot while health kept measuring a newer one — health could report "fresh"
+   for a snapshot nobody was being given. */
+describe("snapshot freshness", () => {
+  test("a refresh with no material change still advances what /api/snapshot serves", async () => {
+    const first = lifecycleSnapshot("2026-07-28T12:00:00.000Z");
+    let current = first;
+    let publish: ((snapshot: HubSnapshot) => void) | undefined;
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: (listener) => {
+        publish = listener;
+        return () => {};
+      },
+      refresh: async () => current,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const before = await fetch(new Request("http://127.0.0.1:4701/api/snapshot"));
+    expect((await before.json()).generatedAt).toBe(first.generatedAt);
+    const baseSequence = before.headers.get("x-ant-hill-snapshot-sequence");
+
+    // Same fleet, newer evidence: only generatedAt and lastCheckedAt move.
+    current = lifecycleSnapshot("2026-07-28T12:00:30.000Z");
+    publish?.(current);
+
+    const after = await fetch(new Request("http://127.0.0.1:4701/api/snapshot"));
+    expect((await after.json()).generatedAt).toBe("2026-07-28T12:00:30.000Z");
+    // Freshness alone must not cost a sequence number or wake every client.
+    expect(after.headers.get("x-ant-hill-snapshot-sequence")).toBe(baseSequence);
+
+    // A material change still earns its sequence bump.
+    const changed = lifecycleSnapshot("2026-07-28T12:01:00.000Z");
+    changed.totals = { ...changed.totals, live: 2 };
+    current = changed;
+    publish?.(changed);
+
+    const bumped = await fetch(new Request("http://127.0.0.1:4701/api/snapshot"));
+    expect((await bumped.json()).totals.live).toBe(2);
+    expect(bumped.headers.get("x-ant-hill-snapshot-sequence")).not.toBe(baseSequence);
+    fetch.dispose();
+  });
+});
+
 describe("SSE lifecycle", () => {
   test("control requests use the runtime cmux executable override", async () => {
     const current = lifecycleSnapshot();

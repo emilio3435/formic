@@ -475,7 +475,19 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
     const nextFingerprint = compactSnapshotFingerprint(snapshot);
-    if (nextFingerprint === fingerprint) return;
+    /* The fingerprint deliberately ignores generatedAt, controlHealth
+       .lastCheckedAt and elapsedMs, so "no material change" still means "newer
+       evidence". Returning early used to leave currentSnapshot pinned to an old
+       object while /api/health reported the age of state.get(): the two
+       endpoints answered from different snapshots, and a quiet fleet could hold
+       /api/snapshot's generatedAt past the 60s staleness line while health kept
+       saying ok. Adopt every snapshot; spend a sequence number and an SSE delta
+       only on a material one. */
+    if (nextFingerprint === fingerprint) {
+      currentSnapshot = snapshot;
+      currentSnapshotEvent = snapshotEvent(snapshot, snapshotSequence);
+      return;
+    }
     const baseSequence = snapshotSequence;
     snapshotSequence += 1;
     const deltaEvent = snapshotDeltaEvent(
