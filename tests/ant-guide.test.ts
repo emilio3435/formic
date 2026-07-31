@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /* ANT-GUIDE.md is written for someone who has never seen the dashboard, which
@@ -17,7 +17,14 @@ const read = (name: string) => readFileSync(join(ROOT, name), "utf8");
 const guide = read("ANT-GUIDE.md");
 const deploy = read("DEPLOY.md");
 const html = read("src/web/index.html");
-const app = read("src/web/app.js");
+/* Every client source, not app.js alone: the client is being split into ES
+   modules, so a label the guide quotes can move between files without changing
+   anything a reader sees. These assertions are about what the CLIENT produces. */
+const app = readdirSync(join(ROOT, "src/web"))
+  .filter((name) => name.endsWith(".js"))
+  .sort()
+  .map((name) => read(join("src/web", name)))
+  .join("\n");
 const catalogs = read("src/web/client-catalogs.js");
 
 describe("ANT-GUIDE.md stays true to the product", () => {
