@@ -3222,14 +3222,21 @@ function programOpen(program, ui = state) {
   const override = ui.programOverrides.get(program.id);
   if (override) return override === "open";
   if (ui.view === "history") return false;
-  const r = programRollup(program);
-  /* The rollup alone cannot decide this. programRollup prefers the SERVER's
-     rollup, whose needsYou counts only non-ended agents — so a program holding
-     an agent that reads `ended` while its process still runs reports
-     needsYou: 0 and stays collapsed. The row then clears the "now" filter and
-     still never paints. Ask alerting() directly for that case; the rollup keeps
-     answering for working/needsYou. */
-  return r.needsYou > 0 || r.working > 0 || program.agents.some(alerting);
+  /* The rollup cannot decide this AT ALL, and an earlier fix here only got half
+     of it. programRollup prefers the SERVER's rollup, which is a different
+     derivation over a different population than the client's own viewMatches():
+     its needsYou counts non-ended agents only, and its working can read 0 for an
+     agent the client derives as working (a stopped transcript whose process is
+     still up). Either disagreement collapsed the program, and the collapsed
+     program then dropped rows that had already cleared the filter — so Now paints
+     one row on a fleet with ten.
+
+     So ask the filter's own question, not a second opinion about it: a program is
+     open when it holds an agent the Now view would admit. The gate is now
+     incapable of contradicting the filter, which is the invariant that was
+     actually broken. History stays collapsed above; ended-and-healthy programs
+     still fail this predicate, so a board of 60 finished programs stays quiet. */
+  return program.agents.some((agent) => viewMatches("now", agent));
 }
 
 function toggleProgram(program) {

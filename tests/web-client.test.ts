@@ -4568,6 +4568,63 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(M.programOpen(quiet, listUi())).toBe(false);
   });
 
+  /* Regression: the same defect on the WORKING half of the predicate. Fix (3)
+     patched the alerted case by asking alerting() directly, but working/needsYou
+     were still answered by programRollup — i.e. by the SERVER's rollup, which is
+     a different derivation over a different population than the client's own
+     viewMatches(). Whenever the two disagree, the Now filter admits a row and the
+     collapsed program then drops it, so the tab reads near-empty on a busy fleet.
+     The gate must ask the identical question the filter asks. */
+  test("(3b) a program holding a working agent expands even when its server rollup says working: 0", () => {
+    const busy = agent({
+      id: "claude:live-worker",
+      displayName: "Claude · live worker",
+      status: "running",
+      activity: "working",
+      outcome: "healthy",
+    });
+    const program = {
+      id: "cwd-busy",
+      name: "busy",
+      agents: [busy],
+      // Server rollup disagrees with the client derivation — the whole bug.
+      rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+    };
+
+    expect(M.viewMatches("now", busy)).toBe(true); // clears the filter...
+    expect(M.programOpen(program, listUi())).toBe(true); // ...so it must also paint.
+
+    const root = newNode("div");
+    const visible = [{ program, agents: [busy] }];
+    const shown = withDom(() => M.syncProgramList(root, visible, listUi({
+      snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(shown).toBe(1);
+    const body = root.children[0].children[root.children[0].children.length - 1];
+    expect(body.children.length).toBe(2); // column header + the rescued row
+    expect(textOf(body.children[1])).toContain("Claude · live worker");
+  });
+
+  /* The invariant behind both (3) and (3b), stated once so it cannot silently
+     regress: in the Now view the open-gate can never contradict the filter. */
+  test("(3c) in Now, every program with a filter-matching agent is expanded", () => {
+    const cases = [
+      agent({ id: "a:1", status: "running", activity: "working", outcome: "healthy" }),
+      agent({ id: "a:2", status: "attention", activity: "idle", outcome: "needs-you" }),
+      agent({ id: "a:3", status: "attention", activity: "ended", outcome: "needs-you", processState: "running" }),
+    ];
+    for (const a of cases) {
+      const program = {
+        id: "cwd-" + a.id,
+        name: a.id,
+        agents: [a],
+        rollup: { total: 1, live: 0, working: 0, idle: 0, ended: 1, needsYou: 0, blocked: 0, failed: 0, linked: 0 },
+      };
+      expect(M.viewMatches("now", a)).toBe(true);
+      expect(M.programOpen(program, listUi())).toBe(true);
+    }
+  });
+
   /* -------- finding 1: the quarantine dead end -----------------------------
      Identity resolution refuses to bind a session, Focus and Send go dead, and
      the operator was given a fixed sentence with no reason and no way forward —
