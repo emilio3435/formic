@@ -1030,6 +1030,14 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-color: var(--ink);
   background: color-mix(in srgb, var(--ink) 8%, var(--surface));
 }
+/* A value the server never confirmed. Dashed border reuses the same "this is not
+   established fact" language the unknown-liveness chip already speaks, and amber
+   keeps it advisory — an unverified default is not an intervention. */
+.filter-chip.is-unverified {
+  color: var(--amber);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
 
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
 .search-wrap { flex: 1 1 240px; }

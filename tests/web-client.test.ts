@@ -2078,6 +2078,44 @@ describe("pulse strip — verdict-first summary", () => {
     expect(source).toContain("function renderHealthRail(");
   });
 
+  /* A dead /api/triage/queue answered with console.warn and nothing else.
+     queueItems stayed [], which produces zero queue findings — indistinguishable
+     from a genuinely empty queue — so the strip collapsed to CALM while triage
+     work sat unseen on the server. An unreachable queue is not an empty one. */
+  test("an unreachable triage queue is never mistaken for a calm board", () => {
+    const clean = snapshot();
+    expect(M.pulseStripModel(clean, "live", [], "percent", "").calm).toBe(true);
+
+    const broken = M.pulseStripModel(clean, "live", [], "percent", "queue response was invalid");
+    expect(broken.calm).toBe(false);         // cannot declare calm on partial evidence
+    expect(broken.queueError).toBe("queue response was invalid");
+
+    // The Needs-you card is the one that means "stop and do something", so it is
+    // where the missing input has to be admitted.
+    const card = broken.cells.find((c: { id: string }) => c.id === "needs-you");
+    expect(card.data.sublabel).toContain("Triage queue unavailable");
+    expect(card.data.sublabel).toContain("queue response was invalid");
+
+    // A healthy queue says nothing extra — no permanent scold on a good board.
+    const okCard = M.pulseStripModel(clean, "live", [], "percent", "").cells
+      .find((c: { id: string }) => c.id === "needs-you");
+    expect(okCard.data.sublabel).not.toContain("unavailable");
+  });
+
+  test("fetchTriageQueue records the failure instead of only warning", async () => {
+    await withState({ queueItems: [], queueError: "" }, () =>
+      withRequests([{ status: 500, json: { ok: false } }], async () => {
+        await M.fetchTriageQueue();
+        expect(M.state.queueError).not.toBe("");
+      }));
+    // A recovered fetch must clear it, or one blip scolds forever.
+    await withState({ queueItems: [], queueError: "stale complaint" }, () =>
+      withRequests([{ status: 200, json: { ok: true, items: [] } }], async () => {
+        await M.fetchTriageQueue();
+        expect(M.state.queueError).toBe("");
+      }));
+  });
+
   test("pulseStripModel collapses to calm only when nothing needs the operator", () => {
     expect(M.pulseStripModel(snapshot(), "live", []).calm).toBe(true);
 
@@ -4303,6 +4341,44 @@ describe("FE-B: harness-backed client behavior", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const custom: any = withDom(() => M.filterChip("Custom 12h", true, () => {}, { fkey: "lookback:custom" }));
     expect(custom.dataset.fkey).toBe("lookback:custom");
+  });
+
+  /* fetchSettings' only failure record was `state.settingsLoaded = false`, and
+     nothing anywhere read that field — the flag was written and never consulted,
+     so a dead /api/settings was invisible by construction. Meanwhile the scan
+     chip printed the hard-coded 36 as "36h window", which reads as a value the
+     server reported. */
+  test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
+    const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", ...ui }));
+      const bar = domById.get("filter-bar");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
+    });
+
+    // Settings answered: the number is reported, so state it plainly.
+    const ok = textOfChip({ scanWindowHours: 12, settingsError: "" });
+    expect(textOf(ok)).toContain("12h window");
+    expect(ok.className).not.toContain("is-unverified");
+
+    // Settings failed and no snapshot corroborates it: say so instead of
+    // passing the built-in default off as the server's answer.
+    const bad = textOfChip({ scanWindowHours: 36, settingsError: "settings 500" });
+    expect(textOf(bad)).toContain("window unverified");
+    expect(textOf(bad)).not.toContain("36h window");
+    expect(bad.className).toContain("is-unverified");
+    expect(bad.attributes.title).toContain("settings 500"); // the reason is reachable
+    expect(bad.attributes.title).toContain("36h");          // and so is the fallback used
+
+    // A snapshot IS authoritative, so it overrides a failed settings call —
+    // no false alarm once the real number has arrived by another route.
+    const rescued = textOfChip({
+      scanWindowHours: 36,
+      settingsError: "settings 500",
+      snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
+    });
+    expect(textOf(rescued)).toContain("24h window");
+    expect(rescued.className).not.toContain("is-unverified");
   });
 
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {

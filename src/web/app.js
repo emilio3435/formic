@@ -1015,7 +1015,7 @@ function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
-function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed) {
+function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed, queueError = state.queueError) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
     // trailing micro-chip; degraded promotes to a full cell with its reason.
@@ -1050,11 +1050,18 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   if (id === "needs-you") {
     const attention = attentionSummary(snap);
     const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
+    /* This card is the one that means "stop reading and go do something", so a
+       missing input has to be admitted HERE rather than only in a console warning.
+       Queued triage items are part of its findings list; when the queue did not
+       answer, the count below is a floor, not a total. */
+    const queueDown = queueError
+      ? "Triage queue unavailable (" + queueError + ") — findings may be missing."
+      : "";
     return {
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
-      sublabel: attention.count && top ? top : "No active findings.",
-      tone: attention.count ? "hot" : "ok",
+      sublabel: queueDown || (attention.count && top ? top : "No active findings."),
+      tone: attention.count || queueDown ? "hot" : "ok",
     };
   }
   if (id === "momentum") {
@@ -1374,7 +1381,11 @@ const state = {
   facetProvider: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
   scanWindowHours: 36,
-  settingsLoaded: false,
+  /* Was `settingsLoaded`, which nothing ever read — written true and false and
+     never consulted, so a dead /api/settings was invisible by construction.
+     The error string is read by the scan-window chip, which otherwise prints
+     this 36 as though the server had confirmed it. */
+  settingsError: "",
   settingsPending: false,
   usageRangeId: "24h",
   usageCustomHours: 24,
@@ -1440,6 +1451,9 @@ const state = {
   triagePending: new Set(),
   triageErrors: new Map(),
   queueItems: [],
+  /* An empty triage queue and an unreachable one produce the same zero queue
+     findings, and the strip called that calm. This is what tells them apart. */
+  queueError: "",
   // Inline pulse expansion. The needs-you verdict button opens a capped
   // findings panel in place; "+N more" reveals the rest. Both are transient —
   // not persisted, so a reload returns to the collapsed strip.
@@ -1508,10 +1522,15 @@ async function fetchSettings() {
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
-    state.settingsLoaded = true;
-  } catch {
-    state.settingsLoaded = false;
+    state.settingsError = "";
+  } catch (err) {
+    /* The scan window falls back to a hard-coded 36, and the filter chip printed
+       that as fact. A snapshot carries the real value and overrides it, so this
+       only bites before the first snapshot or when one omits the field — which
+       is exactly when the operator has no other way to notice. */
+    state.settingsError = err && err.message ? err.message : "Settings unavailable";
   }
+  renderFilterBar();
 }
 
 async function postScanWindow(hours) {
@@ -2278,7 +2297,7 @@ let pulseNeedsYouWas = 0;
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay, state.queueError);
   // One derivation per widget per paint. The signature, the cell and the calm
   // line all read this map; each used to call summaryWidgetData again, and each
   // of those calls re-derived the whole findings list underneath.
@@ -2372,9 +2391,18 @@ async function fetchTriageQueue() {
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
+    state.queueError = "";
     renderHealthRail();
   } catch (err) {
+    /* This used to be console.warn and nothing else. queueItems then stayed [],
+       which yields zero queue findings — the same output a genuinely empty queue
+       gives — so the strip collapsed to CALM while triage work sat unseen on the
+       server. The last known items are kept rather than cleared (dropping them
+       would lose real information); the error is what stops them being read as
+       the whole truth. */
+    state.queueError = err && err.message ? err.message : "Triage queue unavailable";
     console.warn("triage queue fetch failed:", err);
+    renderHealthRail();
   }
 }
 
@@ -2966,23 +2994,27 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    no session near its context ceiling. cells carry the fixed-order weighting
    (urgency changes weight via cell-hot/cell-micro, never order); findings is
    the ordered inline-expansion list. */
-function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent") {
+function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent", queueError = "") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
   const peak = peakContext(snap);
+  /* Calm is a claim about the WHOLE board, so it cannot be made while one of the
+     board's inputs is missing. An unreachable triage queue contributes zero
+     findings exactly like an empty one; without this the strip would fold into
+     its calm line and hide the fact that it is reasoning on partial evidence. */
   const calm = !!snap && !!attention && attention.count === 0
-    && status.key === "operational" && !(peak && peak.pct >= 85);
+    && status.key === "operational" && !(peak && peak.pct >= 85) && !queueError;
   // `display` is threaded so renderHealthRail can compute each widget's data
   // ONCE and reuse it for the paint signature, the cell and the calm line —
   // it used to derive the same three from scratch on every paint.
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
-    const data = summaryWidgetData(id, snap, conn, display, queueItems);
+    const data = summaryWidgetData(id, snap, conn, display, queueItems, undefined, queueError);
     const weight = id === "health"
       ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
     return { id, weight, data };
   });
-  return { calm, cells, findings: pulseFindings(snap, queueItems) };
+  return { calm, cells, findings: pulseFindings(snap, queueItems), queueError };
 }
 
 function findingFromIssue(issue, kind, snap = state.snap) {
@@ -3144,7 +3176,9 @@ function renderTabs() {
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
-    class: "filter-chip" + (active ? " is-active" : ""),
+    // is-unverified marks a chip whose value the server never confirmed, so a
+    // built-in default cannot pass for a reported one.
+    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : ""),
     "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
@@ -3217,16 +3251,30 @@ function renderFilterBar(ui = state) {
     { fkey: "lookback:custom" },
   ));
   bar.append(el("span", { class: "filter-lead", text: "Scan" }));
-  const scanHours = Number((ui.snap && ui.snap.scanWindowHours) || ui.scanWindowHours) || 36;
+  /* The snapshot is the authoritative carrier; /api/settings is the boot path
+     that fills this in before one arrives. When neither answered, the number is
+     a hard-coded default, and printing "36h window" claims the server confirmed
+     it. Say it is unverified instead — the chip still works, it just stops
+     asserting. */
+  const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
+  const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
+  const unverified = !confirmed && !!ui.settingsError;
   bar.append(filterChip(
-    scanHours + "h window",
+    unverified ? "window unverified" : scanHours + "h window",
     false,
     () => {
       const raw = window.prompt("Collector scan window hours (1–168)", String(scanHours));
       if (raw == null) return;
       void postScanWindow(raw);
     },
-    { disabled: ui.settingsPending, title: "How far back collectors harvest sessions", fkey: "scan-window" },
+    {
+      disabled: ui.settingsPending,
+      title: unverified
+        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h."
+        : "How far back collectors harvest sessions",
+      fkey: "scan-window",
+      alert: unverified,
+    },
   ));
 }
 
