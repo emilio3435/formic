@@ -1,122 +1,87 @@
 # The Ant Guide
 
-A field guide to reading and using the Ant Hill dashboard.
+**You have several AI coding assistants running at once. This is the one screen
+that tells you which one needs you.**
 
-**This guide assumes you have never seen this thing before.** It does not assume
-you write code. If you want to *install* the Ant Hill on a new machine, that is
-[QUICKSTART.md](./QUICKSTART.md) — this guide is about *using* one that is
-already running.
+![The Ant Hill dashboard](docs/guide-shots/before-full.png)
 
----
+Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
-## What this thing is
+This guide is about *using* a dashboard that is already running. To install one
+on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 
-Several AI coding assistants (Claude Code, Codex, Cursor) can be working on your
-machine at the same time, each in its own terminal window. That is great until
-you have six of them and no idea which one finished, which one crashed, and
-which one has been sitting there for twenty minutes waiting for you to answer a
-question.
-
-The Ant Hill is one screen that answers that. It reads the log files those tools
-already write and shows you every session in one list.
-
-It is **read-only by default** and entirely local. Nothing leaves `127.0.0.1`,
-and it never opens or sends your source code.
+> **The one rule worth learning first.** When the Ant Hill does not know
+> something, it says so instead of showing a plausible number. A blank is
+> usually honest, not broken.
 
 ---
 
-## 1. Quick start
+## The 60-second version
 
-### Open it
+Four steps. Do these in order and you have used the tool correctly.
 
-```
-http://127.0.0.1:4701
-```
+### 1. Check `Needs you`
 
-That is the always-on dashboard. If the page does not load at all, jump to
-[“Nothing loads”](#nothing-loads-at-all) at the bottom.
+![The summary band](docs/guide-shots/shot-1-summary.png)
 
-> Two ports exist and it confuses everyone once: **4701** is the permanent one
-> that runs in the background. **4702** is what you get if you start a copy by
-> hand with `bun start`. Use 4701 unless you were told otherwise.
+Five cards across the top. **Only the first one is a to-do list.** If `Needs you`
+is zero, nothing is waiting on you and you can close the tab.
 
-### What you are looking at
+The rest are context, not tasks: how much is shipping, what it is costing, how
+full the fullest context window is, and whether the system itself is healthy.
 
-The screen has four bands, top to bottom:
+### 2. Open the `Alerts` tab
 
-1. **The header** — the name, and a badge on the right that should say **Live**.
-2. **Summary** — five cards giving you the whole fleet at a glance.
-3. **The board** — the actual list of sessions, grouped by project.
-4. **The drawer** — slides in on the right when you click a row.
+![The tabs and the board](docs/guide-shots/shot-2-board.png)
 
-### What to click first
+`Now` is the default and shows everything working *or* asking for you. `Alerts`
+is the shortlist — only sessions actually waiting on a human. If `Alerts` is
+empty, everything is either working or done.
 
-1. **Look at the badge in the top right.** If it says `Live`, the page is
-   receiving updates in real time and you never need to refresh it. Leave it open
-   on a second monitor and it stays current on its own.
-2. **Look at the `Needs you` card** in the Summary row. That number is the only
-   one that means "stop reading and go do something." Zero means nothing is
-   waiting on you.
-3. **Click the `Alerts` tab.** This is the shortlist: only sessions that are
-   actually asking for a human. If it is empty, everything is either working or
-   done.
-4. **Click any row.** The drawer opens on the right with the full story for that
-   one session — what it last said, which terminal it lives in, and the buttons
-   to act on it.
-5. **Press `Escape`** to close the drawer again.
+### 3. Read the row
 
-That is the whole loop: *Needs you → Alerts tab → click the row → deal with it.*
+![One row](docs/guide-shots/shot-5-row.png)
+
+Every row is **one AI session**. Left to right:
+
+| Part | What it is |
+|---|---|
+| Name | Who it is, and the folder it is working in |
+| Message | The last thing it said |
+| Status | `Working`, `Idle`, `Alert`, `Done` |
+| Model · ctx | Which model, and how full its context window is |
+| Tokens | How much it has used |
+| Elapsed | How long since it last moved |
+
+A row indented under another with `↳` is a **subagent** — something the row above
+it launched.
+
+### 4. Click it, deal with it, press `Escape`
+
+![The drawer](docs/guide-shots/shot-4-drawer.png)
+
+The drawer holds everything about that one session: what it last said, whether
+its process is still alive, and the four buttons that act on it.
+
+| Button | Does |
+|---|---|
+| **Focus** | Jumps you to that session's terminal window |
+| **Send** | Types an instruction into it |
+| **Interrupt** | Stops what it is doing |
+| **Archive** | Removes a finished session from the board |
+
+The first three need cmux (see the glossary). Without it they grey out with a
+reason, and the board still watches everything perfectly well.
+
+**That is the whole loop:** `Needs you` → `Alerts` → click the row → deal with
+it → `Escape`.
 
 ---
 
-## 2. The layout
+## Reference
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│  The Ant Hill                              [Alerts off]  ● Live            │  ← header
-│  Live multi-agent control room                                             │
-├────────────────────────────────────────────────────────────────────────────┤
-│  Summary                                            [Customize summary]    │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌────────────────┐  │
-│  │ NEEDS    │ │ MOMENTUM │ │ BURN     │ │ CONTEXT    │ │ HEALTH         │  │  ← summary
-│  │ YOU      │ │          │ │          │ │ PEAK       │ │                │  │
-│  │ 2        │ │ 3        │ │ 41k /min │ │ 14%        │ │ Operational    │  │
-│  │ findings │ │ shipping │ │          │ │ peak window│ │                │  │
-│  │ Codex ·  │ │ ↑2 done  │ │ $2.10    │ │ Peak 14% · │ │ 4/4 sources    │  │
-│  │ migration│ │ this hour│ │ last hour│ │ Median 9%  │ │ healthy        │  │
-│  └──────────┘ └──────────┘ └──────────┘ └────────────┘ └────────────────┘  │
-│    ↑ big number, then the small print under it explains where it came from  │
-├──────────────────────────────────────────────┬─────────────────────────────┤
-│ [Now] [Alerts] [Working] [Idle] [History]    │                             │
-│ [Usage]                          ← tabs      │      THE DRAWER             │
-│                                              │                             │
-│ [search………………]  [Select]  [Action log]      │  Opens when you click a     │
-│ 12 shown · 6 live · 157 tracked  ← scope     │  row. Holds everything      │
-│                                              │  about ONE session:         │
-│ ▼ my-project              3 agents 1 alert   │                             │
-│ ┌──────────────────────────────────────────┐ │   · what it last said       │
-│ │ Claude · api-refactor    Working  14% ▮  │ │   · Process live / Died     │
-│ │   "Running the test suite…"   12k   4m   │ │   · which terminal it is in │
-│ ├──────────────────────────────────────────┤ │   · Focus / Send /          │
-│ │ Codex · migration       ▌ALERT   22% ▮▮  │ │     Interrupt / Archive     │
-│ │   "Needs your permission"      8k   1m   │ │   · Evidence · Transcript   │
-│ ├──────────────────────────────────────────┤ │                             │
-│ │  ↳ Cursor · subagent     Idle     4% ▮   │ │  Escape closes it.          │
-│ └──────────────────────────────────────────┘ │                             │
-│ ▶ another-project         8 agents           │                             │
-│                                              │                             │
-│        ↑ the board                           │                             │
-└──────────────────────────────────────────────┴─────────────────────────────┘
-```
-
-Each row reads left to right: **who it is** (provider + name), **what it last
-said**, then a right-hand instrument cluster — **status**, **model and context
-%**, **tokens**, **time since it last moved**.
-
-A row indented under another with a `↳` is a **subagent**: something the row
-above it launched.
-
-### The tabs
+<details>
+<summary><b>The six tabs</b></summary>
 
 | Tab | Shows |
 |---|---|
@@ -127,19 +92,28 @@ above it launched.
 | **History** | Finished sessions. Collapsed by default — there are usually a lot. |
 | **Usage** | Token and cost charts over time, rather than a list. |
 
-### The Summary cards
+`Idle` and `History` also apply a *lookback* window (6 hours by default) that you
+can widen from the filter bar.
+
+</details>
+
+<details>
+<summary><b>The five summary cards</b></summary>
 
 | Card | What it tells you |
 |---|---|
-| **Needs you** | How many findings want a human. **The only number that is a to-do list.** |
+| **Needs you** | How many findings want a human. The only number that is a to-do list. |
 | **Momentum** | How many are shipping, and how many have gone quiet for 15+ minutes. |
-| **Burn** | Tokens per minute and dollars per hour, if cost data is available. |
-| **Context peak** | How full the fullest session's context window is, plus the median. High peak = someone is about to run out of room. |
-| **Health** | One verdict for the whole system: `Operational`, `Degraded`, or `Offline`. |
+| **Burn** | Tokens per minute, and dollars per hour if cost data is available. |
+| **Context peak** | How full the fullest session's context window is, plus the median. A high peak means someone is about to run out of room. |
+| **Health** | One verdict for the whole system. |
 
-You can hide, show and reorder these with **Customize summary**.
+Hide, show, and reorder these with **Customize summary**.
 
-### Keyboard
+</details>
+
+<details>
+<summary><b>Keyboard</b></summary>
 
 | Key | Does |
 |---|---|
@@ -149,198 +123,199 @@ You can hide, show and reorder these with **Customize summary**.
 | `Escape` | Close the drawer |
 | `Tab` | Move between buttons and controls |
 
-Arrow keys stop at the top and bottom rather than wrapping around, so you cannot
+Arrow keys stop at the top and bottom rather than wrapping, so you cannot
 accidentally teleport to the other end of a long board.
 
----
+</details>
 
-## 3. Glossary
+<details>
+<summary><b>Glossary</b></summary>
 
-Terms you will hear around this project. Some are on the screen; some are only
-in conversation and in the code. That distinction is marked, so you do not go
-hunting for a button that does not exist.
+Terms marked *(on screen)* are things you can point at. The rest only come up in
+conversation, so you do not go hunting for a button that does not exist.
 
 **Agent** *(on screen)*
-: One AI coding session. One `claude` or `codex` command in one terminal, or one
-Cursor agent. Every row on the board is one agent. It is not a person and not a
-project — it is a single running conversation.
+: One AI coding session — one `claude` or `codex` command in one terminal, or one
+Cursor agent. Every row is one agent. Not a person, not a project: a single
+running conversation.
 
 **Program** *(on screen)*
-: A group of agents, usually meaning "one project folder." The grey bars that
-split the board into sections are programs. Click one to collapse or expand it.
-If you have not configured project names, sessions are grouped by working
-directory instead.
+: A group of agents, usually meaning one project folder. The grey bars splitting
+the board into sections are programs. Click one to collapse it. Without
+configured project names, sessions group by working directory.
 
 **Drawer** *(on screen)*
-: The panel that slides in from the right when you click a row. Everything about
-one agent lives there: its last message, its process state, which terminal it is
-attached to, the action buttons, and the **Evidence** and **Transcript**
-sections if you want the raw detail. `Escape` closes it.
+: The panel that slides in when you click a row. Everything about one agent: last
+message, process state, which terminal it is attached to, the action buttons, and
+the **Evidence** and **Transcript** sections for raw detail.
 
 **Swarm** *(on screen)*
-: When one agent launches other agents to work for it, they form a tree — a
-parent with children. The board shows this with indentation and a `↳`. Agents can
-carry roles like *orchestrator*, *frontend*, *backend*, *verifier*, or *tester*.
+: When one agent launches others, they form a tree. The board shows this with
+indentation and `↳`. Agents can carry roles like *orchestrator*, *frontend*,
+*backend*, *verifier*, or *tester*.
 
 **Swarm control** *(on screen, as `Select`)*
-: Acting on several agents at once instead of one at a time. Click **Select** in
-the toolbar, tick the agents you want, and a bar appears at the bottom letting
-you send one instruction to all of them (a **broadcast**). Agents that cannot be
-safely reached are not selectable, on purpose.
+: Acting on several agents at once. Click **Select**, tick the agents you want,
+and a bar appears letting you send one instruction to all of them (a
+**broadcast**). Agents that cannot be safely reached are not selectable, on
+purpose.
 
-**Lane** *(conversation only — not on the dashboard)*
-: One workstream, worked by one agent, on its own git branch. "The backend lane"
-means the agent and branch handling backend work. Several lanes run at once and
-each lands its finished work into `main`. See [DEPLOY.md](./DEPLOY.md).
+**Collector**
+: The part that reads each tool's log files — one per provider. When a collector
+cannot read its files, that provider's data goes stale and Health reports it.
 
-**Wave** *(conversation only — not on the dashboard)*
+**Snapshot**
+: One complete picture of every agent, rebuilt every few seconds and pushed to
+your browser. "The board is stale" means the snapshot stopped updating.
+
+**cmux**
+: A separate terminal manager. With it, the Ant Hill knows which terminal window
+each session lives in, which is what makes **Focus** and **Send** possible.
+Without it the dashboard still watches everything; it just refuses to type into a
+terminal it cannot positively identify.
+
+**Lane** *(conversation only)*
+: One workstream, worked by one agent, on its own git branch. Several run at once
+and each lands into `main`. See [DEPLOY.md](./DEPLOY.md).
+
+**Wave** *(conversation only)*
 : A batch of work done across several lanes at roughly the same time, then merged
 together. "Wave 6" is a round of changes, not a place.
 
-**Collector**
-: The part of the Ant Hill that reads each tool's log files. There is one per
-provider (Claude, Codex, Cursor). When a collector cannot read its files, that
-provider's data goes stale and Health reports it.
-
-**Snapshot**
-: One complete picture of every agent, rebuilt by the server every few seconds
-and pushed to your browser. When people say "the board is stale," they mean the
-snapshot stopped updating.
-
-**cmux**
-: A separate terminal manager. If it is installed and set up, the Ant Hill can
-tell which terminal window each session lives in — which is what makes **Focus**
-and **Send** possible. Without it, the dashboard still watches everything
-perfectly well; it just refuses to type into a terminal it cannot positively
-identify.
-
-**Focus / Send / Interrupt / Archive** *(on screen, in the drawer)*
-: The four actions. **Focus** jumps you to that session's terminal window.
-**Send** types an instruction into it. **Interrupt** stops what it is doing.
-**Archive** removes a finished session from the board. The first three need cmux;
-they appear greyed out with a reason when they cannot be routed.
+</details>
 
 ---
 
-## 4. Troubleshooting
+## When something looks wrong
 
-### What does “Degraded” mean?
+<details>
+<summary><b>Health says "Degraded"</b></summary>
 
-It means *something* is not fully healthy — but on its own it does not tell you
-whether you are blocked. So the dashboard also states which of three kinds it is:
+`Degraded` means something is not fully healthy, but on its own it does not tell
+you whether *you* are blocked. The card also states which of three kinds it is:
 
 | Severity | Meaning | What to do |
 |---|---|---|
 | **Blocking** | The control plane is unreachable. **Focus and Send do not work.** | Waiting will not fix it. Usually cmux is not running or not set up. |
-| **Stale** | The numbers on screen may no longer be true — the live feed or the last refresh failed. | Hit the **Refresh** affordance on the Health card. |
-| **Advisory** | The board is fully usable; some evidence needs tidying (e.g. identity conflicts). | Nothing urgent. Someone can clean it up later. |
+| **Stale** | The numbers may no longer be true — the live feed or last refresh failed. | Hit **Refresh** on the Health card. |
+| **Advisory** | The board is fully usable; some evidence needs tidying. | Nothing urgent. Clean it up later. |
 
-**The most common one by far is a cmux-related `Blocking` on a machine where
-cmux was never set up.** That is expected, not a fault: the Ant Hill deliberately
-refuses to type into a terminal it cannot prove it has identified correctly. It
-will keep watching everything correctly. If you only want to *watch*, you can
-ignore it forever. If you want Focus and Send, install cmux and run
+**By far the most common is a cmux-related `Blocking` on a machine where cmux was
+never set up.** That is expected, not a fault — the Ant Hill deliberately refuses
+to type into a terminal it cannot prove it has identified. If you only want to
+watch, ignore it forever. If you want Focus and Send, install cmux and run
 `bun run setup:cmux` once.
 
-`Health: Offline` is different — that means your browser has lost the server
-entirely. See “Nothing loads,” below.
+`Health: Offline` is different: your browser has lost the server entirely. See
+"Nothing loads."
 
-### Why does an agent say “Awaiting first check”?
+</details>
 
-That is the **process liveness** chip in the drawer. It answers a question the
-status alone cannot: *is this session's process actually still alive?* A crashed
-agent and a cleanly finished one both just stop, and they look identical
-otherwise.
+<details>
+<summary><b>An agent says "Awaiting first check"</b></summary>
+
+That is the **process liveness** chip in the drawer. It answers what status alone
+cannot: *is this session's process actually still alive?* A crashed agent and a
+cleanly finished one both just stop, and otherwise look identical.
 
 | Chip | Meaning |
 |---|---|
-| **Process live** (green) | The process is still running. |
-| **Exited cleanly** (grey) | It finished properly. This one is done. |
-| **Died** (red) | The process is gone and nothing ended cleanly. It stopped without finishing — this is the one worth looking at. |
-| **Awaiting first check** (grey, dashed) | The Ant Hill has not managed to check this session's process yet. Ordinary and temporary. |
-| **No process evidence** (grey, dashed) | The session already ended and no process evidence was ever captured, so whether it finished or crashed can no longer be recovered. |
+| **Process live** (green) | Still running. |
+| **Exited cleanly** (grey) | Finished properly. Done. |
+| **Died** (red) | The process is gone and nothing ended cleanly. **This is the one worth looking at.** |
+| **Awaiting first check** (grey, dashed) | Not checked yet. Ordinary and temporary. |
+| **No process evidence** (grey, dashed) | The session ended and no evidence was captured, so whether it finished or crashed can no longer be recovered. |
 
-If there is **no chip at all**, the session predates process checking entirely.
-That is deliberate: absence of evidence is never displayed as evidence of death.
+No chip at all means the session predates process checking. Absence of evidence
+is never displayed as evidence of death, and most finished sessions on a busy
+board read **No process evidence**. That is normal.
 
-Most finished sessions on a busy board read **No process evidence**. That is
-normal and is not a fault to chase.
+</details>
 
-### How do I restart it?
+<details>
+<summary><b>Nothing loads at all</b></summary>
 
-The dashboard on **:4701** runs in the background as a system service. Restart
-it with:
+The page not loading means the server is not running — different from
+`Degraded`, which means the server *is* running and reporting a problem.
+
+Restart it:
 
 ```bash
 launchctl kickstart -k gui/$UID/ai.imaginethat.anthill
 ```
 
-Give it a few seconds, then reload the page. To see what is actually running:
+Check it came back — this should print `200`:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4701/
+```
+
+If that fails, see what is actually up:
 
 ```bash
 bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 ```
 
 > **Do not start anything on port 4701 by hand.** That port belongs to the
-> background service, and a hand-started copy will collide with it. To try out a
-> change safely, use `bash scripts/anthill-preview.sh`, which picks a free
+> background service and a hand-started copy will collide with it. To try a
+> change safely, run `bash scripts/anthill-preview.sh`, which picks a free
 > throwaway port and refuses to touch 4701.
+>
+> Two ports exist and it confuses everyone once: **4701** is the permanent
+> background one. **4702** is what you get from `bun start` by hand.
 
-### Nothing loads at all
+</details>
 
-The page not loading means the server is not running — this is different from
-`Degraded`, which means the server is running and reporting a problem.
+<details>
+<summary><b>The board is empty</b></summary>
 
-1. Restart it with the `launchctl` command above.
-2. Check it came back: `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4701/`
-   should print `200`.
-3. If that fails, run `bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh`
-   to see what is actually up.
-
-### The board is empty
-
-If it says **“The ant hill is still — no tracked agents,”** the server is healthy
-and genuinely sees nothing. Either nothing has run recently, or everything that
-ran has aged out — only sessions from roughly the last day and a half are
-scanned by default.
+If it says **"The ant hill is still — no tracked agents,"** the server is healthy
+and genuinely sees nothing. Either nothing has run recently, or everything has
+aged out — only about the last day and a half is scanned by default.
 
 Start a session (`claude` or `codex` in any project folder) and a row should
-appear within about five seconds, with no refresh needed.
+appear within about five seconds, no refresh needed.
 
-Also check you are not filtering yourself into an empty room: clear the **search
-box**, and note that the **Idle** and **History** tabs additionally apply a
-*lookback* window (6 hours by default) which you can widen from the filter bar.
+Also check you have not filtered yourself into an empty room: clear the **search
+box**, and remember `Idle` and `History` apply their own lookback window.
 
-### A grey shimmering placeholder sits there
+</details>
 
-That is the loading skeleton, shown while the first data is still being fetched.
-It should be replaced within a second or two. If it persists, the page is waiting
-on a server that is not answering — restart it.
+<details>
+<summary><b>A grey shimmering placeholder sits there</b></summary>
 
-### Costs show blank, or “cost unavailable”
+That is the loading skeleton, shown while the first data is fetched. It should be
+replaced within a second or two. If it persists, the page is waiting on a server
+that is not answering — restart it.
+
+</details>
+
+<details>
+<summary><b>Costs are blank, or say "cost unavailable"</b></summary>
 
 Dollar figures come from a separate tool (OpenBurnBar). Without it, the Ant Hill
 shows cost as unavailable rather than inventing a `$0`. Token counts still work.
 
-### A session shows “not reported” for context or tokens
+</details>
 
-Not every provider reports the same numbers. Claude transcripts, for instance,
-report tokens used but not always the size of the context window — and without
-both, a truthful "% full" cannot be calculated, so the dashboard shows the raw
-token count instead of guessing a percentage.
+<details>
+<summary><b>A session shows "not reported" for context or tokens</b></summary>
 
-This is a theme worth internalising: **when the Ant Hill does not know something,
-it says so rather than showing a plausible number.** A blank is usually honest,
-not broken.
+Not every provider reports the same numbers. Claude transcripts report tokens
+used but not always the size of the context window, and without both, a truthful
+"% full" cannot be calculated — so the dashboard shows the raw token count
+instead of guessing a percentage.
+
+</details>
 
 ---
 
-## 5. Where to go next
+## Where to go next
 
 | Document | Covers |
 |---|---|
 | [QUICKSTART.md](./QUICKSTART.md) | Installing it on a fresh machine |
 | [DEPLOY.md](./DEPLOY.md) | Ports, deploying, previewing changes safely |
-| [README.md](./README.md) | The technical overview and data-truth rules |
+| [README.md](./README.md) | Technical overview and the data-truth rules |
 | [TRIAGE-WORKFLOW.md](./TRIAGE-WORKFLOW.md) | The investigation and triage flow |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | How the pieces fit together |
