@@ -42,8 +42,15 @@ export class BunCommandRunner implements CommandRunner {
           });
         }, timeoutMs);
       });
-      const result = await Promise.race([work, deadline]);
-      if (!result.timedOut) clearTimeout(deadlineTimer!);
+      let result: CommandResult;
+      try {
+        result = await Promise.race([work, deadline]);
+      } finally {
+        // A rejected pipe read must not leave the deadline armed: it would hold
+        // the event loop open and later signal a process group this call no
+        // longer owns, since the pid can be recycled once the child is reaped.
+        clearTimeout(deadlineTimer!);
+      }
       return result;
     } catch (error) {
       return {
