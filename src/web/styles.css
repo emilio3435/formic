@@ -1167,7 +1167,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
 .agent-row:focus { outline: none; }
-.agent-row:focus-visible { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* Arrow keys walk rows, so the ring is now a primary navigation cue rather than
+   an accessibility fallback — a 1px hairline in --line-strong was too quiet to
+   track while stepping. Ember at 2px is the same ink the global :focus-visible
+   rule uses, so keyboard focus reads identically everywhere on the board. */
+.agent-row:focus-visible { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); box-shadow: inset 0 0 0 2px var(--ember); }
 .agent-row.is-selected { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border-left-color: var(--ink); }
 .agent-row.is-selecting { cursor: default; }
 .agent-row.is-renaming { border-bottom-color: transparent; }
@@ -1214,9 +1218,9 @@ body.feed-frozen .programs { opacity: 0.62; }
    ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
    on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
    colour AND the focus ring shows. */
-.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 1px var(--line-strong); }
-.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 1px var(--line-strong); }
-.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 1px var(--line-strong); }
+.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 2px var(--ember); }
+.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 2px var(--ember); }
+.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 2px var(--ember); }
 .agent-row.is-ended { opacity: 0.66; }
 .agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 

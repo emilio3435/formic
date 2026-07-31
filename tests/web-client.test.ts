@@ -1631,9 +1631,12 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
         new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
       )?.[0] ?? "";
       expect(rule).not.toBe("");
-      // Both components present: the state-colored 4px rail AND the 1px focus ring.
+      // Both components present: the state-colored 4px rail AND the focus ring.
+      // The ring became 2px ember when arrow keys made it a navigation cue
+      // rather than an accessibility fallback; the combination is the invariant
+      // this test exists for, and it still has to hold.
       expect(rule).toContain(`inset 4px 0 var(${ink})`);
-      expect(rule).toContain("inset 0 0 0 1px var(--line-strong)");
+      expect(rule).toContain("inset 0 0 0 2px var(--ember)");
     }
   });
 
@@ -4558,6 +4561,90 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
+  });
+
+  /* -------- arrow-key row navigation --------------------------------------
+     Tab reached rows already, but it walks every focusable on the board, so
+     stepping one row could take a dozen presses at 165 rows. These drive the
+     real handler against plain nodes — the arithmetic AND the guards. */
+  function navRow(): { focused: number; closest: (sel: string) => unknown; focus: () => void } {
+    const row = {
+      focused: 0,
+      closest(sel: string) { return sel.includes(".agent-row") ? row : null; },
+      focus() { row.focused += 1; },
+    };
+    return row;
+  }
+  function navEvent(key: string, target: unknown, mods: Record<string, boolean> = {}) {
+    return { key, target, prevented: 0, preventDefault() { this.prevented += 1; }, ...mods };
+  }
+
+  test("(9) arrows walk rows, clamp at both ends, and Home/End jump", () => {
+    const rows = [navRow(), navRow(), navRow()];
+    const from = (i: number, key: string) => {
+      const e = navEvent(key, rows[i]);
+      expect(M.handleRowNavigation(e, rows)).toBe(true);
+      expect(e.prevented).toBe(1); // never let the board scroll underneath
+    };
+
+    from(0, "ArrowDown");
+    expect(rows[1].focused).toBe(1);
+    from(1, "ArrowUp");
+    expect(rows[0].focused).toBe(1);
+    from(0, "End");
+    expect(rows[2].focused).toBe(1);
+    from(2, "Home");
+    expect(rows[0].focused).toBe(2);
+
+    /* Clamping, not wrapping: wrapping teleports the operator across a long
+       board with no visual event to explain it. The key is still consumed. */
+    from(2, "ArrowDown");
+    expect(rows[0].focused).toBe(2); // unchanged — no wrap to the top
+    from(0, "ArrowUp");
+    expect(rows[2].focused).toBe(1); // unchanged — no wrap to the bottom
+  });
+
+  test("(9b) row navigation declines the keys that are not its own", () => {
+    const rows = [navRow(), navRow()];
+    // Keys it must never claim.
+    for (const key of ["Enter", " ", "Escape", "a", "Tab", "ArrowLeft"]) {
+      const e = navEvent(key, rows[0]);
+      expect(M.handleRowNavigation(e, rows)).toBe(false);
+      expect(e.prevented).toBe(0);
+    }
+    // A modified arrow is a browser/OS gesture — word jump, history, scroll.
+    for (const mod of ["metaKey", "ctrlKey", "altKey", "shiftKey"]) {
+      const e = navEvent("ArrowDown", rows[0], { [mod]: true });
+      expect(M.handleRowNavigation(e, rows)).toBe(false);
+      expect(rows[1].focused).toBe(0);
+    }
+    // Typing in a row's rename field must keep its own caret movement.
+    const input = { closest: (sel: string) => (sel.includes("input") ? input : null) };
+    expect(M.handleRowNavigation(navEvent("ArrowDown", input), rows)).toBe(false);
+    // Focus outside any row at all.
+    const elsewhere = { closest: () => null };
+    expect(M.handleRowNavigation(navEvent("ArrowDown", elsewhere), rows)).toBe(false);
+    expect(rows[1].focused).toBe(0);
+  });
+
+  test("(9c) nextRowIndex handles the empty board and entry from nowhere", () => {
+    expect(M.nextRowIndex(-1, "ArrowDown", 0)).toBe(-1); // nothing to focus
+    expect(M.nextRowIndex(0, "ArrowDown", 0)).toBe(-1);
+    expect(M.nextRowIndex(-1, "ArrowDown", 5)).toBe(0); // Down enters at the top
+    expect(M.nextRowIndex(-1, "ArrowUp", 5)).toBe(4);   // Up enters at the bottom
+    expect(M.nextRowIndex(2, "PageDown", 5)).toBe(-1);  // not a key it owns
+    // An empty board must not throw on a real keypress.
+    expect(M.handleRowNavigation(navEvent("ArrowDown", navRow()), [])).toBe(false);
+  });
+
+  test("(9d) the focus ring is visible enough to navigate by", () => {
+    /* The ring is the primary cue once arrows move focus, so it must be the same
+       ember ink the global :focus-visible rule uses, at 2px. The alert-row
+       variants of this ring are covered by (g), which owns the rail+ring
+       interaction. */
+    const rule = styles.match(/\.agent-row:focus-visible\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toBe("");
+    expect(rule).toContain("inset 0 0 0 2px var(--ember)");
   });
 
   /* Regression: the alerted row that passed the filter and still never painted.

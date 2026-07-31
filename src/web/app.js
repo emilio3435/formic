@@ -1247,6 +1247,10 @@ globalThis.TheAntHill = {
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
+  // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
+  // block, exactly the TDZ hazard the comment above describes. The behavior it
+  // gates is asserted through handleRowNavigation instead.
+  nextRowIndex, handleRowNavigation,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
@@ -3942,6 +3946,60 @@ function swarmNote(agent, opts) {
   if ((opts.depth || 0) > 0 || !agent.parentAgentId) return null;
   const parent = opts.fullById && opts.fullById.get(agent.parentAgentId);
   return parent ? "↳ under " + agentName(parent) : "↳ parent session untracked";
+}
+
+/* ---------- row keyboard navigation ----------
+
+   Rows are role="button" with tabindex 0, so Tab already reached them — but Tab
+   walks EVERY focusable on the board (filter chips, program heads, rename
+   pencils, per-row controls), so stepping from one row to the next could take a
+   dozen presses on a board with 165 of them. Arrows walk rows and nothing else.
+
+   The index math is kept separate from the DOM so the end-of-list rules are
+   testable without a browser. Arrows CLAMP rather than wrap: wrapping from the
+   last row to the first silently teleports the operator across a long board with
+   no visual event to explain it. Home/End are the deliberate way to make that
+   jump. */
+const ROW_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End"]);
+
+function nextRowIndex(current, key, count) {
+  if (count <= 0) return -1;
+  switch (key) {
+    // From nowhere, Down enters at the top and Up enters at the bottom.
+    case "ArrowDown": return current < 0 ? 0 : Math.min(count - 1, current + 1);
+    case "ArrowUp": return current < 0 ? count - 1 : Math.max(0, current - 1);
+    case "Home": return 0;
+    case "End": return count - 1;
+    default: return -1;
+  }
+}
+
+/* Only rows that are actually reachable: in select mode the broadcast-ineligible
+   ones carry tabindex="-1", and arrow nav must skip exactly what Tab skips. */
+function navigableRows() {
+  const root = $("programs");
+  return root ? [...root.querySelectorAll('.agent-row[tabindex="0"]')] : [];
+}
+
+/* `rows` is injectable so the whole handler — not just the arithmetic — can be
+   driven in a test against plain nodes. */
+function handleRowNavigation(e, rows = navigableRows()) {
+  if (!ROW_NAV_KEYS.has(e.key)) return false;
+  // A modified arrow is a browser/OS gesture (word jump, history, scroll); never
+  // take those. Same for a text field inside a row's rename form.
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false;
+  const target = e.target;
+  if (!target || !target.closest) return false;
+  if (target.closest("input, textarea, select")) return false;
+  const row = target.closest(".agent-row");
+  if (!row) return false;
+  const next = nextRowIndex(rows.indexOf(row), e.key, rows.length);
+  if (next < 0) return false;
+  // Consume even when already at the end, or the board scrolls out from under a
+  // held arrow key while focus visibly stays put.
+  e.preventDefault();
+  if (rows[next] && rows[next] !== row) rows[next].focus();
+  return true;
 }
 
 /* ---------- selection + inspector ---------- */
@@ -7082,6 +7140,8 @@ function boot() {
     if (es) es.close();
     connect();
   });
+
+  document.addEventListener("keydown", (e) => { handleRowNavigation(e); });
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
