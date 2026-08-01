@@ -167,7 +167,23 @@ export interface AgentSnapshot {
   outcome?: OutcomeState;
   controlState?: OperatorControlState;
   role?: AgentRole;
+  /* One thing the operator can do about this agent, derived from what the agent
+     wrote. Absent when nothing in the text says why it would want a human —
+     which is most agents most of the time, and is the point. */
   nextAction?: string;
+  /* The reading behind nextAction, so the board can group rows by why they are
+     waiting ("2 blocked on permission", "3 asked a question") and quote the
+     agent rather than paraphrase it. `kind: "unknown"` is a real answer. */
+  attentionSignal?: {
+    kind:
+      | "permission-requested"
+      | "input-requested"
+      | "question-pending"
+      | "assumption-stated"
+      | "stopped-mid-work"
+      | "unknown";
+    evidence?: string;
+  };
   modelPolicy?: ModelPolicy;
   parentAgentId?: string;
   threadDepth?: number;

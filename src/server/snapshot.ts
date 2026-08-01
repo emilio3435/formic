@@ -12,6 +12,7 @@ import type {
 import { MODEL_CONFIG } from "./model-config";
 import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
+import { attentionFieldsFor } from "./attention-signal";
 import {
   buildOperatorIssues,
   classifyIdentityConflicts,
@@ -35,7 +36,6 @@ import {
   controlsFor,
   cursorModelPolicy,
   effortFor,
-  nextActionFor,
   operatorControlState,
   outcomeFor,
   processStateFor,
@@ -148,7 +148,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
-      nextAction: nextActionFor(activity, outcome, controlState),
+      ...attentionFieldsFor({
+        transcriptTail: notification?.body
+          ? `${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`
+          : source.transcriptTail,
+        lastAgentMessage: source.lastAgentMessage,
+        activity,
+        processState: processStateFor(source),
+        transcriptEndedCleanly: source.transcriptEndedCleanly,
+      }, outcome, controlState),
       modelPolicy: cursorModelPolicy(source, sourcesById),
       parentAgentId: source.parentSourceSessionId
         ? `${source.provider}:${source.parentSourceSessionId}`

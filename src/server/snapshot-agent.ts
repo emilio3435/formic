@@ -167,17 +167,8 @@ export function contextPctFor(agent: CollectedAgent): number | undefined {
   return Math.round((numerator / contextWindow) * 100);
 }
 
-export function nextActionFor(
-  activity: ActivityState,
-  outcome: OutcomeState,
-  controlState: OperatorControlState,
-): string {
-  if (outcome === "failed") return "Review the failure and choose a repair.";
-  if (outcome === "blocked") return "Resolve the reported blocker.";
-  if (outcome === "needs-you") return "Review the latest notification.";
-  if (activity === "ended") return "Review this session in history.";
-  if (controlState === "quarantined") return "Resolve the cmux identity conflict to enable controls.";
-  if (activity === "working") return "Monitor current work.";
-  if (activity === "idle" && controlState === "linked") return "Focus or send a follow-up.";
-  return "Review the last recorded result.";
-}
+/* nextActionFor(activity, outcome, controlState) lived here. It classified by
+   clock and control-plane state alone and never read a word the agent wrote, so
+   on a live fleet of 275 it answered "Review this session in history." for 248.
+   attention-signal.ts replaces it with detectors over transcriptTail and
+   lastAgentMessage, and emits nothing where the text does not say why. */

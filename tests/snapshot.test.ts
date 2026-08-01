@@ -1495,8 +1495,12 @@ describe("a stale transcript is silence, not an ending", () => {
     // the agent's own controls[], which reported focus/instruct as enabled.
     expect(live.controlState).toBe("linked");
     expect(live.controls.find(({ action }) => action === "instruct")?.enabled).toBe(true);
-    // And the operator is no longer sent to history to find a running session.
-    expect(live.nextAction).not.toContain("history");
+    /* And the operator is no longer sent to history to find a running session.
+       Stronger than it used to be: a quiet, healthy, linked session has nothing
+       the operator must do, so it now says nothing at all rather than filling
+       the row with a restatement of its own state. */
+    expect(live.nextAction ?? "").not.toContain("history");
+    expect(live.nextAction).toBeUndefined();
   });
 
   test("the elapsed clock keeps running for a session that never ended", () => {
