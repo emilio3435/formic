@@ -2455,6 +2455,8 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    no session near its context ceiling. cells carry the fixed-order weighting
    (urgency changes weight via cell-hot/cell-micro, never order); findings is
    the ordered inline-expansion list. */
+const fetchFailedNow = () => Boolean(state && state.fetchFailed);
+
 function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent", queueError = "") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
@@ -2501,9 +2503,31 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
       : data.tone === "hot" ? "hot" : "normal";
     return { id, weight, data, speaks: speaks(id, data) };
   });
+  /* Audit §6: when the board's top finding IS the system fault, NEEDS YOU and
+     HEALTH are the same sentence at two altitudes — "1 finding · Two live
+     sessions share one cmux pane" beside "Advisory · 1 degraded source", the
+     second in a full-width row. attentionSummary and topSourceIssue read the same
+     issues array, so the overlap is structural rather than coincidental.
+
+     They genuinely diverge — a dead control plane is not in the issues list, and
+     a lone agent failure leaves sources healthy — so HEALTH is suppressed only in
+     that exact overlap, and it hands its remedy to the cell that survives so the
+     "what to do about it" is not suppressed with it. */
+  const top = topSourceIssue(snap);
+  const overlap = conn === "live" && !fetchFailedNow()
+    && status.key === "degraded"
+    && !!(snap && snap.controlHealth && snap.controlHealth.cmuxReachable === true)
+    && !!top && top.kind === "system"
+    && cells.some((cell) => cell.id === "needs-you" && cell.speaks);
+  const kept = cells.filter((cell) => cell.speaks && !(overlap && cell.id === "health"));
+  if (overlap) {
+    const needs = kept.find((cell) => cell.id === "needs-you");
+    const remedy = healthRemedy(snap);
+    if (needs && remedy) needs.data = { ...needs.data, remedy };
+  }
   return {
     calm,
-    cells: cells.filter((cell) => cell.speaks),
+    cells: kept,
     findings: pulseFindings(snap, queueItems),
     queueError,
   };

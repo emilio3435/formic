@@ -4464,6 +4464,36 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
+     Two live sessions share one cmux pane" beside "Advisory · 1 degraded source"
+     — the second in a full-width row. attentionSummary and topSourceIssue read
+     the same issues array, so when the top finding IS the system fault, the two
+     cells are the same sentence at different altitudes.
+
+     They genuinely diverge, so HEALTH is suppressed only in that exact overlap. */
+  test("(6a) one system fault is narrated by one cell, not two", () => {
+    const overlap = snapshot({
+      issues: [{ id: "system:pane", kind: "system", severity: "warning", title: "Two live sessions share one cmux pane", summary: "s", affectedAgentIds: [] }],
+      totals: { live: 1, tracked: 1, attention: 1, working: 1, idle: 0, history: 0, sourceHealth: { healthy: 3, degraded: 1, total: 4 } },
+    });
+    const ids = M.pulseStripModel(overlap, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(ids).toContain("needs-you");
+    expect(ids).not.toContain("health");
+
+    /* Divergence must survive. A dead control plane is NOT in the issues list the
+       way a pane conflict is, so HEALTH keeps its cell and speaks alone. */
+    const blocked = snapshot({ issues: [], controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    const blockedIds = M.pulseStripModel(blocked, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(blockedIds).toContain("health");
+    expect(blockedIds).not.toContain("needs-you");
+
+    // An agent-level finding leaves HEALTH silent anyway — sources are fine.
+    const agentOnly = snapshot({ issues: [{ id: "agent:x", kind: "agent", severity: "warning", title: "t", summary: "s", affectedAgentIds: [] }] });
+    const agentIds = M.pulseStripModel(agentOnly, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(agentIds).toContain("needs-you");
+    expect(agentIds).not.toContain("health");
+  });
+
   /* Regression caught in a browser screenshot: the drawer rendered the task as
      the head objective AND as a Thread turn, six lines apart. The task is a
      floor for the case where nothing else carries the session's prose — not a
