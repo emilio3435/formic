@@ -4535,7 +4535,11 @@ describe("FE-B: harness-backed client behavior", () => {
     });
     const data = M.summaryWidgetData("context-peak", withCtx, "live", "percent");
     expect(data.value).toBe("74%"); // server's number wins over the client's 25%
-    expect(data.sublabel).toContain("Peak 74% · Median 31%");
+    /* The headline is already "74%", so repeating "Peak 74%" here printed one
+       number twice in one tile — audit §12, the same defect the drawer's context
+       tile had fixed. The median stays: it is what the headline cannot say. */
+    expect(data.sublabel).toContain("Median 31%");
+    expect(data.sublabel).not.toContain("Peak 74%");
     expect(data.meterPct).toBe(74);
     expect(data.tone).toBe("ok");
 
@@ -4549,7 +4553,7 @@ describe("FE-B: harness-backed client behavior", () => {
     const bare = M.summaryWidgetData("context-peak", serverOnly, "live", "percent");
     expect(bare.value).toBe("91%");
     expect(bare.value).not.toBe("No data");
-    expect(bare.sublabel).toContain("Peak 91% · Median 12%");
+    expect(bare.sublabel).toContain("Median 12%");
     expect(bare.tone).toBe("hot"); // 91% is a real ceiling warning
 
     // Tokens display still reads the peak agent's own totals, not a percentage.

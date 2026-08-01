@@ -714,7 +714,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const cost = burn.costLastHourUsd != null
       ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
-    const coverage = burn.coverage
+    // Audit §20: coverage speaks only when incomplete. See context-peak below.
+    const coverage = burn.coverage && burn.coverage.reporting < burn.coverage.eligible
       ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
     /* The rate and the cost come from different places — the rate needs completed
        five-minute buckets, the cost comes from BurnBar — so one being absent says
@@ -750,11 +751,21 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const median = Number.isFinite(snap.contextMedian) ? snap.contextMedian : null;
     if (!peak && reported == null) return noDataWidget("No live context reports.");
     const pct = reported != null ? reported : peak.pct;
-    const coverage = totals.tokenReporting != null && totals.tokenEligible != null
+    /* Coverage only when it is INCOMPLETE. "11/11 reporting" spends a clause to
+       say nothing is missing; the number an operator needs is the one that tells
+       them the reading is partial. (Audit §20 — the same suffix appears on BURN
+       under a different population, and rendering both identically at N/N
+       invited comparing two counts that do not measure the same thing.) */
+    const partial = totals.tokenReporting != null && totals.tokenEligible != null
+      && totals.tokenReporting < totals.tokenEligible;
+    const coverage = partial
       ? ` · ${totals.tokenReporting}/${totals.tokenEligible} reporting` : "";
-    /* Peak alone hides the shape of the fleet: one agent at 90% and every agent
-       at 90% are the same headline and very different situations. */
-    const spread = median != null ? `Peak ${pct}% · Median ${median}%` : "Highest observed";
+    /* The headline already IS the peak percentage, so repeating "Peak 62%"
+       underneath printed one number twice about 40px apart — the same defect the
+       drawer's context tile had, whose fix never reached the band. Peak alone
+       hides the shape of the fleet, so the median stays: one agent at 90% and
+       every agent at 90% are the same headline and very different situations. */
+    const spread = median != null ? `Median ${median}%` : "Highest observed";
     return {
       value: peak && display === "tokens" ? contextDisplayValue(peak.agent.tokens, display) : pct + "%",
       unit: display === "tokens" && peak ? "" : "peak window",
