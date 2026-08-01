@@ -4459,6 +4459,28 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §3. The tile rendered "BURN / No data / $19.54 last hour ·
+     31/31 reporting" — a verdict of "no data" printed directly above a dollar
+     figure and a claim of COMPLETE coverage. The operator could not tell whether
+     spend was unknown or $19.54. The rate and the cost have different sources
+     (the rate needs completed 5-minute buckets; the cost comes from BurnBar), so
+     one being absent says nothing about the other. */
+  test("(3a) BURN never calls itself empty while it is reporting a cost", () => {
+    const withCost = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: 19.54, coverage: { reporting: 31, eligible: 31 } } } });
+    const data = M.summaryWidgetData("burn", withCost, "live", "percent");
+    expect(data.value).not.toBe("No data");
+    expect(data.value).toContain("rate");
+    expect(data.sublabel).toContain("$19.54");
+
+    // A rate present is unchanged — the headline is still the number.
+    const full = snapshot({ pulse: { burn: { tokensPerMin: 8200, costLastHourUsd: 5.01, coverage: { reporting: 14, eligible: 14 } } } });
+    expect(M.summaryWidgetData("burn", full, "live", "percent").value).toBe(M.fmtTok(8200));
+
+    // Neither number present is still an honest empty tile.
+    const neither = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: null } } });
+    expect(M.summaryWidgetData("burn", neither, "live", "percent").value).toBe("No data");
+  });
+
   test("(8) CONTEXT PEAK reports the server's peak and median", () => {
     const withCtx = snapshot({
       contextPeak: 74,

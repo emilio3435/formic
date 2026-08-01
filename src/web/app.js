@@ -716,11 +716,23 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       : "cost unavailable";
     const coverage = burn.coverage
       ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
+    /* The rate and the cost come from different places — the rate needs completed
+       five-minute buckets, the cost comes from BurnBar — so one being absent says
+       nothing about the other. Headlining "No data" above a real dollar figure
+       and a claim of complete coverage left the operator unable to tell whether
+       spend was unknown or $19.54. Only the missing half says it is missing. */
+    const hasRate = burn.tokensPerMin != null;
+    const hasCost = burn.costLastHourUsd != null;
+    /* Both missing is still "No data", but it keeps the sublabel rather than
+       swapping in a generic one: "cost unavailable" is the honest phrasing for a
+       failed BurnBar query and must never degrade into a rendered $0. */
+    const sub = cost + coverage + (burn.costNote ? " · " + burn.costNote : "");
+    if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
     return {
-      value: burn.tokensPerMin != null ? fmtTok(burn.tokensPerMin) : "No data",
-      unit: burn.tokensPerMin != null ? "/min" : "",
-      sublabel: cost + coverage + (burn.costNote ? " · " + burn.costNote : ""),
-      tone: burn.tokensPerMin != null ? "ok" : "missing",
+      value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
+      unit: hasRate ? "/min" : "",
+      sublabel: sub,
+      tone: hasRate ? "ok" : "missing",
     };
   }
   if (id === "context-peak") {
