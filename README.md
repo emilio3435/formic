@@ -51,9 +51,10 @@ That saves a local cmux password so Ant Hill can see terminal names and use Focu
 
 `bun run check` runs strict TypeScript plus the collector, identity, routing, notification, archive, snapshot/SSE, control, lifecycle, web-client, and HTTP-boundary tests.
 
-The exact 2026-07-22 commands, point-in-time results, browser checks, disposable cmux control proof, and review verdicts are preserved in [VERIFICATION.md](./VERIFICATION.md).
+The exact 2026-07-22 commands, point-in-time results, browser checks, disposable cmux control proof, and review verdicts are preserved in [VERIFICATION-2026-07-22.md](./docs/history/VERIFICATION-2026-07-22.md). It is a
+point-in-time record, not the current verification standard — the live gate is `bun run check`.
 
-The staged implementation plan for model share, usage trends, request/response distributions, latency, coverage, and Cursor policy analytics is in [TOKEN-ANALYTICS-PLAN.md](./TOKEN-ANALYTICS-PLAN.md).
+Usage and cost analytics are served from OpenBurnBar via `/api/usage/*` (see `src/server/burnbar.ts`). The superseded 2026-07-22 plan for a local analytics store is archived at [TOKEN-ANALYTICS-PLAN.md](./docs/history/TOKEN-ANALYTICS-PLAN.md); it describes an architecture the code did not take.
 
 The direct, coordinated, and investigation flow—including explicit read-only Luna launch and persisted run states—is in [TRIAGE-WORKFLOW.md](./TRIAGE-WORKFLOW.md).
 
