@@ -597,10 +597,25 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const derived = healthRemedy(snap);
     /* A blocking fault outranks any tidy-up: telling an operator to close panes
        while Focus and Send cannot route at all points them at the wrong problem.
-       The panes stay listed, the instruction does not — restoring the control
-       plane is the only next step that matters until it is back. */
-    const remedy = derived && severity && severity.key === "blocking"
-      ? { ...derived, instruction: "" }
+       But suppressing the wrong instruction must not leave none — a card that
+       says the board is Blocked and stops there is the symptom-without-a-remedy
+       the whole rewrite exists to remove. These severities are decided here, in
+       the client, so their next step is named here too. */
+    const blockingStep = !snap || conn === "offline"
+      ? "Check the hub is running, then Refresh."
+      : control && control.cmuxReachable !== true
+        ? "Start cmux, then Refresh — Focus and Send come back on their own."
+        : "";
+    /* Offline is its own status key rather than a `degraded` severity, so it
+       needs naming here too — it is the one state where the operator is most
+       stranded and least able to guess the next move. */
+    const severityStep = (severity && severity.key === "blocking") || status.key === "offline"
+      ? blockingStep
+      : severity && severity.key === "stale" ? "Refresh to re-pull the evidence."
+      : "";
+    const remedy = severityStep
+      ? { ...(derived || { problem: "", paneCount: 0, blockedCount: 0, panes: [], tidy: false }),
+          instruction: severityStep, panes: [] }
       : derived;
     return {
       value: (severity && SEVERITY_HEADLINE[severity.key])
@@ -4599,11 +4614,23 @@ function renderEvidenceShelf(agent) {
    plus process liveness. `statusReason` is 100% populated on the wire and was
    rendered on zero agents; it is the sentence that says which. */
 function renderStatusLine(agent, activity, outcome, control, policy) {
+  /* The activity word is emitted ALWAYS and hidden by CSS only at the widths
+     where the roster row that carries it is actually beside the drawer. Below
+     1025px the drawer is a full-viewport sheet and the roster is completely
+     covered — measured, not assumed — so deleting the word outright left an
+     operator on a 1024px window unable to tell whether the session they were
+     reading was running or parked. It also never reached a screen reader at any
+     width, because the age text encoded activity only as a colour. */
   const line = el("div", {
     class: "status-line",
     role: "status",
-    "aria-label": "Session status",
+    "aria-label": "Session status: " + (ACTIVITY_LABELS[activity] || activity),
   });
+  line.append(el("span", {
+    class: "status-line-activity act-" + activity,
+    text: ACTIVITY_LABELS[activity] || activity,
+  }));
+  line.append(el("span", { class: "status-line-sep status-line-activity", "aria-hidden": "true", text: "·" }));
 
   // Time since the source last moved — the live fact, not uptime. Uptime measured
   // the wrong clock: it read 200h for an agent that had been silent for an hour.
@@ -5104,7 +5131,7 @@ function renderVitalsBand(agent) {
    "No operate digest yet" placeholder — a tab whose only remaining content was an
    apology for having none. */
 
-const TURN_ROLE_LABELS = { user: "You", assistant: "Agent" };
+const TURN_ROLE_LABELS = { user: "You", assistant: "Agent", task: "Task" };
 
 function renderChatTurn(role, text) {
   return el("div", { class: "chat-turn chat-turn--" + role },
@@ -5118,6 +5145,16 @@ function renderChatTurn(role, text) {
    lastHumanMessage was byte-identical to lastAgentMessage on 18 of 22 active
    agents — so any renderer that trusts the field NAMES prints the same prose
    twice under two labels. Compare the text, not the field. */
+/* Two normalised strings that are the same prose. Either identical, or one is
+   the server's truncation of the other — the collectors cut long text and append
+   an ellipsis, so the short copy is a prefix of the long one and ends in "…". */
+function isSameProse(a, b) {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 24 || !long.startsWith(short.replace(/…$/, ""))) return false;
+  return /…$/.test(short);
+}
+
 function dedupeTurns(candidates) {
   const seen = [];
   const kept = [];
@@ -5125,7 +5162,17 @@ function dedupeTurns(candidates) {
     const text = typeof turn.text === "string" ? turn.text.trim() : "";
     if (!text) continue;
     const norm = normalizeCompareText(text);
-    if (!norm || seen.some((prev) => prev === norm || prev.includes(norm) || norm.includes(prev))) continue;
+    /* Repetition, not containment. This used to drop a turn whenever either text
+       contained the other, which is a much bigger net than it looks: an agent
+       that quotes the operator's instruction back before answering — extremely
+       common — was judged a repeat of the user turn and dropped WITH its answer
+       attached, so the operator saw their own message and no reply from an agent
+       that had replied.
+
+       A turn is a repeat only if it says the same thing: identical after
+       normalising, or the same text with one side truncated by the server (which
+       appends an ellipsis, so the shorter copy is a prefix that ends in one). */
+    if (!norm || seen.some((prev) => isSameProse(prev, norm))) continue;
     seen.push(norm);
     kept.push({ ...turn, text });
   }
@@ -5145,9 +5192,20 @@ function dedupeTurns(candidates) {
    the honest stand-in is the task the operator actually set. */
 function renderChat(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  /* `task` is the last candidate, and it is what stops three independently
+     reasonable dedup rules from composing into an empty drawer: the head
+     suppresses the objective when it equals the message, Thread reads only the
+     two turn fields, and the row summary is folded on the selected row — so an
+     agent whose only prose is `task` could end up with the head silent, Thread
+     saying "no messages", and the roster copy hidden, for a session whose task
+     is populated on the wire. Recovering it meant leaving the cockpit.
+
+     dedupeTurns still drops it when a turn already says the same thing, so this
+     adds a floor without adding a duplicate: at least one copy always survives. */
   const turns = dedupeTurns([
     { role: "user", text: agent.lastUserMessage },
     { role: "assistant", text: agent.lastAgentMessage },
+    { role: "task", text: agent.task },
   ]);
   for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
 

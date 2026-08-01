@@ -2152,6 +2152,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   margin-top: 0.15rem; font-size: 12.5px; color: var(--muted);
 }
 .status-line-sep { color: var(--line-strong); }
+.status-line-activity { font-weight: 650; }
+.status-line-activity.act-working { color: var(--working); }
+.status-line-activity.act-idle { color: var(--idle); }
+.status-line-activity.act-ended { color: var(--ended); }
+/* Hidden only where the roster row beside the drawer is actually carrying it.
+   Below this width the drawer is a full sheet and the roster is occluded, so the
+   word is the operator's only way to know if the session is running. */
+@media (min-width: 1025px) {
+  body.inspector-open .status-line-activity { display: none; }
+}
 .status-line-live {
   display: inline-flex; align-items: center; gap: 0.35rem;
   font-weight: 650; color: var(--muted);
