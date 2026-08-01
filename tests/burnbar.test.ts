@@ -505,6 +505,132 @@ db.close();
     }
   });
 
+  const wardSpikeTestName =
+    `an unmeasured baseline does not manufacture a spike${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(wardSpikeTestName, async () => {
+    /* A spike is a ratio of two windows, so scoring NULL rows as zero corrupts
+       it in both directions. This fixture puts the gap in the BASELINE, which
+       is the dangerous direction: the denominator collapses, the ratio goes
+       through the roof, and the ward raises an alarm out of data it never had.
+       An invented alarm is worse than a missed one here — it spends the
+       operator's attention on nothing and teaches them to stop looking. */
+    const wardRoot = mkdtempSync(join(tmpdir(), "anthill-ward-spike-"));
+    const wardDb = join(wardRoot, "openburnbar.sqlite");
+    const createScript = join(wardRoot, "create-spike-fixture.ts");
+    writeFileSync(
+      createScript,
+      `
+import { Database } from "bun:sqlite";
+Database.setCustomSQLite(${JSON.stringify(dylib)});
+const db = new Database(${JSON.stringify(wardDb)}, { create: true });
+db.run("PRAGMA key = '${key}'");
+db.run(\`CREATE TABLE token_usage (
+  id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
+// Baseline window (07-21): heavy usage, but the row was never measured.
+db.run(\`INSERT INTO token_usage VALUES
+  ('b1','Codex','s','proj','m',NULL,NULL,0,0,NULL,0.01,'exact','2026-07-21 10:00:00.000','2026-07-21 10:01:00.000')\`);
+// Current window (07-22): usage that only LOOKS like a surge once the baseline
+// has been flattened to zero. Sized to clear the ward's 1,000/h floor
+// (100,000 over 24h is ~4,167/h) so the phantom spike genuinely fires without
+// the guard — a smaller number would let this test pass for the wrong reason.
+db.run(\`INSERT INTO token_usage VALUES
+  ('c1','Codex','s','proj','m',80000,20000,0,0,100000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000')\`);
+db.close();
+`,
+    );
+    expect(Bun.spawnSync(["bun", createScript], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = wardRoot;
+    process.env.BURNBAR_DB_PATH = wardDb;
+    process.env.BURNBAR_DB_KEY = key;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = dylib;
+    try {
+      // 24h current window; its baseline is the preceding 24h, which holds the
+      // unmeasured row.
+      const ward = await getUsageWard("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+      expect(ward.available).toBe(true);
+      // No alarm is raised off a denominator that was never measured...
+      expect(ward.spikes).toEqual([]);
+      // ...and the silence is qualified, so it cannot be read as an all-clear.
+      expect(ward.spikeCoverage.complete).toBe(false);
+      expect(ward.spikeCoverage.skipped).toBe(1);
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(wardRoot, { recursive: true, force: true });
+    }
+  });
+
+  const wardRealSpikeTestName =
+    `a fully measured surge is still reported${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(wardRealSpikeTestName, async () => {
+    // The control: suppression must be scoped to unmeasured series only.
+    const spikeRoot = mkdtempSync(join(tmpdir(), "anthill-ward-real-"));
+    const spikeDb = join(spikeRoot, "openburnbar.sqlite");
+    const createScript = join(spikeRoot, "create-real-spike.ts");
+    writeFileSync(
+      createScript,
+      `
+import { Database } from "bun:sqlite";
+Database.setCustomSQLite(${JSON.stringify(dylib)});
+const db = new Database(${JSON.stringify(spikeDb)}, { create: true });
+db.run("PRAGMA key = '${key}'");
+db.run(\`CREATE TABLE token_usage (
+  id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
+db.run(\`INSERT INTO token_usage VALUES
+  ('rb','Codex','s','proj','m',800,200,0,0,1000,0.01,'exact','2026-07-21 10:00:00.000','2026-07-21 10:01:00.000'),
+  ('rc','Codex','s','proj','m',80000,20000,0,0,100000,0.90,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000')\`);
+db.close();
+`,
+    );
+    expect(Bun.spawnSync(["bun", createScript], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = spikeRoot;
+    process.env.BURNBAR_DB_PATH = spikeDb;
+    process.env.BURNBAR_DB_KEY = key;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = dylib;
+    try {
+      const ward = await getUsageWard("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+      expect(ward.spikes.length).toBe(1);
+      expect(ward.spikes[0]).toMatchObject({ provider: "Codex", model: "m" });
+      expect(ward.spikeCoverage).toEqual({ complete: true, skipped: 0 });
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(spikeRoot, { recursive: true, force: true });
+    }
+  });
+
   test("usage endpoints reject non-loopback hosts", async () => {
     const response = await handleUsageRequest(
       new Request("http://example.com/api/usage/summary?from=2026-07-22T00:00:00.000Z&to=2026-07-23T00:00:00.000Z"),

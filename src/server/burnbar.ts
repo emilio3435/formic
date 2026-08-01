@@ -58,6 +58,11 @@ export interface UsageSeriesPoint {
   provider: string;
   model: string;
   tokens: number;
+  /* Invocations in this bucket with no token measurement. The chart draws
+     `tokens` as a bar height, so folding an unmeasured row in as zero drew a
+     quiet period that was never observed to be quiet. The bar stays the
+     measured height; this says how much of the bucket it is not describing. */
+  tokensMissing: number;
   costUsd: number | null;
   costProvenance: CostProvenance;
   pricingVersion?: string;
@@ -267,6 +272,12 @@ export interface UsageWardResponse {
   from: string;
   to: string;
   spikes: UsageSpike[];
+  /* Spike detection compares two windows, so it can only speak about series
+     whose rows were all measured. `skipped` counts the provider/model series
+     left unscored because one of their windows had unmeasured rows — without
+     it, "no spikes" would read as an all-clear the ward never actually
+     established. */
+  spikeCoverage: { complete: boolean; skipped: number };
   quotaPressure: Array<{ provider: string; label: string; usedPercent: number; resetsAt?: string }>;
   /* The ward answers from two independent sources: spikes from the encrypted
      database, quota pressure from the provider_quotas.json sidecar. Either can
@@ -607,7 +618,10 @@ export async function getUsageSeries(
          ${bucketSql} AS bucketStart,
          provider,
          COALESCE(model, 'unknown') AS model,
-         SUM(COALESCE(totalTokens, 0)) AS tokens,
+         -- Bare SUM skips NULLs rather than scoring them zero; tokensMissing
+         -- carries what the bar height therefore cannot account for.
+         SUM(totalTokens) AS tokens,
+         SUM(CASE WHEN totalTokens IS NULL THEN 1 ELSE 0 END) AS tokensMissing,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(inputTokens, 0) END) AS unpricedInputTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(outputTokens, 0) END) AS unpricedOutputTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
@@ -654,6 +668,7 @@ export async function getUsageSeries(
           provider: str(row.provider) || "unknown",
           model: str(row.model) || "unknown",
           tokens: num(row.tokens) ?? 0,
+          tokensMissing: num(row.tokensMissing) ?? 0,
           ...cost,
           invocations: num(row.invocations) ?? 0,
         };
@@ -812,7 +827,8 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
     const [current, baseline, quotas] = await Promise.all([
       runEncryptedQuery(
         `SELECT provider, COALESCE(model, 'unknown') AS model,
-                SUM(COALESCE(totalTokens, 0)) AS tokens
+                SUM(totalTokens) AS tokens,
+                SUM(CASE WHEN totalTokens IS NULL THEN 1 ELSE 0 END) AS tokensMissing
          FROM token_usage
          WHERE startTime >= ? AND startTime < ?
          GROUP BY provider, model`,
@@ -820,7 +836,8 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       ),
       runEncryptedQuery(
         `SELECT provider, COALESCE(model, 'unknown') AS model,
-                SUM(COALESCE(totalTokens, 0)) AS tokens
+                SUM(totalTokens) AS tokens,
+                SUM(CASE WHEN totalTokens IS NULL THEN 1 ELSE 0 END) AS tokensMissing
          FROM token_usage
          WHERE startTime >= ? AND startTime < ?
          GROUP BY provider, model`,
@@ -829,12 +846,27 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       getUsageQuotas(),
     ]);
     const hours = duration / 3_600_000;
+    const keyOf = (row: QueryRow): string => `${str(row.provider)}\0${str(row.model)}`;
     const baselineMap = new Map(
-      baseline.map((row) => [`${str(row.provider)}\0${str(row.model)}`, (num(row.tokens) ?? 0) / hours]),
+      baseline.map((row) => [keyOf(row), (num(row.tokens) ?? 0) / hours]),
     );
+    /* A spike is a RATIO, so an unmeasured row corrupts it in both directions.
+       SUM(COALESCE(totalTokens, 0)) scored NULL rows as zero, which understates
+       whichever window they fall in: a gap in the baseline inflates the ratio
+       and invents a spike out of missing data, and a gap in the current window
+       flattens a real one. Inventing an alarm is the worse failure — it spends
+       the operator's attention on nothing and teaches them the ward cries wolf.
+       Neither direction is defensible, so a series whose windows are not fully
+       measured is not scored at all, and the count of what was skipped rides
+       the response so silence is never mistaken for an all-clear. */
+    const unmeasured = new Set<string>();
+    for (const row of [...current, ...baseline]) {
+      if ((num(row.tokensMissing) ?? 0) > 0) unmeasured.add(keyOf(row));
+    }
     const spikes: UsageSpike[] = [];
     for (const row of current) {
-      const key = `${str(row.provider)}\0${str(row.model)}`;
+      const key = keyOf(row);
+      if (unmeasured.has(key)) continue;
       const currentRate = (num(row.tokens) ?? 0) / hours;
       const baselineRate = baselineMap.get(key) ?? 0;
       const ratio = baselineRate > 0 ? currentRate / baselineRate : currentRate > 0 ? Infinity : 0;
@@ -869,6 +901,7 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       from,
       to,
       spikes: spikes.slice(0, 12),
+      spikeCoverage: { complete: unmeasured.size === 0, skipped: unmeasured.size },
       quotaPressure: quotaPressure.slice(0, 12),
       quotas: quotas.available
         ? { available: true }
@@ -883,6 +916,8 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       from,
       to,
       spikes: [],
+      // Nothing was scored, so nothing is claimed about spikes either.
+      spikeCoverage: { complete: false, skipped: 0 },
       quotaPressure: [],
       // The database failed before the sidecar was ever consulted.
       quotas: { available: false, error: "Quotas were not read." },
