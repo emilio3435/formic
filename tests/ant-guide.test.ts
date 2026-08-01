@@ -60,9 +60,16 @@ describe("ANT-GUIDE.md stays true to the product", () => {
     }
   });
 
-  test("the Degraded severities it explains are the three the client computes", () => {
-    const severities = [...app.matchAll(/\{ key: "(blocking|stale|advisory)", label: "([^"]+)"/g)].map((m) => m[2]);
-    expect(severities.sort()).toEqual(["Advisory", "Blocking", "Stale"]);
+  test("the Degraded severities it explains are the ones the client shows", () => {
+    /* Assert the HEADLINES, not DEGRADED_SEVERITY.label. The severity badge was
+       deleted when the health card's headline became the severity itself, so
+       those internal labels no longer reach a screen — "Blocking" is the key's
+       name, "Blocked" is the word the operator reads, and the guide is right to
+       teach the latter. A doc test must pin what is visible. */
+    const headlines = [...app.matchAll(/const SEVERITY_HEADLINE = \{([^}]*)\}/g)]
+      .flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((h) => h[1]));
+    expect(headlines.sort()).toEqual(["Advisory", "Blocked", "Stale"]);
+    const severities = headlines;
     for (const label of severities) {
       expect(guide, `guide omits the ${label} severity`).toContain(`**${label}**`);
     }

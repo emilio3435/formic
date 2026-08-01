@@ -1799,7 +1799,10 @@ function renderHealthRail() {
     model.findings.map(findingPaintKey).join("|"),
     // The calm line renders momentum/burn/health regardless of which widgets
     // are enabled, so sign its actual inputs — not the customized cell list.
-    (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
+    (model.calm
+      ? ["momentum", "burn", "health"]
+      : state.widgetIds.filter((id) => dataById.has(id))
+    ).map((id) => {
       const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
@@ -1820,9 +1823,17 @@ function renderHealthRail() {
   if (model.calm) {
     widgets.append(renderPulseCalm(dataById.get("health")));
   } else {
+    /* The MODEL decides what speaks; this loop only orders it. It used to walk
+       state.widgetIds and fall back to summaryWidgetData for any id the model had
+       omitted — which meant every suppression decided in pulseStripModel (a cell
+       with nothing to report, a health cell already narrated by NEEDS YOU)
+       rendered anyway. The omissions were real in the model and invisible on
+       screen; caught by counting .reading-widget nodes in the browser against the
+       model's own cell list. */
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
-      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal", dataById.get(id)));
+      if (!cell) continue;
+      widgets.append(renderSummaryWidget(id, cell.weight, cell.data));
     }
   }
   renderPulseFindings(model);
@@ -2806,16 +2817,28 @@ function renderScopeNote(shown) {
         : "");
     return;
   }
-  if (!state.snap) { note.textContent = ""; return; }
-  const t = totalsOf(state.snap);
-  const scan = state.snap.scanWindowHours || state.scanWindowHours;
-  let text = `${shown} shown · ${t.live} live · ${t.tracked} tracked`;
-  if (lookbackApplies(state.view)) {
-    text += ` · lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`;
+  if (!state.snap) { note.textContent = ""; note.hidden = true; return; }
+  /* Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
+     already showing Now 12 / Idle 19 / History 44 — twelve numeric occurrences
+     carrying nine distinct values, with the three 12s being one set. Worse,
+     `shown` is the active tab AFTER search and facets while the tab counts omit
+     them, so the two silently disagree the moment a filter is on, and `tracked`
+     has no threshold, no change and no action attached to it.
+
+     It now renders only what CHANGES the interpretation of what is on screen —
+     a filter is narrowing the list, a lookback window is hiding rows, or the
+     last refresh failed. Otherwise the tab bar has already said it. */
+  const parts = [];
+  if (state.query || state.facetProgram || state.facetProvider) {
+    parts.push(`${shown} matching`);
   }
-  if (state.query || state.facetProgram || state.facetProvider) text += " · filters applied";
-  if (state.fetchFailed) text += " · last refresh failed";
-  note.textContent = text;
+  if (lookbackApplies(state.view)) {
+    const scan = state.snap.scanWindowHours || state.scanWindowHours;
+    parts.push(`lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`);
+  }
+  if (state.fetchFailed) parts.push("last refresh failed");
+  note.textContent = parts.join(" · ");
+  note.hidden = parts.length === 0;
 }
 
 /* ---------- program list ---------- */
@@ -3078,12 +3101,39 @@ function renderPrograms() {
   } else {
     const emptyByView = {
       "now": `No active work right now — idle sessions remain available in Idle.`,
-      "needs-you": "Nothing needs you. Every tracked session is working or done — open Now for the whole board.",
+      "needs-you": "Nothing needs you",
       "working": "No agents are working right now.",
       "idle": "No idle agents.",
       "history": "No ended sessions recorded yet.",
     };
-    const wrap = el("div", { class: "no-match" }, el("p", { text: emptyByView[state.view] || "Nothing here." }));
+    /* An operator glancing at an empty cockpit must be able to tell "nothing is
+       wrong" from "nothing has loaded". Those look identical when the only
+       difference is small grey text on a large white field — and on the
+       attention view, empty is the GOOD state and the one they will see most.
+
+       So the all-clear reads as a finding in its own right: a verdict mark, the
+       headline at weight, and underneath it the fleet's vital signs with a
+       ticking age. The numbers are the proof of life — a board that is still
+       loading cannot say "18 live · 6 working" or count seconds since its last
+       snapshot. Every other empty view stays muted prose, because absence there
+       is a filter result rather than an answer. */
+    const allClear = state.view === "needs-you";
+    const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
+    if (allClear) {
+      const t = totalsOf(state.snap);
+      wrap.append(
+        el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check")),
+        el("p", { class: "all-clear-head", text: emptyByView["needs-you"] }),
+        el("p", { class: "all-clear-vitals" },
+          el("span", { text: `${t.live} live · ${t.working} working · ${t.idle} idle` }),
+          el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
+          el("span", {
+            dataset: { ago: state.snap.generatedAt },
+            text: "checked " + agoText(state.snap.generatedAt),
+          })));
+    } else {
+      wrap.append(el("p", { text: emptyByView[state.view] || "Nothing here." }));
+    }
     /* The escape hatch has to agree with the sentence above it. On the attention
        view the answer to "nothing needs you" is the whole board, not the
        archive — offering History there sent the operator to finished work while
