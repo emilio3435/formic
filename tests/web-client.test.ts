@@ -3913,12 +3913,24 @@ describe("the health card's headline agrees with its own severity", () => {
   test("an advisory is rendered lighter than a real degradation", () => {
     const weightOf = (snap: unknown, failed: boolean) =>
       M.pulseStripModel(snap, "live", [], "percent", "").cells.find((c: { id: string }) => c.id === "health").weight;
-    // Advisory shrinks to the micro cell — the same weight a healthy board gets,
-    // because in both cases there is nothing for the operator to do right now.
-    expect(weightOf(advisory(), false)).toBe("micro");
-    // A blocking problem stays full size.
+    /* Advisory used to shrink to micro on the reasoning that "in both cases
+       there is nothing for the operator to do right now". That premise no
+       longer holds: a non-clear verdict now carries a remedy and a pane list,
+       and micro renders the headline alone — so shrinking it deletes the answer
+       the card exists to give. An advisory keeps its cell.
+
+       The subject of this test is unchanged and still asserted, one layer down:
+       advisory is LIGHTER than a real degradation. That distinction now lives
+       in tone (amber `advisory` vs `degraded`), which is where a severity
+       difference belongs — not in whether the operator is shown what to do. */
+    expect(weightOf(advisory(), false)).toBe("normal");
+    expect(M.summaryWidgetData("health", advisory(), "live", "percent", [], false).tone).toBe("advisory");
+    // A blocking problem stays full size, and reads at the heavier tone.
     const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
     expect(weightOf(blocked, false)).toBe("normal");
+    expect(M.summaryWidgetData("health", blocked, "live", "percent", [], false).tone).toBe("degraded");
+    // A clear board still rides at micro: no claim to justify, so stay quiet.
+    expect(weightOf(snapshot(), false)).toBe("micro");
   });
 
   test("shrinking the advisory cell does not delete its explanation", async () => {

@@ -1528,7 +1528,11 @@ function healthMicroChip(data) {
   /* An advisory rides at micro too, so this chip is the ONLY place its
      consequence sentence can still be read — carry it, or shrinking the cell
      would silently delete the explanation along with the alarm. */
-  const detail = [data.severityDetail, data.sublabel].filter(Boolean).join(" ");
+  /* A clear board rides at micro, so this chip is where pending tidy-up has to
+     survive: the instruction rides on the tooltip rather than being promoted
+     into a cell it has not earned. Quiet, but not lost. */
+  const detail = [data.severityDetail, data.sublabel, data.remedy && data.remedy.instruction]
+    .filter(Boolean).join(" ");
   return el("span", { class: "verdict-chip verdict-" + data.tone, title: detail || data.sublabel },
     icon(data.icon), data.value);
 }
@@ -2426,10 +2430,19 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
   // it used to derive the same three from scratch on every paint.
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
     const data = summaryWidgetData(id, snap, conn, display, queueItems, undefined, queueError);
-    // An advisory rides at micro alongside "ok": in both cases there is nothing
-    // for the operator to do right now, which is what cell weight communicates.
+    /* Weight follows actionability, not tone. An advisory used to ride at micro
+       on the reasoning that there was "nothing for the operator to do right
+       now" — true when the card could only name a symptom, false now that a
+       non-clear verdict carries a remedy. Micro renders the headline alone, so
+       collapsing an advisory deletes the very answer the card exists to give:
+       the board would say something needs tidying and hide what to do about it.
+
+       A clear verdict still rides at micro. Nothing is wrong, so the card makes
+       no claim to justify, and a cockpit that stays quiet when quiet is the
+       truth is the point. Pending tidy-up is carried on the chip's tooltip
+       rather than promoted into a cell it does not deserve. */
     const weight = id === "health"
-      ? (data.tone === "ok" || data.tone === "advisory" ? "micro" : "normal")
+      ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
     return { id, weight, data };
   });
