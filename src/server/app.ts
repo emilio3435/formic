@@ -69,6 +69,12 @@ export type NewOperatorAction = Omit<OperatorAction, "id" | "at">;
 export interface ActionLogStore {
   list(limit: number): readonly OperatorAction[];
   append(action: NewOperatorAction): Promise<OperatorAction>;
+  /* Why the list may be short. appendAction deliberately swallows a persist
+     failure — the control it is journalling has already run, so failing the
+     response would invite the operator to repeat a completed action — but that
+     left the failure nowhere except stderr, and /api/actions went on serving a
+     silently incomplete history as though it were the whole record. */
+  persistError?(): string | undefined;
 }
 
 const ACTION_ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -89,6 +95,7 @@ function createActionId(nowMs: number): string {
 export class MemoryActionLogStore implements ActionLogStore {
   protected actions: OperatorAction[] = [];
   private mutationQueue: Promise<void> = Promise.resolve();
+  private lastPersistError?: string;
 
   constructor(
     protected readonly now: () => number = Date.now,
@@ -116,9 +123,20 @@ export class MemoryActionLogStore implements ActionLogStore {
     this.actions = retainActions(actions, this.now());
   }
 
+  persistError(): string | undefined {
+    return this.lastPersistError;
+  }
+
   private async commit(actions: readonly OperatorAction[]): Promise<void> {
     const retained = retainActions(actions, this.now());
-    await this.persist(retained);
+    try {
+      await this.persist(retained);
+    } catch (error) {
+      // Remember it, then rethrow so append() still rejects as it always has.
+      this.lastPersistError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
+    this.lastPersistError = undefined;
     this.actions = retained;
   }
 
@@ -524,8 +542,15 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");
       const limit = limitFrom(url, 100, 500);
       if (limit instanceof Response) return limit;
+      const store = await actionLogStore;
+      const journalError = store.persistError?.();
       return Response.json(
-        { ok: true, actions: (await actionLogStore).list(limit) },
+        {
+          ok: true,
+          actions: store.list(limit),
+          // An incomplete history must not read as a complete one.
+          journal: journalError ? { healthy: false, error: journalError } : { healthy: true },
+        },
         { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
       );
     }

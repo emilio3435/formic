@@ -230,6 +230,41 @@ describe("operator action log", () => {
     fetch.dispose();
   });
 
+  /* appendAction swallows a persist failure on purpose: the control it is
+     journalling has already run, so failing the response would invite the
+     operator to repeat a completed action. But that left the failure in stderr
+     and nowhere else, and /api/actions kept serving a silently short history as
+     though it were the whole record — the endpoint asserting "these are the
+     actions taken" when it means "these are the ones we managed to write". */
+  test("a journal that cannot be written says so instead of serving a short history as complete", async () => {
+    class UnwritableActionLogStore extends MemoryActionLogStore {
+      protected override async persist(): Promise<void> {
+        throw new Error("action log volume is read-only");
+      }
+    }
+    const store = new UnwritableActionLogStore(() => Date.parse("2026-07-28T09:12:03.114Z"));
+    const fetch = app(snapshot(), { actions: store });
+    try {
+      const healthy = await (await fetch(get("/api/actions"))).json();
+      // Nothing has failed yet, so nothing is claimed.
+      expect(healthy.journal).toEqual({ healthy: true });
+
+      await expect(store.append({
+        kind: "focus",
+        agentIds: ["codex:test-session"],
+        outcome: "ok",
+        detail: "Focused the fixture session.",
+      })).rejects.toThrow("read-only");
+
+      const degraded = await (await fetch(get("/api/actions"))).json();
+      expect(degraded.actions).toEqual([]);
+      expect(degraded.journal.healthy).toBe(false);
+      expect(degraded.journal.error).toContain("read-only");
+    } finally {
+      fetch.dispose();
+    }
+  });
+
   test("records staged control failure and partial broadcast exactly once each, newest first", async () => {
     const actions = new MemoryActionLogStore(() => Date.parse("2026-07-28T09:12:03.114Z"));
     const runner = new StubRunner([
