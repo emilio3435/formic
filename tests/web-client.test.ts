@@ -3908,9 +3908,13 @@ describe("the health card's headline agrees with its own severity", () => {
     expect(stale.tone).toBe("degraded");
     expect(stale.sublabel).toContain("refresh failed");
 
-    // Offline and Operational are untouched.
+    /* Offline and the healthy verdict are untouched by the severity split. The
+       healthy card now reads "All clear" rather than "Operational": the status
+       KEY is still `operational`, but the card speaks the operator's word for
+       it instead of the system's. Only the wording moved — this test's subject,
+       that blocking and stale keep their full weight, is asserted above. */
     expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
-    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("Operational");
+    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("All clear");
   });
 
   test("an advisory is rendered lighter than a real degradation", () => {
