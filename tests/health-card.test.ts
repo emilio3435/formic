@@ -111,6 +111,31 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
     expect(remedy.problem).not.toContain("identity conflict");
   });
 
+  test("a live fault never borrows the tidy-up's remedy", () => {
+    /* Caught on the live board, not in a diff: the card read "3 live sessions
+       can't take commands." and then offered "Close 17 cmux panes ... this is
+       tidying, not a fault." — a fix for a different problem, contradicting the
+       line above it. Debris answers debris. A live fault uses its own remedy,
+       or the summary the backend wrote for it, which carries the fix in prose.
+       The pane list goes with the tidy-up too: offering it here would point the
+       operator at panes that would not unblock anything. */
+    const blocked = agent({ id: "codex:live", activity: "idle", controlState: "quarantined" });
+    const snap = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: ["conflict"], staleSources: [], debris: DEBRIS },
+      issues: [{
+        id: "system:cmux-shared-pane", kind: "system", severity: "error",
+        title: "Two live sessions share one cmux pane",
+        summary: "Focus, Send and Interrupt stay unavailable for 2 sessions until one is closed.",
+        affectedAgentIds: ["codex:live"],
+      }],
+      programs: [{ id: "p1", name: "p1", agents: [blocked] }],
+    });
+    const remedy = M.healthRemedy(snap);
+    expect(remedy.instruction).not.toContain("tidying, not a fault");
+    expect(remedy.instruction).toContain("until one is closed");
+    expect(remedy.panes).toHaveLength(0);
+  });
+
   test("no next step is invented when the payload cannot supply one", () => {
     // A confident instruction the payload does not support is worse than none:
     // it sends an operator somewhere that may not fix anything.

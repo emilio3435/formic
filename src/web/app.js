@@ -517,12 +517,21 @@ function healthRemedy(snap) {
         ? `${blocked} live session${blocked === 1 ? "" : "s"} can't take commands.`
         : issue.summary)
       : "",
-    /* The backend owns this wording: it classified the fault, so it names the
-       fix. Rendered verbatim, never paraphrased. */
-    instruction: (debris && debris.remedy) || "",
+    /* The instruction must answer the problem actually stated. The debris
+       remedy says, in its own words, "this is tidying, not a fault" — printing
+       it under "3 live sessions can't take commands" offers a fix for a
+       different problem and reads as a contradiction. So it is reserved for the
+       case where debris IS the complaint; a live fault uses its own remedy, or
+       the summary the backend wrote for it, which carries the fix in prose.
+       Either way the wording is the backend's, never paraphrased. */
+    instruction: issue
+      ? (issue.remedy || (blocked && issue.summary ? issue.summary : ""))
+      : (debris && debris.remedy) || "",
     paneCount: (debris && debris.count) || panes.length,
     blockedCount: blocked,
-    panes,
+    // The pane list is evidence for the tidy-up instruction. Offering it beside
+    // a live fault points the operator at panes that would not unblock anything.
+    panes: issue ? [] : panes,
     tidy: !issue,
   };
 }
