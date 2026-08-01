@@ -1,5 +1,14 @@
 # The Ant Hill — Inspector Drawer States: Plan of Attack
 
+> **ARCHIVED 2026-08-01 — do not follow §5.** The design in this plan shipped,
+> but §5's instruction to preserve `renderOverview`, `renderSwarmSection`,
+> `renderTechnical`, and `renderTarget` is now *inverted*: all four were
+> deleted, and `tests/web-client.test.ts` asserts their absence by name
+> (`expect(byClass(drawer, "swarm-section")).toBeNull()`). Reintroducing them
+> turns the suite red. The `.drawer-*` class names in §1 were also renamed to
+> the `dw-*` namespace, and every `file:line` citation in §0 predates the
+> `app.js` ES-module split. Kept for the §4 nesting-options rationale.
+
 **Date:** 2026-07-22
 **Scope:** Redesign the right-hand inspector drawer (`aside#inspector.pane-inspector`) so it presents a *distinct design per entity type* and *owns ~90% of the interaction*, pulling triage generation, affected-agent chips, technical detail, and investigation results out of the inline list surfaces and into the drawer. This is a scoping/design deliverable — no production code changes beyond these two files.
 
