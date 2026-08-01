@@ -839,7 +839,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -1533,6 +1533,30 @@ function healthMicroChip(data) {
     icon(data.icon), data.value);
 }
 
+/* Which repair control, if any, the health cell should offer.
+
+   It used to offer "Refresh" for every degraded and advisory state. Measured on
+   the live board: the cell said "4 live sessions can't take commands … until one
+   is closed" and then rendered a button that re-pulls the snapshot — naming the
+   correct action and offering a different one, with the only affordance present
+   being the one that cannot help.
+
+   A control is offered only when re-pulling evidence could change the answer:
+   the fetch itself failed, the feed is not live, or the fault is repaired OUTSIDE
+   this app (cmux is down; the operator starts it, then confirms). An
+   evidence-based advisory — two sessions sharing a pane — is fixed by closing one
+   and the collector rescans on its own, so there is nothing to offer. */
+function healthRefreshAction(ui = state) {
+  if (ui.fetchFailed || ui.conn !== "live") {
+    return { label: "Retry snapshot", title: "Re-pull the latest snapshot evidence" };
+  }
+  const control = ui.snap && ui.snap.controlHealth;
+  if (control && control.cmuxReachable !== true) {
+    return { label: "Verify repair", title: "Re-probe cmux after starting it" };
+  }
+  return null;
+}
+
 function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
   const cellClass = "reading-widget widget-" + id
@@ -1618,15 +1642,16 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
       onclick: toggleHealthPanes,
     }, healthPanesOpen ? "Hide panes" : "Show " + remedy.panes.length + " panes"));
   }
-  if (degraded) {
+  const refresh = degraded ? healthRefreshAction() : null;
+  if (refresh) {
     subNode.append(el("button", {
       type: "button",
       class: "reading-repair",
-      title: "Re-pull the latest snapshot evidence",
-      "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
+      title: refresh.title,
+      "aria-label": reason ? refresh.label + " — " + reason.title : refresh.label,
       dataset: { fkey: "degraded-refresh" },
       onclick: () => recollectSnapshot(),
-    }, "Refresh"));
+    }, refresh.label));
   }
   if (healthPanesOpen && remedy && remedy.panes.length) {
     subNode.append(el("ul", { class: "health-pane-list" },

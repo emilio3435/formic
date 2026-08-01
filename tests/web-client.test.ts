@@ -4459,6 +4459,25 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §4. The HEALTH cell named the correct action — close one of the
+     conflicting sessions — and then rendered a REFRESH button, which does
+     something else entirely. The only affordance present was the one that cannot
+     help. A control is offered only when re-pulling evidence could actually
+     change the answer. */
+  test("(4a) the health cell offers refresh only when refreshing could change the answer", () => {
+    // A failed fetch is exactly what retrying fixes.
+    expect(M.healthRefreshAction({ fetchFailed: true, conn: "live", snap: snapshot() })).toMatchObject({ label: "Retry snapshot" });
+    // A feed that is not live is the same class of problem.
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "reconnecting", snap: snapshot() })).toMatchObject({ label: "Retry snapshot" });
+    // cmux down is repaired OUTSIDE the app, so the button confirms the repair.
+    const unreachable = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "live", snap: unreachable })).toMatchObject({ label: "Verify repair" });
+    /* An evidence-based advisory — two live sessions sharing a pane — is fixed by
+       closing one, and the collector rescans on its own. Offering a button here
+       is offering the wrong lever. */
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "live", snap: snapshot() })).toBeNull();
+  });
+
   /* Cockpit audit §3. The tile rendered "BURN / No data / $19.54 last hour ·
      31/31 reporting" — a verdict of "no data" printed directly above a dollar
      figure and a claim of COMPLETE coverage. The operator could not tell whether
