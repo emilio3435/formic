@@ -2101,9 +2101,11 @@ describe("pulse strip — verdict-first summary", () => {
     expect(card.data.sublabel).toContain("queue response was invalid");
 
     // A healthy queue says nothing extra — no permanent scold on a good board.
-    const okCard = M.pulseStripModel(clean, "live", [], "percent", "").cells
-      .find((c: { id: string }) => c.id === "needs-you");
-    expect(okCard.data.sublabel).not.toContain("unavailable");
+    /* A healthy queue on a clean board says nothing at all now: the cell is
+       omitted rather than rendering "0 / No active findings". Absence IS the
+       "no permanent scold" assertion this line was making. */
+    expect(M.pulseStripModel(clean, "live", [], "percent", "").cells
+      .find((c: { id: string }) => c.id === "needs-you")).toBeUndefined();
   });
 
   test("fetchTriageQueue records the failure instead of only warning", async () => {
@@ -3943,8 +3945,11 @@ describe("the health card's headline agrees with its own severity", () => {
     const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
     expect(weightOf(blocked, false)).toBe("normal");
     expect(M.summaryWidgetData("health", blocked, "live", "percent", [], false).tone).toBe("degraded");
-    // A clear board still rides at micro: no claim to justify, so stay quiet.
-    expect(weightOf(snapshot(), false)).toBe("micro");
+    /* A clear board no longer rides at micro — it does not ride at all. "Nothing
+       is wrong" is now said by the cell being absent rather than by a quiet chip
+       asserting it, which is the convention audit §5 asked for. */
+    expect(M.pulseStripModel(snapshot(), "live", [], "percent", "").cells
+      .find((c: { id: string }) => c.id === "health")).toBeUndefined();
   });
 
   test("shrinking the advisory cell does not delete its explanation", async () => {
@@ -4459,6 +4464,28 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §5 and §11: widgets that render their empty state instead of
+     not rendering. A cell reporting ABSENCE is noise surrounding the one cell
+     reporting a fault, and three separate widgets asserting "nothing needs you"
+     teach the operator to stop reading the one that will eventually say 1. */
+  test("(5a) a cell with nothing to report is omitted, not rendered empty", () => {
+    const quiet = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: null }, momentum: { completionsLastHour: 0, observedWindowMs: 0, stalled: 0 }, activity: { buckets: [] } } });
+    const ids = M.pulseStripModel(quiet, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(ids).not.toContain("needs-you");   // zero findings says nothing
+    expect(ids).not.toContain("burn");        // no rate and no cost
+    expect(ids).not.toContain("context-peak");// no live context reports
+    expect(ids).not.toContain("health");      // operational is silence
+
+    // A real finding brings its cell back.
+    const busy = snapshot({ issues: [{ id: "e", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }] });
+    expect(M.pulseStripModel(busy, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("needs-you");
+    /* A finding alone does not degrade systemStatus — sources and control are
+       still fine — so HEALTH stays silent and NEEDS YOU carries it. HEALTH speaks
+       when the system itself is at fault. */
+    const degraded = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(M.pulseStripModel(degraded, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("health");
+  });
+
   /* Cockpit audit §4. The HEALTH cell named the correct action — close one of the
      conflicting sessions — and then rendered a REFRESH button, which does
      something else entirely. The only affordance present was the one that cannot

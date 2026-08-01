@@ -1740,7 +1740,10 @@ function renderPulseCalm(healthData) {
   const snap = state.snap;
   const totals = totalsOf(snap);
   const pulse = snap && snap.pulse;
-  const parts = ["All clear", totals.working + " shipping"];
+  /* The health micro-chip at the end of this line already says "All clear", so
+     leading with it printed the same verdict twice in one sentence — the purest
+     form of the noise this band exists to remove. */
+  const parts = [totals.working + " shipping"];
   if (pulse) {
     parts.push("↑" + pulse.momentum.completionsLastHour + " done this hour");
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
@@ -2454,6 +2457,21 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
   // `display` is threaded so renderHealthRail can compute each widget's data
   // ONCE and reuse it for the paint signature, the cell and the calm line —
   // it used to derive the same three from scratch on every paint.
+  /* A cell that has nothing to report does not render. This is the single
+     convention behind audit §5, §11, §14 and §20: four findings that were all
+     the same bug — widgets rendering their EMPTY state instead of not rendering.
+     Four cells reporting absence around one cell reporting a fault is how a band
+     that always renders loses the ability to signal by rendering.
+
+     "Nothing needs you" in particular was asserted by three separate widgets at
+     once, and an operator who learns that a counter always reads 0 stops reading
+     it — which is exactly when it turns 1. */
+  const speaks = (id, data) => {
+    if (id === "needs-you") return Boolean(queueError) || data.value !== "0";
+    if (id === "health") return data.tone !== "ok";
+    // The rest are instruments: they speak when they have a reading.
+    return data.tone !== "missing" && data.value !== "No data";
+  };
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
     const data = summaryWidgetData(id, snap, conn, display, queueItems, undefined, queueError);
     /* Weight follows actionability, not tone. An advisory used to ride at micro
@@ -2470,9 +2488,14 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
     const weight = id === "health"
       ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
-    return { id, weight, data };
+    return { id, weight, data, speaks: speaks(id, data) };
   });
-  return { calm, cells, findings: pulseFindings(snap, queueItems), queueError };
+  return {
+    calm,
+    cells: cells.filter((cell) => cell.speaks),
+    findings: pulseFindings(snap, queueItems),
+    queueError,
+  };
 }
 
 function findingFromIssue(issue, kind, snap = state.snap) {
