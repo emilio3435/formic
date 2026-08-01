@@ -14,10 +14,15 @@
 
    1. Deterministic. Plain string and regex tests, no model in the loop. Every
       classification is reproducible from the text alone.
-   2. Silence beats filler. A detector that cannot recognise the situation
-      returns "unknown" with NO nextAction, and the caller emits nothing. An
-      operator can act on "it asked a question and stopped"; nobody can act on
-      a sentence printed under every row on the board. */
+   2. Silence beats filler. A detector that cannot recognise the situation emits
+      NO nextAction and the caller emits nothing. An operator can act on "it
+      asked a question and stopped"; nobody can act on a sentence printed under
+      every row on the board.
+
+   3. Silence is not one state. "I read its closing words and nothing wants you"
+      (nothing-wanted) and "there was nothing to read" (not-readable) look
+      identical on the board and are opposite facts. attentionCoverage below
+      reports the split so a quiet board can be trusted rather than assumed. */
 
 import type {
   ActivityState,
@@ -34,6 +39,8 @@ export type AttentionSignalKind =
   | "input-requested"
   /** It laid out alternatives and handed the choice back. */
   | "fork-unresolved"
+  /** It stopped and handed the decision over in a statement, not a question. */
+  | "handoff-stated"
   /** The agent's last word to us was a question, and it stopped there. */
   | "question-pending"
   /** The agent proceeded on a stated assumption and invited correction. */
@@ -42,12 +49,18 @@ export type AttentionSignalKind =
   | "stopped-mid-work"
   /** It ended while saying, in its own words, that work was left over. */
   | "exited-unlanded"
-  /** Nothing in the text says why. Say so; do not invent a reason. */
-  | "unknown";
+  /* The agent's closing words were readable and say nothing that wants a human.
+     Silence here is a finding: we looked. */
+  | "nothing-wanted"
+  /* There was nothing to read — no attributed closing text, or only machine
+     output. The layer has NO OPINION, which is not the same as "all clear", and
+     must never be counted as a correct negative. Measured by the GPT lane
+     against the live fleet: 288 of 302 silences were this, not the other. */
+  | "not-readable";
 
 export interface AttentionSignal {
   kind: AttentionSignalKind;
-  /** One thing the operator can do. Absent exactly when kind is "unknown". */
+  /** One thing the operator can do. Absent for nothing-wanted and not-readable. */
   nextAction?: string;
   /** The agent's own words behind the reading, so the row can quote, not paraphrase. */
   evidence?: string;
@@ -146,6 +159,29 @@ const FORK_PATTERNS: readonly RegExp[] = [
   /\btwo (?:options|choices|paths|ways)\b/i,
 ];
 
+/* Agents hand decisions back DECLARATIVELY far more often than they ask.
+   Measured by the GPT lane against real transcripts: of five turns genuinely
+   waiting on a human, four ended in a statement, not a question —
+   "6 commits, unpushed — publishing is your call.", "left to you", "two things
+   for you". question-pending cannot see any of those, because none of them ends
+   in "?". This was four of the five real misses.
+
+   Each phrase hands control over explicitly. Softer sign-offs ("hope that
+   helps", "happy to continue") are excluded: they are politeness, not a stop. */
+const HANDOFF_PATTERNS: readonly RegExp[] = [
+  /\b(?:your|their) (?:call|decision|choice|shout|move)\b/i,
+  /\bup to you\b/i,
+  /\b(?:left|over|down) to you\b/i,
+  /\byours to (?:call|decide|land|push)\b/i,
+  /\b(?:waiting|blocked|holding) (?:on|for) (?:you|your)\b/i,
+  /\bI(?:'ll| will) hold\b/i,
+  /\b(?:tell|let) me (?:know )?(?:which|if you|when you|whether)\b/i,
+  /\bsay the word\b/i,
+  /\b(?:needs|requires) (?:your|a human) (?:sign-?off|approval|decision|review)\b/i,
+  /\bawaiting your\b/i,
+  /\b(?:one|two|three|four|a few|\d+) (?:things?|items?|decisions?|calls?) for you\b/i,
+];
+
 /* Positive evidence that work was left over. Deliberately NOT "no completion
    marker found": absence of a phrase is not evidence of unfinished work, and
    inferring from absence is how a detector starts firing on nine rows out of
@@ -175,6 +211,25 @@ function truncate(value: string): string {
   return collapsed.length <= MAX_EVIDENCE_CHARS
     ? collapsed
     : `${collapsed.slice(0, MAX_EVIDENCE_CHARS - 1).trimEnd()}…`;
+}
+
+/* The sentence a match sits in, so evidence quotes a whole thought rather than
+   the bare regex hit. The operator is being asked to take a decision and needs
+   to see what it is about. */
+/* Text an agent is QUOTING rather than saying. Agents discuss each other's
+   output constantly in this swarm, and a hand-back phrase inside quotation
+   marks is being reported, not performed — measured live, the detector fired on
+   a transcript quoting the critique that asked for the detector. Same
+   self-amplification the marker spoof had, reached through content instead.
+   Quoted spans are blanked (not deleted) so surrounding offsets still line up. */
+function withoutQuotedSpans(value: string): string {
+  return value.replace(/[“"'`][^“”"'`]{0,400}[”"'`]/g, (span) => " ".repeat(span.length));
+}
+
+function sentenceAround(value: string, index: number): string {
+  const start = value.lastIndexOf(".", index) + 1;
+  const end = value.indexOf(".", index);
+  return value.slice(start, end === -1 ? undefined : end + 1).trim();
 }
 
 function lastNonEmptyLine(value: string): string {
@@ -229,6 +284,27 @@ function agentClosingLine(input: AttentionSignalInput): string {
   return line;
 }
 
+/* Did the layer have the agent's own closing words to read? This is the line
+   between honest silence and blind silence. The transcript tail does not count:
+   it is unattributed, so its content cannot be credited to the agent. */
+export function readableClosingText(input: AttentionSignalInput): string | undefined {
+  const closing = clean(input.lastAgentClosing);
+  if (closing) return isMachineText(closing) ? undefined : closing;
+  /* A front-window lastAgentMessage counts ONLY when nothing was cut. The
+     collector marks a clipped message with a trailing "…", and 205 of 302 live
+     agents carried exactly that: the visible third of a turn whose conclusion
+     was discarded. Reading those and finding no signal proves nothing. */
+  const spoken = clean(input.lastAgentMessage);
+  if (!spoken || spoken.endsWith("…") || isMachineText(spoken)) return undefined;
+  return spoken;
+}
+
+type ActionableKind = Exclude<AttentionSignalKind, "nothing-wanted" | "not-readable">;
+
+function isActionable(kind: AttentionSignalKind): kind is ActionableKind {
+  return kind !== "nothing-wanted" && kind !== "not-readable";
+}
+
 export function detectAttentionSignal(input: AttentionSignalInput): AttentionSignal {
   const marker = clean(input.attentionNotification) || undefined;
   if (marker) {
@@ -270,16 +346,25 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
 
   const spokenRaw = clean(input.lastAgentClosing) || clean(input.lastAgentMessage) || clean(input.transcriptTail);
   const spoken = isMachineText(spokenRaw) ? "" : spokenRaw;
-  const assumption = ASSUMPTION_PATTERNS.map((pattern) => pattern.exec(spoken)).find(Boolean);
+
+  /* After the interrogative detectors, before assumption: a hand-back is a
+     stronger claim than "it proceeded on an assumption" — the agent has stopped
+     and is holding, rather than carrying on with a caveat. */
+  const asserted = withoutQuotedSpans(spoken);
+  const handoff = HANDOFF_PATTERNS.map((pattern) => pattern.exec(asserted)).find(Boolean);
+  if (handoff) {
+    return {
+      kind: "handoff-stated",
+      nextAction: "Take the decision it handed back.",
+      evidence: truncate(sentenceAround(spoken, handoff.index)),
+    };
+  }
+  const assumption = ASSUMPTION_PATTERNS.map((pattern) => pattern.exec(withoutQuotedSpans(spoken))).find(Boolean);
   if (assumption) {
-    // Quote the sentence the assumption sits in, not the bare regex hit: the
-    // operator is being asked to confirm a decision, and needs to see it.
-    const start = spoken.lastIndexOf(".", assumption.index) + 1;
-    const end = spoken.indexOf(".", assumption.index);
     return {
       kind: "assumption-stated",
       nextAction: "Confirm or correct the assumption it proceeded on.",
-      evidence: truncate(spoken.slice(start, end === -1 ? undefined : end + 1)),
+      evidence: truncate(sentenceAround(spoken, assumption.index)),
     };
   }
 
@@ -313,8 +398,11 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
     }
   }
 
-  // Nothing in the text says why this agent would want a human. Say nothing.
-  return { kind: "unknown" };
+  /* Nothing wanted, or nothing to read? The board stays silent either way, but
+     they are different facts and only one of them is a finding. Conflating them
+     let 96.6% of the fleet's silence look like "we looked and it is fine" when
+     the truth was "the input was empty or machine output". */
+  return { kind: readableClosingText(input) ? "nothing-wanted" : "not-readable" };
 }
 
 /* The snapshot fields for one agent: the content signal where there is one, a
@@ -330,13 +418,79 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
    attentionSignal is emitted only when it says something. Its absence means
    "we could not tell from the text", which is the honest reading and cannot be
    rendered as advice by mistake. */
-export function attentionFieldsFor(
+/* Fleet-wide honesty about the layer itself.
+
+   Two of the eight detectors cannot fire without a precondition the fleet may
+   simply not have: permission/input need a cmux notification (impossible for
+   any agent not routed to a pane, which includes every quarantined and
+   observed-only session), and stopped-mid-work needs a PROVEN process death.
+   Reported here so "0 fired" is distinguishable from "0 could have fired" —
+   otherwise a detector that is structurally dead looks identical to one that
+   looked and found nothing. */
+export interface AttentionCoverage {
+  agents: number;
+  /** Agents whose own closing words were available to read. */
+  readable: number;
+  /** Agents where the layer had nothing to read and therefore has no opinion. */
+  notReadable: number;
+  /** Fire count per actionable detector; absent kinds fired zero times. */
+  signals: Record<string, number>;
+  preconditions: {
+    /** Upper bound on permission-requested + input-requested. */
+    withNotification: number;
+    /** Upper bound on stopped-mid-work. */
+    withProvenDeath: number;
+  };
+}
+
+export function emptyAttentionCoverage(): AttentionCoverage {
+  return {
+    agents: 0,
+    readable: 0,
+    notReadable: 0,
+    signals: {},
+    preconditions: { withNotification: 0, withProvenDeath: 0 },
+  };
+}
+
+/* One detection per agent, used for BOTH the row fields and the tally, so the
+   published coverage can never drift from what the board actually shows. */
+export function recordAttention(
+  coverage: AttentionCoverage,
   input: AttentionSignalInput,
   outcome: OutcomeState,
   controlState: OperatorControlState,
 ): Pick<AgentSnapshot, "nextAction" | "attentionSignal"> {
   const signal = detectAttentionSignal(input);
-  if (signal.kind !== "unknown" && signal.nextAction) {
+  coverage.agents += 1;
+  if (signal.kind === "not-readable") coverage.notReadable += 1;
+  else coverage.readable += 1;
+  if (isActionable(signal.kind)) {
+    coverage.signals[signal.kind] = (coverage.signals[signal.kind] ?? 0) + 1;
+  }
+  if (clean(input.attentionNotification)) coverage.preconditions.withNotification += 1;
+  if (input.processState === "died") coverage.preconditions.withProvenDeath += 1;
+  return fieldsFrom(signal, input, outcome, controlState);
+}
+
+export function attentionFieldsFor(
+  input: AttentionSignalInput,
+  outcome: OutcomeState,
+  controlState: OperatorControlState,
+): Pick<AgentSnapshot, "nextAction" | "attentionSignal"> {
+  return fieldsFrom(detectAttentionSignal(input), input, outcome, controlState);
+}
+
+function fieldsFrom(
+  signal: AttentionSignal,
+  input: AttentionSignalInput,
+  outcome: OutcomeState,
+  controlState: OperatorControlState,
+): Pick<AgentSnapshot, "nextAction" | "attentionSignal"> {
+  /* The two silent kinds carry no nextAction by construction, so this guard is
+     also what keeps them off the wire — the type union on AgentSnapshot lists
+     only actionable readings, and TypeScript enforces that here. */
+  if (signal.nextAction && isActionable(signal.kind)) {
     return {
       nextAction: signal.nextAction,
       attentionSignal: {

@@ -173,17 +173,22 @@ export interface AgentSnapshot {
   nextAction?: string;
   /* The reading behind nextAction, so the board can group rows by why they are
      waiting ("2 blocked on permission", "3 asked a question") and quote the
-     agent rather than paraphrase it. `kind: "unknown"` is a real answer. */
+     agent rather than paraphrase it.
+
+     Only ACTIONABLE readings reach the wire. The two silent outcomes —
+     nothing-wanted and not-readable — are deliberately absent here: putting
+     either under every row would be the filler this layer exists to remove.
+     Their split is reported once, fleet-wide, on HubSnapshot.attentionCoverage. */
   attentionSignal?: {
     kind:
       | "permission-requested"
       | "input-requested"
       | "fork-unresolved"
+      | "handoff-stated"
       | "question-pending"
       | "assumption-stated"
       | "stopped-mid-work"
-      | "exited-unlanded"
-      | "unknown";
+      | "exited-unlanded";
     evidence?: string;
   };
   modelPolicy?: ModelPolicy;
@@ -392,6 +397,17 @@ export interface ControlHealth {
   debris?: ControlDebris;
 }
 
+/* How much of the fleet the attention layer could actually read, and which
+   detectors were even able to fire. Without this a quiet board is ambiguous:
+   "nothing wants you" and "we could not read anything" render identically. */
+export interface AttentionCoverageSummary {
+  agents: number;
+  readable: number;
+  notReadable: number;
+  signals: Record<string, number>;
+  preconditions: { withNotification: number; withProvenDeath: number };
+}
+
 export interface HubSnapshot {
   schemaVersion: 1;
   generatedAt: string;
@@ -405,6 +421,7 @@ export interface HubSnapshot {
   contextPeak?: number;
   contextMedian?: number;
   controlHealth: ControlHealth;
+  attentionCoverage?: AttentionCoverageSummary;
   totals: {
     live: number;
     tracked: number;

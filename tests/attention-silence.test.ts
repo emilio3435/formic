@@ -151,9 +151,12 @@ describe("a row the detectors cannot explain says nothing", () => {
       processState: "running",
     });
 
-    // Exactly one key. A nextAction or evidence riding along on "unknown" is a
-    // catch-all wearing a different hat.
-    expect(signal.kind).toBe("unknown");
+    /* Exactly one key. A nextAction or evidence riding along on a silent kind
+       is a catch-all wearing a different hat.
+       "unknown" split into nothing-wanted (we read its closing words and none
+       of them want you) and not-readable (there was nothing to read). This row
+       has readable text, so the silence is a finding. */
+    expect(signal.kind).toBe("nothing-wanted");
     expect(Object.keys(signal)).toEqual(["kind"]);
   });
 
@@ -165,7 +168,9 @@ describe("a row the detectors cannot explain says nothing", () => {
         activity: "idle",
         processState: "running",
       });
-      expect(signal.kind).toBe("unknown");
+      // No text at all: the layer has no opinion and must not be credited with
+      // a correct negative for it.
+      expect(signal.kind).toBe("not-readable");
       expect(signal.nextAction).toBeUndefined();
     }
   });
@@ -219,7 +224,7 @@ describe("when a detector does speak, it quotes the agent", () => {
     });
 
     expect(signal.kind).not.toBe("stopped-mid-work");
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("a died process with unfinished work does speak, so the silence above is a choice", () => {

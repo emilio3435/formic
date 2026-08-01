@@ -12,7 +12,7 @@ import type {
 import { MODEL_CONFIG } from "./model-config";
 import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
-import { attentionFieldsFor } from "./attention-signal";
+import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
 import {
   buildOperatorIssues,
   classifyIdentityConflicts,
@@ -82,6 +82,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);
   }
 
+  const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
   const childCounts = new Map<string, number>();
@@ -148,7 +149,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
-      ...attentionFieldsFor({
+      ...recordAttention(attentionCoverage, {
         transcriptTail: source.transcriptTail,
         // Straight from cmux, never recovered from the rendered marker: an agent
         // that writes "[Attention] …" into its own transcript must not be able
@@ -273,6 +274,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     lookbackHours: scanWindowHours,
     contextPeak,
     contextMedian,
+    attentionCoverage,
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),

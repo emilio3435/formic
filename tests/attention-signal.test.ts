@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   attentionFieldsFor,
   detectAttentionSignal,
+  emptyAttentionCoverage,
+  recordAttention,
   type AttentionSignalInput,
 } from "../src/server/attention-signal";
 
@@ -65,7 +67,7 @@ describe("attention signal detectors", () => {
     const rhetorical = "a".repeat(240) + "?";
     const signal = detectAttentionSignal(input({ lastAgentMessage: rhetorical }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
     expect(signal.nextAction).toBeUndefined();
   });
 
@@ -111,7 +113,7 @@ describe("attention signal detectors", () => {
       lastAgentMessage: "The report lists every assumption the previous lane made about retry behaviour.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("a died process whose work does not read as finished is flagged for a resume decision", () => {
@@ -134,7 +136,7 @@ describe("attention signal detectors", () => {
       lastAgentMessage: "All 18 guards pass and the branch is committed. Done.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("a clean exit is never stopped-mid-work, whatever the transcript says", () => {
@@ -145,7 +147,7 @@ describe("attention signal detectors", () => {
       transcriptEndedCleanly: true,
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("an ordinary finished session says nothing at all", () => {
@@ -158,11 +160,24 @@ describe("attention signal detectors", () => {
       transcriptTail: "No source→sink path with a plausible attacker-controllable impact.",
     }));
 
-    expect(signal).toEqual({ kind: "unknown" });
+    expect(signal).toEqual({ kind: "nothing-wanted" });
   });
 
-  test("an agent with no text at all is unknown rather than guessed at", () => {
-    expect(detectAttentionSignal(input())).toEqual({ kind: "unknown" });
+  test("an agent with no text at all reports that it could not read, not that all is well", () => {
+    /* The distinction the GPT lane's critique turned on: 288 of 302 silences
+       were this state, and counting them as "we looked and found nothing" made
+       a blind layer look like a disciplined one. */
+    expect(detectAttentionSignal(input())).toEqual({ kind: "not-readable" });
+  });
+
+  test("a front-truncated message is not readable either, however much of it survived", () => {
+    // 205 of 302 live agents carried exactly this: the visible third of a turn
+    // whose conclusion — where the ask lives — was cut off.
+    const clipped = detectAttentionSignal(input({
+      lastAgentMessage: "Checked in. Here is the honest state. The program's work is landed and live, and I verif…",
+    }));
+
+    expect(clipped.kind).toBe("not-readable");
   });
 
   test("the operator's own closing words are never read as the agent's question", () => {
@@ -175,7 +190,7 @@ describe("attention signal detectors", () => {
       transcriptTail: "Applying the fix now.\n\nShould we also bump the timeout?",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 });
 
@@ -206,7 +221,7 @@ describe("fork detection", () => {
       lastAgentClosing: "I checked whether the cache or the index was stale, and it was the index.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 });
 
@@ -229,7 +244,7 @@ describe("unlanded work detection", () => {
       lastAgentClosing: "All five migrations converted and committed. Done.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("leftover work is inferred from words, never from a missing completion phrase", () => {
@@ -242,7 +257,7 @@ describe("unlanded work detection", () => {
       lastAgentClosing: "The parser now handles the nested case and the fixtures were regenerated.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("a live session naming leftover work is not flagged: it is still working on it", () => {
@@ -251,7 +266,7 @@ describe("unlanded work detection", () => {
       lastAgentClosing: "Still need to do the audit tables.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 });
 
@@ -294,7 +309,7 @@ describe("notification provenance", () => {
       lastAgentClosing: "A transcript containing [Attention] Claude needs your permission would otherwise surface as a pill.",
     }));
 
-    expect(signal.kind).toBe("unknown");
+    expect(signal.kind).toBe("nothing-wanted");
   });
 
   test("the same words coming from cmux are trusted", () => {
@@ -358,5 +373,105 @@ describe("attentionFieldsFor", () => {
     const fields = attentionFieldsFor(input({ activity: "ended" }), "healthy", "linked");
     expect(fields.attentionSignal).toBeUndefined();
     expect(fields.nextAction).toBeUndefined();
+  });
+});
+
+/* §4 of the GPT lane's critique, and the largest single recall gap it found:
+   of five turns genuinely waiting on a human, FOUR ended in a statement rather
+   than a question. question-pending is structurally blind to all of them. */
+describe("declarative hand-backs", () => {
+  test.each([
+    ["6 commits are in, unpushed — publishing is your call.", "your call"],
+    ["The remaining scope is left to you.", "left to you"],
+    ["I have staged everything and I'm blocked on you for the credentials.", "blocked on you"],
+    ["Two candidate fixes are written up; tell me which you want.", "tell me which"],
+    ["Nothing else runs without a decision here, so I'll hold.", "I'll hold"],
+    ["This needs your sign-off before it can land.", "needs your sign-off"],
+    ["That is the lot — two things for you before I continue.", "two things for you"],
+  ])("recognises %j as a hand-back", (closing) => {
+    const signal = detectAttentionSignal(input({ lastAgentClosing: closing }));
+    expect(signal.kind).toBe("handoff-stated");
+    expect(signal.nextAction).toBe("Take the decision it handed back.");
+  });
+
+  test.each([
+    "Hope that helps — happy to keep going if useful.",
+    "Let me know how it goes.",
+    "I reviewed the diff and found no security issues.",
+    "The report explains what was left to the previous lane.",
+  ])("does not fire on politeness or narration: %j", (closing) => {
+    /* A sign-off is not a stop. Firing on these would put a decision on the
+       board that the operator does not have to make, which is the filler
+       failure wearing a new phrase. */
+    expect(detectAttentionSignal(input({ lastAgentClosing: closing })).kind)
+      .toBe("nothing-wanted");
+  });
+
+  test("a question still outranks a hand-back in the same message", () => {
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing: "It is your call in the end. Should I land it now?",
+    }));
+    expect(signal.kind).toBe("question-pending");
+  });
+});
+
+describe("attention coverage", () => {
+  test("separates what it read from what it could not, and reports dead preconditions", () => {
+    /* §1 and §6. 288 of 302 live silences were blind, not honest, and two
+       detectors could not fire at all — both invisible before this. */
+    const coverage = emptyAttentionCoverage();
+    recordAttention(coverage, input({ lastAgentClosing: "All tests pass and it is committed." }), "healthy", "linked");
+    recordAttention(coverage, input({ lastAgentMessage: "Checked in. The work is landed and I verif…" }), "healthy", "linked");
+    recordAttention(coverage, input(), "healthy", "linked");
+    recordAttention(coverage, input({ lastAgentClosing: "Publishing is your call." }), "healthy", "linked");
+    recordAttention(
+      coverage,
+      input({ attentionNotification: "Claude needs your permission", processState: "died" }),
+      "healthy",
+      "linked",
+    );
+
+    expect(coverage.agents).toBe(5);
+    // Two blind rows: one with no text, one whose message was front-truncated.
+    expect(coverage.notReadable).toBe(2);
+    expect(coverage.readable).toBe(3);
+    expect(coverage.signals["handoff-stated"]).toBe(1);
+    expect(coverage.signals["permission-requested"]).toBe(1);
+    // Silent kinds never appear as signals — they are not findings on a row.
+    expect(coverage.signals["nothing-wanted"]).toBeUndefined();
+    // Preconditions bound the detectors that depend on them.
+    expect(coverage.preconditions.withNotification).toBe(1);
+    expect(coverage.preconditions.withProvenDeath).toBe(1);
+  });
+
+  test("a fleet with no notifications reports zero, not an absent precondition", () => {
+    // "0 fired" and "0 could fire" must be distinguishable.
+    const coverage = emptyAttentionCoverage();
+    recordAttention(coverage, input({ lastAgentClosing: "Done." }), "healthy", "linked");
+    expect(coverage.preconditions).toEqual({ withNotification: 0, withProvenDeath: 0 });
+    expect(coverage.signals).toEqual({});
+  });
+});
+
+describe("self-reference", () => {
+  test("a hand-back phrase inside quotation marks is reported, not performed", () => {
+    /* The self-amplification class from §5, reached through content instead of
+       the marker: this swarm discusses its own detectors constantly, and a
+       transcript quoting "publishing is your call" was classified as handing a
+       decision back. Quoting is not asserting. */
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing: 'The detector caught the critique example verbatim: "6 commits, unpushed — publishing is your call."',
+    }));
+
+    expect(signal.kind).toBe("nothing-wanted");
+  });
+
+  test("the same phrase unquoted is still a hand-back", () => {
+    // The control: quoting-awareness must not disarm the detector generally.
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing: "6 commits, unpushed — publishing is your call.",
+    }));
+
+    expect(signal.kind).toBe("handoff-stated");
   });
 });
