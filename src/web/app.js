@@ -843,7 +843,7 @@ globalThis.TheAntHill = {
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
-  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText,
+  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
@@ -3336,6 +3336,28 @@ function providerMark(agent) {
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
 
+/* What the Status cell should say, given the tab the operator is already in.
+
+   Audit §7: with the Now tab active, all six in-viewport rows printed "Working"
+   — a column where every cell carries the same word is not a signal, and it was
+   consuming the roster's scarcest space to restate the choice the operator had
+   just made. viewMatches pins working/idle/history to exactly one activity, so
+   in those views the activity is guaranteed by the tab itself.
+
+   The cell speaks what the tab does NOT guarantee: an exceptional outcome
+   always, and the activity only where a view genuinely mixes them and the row is
+   not the dominant case. Healthy working rows in Now say nothing. */
+const ACTIVITY_PINNED_VIEWS = new Set(["working", "idle", "history"]);
+
+function rowStateWords(activity, outcome, view) {
+  const words = [];
+  if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
+    words.push(ACTIVITY_LABELS[activity] || activity);
+  }
+  if (outcome !== "healthy") words.push(OUTCOME_LABELS[outcome] || outcome);
+  return words;
+}
+
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -3464,13 +3486,21 @@ function renderAgentRow(agent, program, opts = {}) {
   const tokens = tokenSummary(agent.tokens);
 
   const instruments = el("span", { class: "row-instruments" },
-    el("span", {
-      class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
-      title: stateText,
-      "aria-label": "Status: " + stateText,
-    },
-      el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
-      outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
+    /* Silent when the tab already guarantees the answer. The full state stays in
+       the title and the row's aria-label, so nothing is lost to a reader who
+       asks — it just stops being printed 275 times. */
+    (() => {
+      const words = rowStateWords(activity, outcome, state.view);
+      if (!words.length) return null;
+      return el("span", {
+        class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+        title: stateText,
+        "aria-label": "Status: " + stateText,
+      }, el("span", {
+        class: outcome !== "healthy" ? "row-state-alert" : "act-" + activity,
+        text: words.join(" · "),
+      }));
+    })(),
     el("span", {
       class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
       "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),

@@ -1349,16 +1349,30 @@ describe("calm program and agent list rendering", () => {
     expect(styles).toContain("-webkit-line-clamp: 3");
   });
 
-  test("status column is the state-colored activity word plus a red alert span, not a bare dot", () => {
+  test("the status column speaks only what the active tab does not already guarantee", () => {
+    /* Audit §7: with Now active, all six in-viewport rows printed "Working". A
+       column where every cell carries the same word is not a signal, and it was
+       spending the roster's scarcest space restating the tab the operator had
+       just chosen. viewMatches pins working/idle/history to one activity, so
+       there the tab IS the answer. */
+    expect(M.rowStateWords("working", "healthy", "now")).toEqual([]);      // the dominant case
+    expect(M.rowStateWords("working", "healthy", "working")).toEqual([]);  // pinned by the tab
+    expect(M.rowStateWords("idle", "healthy", "idle")).toEqual([]);        // pinned by the tab
+    expect(M.rowStateWords("ended", "healthy", "history")).toEqual([]);    // pinned by the tab
+
+    // An exceptional outcome is never silent, in any view.
+    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Alert"]);
+    expect(M.rowStateWords("working", "failed", "working")).toEqual(["Failed"]);
+    // A mixed view still distinguishes a non-dominant activity.
+    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Idle", "Alert"]);
+
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
-    // Full state still lives in the tooltip + row aria-label.
+    // Full state still lives in the tooltip + row aria-label, so nothing is lost
+    // to a reader who asks — it just stops being printed on every row.
     expect(row).toContain('title: stateText');
-    // The activity word carries the state color (act-<activity>); no duplicate dot glyph.
-    expect(row).toContain('class: "act-" + activity, text: ACTIVITY_LABELS[activity]');
     expect(row).not.toContain("act-glyph act-");
-    // The alert suffix rides its own red span rather than an uncolored word.
-    expect(row).toContain('class: "row-state-alert"');
+    expect(row).toContain('"row-state-alert"');
     expect(styles).toContain(".row-state-alert { color: var(--needs); }");
   });
 
