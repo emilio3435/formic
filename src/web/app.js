@@ -4385,12 +4385,39 @@ function drawerSessionTag(agent, ui = state) {
   return ambiguousNames(all).has(agentName(agent)) ? sessionTag(agent) : "";
 }
 
-/* The standing objective, promoted out of Operate. `taskMeaningfullyDifferent`
-   already proves it is not just a copy of the last message, so this never
-   restates the thread below it. */
+/* Two texts that begin the same way are the same text to a reader, even when
+   neither contains the other. Containment alone is not enough here: the server
+   truncates long prose and appends an ellipsis, so `lastUserMessage` is
+   frequently a shortened `task` ending in a character the original never had —
+   which defeats includes() in both directions while looking identical on screen.
+   Verified in a browser: the head and the "You" turn printed the same wall of
+   prompt preamble six lines apart, and every containment check passed. */
+function sameOpening(a, b) {
+  const n = Math.min(a.length, b.length, 120);
+  return n >= 24 && a.slice(0, n) === b.slice(0, n);
+}
+
+/* The standing objective, promoted out of Operate.
+
+   `taskMeaningfullyDifferent` compares `task` against `lastHumanMessage`, which
+   was the right question while Operate rendered that field — but Thread renders
+   `lastUserMessage`, and on a live board the task is frequently byte-identical
+   to THAT instead. Verified in a browser rather than in the diff: the head
+   printed a wall of prompt preamble and the "You" turn printed the same wall
+   again, six lines apart. Comparing against the wrong neighbour reintroduced the
+   exact duplication this overhaul was commissioned to remove.
+
+   So compare against every turn Thread can actually paint. */
 function drawerObjective(agent) {
-  if (!taskMeaningfullyDifferent(agent)) return "";
-  return conciseText(String(agent.task || "").trim(), 140);
+  const task = String(agent.task || "").trim();
+  if (!task || !taskMeaningfullyDifferent(agent)) return "";
+  const norm = normalizeCompareText(task);
+  if (!norm) return "";
+  for (const other of [agent.lastUserMessage, agent.lastAgentMessage]) {
+    const cmp = normalizeCompareText(String(other || "").trim());
+    if (cmp && sameOpening(norm, cmp)) return "";
+  }
+  return conciseText(task, 140);
 }
 
 function renderAgentDrawer(pane, view) {
@@ -4588,8 +4615,14 @@ function renderStatusLine(agent, activity, outcome, control, policy) {
     }));
   }
 
+  /* statusReason only when it adds a fact the clock did not. On a working agent
+     it reads "Source activity within 3 minutes." directly beside "11s ago" —
+     the same observation at coarser precision, which is repeat information under
+     a different label. It earns its place on everything else, where it explains
+     a silence the clock can only measure ("No source activity in the last 45
+     minutes", "Archived by source or operator"). */
   const reason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
-  if (reason) {
+  if (reason && activity !== "working") {
     line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
     line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
   }
@@ -5012,16 +5045,21 @@ function renderVitalsBand(agent) {
   const ctx = contextUsage(t);
   if (ctx) {
     const hot = ctx.pct >= CONTEXT_ALARM_PCT;
-    const parts = [ctx.pct + "% of the window"];
+    /* The percentage is spoken ONCE, by the ring, which is the gauge an operator
+       reads at a glance. An earlier pass printed it in the ring AND again in the
+       sentence beside it — the same quantity encoded twice inside a single tile,
+       which is the defect this overhaul exists to remove, committed inside the
+       fix for it. The sentence now carries only what the ring cannot: the
+       absolute size the percentage is a fraction OF, and the session total. */
+    const lines = [fmtTok(t.total) + " of " + fmtTok(t.contextWindow) + " window"];
     // Omitted honestly rather than zeroed when the source reports no session sum.
-    if (t.sessionTotal != null) parts.push(fmtTok(t.sessionTotal) + " used this session");
+    if (t.sessionTotal != null) lines.push(fmtTok(t.sessionTotal) + " used this session");
     tiles.push(vitalTile("Context",
       el("div", { class: "vital-ring-wrap" + (hot ? " is-hot" : "") },
         svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
         el("div", { class: "vital-figure" },
-          el("div", { class: "vital-big mono" },
-            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) })),
-          el("div", { class: "vital-note", text: parts.join(" · " ) })))));
+          el("div", { class: "vital-note mono", text: lines[0] }),
+          lines[1] ? el("div", { class: "vital-note", text: lines[1] }) : null))));
   } else if (t.sessionTotal != null) {
     // No window means no percentage can be honest, so the session sum stands
     // alone under wording that never implies a fill level.

@@ -2808,9 +2808,17 @@ describe("vitals instrument band (B3)", () => {
     expect(band).not.toBeNull();
     const text = textOf(band).replace(/\s+/g, " ");
     // Both magnitudes, each exactly once, against wording that cannot be swapped.
-    expect(text.match(/\b120k\b/g)?.length).toBe(1);
-    expect(text.match(/\b480k\b/g)?.length).toBe(1);
-    expect(text).toContain("% of the window");
+    /* Counted as plain substrings: textOf concatenates sibling nodes without
+       separators, so "…window480k…" has no word boundary to anchor on. */
+    const count = (needle: string) => text.split(needle).length - 1;
+    expect(count("120k")).toBe(1);
+    expect(count("480k")).toBe(1);
+    /* The percentage is spoken once, by the ring. The sentence carries only what
+       the ring cannot: the absolute size it is a fraction of, and the session
+       total. Printing the pct in both was the same quantity twice inside one
+       tile — the defect, committed inside its own fix. */
+    expect(count("12%")).toBe(1);
+    expect(text).toContain("of 1.0M window");
     expect(text).toContain("used this session");
     // The numerator is never bare: 120k means nothing without its denominator.
     expect(text).toContain("1.0M");
