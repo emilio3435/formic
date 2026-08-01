@@ -57,6 +57,8 @@ function assistantBlob(modelName: string): string {
 // state.vscdb's cursorDiskKV; ai-tracking (when provided) supplies the fallback.
 async function setupGuiComposerHome(options: {
   composerData?: { modelName: string; parameters?: { id: string; value: string }[] };
+  /** Writes a composerData row whose value is not JSON, to model a damaged store. */
+  corruptComposerData?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -97,6 +99,13 @@ async function setupGuiComposerHome(options: {
         },
         usageData: {},
       }),
+    ]);
+  }
+  if (options.corruptComposerData) {
+    state.run("create table cursorDiskKV (key text primary key, value blob)");
+    state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
+      `composerData:${GUI_SESSION_ID}`,
+      "{ this is not json",
     ]);
   }
   state.close();
@@ -652,6 +661,33 @@ describe("Cursor Agent persisted session truth", () => {
       model: "claude-opus-4-8-thinking-high",
       effort: "xhigh",
     });
+  });
+
+  /* An unreadable composerData record used to return {} — identical to a
+     session that never wrote one. An absent model becomes the model policy
+     "unreported", whose summary tells the operator "Cursor did not expose an
+     authoritative model for this session": a confident claim about Cursor made
+     from a local failure to read Cursor's own database. The two have opposite
+     remedies, so the collector must not answer for a record it could not read. */
+  test("an unreadable composerData record degrades the source instead of reading as no model", async () => {
+    const home = await setupGuiComposerHome({ corruptComposerData: true, trackingModel: "grok-4.5" });
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors.join(" ")).toContain("composerData");
+    // The session is still collected — a damaged model record must not delete
+    // the agent from the board.
+    expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)).toBeDefined();
+  });
+
+  test("a session that never wrote composerData stays silent", async () => {
+    // Absence is a real answer and must not be reported as a source fault.
+    const home = await setupGuiComposerHome({ trackingModel: "grok-4.5" });
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.errors).toEqual([]);
   });
 
   test("falls back to ai-tracking when composerData reports the sentinel 'default' model", async () => {

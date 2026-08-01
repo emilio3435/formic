@@ -604,22 +604,34 @@ function composerEffort(selectedModels: unknown): string | undefined {
 // (roots and subagents alike). "default" means "no explicit model", so it is treated as
 // unreported. The state.vscdb is a live WAL database; callers open it read-only and may
 // lack the cursorDiskKV table on older installs, so the query is guarded.
+/* Returning {} for a failed read made it identical to a session that simply
+   has no composerData, and an absent model renders as the model policy
+   "unreported" — whose summary tells the operator "Cursor did not expose an
+   authoritative model for this session". That is a confident claim about
+   Cursor's behaviour made from a local failure to read Cursor's database, and
+   the two have opposite remedies. Absence still returns {}; a failure now
+   throws, so the caller records it against the cursor source instead. */
 function composerModelForSession(database: Database, sessionId: string): CursorStoreEvidence {
   let row: { value?: string | Uint8Array } | null;
   try {
     row = database.query("select value from cursorDiskKV where key = ?").get(`composerData:${sessionId}`) as
       | { value?: string | Uint8Array }
       | null;
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(
+      `composerData lookup failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  // No row is a real answer: this session never wrote composerData.
   if (row?.value === undefined || row.value === null) return {};
   let parsed: unknown;
   try {
     const value = typeof row.value === "string" ? row.value : Buffer.from(row.value).toString("utf8");
     parsed = JSON.parse(value);
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(
+      `composerData for ${sessionId} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const modelConfig = asRecord(asRecord(parsed)?.modelConfig);
   const modelName = nonEmptyString(modelConfig?.modelName);
@@ -761,8 +773,16 @@ async function collectCursorGuiSessions(
       try {
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
-        // PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
-        const composer = cachedComposerModel(state, row.id);
+        /* PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
+           The lookup is enrichment, not existence: a damaged model record must
+           degrade the source without deleting the session from the board, so it
+           is isolated from the per-row catch below. */
+        let composer: CursorStoreEvidence = {};
+        try {
+          composer = cachedComposerModel(state, row.id);
+        } catch (error) {
+          errors.push(`cursor GUI ${row.id} composerData: ${error instanceof Error ? error.message : String(error)}`);
+        }
         const parsed = parseCursorSession({
           sessionId: row.id,
           metaJson: JSON.stringify({
@@ -815,15 +835,17 @@ async function fillMissingCursorModels(
 ): Promise<void> {
   const missing = agents.filter((agent) => !agent.model);
   if (missing.length === 0 || !state?.hasComposerData) return;
-  try {
-    for (const agent of missing) {
+  // Per-session isolation: one unreadable record must not stop the remaining
+  // sessions from being filled, and each failure is named on its own.
+  for (const agent of missing) {
+    try {
       const composer = cachedComposerModel(state, agent.sourceSessionId);
       if (!composer.model) continue;
       agent.model = composer.model;
       if (composer.effort && !agent.effort) agent.effort = composer.effort;
+    } catch (error) {
+      errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
