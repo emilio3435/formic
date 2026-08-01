@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { buildOperatorIssues } from "../src/server/snapshot-operator-issues";
 import { buildSnapshot } from "../src/server/snapshot";
-import type { AgentSnapshot, OperatorIssue } from "../src/shared/types";
+import type { OperatorIssue } from "../src/shared/types";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
 /* Guards for two overhauls landing in parallel: the agent drawer, and the
@@ -111,39 +111,49 @@ describe("health severity: the quiet half must not be bought with the loud half"
     expect(control?.technicalDetails).toContain("cmux socket refused the connection");
   });
 
-  test("a degraded collector stays a warning and never inflates to an error", () => {
-    // Partial session data is worth saying; it is not worth the same weight as
-    // a dead control plane. Collapsing the two tiers is how a board becomes
-    // permanently red and therefore ignorable.
-    const collector = issueById(
-      snapshotWith({ sourceErrors: { claude: ["EACCES scanning ~/.claude"] } }).issues,
-      "system:claude-collector",
-    );
+  test("a degraded collector blames only its own provider's agents", () => {
+    /* Scope is what keeps a warning readable: a Claude scan that failed says
+       nothing about the Codex sessions on the same board. The fixture carries
+       one agent of each provider on purpose — asserting an empty list against a
+       Codex-only fleet would have passed no matter how the code attributed
+       blame, which is the mistake this test used to make. */
+    const snapshot = buildSnapshot({
+      agents: [
+        collected(),
+        collected({ id: "claude:c1", provider: "claude", sourceSessionId: "c1", displayName: "Claude worker" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: NOW,
+      sourceErrors: { claude: ["EACCES scanning ~/.claude"] },
+    } as never);
+    const collector = issueById(snapshot.issues, "system:claude-collector");
 
     expect(collector?.severity).toBe("warning");
-    expect(collector?.affectedAgentIds).toEqual([]);
+    expect(collector?.affectedAgentIds).toEqual(["claude:c1"]);
+    expect(collector?.affectedAgentIds).not.toContain("codex:live");
   });
 
-  test("severity is only ever error or warning, so the UI can rank it", () => {
-    /* The card picks its tone from this field. A third value added without the
-       renderer learning it would paint an unranked, untoned row. */
-    const agents = [
-      collected({ id: "codex:failed", sourceSessionId: "failed", displayName: "Failed", gates: ["tests failed"] }),
-      collected({ id: "codex:blocked", sourceSessionId: "blocked", displayName: "Blocked", gates: ["awaiting review"] }),
-    ];
+  test("the two severity tiers stay distinct on a board that has both", () => {
+    /* Not "severity is one of two strings" — the type already says that, and a
+       build where every warning had been promoted to error would satisfy it
+       while being exactly the permanently-red board this overhaul exists to
+       end. The assertion is that both tiers are actually reachable: a dead
+       control plane and a degraded collector must not arrive at equal weight. */
     const snapshot = buildSnapshot({
-      agents,
+      agents: [collected()],
       surfaces: [],
       archiveStore,
       now: NOW,
       cmuxErrors: ["cmux socket refused the connection"],
-      sourceErrors: { claude: ["EACCES"] },
+      sourceErrors: { claude: ["EACCES scanning ~/.claude"] },
     } as never);
+    const severities = (snapshot.issues ?? []).map((issue) => issue.severity);
 
-    expect(snapshot.issues?.length).toBeGreaterThan(0);
-    for (const issue of snapshot.issues ?? []) {
-      expect(["error", "warning"]).toContain(issue.severity);
-    }
+    expect(severities).toContain("error");
+    expect(severities).toContain("warning");
+    expect(issueById(snapshot.issues, "system:cmux-control")?.severity).toBe("error");
+    expect(issueById(snapshot.issues, "system:claude-collector")?.severity).toBe("warning");
   });
 
   test("a machine holding only abandoned-pane debris reports healthy", () => {
@@ -257,11 +267,21 @@ describe("health severity: the quiet half must not be bought with the loud half"
     }
   });
 
-  test("buildOperatorIssues is silent on a healthy fleet even when called directly", () => {
-    // The board's silence must come from the builder, not from a filter applied
-    // downstream that a refactor could drop.
-    const healthy: AgentSnapshot[] = [];
-    expect(buildOperatorIssues(healthy, [], undefined, [])).toEqual([]);
+  test("the builder's silence is earned, not the result of it never speaking", () => {
+    /* Replaces a guard that asserted buildOperatorIssues([], [], undefined, [])
+       returns []. Mutation testing killed it: a stubbed `() => []` passed it,
+       so it could not distinguish a working builder from no builder at all and
+       was manufacturing confidence.
+
+       Silence is only meaningful against a builder that demonstrably speaks, so
+       the same call is made twice — once with nothing wrong, once with a real
+       fault — and the difference between them is the assertion. */
+    const quiet = buildOperatorIssues([], [], undefined, []);
+    const loud = buildOperatorIssues([], [], undefined, ["cmux socket refused the connection"]);
+
+    expect(quiet).toEqual([]);
+    expect(loud.length).toBeGreaterThan(0);
+    expect(loud.map((issue) => issue.id)).toContain("system:cmux-control");
   });
 });
 
@@ -436,7 +456,11 @@ describe("agent drawer: condensed by default, and honest about its numbers", () 
        here would pin the defect in place. The guard's stated intent is only to
        prove the pane is not empty and belongs to THIS agent, which the reason it
        reports proves at least as well, and which the row does not carry. */
-    expect(textOf(nodes[0]!)).toContain(AGENT.statusReason);
+    /* The model is the stable per-agent fact the head always carries. An earlier
+       revision asserted statusReason here, but the drawer now suppresses it on a
+       working agent — it read "Source activity within 3 minutes." directly beside
+       "11s ago", the same observation at coarser precision. */
+    expect(textOf(nodes[0]!)).toMatch(/opus 4\.8/i);
   });
 
   test("raw detail ships collapsed, so the drawer opens as a summary", () => {
@@ -484,15 +508,20 @@ describe("agent drawer: condensed by default, and honest about its numbers", () 
        each is reachable under wording that separates turn from session. */
     const rendered = textOf(nodes[0]!).replace(/\s+/g, " ");
 
-    expect(rendered).toContain("120k");
-    expect(rendered).toContain("480k");
     expect(rendered).toMatch(/context/i);
     expect(rendered).toMatch(/session/i);
 
-    // Neither magnitude may appear more than once: a repeat is a second,
-    // unlabelled printing of a number that already has a home.
-    expect(rendered.match(/\b120k\b/g)?.length).toBe(1);
-    expect(rendered.match(/\b480k\b/g)?.length).toBe(1);
+    /* The whole inventory, not a spot check. Asserting only that 120k and 480k
+       each appear once would let a third magnitude arrive unlabelled and go
+       unnoticed — which is the failure this property exists to prevent. So the
+       complete multiset of token-shaped numbers the drawer prints is fixed:
+       the turn total, its window, and the session total. A new number, a
+       repeat, or a dropped one all fail here. */
+    const magnitudes = (rendered.match(/\b\d[\d.]*\s*[kM]\b/g) ?? [])
+      .map((value) => value.replace(/\s+/g, ""))
+      .sort();
+
+    expect(magnitudes).toEqual(["1.0M", "120k", "480k"].sort());
   });
 
   test("the context figure is shown against its window, never bare", () => {
