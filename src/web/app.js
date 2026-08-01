@@ -1620,7 +1620,12 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      other when both print: "The board is usable; evidence needs tidying. 3 live
      sessions can't take commands." is the same self-disagreement the headline
      used to have with its own badge. The specific sentence wins outright. */
-  const problemText = (remedy && remedy.problem) || (reason ? reason.title : data.sublabel);
+  /* The severity's own detail already IS the consequence sentence, so printing
+     the generic sublabel after it says cmux is unreachable twice in one line.
+     Seen on the live board: "cmux unreachable — Focus and Send cannot route.
+     cmux unreachable — terminal titles and Focus/Send stay offline." */
+  const problemText = (remedy && remedy.problem)
+    || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
   const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
   subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
   if (remedy && remedy.instruction) {
