@@ -723,16 +723,142 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
 
+    /* The title names the situation and the summary names the remedy.
+       "CMUX identity conflicts" told an operator nothing they could act on:
+       it described the scanner's internal state, not theirs. */
     expect(snapshot.issues).toEqual([
       expect.objectContaining({
         id: "system:cmux-identity-conflicts",
-        title: "CMUX identity conflicts",
+        title: "Two live sessions share one cmux pane",
         affectedAgentIds: [source.id],
         technicalDetails: expect.arrayContaining([expect.stringContaining("ttys003"), expect.stringContaining("ttys005")]),
       }),
     ]);
+    expect(snapshot.issues?.[0]?.summary).toContain("until one is closed");
     expect(snapshot.totals.needsYou).toBe(1);
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+  });
+
+  /* An identity conflict costs one thing: controls stay quarantined for the
+     sessions on that pane. A pane whose sessions have all ended is withholding
+     controls from nobody, and nobody will ever close a pane from a wave that
+     finished last week — so it reported a permanent error, the board could
+     never reach Operational, and an operator learned to ignore the one signal
+     that was supposed to mean "look at me". */
+  test("a pane whose sessions have all ended is debris, not a fault", () => {
+    const finished = collected({
+      id: "codex:finished-wave",
+      sourceSessionId: "finished-wave",
+      // Outside the activity window: buildSnapshot derives this as "ended".
+      updatedAt: "2026-07-14T09:00:00.000Z",
+      status: "archived",
+    });
+    const snapshot = buildSnapshot({
+      agents: [finished],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [finished.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // Nothing is asked of the operator...
+    expect((snapshot.issues ?? []).filter(({ id }) => id === "system:cmux-identity-conflicts")).toEqual([]);
+    // ...and nothing drives the board red: this is what makes Operational reachable.
+    expect(snapshot.controlHealth.errors).toEqual([]);
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+
+    // But the debris is still named, counted, and carries what to do about it.
+    expect(snapshot.controlHealth.debris).toMatchObject({
+      kind: "abandoned-cmux-panes",
+      count: 1,
+      surfaceIds: ["SURFACE-UNIQUE"],
+    });
+    expect(snapshot.controlHealth.debris?.remedy).toContain("Close 1 cmux pane");
+    expect(snapshot.controlHealth.debris?.detail).toHaveLength(1);
+  });
+
+  test("the same pane becomes a fault again the moment a live session appears on it", () => {
+    const live = collected({ id: "codex:live-again", sourceSessionId: "live-again" });
+    const snapshot = buildSnapshot({
+      agents: [live],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [live.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // No threshold to tune and no state to reset: the classification follows
+    // the evidence, so reopening work in the pane restores the alarm.
+    expect(snapshot.controlHealth.debris).toBeUndefined();
+    expect(snapshot.controlHealth.errors).toHaveLength(1);
+    expect(snapshot.totals.sourceHealth?.degraded).toBe(1);
+    const issue = (snapshot.issues ?? []).find(({ id }) => id === "system:cmux-identity-conflicts");
+    expect(issue?.severity).toBe("error");
+    expect(issue?.affectedAgentIds).toEqual([live.id]);
+  });
+
+  test("agents quarantined for an unrelated reason are not blamed on pane conflicts", () => {
+    /* affectedAgentIds was `controlState === "quarantined" || <named by a
+       conflicted surface>`. The first clause swept in every quarantined agent
+       whatever the cause, so a fleet quarantined for sharing one cwd — a
+       different condition with a different remedy — was reported as collateral
+       of surface conflicts it had no connection to. */
+    const onConflictedPane = collected({ id: "codex:on-pane", sourceSessionId: "on-pane" });
+    /* Two live sessions in one worktree with a surface that cannot tell them
+       apart: cwd resolution goes ambiguous, which quarantines both. This is the
+       everyday shape of a multi-agent swarm sharing a checkout, and it has
+       nothing to do with the conflicted pane above. */
+    const sharedCwdA = collected({
+      id: "codex:shared-a",
+      sourceSessionId: "shared-a",
+      cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+    });
+    const sharedCwdB = collected({
+      id: "codex:shared-b",
+      sourceSessionId: "shared-b",
+      cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+    });
+    const snapshot = buildSnapshot({
+      agents: [onConflictedPane, sharedCwdA, sharedCwdB],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [onConflictedPane.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }, {
+        workspaceId: "WORKSPACE-SHARED",
+        surfaceId: "SURFACE-SHARED",
+        paneId: "PANE-SHARED",
+        cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+        sourceSessionIds: [],
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // The fixture only proves anything if those two really are quarantined.
+    const quarantined = snapshot.programs
+      .flatMap(({ agents }) => agents)
+      .filter(({ controlState }) => controlState === "quarantined")
+      .map(({ id }) => id);
+    expect(quarantined).toContain(sharedCwdA.id);
+    expect(quarantined).toContain(sharedCwdB.id);
+
+    const issue = (snapshot.issues ?? []).find(({ id }) => id === "system:cmux-identity-conflicts");
+    expect(issue?.affectedAgentIds).toEqual([onConflictedPane.id]);
+    expect(issue?.affectedAgentIds).not.toContain(sharedCwdA.id);
+    expect(issue?.affectedAgentIds).not.toContain(sharedCwdB.id);
   });
 
   test("identity-conflict issues link agents named by the conflicting process evidence", () => {

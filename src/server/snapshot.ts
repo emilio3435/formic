@@ -12,7 +12,11 @@ import type {
 import { MODEL_CONFIG } from "./model-config";
 import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
-import { buildOperatorIssues } from "./snapshot-operator-issues";
+import {
+  buildOperatorIssues,
+  classifyIdentityConflicts,
+  controlDebrisFor,
+} from "./snapshot-operator-issues";
 import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
 /* Re-exported so the program-resolution move stays invisible to callers:
    state.ts imports ProgramHint from "./snapshot". */
@@ -220,10 +224,19 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     .map(([provider]) => provider);
   const sourceIssues = buildOperatorIssues(allAgents, input.surfaces, input.sourceErrors, cmuxErrors);
   const { issues, recentlyResolved } = lifecycleIssues(sourceIssues, input, now);
+  /* Abandoned panes are separated out before anything downstream counts errors.
+     They are permanent by construction — nobody closes a pane from a finished
+     wave — so leaving them in `errors` made Operational unreachable on any
+     machine that had ever run a swarm, which is every machine this ships to. */
+  const identitySplit = classifyIdentityConflicts(allAgents, input.surfaces, cmuxErrors);
+  const debris = controlDebrisFor(identitySplit);
+  const operationalCmuxErrors = cmuxErrors.filter(
+    (error) => !identitySplit.debrisErrors.includes(error),
+  );
   const degradedSources =
     ["codex", "claude", "cursor"].filter((provider) =>
       (input.sourceErrors?.[provider as Provider]?.length ?? 0) > 0,
-    ).length + (cmuxErrors.length > 0 || input.cmuxReachable === false ? 1 : 0);
+    ).length + (operationalCmuxErrors.length > 0 || input.cmuxReachable === false ? 1 : 0);
   const sourceTotal = 4;
   const activeCursorAgents = liveAgents.filter((agent) => agent.provider === "cursor");
   const cursorModelHealth = {
@@ -245,10 +258,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     contextPeak,
     contextMedian,
     controlHealth: {
-      cmuxReachable: input.cmuxReachable ?? cmuxErrors.length === 0,
+      cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),
-      errors: [...cmuxErrors, ...sourceErrors],
+      errors: [...operationalCmuxErrors, ...sourceErrors],
       staleSources,
+      ...(debris ? { debris } : {}),
     },
     totals: {
       live: liveAgents.length,

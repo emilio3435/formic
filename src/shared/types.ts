@@ -342,11 +342,32 @@ export interface SourceHealthSummary {
   byProvider?: Record<Provider, SourceHealth>;
 }
 
+/* Workspace leftovers the hub can see but nobody needs to act on now. A cmux
+   pane whose sessions have all ended still holds open transcript handles, so
+   identity scanning still reports a conflict for it forever — nobody is going
+   to close a pane from a wave that finished last week. Carried separately from
+   `errors` so a board with nothing but debris can still read Operational, while
+   the debris stays discoverable and, above all, names its own remedy. */
+export interface ControlDebris {
+  kind: "abandoned-cmux-panes";
+  count: number;
+  surfaceIds: string[];
+  /** What the operator would do about it, in words that name an action. */
+  remedy: string;
+  /** The raw scanner strings, for the drawer. Never the operator's first read. */
+  detail: string[];
+}
+
 export interface ControlHealth {
   cmuxReachable: boolean;
   lastCheckedAt: string;
+  /* Faults that impair operation NOW. Anything the operator cannot act on, or
+     that costs nothing until they do, belongs in `debris` instead — this list
+     drives the Degraded verdict, so a permanent entry here is a permanently
+     red board and an operator trained to ignore it. */
   errors: string[];
   staleSources: Provider[];
+  debris?: ControlDebris;
 }
 
 export interface HubSnapshot {
