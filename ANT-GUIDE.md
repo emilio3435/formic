@@ -24,15 +24,14 @@ Four steps. Do these in order and you have used the tool correctly.
 
 ![The summary band](docs/guide-shots/shot-1-summary.png)
 
-Above is the band with something on it: `Needs you` reads 1, and it says both
-what is wrong and what to do about it. **Only `Needs you` is a to-do list.** The
-rest are context, not tasks: how much is shipping, what it is costing, how full
-the fullest context window is, and whether the system itself is healthy.
+**When nothing needs you the band is one line**, as above: what is shipping, what
+has finished this hour, what it is burning, and `All clear`. No cards, no numbers
+to read past. That line is the answer, and you can close the tab.
 
-**When nothing needs you, that whole band collapses to a single line** — what is
-shipping, what has finished this hour, what it is burning, and `All clear`. No
-cards, no numbers to read past. That line is the answer, and you can close the
-tab.
+When something does need you it expands into cards, and **only `Needs you` is a
+to-do list** — it names both what is wrong and what to do about it. The rest are
+context, not tasks: how much is shipping, what it is costing, how full the
+fullest context window is, and whether the system itself is healthy.
 
 ### 2. The board opens on `Needs you`
 
