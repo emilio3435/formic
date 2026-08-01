@@ -1908,7 +1908,7 @@ describe("source hygiene", () => {
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain(">Alerts<span");
+    expect(html).toContain(">Needs you<span");
     expect(source).toContain("function renderWidgetCustomizer()");
     expect(source).toContain("onchange: (event) => setWidgetEnabled");
     expect(source).toContain('aria-label": `Move ${widget.label} up`');
@@ -3409,11 +3409,17 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background: var(--ink)");
   });
 
-  test("index.html seeds is-current on the default Now tab (honest guard — the markup already does)", () => {
-    // renderTabs re-derives the active marker on every render, but the first paint
-    // before JS runs must already present Now as current. This locks the seed markup
-    // so a future edit to the tab list can't ship a currentless first frame.
-    expect(html).toContain('class="view-tab is-current" data-view="now" aria-pressed="true"');
+  test("index.html seeds is-current on the default tab, and that tab is the attention one", () => {
+    /* renderTabs re-derives the active marker on every render, but the first
+       paint before JS runs must already present a current tab. The seeded tab is
+       now needs-you: a cockpit whose landing state is "show me all routine work"
+       cannot also claim to stay silent about what does not need a human. */
+    expect(html).toContain('class="view-tab is-current" data-view="needs-you" aria-pressed="true"');
+    expect(html).not.toContain('class="view-tab is-current" data-view="now"');
+    // …and the markup order matches the model, so the first tab is the seeded one.
+    expect(html.indexOf('data-view="needs-you"')).toBeLessThan(html.indexOf('data-view="now"'));
+    expect(M.OPS_VIEWS[0]).toBe("needs-you");
+    expect(M.state.view).toBe("needs-you");
   });
 });
 

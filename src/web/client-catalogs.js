@@ -4,7 +4,11 @@ export const ACTIVITY_LABELS = { working: "Working", idle: "Idle", ended: "Ended
 export const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Alert", blocked: "Blocked", failed: "Failed" };
 export const CONTROL_LABELS = { linked: "Linked", "observed-only": "Observed only", quarantined: "Quarantined" };
 
-export const OPS_VIEWS = ["now", "needs-you", "working", "idle", "history"];
+/* Attention first, deliberately. The board used to open on "now" — every routine
+   working agent — with the attention tab reading 0 beside it. A cockpit whose
+   landing state is "show me all routine work" cannot also claim to stay silent
+   about what does not need a human. */
+export const OPS_VIEWS = ["needs-you", "now", "working", "idle", "history"];
 export const VIEWS = [...OPS_VIEWS, "usage"];
 export const LOOKBACK_STORAGE_KEY = "mtn3-lookbackHours";
 export const LOOKBACK_PRESETS = [1, 6, 24, 36];

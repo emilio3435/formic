@@ -2983,18 +2983,23 @@ function renderPrograms() {
   } else {
     const emptyByView = {
       "now": `No active work right now — idle sessions remain available in Idle.`,
-      "needs-you": "No alerts. System interventions may still require operator action.",
+      "needs-you": "Nothing needs you. Every tracked session is working or done — open Now for the whole board.",
       "working": "No agents are working right now.",
       "idle": "No idle agents.",
       "history": "No ended sessions recorded yet.",
     };
     const wrap = el("div", { class: "no-match" }, el("p", { text: emptyByView[state.view] || "Nothing here." }));
+    /* The escape hatch has to agree with the sentence above it. On the attention
+       view the answer to "nothing needs you" is the whole board, not the
+       archive — offering History there sent the operator to finished work while
+       the copy told them to open Now. */
+    const exitView = state.view === "needs-you" ? "now" : "history";
     if (state.view !== "history" && tracked) {
       wrap.append(el("button", {
         type: "button", class: "btn",
-        dataset: { fkey: "goto-history" },
-        onclick: () => setView("history"),
-      }, "Open history"));
+        dataset: { fkey: "goto-" + exitView },
+        onclick: () => setView(exitView),
+      }, exitView === "now" ? "Open Now" : "Open history"));
     }
     root.append(wrap);
   }

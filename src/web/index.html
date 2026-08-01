@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=bookshelf-seam-1">
+  <link rel="stylesheet" href="styles.css?v=cockpit-audit-1">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -65,8 +65,8 @@
       <main id="main" class="pane-list" tabindex="-1">
         <section class="toolbar" aria-label="Views, search, and selection">
           <nav class="views" role="group" aria-label="View" id="views">
-            <button type="button" class="view-tab is-current" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
-            <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Alerts<span class="count" id="count-needs-you"></span></button>
+            <button type="button" class="view-tab is-current" data-view="needs-you" aria-pressed="true">Needs you<span class="count" id="count-needs-you"></span></button>
+            <button type="button" class="view-tab" data-view="now" aria-pressed="false">Now<span class="count" id="count-now"></span></button>
             <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
             <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
             <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
@@ -129,6 +129,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=bookshelf-seam-1"></script>
+  <script type="module" src="app.js?v=cockpit-audit-1"></script>
 </body>
 </html>

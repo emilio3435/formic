@@ -30,13 +30,14 @@ is zero, nothing is waiting on you and you can close the tab.
 The rest are context, not tasks: how much is shipping, what it is costing, how
 full the fullest context window is, and whether the system itself is healthy.
 
-### 2. Open the `Alerts` tab
+### 2. The board opens on `Needs you`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)
 
-`Now` is the default and shows everything working *or* asking for you. `Alerts`
-is the shortlist — only sessions actually waiting on a human. If `Alerts` is
-empty, everything is either working or done.
+`Needs you` is the default and is deliberately the shortlist — only sessions
+actually waiting on a human. If it is empty, everything is either working or
+done, and that empty screen is the answer. `Now` is the whole board: everything
+working *or* asking for you.
 
 ### 3. Read the row
 
@@ -73,8 +74,8 @@ its process is still alive, and the four buttons that act on it.
 The first three need cmux (see the glossary). Without it they grey out with a
 reason, and the board still watches everything perfectly well.
 
-**That is the whole loop:** `Needs you` → `Alerts` → click the row → deal with
-it → `Escape`.
+**That is the whole loop:** `Needs you` → click the row → deal with it →
+`Escape`.
 
 ---
 
@@ -86,7 +87,7 @@ it → `Escape`.
 | Tab | Shows |
 |---|---|
 | **Now** | Anything working *or* asking for you. The default, and the one to keep open. |
-| **Alerts** | Only sessions waiting on a human. Your to-do list. |
+| **Needs you** | Only sessions waiting on a human. Your to-do list, and the tab the board opens on. |
 | **Working** | Currently producing output. |
 | **Idle** | Alive but not doing anything right now. |
 | **History** | Finished sessions. Collapsed by default — there are usually a lot. |

@@ -27,7 +27,7 @@ export const state = {
   // in any environment without fetch, so the mark simply never speaks.
   serverHealth: null,
   lastEventAt: 0,
-  view: "now",
+  view: "needs-you", // the board opens on what needs a human, not on all work
   query: "",
   facetProgram: "",
   facetProvider: "",
