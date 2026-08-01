@@ -585,7 +585,14 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        panes out of `errors` and into `debris`, a tidy-up no longer degrades the
        verdict — but it must still be discoverable, or the cleanup becomes
        invisible the moment it stops being an alarm. */
-    const remedy = healthRemedy(snap);
+    const derived = healthRemedy(snap);
+    /* A blocking fault outranks any tidy-up: telling an operator to close panes
+       while Focus and Send cannot route at all points them at the wrong problem.
+       The panes stay listed, the instruction does not — restoring the control
+       plane is the only next step that matters until it is back. */
+    const remedy = derived && severity && severity.key === "blocking"
+      ? { ...derived, instruction: "" }
+      : derived;
     return {
       value: (severity && SEVERITY_HEADLINE[severity.key])
         || (status.key === "operational" ? "All clear" : status.label),
@@ -1581,10 +1588,13 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      consequence for the operator. The title is still reachable — it labels the
      Refresh control — but it no longer stands in for an explanation. */
   const remedy = data.remedy;
-  subNode.append(el("span", {
-    text: (data.severityDetail ? data.severityDetail + " " : "")
-      + ((remedy && remedy.problem) || (reason ? reason.title : data.sublabel)) + sinceNote + snapNote,
-  }));
+  /* The generic severity blurb and a specific problem sentence contradict each
+     other when both print: "The board is usable; evidence needs tidying. 3 live
+     sessions can't take commands." is the same self-disagreement the headline
+     used to have with its own badge. The specific sentence wins outright. */
+  const problemText = (remedy && remedy.problem) || (reason ? reason.title : data.sublabel);
+  const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
+  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }

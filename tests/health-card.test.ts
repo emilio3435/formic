@@ -148,14 +148,41 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
     expect(panes[0].updatedAt).toBe("2026-07-21T03:00:00.000Z");
   });
 
-  test("a blocking fault still outranks any tidy-up", () => {
-    // Debris must never soften a real outage: cmux unreachable means Focus and
-    // Send cannot route, and that headline wins regardless of pending cleanup.
+  test("a blocking fault outranks any tidy-up, and does not offer it as the fix", () => {
+    /* Debris must never soften a real outage, and must never stand in for its
+       remedy: "close 17 panes" while Focus and Send cannot route at all points
+       the operator at the wrong problem. The panes stay listed; the instruction
+       does not, because restoring the control plane is the only next step that
+       matters until it is back. */
     const down = snapshot({
       controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: ["gone"], staleSources: [], debris: DEBRIS },
     });
     const data = M.summaryWidgetData("health", down, "live", "percent", [], false);
     expect(data.value).toBe("Blocked");
     expect(data.severityDetail).toContain("Focus and Send");
+    expect(data.remedy.instruction).toBe("");
+  });
+
+  test("the card never prints a generic blurb that argues with its own problem line", () => {
+    /* The card used to headline "Degraded" and contradict itself one line down
+       with an ADVISORY badge. The same trap reappears whenever the generic
+       severity sentence prints beside a specific one: "The board is usable;
+       evidence needs tidying." directly above "3 live sessions can't take
+       commands." Only one of those can be true, so the specific one wins. */
+    const blocked = agent({ id: "codex:live", activity: "idle", controlState: "quarantined" });
+    const snap = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: ["conflict"], staleSources: [] },
+      issues: [{
+        id: "system:cmux-identity-conflicts", kind: "system", severity: "error",
+        title: "CMUX identity conflicts", summary: "conflicting evidence",
+        affectedAgentIds: ["codex:live"],
+      }],
+      programs: [{ id: "p1", name: "p1", agents: [blocked] }],
+    });
+    const data = M.summaryWidgetData("health", snap, "live", "percent", [], false);
+    // The advisory blurb is still available as the severity's own detail...
+    expect(data.severityDetail).toContain("board is usable");
+    // ...but the problem sentence is what the operator reads, and it disagrees.
+    expect(data.remedy.problem).toContain("1 live session");
   });
 });
