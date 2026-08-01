@@ -420,10 +420,11 @@ function listUi(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/* The three drawer panels, rendered and flattened to text. */
+/* The drawer's panels, rendered and flattened to text. `operate` is gone — the
+   Operate panel was deleted in the drawer overhaul, so the shelf is one Thread
+   pane plus the collapsed Evidence rail. */
 function panelTexts(a: Record<string, unknown>) {
   return withDom(() => ({
-    operate: textOf(M.renderOperate(a, { id: "p", name: "P", agents: [] })),
     chat: textOf(M.renderChat(a)),
     evidence: textOf(M.renderEvidence(a)),
   }));
@@ -651,9 +652,8 @@ describe("provider-aware row summaries", () => {
       transcriptTail: TAIL,
     });
     const panels = panelTexts(rich);
-    // Bookshelf seam: Chat shows readable You/Agent turns only — the raw
-    // transcript tail is Evidence-only machinery behind the disclosure.
-    expect(panels.operate).not.toContain(TAIL);
+    // Thread shows readable You/Agent turns only — the raw transcript tail is
+    // Evidence-only machinery behind the disclosure.
     expect(panels.chat).toContain("pushed the branch");
     expect(panels.chat).not.toContain(TAIL);
     expect(panels.evidence).toContain(TAIL);
@@ -1364,7 +1364,7 @@ describe("calm program and agent list rendering", () => {
 
   test("selected rows retain an accessible full-text inspector path", () => {
     const message = "Review the full terminal transcript before dispatch.";
-    const selected = agent({ lastHumanMessage: message, lastAgentMessage: "Evidence checked." });
+    const selected = agent({ lastUserMessage: message, lastAgentMessage: "Evidence checked." });
     const program = { id: "p1", name: "P", agents: [selected] };
     const row = withDom(() => M.renderAgentRow(selected, program));
     expect(row.attributes["aria-label"]).toContain(
@@ -1376,9 +1376,13 @@ describe("calm program and agent list rendering", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: selected, program });
       return pane;
     });
-    const humanMessage = byClass(drawer, "last-human-message");
-    expect(humanMessage).not.toBeNull();
-    expect(textOf(humanMessage)).toBe(message);
+    /* The drawer used to print the message a second time under "Last human
+       message". That panel is gone; the message now lives exactly once, as a
+       Thread turn, which is what this test should be guarding. */
+    expect(byClass(drawer, "last-human-message")).toBeNull();
+    const turn = byClass(drawer, "chat-turn-body");
+    expect(turn).not.toBeNull();
+    expect(textOf(turn)).toBe(message);
     expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
@@ -2436,13 +2440,16 @@ describe("fail-loud control invariants (source-level)", () => {
   });
 });
 
-describe("Take A agent drawer — Operate · Chat · Evidence", () => {
-  test("bookshelf shelf replaces tabs: Operate + Chat open, Evidence behind the caterpillar rail", () => {
+describe("agent drawer — Thread · Evidence", () => {
+  test("bookshelf shelf replaces tabs: Thread open, Evidence behind the caterpillar rail", () => {
     // No tab dance — the drawer is a horizontal shelf.
     expect(source).not.toContain("inspectorTabButton(");
     expect(source).toContain('class: "drawer-shelf"');
-    expect(source).toContain('key: "operate"');
-    expect(source).toContain('key: "chat"');
+    // One reading pane now. Operate was deleted: its message duplicated Thread's
+    // user turn, its task moved to the head, its role/model chips were third
+    // printings of facts the row and head already carry.
+    expect(source).toContain('key: "thread"');
+    expect(source).not.toContain('key: "operate"');
     expect(source).toContain("renderEvidenceShelf(agent)");
     // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
     expect(source).toContain("evidenceOpen: false");
@@ -2457,9 +2464,6 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     );
     expect(evidenceShelf).not.toContain("renderVitals(agent)");
     expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
-    const operate = requiredSlice(source, /function renderOperate\([\s\S]*?\n}\n/, "renderOperate");
-    expect(operate).not.toContain("renderVitals(");
-    expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
     expect(styles).toContain(".shelf-evidence-rail {");
     // Widescreen split: roster rail ~40%, drawer ~60%.
@@ -2532,21 +2536,19 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     ]);
   });
 
-  test("Operate shows task only when meaningfully different from the human message", () => {
-    // FE-B: rendered, not grepped. A task that merely restates the human message
-    // earns no second heading; a genuinely different one does.
+  test("the objective surfaces the task only when it is not a restatement", () => {
+    /* Task moved out of Operate and onto the head, because it is the one field
+       that says WHICH lane this is: on the live board 19 of 22 active agents
+       share a display name while their tasks differ. It must still stay silent
+       when it merely echoes the message. */
     const echoed = agent({ lastHumanMessage: "rebuild the collector", task: "Rebuild the collector." });
     const distinct = agent({ lastHumanMessage: "rebuild the collector", task: "Port the SEM forecast rate limiter", model: "claude-opus-4-8" });
     expect(M.taskMeaningfullyDifferent(echoed)).toBe(false);
     expect(M.taskMeaningfullyDifferent(distinct)).toBe(true);
-    const echoedPanel = withDom(() => M.renderOperate(echoed, { id: "p", name: "P", agents: [] }));
-    expect(textOf(echoedPanel)).not.toContain("Task");
-    const distinctPanel = withDom(() => M.renderOperate(distinct, { id: "p", name: "P", agents: [] }));
-    expect(textOf(distinctPanel)).toContain("Task");
-    expect(textOf(distinctPanel)).toContain("Port the SEM forecast rate limiter");
-    // Operate still carries the identity meta row (role/model), not vitals.
-    expect(byClass(distinctPanel, "operate-meta")).not.toBeNull();
-    expect(textOf(byClass(distinctPanel, "operate-meta"))).toContain("opus 4.8");
+    expect(M.drawerObjective(echoed)).toBe("");
+    expect(M.drawerObjective(distinct)).toContain("Port the SEM forecast rate limiter");
+    // And the role/model meta row is gone: model was a third printing.
+    expect(source).not.toContain('class: "operate-meta"');
   });
 });
 
@@ -2575,25 +2577,25 @@ describe("verdict head — act from the top (B2)", () => {
   }
   const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
 
-  test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
+  test("drawer order: verdict head → banner → vitals mount → shelf → lineage → dock", () => {
     const drawer = agentDrawer();
     expect(drawer).toBeTruthy();
     const headAt = drawer.indexOf("inspector-head inspector-verdict");
     const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
-    const nextAt = drawer.indexOf('class: "next-action"');
     const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
     const shelfAt = drawer.indexOf('class: "drawer-shelf"');
     const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
     const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
-    for (const at of [headAt, bannerAt, nextAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
+    for (const at of [headAt, bannerAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
       expect(at).toBeGreaterThan(-1);
     }
     // The banner stays state, pinned immediately after the head.
     expect(bannerAt).toBeGreaterThan(headAt);
-    // Next action directly under the head; the vitals mount (B3's slot) sits
-    // between next-action and the Operate | Chat shelf.
-    expect(nextAt).toBeGreaterThan(bannerAt);
-    expect(vitalsAt).toBeGreaterThan(nextAt);
+    /* next-action is gone: across 243 live agents it held three distinct strings
+       and 214 read "Review this session in history." — a restatement of
+       activity === "ended" dressed as per-agent advice. */
+    expect(drawer).not.toContain('class: "next-action"');
+    expect(vitalsAt).toBeGreaterThan(bannerAt);
     expect(shelfAt).toBeGreaterThan(vitalsAt);
     // Lineage is demoted below the shelf — context, not action — and the
     // command dock stays pinned at the bottom.
@@ -2603,16 +2605,16 @@ describe("verdict head — act from the top (B2)", () => {
     expect(styles).toContain(".inspector-vitals:empty { display: none; }");
   });
 
-  test("the head carries the gate chip and one primary-action control", () => {
+  test("the head carries the gate chip and exactly one Focus button exists", () => {
     const drawer = agentDrawer();
     const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
     expect(head).toContain("verdictGate(");
-    expect(head).toContain("headPrimaryAction(");
-    // headPrimaryAction reuses the dock's derivation — capability() +
-    // renderDockTool() — never a duplicated action implementation.
-    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(headFn).toContain('capability(agent, "focus")');
-    expect(headFn).toContain("renderDockTool(");
+    /* The head's primary action is deleted. It rendered a literal copy of a dock
+       tool while the dock is position:sticky at the bottom of the same pane, so
+       one Focus button was on screen twice. */
+    expect(head).not.toContain("headPrimaryAction(");
+    expect(source).not.toContain("function headPrimaryAction(");
+    expect(styles).toContain("position: sticky"); // the dock keeps Focus reachable
     // The gate is ember ink + outline, never a filled banner.
     const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
     expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
@@ -2688,43 +2690,6 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     }
   }
 
-  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; both enabled → focus wins; absent → null", () => {
-    const locked = agent({ controls: [
-      { action: "focus", enabled: false, reason: "no route" },
-      { action: "instruct", enabled: true },
-      { action: "interrupt", enabled: true },
-    ] });
-    expect(withDom(() => M.headPrimaryAction(locked))).toBeNull();
-
-    const focusReady = agent({ controls: [
-      { action: "focus", enabled: true },
-      { action: "instruct", enabled: true },
-    ] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const focusTool: any = withDom(() => M.headPrimaryAction(focusReady));
-    expect(focusTool).not.toBeNull();
-    expect(focusTool.className).toContain("dock-tool");
-    expect(focusTool.dataset.fkey).toBe("head:act:codex:a1:focus");
-
-    const interruptOnly = agent({ controls: [{ action: "interrupt", enabled: true }] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
-    expect(interruptTool).not.toBeNull();
-    expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
-
-    // Priority head-to-head: both focus and interrupt enabled at once — focus
-    // must win, not just when interrupt is absent entirely.
-    const bothEnabled = agent({ controls: [
-      { action: "focus", enabled: true },
-      { action: "interrupt", enabled: true },
-    ] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bothTool: any = withDom(() => M.headPrimaryAction(bothEnabled));
-    expect(bothTool).not.toBeNull();
-    expect(bothTool.dataset.fkey).toBe("head:act:codex:a1:focus");
-
-    expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
-  });
 
   test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
     // Visible text from gates; statusReason empty → the tooltip carries the
@@ -2764,16 +2729,18 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     expect(M.quietSourceLine(calm)).toBeNull();
   });
 
-  test("instance-scoped keys: head prefixes its fkeys; confirm strip and Escape bind to one instance", () => {
-    const dockToolFn = source.match(/function renderDockTool\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(dockToolFn).toContain('opts.fkeyPrefix || ""');
-    // The confirm strip renders only for the instance that opened it.
+  /* The head no longer renders a primary action, so the instance-scoping that
+     existed only to keep two copies of one Focus button from stealing each
+     other's confirm strip is gone with it. The dock's own scoping is still
+     load-bearing and is asserted here. */
+  test("the dock still scopes its confirm strip to the instance that opened it", () => {
+    const dockToolFn = requiredSlice(source, /function renderDockTool\([\s\S]*?\n\}\n/, "renderDockTool");
     expect(dockToolFn).toContain("state.confirming === fkey");
     expect(dockToolFn).toContain("state.confirming = fkey");
-    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(headFn).toContain('fkeyPrefix: "head:"');
     // Escape restores focus to the exact instance fkey stored in state.confirming.
     expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+    // And there is exactly one Focus button in the drawer now: the dock's.
+    expect(source).not.toContain('fkeyPrefix: "head:"');
   });
 });
 
@@ -2826,51 +2793,74 @@ describe("vitals instrument band (B3)", () => {
     return s;
   }
 
-  test("(a) renderVitalsBand is exported and renders mono-classed values for a live agent", () => {
+  test("(a) one context tile carries both magnitudes, in a sentence", () => {
     expect(typeof M.renderVitalsBand).toBe("function");
+    /* The reported defect was two sibling NOUN labels — "Context" beside
+       "Session tokens" — both reading as "an amount of tokens". Prepositions
+       separate them where nouns could not, and one tile removes the side-by-side
+       adjacency that invited the comparison in the first place. */
     const live = agent({
-      model: "gpt-5-codex",
-      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      tokens: { provenance: "observed", scope: "latest-turn", total: 120000, contextWindow: 1000000, sessionTotal: 480000 },
       elapsedMs: 125000,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const band: any = withDom(() => M.renderVitalsBand(live));
     expect(band).not.toBeNull();
-    expect(band.className).toContain("vitals");
+    const text = textOf(band).replace(/\s+/g, " ");
+    // Both magnitudes, each exactly once, against wording that cannot be swapped.
+    expect(text.match(/\b120k\b/g)?.length).toBe(1);
+    expect(text.match(/\b480k\b/g)?.length).toBe(1);
+    expect(text).toContain("% of the window");
+    expect(text).toContain("used this session");
+    // The numerator is never bare: 120k means nothing without its denominator.
+    expect(text).toContain("1.0M");
     const classes = classesOf(band);
-    // Values ride the canonical "vital-big mono" convention (DESIGN rule 2).
-    expect(classes.some((c) => c.includes("vital-big") && c.includes("mono"))).toBe(true);
-    // An observed context window renders a real SVG ring; uptime is present.
     expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
-    const text = textOf(band);
-    expect(text).toContain("40k"); // observed context total
-    expect(text).toContain("2m");  // 125s uptime → fmtElapsed "2m"
+    // Past the threshold the same tile takes ember ink rather than appearing.
+    const hot = agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 900000, contextWindow: 1000000, sessionTotal: 480000 } });
+    expect(classesOf(withDom(() => M.renderVitalsBand(hot))).some((c) => c.includes("is-hot"))).toBe(true);
+    expect(classes.some((c) => c.includes("is-hot"))).toBe(false);
   });
 
-  test("(b) missing vitals render honest fallbacks — observed count without a fabricated window, omit-empty otherwise", () => {
-    // Claude-style: observed total but NO context window → absolute count, never a
-    // fabricated percentage/ring (no invented denominator).
+  test("(b) the band never invents a denominator, and the deleted tiles stay deleted", () => {
+    // Observed total but NO context window → no ring, no fabricated percentage,
+    // and now no consolation tile either: with nothing to compare against there
+    // is no alarm to raise, and Evidence's `latest call` row carries the count.
     const noWindow = agent({
       provider: "claude",
       tokens: { provenance: "observed", total: 40000 },
       elapsedMs: undefined,
       updatedAt: undefined,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const band: any = withDom(() => M.renderVitalsBand(noWindow));
-    expect(band).not.toBeNull();
-    const classes = classesOf(band);
-    expect(classes.some((c) => c.includes("vital-ring"))).toBe(false); // no fabricated ring
-    const text = textOf(band);
-    expect(text).toContain("40k");   // honest observed count
-    expect(text).not.toContain("%"); // no invented percentage
-    // Nothing reported at all → the band is omitted entirely (never a fake $0/0 tile).
+    expect(withDom(() => M.renderVitalsBand(noWindow))).toBeNull();
+
     const blank = withDom(() => M.renderVitalsBand(
       agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
     ));
     expect(blank).toBeNull();
-    // The honest "not reported" string itself stays byte-identical.
     expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
+
+    /* The three deleted tiles, each for its own reason:
+       - Session tokens duplicated Evidence's `session total`, which already
+         carries SESSION_TOTAL_HINT — the correct label AND the definition.
+       - cache hit used cachedInput/input, but `input` is the UNCACHED remainder,
+         so the true rate is cachedInput/(cachedInput+input). The wrong
+         denominator can exceed 1 (hence the old Math.min clamp) and printed a
+         constant "100%" on nearly every active agent.
+       - Uptime timed since START, not since movement: 200h for an agent that had
+         been silent for an hour. */
+    const rich = agent({
+      tokens: { provenance: "observed", scope: "latest-turn", total: 180000, contextWindow: 200000, sessionTotal: 27000000, cachedInput: 90000, input: 10000 },
+      elapsedMs: 125000,
+    });
+    const text = textOf(withDom(() => M.renderVitalsBand(rich)));
+    expect(text).not.toContain("Session tokens");
+    expect(text).not.toContain("cache hit");
+    expect(text).not.toContain("Uptime");
+    // Evidence still owns the session figure, with its definition attached —
+    // asserted at source level here because this describe's local fake document
+    // is narrower than the shared one renderEvidence needs.
+    expect(source).toContain("cumulative this session");
   });
 
   test("(c) renderEvidenceShelf no longer builds the vitals block — it moved to the band", () => {
@@ -3066,9 +3056,12 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     // in agent-rows, WS-C's territory, and is out of scope for this task).
     const perType = styles.slice(
       styles.indexOf("/* ---------- inspector: per-type drawer states"),
-      styles.indexOf("/* ---------- vitals band"),
+      // Landmark renamed with the section: the vitals band became the context
+      // alarm when its session/cache/uptime tiles were cut.
+      styles.indexOf("/* ---------- context alarm"),
     );
     expect(perType).toBeTruthy();
+    expect(styles).toContain("/* ---------- context alarm"); // the landmark exists
     expect(perType).not.toContain("#fff");
     // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
     // those class strings, or it would render as an unstyled element. Back the
@@ -3521,7 +3514,7 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     // sk-pulse is the first-paint skeleton shimmer; it is inside the universal
     // guard above like every other one, which is what this list exists to force
     // a new animation's author to confirm.
-    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "status-pulse", "sun-pulse"]);
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "sun-pulse"]);
     // Every live `animation:` usage keys off one of those keyframes — none escapes.
     const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
     expect(new Set(animated)).toEqual(new Set(keyframes));
@@ -5389,30 +5382,27 @@ describe("FE-B: harness-backed client behavior", () => {
      function names, their ordering, even the blank lines between them. Those
      assertions were replaced with the rendered-DOM ones above and below, and
      the functions deleted. What the drawer actually builds is the contract. */
-  test("(5) the agent drawer builds Operate + Chat + the Evidence rail, and no swarm section", () => {
-    const a = agent({
-      lastHumanMessage: "ship it",
-      lastAgentMessage: "done",
-      cwd: "/repos/x",
-      controls: [{ action: "focus", enabled: true }, { action: "instruct", enabled: true }],
+  test("(5) the agent drawer builds one Thread pane + the Evidence rail, and no swarm section", () => {
+    const rich = agent({
+      lastUserMessage: "rebase onto main",
+      lastAgentMessage: "rebased, 412 tests green",
+      task: "Port the SEM forecast rate limiter",
     });
-    const program = { id: "p", name: "P", agents: [a] };
-    const drawer = withDom(() => {
-      const pane = newNode("div");
-      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
-      return pane;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shelves = findAll(drawer, (n: any) => n.dataset && n.dataset.shelf).map((n) => n.dataset.shelf);
-    expect(shelves).toEqual(["operate", "chat"]);
-    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
-    // renderSwarmSection's output — the thing the "do not delete" comment was
-    // protecting — is nowhere in the drawer; renderLineageSpine superseded it.
-    expect(byClass(drawer, "swarm-section")).toBeNull();
-    expect(byClass(drawer, "swarm-link")).toBeNull();
-    // The command dock still owns the lock copy renderPrimaryActions claimed to
-    // keep "discoverable" — proof the alias carried nothing of its own.
-    expect(textOf(drawer)).toContain("Send");
+    const pane = newNode("div");
+    withState({ snap: snapshot({ programs: [{ id: "p", name: "P", agents: [rich] }] }) }, () =>
+      withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: rich, program: { id: "p", name: "P", agents: [rich] } })));
+    const text = textOf(pane);
+    expect(text).toContain("Thread");
+    expect(text).not.toContain("Operate");
+    expect(text).toContain("Evidence");
+    // Both turns survive, each exactly once, under honest role labels.
+    expect(text).toContain("rebase onto main");
+    expect(text).toContain("rebased, 412 tests green");
+    expect(text).toContain("You");
+    expect(text).toContain("Agent");
+    // The objective rides the head, not a second panel heading.
+    expect(text).toContain("Port the SEM forecast rate limiter");
+    expect(text).not.toContain("Last human message");
   });
 
   /* -------- finding 9: the shadowed `state` identifier ---------------------- */

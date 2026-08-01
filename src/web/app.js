@@ -773,7 +773,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
   preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
+  quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
@@ -788,7 +788,7 @@ globalThis.TheAntHill = {
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
-  renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
+  renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
   identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
   renderControlBanner, renderIdentityBlock,
   el,
@@ -4351,23 +4351,26 @@ function renderAttentionBlock(agent, ui = state, now = Date.now()) {
   return block;
 }
 
-/* The single most-relevant action control for the verdict head. Reuses the
-   dock's derivation (capability + renderDockTool) so head and dock behave
-   identically. Focus (jump to the pane) leads; Interrupt only when it is the
-   sole enabled lever. When safe controls are locked the head stays empty —
-   the control banner owns that story. */
-function headPrimaryAction(agent) {
-  const focusCap = capability(agent, "focus");
-  const instructCap = capability(agent, "instruct");
-  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
-  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
-  const interruptCap = capability(agent, "interrupt");
-  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
-  return null;
-}
 
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
+/* The disambiguator for a drawer whose title is shared with other agents. Reuses
+   the row's ambiguousNames/sessionTag pair so both surfaces name a session the
+   same way — an operator who reads "#f263450b" on a row finds the same token at
+   the top of the drawer it opens. Silent when the name is already unique. */
+function drawerSessionTag(agent, ui = state) {
+  const all = snapshotAgents(ui.snap).map((x) => x.agent);
+  return ambiguousNames(all).has(agentName(agent)) ? sessionTag(agent) : "";
+}
+
+/* The standing objective, promoted out of Operate. `taskMeaningfullyDifferent`
+   already proves it is not just a copy of the last message, so this never
+   restates the thread below it. */
+function drawerObjective(agent) {
+  if (!taskMeaningfullyDifferent(agent)) return "";
+  return conciseText(String(agent.task || "").trim(), 140);
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const activity = deriveActivity(agent);
@@ -4379,14 +4382,35 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  // Verdict head — name, status words, the gate when blocked, and the one
-  // most-relevant action: verdict first, act from the top.
+  /* Verdict head.
+
+     The title used to be agentName alone, and on the live board that identified
+     nothing: 19 of the 22 agents an operator is actively running all render
+     "Claude · the-mountain-main". Opening four drawers in a row gave four
+     identical headings. Two changes fix it without a semantic swap:
+
+       - the session tag rides the title whenever the name is shared, reusing the
+         same disambiguator the ROW already solved this with, so the two surfaces
+         speak one language;
+       - `task` — the standing objective, distinct on 8 of those 22 where the name
+         managed 2 — is promoted out of the Operate panel to sit directly under
+         the title. It is the line that says WHICH lane this is.
+
+     The head no longer carries a primary action. headPrimaryAction rendered a
+     literal copy of a dock tool, and the dock is position:sticky at the bottom of
+     the pane — the same Focus button was on screen twice, with instance-scoped
+     confirm keys existing only to stop the two copies stealing each other's
+     focus. */
   const sourceLine = quietSourceLine(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  const headAction = headPrimaryAction(agent);
+  const tag = drawerSessionTag(agent);
+  const objective = drawerObjective(agent);
   pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
-      el("h2", { class: "inspector-title", text: agentName(agent) }),
+      el("h2", { class: "inspector-title" },
+        agentName(agent),
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
+      objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
       sourceLine
         ? el("p", {
           class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
@@ -4402,9 +4426,7 @@ function renderAgentDrawer(pane, view) {
       renderStatusLine(agent, activity, outcome, control, policy),
       verdictLiveness(agent),
       verdictGate(agent, outcome)),
-    el("div", { class: "verdict-side" },
-      closeButton(),
-      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
+    el("div", { class: "verdict-side" }, closeButton())));
 
   const attentionBlock = renderAttentionBlock(agent);
   if (attentionBlock) pane.append(attentionBlock);
@@ -4412,10 +4434,11 @@ function renderAgentDrawer(pane, view) {
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
 
-  if (agent.nextAction) {
-    pane.append(el("p", { class: "next-action" },
-      el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
-  }
+  /* `nextAction` is gone. It rendered on 100% of agents and looked like per-agent
+     guidance, but across 243 live agents it held THREE distinct strings and 214
+     of them read "Review this session in history." — a restatement of
+     `activity === "ended"` dressed as advice. A directive that is the same
+     sentence on nine agents out of ten is not a directive. */
 
   // Vitals promoted to an instrument band directly under the verdict head —
   // the numbers an operator acts on, no longer buried in the Evidence shelf.
@@ -4435,14 +4458,8 @@ function renderAgentDrawer(pane, view) {
     "aria-label": "Agent sections",
   },
     renderShelfSection({
-      key: "operate",
-      title: "Operate",
-      open: true,
-      body: renderOperate(agent, program),
-    }),
-    renderShelfSection({
-      key: "chat",
-      title: "Chat",
+      key: "thread",
+      title: "Thread",
       open: true,
       body: renderChat(agent),
     }),
@@ -4520,7 +4537,18 @@ function renderEvidenceShelf(agent) {
   return section;
 }
 
-/* One calm status sentence under the title — replaces the pill cluster. */
+/* One line under the title, and it earns every word it prints.
+
+   It used to read "Working · Healthy · View only" on almost every agent. Measured
+   against the live board: `outcome` is `healthy` on 243/243, so that word carried
+   zero bits; `activity` is the word already printed on the row the operator just
+   clicked; and `control` is stated again, with its reason and its remedy, by
+   renderControlBanner directly below. Three items, no information.
+
+   What this line answers instead is the question the drawer could not answer at
+   all: "went quiet 20 minutes ago — dead, or thinking?" That is time-since-update
+   plus process liveness. `statusReason` is 100% populated on the wire and was
+   rendered on zero agents; it is the sentence that says which. */
 function renderStatusLine(agent, activity, outcome, control, policy) {
   const line = el("div", {
     class: "status-line",
@@ -4528,28 +4556,32 @@ function renderStatusLine(agent, activity, outcome, control, policy) {
     "aria-label": "Session status",
   });
 
-  const live = el("span", { class: "status-line-live act-" + activity });
-  if (activity === "working") live.append(el("span", { class: "status-pulse", "aria-hidden": "true" }));
-  else live.append(el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }));
-  live.append(ACTIVITY_LABELS[activity] || activity);
-  line.append(live);
-
-  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-  line.append(el("span", {
-    class: "status-line-item outcome-" + outcome,
-    text: OUTCOME_LABELS[outcome] || outcome,
-  }));
-
-  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-  const controlNode = el("span", {
-    class: "status-line-item control-" + control,
-    title: CONTROL_HINTS[control] || null,
-  });
-  if (control === "quarantined" || control === "linked" || control === "observed-only") {
-    controlNode.append(icon(CONTROL_ICONS[control] || "observed"));
+  // Time since the source last moved — the live fact, not uptime. Uptime measured
+  // the wrong clock: it read 200h for an agent that had been silent for an hour.
+  if (agent.updatedAt) {
+    line.append(el("span", {
+      class: "status-line-live act-" + activity,
+      dataset: { ago: agent.updatedAt },
+      text: agoText(agent.updatedAt),
+    }));
   }
-  controlNode.append(CONTROL_STATE_TEXT[control] || CONTROL_LABELS[control] || control);
-  line.append(controlNode);
+
+  const reason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
+  if (reason) {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
+  }
+
+  /* Escalations only. A policy mismatch is real trouble and nothing else says it;
+     `outcome` speaks only when it stops being healthy, which is the whole point
+     of deleting it from the nominal line. */
+  if (outcome !== "healthy") {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", {
+      class: "status-line-item outcome-" + outcome,
+      text: OUTCOME_LABELS[outcome] || outcome,
+    }));
+  }
 
   if (policy && policy.state === "mismatch") {
     line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
@@ -4937,47 +4969,55 @@ function vitalTile(label, figure) {
    :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
    the type but is never populated — real cost is program/pulse-level only, and
    program cost has no place inside a single agent's band. */
+const CONTEXT_ALARM_PCT = 70;
+
 function renderVitalsBand(agent) {
   const t = agent.tokens || {};
   const tiles = [];
 
-  // Context pressure — a ring when we have an observed window, else the raw token
-  // summary so any source with tokens still gets a tile.
+  /* ONE tile, two numbers, and the words between them do the disambiguating.
+
+     The reported defect was "SESSION TOKENS 23.7M" sitting beside "CONTEXT 272k"
+     under sibling NOUN labels — both read as "an amount of tokens", so the
+     operator had to infer that one is a fill level and one is a running meter.
+     Nouns cannot fix that; two tiles side by side actively invite the comparison.
+     Prepositions fix it: "12% of the window" and "used this session" cannot be
+     read as the same measurement.
+
+     Both magnitudes still appear, because both answer real questions — how much
+     room is left, and how much this lane has cost — but each appears exactly
+     once, in one tile, in a sentence. */
   const ctx = contextUsage(t);
   if (ctx) {
+    const hot = ctx.pct >= CONTEXT_ALARM_PCT;
+    const parts = [ctx.pct + "% of the window"];
+    // Omitted honestly rather than zeroed when the source reports no session sum.
+    if (t.sessionTotal != null) parts.push(fmtTok(t.sessionTotal) + " used this session");
     tiles.push(vitalTile("Context",
-      el("div", { class: "vital-ring-wrap" },
+      el("div", { class: "vital-ring-wrap" + (hot ? " is-hot" : "") },
         svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
         el("div", { class: "vital-figure" },
           el("div", { class: "vital-big mono" },
-            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))))));
-  } else {
-    const tok = tokenSummary(t);
-    if (tok.known) {
-      tiles.push(vitalTile(tok.label === "latest call" ? "Latest call" : "Tokens",
-        el("div", { class: "vital-big mono", title: tok.title, text: tok.text })));
-    }
+            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) })),
+          el("div", { class: "vital-note", text: parts.join(" · " ) })))));
+  } else if (t.sessionTotal != null) {
+    // No window means no percentage can be honest, so the session sum stands
+    // alone under wording that never implies a fill level.
+    tiles.push(vitalTile("Tokens",
+      el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) + " used this session" })));
   }
 
-  // Session spend + cache-hit efficiency (computed, not raw).
-  const cacheHit = (t.cachedInput != null && t.input) ? Math.min(100, Math.round((t.cachedInput / t.input) * 100)) : null;
-  if (t.sessionTotal != null) {
-    tiles.push(vitalTile("Session tokens",
-      el("div", {},
-        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
-        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
-        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)));
-  }
+  /* Deleted, each for its own reason:
 
-  // Uptime.
-  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
-  if (elapsed && elapsed !== "—") {
-    tiles.push(vitalTile("Uptime",
-      el("div", { class: "vital-big mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed })));
-  } else if (agent.updatedAt) {
-    tiles.push(vitalTile("Last update",
-      el("div", { class: "vital-big mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })));
-  }
+     - "N% cache hit last call": computed as cachedInput/input, but `input` is the
+       UNCACHED remainder, so the true rate is cachedInput/(cachedInput+input).
+       The wrong denominator can exceed 1 — the Math.min(100, …) clamp was the
+       tell — and on the live board it printed exactly "100%" on nearly every
+       active agent. A constant rendered as a bar chart.
+     - "Uptime": measured the wrong clock. It read 200h for an agent that had been
+       silent for an hour, because it times since start, not since movement. The
+       question it looked like it answered — "quiet 20 minutes, dead or thinking?"
+       — is now answered honestly by the status line's time-since-update. */
 
   if (!tiles.length) return null;
   const band = el("div", { class: "vitals" });
@@ -4985,104 +5025,78 @@ function renderVitalsBand(agent) {
   return band;
 }
 
-function renderOperateMeta(agent) {
-  const items = [];
-  if (agent.role && agent.role !== "agent") {
-    items.push({
-      label: "role",
-      hint: GLOSSARY.role,
-      node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
-    });
-  }
-  if (agent.model) {
-    items.push({
-      label: "model",
-      hint: GLOSSARY.model,
-      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
-    });
-  }
-  // Uptime, token, and context figures now lead the drawer in the vitals
-  // instrument band under the verdict head. This meta row stays identity-only.
-  if (!items.length) return null;
+/* renderOperate and renderOperateMeta are deleted, not merged.
 
-  const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
-  for (const item of items) {
-    row.append(el("span", { class: "operate-meta-item" },
-      el("span", {
-        class: "operate-meta-label term-hint",
-        tabindex: "0",
-        title: item.hint || null,
-        "aria-label": item.hint ? `${item.label}: ${item.hint}` : item.label,
-        text: item.label,
-      }),
-      item.node));
-  }
-  return row;
-}
+   Operate was never a tab; it was four fields from four different domains sharing
+   a heading, and every one of them had a better home:
 
-function renderOperate(agent, _program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  if (message) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Last human message" }),
-      el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
-  }
+     "Last human message" -> deleted. Byte-identical to Thread's user turn on 37%
+        of the board, and on active agents it was the ASSISTANT's prose printed
+        under a label claiming a human wrote it.
+     "Task"               -> the head, as the objective line. It is the only field
+        that distinguishes one lane from another when 19 of 22 share a name.
+     outcome note         -> the status line, which now speaks only on escalation.
+     role + model chips   -> deleted. The row renders the role chip on exactly the
+        same condition, and model is already in the head's provider chip. Both
+        were third printings.
 
-  if (taskMeaningfullyDifferent(agent)) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Task" }),
-      el("p", { class: "operate-task", text: agent.task.trim() }));
-  }
+   With those redistributed the function returned an empty panel and its own
+   "No operate digest yet" placeholder — a tab whose only remaining content was an
+   apology for having none. */
 
-  const outcome = deriveOutcome(agent);
-  if (outcome !== "healthy" && agent.statusReason) {
-    panel.append(el("p", {
-      class: "operate-outcome-note outcome-" + outcome,
-      text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
-    }));
-  }
-
-  // Vitals lead the drawer as an instrument band under the verdict head — Operate
-  // stays a calm digest so Chat + Operate can showcase side by side.
-  const meta = renderOperateMeta(agent);
-  if (meta) panel.append(meta);
-  if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
-  }
-  return panel;
-}
+const TURN_ROLE_LABELS = { user: "You", assistant: "Agent" };
 
 function renderChatTurn(role, text) {
   return el("div", { class: "chat-turn chat-turn--" + role },
-    el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
+    el("div", { class: "chat-turn-role", text: TURN_ROLE_LABELS[role] || role }),
     el("p", { class: "chat-turn-body", tabindex: "0", text }));
 }
 
+/* Drops any turn whose text repeats one already shown. This is the rule that
+   makes "every surviving field appears exactly once" true by construction rather
+   than by inspection: the three message fields overlap constantly on real data —
+   lastHumanMessage was byte-identical to lastAgentMessage on 18 of 22 active
+   agents — so any renderer that trusts the field NAMES prints the same prose
+   twice under two labels. Compare the text, not the field. */
+function dedupeTurns(candidates) {
+  const seen = [];
+  const kept = [];
+  for (const turn of candidates) {
+    const text = typeof turn.text === "string" ? turn.text.trim() : "";
+    if (!text) continue;
+    const norm = normalizeCompareText(text);
+    if (!norm || seen.some((prev) => prev === norm || prev.includes(norm) || norm.includes(prev))) continue;
+    seen.push(norm);
+    kept.push({ ...turn, text });
+  }
+  return kept;
+}
+
+/* Thread — the drawer's one reading surface, and the only place a message is
+   printed. Operate is gone: its "Last human message" was the SAME string as this
+   panel's user turn on 37% of the board, and on active agents it was actually the
+   ASSISTANT's prose under a label claiming a human wrote it. Its task moved to the
+   head, its outcome note to the status line, its role/model chips were the third
+   printing of facts the row and the head already carry.
+
+   `lastHumanMessage` is deliberately NOT a fallback here. The server documents it
+   as "the latest provider-shaped assistant OR user prose", so using it to fill a
+   turn labelled "You" is how the mislabel got in. When there is no user message,
+   the honest stand-in is the task the operator actually set. */
 function renderChat(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  // Readable You/Agent turns only — the raw transcript tail lives in Evidence.
-  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
-  const user = typeof userRaw === "string" ? userRaw.trim() : "";
-  const assistant = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
-  if (user) panel.append(renderChatTurn("user", userRaw));
-  if (assistant) panel.append(renderChatTurn("assistant", agent.lastAgentMessage));
+  const turns = dedupeTurns([
+    { role: "user", text: agent.lastUserMessage },
+    { role: "assistant", text: agent.lastAgentMessage },
+  ]);
+  for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
 
-  const artifact = transcriptArtifact(agent);
-  if (artifact && artifact.path) {
-    panel.append(el("p", { class: "chat-transcript-link" },
-      el("span", { text: "Transcript: " }),
-      el("code", { text: artifact.path }),
-      " ",
-      el("button", {
-        type: "button", class: "btn sm",
-        dataset: { fkey: `copy-transcript:${agent.id}` },
-        onclick: () => copyText(artifact.path),
-      }, "Copy path")));
-  }
+  /* The transcript path is not here. Evidence's artifact list already renders the
+     same path with its own Copy button, and raw paths are exactly what "evidence
+     stays collapsed as the place for raw detail" means. */
 
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
+    panel.append(el("p", { class: "inspector-note", text: "No messages captured for this session yet." }));
   }
   return panel;
 }

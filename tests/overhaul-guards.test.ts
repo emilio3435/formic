@@ -430,7 +430,13 @@ describe("agent drawer: condensed by default, and honest about its numbers", () 
        displayName here would assert a naming rule this file does not own. */
     expect(nodes.length).toBeGreaterThan(20);
     expect(textOf(nodes[0]!)).toContain(M.agentName(AGENT));
-    expect(textOf(nodes[0]!)).toMatch(/working/i);
+    /* Was `toMatch(/working/i)`. The drawer no longer prints the activity word:
+       the row that opened it already says "Working", and restating it was one of
+       the duplications this overhaul was commissioned to remove — so requiring it
+       here would pin the defect in place. The guard's stated intent is only to
+       prove the pane is not empty and belongs to THIS agent, which the reason it
+       reports proves at least as well, and which the row does not carry. */
+    expect(textOf(nodes[0]!)).toContain(AGENT.statusReason);
   });
 
   test("raw detail ships collapsed, so the drawer opens as a summary", () => {
