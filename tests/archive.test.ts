@@ -54,7 +54,11 @@ describe("durable archive state", () => {
     ]);
   });
 
-  test("a corrupt archive degrades to empty with a loud log", async () => {
+  /* An archive we could not read is not an empty archive. Booting on empty is
+     right — the hub must start — but it silently returns every dismissed
+     session to the board as live work, so the count of what is running is
+     wrong and the console was the only place that said why. */
+  test("a corrupt archive degrades to empty and reports why, not just to the console", async () => {
     const files: ArchiveFileOperations = {
       readText: async () => "{",
       makeDirectory: async () => {},
@@ -66,10 +70,29 @@ describe("durable archive state", () => {
       const store = await JsonArchiveStore.open("/virtual/archive.json", files);
 
       expect(store.archivedAgents()).toEqual([]);
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining("Ignoring unreadable archive"));
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining("could not be read"));
+      // The part the console cannot deliver: a value the snapshot can carry.
+      expect(store.loadError() ?? "").toContain("/virtual/archive.json");
+      expect(store.loadError() ?? "").toContain("unarchived");
     } finally {
       logged.mockRestore();
     }
+  });
+
+  test("an archive that was never written is not reported as a failure", async () => {
+    // ENOENT is the normal state before anything has been archived.
+    const files: ArchiveFileOperations = {
+      readText: async () => {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    };
+    const store = await JsonArchiveStore.open("/virtual/absent-archive.json", files);
+
+    expect(store.archivedAgents()).toEqual([]);
+    expect(store.loadError()).toBeUndefined();
   });
 
   test("persists enough source truth to render an archive after the live file leaves the scan window", async () => {

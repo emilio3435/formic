@@ -782,6 +782,38 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.controlHealth.debris?.detail).toHaveLength(1);
   });
 
+  /* Unlike an abandoned pane, this one belongs in errors: every session the
+     operator dismissed is back on the board as work in flight, so the count of
+     what is running is wrong until someone fixes it. */
+  test("an archive that failed to load is a fault on the board, not just a console line", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore: {
+        ...archiveStore,
+        loadError: () => "archived agents could not be read from /virtual/archive.json, so the board is showing every session as unarchived: bad JSON",
+      },
+      cmuxReachable: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.controlHealth.errors.some((error) => error.includes("unarchived"))).toBe(true);
+    // It is a fault, so it must NOT be filed as tidy-up debris.
+    expect(snapshot.controlHealth.debris).toBeUndefined();
+  });
+
+  test("a healthy archive adds nothing to the board", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      cmuxReachable: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.controlHealth.errors).toEqual([]);
+  });
+
   test("the same pane becomes a fault again the moment a live session appears on it", () => {
     const live = collected({ id: "codex:live-again", sourceSessionId: "live-again" });
     const snapshot = buildSnapshot({

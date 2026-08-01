@@ -108,4 +108,8 @@ export interface ArchiveStore {
   archive(agentId: string, agent?: CollectedAgent): Promise<void>;
   record?(agents: readonly CollectedAgent[]): Promise<void>;
   archivedAgents?(): readonly CollectedAgent[];
+  /* Set when an empty archive is standing in for one that could not be read.
+     Every dismissed agent is back on the board as live work in that state, so
+     it is a fault the operator needs told, not a quiet fallback. */
+  loadError?(): string | undefined;
 }

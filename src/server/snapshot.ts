@@ -233,6 +233,10 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const operationalCmuxErrors = cmuxErrors.filter(
     (error) => !identitySplit.debrisErrors.includes(error),
   );
+  /* A cleared archive is a live fault, not debris: every session the operator
+     dismissed is back on the board as work in flight, and the count of what is
+     running is wrong until it is fixed. */
+  const archiveLoadError = input.archiveStore.loadError?.();
   const degradedSources =
     ["codex", "claude", "cursor"].filter((provider) =>
       (input.sourceErrors?.[provider as Provider]?.length ?? 0) > 0,
@@ -260,7 +264,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),
-      errors: [...operationalCmuxErrors, ...sourceErrors],
+      errors: [
+        ...operationalCmuxErrors,
+        ...sourceErrors,
+        ...(archiveLoadError ? [archiveLoadError] : []),
+      ],
       staleSources,
       ...(debris ? { debris } : {}),
     },
