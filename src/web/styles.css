@@ -412,6 +412,40 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
 
+/* The health card's instruction line: the one sentence that tells an operator
+   what to do. It reads at ink weight because a remedy the eye skips is the
+   same as no remedy — the surrounding .reading-sub stays muted. */
+.reading-remedy {
+  margin: 0.3rem 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.reading-panes { color: var(--slate); border-color: color-mix(in srgb, var(--slate) 42%, var(--line-strong)); }
+.reading-panes:hover { color: var(--ink); border-color: var(--slate); background: color-mix(in srgb, var(--slate) 10%, var(--raise)); }
+
+/* Named evidence for the instruction: which panes, and how long they have been
+   quiet. Capped and scrollable so a long tail never pushes the strip open. */
+.health-pane-list {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 9.5rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+.health-pane-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.22rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.health-pane-name { color: var(--ink); overflow-wrap: anywhere; }
+.health-pane-age { color: var(--faint); font-family: var(--font-mono); white-space: nowrap; }
+.health-pane-more { color: var(--faint); font-style: italic; }
+
 /* the Health verdict chip (full cell when degraded, micro-chip when OK) */
 .verdict-chip {
   display: inline-flex;
@@ -1597,7 +1631,14 @@ body.feed-frozen .programs { opacity: 0.62; }
    With an agent open, the roster keeps ~40% as a scannable rail (trees of
    agent/workspace/program) and the drawer takes ~60% — the reading surface.
    the model/tokens/elapsed instruments fold away; they live in full in the drawer. */
-@media (min-width: 1180px) {
+/* 1025px, not 1180px. Below 1025 the drawer is a full-viewport sheet and the row
+   is not on screen at all; from 1025 up it docks BESIDE the row. The old 1180
+   boundary therefore left a 155px-wide window in which the drawer and the row
+   both rendered model, context %, tokens and elapsed — the duplication this
+   overhaul exists to remove, present at exactly the widths a laptop runs at.
+   Folding at the same breakpoint the layout changes at makes "the row already
+   shows it" true wherever it is claimed. */
+@media (min-width: 1025px) {
   body.inspector-open .pane-list {
     flex: 0 0 clamp(380px, 40%, 760px);
   }
@@ -1615,6 +1656,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .agent-grid .ri-model,
   body.inspector-open .agent-grid .ri-tokens,
   body.inspector-open .agent-grid .ri-elapsed,
+  /* The row summary is conciseText(lastHumanMessage, 120) — the first 120
+     characters of the very prose the Thread pane renders in full, inches away.
+     The largest duplicate on screen, and the one nobody had named. */
+  body.inspector-open .agent-grid .row-description,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
 }
 
@@ -1959,6 +2004,29 @@ body.feed-frozen .programs { opacity: 0.62; }
 .inspector-id { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
 .inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+/* Session tag beside the drawer title. Same disambiguator the row uses, so an
+   operator carries one token between the two surfaces. Quiet mono — it is a
+   handle, never a status. */
+.inspector-tag {
+  margin-left: 0.4rem;
+  font-size: 0.62em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+  vertical-align: middle;
+}
+/* The standing objective, promoted out of the old Operate panel. It is the line
+   that says WHICH lane this is when 19 of 22 drawers share a title. */
+.inspector-objective {
+  margin: 0.3rem 0 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  font-weight: 550;
+}
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
@@ -2281,7 +2349,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .label-status { margin: 0; color: var(--faint); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }
-.last-human-message,
 .operate-task,
 .chat-turn-body {
   margin: -0.2rem 0 0;
@@ -2292,7 +2359,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.operate-task { margin-top: 0; color: var(--muted); font-size: 13.5px; }
 .operate-outcome-note { margin: 0; font-size: 13px; color: var(--muted); }
 .operate-outcome-note.outcome-failed,
 .operate-outcome-note.outcome-blocked { color: var(--ember); font-weight: 650; }

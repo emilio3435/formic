@@ -447,6 +447,96 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* The third question the card never answered: what do I do about it?
+
+   "CMUX identity conflicts" names a symptom in the collector's vocabulary and
+   leaves the operator with nowhere to go. This turns the top finding into a
+   consequence an operator recognises and an instruction they can carry out.
+
+   CONTRACT WITH THE BACKEND LANE — when an OperatorIssue carries `remedy`, its
+   wording wins and is rendered verbatim, so severity and phrasing stay owned by
+   the lane reclassifying them:
+
+     remedy?: { instruction: string; problem?: string }
+
+   Until that field lands this derives both from evidence already in the
+   snapshot, so the card is useful today and defers the moment it arrives.
+
+   The derivation is deliberately narrow. It sizes the alarm by the sessions an
+   operator genuinely cannot drive — live AND quarantined — not by every session
+   the issue touches. Today's identity-conflict row implicates 37 sessions, but
+   26 of them have already ended; counting all 37 is what made a tidy-up read
+   like an outage. An instruction is only asserted for issues whose remedy is
+   actually derivable; anything else falls back to the issue's own summary
+   rather than inventing a next step. */
+function healthRemedy(snap) {
+  const control = (snap && snap.controlHealth) || null;
+  const debris = (control && control.debris) || null;
+  const issue = topSourceIssue(snap);
+  if (!issue && !(debris && debris.count)) return null;
+  const entries = snapshotAgents(snap);
+
+  /* Which panes, in the operator's terms. The backend names the surfaces; this
+     maps them back to the sessions that opened them so the list reads as pane
+     titles rather than UUIDs. One pane can hold several ended sessions, so it
+     is collapsed to one row — the operator closes panes, not sessions. */
+  const debrisIds = new Set((debris && debris.surfaceIds) || []);
+  const byPane = new Map();
+  for (const { agent } of entries) {
+    const surfaceId = agent.target && agent.target.surfaceId;
+    const claimed = surfaceId && debrisIds.has(surfaceId);
+    if (!claimed) continue;
+    const existing = byPane.get(surfaceId);
+    if (!existing || (agent.updatedAt || "") > (existing.updatedAt || "")) {
+      byPane.set(surfaceId, {
+        name: (agent.target && agent.target.workspaceTitle) || agent.displayName || surfaceId,
+        updatedAt: agent.updatedAt,
+      });
+    }
+  }
+  let panes = [...byPane.values()];
+  /* Before the split lands, or when a surface names no session we can resolve,
+     fall back to the ended sessions the issue itself implicates. */
+  if (!panes.length && issue) {
+    const affected = new Set(issue.affectedAgentIds || []);
+    panes = entries
+      .filter((entry) => affected.has(entry.agent.id) && entry.agent.activity === "ended")
+      .map((entry) => ({ name: entry.agent.displayName || entry.agent.id, updatedAt: entry.agent.updatedAt }));
+  }
+
+  const blocked = issue
+    ? entries.filter((entry) => new Set(issue.affectedAgentIds || []).has(entry.agent.id)
+      && entry.agent.controlState === "quarantined" && entry.agent.activity !== "ended").length
+    : 0;
+
+  return {
+    // Nothing live is wrong when only debris remains, so this stays empty and
+    // the card keeps its all-clear headline rather than inventing a complaint.
+    problem: issue
+      ? (blocked
+        ? `${blocked} live session${blocked === 1 ? "" : "s"} can't take commands.`
+        : issue.summary)
+      : "",
+    /* The backend owns this wording: it classified the fault, so it names the
+       fix. Rendered verbatim, never paraphrased. */
+    instruction: (debris && debris.remedy) || "",
+    paneCount: (debris && debris.count) || panes.length,
+    blockedCount: blocked,
+    panes,
+    tidy: !issue,
+  };
+}
+
+/* Local to the health card: the pane list is a disclosure on this cell, not
+   board state, so it stays out of the shared client-state module another lane
+   owns. */
+let healthPanesOpen = false;
+
+function toggleHealthPanes() {
+  healthPanesOpen = !healthPanesOpen;
+  renderHealthRail();
+}
+
 /* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
    source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
    agoText. A source that has never been healthy (lastHealthyAt null) contributes
@@ -486,16 +576,32 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        so the two cannot disagree, and `advisory` gets its own tone so the strip
        can render it at the weight it deserves. */
     const severity = status.key === "degraded" ? degradedSeverity(snap, conn, fetchFailed) : null;
+    /* A healthy board has to read as actively clear, not merely silent. "All
+       clear" is the operator's word for it; "Operational" described the system
+       to itself and left a reader unsure whether the board was fine or just
+       not talking. */
     const SEVERITY_HEADLINE = { blocking: "Blocked", stale: "Stale", advisory: "Advisory" };
+    /* Computed even when the board is clear. Once the backend moves abandoned
+       panes out of `errors` and into `debris`, a tidy-up no longer degrades the
+       verdict — but it must still be discoverable, or the cleanup becomes
+       invisible the moment it stops being an alarm. */
+    const remedy = healthRemedy(snap);
     return {
-      value: (severity && SEVERITY_HEADLINE[severity.key]) || status.label,
+      value: (severity && SEVERITY_HEADLINE[severity.key])
+        || (status.key === "operational" ? "All clear" : status.label),
       unit: "",
+      remedy,
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
         : status.key === "operational"
+          /* "Nothing needs you" is the whole point of the clear state, so it is
+             only claimed when it is true. Pending tidy-up says so plainly and
+             stays optional — offered, not demanded. */
           ? (source && source.total > 0
-            ? `${source.healthy}/${source.total} sources healthy · controls reachable.`
-            : "Sources and controls healthy.")
+            ? `${source.healthy}/${source.total} sources healthy · controls reachable`
+              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you.")
+            : "Sources and controls healthy"
+              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you."))
           : conn !== "live" ? "Live snapshot feed is not healthy."
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
@@ -672,6 +778,7 @@ globalThis.TheAntHill = {
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
   systemStatus, degradedSeverity, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
@@ -1467,10 +1574,35 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      severity itself now, so repeating it here just printed ADVISORY under
      Advisory. The consequence sentence is the part that was carrying the
      information, and it stays. */
+  /* Three answers in the order an operator asks for them: what is wrong, what
+     to do about it, then the controls to do it. The finding's title used to
+     occupy this first line, which spent the card's most-read sentence on the
+     collector's name for the problem ("CMUX identity conflicts") instead of its
+     consequence for the operator. The title is still reachable — it labels the
+     Refresh control — but it no longer stands in for an explanation. */
+  const remedy = data.remedy;
   subNode.append(el("span", {
     text: (data.severityDetail ? data.severityDetail + " " : "")
-      + (reason ? reason.title : data.sublabel) + sinceNote + snapNote,
+      + ((remedy && remedy.problem) || (reason ? reason.title : data.sublabel)) + sinceNote + snapNote,
   }));
+  if (remedy && remedy.instruction) {
+    subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
+  }
+  // Naming a remedy an operator cannot locate is only half an answer, so the
+  // panes it refers to are one click away rather than a hunt through cmux. This
+  // rides outside the `degraded` branch: on a clear board the cleanup is still
+  // offered, just without the alarm around it.
+  if (remedy && remedy.panes.length) {
+    subNode.append(el("button", {
+      type: "button",
+      class: "reading-repair reading-panes",
+      "aria-expanded": String(healthPanesOpen),
+      "aria-label": (healthPanesOpen ? "Hide" : "Show") + " the "
+        + remedy.panes.length + " leftover cmux panes",
+      dataset: { fkey: "health-panes" },
+      onclick: toggleHealthPanes,
+    }, healthPanesOpen ? "Hide panes" : "Show " + remedy.panes.length + " panes"));
+  }
   if (degraded) {
     subNode.append(el("button", {
       type: "button",
@@ -1480,6 +1612,15 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
       dataset: { fkey: "degraded-refresh" },
       onclick: () => recollectSnapshot(),
     }, "Refresh"));
+  }
+  if (healthPanesOpen && remedy && remedy.panes.length) {
+    subNode.append(el("ul", { class: "health-pane-list" },
+      ...remedy.panes.slice(0, 12).map((pane) => el("li", {},
+        el("span", { class: "health-pane-name", text: pane.name }),
+        el("span", { class: "health-pane-age", text: pane.updatedAt ? "quiet " + agoText(pane.updatedAt) : "" }))),
+      remedy.panes.length > 12
+        ? el("li", { class: "health-pane-more", text: "+" + (remedy.panes.length - 12) + " more" })
+        : null));
   }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
 }
