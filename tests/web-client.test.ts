@@ -6168,14 +6168,14 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
   });
 
-  /* F3: "Alerts off" sat silently beside four waiting agents. The button
+  /* F3: "Notifications off" sat silently beside four waiting agents. The button
      reported the delivery channel and never the backlog, so muting the channel
      also hid the work. The count must therefore survive every muted state. */
   test("(4) the waiting count rides every toggle state, muted and blocked included", () => {
     const off = M.notifyToggleView({ enabled: false, permission: "default" }, true, 4);
-    expect(off.label).toBe("Alerts off");
+    expect(off.label).toBe("Notifications off");
     expect(off.count).toBe(4);
-    expect(off.ariaLabel).toBe("Alerts off, 4 agents waiting on you");
+    expect(off.ariaLabel).toBe("Notifications off, 4 agents waiting on you");
     expect(off.title).toContain("4 waiting on you");
 
     // Blocked and unsupported are exactly the states where the operator has no
@@ -6186,11 +6186,11 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // A quiet fleet stays quiet: no badge, no count noise in the label or title.
     const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
     expect(calmView.count).toBe(0);
-    expect(calmView.ariaLabel).toBe("Alerts on");
+    expect(calmView.ariaLabel).toBe("Notifications on");
     expect(calmView.title).not.toContain("waiting on you");
     // Singular reads as English, not "1 agents".
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
-      .toBe("Alerts off, 1 agent waiting on you");
+      .toBe("Notifications off, 1 agent waiting on you");
 
     // The badge is a real node carrying the digit, not text glued onto the label.
     expect(source).toContain('class: "notify-badge"');
@@ -6208,13 +6208,13 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
     // The control states an operator can actually reach.
-    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Alerts off");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Notifications off");
     expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true))
-      .toMatchObject({ label: "Alerts on", pressed: true, disabled: false });
+      .toMatchObject({ label: "Notifications on", pressed: true, disabled: false });
     // Denied: stated once, disabled, no nagging and no repeated prompt.
     const denied = M.notifyToggleView({ enabled: false, permission: "denied" }, true);
     expect(denied.disabled).toBe(true);
-    expect(denied.label).toBe("Alerts blocked");
+    expect(denied.label).toBe("Notifications blocked");
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, false).disabled).toBe(true);
 
     // The one requestPermission call in the client is inside the click handler.

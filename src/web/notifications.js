@@ -85,16 +85,21 @@ export function titleWithAlerts(base, count) {
   return count > 0 ? "(" + count + ") " + clean : clean;
 }
 
+/* "Notifications", never "Alerts". This control governs browser notification
+   delivery; the tab now called "Needs you" counts agents waiting on a human.
+   They were both labelled "Alerts" on adjacent surfaces with no shared meaning,
+   so "Alerts off" sat inches from "Alerts 0" and an operator could reasonably
+   read the first as an explanation of the second. */
 export function notifyToggleView(notify, supported = notificationsSupported(), count = 0) {
   const n = Number.isFinite(count) && count > 0 ? count : 0;
   const suffix = n ? ` · ${n} waiting on you` : "";
   const view = !supported
-    ? { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
+    ? { label: "Notifications unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
     : notify.permission === "denied"
-      ? { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." }
+      ? { label: "Notifications blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." }
       : notify.enabled
-        ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
-        : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
+        ? { label: "Notifications on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
+        : { label: "Notifications off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
   return {
     ...view,
     count: n,
@@ -158,7 +163,7 @@ export async function toggleNotifications() {
 /* Denied is not an error state to shout about — the operator said no. The
    control just reads "unavailable" and nothing else changes. */
 /* `count` is how many agents are waiting on a human right now, and it rides on
-   EVERY branch — muted, blocked and unsupported included. "Alerts off" sitting
+   EVERY branch — muted, blocked and unsupported included. "Notifications off" sitting
    silently beside four waiting agents was the whole defect: the button reported
    the delivery channel and never the backlog. Turning notifications off is a
    choice about interruption, not a reason to stop showing the number. */
