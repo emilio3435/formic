@@ -65,11 +65,18 @@ Cursor). A row appears within about five seconds — no refresh needed.
 **Working correctly when:** the badge top-right reads **Live**, and a new session
 shows up on its own.
 
+The board opens on a **6-hour** window even though the last **36 hours** are
+scanned. If it looks empty, widen the lookback (1h / 6h / 24h / 36h) before
+concluding nothing was collected.
+
 ## Expected on a monitoring-only install
 
-- **A red "CMUX control is degraded" verdict in the header.** Correct behavior:
-  without cmux, the dashboard can't prove which terminal owns which session, so
-  it refuses to type into one. Focus and Send stay disabled by design.
+- **A `Blocked` health card.** It reads `cmux unreachable — terminal titles and
+  Focus/Send stay offline.` and offers one next step: `Start cmux, then Refresh
+  — Focus and Send come back on their own.` Correct behavior: without cmux, the
+  dashboard can't prove which terminal owns which session, so it refuses to type
+  into one. Focus and Send stay disabled by design. With cmux running and nothing
+  wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 - **An empty list** reading `The ant hill is still — no tracked agents.` — nothing

@@ -20,7 +20,7 @@ Ports: **4701** is the default for both `bun start` and `bun run start:server`, 
 bun run setup:cmux
 ```
 
-That saves a local cmux password so Ant Hill can see terminal names and use Focus/Send even when started outside cmux. It requires cmux to be installed. Without it, Ant Hill still starts and collects normally; the controls stay disabled and the header shows a cmux-degraded verdict.
+That saves a local cmux password so Ant Hill can see terminal names and use Focus/Send even when started outside cmux. It requires cmux to be installed. Without it, Ant Hill still starts and collects normally; the controls stay disabled and the health card reads **Blocked**, naming the consequence (`cmux unreachable — Focus and Send cannot route.`) and what to do about it.
 
 ## Safety model
 
@@ -29,7 +29,7 @@ That saves a local cmux password so Ant Hill can see terminal names and use Focu
 - Ambiguous or missing targets have disabled controls with a visible reason.
 - Controls accept a small structured action set and propagate the real cmux exit code and stderr.
 - Mutating requests require an exact same-origin loopback `Origin`; arbitrary shell/spawn commands are outside the API.
-- Unread cmux notifications are the source for operator-attention state.
+- Operator-attention state combines unread cmux notifications with signals read from the agent's own text (`src/server/attention-signal.ts`). Each agent carries an `attentionSignal` kind and the evidence behind it, so a row quotes the agent rather than paraphrasing it. A situation the detectors do not recognise stays `unknown` with no next action, rather than emitting filler.
 - Archived cards retain their compact source record after the original provider file leaves the live scan window.
 
 ## Data truth
@@ -41,7 +41,9 @@ That saves a local cmux password so Ant Hill can see terminal names and use Focu
 - Injected agent instructions and transport envelopes are excluded from task names. Primary labels use the real assignment; source session IDs remain in card details.
 - A source cwd of `~` stays visible as source truth. Presentation grouping may use configured task hints or an exact cmux surface, but never changes control routing.
 - OMP is not an Ant Hill launch dependency. Its collector is archived, read-only compatibility for historical session records and can never appear as active runtime work.
-- The primary token glance metric is the median latest request across working sessions. Per-session cumulative totals remain available in details and never inflate current-request usage.
+- The fleet glance is context, not raw tokens: peak and median `contextPct` across live sessions, reported together because a peak alone hides whether one agent or the whole fleet is loaded. `contextPct` is omitted rather than guessed when the window or token scope cannot support it. `totals.tokenMedian` (median latest request) is still in the payload; per-session cumulative totals stay in details and never inflate current-request usage.
+- Cost comes from OpenBurnBar and reads `unavailable` when the source has nothing for a window — never `$0`. An empty window and a broken query must not look alike.
+- The health verdict answers three things or it does not earn its place: whether anything is wrong, how bad, and what to do. If it claims something is wrong it names a next step; only a clear board is allowed to be silent. Faults that impair operation now live in `controlHealth.errors`; leftovers nobody needs to act on — a cmux pane whose sessions have all ended — go to `controlHealth.debris` with their own remedy, so tidying never reads as an outage.
 
 ## Summary message contract
 
@@ -58,4 +60,6 @@ Usage and cost analytics are served from OpenBurnBar via `/api/usage/*` (see `sr
 
 The direct, coordinated, and investigation flow—including explicit read-only Luna launch and persisted run states—is in [TRIAGE-WORKFLOW.md](./TRIAGE-WORKFLOW.md).
 
-The live v2 launch agent, port 4700, and files under `~/mountain` remain unchanged. The local v3 process on port 4701 was refreshed to this build; no commit, push, external deployment, launchd edit, or port-4700 cutover was performed.
+The live v2 launch agent, port 4700, and files under `~/mountain` remain unchanged.
+
+Ant Hill itself runs on 4701 as a launchd agent (`ai.imaginethat.anthill`, `KeepAlive`), deployed by `scripts/anthill-deploy.sh` — see `DEPLOY.md`.
