@@ -24,20 +24,25 @@ Four steps. Do these in order and you have used the tool correctly.
 
 ![The summary band](docs/guide-shots/shot-1-summary.png)
 
-Five cards across the top. **Only the first one is a to-do list.** If `Needs you`
-is zero, nothing is waiting on you and you can close the tab.
+Above is the band with something on it: `Needs you` reads 1, and it says both
+what is wrong and what to do about it. **Only `Needs you` is a to-do list.** The
+rest are context, not tasks: how much is shipping, what it is costing, how full
+the fullest context window is, and whether the system itself is healthy.
 
-The rest are context, not tasks: how much is shipping, what it is costing, how
-full the fullest context window is, and whether the system itself is healthy.
+**When nothing needs you, that whole band collapses to a single line** — what is
+shipping, what has finished this hour, what it is burning, and `All clear`. No
+cards, no numbers to read past. That line is the answer, and you can close the
+tab.
 
 ### 2. The board opens on `Needs you`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)
 
 `Needs you` is the default and is deliberately the shortlist — only sessions
-actually waiting on a human. If it is empty, everything is either working or
-done, and that empty screen is the answer. `Now` is the whole board: everything
-working *or* asking for you.
+actually waiting on a human. When it is empty it says so outright — **Nothing
+needs you**, with a count of what is alive behind it — rather than showing you a
+blank. That screen is the answer, not a failure to load. `Open Now` is there when
+you want the whole board: everything working *or* asking for you.
 
 ### 3. Read the row
 
@@ -49,7 +54,7 @@ Every row is **one AI session**. Left to right:
 |---|---|
 | Name | Who it is, and the folder it is working in |
 | Message | The last thing it said |
-| Status | `Working`, `Idle`, `Alert`, `Done` |
+| Status | `Working`, `Idle`, `Ended` — and if something is wrong, `Alert`, `Blocked` or `Failed` beside it |
 | Model · ctx | Which model, and how full its context window is |
 | Tokens | How much it has used |
 | Elapsed | How long since it last moved |
@@ -84,14 +89,21 @@ reason, and the board still watches everything perfectly well.
 <details>
 <summary><b>The six tabs</b></summary>
 
+In board order, which is deliberate — attention first:
+
 | Tab | Shows |
 |---|---|
-| **Now** | Anything working *or* asking for you. The default, and the one to keep open. |
 | **Needs you** | Only sessions waiting on a human. Your to-do list, and the tab the board opens on. |
+| **Now** | Anything working *or* asking for you. The whole live board. |
 | **Working** | Currently producing output. |
 | **Idle** | Alive but not doing anything right now. |
 | **History** | Finished sessions. Collapsed by default — there are usually a lot. |
 | **Usage** | Token and cost charts over time, rather than a list. |
+
+The board used to open on `Now` — every routine working agent — with the
+attention count sitting at zero beside it. A cockpit whose landing state is
+"show me everything" cannot also claim to stay quiet about what does not need
+you, so `Needs you` leads.
 
 `Idle` and `History` also apply a *lookback* window (6 hours by default) that you
 can widen from the filter bar.
@@ -99,7 +111,11 @@ can widen from the filter bar.
 </details>
 
 <details>
-<summary><b>The five summary cards</b></summary>
+<summary><b>The summary cards</b></summary>
+
+On a clear board these collapse into a single line and only the shipping,
+finished-this-hour, burn and `All clear` figures survive. They expand into cards
+when something needs you:
 
 | Card | What it tells you |
 |---|---|
@@ -190,16 +206,21 @@ together. "Wave 6" is a round of changes, not a place.
 ## When something looks wrong
 
 <details>
-<summary><b>Health says "Degraded"</b></summary>
+<summary><b>Health is not "All clear"</b></summary>
 
-`Degraded` means something is not fully healthy, but on its own it does not tell
-you whether *you* are blocked. The card also states which of three kinds it is:
+The card says which of four things it is, and **if it claims something is wrong
+it also names the next step.** Only a clear board is allowed to say nothing.
 
-| Severity | Meaning | What to do |
+| Verdict | Meaning | What it tells you to do |
 |---|---|---|
-| **Blocking** | The control plane is unreachable. **Focus and Send do not work.** | Waiting will not fix it. Usually cmux is not running or not set up. |
-| **Stale** | The numbers may no longer be true — the live feed or last refresh failed. | Hit **Refresh** on the Health card. |
-| **Advisory** | The board is fully usable; some evidence needs tidying. | Nothing urgent. Clean it up later. |
+| **All clear** | Nothing is wrong. | Nothing. This is the resting state. |
+| **Blocked** | The control plane is unreachable. **Focus and Send do not work.** | `Start cmux, then Refresh` — waiting will not fix it. Usually cmux is not running or not set up. |
+| **Stale** | The numbers may no longer be true — the live feed or last refresh failed. | `Refresh to re-pull the evidence`, on the card. |
+| **Advisory** | Something needs doing, but the board is fully usable. | Whatever the card says. Often tidying, and it will tell you which panes. |
+
+A clear board can still offer a **tidy-up**: leftover cmux panes whose sessions
+have all ended. That is an offer, not a fault — it never turns the board red,
+and `Show panes` lists exactly which ones.
 
 **By far the most common is a cmux-related `Blocking` on a machine where cmux was
 never set up.** That is expected, not a fault — the Ant Hill deliberately refuses
@@ -262,8 +283,10 @@ bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 > change safely, run `bash scripts/anthill-preview.sh`, which picks a free
 > throwaway port and refuses to touch 4701.
 >
-> Two ports exist and it confuses everyone once: **4701** is the permanent
-> background one. **4702** is what you get from `bun start` by hand.
+> **4701** is the permanent background one, and it is also what `bun start`
+> binds — so `bun start` reuses the running service rather than starting a
+> second copy. For a throwaway instance use `anthill-preview.sh`, which picks a
+> free port in the 4710–4719 range.
 
 </details>
 
