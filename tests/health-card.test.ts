@@ -185,7 +185,25 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
     const data = M.summaryWidgetData("health", down, "live", "percent", [], false);
     expect(data.value).toBe("Blocked");
     expect(data.severityDetail).toContain("Focus and Send");
-    expect(data.remedy.instruction).toBe("");
+    /* Suppressing the wrong instruction must not leave none. Caught on the live
+       board: the blocked card named the fault and stopped, which is the
+       symptom-without-a-remedy this whole rewrite exists to remove. Every
+       non-clear verdict carries a next step. */
+    expect(data.remedy.instruction).not.toContain("cmux panes left over");
+    expect(data.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
+    expect(data.remedy.panes).toHaveLength(0);
+  });
+
+  test("every non-clear verdict carries a next step", () => {
+    // The card's contract in one assertion: if it claims something is wrong, it
+    // must also say what to do. A clear board is the only one allowed to be silent.
+    const stale = M.summaryWidgetData("health", snapshot(), "live", "percent", [], true);
+    expect(stale.value).toBe("Stale");
+    expect(stale.remedy.instruction).toBe("Refresh to re-pull the evidence.");
+
+    const offline = M.summaryWidgetData("health", null, "offline", "percent", [], false);
+    expect(offline.value).toBe("Offline");
+    expect(offline.remedy.instruction).toBe("Check the hub is running, then Refresh.");
   });
 
   test("the card never prints a generic blurb that argues with its own problem line", () => {
