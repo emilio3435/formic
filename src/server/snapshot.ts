@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { basename } from "node:path";
 import type {
   AgentSnapshot,
   HubPulse,
@@ -7,9 +5,7 @@ import type {
   IssueLifecycle,
   IssueWorkState,
   OperatorIssue,
-  OutcomeState,
   ProgramSnapshot,
-  ProgramRollup,
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
@@ -17,6 +13,10 @@ import { MODEL_CONFIG } from "./model-config";
 import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { buildOperatorIssues } from "./snapshot-operator-issues";
+import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
+/* Re-exported so the program-resolution move stays invisible to callers:
+   state.ts imports ProgramHint from "./snapshot". */
+export type { ProgramHint } from "./snapshot-programs";
 /* Re-exported so the issue-lifecycle move stays invisible to callers:
    state.ts and the snapshot tests import these from "./snapshot". */
 export {
@@ -45,14 +45,6 @@ import {
   type CollectedAgent,
 } from "./types";
 
-export interface ProgramHint {
-  id: string;
-  name: string;
-  purpose?: string;
-  path?: string;
-  match: string[];
-}
-
 export interface SnapshotInput {
   agents: readonly CollectedAgent[];
   surfaces: readonly CmuxSurface[];
@@ -73,78 +65,6 @@ export interface SnapshotInput {
 
 export function withPulse(snapshot: HubSnapshot, pulse: HubPulse): HubSnapshot {
   return { ...snapshot, pulse };
-}
-
-function hash(value: string): string {
-  let result = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    result ^= value.charCodeAt(index);
-    result = Math.imul(result, 16_777_619);
-  }
-  return (result >>> 0).toString(36);
-}
-
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unassigned";
-}
-
-function rollupFor(agents: readonly AgentSnapshot[]): ProgramRollup {
-  const outcomeCount = (outcome: OutcomeState): number => agents.filter((agent) => agent.outcome === outcome).length;
-  return {
-    total: agents.length,
-    live: agents.filter((agent) => agent.activity === "working" || agent.activity === "idle").length,
-    working: agents.filter((agent) => agent.activity === "working").length,
-    idle: agents.filter((agent) => agent.activity === "idle").length,
-    ended: agents.filter((agent) => agent.activity === "ended").length,
-    needsYou: agents.filter((agent) => agent.outcome && agent.outcome !== "healthy" && agent.activity !== "ended").length,
-    blocked: outcomeCount("blocked"),
-    failed: outcomeCount("failed"),
-    linked: agents.filter((agent) => agent.controlState === "linked").length,
-  };
-}
-
-function agentSortRank(agent: AgentSnapshot): number {
-  if (agent.outcome === "failed") return 0;
-  if (agent.outcome === "needs-you") return 1;
-  if (agent.outcome === "blocked") return 2;
-  if (agent.activity === "working") return 3;
-  if (agent.activity === "idle") return 4;
-  return 5;
-}
-
-function configuredProgram(
-  hints: readonly ProgramHint[],
-  values: readonly (string | undefined)[],
-): ProgramHint | undefined {
-  return hints.find((hint) =>
-    hint.match.some((needle) =>
-      values.some((value) => value?.toLowerCase().includes(needle.toLowerCase())),
-    ),
-  );
-}
-
-function programFor(
-  agent: CollectedAgent,
-  hints: readonly ProgramHint[],
-  surface?: CmuxSurface,
-  exactSurface = false,
-): Omit<ProgramSnapshot, "agents"> {
-  const configured =
-    configuredProgram(hints, [agent.cwd, agent.id]) ??
-    (exactSurface ? configuredProgram(hints, [surface?.cwd, surface?.workspaceTitle]) : undefined) ??
-    configuredProgram(hints, [agent.task, agent.displayName]);
-  if (configured) {
-    return { id: configured.id, name: configured.name, purpose: configured.purpose, path: configured.path };
-  }
-  const cwd = exactSurface && surface?.cwd ? surface.cwd : agent.cwd;
-  if (!cwd) return { id: `${agent.provider}-unassigned`, name: `${agent.provider.toUpperCase()} · No project` };
-  const normalizedCwd = cwd.replace(/\/+$/, "");
-  if (normalizedCwd === homedir().replace(/\/+$/, "")) {
-    // cwd is literally ~ — not "unassigned", just not a project checkout.
-    return { id: `cwd-home-${hash(normalizedCwd)}`, name: "Home", path: cwd };
-  }
-  const name = basename(cwd) || cwd;
-  return { id: `cwd-${slug(name)}-${hash(cwd)}`, name, path: cwd };
 }
 
 export function buildSnapshot(input: SnapshotInput): HubSnapshot {
