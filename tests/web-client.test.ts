@@ -4464,6 +4464,21 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Regression caught in a browser screenshot: the drawer rendered the task as
+     the head objective AND as a Thread turn, six lines apart. The task is a
+     floor for the case where nothing else carries the session's prose — not a
+     fixture that prints alongside the head. */
+  test("(2b) the task never prints as both the objective and a Thread turn", () => {
+    const both = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "start with the buckets", lastAgentMessage: "done" });
+    expect(M.drawerObjective(both)).toContain("Port the SEM forecast");
+    expect(textOf(withDom(() => M.renderChat(both)))).not.toContain("Port the SEM forecast");
+
+    // With no turns at all the floor still holds: the drawer cannot go empty.
+    const bare = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "", lastAgentMessage: "", lastHumanMessage: "Port the SEM forecast rate limiter" });
+    expect(M.drawerObjective(bare)).toBe("");
+    expect(textOf(withDom(() => M.renderChat(bare)))).toContain("Port the SEM forecast");
+  });
+
   /* Cockpit audit §5 and §11: widgets that render their empty state instead of
      not rendering. A cell reporting ABSENCE is noise surrounding the one cell
      reporting a fault, and three separate widgets asserting "nothing needs you"

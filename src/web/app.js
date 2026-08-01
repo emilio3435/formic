@@ -5223,10 +5223,16 @@ function renderChat(agent) {
 
      dedupeTurns still drops it when a turn already says the same thing, so this
      adds a floor without adding a duplicate: at least one copy always survives. */
+  /* The task is a FLOOR, not a fixture: it appears here only when nothing else
+     carries it. The head already prints it as the objective whenever it differs
+     from the turns, so including it unconditionally rendered the same prose
+     twice in one drawer — six lines apart, which is the exact defect this
+     overhaul was commissioned to remove, reintroduced by the fix for the
+     opposite failure (a drawer that could go completely empty). */
   const turns = dedupeTurns([
     { role: "user", text: agent.lastUserMessage },
     { role: "assistant", text: agent.lastAgentMessage },
-    { role: "task", text: agent.task },
+    { role: "task", text: drawerObjective(agent) ? "" : agent.task },
   ]);
   for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
 
