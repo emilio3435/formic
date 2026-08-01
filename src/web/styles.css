@@ -1651,11 +1651,33 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .agent-column-header {
     grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
   }
-  /* Keep identity + status; drop the model/tokens/elapsed instruments and their
-     header labels (columns 3–5). */
-  body.inspector-open .agent-grid .ri-model,
-  body.inspector-open .agent-grid .ri-tokens,
-  body.inspector-open .agent-grid .ri-elapsed,
+  /* The docked roster used to DELETE model, context, tokens and elapsed from
+     every row — measured on the live board: an unselected row still held
+     "opus 5 · 67%", "668k tokens" and "35.3h", all display:none. Those are
+     exactly the fields that decide which agent to open NEXT, so blanking them on
+     all 275 rows because one drawer is open forces the operator to open drawers
+     serially to triage a swarm. That is the cockpit failing at its one job.
+
+     There genuinely is not room for five columns in a 40%-width roster, so the
+     answer is fewer COLUMNS, not less information: the instrument cluster stops
+     being display:contents and becomes one compact run under the name, reading
+     "opus 5 · 67% · 668k · 35.3h". */
+  body.inspector-open .agent-grid > .row-instruments {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0 0.45rem;
+    grid-column: 2;
+    min-width: 0;
+  }
+  body.inspector-open .agent-grid .ri-cell { grid-column: auto; }
+  body.inspector-open .agent-grid .ri-value { font-size: 11px; font-weight: 600; }
+  /* The SELECTED row alone stays quiet: its drawer carries these facts inches
+     away, so there the instruments really are a duplicate. */
+  body.inspector-open .agent-row.is-selected .ri-model,
+  body.inspector-open .agent-row.is-selected .ri-tokens,
+  body.inspector-open .agent-row.is-selected .ri-elapsed,
   /* The row summary is conciseText(lastHumanMessage, 120) — the first 120
      characters of the very prose the Thread pane renders in full, inches away.
      The largest duplicate on screen, and the one nobody had named.

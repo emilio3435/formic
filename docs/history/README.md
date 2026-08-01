@@ -20,5 +20,20 @@ code is right.
 | `VERIFICATION-2026-07-22.md` | Verification record, 2026-07-22 | A frozen transcript whose three test counts disagree with each other. The live gate is `bun run check`. |
 | `GOAL-2026-07-23.md` | Project charter | Its Cursor-compliance rule contradicts `config/models.json`, and its no-deploy clause is overtaken by `DEPLOY.md`. |
 
+## Visual and audit artifacts
+
+Screenshots, mockups and audit reports from finished waves. None is referenced
+by any live doc, script, or test.
+
+| File | Was |
+|---|---|
+| `AUDIT-2026-07-28.html` | Adversarial audit, 2026-07-28. Drove the waves that followed; all three of its **critical** findings have since landed — the Live badge now degrades to "Stale feed", `command.ts` settles its timeout deadline, and `state.ts` has a refresh watchdog. Kept for the reasoning, not as a work list. |
+| `BEFORE-AFTER-2026-07-23.html` | Before/after comparison for the 2026-07-23 restyle |
+| `inspector-data-takes-2026-07-22.html` | Inspector data-density explorations |
+| `widescreen-weights-mockup-2026-07-22.html` | Widescreen layout weights mockup |
+| `implementation-notes.html` | Loose implementation notes |
+| `signal-surface-hybrid.html`, `signal-surface-mockups.html` | Pixel targets for the deleted attention board |
+| `drawer-states-mockups-2026-07-22.html` | Companion visuals for the drawer plan |
+
 Full reasoning, with the evidence behind each classification, is in
 `DOC-AUDIT-2026-07-31.md` at the repo root.
