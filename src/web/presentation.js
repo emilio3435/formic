@@ -568,3 +568,37 @@ export function terminalSourceName(agent) {
    tail of surfaceCwd) is the closest identity we can honestly show. */
 
 export const workspaceLabelTarget = (workspaceId) => ({ kind: "workspace", workspaceId });
+
+
+/* Snapshot index, memoised per snapshot object. Lives here beside
+   snapshotAgents: it is a view OF the snapshot, and both the board and the
+   notifier need it, so neither should own it.
+
+An immutable snapshot yields the same index every time, but affectedImpact
+   rebuilt it once PER ISSUE — O(issues × agents) per pass, and renderHealthRail
+   drives several passes per paint. Keyed on the snapshot object itself, so
+   adopting a new snapshot invalidates it for free and nothing has to be cleared
+
+function drawerAccent(pane, kind) {
+  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
+}
+
+function dwEyebrow(kindClass, iconName, text) {
+  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
+}
+
+/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
+   the agent drawer: the status kicker + title (+ an optional sub line) on the
+   left, Close and the one promoted action stacked on the right. The agent drawer
+   keeps its own richer head (provider rail, status line, gate); the entity
+   drawers share this so the five near-identical heads are not hand-rolled. */
+const agentIndexCache = new WeakMap();
+
+export function agentsById(snap = state.snap) {
+  if (!snap || typeof snap !== "object") return new Map();
+  const cached = agentIndexCache.get(snap);
+  if (cached) return cached;
+  const index = new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
+  agentIndexCache.set(snap, index);
+  return index;
+}

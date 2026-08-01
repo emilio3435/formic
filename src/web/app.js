@@ -8,6 +8,11 @@ import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSp
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { state } from "./client-state.js";
 import {
+  applyNotifications, deliverNotification, loadNotifyPreference, needsHumanIds,
+  notificationPlan, notifyToggleView, renderNotifyToggle, titleWithAlerts, toggleNotifications,
+} from "./notifications.js";
+
+import {
   actionOutcomeView,
   agentLabelEligible,
   agentLabelTarget,
@@ -45,6 +50,7 @@ import {
   terminalIdentity,
   terminalSourceName,
   workspaceLabelTarget,
+  agentsById,
   IDENTITY_TIER_LABELS,
   INVESTIGATION_STATE_VIEW,
   ROLE_LABELS,
@@ -3818,6 +3824,14 @@ function resolveSelection(sel) {
   return null;
 }
 
+function drawerAccent(pane, kind) {
+  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
+}
+
+function dwEyebrow(kindClass, iconName, text) {
+  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
+}
+
 function missingDrawer() {
   return [
     el("div", { class: "inspector-head" },
@@ -3827,34 +3841,6 @@ function missingDrawer() {
   ];
 }
 
-/* An immutable snapshot yields the same index every time, but affectedImpact
-   rebuilt it once PER ISSUE — O(issues × agents) per pass, and renderHealthRail
-   drives several passes per paint. Keyed on the snapshot object itself, so
-   adopting a new snapshot invalidates it for free and nothing has to be cleared
-   by hand. Callers read it; nobody mutates it. */
-const agentIndexCache = new WeakMap();
-function agentsById(snap = state.snap) {
-  if (!snap || typeof snap !== "object") return new Map();
-  const cached = agentIndexCache.get(snap);
-  if (cached) return cached;
-  const index = new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
-  agentIndexCache.set(snap, index);
-  return index;
-}
-
-function drawerAccent(pane, kind) {
-  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
-}
-
-function dwEyebrow(kindClass, iconName, text) {
-  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
-}
-
-/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
-   the agent drawer: the status kicker + title (+ an optional sub line) on the
-   left, Close and the one promoted action stacked on the right. The agent drawer
-   keeps its own richer head (provider rail, status line, gate); the entity
-   drawers share this so the five near-identical heads are not hand-rolled. */
 function drawerVerdictHead({ eyebrow, title, sub, action }) {
   return el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
@@ -5906,163 +5892,10 @@ async function sendBroadcast() {
    leaving, not on the first paint (opening the page to six waiting agents is
    not six pieces of news), and never on routine churn. */
 
-const NOTIFY_STORAGE_KEY = "mtn3-notify";
-const NOTIFY_NAME_LIMIT = 3;
-const NOTIFY_TAG = "anthill-needs-you";  // replaces its predecessor; never stacks
 
-/* Who actually needs a human — the same verdict the Alerts view and the beacon
-   read, so the notification can never disagree with the board it came from. */
-function needsHumanIds(snap) {
-  const ids = [];
-  // alerting() is that verdict — sharing it is what stops the notifier from
-  // announcing a different set of agents than the Alerts view shows.
-  for (const { agent } of snapshotAgents(snap)) if (alerting(agent)) ids.push(agent.id);
-  return ids.sort();
-}
 
-/* Pure. `prev === null` means "we have not looked yet": seed the baseline and
-   stay silent, which is what stops a reload from announcing the whole backlog. */
-function notificationPlan(prev, next, nameFor = null) {
-  const ids = next.slice().sort();
-  if (prev === null || prev === undefined) return { fire: false, ids, reason: "seeded" };
-  const before = new Set(prev);
-  const fresh = ids.filter((id) => !before.has(id));
-  if (!fresh.length) return { fire: false, ids, reason: "no new agent needs you" };
-  const names = fresh.slice(0, NOTIFY_NAME_LIMIT).map((id) => (nameFor && nameFor(id)) || id);
-  const rest = fresh.length - names.length;
-  return {
-    fire: true,
-    ids,
-    reason: "new",
-    title: fresh.length === 1 ? "1 agent needs you" : fresh.length + " agents need you",
-    body: names.join(", ") + (rest > 0 ? " and " + rest + " more" : ""),
-  };
-}
 
-/* The zero-permission escalation: a background tab shows its own alert count. */
-function titleWithAlerts(base, count) {
-  const clean = String(base).replace(/^\(\d+\)\s*/, "");
-  return count > 0 ? "(" + count + ") " + clean : clean;
-}
 
-function notificationsSupported() {
-  return typeof Notification !== "undefined";
-}
-
-function loadNotifyPreference() {
-  try {
-    state.notify.enabled = localStorage.getItem(NOTIFY_STORAGE_KEY) === "on";
-  } catch { state.notify.enabled = false; }
-  if (notificationsSupported()) state.notify.permission = Notification.permission;
-  // Permission revoked in browser settings between sessions: the stored
-  // preference is stale, so do not carry a promise we cannot keep.
-  if (state.notify.enabled && state.notify.permission !== "granted") state.notify.enabled = false;
-}
-
-function saveNotifyPreference() {
-  try { localStorage.setItem(NOTIFY_STORAGE_KEY, state.notify.enabled ? "on" : "off"); }
-  catch { /* storage unavailable */ }
-}
-
-/* The ONLY place permission is requested, and it is reachable only from a click.
-   Never on load: an unprompted permission dialog is how a page gets denied
-   permanently, which would silently disable the feature forever. */
-async function toggleNotifications() {
-  if (state.notify.enabled) {
-    state.notify.enabled = false;
-    saveNotifyPreference();
-    renderNotifyToggle();
-    return;
-  }
-  if (!notificationsSupported()) { renderNotifyToggle(); return; }
-  let permission = Notification.permission;
-  if (permission === "default") {
-    try { permission = await Notification.requestPermission(); }
-    catch { permission = "denied"; }
-  }
-  state.notify.permission = permission;
-  state.notify.enabled = permission === "granted";
-  saveNotifyPreference();
-  renderNotifyToggle();
-}
-
-/* Denied is not an error state to shout about — the operator said no. The
-   control just reads "unavailable" and nothing else changes. */
-/* `count` is how many agents are waiting on a human right now, and it rides on
-   EVERY branch — muted, blocked and unsupported included. "Alerts off" sitting
-   silently beside four waiting agents was the whole defect: the button reported
-   the delivery channel and never the backlog. Turning notifications off is a
-   choice about interruption, not a reason to stop showing the number. */
-function notifyToggleView(notify, supported = notificationsSupported(), count = 0) {
-  const n = Number.isFinite(count) && count > 0 ? count : 0;
-  const suffix = n ? ` · ${n} waiting on you` : "";
-  const view = !supported
-    ? { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
-    : notify.permission === "denied"
-      ? { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." }
-      : notify.enabled
-        ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
-        : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
-  return {
-    ...view,
-    count: n,
-    title: view.title + suffix,
-    // The button's accessible name carries the backlog too — a screen reader
-    // must not have to infer it from a bare digit beside the label.
-    ariaLabel: view.label + (n ? `, ${n} agent${n === 1 ? "" : "s"} waiting on you` : ""),
-  };
-}
-
-function renderNotifyToggle() {
-  const btn = $("notify-toggle");
-  if (!btn) return;
-  const view = notifyToggleView(state.notify, notificationsSupported(), needsHumanIds(state.snap).length);
-  btn.textContent = view.label;
-  // The count is its own node rather than text appended to the label, so it can
-  // take the ember treatment the tab counts already use and stays out of the
-  // button's text content.
-  if (view.count) btn.append(el("span", { class: "notify-badge", "aria-hidden": "true", text: String(view.count) }));
-  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
-  btn.setAttribute("title", view.title);
-  btn.setAttribute("aria-label", view.ariaLabel);
-  if (view.disabled) btn.setAttribute("disabled", "");
-  else btn.removeAttribute("disabled");
-  btn.classList.toggle("is-on", view.pressed);
-  btn.classList.toggle("is-alerting", view.count > 0);
-}
-
-/* Delivery, kept separate from the decision so every gate is assertable without
-   a browser. Each refusal returns its own reason rather than a shared silence,
-   because "we chose not to" and "the browser refused" are different facts. */
-function deliverNotification(plan, notify, ctor) {
-  if (!plan.fire) return plan.reason;
-  if (!notify.enabled) return "muted";
-  if (!ctor) return "unsupported";
-  if (notify.permission !== "granted") return "not-granted";
-  try {
-    // eslint-disable-next-line no-new
-    new ctor(plan.title, { body: plan.body, tag: NOTIFY_TAG });
-    return "sent";
-  } catch { return "refused"; }
-}
-
-/* Called on every adopted snapshot. The title always updates — it costs no
-   permission and cannot annoy anyone. The Notification only fires when the plan
-   says a NEW agent needs a human AND the operator opted in; denied, unsupported
-   or muted all degrade to the title alone, silently. */
-function applyNotifications(snap = state.snap) {
-  const next = needsHumanIds(snap);
-  const byId = agentsById(snap);
-  const plan = notificationPlan(state.notify.seen, next, (id) => {
-    const found = byId.get(id);
-    return found ? agentName(found.agent) : null;
-  });
-  state.notify.seen = plan.ids;
-  if (typeof document !== "undefined") {
-    document.title = titleWithAlerts(state.notify.baseTitle || document.title, next.length);
-  }
-  return deliverNotification(plan, state.notify, notificationsSupported() ? Notification : null);
-}
 
 /* ---------- action log ----------
 
