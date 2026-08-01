@@ -428,6 +428,83 @@ db.close();
     }
   });
 
+  const nullTokensTestName =
+    `an unmeasured invocation is counted, not scored zero${canSqlcipher ? "" : ` (SKIPPED: missing ${dylib})`}`;
+  test.skipIf(!canSqlcipher)(nullTokensTestName, async () => {
+    /* token_usage.totalTokens is nullable. SUM(COALESCE(totalTokens, 0)) folded
+       a NULL into the total as if that call had burned nothing, so an
+       invocation nobody measured was indistinguishable from one that used no
+       tokens — and burnRateTokensPerHour divided the resulting short numerator
+       by the full window, producing a confident rate from an incomplete count. */
+    const nullRoot = mkdtempSync(join(tmpdir(), "anthill-null-tokens-"));
+    const nullDb = join(nullRoot, "openburnbar.sqlite");
+    const createScript = join(nullRoot, "create-null-fixture.ts");
+    writeFileSync(
+      createScript,
+      `
+import { Database } from "bun:sqlite";
+Database.setCustomSQLite(${JSON.stringify(dylib)});
+const db = new Database(${JSON.stringify(nullDb)}, { create: true });
+db.run("PRAGMA key = '${key}'");
+db.run(\`CREATE TABLE token_usage (
+  id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
+  inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
+  totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
+// One measured call and one the source never counted, in the same window.
+db.run(\`INSERT INTO token_usage VALUES
+  ('n1','Codex','s','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
+  ('n2','Codex','s','proj','claude-opus-4-8',NULL,NULL,0,0,NULL,0.01,'exact','2026-07-22 10:30:00.000','2026-07-22 10:31:00.000')\`);
+// A second, fully measured window as the control.
+db.run(\`INSERT INTO token_usage VALUES
+  ('n3','Codex','s','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-24 10:00:00.000','2026-07-24 10:01:00.000')\`);
+db.close();
+`,
+    );
+    expect(Bun.spawnSync(["bun", createScript], { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+
+    const previous = {
+      support: process.env.BURNBAR_SUPPORT_DIR,
+      db: process.env.BURNBAR_DB_PATH,
+      key: process.env.BURNBAR_DB_KEY,
+      dylib: process.env.BURNBAR_SQLCIPHER_DYLIB,
+    };
+    process.env.BURNBAR_SUPPORT_DIR = nullRoot;
+    process.env.BURNBAR_DB_PATH = nullDb;
+    process.env.BURNBAR_DB_KEY = key;
+    process.env.BURNBAR_SQLCIPHER_DYLIB = dylib;
+    try {
+      const partial = await getUsageSummary("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+      expect(partial.available).toBe(true);
+      expect(partial.invocations).toBe(2);
+      // The measured subtotal survives — an understatement is not a fabrication...
+      expect(partial.processedTokens).toBe(1000);
+      // ...but the gap is stated rather than absorbed.
+      expect(partial.tokensMissing).toBe(1);
+      expect(partial.tokensKnown).toBe(false);
+      // And no rate is invented from a numerator that is missing a term.
+      expect(partial.burnRateTokensPerHour).toBeNull();
+      expect(partial.byProvider[0]).toMatchObject({ tokens: 1000, tokensMissing: 1 });
+
+      // The control: nothing missing, so the rate is owed and given.
+      const complete = await getUsageSummary("2026-07-24T00:00:00.000Z", "2026-07-25T00:00:00.000Z");
+      expect(complete.processedTokens).toBe(1000);
+      expect(complete.tokensMissing).toBe(0);
+      expect(complete.tokensKnown).toBe(true);
+      expect(complete.burnRateTokensPerHour).toBeGreaterThan(0);
+    } finally {
+      for (const [name, value] of Object.entries({
+        BURNBAR_SUPPORT_DIR: previous.support,
+        BURNBAR_DB_PATH: previous.db,
+        BURNBAR_DB_KEY: previous.key,
+        BURNBAR_SQLCIPHER_DYLIB: previous.dylib,
+      })) {
+        if (value == null) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(nullRoot, { recursive: true, force: true });
+    }
+  });
+
   test("usage endpoints reject non-loopback hosts", async () => {
     const response = await handleUsageRequest(
       new Request("http://example.com/api/usage/summary?from=2026-07-22T00:00:00.000Z&to=2026-07-23T00:00:00.000Z"),

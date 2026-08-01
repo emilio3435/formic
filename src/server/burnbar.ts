@@ -23,7 +23,19 @@ export interface UsageSummary {
   source: "burnbar";
   from: string;
   to: string;
+  /* The tokens actually measured in this window. Rows can carry a NULL
+     totalTokens, and SUM(COALESCE(totalTokens, 0)) used to fold those into the
+     total as if they were zero-token calls — so an unmeasured invocation was
+     indistinguishable from one that burned nothing, and the figure was labelled
+     observed either way. It stays the measured sum (an understatement is not a
+     fabrication) and is qualified by the two fields below. */
   processedTokens: number | null;
+  /* Mirrors costKnown: false as soon as any invocation in the window has no
+     token measurement, so a consumer can tell a total from a floor. */
+  tokensKnown: boolean;
+  /* How many invocations went unmeasured — the size of the gap, not just its
+     existence, so the card can say "3,000 across 2 calls, 1 unmeasured". */
+  tokensMissing: number;
   estimatedCostUsd: number | null;
   costProvenance?: CostProvenance;
   pricingVersion?: string;
@@ -33,6 +45,7 @@ export interface UsageSummary {
   byProvider: Array<{
     provider: string;
     tokens: number;
+    tokensMissing: number;
     costUsd: number | null;
     costProvenance?: CostProvenance;
     invocations: number;
@@ -432,6 +445,9 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     available: false,
     provenance: "unavailable",
     sourceHealth: unavailableSource(error),
+    // Nothing was read, so nothing is known — not "nothing was missing".
+    tokensKnown: false,
+    tokensMissing: 0,
     source: "burnbar",
     from,
     to,
@@ -454,7 +470,10 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          provider,
          COALESCE(model, 'unknown') AS model,
          COUNT(*) AS invocations,
-         SUM(COALESCE(totalTokens, 0)) AS tokens,
+         -- Bare SUM skips NULLs instead of scoring them zero, so this is the
+         -- sum of what was actually measured; tokensMissing carries the rest.
+         SUM(totalTokens) AS tokens,
+         SUM(CASE WHEN totalTokens IS NULL THEN 1 ELSE 0 END) AS tokensMissing,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(inputTokens, 0) END) AS unpricedInputTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(outputTokens, 0) END) AS unpricedOutputTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
@@ -489,7 +508,10 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
           };
       return {
         provider: str(row.provider) || "unknown",
+        // null here means every row in the group was unmeasured, which
+        // tokensMissing states outright — 0 is the measured subtotal, not a claim.
         tokens: num(row.tokens) ?? 0,
+        tokensMissing: num(row.tokensMissing) ?? 0,
         invocations: num(row.invocations) ?? 0,
         ...cost,
       };
@@ -506,6 +528,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       return {
         provider,
         tokens: group.reduce((sum, row) => sum + row.tokens, 0),
+        tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
         costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
         costProvenance: unknown ? "unknown" as const
           : derived ? "derived_estimate" as const
@@ -514,6 +537,8 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       };
     });
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
+    const tokensMissing = byProvider.reduce((sum, row) => sum + row.tokensMissing, 0);
+    const tokensKnown = tokensMissing === 0;
     const invocations = byProvider.reduce((sum, row) => sum + row.invocations, 0);
     const anyCostMissing = byProvider.some((row) => row.costUsd == null);
     const anyCostDerived = byProvider.some((row) => row.costProvenance === "derived_estimate");
@@ -530,6 +555,8 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       from,
       to,
       processedTokens,
+      tokensKnown,
+      tokensMissing,
       estimatedCostUsd,
       costProvenance: estimatedCostUsd == null ? "unknown"
         : anyCostDerived ? "derived_estimate"
@@ -539,7 +566,11 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
         : {}),
       costKnown: estimatedCostUsd != null,
       invocations,
-      burnRateTokensPerHour: processedTokens / hours,
+      /* A rate divides a numerator by a window. If part of the numerator was
+         never measured, the quotient is not a smaller rate — it is a made-up
+         one, stated to the same precision as a real one. Withhold it rather
+         than let a gap in the data read as a quiet period. */
+      burnRateTokensPerHour: tokensKnown ? processedTokens / hours : null,
       byProvider,
     };
   } catch (error) {
