@@ -178,9 +178,11 @@ export interface AgentSnapshot {
     kind:
       | "permission-requested"
       | "input-requested"
+      | "fork-unresolved"
       | "question-pending"
       | "assumption-stated"
       | "stopped-mid-work"
+      | "exited-unlanded"
       | "unknown";
     evidence?: string;
   };
@@ -194,6 +196,10 @@ export interface AgentSnapshot {
   lastUserMessage?: string | null;
   /** Latest sanitized human-legible AGENT reply; null when none survived cleaning. */
   lastAgentMessage?: string | null;
+  /* The closing words of the agent's last message, attributed by construction
+     rather than inferred from the transcript tail (whose final line may be the
+     operator's). This is what the attention detectors read. */
+  lastAgentClosing?: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;

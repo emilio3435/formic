@@ -4,6 +4,7 @@ import { open, readdir, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
 import {
   extractLastHumanMessage,
+  extractClosingByRole,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -268,6 +269,8 @@ function makeAgent(input: {
     ),
     lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
     lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
+    // End-anchored and role-attributed: what the agent actually stopped on.
+    lastAgentClosing: extractClosingByRole(input.provider, input.humanMessages ?? [], "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,

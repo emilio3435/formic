@@ -32,12 +32,16 @@ export type AttentionSignalKind =
   | "permission-requested"
   /** cmux says the agent is waiting, without naming a permission. */
   | "input-requested"
+  /** It laid out alternatives and handed the choice back. */
+  | "fork-unresolved"
   /** The agent's last word to us was a question, and it stopped there. */
   | "question-pending"
   /** The agent proceeded on a stated assumption and invited correction. */
   | "assumption-stated"
   /** The process is gone and the transcript does not read as finished. */
   | "stopped-mid-work"
+  /** It ended while saying, in its own words, that work was left over. */
+  | "exited-unlanded"
   /** Nothing in the text says why. Say so; do not invent a reason. */
   | "unknown";
 
@@ -52,16 +56,67 @@ export interface AttentionSignal {
 export interface AttentionSignalInput {
   transcriptTail?: string | null;
   lastAgentMessage?: string | null;
+  /* The agent's closing words, role-attributed by the collector. This is the
+     field that made the content detectors possible: lastAgentMessage is a front
+     window (first 240 chars) so a question asked after an explanation never
+     reached here, and the transcript tail cannot be attributed because its last
+     line may be the operator's. */
+  lastAgentClosing?: string | null;
+  /* The cmux notification body, straight from the control plane.
+     This used to be recovered by scanning transcriptTail for the "[Attention]"
+     marker snapshot.ts appends — which an agent can simply write. Measured
+     live: two sessions discussing the marker in their own transcripts were
+     classified as blocked on a permission prompt, one of them while explaining
+     that exact spoof. Evidence about whether a human is being waited on has to
+     come from the control plane, not from text the agent authors. */
+  attentionNotification?: string | null;
   activity: ActivityState;
   processState: ProcessState;
   transcriptEndedCleanly?: boolean;
 }
 
-/* A question is a short closing line, not any paragraph that happens to end in
-   "?". Prose summaries routinely close with a rhetorical flourish, and treating
-   those as pending questions would rebuild the filler problem with new words. */
-const MAX_QUESTION_CHARS = 220;
 const MAX_EVIDENCE_CHARS = 160;
+
+/* A pending question is an INTERROGATIVE clause that the message ends on — not
+   merely a paragraph whose last character is "?".
+
+   The first version capped the closing at 220 characters instead, on the theory
+   that a real question is short. Measured live, that was wrong in both
+   directions: three closings ended in "?" and it recognised one, rejecting a
+   222-character "Want me to write a one-page README that ties both programs
+   together …?" and a 241-character list that ended "Which would help?" — both
+   genuine asks with a long run-up. Length was never the property that made them
+   questions; the interrogative clause was.
+
+   Anchored to the end and bounded, so a narrative that merely contains "is"
+   somewhere cannot match, and the capture is the question itself rather than
+   the paragraph in front of it. */
+/* The last alternative catches a lost line break. Message cleaning flattens
+   markdown bullets into one line, so "…easier upload\nWhich would help?" arrives
+   with no punctuation at all between the list item and the question. A capital
+   directly after a lowercase word is where that break used to be. */
+const PENDING_QUESTION =
+  /(?:^|[.!?;:,—–-]\s*|\s(?:and|or|but|so)\s|(?<=[a-z])\s(?=[A-Z]))((?:want|should|shall|do|does|did|would|could|can|will|which|what|why|how|who|whom)\b[^?]{0,200}\?)$/i;
+
+const INTERROGATIVE_OPENER =
+  /^[…\s"'(-]*(?:want|should|shall|do|does|did|would|could|can|will|which|what|why|how|who|whom)\b/i;
+
+function pendingQuestion(closing: string): string | undefined {
+  const sentence = finalSentence(closing);
+  if (!sentence.endsWith("?")) return undefined;
+  /* When the sentence OPENS on the interrogative, the whole sentence is the
+     question and quoting a sub-clause of it would hand the operator a fragment.
+     Otherwise take the LAST interrogative clause, which is the actual ask at the
+     end of a longer run-up — the first one is usually narration ("I could
+     sharpen the faces …") that happens to share a word with a question. */
+  if (INTERROGATIVE_OPENER.test(sentence)) return sentence.replace(/^…\s*/, "");
+  /* The EARLIEST clause-initial match. Every match is anchored to the final "?",
+     so the earliest one is the outermost — the whole question rather than a tail
+     of it ("would help?" instead of "Which would help?"). The clause boundary is
+     what makes this safe: narration like "I could sharpen the faces" is not
+     clause-initial, so it cannot open a match. */
+  return PENDING_QUESTION.exec(sentence)?.[1]?.trim();
+}
 
 const PERMISSION_PATTERN = /\b(?:permission|approve|approval|allow|authoris|authoriz|grant access)\w*\b/i;
 
@@ -75,6 +130,35 @@ const ASSUMPTION_PATTERNS: readonly RegExp[] = [
   /\bunless you(?:'d| would)? (?:prefer|rather|say)\b/i,
   /\bI(?:'ll| will) (?:proceed|continue|go) with\b[^.?!]*\bunless\b/i,
   /\btell me if (?:that|this) is wrong\b/i,
+];
+
+/* A fork is a choice handed back, not merely a sentence containing "or". Each
+   pattern requires BOTH named alternatives and an explicit hand-off, because
+   "I checked the cache or the index" is narration and must not raise a decision
+   the operator never has to make. */
+const FORK_PATTERNS: readonly RegExp[] = [
+  /\bwhich (?:one )?(?:would|do) you (?:prefer|want|like|pick|choose)\b/i,
+  /\blet me know which\b/i,
+  /\b(?:do|would) you want me to\b[^.?!]*\bor\b[^.?!]*\?/i,
+  /\b(?:should|shall) (?:i|we)\b[^.?!]*\bor\b[^.?!]*\?/i,
+  /\beither\b[^.?!]*\bor\b[^.?!]*\?/i,
+  /\boption\s+(?:a|1|one)\b[\s\S]{0,400}?\boption\s+(?:b|2|two)\b/i,
+  /\btwo (?:options|choices|paths|ways)\b/i,
+];
+
+/* Positive evidence that work was left over. Deliberately NOT "no completion
+   marker found": absence of a phrase is not evidence of unfinished work, and
+   inferring from absence is how a detector starts firing on nine rows out of
+   ten again. The agent has to say it. */
+const UNLANDED_PATTERNS: readonly RegExp[] = [
+  /\bstill (?:need|needs|needed|to do|outstanding|pending)\b/i,
+  /\bnot (?:yet )?(?:done|finished|landed|committed|merged|complete)\b/i,
+  /\b(?:have|has) not yet\b|\bhaven'?t yet\b/i,
+  /\bnext steps?\b\s*[:—-]/i,
+  /\b(?:remaining|outstanding) (?:work|tasks?|items?|findings?)\b/i,
+  /\bstill in progress\b/i,
+  /\bwill (?:continue|resume|pick (?:this|it) up)\b/i,
+  /\bran out of (?:time|context|budget)\b/i,
 ];
 
 /* Closing lines that mean the agent finished rather than stalled. Used only to
@@ -98,17 +182,29 @@ function lastNonEmptyLine(value: string): string {
   return lines[lines.length - 1] ?? "";
 }
 
-/* snapshot.ts appends "[Attention] <body>" to the tail when cmux reports an
-   unread notification. That marker is the one place the control plane states,
-   in words, that a human is being waited on — the strongest signal available
-   and the only one that does not have to be inferred. */
-export function attentionMarker(transcriptTail: string | null | undefined): string | undefined {
-  const tail = clean(transcriptTail);
-  if (!tail) return undefined;
-  const marker = tail.lastIndexOf("[Attention]");
-  if (marker === -1) return undefined;
-  const body = tail.slice(marker + "[Attention]".length).trim();
-  return body || undefined;
+/* The last SENTENCE, not the last window. The length guard on questions exists
+   to reject paragraphs that merely trail off in a question mark, but the
+   attributed closing arrives as a fixed 240-character slice — so measuring the
+   whole slice threw away real questions for being preceded by too much
+   explanation. Measured live: three closings ended in "?" and only one was
+   recognised, purely because the other two carried a longer run-up. */
+function finalSentence(value: string): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  // The trailing [.!?]? matters: without it the lookahead fails on exactly the
+  // sentences this exists for, the ones ending in "?".
+  const boundary = collapsed.search(/(?:[.!?])\s+(?=[^.!?]*[.!?]?$)/);
+  return boundary === -1 ? collapsed : collapsed.slice(boundary + 1).trim();
+}
+
+/* Machine data that survived message cleaning. A closing line is the END of a
+   message, so a turn that finishes by dumping JSON, a diff hunk or a log line
+   lands here even when its opening prose was clean. Measured live: a serialized
+   finding blob ("fingerprint":"…/PYTHON_VERSION_REQUIREMENTS.md:138") matched an
+   unfinished-work phrase and asked the operator to pick up work nobody left. */
+const MACHINE_TEXT = /\{"|"\}|":\s*"|\[\{|\}\]|^\s*[+-]{3}\s|\b[\w./-]+:\d+:\d+\b|\{\s*\w+\s*=|\w+="[^"]*"/;
+
+function isMachineText(value: string): boolean {
+  return MACHINE_TEXT.test(value);
 }
 
 /* The agent's own final utterance. Prefer lastAgentMessage, which the collectors
@@ -116,16 +212,25 @@ export function attentionMarker(transcriptTail: string | null | undefined): stri
    absent, since a tail can end on the operator's words and mistaking those for
    the agent's would invert the whole reading. */
 function agentClosingLine(input: AttentionSignalInput): string {
+  /* lastAgentClosing is end-anchored AND attributed, so it is the only source
+     that can answer "what did the agent stop on". The others are fallbacks for
+     collectors that do not populate it yet: lastAgentMessage is a front window
+     (a question after an explanation is not in it), and the transcript tail is
+     an unattributed slice whose final line may be the operator's — reading that
+     as the agent's question inverts who is waiting for whom. */
+  const closing = clean(input.lastAgentClosing);
+  if (closing) return isMachineText(closing) ? "" : lastNonEmptyLine(closing);
   const spoken = clean(input.lastAgentMessage);
-  if (spoken) return lastNonEmptyLine(spoken);
+  if (spoken) return isMachineText(spoken) ? "" : lastNonEmptyLine(spoken);
   const tail = clean(input.transcriptTail);
   if (!tail) return "";
   const line = lastNonEmptyLine(tail);
-  return line.startsWith("[Attention]") ? "" : line;
+  if (line.startsWith("[Attention]") || isMachineText(line)) return "";
+  return line;
 }
 
 export function detectAttentionSignal(input: AttentionSignalInput): AttentionSignal {
-  const marker = attentionMarker(input.transcriptTail);
+  const marker = clean(input.attentionNotification) || undefined;
   if (marker) {
     return PERMISSION_PATTERN.test(marker)
       ? {
@@ -142,15 +247,29 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
 
   const closing = agentClosingLine(input);
 
-  if (closing.endsWith("?") && closing.length <= MAX_QUESTION_CHARS) {
+  /* Checked before question-pending: a fork IS a question, but "choose between
+     these two" is a more useful instruction than "answer it", and the operator
+     can act on it without reading the transcript first. */
+  const forkSource = closing || clean(input.lastAgentClosing);
+  if (forkSource && !isMachineText(forkSource) && FORK_PATTERNS.some((pattern) => pattern.test(forkSource))) {
     return {
-      kind: "question-pending",
-      nextAction: "Answer the question it stopped on.",
-      evidence: truncate(closing),
+      kind: "fork-unresolved",
+      nextAction: "Pick one of the options it stopped between.",
+      evidence: truncate(forkSource),
     };
   }
 
-  const spoken = clean(input.lastAgentMessage) || clean(input.transcriptTail);
+  const question = pendingQuestion(closing);
+  if (question) {
+    return {
+      kind: "question-pending",
+      nextAction: "Answer the question it stopped on.",
+      evidence: truncate(question),
+    };
+  }
+
+  const spokenRaw = clean(input.lastAgentClosing) || clean(input.lastAgentMessage) || clean(input.transcriptTail);
+  const spoken = isMachineText(spokenRaw) ? "" : spokenRaw;
   const assumption = ASSUMPTION_PATTERNS.map((pattern) => pattern.exec(spoken)).find(Boolean);
   if (assumption) {
     // Quote the sentence the assumption sits in, not the bare regex hit: the
@@ -173,6 +292,23 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
         kind: "stopped-mid-work",
         nextAction: "Decide whether to resume it: the process died before the work read as finished.",
         ...(closing ? { evidence: truncate(closing) } : {}),
+      };
+    }
+  }
+
+  /* Ended while saying work was left over. Weaker than a dead process — the
+     session may have exited perfectly cleanly — so it needs the agent to have
+     SAID so, and it is checked after the crash case which has harder evidence. */
+  if (input.activity === "ended") {
+    const spokenAll = clean(input.lastAgentClosing) || clean(input.lastAgentMessage);
+    const unlanded = spokenAll && !isMachineText(spokenAll)
+      ? UNLANDED_PATTERNS.find((pattern) => pattern.test(spokenAll))
+      : undefined;
+    if (unlanded && !COMPLETION_PATTERN.test(closing)) {
+      return {
+        kind: "exited-unlanded",
+        nextAction: "Pick up the work it named as unfinished, or close it out.",
+        evidence: truncate(spokenAll),
       };
     }
   }

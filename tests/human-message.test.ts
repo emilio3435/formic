@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractClosingByRole,
   extractLastHumanMessage,
   extractLastMessageByRole,
+  readableClosing,
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "../src/server/human-message";
@@ -110,5 +112,49 @@ describe("extractLastMessageByRole — the two sides of the exchange", () => {
       { role: "assistant", content: "Only the agent spoke." },
     ], "user")).toBeNull();
     expect(extractLastMessageByRole("codex", [], "assistant")).toBeNull();
+  });
+});
+
+/* readableHumanMessage keeps the FIRST 240 characters, which is right for a
+   one-line preview and exactly wrong for reading intent: an agent asks its
+   question in the last sentence, after the explanation. Every one of those was
+   discarded before the snapshot existed, which is why the attention detectors
+   had almost nothing to read. */
+describe("readableClosing — the end of a message, not its beginning", () => {
+  const longAnswer =
+    "I traced the regression through the writer path and confirmed the lock is held across the flush. "
+    + "The safest repair is to narrow the critical section, but that touches the retry logic, which the "
+    + "batch importer also depends on, so the blast radius is wider than it first looks. "
+    + "I have reproduced it locally against the fixture set and the failure is deterministic. "
+    + "Should I narrow the lock, or leave it and add a backpressure gate?";
+
+  test("keeps the closing question that front-truncation destroys", () => {
+    expect(readableHumanMessage("claude", longAnswer)).not.toContain("Should I narrow the lock");
+    expect(readableClosing("claude", longAnswer)).toContain("Should I narrow the lock");
+  });
+
+  test("marks the elision so a clipped closing is never read as the whole message", () => {
+    expect(readableClosing("claude", longAnswer)?.startsWith("…")).toBe(true);
+  });
+
+  test("a short message is returned whole and unmarked", () => {
+    expect(readableClosing("claude", "Ready when you are.")).toBe("Ready when you are.");
+  });
+
+  test("messages that are not human-readable stay undefined, as before", () => {
+    expect(readableClosing("claude", "")).toBeUndefined();
+  });
+
+  test("extractClosingByRole attributes by role rather than by position", () => {
+    const candidates: HumanMessageCandidate[] = [
+      { role: "assistant", content: "Earlier agent turn that also ends in a question?" },
+      { role: "user", content: "Now do the migration and tell me when it lands." },
+    ];
+
+    // The operator spoke last; the AGENT's closing is still the agent's.
+    expect(extractClosingByRole("claude", candidates, "assistant"))
+      .toBe("Earlier agent turn that also ends in a question?");
+    expect(extractClosingByRole("claude", candidates, "user"))
+      .toBe("Now do the migration and tell me when it lands.");
   });
 });

@@ -149,10 +149,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...attentionFieldsFor({
-        transcriptTail: notification?.body
-          ? `${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`
-          : source.transcriptTail,
+        transcriptTail: source.transcriptTail,
+        // Straight from cmux, never recovered from the rendered marker: an agent
+        // that writes "[Attention] …" into its own transcript must not be able
+        // to report itself as blocked on a permission prompt.
+        attentionNotification: notification?.body,
         lastAgentMessage: source.lastAgentMessage,
+        lastAgentClosing: source.lastAgentClosing,
         activity,
         processState: processStateFor(source),
         transcriptEndedCleanly: source.transcriptEndedCleanly,
@@ -165,6 +168,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       nickname: source.nickname,
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
+      lastAgentClosing: source.lastAgentClosing,
       lastHumanMessage: source.lastHumanMessage !== undefined
         ? source.lastHumanMessage === source.statusReason
           ? snapshotStatusReason

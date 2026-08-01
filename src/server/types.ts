@@ -35,6 +35,9 @@ export interface CollectedAgent {
   lastHumanMessage?: string | null;
   lastUserMessage?: string | null;
   lastAgentMessage?: string | null;
+  /* The END of the agent's last message, role-attributed. lastAgentMessage is a
+     front window, so a question asked after an explanation never survived it. */
+  lastAgentClosing?: string | null;
   transcriptTail?: string;
   artifacts: Artifact[];
   gates: string[];

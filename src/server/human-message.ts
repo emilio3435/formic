@@ -38,7 +38,10 @@ function shorten(text: string): string {
   return `${clipped.slice(0, boundary > MAX_HUMAN_MESSAGE_CHARS * 0.6 ? boundary : clipped.length).trimEnd()}…`;
 }
 
-function readableText(text: string): string | undefined {
+/* Everything readableText does EXCEPT the final truncation, so a caller that
+   wants the end of a message can have the same cleaning without the front
+   window baked in. */
+function cleanMessage(text: string): string | undefined {
   let value = text.replace(/\r/g, "").trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
 
@@ -86,7 +89,38 @@ function readableText(text: string): string | undefined {
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned || /^(?:diff|index|patch|changes?)\b[\s:.-]*$/i.test(cleaned)) return undefined;
-  return shorten(cleaned);
+  return cleaned;
+}
+
+function readableText(text: string): string | undefined {
+  const cleaned = cleanMessage(text);
+  return cleaned === undefined ? undefined : shorten(cleaned);
+}
+
+/* The END of a message, not its beginning.
+
+   readableText keeps the first 240 characters and drops the rest, which is the
+   right shape for a one-line preview and exactly wrong for reading intent: an
+   agent that asks "should I roll back or patch forward?" asks it in its last
+   sentence, after the explanation. Front-truncation discarded every one of
+   those before the snapshot existed, which is why the attention detectors had
+   almost nothing to read.
+
+   Returns the final sentence when the message ends on one, so the caller gets a
+   complete thought rather than a window that happens to land mid-clause. */
+export function readableClosing(provider: Provider, content: unknown): string | undefined {
+  const cleaned = cleanMessage(textParts(provider, content).join("\n"));
+  if (cleaned === undefined) return undefined;
+  if (cleaned.length <= MAX_HUMAN_MESSAGE_CHARS) return cleaned;
+
+  // Prefer a sentence boundary inside the tail window; a question mark or full
+  // stop is where a thought actually starts.
+  const tail = cleaned.slice(-MAX_HUMAN_MESSAGE_CHARS);
+  const boundary = tail.search(/(?<=[.!?])\s+(?=[A-Z(“"'\d])/);
+  const candidate = boundary === -1 ? tail : tail.slice(boundary).trim();
+  // A sentence-start that leaves almost nothing is worse than a clipped window.
+  const closing = candidate.length >= 24 ? candidate : tail.trim();
+  return closing === cleaned ? closing : `…${closing}`;
 }
 
 export function readableHumanMessage(provider: Provider, content: unknown): string | undefined {
@@ -119,6 +153,24 @@ export function extractLastMessageByRole(
     if (candidate.isMeta || candidate.role !== role) continue;
     const message = readableHumanMessage(provider, candidate.content);
     if (message) return message;
+  }
+  return null;
+}
+
+/* The closing words of the last message from `role`, attributed by construction.
+   The transcript tail cannot do this: it is a fixed-length slice of the whole
+   conversation, so its final line may be the operator's, and mistaking one for
+   the other inverts who is waiting for whom. Walking the role-tagged candidates
+   removes the guess. */
+export function extractClosingByRole(
+  provider: Provider,
+  candidates: readonly HumanMessageCandidate[],
+  role: "assistant" | "user",
+): string | null {
+  for (const candidate of [...candidates].reverse()) {
+    if (candidate.isMeta || candidate.role !== role) continue;
+    const closing = readableClosing(provider, candidate.content);
+    if (closing) return closing;
   }
   return null;
 }
