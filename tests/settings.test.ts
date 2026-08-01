@@ -48,6 +48,42 @@ describe("scan window settings", () => {
     expect(JSON.parse([...files.values()].at(-1)!).scanWindowHours).toBe(6);
   });
 
+  /* Defaults standing in for settings we could not read is a different fact
+     from defaults because none were ever saved, and only the first one means
+     the operator's configured window has quietly stopped being honoured. Both
+     used to produce the identical store with nothing recorded. */
+  test("an unreadable settings file is reported while defaults keep the hub booting", async () => {
+    const store = await JsonSettingsStore.open("/tmp/anthill-corrupt-settings.json", {
+      readText: async () => "{ this is not json",
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    });
+
+    // The hub still boots on defaults — refusing to start would be worse.
+    expect(store.get().scanWindowHours).toBe(36);
+    // But the substitution is on the record, naming the file and the fallback.
+    expect(store.loadError ?? "").toContain("anthill-corrupt-settings.json");
+    expect(store.loadError ?? "").toContain("36");
+  });
+
+  test("settings that were never saved are not reported as a failure", async () => {
+    const store = await JsonSettingsStore.open("/tmp/anthill-absent-settings.json", {
+      readText: async () => {
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      },
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    });
+
+    expect(store.get().scanWindowHours).toBe(36);
+    // ENOENT is the normal state before an operator saves anything.
+    expect(store.loadError).toBeUndefined();
+  });
+
   test("POST /api/settings rejects cross-origin", async () => {
     const store = await JsonSettingsStore.open("/tmp/unused-settings.json", {
       readText: async () => {
