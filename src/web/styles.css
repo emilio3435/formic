@@ -1658,8 +1658,13 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .agent-grid .ri-elapsed,
   /* The row summary is conciseText(lastHumanMessage, 120) — the first 120
      characters of the very prose the Thread pane renders in full, inches away.
-     The largest duplicate on screen, and the one nobody had named. */
-  body.inspector-open .agent-grid .row-description,
+     The largest duplicate on screen, and the one nobody had named.
+
+     Folded on the SELECTED row only. An earlier pass folded it on every row and
+     that was wrong: while a drawer is open the operator is still scanning the
+     roster to choose what to open NEXT, and the summary is what they scan by.
+     Only the selected row's copy is a duplicate — the other 200 are the board. */
+  body.inspector-open .agent-row.is-selected .row-description,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
 }
 
