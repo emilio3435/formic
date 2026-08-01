@@ -25,6 +25,10 @@ export interface AttentionStore {
   observe(notifications: readonly CmuxNotification[]): void;
   apply(surfaceId: string, action: AttentionAction, snoozedUntil?: string): Promise<AttentionRecord>;
   filter(notifications: readonly CmuxNotification[]): CmuxNotification[];
+  /* Set when empty attention state is standing in for state that could not be
+     read. Every notification the operator already acknowledged is unread again
+     in that case, so the board asks for attention it was previously given. */
+  loadError?(): string | undefined;
 }
 
 export class MemoryAttentionStore implements AttentionStore {
@@ -33,6 +37,11 @@ export class MemoryAttentionStore implements AttentionStore {
   private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(protected readonly now: () => number = Date.now) {}
+
+  /* In-memory state cannot fail to load; the durable subclass overrides this. */
+  loadError(): string | undefined {
+    return undefined;
+  }
 
   list(): readonly AttentionRecord[] {
     return [...this.records.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -119,6 +128,11 @@ export class MemoryAttentionStore implements AttentionStore {
 
 export class JsonAttentionStore extends MemoryAttentionStore {
   private writeNumber = 0;
+  private lastLoadError?: string;
+
+  override loadError(): string | undefined {
+    return this.lastLoadError;
+  }
 
   private constructor(private readonly path: string, now: () => number) {
     super(now);
@@ -139,9 +153,14 @@ export class JsonAttentionStore extends MemoryAttentionStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         store.records.clear();
-        console.error(
-          `[JsonAttentionStore] Ignoring unreadable attention state at ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        /* Empty attention state is not neutral: every notification the operator
+           already acknowledged, snoozed or dismissed is unread again, so the
+           board asks for attention it was previously given and the count of
+           what needs a human is wrong. Start empty, but stop making the console
+           the only witness. */
+        store.lastLoadError = `attention state could not be read from ${path}, so acknowledged notifications are unread again: `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[JsonAttentionStore] ${store.lastLoadError}`);
       }
     }
     if (pruned) await store.persist(store.list());

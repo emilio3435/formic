@@ -7,6 +7,7 @@ import {
   MAX_SSE_CLIENTS,
   type MountainAppState,
 } from "../src/server/app";
+import { MemoryAttentionStore } from "../src/server/cmux";
 import { MemoryTriageQueueStore } from "../src/server/triage";
 import type { AgentSnapshot, HubSnapshot, OperatorIssue } from "../src/shared/types";
 import type { ArchiveStore, CommandRunner } from "../src/server/types";
@@ -136,6 +137,34 @@ describe("health endpoint", () => {
     expect(body.data.complete).toBe(false);
     expect(body.data.staleSources).toEqual(["codex"]);
     expect(body.data.controlErrors).toBe(1);
+    fetch.dispose();
+  });
+
+  test("unreadable operator state makes the board incomplete without killing the process", async () => {
+    const now = Date.parse("2026-07-28T12:00:00.000Z");
+    const current = lifecycleSnapshot(new Date(now).toISOString());
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: async () => current,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    // A store whose acknowledged notifications failed to load: everything the
+    // operator already dismissed is unread again.
+    const attentionStore = new MemoryAttentionStore(() => now);
+    attentionStore.loadError = () => "attention state could not be read, so acknowledged notifications are unread again: bad JSON";
+    const fetch = createMountainFetch({
+      state, runner, archiveStore, attentionStore, now: () => now, webRoot: import.meta.dir,
+    });
+
+    const body = await (await fetch(new Request("http://127.0.0.1:4701/api/health"))).json();
+
+    expect(body.ok).toBe(true); // the process is fine
+    expect(body.data.complete).toBe(false); // what it is showing is not
+    expect(body.data.operatorStateError).toContain("unread again");
     fetch.dispose();
   });
 

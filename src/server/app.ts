@@ -722,6 +722,10 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       const staleSources = snapshot.controlHealth?.staleSources ?? [];
       const cmuxReachable = snapshot.controlHealth?.cmuxReachable ?? null;
       const controlErrors = snapshot.controlHealth?.errors?.length ?? 0;
+      /* Operator state that failed to load is an incompleteness of what the
+         board is showing, not of the fleet: acknowledged notifications come
+         back unread, so the board asks for attention it was already given. */
+      const operatorStateError = (await attentionStore).loadError?.();
       return Response.json(
         {
           ok: healthy,
@@ -732,10 +736,11 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
           },
           data: {
-            complete: staleSources.length === 0 && cmuxReachable !== false,
+            complete: staleSources.length === 0 && cmuxReachable !== false && !operatorStateError,
             staleSources: [...staleSources],
             cmuxReachable,
             controlErrors,
+            ...(operatorStateError ? { operatorStateError } : {}),
           },
         },
         {
