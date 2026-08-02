@@ -13,16 +13,21 @@ import type { CmuxSurface, CollectedAgent, CommandResult, CommandRunner } from "
    fixes it, so the fix has something to turn green and nobody has to
    rediscover the trigger.
 
-   All five live in src/server, which the backend lane owns. Nothing here edits
-   that code. Each is a `test.failing`: it RUNS on every commit, passes while
-   the defect is real so the shared suite stays green for the other lanes, and
-   becomes a hard failure the moment the behaviour is fixed —
+   All five live in src/server, which the backend lane owns.
 
-     "this test is marked as failing but it passed. Remove `.failing`"
+   ALL FIVE ARE NOW FIXED. Each arrived here as a `test.failing` that passed
+   while the defect was real and hard-failed the moment the behaviour changed —
+   "marked as failing but it passed" — which is exactly how each fix was
+   confirmed to be the thing that flipped it. Every marker has since been
+   removed, so these now read forwards: they are permanent regression guards,
+   and each one goes red if its defect returns.
 
-   — which is the prompt to delete the marker and leave a permanent regression
-   guard behind. It is not a skip. If a defect below is fixed and the marker is
-   not removed, the build goes red and says so.
+   The fixes, in the order they landed, worst first by blast radius:
+     1. cursor.ts null metadata            d24224b
+     3. cmux.ts epoch-backdated notification ccd40f8
+     5. cursor.ts unreadable subagents dir  71ac797
+     2. collectors.ts lossy OMP total       143556e
+     4. identity.ts unfamiliar-name liveness (this commit)
 
    Every `test.failing` is paired with passing controls. A defect test that
    throws for the wrong reason — a broken fixture, a renamed export, a path the
@@ -223,7 +228,7 @@ describe("DEFECT: identity.ts reports a running process dead for an unfamiliar n
     return agent.processAlive;
   }
 
-  test.failing("a running pid with an unrecognized command is not scored as dead", async () => {
+  test("a running pid with an unrecognized command is not scored as dead", async () => {
     /* src/server/identity.ts: liveness is scored against
        allProcesses.filter(isRecognizedAgentProcess) rather than the process
        table itself, and snapshot-agent turns processAlive===false plus known
