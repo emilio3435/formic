@@ -51,6 +51,8 @@ const SECURITY_HEADERS = {
 
 export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
+/* Under the 30s most proxies and browsers use to declare an idle stream dead. */
+export const SSE_HEARTBEAT_MS = 25_000;
 export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -306,6 +308,13 @@ export interface MountainAppDependencies {
   /* Repository root for the read-only publish surface. Defaults to the web
      root's parent, which is the checkout in every deployment we ship. */
   repoRoot?: string;
+  /* How often an idle event stream sends a heartbeat. Injectable ONLY so the
+     path can be exercised: at the shipped 25s no test can afford to wait, which
+     is why the interval callback was among the largest never-executed blocks in
+     src/server. The heartbeat is what tells a client the connection is alive,
+     so a stream that silently stops sending is a board that stops updating and
+     reads as merely quiet — the failure this project keeps finding. */
+  heartbeatMs?: number;
 }
 
 export interface MountainFetch {
@@ -864,7 +873,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
                 controller,
                 `event: heartbeat\ndata: ${JSON.stringify({ ts: new Date().toISOString() })}\n\n`,
               );
-            }, 25_000),
+            }, dependencies.heartbeatMs ?? SSE_HEARTBEAT_MS),
           );
         },
         cancel() {
