@@ -1708,18 +1708,25 @@ describe("TODAY.md names the providers the board cannot see", () => {
         .not.toContain(absent);
     }
     expect(today(), "TODAY.md stopped naming the uncollected providers")
-      .toMatch(/Hermes and Factory have no collector/i);
+      .toMatch(/Hermes and Factory are billed and uncollected/i);
   });
 
   test("it says this is an absent number, not a wrong one", () => {
     /* The distinction is the whole point: a wrong number announces itself by
        disagreeing with something, and an absent one agrees with everything. */
     const t = today();
+    /* The section must LEAD with what the board is blind to, not with what the
+       number is not. A reader who takes away one sentence must take away that
+       one, so it is pinned as the opening claim rather than as a caveat. */
+    expect(t, "the summary stopped leading with what the board is blind to")
+      .toMatch(/blind to two billed providers and one recurring job/i);
+    expect(t, "the summary stopped saying the health card contradicts it")
+      .toMatch(/asserts nothing is missing/i);
     expect(t, "the summary stopped distinguishing an absent number from a wrong one")
-      .toMatch(/It is an \*\*absent\*\* one/i);
-    expect(t, "the summary stopped saying nothing indicates the absence")
-      .toMatch(/nothing anywhere indicating absence/i);
+      .toMatch(/An absent one agrees with everything/i);
+    expect(t, "the summary stopped saying the spend has no row, agent or collector")
+      .toMatch(/no row, no agent,\s*no session, and no collector/i);
     expect(t, "the summary stopped explaining why 4 of 4 healthy is not a contradiction")
-      .toMatch(/telling the truth about the four it has/i);
+      .toMatch(/true of the four it has and silent about the two/i);
   });
 });
