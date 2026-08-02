@@ -809,7 +809,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       const parts = [];
       const windowText = completionWindowText(momentum);
       if (windowText) parts.push(windowText);
-      if (momentum.stalled) parts.push(`${momentum.stalled} quiet 15m+`);
+      const stall = stallText(snap, momentum.stalled);
+      if (stall) parts.push(stall);
       if (parts.length) sublabel = parts.join(" · ");
     }
     return { value: String(totals.working), unit: "shipping", sublabel, tone: "ok" };
@@ -963,7 +964,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, calmSpendText, bandContextPct, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -2655,10 +2656,24 @@ function stalledCount(snap) {
   return momentum && momentum.stalled > 0 ? momentum.stalled : 0;
 }
 
+/* "18 quiet 15m+", with the 15 coming off the wire.
+
+   pulse.ts ships stallThresholdMs and the client hardcoded "15m+" in three
+   separate places — the momentum card, the watch clause and the resting vitals.
+   Three copies of a server-owned constant: change the threshold to 10 minutes
+   and every one of them keeps saying 15, confidently and wrongly, on a count
+   that is now measuring something else. (GPT day review §2.) */
+function stallText(snap, count = stalledCount(snap)) {
+  if (!count) return "";
+  const momentum = snap && snap.pulse && snap.pulse.momentum;
+  const ms = momentum && Number.isFinite(momentum.stallThresholdMs) ? momentum.stallThresholdMs : null;
+  return `${count} quiet ${ms ? fmtElapsed(ms) : "15m"}+`;
+}
+
 function watchClauses(snap) {
   const clauses = [];
   const stalled = stalledCount(snap);
-  if (stalled) clauses.push(`${stalled} quiet 15m+`);
+  if (stalled) clauses.push(stallText(snap, stalled));
   /* Context peak is an EARLY warning, which means the range that matters is
      below the alarm — above 85% it is no longer early, and the stressed grid
      gives it a cell of its own, so the murmur stands down rather than saying the
@@ -3416,7 +3431,7 @@ function renderPrograms() {
              fleet. The claim is gone; this is the number that replaces it. */
           ...(stalledCount(state.snap) ? [
             el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
-            el("span", { class: "all-clear-quiet", text: `${stalledCount(state.snap)} quiet 15m+` }),
+            el("span", { class: "all-clear-quiet", text: stallText(state.snap) }),
           ] : []),
           el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
           el("span", {

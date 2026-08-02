@@ -4504,6 +4504,26 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* GPT day review §2 again: pulse.ts ships stallThresholdMs and the client
+     hardcoded "15m+" in three places — the momentum card, the watch clause and
+     the resting vitals. Change the threshold to 10 minutes and all three keep
+     saying 15, confidently, about a count now measuring something else. */
+  test("(2d) the stall phrase takes its threshold from the wire", () => {
+    const snap = (ms: number | undefined, stalled = 18) =>
+      snapshot({ pulse: { momentum: { stalled, stallThresholdMs: ms }, burn: {}, activity: { buckets: [] } } });
+    expect(M.stallText(snap(900_000))).toBe("18 quiet 15m+");
+    expect(M.stallText(snap(600_000))).toBe("18 quiet 10m+");
+    // No threshold on the wire keeps the historical wording rather than blanking.
+    expect(M.stallText(snap(undefined))).toBe("18 quiet 15m+");
+    // Nothing stalled says nothing.
+    expect(M.stallText(snap(900_000, 0))).toBe("");
+    /* And the literal is gone from the CODE, so there is one source. Comments are
+       stripped first: a comment explaining why the constant was removed must not
+       read as the constant still being there. */
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect((code.match(/quiet 15m\+/g) ?? []).length).toBe(0);
+  });
+
   /* GPT day review §2: the client recomputed contextPct from tokens.total while
      the server shipped its own on 392 of 432 agents. They agreed — which is the
      dangerous kind of agreement, two derivations that happen to match. Token
