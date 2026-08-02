@@ -290,14 +290,23 @@ describe("a cwd string is not identity", () => {
      tty — and kept focus, because looking at the pane is how an operator
      resolves the ambiguity once the write controls are off. Left failing so the
      question stays visible and flips the moment focus is gated. */
-  test.failing("a cwd-matched target is refused focus", async () => {
-    // Focus is the cheapest write and still moves an operator's attention to a
-    // terminal that was never proven to be the agent's.
+  test("focus stays permitted, because looking is how the operator recovers", async () => {
+    /* Deliberate, and asserted so a later tightening cannot remove it by
+       accident. The gate distinguishes INPUT from navigation: instruct and
+       interrupt type into the pane, focus does not. With Send and Interrupt
+       switched off, going to look at the pane is the only way an operator can
+       tell whether the row found the right terminal — closing that too leaves
+       them a dead row and no way to diagnose it.
+
+       A draft of this block asserted focus must ALSO be refused, marked failing
+       as though it were a pending fix. It would have contradicted a reasoned
+       decision, read as a safety improvement, and enshrined the removal of the
+       recovery path the moment anyone "fixed" it. */
     const runner = new RecordingRunner();
     const result = await run(cwdMatched(), "focus", runner);
 
-    expect(result.response.ok).toBe(false);
-    expect(runner.commands).toEqual([]);
+    expect(result.response.ok).toBe(true);
+    expect(runner.argv).toContain("SURFACE-UNCLAIMED");
   });
 
   test("a cwd-matched target is refused an interrupt", async () => {
