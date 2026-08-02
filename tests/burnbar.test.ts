@@ -250,7 +250,13 @@ db.close();
       // One row lacks cost — never invent a total spend.
       expect(summary.costKnown).toBe(false);
       expect(summary.estimatedCostUsd).toBeNull();
-      expect(summary.costProvenance).toBe("unknown");
+      /* Provenance describes how the reported floor is known, not whether the
+         total is complete — costKnown above already says that. This asserted
+         "unknown" while the window held a priced row, which was the conflation
+         6418f0a removed. */
+      expect(summary.costProvenance).toBe("measured");
+      expect(summary.measuredCostUsd).not.toBeNull();
+      expect(summary.costMissingInvocations).toBeGreaterThan(0);
 
       const derived = await getUsageSummary("2026-07-23T00:00:00.000Z", "2026-07-24T00:00:00.000Z");
       expect(derived).toMatchObject({

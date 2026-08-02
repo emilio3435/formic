@@ -649,7 +649,15 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       estimatedCostUsd,
       measuredCostUsd,
       costMissingInvocations,
-      costProvenance: estimatedCostUsd == null ? "unknown"
+      /* Provenance answers HOW the reported cost is known; costKnown and
+         costMissingInvocations answer WHETHER it is complete. Keying provenance
+         off estimatedCostUsd conflated the two, so a window with 2,931 of 2,973
+         calls priced exactly still announced "unknown" — the last gate in the
+         cascade, and the same lie as withholding the floor: total ignorance
+         claimed where nearly everything is known. It now describes the floor
+         that is actually being reported, and says "unknown" only when there is
+         no measured cost at all. */
+      costProvenance: measuredCostUsd == null ? "unknown"
         : anyCostDerived ? "derived_estimate"
         : "measured",
       ...(estimatedCostUsd != null && anyCostDerived

@@ -94,6 +94,10 @@ const ALL_PRICED_ROWS = `
   ('p1','Codex','s','proj','claude-opus-4-8',800,200,0,0,1000,28.00,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
   ('p2','Claude Code','s','proj','claude-opus-4-8',800,200,0,0,1000,30.00,'exact','2026-07-22 10:05:00.000','2026-07-22 10:06:00.000')`;
 
+const UNPRICED_ROWS = `
+  ('x1','Cursor','s','proj','a-model-with-no-published-price',400,100,0,0,500,NULL,'estimate','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
+  ('x2','Cursor','s','proj','another-unpriced-model',400,100,0,0,500,NULL,'estimate','2026-07-22 10:05:00.000','2026-07-22 10:06:00.000')`;
+
 const WINDOW = { from: "2026-07-22T00:00:00.000Z", to: "2026-07-23T00:00:00.000Z" };
 
 describe("a measured cost is never reported as unknown", () => {
@@ -114,7 +118,11 @@ describe("a measured cost is never reported as unknown", () => {
          number that reads complete while one provider is missing from it. */
       expect(summary.estimatedCostUsd).toBeNull();
       expect(summary.costKnown).toBe(false);
-      expect(summary.costProvenance).toBe("unknown");
+      /* Provenance describes HOW the reported floor is known, not whether the
+         total is complete — costKnown and costMissingInvocations answer that.
+         Saying "unknown" over three providers priced exactly was the last gate
+         in the cascade, and it contradicted this block's own title. */
+      expect(summary.costProvenance).toBe("measured");
 
       // A card can now say "$83.00 across 3 of 4 calls" instead of going silent.
       expect(summary.measuredCostUsd!).toBeLessThan(
@@ -133,6 +141,19 @@ describe("a measured cost is never reported as unknown", () => {
       expect(summary.estimatedCostUsd).toBeCloseTo(58, 6);
       expect(summary.measuredCostUsd).toBeCloseTo(58, 6);
       expect(summary.costMissingInvocations).toBe(0);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("with nothing priced at all, provenance really is unknown", async () => {
+    /* The boundary the change must not cross: "unknown" still has a job. When
+       no call in the window carries a price there is no floor to describe, and
+       claiming "measured" would be the opposite error. */
+    await withFixture(UNPRICED_ROWS, async () => {
+      const summary = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(summary.measuredCostUsd).toBeNull();
+      expect(summary.costProvenance).toBe("unknown");
+      expect(summary.costMissingInvocations).toBe(2);
     });
   });
 
