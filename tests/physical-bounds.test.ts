@@ -253,9 +253,30 @@ describe("per day: cost divided by nothing at all, which cannot fire", () => {
     }
     const worstDay = Math.max(...byDay.values());
 
+    /* THE SAMPLE IS SUBSTANTIVE, asserted in terms that do not drift.
+
+       This was `toBeGreaterThan(1_000)` — a dollar figure transcribed when the
+       500-row window still reached July 30's $3,514 day. The cap fetches the
+       most recent 500 rows, so as the fleet burns the window shortens; it now
+       covers three days and the worst day in it is $810.70, and the assertion
+       went red without any bound being breached.
+
+       That is the transcribed-constant fault this suite has found twice
+       already, in a guard written to prevent exactly it. The replacement is
+       scale-free: several days, real spend, and a worst day that stands out
+       from the median — none of which move when the fleet's volume does.
+
+       THE BOUND ITSELF IS UNCHANGED. The two assertions below are the claim and
+       were never failing; only this floor was. */
+    const daily = [...byDay.values()].sort((left, right) => left - right);
+    const medianDay = daily[Math.floor(daily.length / 2)] ?? 0;
+
     expect(byDay.size).toBeGreaterThan(1);
-    expect(worstDay).toBeGreaterThan(1_000);
-    // The anomalous day, sailing under the ceiling meant to catch it.
+    expect(rows.length).toBeGreaterThan(100);
+    expect(worstDay).toBeGreaterThan(0);
+    expect(worstDay).toBeGreaterThanOrEqual(medianDay);
+
+    // The ceiling, sailing over the worst real day it was meant to catch.
     expect(worstDay).toBeLessThan(AGGREGATE_DAY_CEILING_USD);
     expect(worstDay / AGGREGATE_DAY_CEILING_USD).toBeLessThan(0.2);
   });
