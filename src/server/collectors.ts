@@ -300,6 +300,7 @@ function createOmpParser(): IncrementalParser {
   let updatedAt: string | undefined;
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
   let sessionTotal = 0;
+  let sessionCachedInput = 0;
   let exited = false;
   let index = 0;
 
@@ -335,7 +336,12 @@ function createOmpParser(): IncrementalParser {
         const total = Number(usage.totalTokens ?? input + output + cachedInput + cacheWrite);
         if (![input, output, cachedInput, total].every(Number.isFinite)) continue;
         latestUsage = { input, output, cachedInput, total };
-        sessionTotal += total;
+        /* `total` is this call's SIZE and includes the re-read prefix; summing it
+           over the session counts a cached token once per later call. Measured on
+           real rows the four parts are disjoint (570+385+74711+487 = 76153), so
+           new tokens are input + output + cacheWrite. */
+        sessionTotal += input + output + cacheWrite;
+        sessionCachedInput += cachedInput;
       }
     },
     result(meta) {
@@ -350,7 +356,7 @@ function createOmpParser(): IncrementalParser {
         startedAt: isoTimestamp(session.timestamp),
         updatedAt: updatedAt ?? isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta),
         tokens: latestUsage
-          ? { ...latestUsage, sessionTotal, scope: "latest-turn", provenance: "observed" }
+          ? { ...latestUsage, sessionTotal, sessionCachedInput, scope: "latest-turn", provenance: "observed" }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
         humanMessages: humanMessages(messages),
@@ -402,13 +408,24 @@ function createCodexParser(): IncrementalParser {
           const input = Number(usage.input_tokens ?? 0);
           const sessionInput = Number(sessionUsage.input_tokens ?? 0);
           const sessionOutput = Number(sessionUsage.output_tokens ?? 0);
+          const sessionCached = Number(sessionUsage.cached_input_tokens ?? 0);
           const output = Number(usage.output_tokens ?? 0);
+          /* Codex's own `total_token_usage.total_tokens` is input + output where
+             `input_tokens` already CONTAINS `cached_input_tokens` — so its
+             cumulative total re-charges the whole re-read prefix on every turn,
+             the same defect the Claude parser had. Containment verified on a real
+             rollout: cumulative input−cached (56564−37376 = 19188) equals the sum
+             of the per-turn input−cached (15511 + 3677 = 19188).
+             `cache_write_input_tokens` is 0 in every rollout on disk and its
+             containment is therefore untestable, so it is not added — adding an
+             already-contained field would double-count. */
           tokens = {
             input,
             output,
             cachedInput: Number(usage.cached_input_tokens ?? 0),
             total: Number(usage.total_tokens ?? input + output),
-            sessionTotal: Number(sessionUsage.total_tokens ?? sessionInput + sessionOutput),
+            sessionTotal: Math.max(0, sessionInput - sessionCached) + sessionOutput,
+            sessionCachedInput: sessionCached,
             contextWindow: Number(payload.info.model_context_window) || undefined,
             scope: payload.info.last_token_usage ? "latest-turn" : "session",
             provenance: "observed",
@@ -579,9 +596,19 @@ function createClaudeParser(): IncrementalParser {
       const fallback = fallbackUpdatedAt(meta);
       const uniqueUsage = [...usageByMessage.values()].sort((left, right) => left.index - right.index);
       const latestUsage = uniqueUsage.at(-1);
+      /* Size of one call — cache reads included, because they occupy the window. */
       const usageTotal = (usage: NonNullable<typeof latestUsage>): number =>
         usage.input + usage.output + usage.cachedInput + usage.cacheCreationInput;
-      const sessionTotal = uniqueUsage.reduce((total, usage) => total + usageTotal(usage), 0);
+      /* Consumption over the session — cache reads EXCLUDED. Every call re-sends
+         the whole cached prefix, so summing usageTotal charges the same token
+         once per later call and grows with the square of the conversation. Each
+         prompt token is counted once here, as `input` if it missed the cache or
+         as `cacheCreationInput` if it was written to it; a re-write after the
+         cache expires is real work and is counted again, correctly. */
+      const usageNew = (usage: NonNullable<typeof latestUsage>): number =>
+        usage.input + usage.output + usage.cacheCreationInput;
+      const sessionTotal = uniqueUsage.reduce((total, usage) => total + usageNew(usage), 0);
+      const sessionCachedInput = uniqueUsage.reduce((total, usage) => total + usage.cachedInput, 0);
       return makeAgent({
         provider: "claude",
         sourceSessionId: identity.sessionId,
@@ -599,6 +626,7 @@ function createClaudeParser(): IncrementalParser {
               cachedInput: latestUsage.cachedInput,
               total: usageTotal(latestUsage),
               sessionTotal,
+              sessionCachedInput,
               contextWindow: claudeContextWindow(model),
               scope: "latest-turn",
               provenance: "observed",

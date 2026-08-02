@@ -151,8 +151,16 @@ export function effortFor(agent: CollectedAgent): string | undefined {
 }
 
 export function contextPctFor(agent: CollectedAgent): number | undefined {
-  const { contextWindow, provenance, scope, total, sessionTotal } = agent.tokens;
-  const numerator = scope === "latest-turn" ? total : sessionTotal;
+  const { contextWindow, provenance, scope, total } = agent.tokens;
+  /* Occupancy is a size, so the numerator is always `total` — the one field that
+     means "how big the prompt was", cache reads included, in BOTH scopes. It used
+     to fall back to `sessionTotal` for scope "session"; that read the same number,
+     because the only session-scope producer sets total and sessionTotal from the
+     same codex `total_token_usage`. Now that sessionTotal means new tokens and
+     excludes cache reads, that fallback would have quietly understated a session's
+     fill instead of matching it. a371b23 fixed this numerator once by scope; this
+     removes the branch so it cannot drift back. */
+  const numerator = total;
   if (
     provenance !== "observed" ||
     scope === "unknown" ||

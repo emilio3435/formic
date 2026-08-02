@@ -407,9 +407,9 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("reports peak and median context across live agents", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 50 } }),
-        collected({ id: "codex:high", sourceSessionId: "high", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 90 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 50 } }),
+        collected({ id: "codex:high", sourceSessionId: "high", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 90 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -441,7 +441,14 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(25);
   });
 
-  test("uses the session total for session context", () => {
+  test("session context is measured by prompt size, not by what the session consumed", () => {
+    /* Occupancy is a SIZE: how full the window is right now, cache reads
+       included, because a cached token still takes up room. Consumption is a
+       FLOW and excludes re-reads. They were the same number for every real
+       session-scope agent — codex sets total and sessionTotal from one
+       total_token_usage — so the old branch was invisible until sessionTotal
+       stopped counting re-reads. Reading it here would understate a session's
+       fill by exactly the cached prefix it is still carrying. */
     const snapshot = buildSnapshot({
       agents: [
         collected({
@@ -459,7 +466,7 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
 
-    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(60);
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(25);
   });
 
   test("rejects latest-turn context that exceeds its window", () => {
@@ -521,9 +528,9 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("excludes ended and archived agents from context peak and median", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 40 } }),
-        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 100 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 40 } }),
+        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 100 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -537,10 +544,10 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("rounds the even live-agent context median", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 10 } }),
-        collected({ id: "codex:twenty", sourceSessionId: "twenty", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:seventy", sourceSessionId: "seventy", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 70 } }),
-        collected({ id: "codex:eighty", sourceSessionId: "eighty", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 80 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 10 } }),
+        collected({ id: "codex:twenty", sourceSessionId: "twenty", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:seventy", sourceSessionId: "seventy", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 70 } }),
+        collected({ id: "codex:eighty", sourceSessionId: "eighty", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 80 } }),
       ],
       surfaces: [],
       archiveStore,

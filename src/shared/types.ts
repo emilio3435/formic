@@ -8,12 +8,32 @@ export type AgentRole = "orchestrator" | "verifier" | "automation" | "frontend" 
 export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
 export type ControlAction = "focus" | "instruct" | "interrupt" | "archive";
 
+/* Two different measurements live here and the names have to keep them apart.
+
+   `total` is a SIZE: how big the latest call's prompt was, cache reads included,
+   because a cached token still occupies the window. It is the contextPct
+   numerator and nothing else.
+
+   `sessionTotal` is a FLOW: how many tokens this session has consumed over its
+   life. Cache reads are excluded from it by construction. A cached prefix is
+   re-sent on every call, so summing per-call totals counts the same token once
+   per subsequent call — quadratic in conversation length, not consumption. It
+   put 394,199,049 on a single session's drawer against a 1M window, of which
+   391,452,609 (99.3%) was one conversation re-read 769 times.
+
+   `sessionCachedInput` carries those re-reads separately, under its own name, so
+   the quantity is still available to anyone who wants it and can never again be
+   mistaken for consumption by being folded into a total. */
 export interface TokenUsage {
   input?: number;
   output?: number;
   cachedInput?: number;
+  /** Latest call's prompt+completion size, cache reads INCLUDED. Occupancy. */
   total?: number;
+  /** Session-cumulative NEW tokens: uncached input + output + cache writes. */
   sessionTotal?: number;
+  /** Session-cumulative cache READS. Re-read context, billed at a fraction. */
+  sessionCachedInput?: number;
   contextWindow?: number;
   scope?: "latest-turn" | "session" | "unknown";
   provenance: "observed" | "estimated" | "unknown";
