@@ -17,6 +17,11 @@ export const MAX_TRIAGE_ITEMS = 500;
 
 export interface TriageQueueStore {
   list(): readonly TriageQueueItem[];
+  /* Set when an empty queue is standing in for one that could not be read.
+     Every investigation the operator queued is gone in that state, and an empty
+     list looks identical to "nothing queued" — so the endpoint must say which
+     it is rather than serving silence as an answer. */
+  loadError?(): string | undefined;
   get(issueId: string): TriageQueueItem | undefined;
   add(recommendation: TriageRecommendation): Promise<TriageQueueItem>;
   start(issueId: string, runner: TriageInvestigationRunner): Promise<TriageQueueItem>;
@@ -165,6 +170,11 @@ export function buildTriageRecommendation(
 }
 
 export class MemoryTriageQueueStore implements TriageQueueStore {
+  /* In-memory state cannot fail to load; the durable subclass overrides this. */
+  loadError(): string | undefined {
+    return undefined;
+  }
+
   protected readonly items = new Map<string, TriageQueueItem>();
   private mutationQueue: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(item: TriageQueueItem) => void>();
@@ -289,8 +299,14 @@ export class MemoryTriageQueueStore implements TriageQueueStore {
 }
 
 export class JsonTriageQueueStore extends MemoryTriageQueueStore {
+  private lastLoadError?: string;
+
   private constructor(private readonly path: string, now: () => number) {
     super(now);
+  }
+
+  override loadError(): string | undefined {
+    return this.lastLoadError;
   }
 
   static async open(path: string, now: () => number = Date.now): Promise<JsonTriageQueueStore> {
@@ -325,9 +341,14 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         store.items.clear();
         recovered = false;
-        console.error(
-          `[JsonTriageQueueStore] Ignoring unreadable queue at ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        /* An empty queue is not a queue with nothing in it. Every investigation
+           the operator queued has vanished, and /api/triage/queue would serve
+           `items: []` — indistinguishable from a calm board. Start empty, but
+           stop making the console the only witness. Third of this family, after
+           the archive and the attention store. */
+        store.lastLoadError = `queued investigations could not be read from ${path}, so the queue is showing empty: `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[JsonTriageQueueStore] ${store.lastLoadError}`);
       }
     }
     if (recovered) await store.persist(store.list());
@@ -506,7 +527,13 @@ export async function handleTriageRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/api/triage/queue" && request.method === "GET") {
-    return response({ ok: true, items: store.list() });
+    const loadError = store.loadError?.();
+    return response({
+      ok: true,
+      items: store.list(),
+      // An empty list that failed to load must not read as a calm queue.
+      queue: loadError ? { healthy: false, error: loadError } : { healthy: true },
+    });
   }
   if (url.pathname === "/api/triage/queue" && request.method === "DELETE") {
     const issueId = issueIdFromQuery(request);
