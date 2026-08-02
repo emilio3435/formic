@@ -56,6 +56,12 @@ export interface UsageSummary {
      not own. Reported rather than repaired: the money is real, the unit is what
      is wrong. */
   aggregatedInvocations: number;
+  /* Stored rows that a later snapshot of the same session superseded, and which
+     are therefore NOT summed. Published so the collapse is auditable: the dedup
+     is right for cumulative snapshots and would be wrong for two genuinely
+     distinct calls sharing a session id, and this is the number that would make
+     that visible instead of silently deleting spend. */
+  supersededSnapshots: number;
   /* What exists BEFORE this window, so a view can say what it is not showing.
 
      The UI offered 1h/24h/7d/30d and the API refused anything over 90 days,
@@ -571,6 +577,7 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     processedTokens: null,
     // Nothing was read, so nothing can be classified as an aggregate either.
     aggregatedInvocations: 0,
+    supersededSnapshots: 0,
     // And nothing is known about what lies before the window, which is not the
     // same as knowing there is nothing.
     priorSpend: { earliestAt: null, invocations: 0, measuredCostUsd: null },
@@ -615,9 +622,38 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          -- cumulative session row spans the session's whole lifetime, so
          -- dividing it by THIS window's hours credits hours of work to
          -- whichever window happens to contain its startTime.
-         SUM(CASE WHEN totalTokens > ? THEN 0 ELSE COALESCE(totalTokens, 0) END) AS attributableTokens
-       FROM token_usage
-       WHERE startTime >= ? AND startTime < ?
+         SUM(CASE WHEN totalTokens > ? THEN 0 ELSE COALESCE(totalTokens, 0) END) AS attributableTokens,
+         -- How many stored rows were superseded by a later snapshot of the same
+         -- session. Published so the collapse is auditable rather than silent:
+         -- if a provider ever records two genuinely DISTINCT calls under one
+         -- session id, this dedup would drop one, and this is the number that
+         -- would show it happening.
+         SUM(snapshotRows - 1) AS supersededRows
+       FROM (
+         /* One row per SESSION, not per stored row.
+
+            OpenBurnBar - a separate application; this repo contains no INSERT,
+            UPDATE or DELETE against token_usage - records a session's RUNNING
+            TOTAL and re-records it as the session progresses. Proven on this
+            data: every one of the 22 multi-row sessions across 3,039 rows and
+            three providers shares a startTime, carries advancing endTimes and
+            has monotonically growing totals. 513M then 572M for one session,
+            476M then 483M for another. The later row CONTAINS the earlier one,
+            so SUM() over both double-counted the whole session.
+
+            MAX(endTime) with bare columns is SQLite's documented behaviour:
+            the unaggregated columns come from the row that supplied the max.
+            That is exactly "keep the latest snapshot".
+
+            The key falls back to the row id when a session id is missing, so
+            rows with no session collapse into themselves rather than into
+            each other - grouping every session-less row together would be a
+            far larger data loss than the one being fixed. */
+         SELECT *, MAX(endTime) AS latestEndTime, COUNT(*) AS snapshotRows
+         FROM token_usage
+         WHERE startTime >= ? AND startTime < ?
+         GROUP BY provider, COALESCE(NULLIF(sessionId, ''), id)
+       )
        GROUP BY provider, model
        ORDER BY tokens DESC`,
       // Bound order follows the SQL text: both SELECT placeholders precede WHERE's.
@@ -691,6 +727,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     });
     const aggregatedInvocations = rows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
     const attributableTokens = rows.reduce((sum, row) => sum + (num(row.attributableTokens) ?? 0), 0);
+    const supersededSnapshots = rows.reduce((sum, row) => sum + (num(row.supersededRows) ?? 0), 0);
     /* One aggregate over everything older than this window. Cheap, and it is
        the only way the card can distinguish "nothing was spent before this" from
        "we did not look". */
@@ -769,6 +806,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       tokensKnown,
       tokensMissing,
       aggregatedInvocations,
+      supersededSnapshots,
       priorSpend,
       estimatedCostUsd,
       measuredCostUsd,

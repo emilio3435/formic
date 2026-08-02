@@ -204,3 +204,75 @@ describe("the burn rate names a window it can be held to", () => {
     });
   });
 });
+
+/* Cumulative snapshots, and why summing them double-counted.
+
+   OpenBurnBar - a separate application; this repo has no INSERT, UPDATE or
+   DELETE against token_usage - records a session's RUNNING TOTAL and re-records
+   it as the session progresses. Every one of the 22 multi-row sessions across
+   3,039 rows and three providers shares a startTime, carries advancing endTimes
+   and grows monotonically: 513M then 572M for one, 476M then 483M for another.
+   The later row CONTAINS the earlier one, so SUM() over both counted the whole
+   session twice.
+
+   This is what the earlier "aggregated" label asserted without proof. The
+   evidence now exists, and the fix follows from it rather than from the label. */
+const SNAPSHOTS = `
+  ('s1','Claude Code','sess-A','p','claude-opus-5',900000,60000,400000000,1000000,401960000,500.00,'exact','${at(1)}','${at(5)}'),
+  ('s2','Claude Code','sess-A','p','claude-opus-5',900000,60000,460000000,1000000,461960000,575.00,'exact','${at(1)}','${at(9)}'),
+  ('s3','Codex','sess-B','p','gpt-5.6-terra',600000,50000,0,0,650000,0.42,'exact','${at(2)}','${at(3)}')`;
+
+/* Two rows that carry NO session id. Grouping them together would be a far
+   larger data loss than the double-count being fixed. */
+const NO_SESSION = `
+  ('n1','Hermes','','p','x-ai/grok-4.5',400000,20000,0,0,420000,0.31,'exact','${at(1)}','${at(2)}'),
+  ('n2','Hermes','','p','x-ai/grok-4.5',300000,10000,0,0,310000,0.22,'exact','${at(3)}','${at(4)}')`;
+
+describe("a session's running total is counted once, not once per snapshot", () => {
+  test.skipIf(!canSqlcipher)("the latest snapshot wins and the earlier one is not added to it", async () => {
+    await withRows(SNAPSHOTS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      // Two sessions, not three rows.
+      expect(usage.invocations).toBe(2);
+      // 575.00 (the latest snapshot of sess-A) + 0.42, NOT 500 + 575 + 0.42.
+      expect(usage.measuredCostUsd).toBeCloseTo(575.42, 2);
+      expect(usage.processedTokens).toBe(461_960_000 + 650_000);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("the superseded snapshot's tokens are not added either", async () => {
+    /* The half that moves the headline. 401,960,000 of the 863,920,000 a naive
+       SUM would report is the same work counted twice. */
+    await withRows(SNAPSHOTS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.processedTokens).not.toBe(401_960_000 + 461_960_000 + 650_000);
+      expect(usage.processedTokens).toBeLessThan(500_000_000);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("rows with no session id stay distinct, never collapsed together", async () => {
+    /* The catastrophic version of this fix. Keying on a missing session id
+       would merge every session-less row in the window into one and delete real
+       spend, which is a much larger error than the one being corrected. */
+    await withRows(NO_SESSION, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.invocations).toBe(2);
+      expect(usage.measuredCostUsd).toBeCloseTo(0.53, 2);
+      expect(usage.processedTokens).toBe(730_000);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("a single-row session is untouched, so this is not a discount", async () => {
+    // The control: dedup must do nothing where there is nothing to dedup.
+    await withRows(ALL_CALLS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.invocations).toBe(2);
+      expect(usage.processedTokens).toBe(1_070_000);
+      expect(usage.measuredCostUsd).toBeCloseTo(0.73, 2);
+    });
+  });
+});

@@ -457,13 +457,16 @@ db.run(\`CREATE TABLE token_usage (
   id TEXT PRIMARY KEY, provider TEXT, sessionId TEXT, projectName TEXT, model TEXT,
   inputTokens INTEGER, outputTokens INTEGER, cacheReadTokens INTEGER, cacheCreationTokens INTEGER,
   totalTokens INTEGER, cost REAL, provenanceConfidence TEXT, startTime TEXT, endTime TEXT)\`);
-// One measured call and one the source never counted, in the same window.
+/* One measured call and one the source never counted, in the same window.
+   Distinct session ids because these are two separate CALLS, not two snapshots
+   of one session — sharing an id would now collapse them, which is correct for
+   a running total and wrong here. */
 db.run(\`INSERT INTO token_usage VALUES
-  ('n1','Codex','s','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
-  ('n2','Codex','s','proj','claude-opus-4-8',NULL,NULL,0,0,NULL,0.01,'exact','2026-07-22 10:30:00.000','2026-07-22 10:31:00.000')\`);
+  ('n1','Codex','sn1','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
+  ('n2','Codex','sn2','proj','claude-opus-4-8',NULL,NULL,0,0,NULL,0.01,'exact','2026-07-22 10:30:00.000','2026-07-22 10:31:00.000')\`);
 // A second, fully measured window as the control.
 db.run(\`INSERT INTO token_usage VALUES
-  ('n3','Codex','s','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-24 10:00:00.000','2026-07-24 10:01:00.000')\`);
+  ('n3','Codex','sn3','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-24 10:00:00.000','2026-07-24 10:01:00.000')\`);
 db.close();
 `,
     );

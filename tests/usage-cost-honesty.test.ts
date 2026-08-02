@@ -95,8 +95,8 @@ const ALL_PRICED_ROWS = `
   ('p2','Claude Code','s','proj','claude-opus-4-8',800,200,0,0,1000,30.00,'exact','2026-07-22 10:05:00.000','2026-07-22 10:06:00.000')`;
 
 const UNPRICED_ROWS = `
-  ('x1','Cursor','s','proj','a-model-with-no-published-price',400,100,0,0,500,NULL,'estimate','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
-  ('x2','Cursor','s','proj','another-unpriced-model',400,100,0,0,500,NULL,'estimate','2026-07-22 10:05:00.000','2026-07-22 10:06:00.000')`;
+  ('x1','Cursor','sx1','proj','a-model-with-no-published-price',400,100,0,0,500,NULL,'estimate','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
+  ('x2','Cursor','sx2','proj','another-unpriced-model',400,100,0,0,500,NULL,'estimate','2026-07-22 10:05:00.000','2026-07-22 10:06:00.000')`;
 
 const WINDOW = { from: "2026-07-22T00:00:00.000Z", to: "2026-07-23T00:00:00.000Z" };
 
