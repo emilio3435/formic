@@ -247,9 +247,20 @@ describe("QUICKSTART.md stays true to a first run", () => {
 
   test("the messages it tells a beginner to expect are the ones that get printed", () => {
     const startScript = read("scripts/anthill-start.sh");
-    const noCmux = "cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled).";
-    expect(quickstart, "QUICKSTART.md stopped quoting the no-cmux start message").toContain(noCmux);
-    expect(startScript, "anthill-start.sh no longer prints that message").toContain(noCmux);
+    /* All THREE lines a cmux-less first run prints, in order. QUICKSTART used
+       to quote only the reassuring one and call it "the expected message" —
+       while the line above it, "cmux binary not found.", goes to stderr and
+       reads as a failure. A newcomer meeting an undocumented red line on the
+       first command they run has no way to know the doc meant to cover it. */
+    for (const line of [
+      "cmux binary not found.",
+      "cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled).",
+      "no cmux auth (titles/controls may stay offline)",
+    ]) {
+      expect(quickstart, `QUICKSTART.md stopped quoting "${line}"`).toContain(line);
+      const printed = startScript.includes(line) || read("src/server/index.ts").includes(line);
+      expect(printed, `nothing prints "${line}" any more`).toBe(true);
+    }
 
     /* This one was vague until it was pinned — "a message asking you to open
        cmux first" cannot drift because it never said anything exact. It quotes

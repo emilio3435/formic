@@ -49,13 +49,20 @@ running — closing it stops the server.
 running, `bun start` detects it and just opens the browser instead of
 starting a second server.
 
-Without cmux installed you'll see:
+Without cmux installed you'll see all three of these, in this order:
 
 ```
+cmux binary not found.
 cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled).
+The Ant Hill: http://127.0.0.1:4701 · no cmux auth (titles/controls may stay offline)
 ```
 
-That is the expected message, not an error.
+**All three are expected, including the first.** `cmux binary not found.` is
+printed to standard error, so your terminal may colour it red — it is the
+dashboard reporting that it looked for cmux and did not find one, which is
+exactly right on a machine without it. The board comes up regardless. Focus and
+Send are the only things you lose, and [§ Optional](#optional-enable-focus-and-send)
+turns them on later if you want them.
 
 ## 4. See something
 
