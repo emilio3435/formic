@@ -668,6 +668,25 @@ describe("summary status and widgets", () => {
     expect(failed.degraded).toBe(true);
     expect(failed.sources).toBe("1 of 4 collectors degraded");
 
+    /* The real fresh-machine payload, taken from the server's own buildSnapshot
+       with codex, cursor and cmux absent and no sessions: healthy 1, degraded 0,
+       absent 3, total 1. The backend's 42d842e makes `total` count collectors
+       that EXIST, so the honest sentence is "1 of 1 collectors healthy" — calm
+       and true — rather than "1 of 4", which reads as three failures to someone
+       who simply has not installed those tools.
+
+       This is the shape that matters and the one that cannot be seen on a
+       machine where everything is installed, which is why it is pinned rather
+       than left to a live read: on this developer's box absent is always 0. */
+    const freshMachine = M.emptyBoardVerdict({
+      generatedAt: at,
+      totals: { tracked: 0, sourceHealth: { healthy: 1, degraded: 0, absent: 3, total: 1 } },
+    });
+    expect(freshMachine.degraded).toBe(false);
+    expect(freshMachine.message).toBe("Watching. No sessions running yet.");
+    expect(freshMachine.sources).toBe("1 of 1 collectors healthy");
+    expect(freshMachine.sources).not.toMatch(/degraded|of 4/);
+
     /* No byProvider on the wire means the old counting stands, so a real
        degradation is never silently downgraded to calm by a missing field. */
     const noDetail = M.emptyBoardVerdict({
