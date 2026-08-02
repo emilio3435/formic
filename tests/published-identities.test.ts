@@ -137,7 +137,13 @@ describe("identities that must hold whatever window you ask for", () => {
     /* FAILS at 30d by $1.17, exact everywhere else. A breakdown that does not
        add up to its own total means the scalar and the per-provider rows are
        computed over differently treated row sets — the same shape as I1, in a
-       third place, and confined to the same old rows. */
+       third place, and confined to the same old rows.
+
+       Marked failing until the backend resolves where the $1.17 is dropped —
+       it is routed, and two fixes to this family have now passed it without
+       touching it. It flips to a hard failure the moment the scalar and the
+       breakdown are computed over the same rows, which is the signal to remove
+       this marker rather than the test. */
     if (!available) return;
     const gaps = WINDOWS.map(({ label }) => `${label}=${round(providerCost(label) - (at(label).measuredCostUsd ?? 0))}`);
 
