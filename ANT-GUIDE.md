@@ -267,22 +267,23 @@ record while looking whole is the same defect as a cost of `$0` that means
 *unknown*, and it gets the same treatment.
 
 **What that buys you is one number that means something.** Add a window to the
-spend before it and you get the whole recorded history. Measured on this machine
-at 17:11 on 2026-08-02: **about $32,471 of total measured spend across the
-entire record.**
+spend before it and you get the whole recorded history — and the same whole
+whichever window you ask through. Measured on this machine at 17:21 on
+2026-08-02: **about $32,471 of total measured spend across the entire record**,
+identical to the cent from seven different windows between one day and 399, on
+both of the figures the payload reports.
 
-Read that with two things attached to it, not appended after it.
+**It is still a reading, not a fact.** It grows as the fleet works and it counts
+only what a cost source priced. Quote it with its date or do not quote it — that
+rule applies to every number in this product whose inputs are still moving, and
+it is why the figure above carries a timestamp rather than standing alone.
 
-**It is a reading, not a fact.** It grows as the fleet works, it counts only
-what a cost source priced, and every input to it is still being repaired. Quote
-it with its date or do not quote it.
-
-**The widest queries still under-report, and that is under investigation.** Ask
-through a short window and the arithmetic reconciles; ask through a long one and
-the figures disagree with each other by several thousand dollars — a fixed
-block of older spend that one of the reported figures includes and another
-leaves out. Which means: **prefer narrow windows when the number has to be
-right**, and treat a long-window total as provisional until this is closed.
+What makes it worth quoting at all is not any single measurement. That total has
+now survived four separate corrections — de-duplicating cumulative session
+snapshots, disclosing what sits outside the window, a row cap, and a range clamp
+— and seven windows agree on it afterwards. A number that survives having its
+inputs rebuilt underneath it and lands in the same place is a different kind of
+claim from a number someone read once.
 
 *Where this stands today:* the server computes and returns it — the number above
 is a live reading, not a plan. The Usage card does not print it yet, so for now

@@ -1316,18 +1316,20 @@ describe("what the docs promise about incompleteness", () => {
       .toMatch(/spend before it and you get the whole recorded history/i);
     expect(prose, "the guide stopped labelling the total a reading rather than a fact")
       .toMatch(/a reading, not a fact/i);
-    /* The identity holds for the measured figure and NOT for the estimated one:
-       from 60 days out they diverge by a fixed $6,563.55 while narrow windows
-       agree to the cent. Whichever field a reader lands on, a long-window total
-       is provisional, so the guide must say so beside the number rather than
-       after it — and must not promise the identity unconditionally, which an
-       earlier version did on the strength of reading one field only. */
-    expect(prose, "the guide stopped warning that wide windows under-report")
-      .toMatch(/widest queries still under-report/i);
-    expect(prose, "the guide stopped telling a reader to prefer narrow windows")
-      .toMatch(/prefer narrow windows when the number has to be right/i);
-    expect(prose, "the guide promises the whole-record identity unconditionally again")
-      .not.toMatch(/same whole whichever window/i);
+    /* The identity now holds on BOTH reported figures — measuredCostUsd and
+       estimatedCostUsd agree at every window, verified across seven from 1 day
+       to 399 after the range clamp was fixed. The earlier caveat is retired.
+
+       What must NOT come back is the unqualified version. When this claim was
+       first made it rested on reading one field; the other was short by
+       $6,563.55 and nobody had looked. So the guide has to say the identity
+       holds on BOTH figures, not merely that it holds. */
+    expect(prose, "the guide stopped promising the whole-record identity")
+      .toMatch(/same whole whichever window you ask through/i);
+    expect(prose, "the guide asserts the identity without saying it was checked on both figures")
+      .toMatch(/both of the figures the payload reports/i);
+    expect(prose, "the guide stopped saying how many windows agree")
+      .toMatch(/seven different windows/i);
     const burnbar = read("src/server/burnbar.ts");
     expect(burnbar, "aggregatedRows stopped being a bare count — re-check whether the fix landed")
       .toContain("AS aggregatedRows");
