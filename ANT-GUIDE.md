@@ -633,11 +633,21 @@ fixed constant, so it will keep saying 30 regardless of what was delivered.
 of its drawer rather than trusting `Archive` to hold it. Archiving a *recently
 active* session behaves as advertised; it is old sessions that evaporate.
 
-**And when it is fixed, it will be fixed forward.** The repair works by
-recording the moment you archive, so it can only help records archived after it
-ships. Anything already in the archive has no such stamp and keeps running on
-the old clock, so treat the warning above as permanent for today's contents and
-retired only for what you archive afterwards.
+**The repair has landed, and it is forward-only.** It works by recording the
+moment you archive, so it can only help records stamped after it shipped.
+Anything archived before that has no stamp and keeps running on the old clock.
+
+Measured on this machine at 17:25 on 2026-08-02: **360 of 578 archived records
+now carry an archive time, and 218 do not.** The board reports both, rather than
+averaging them into one reassuring figure — a record it cannot measure is
+counted as *unmeasurable*, never as zero.
+
+**What has not been demonstrated yet is the outcome.** The oldest stamped record
+is less than a day old, because the stamping only began when the fix shipped. So
+the mechanism is verifiable today and the promise is not: nothing has yet been
+held for thirty days *and observed to still be there*. That takes thirty days
+and cannot be hurried. Until then, the honest reading is that the clock now
+starts in the right place, not that the full term has been proven.
 
 </details>
 

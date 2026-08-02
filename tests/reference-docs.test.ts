@@ -1268,8 +1268,12 @@ describe("what the docs promise about incompleteness", () => {
        stamping the archive time, so it cannot reach records stored before it —
        a reader who takes "fixed" to mean "my existing archive is safe" has been
        misled by the good news rather than the bad. */
+    /* One canonical phrasing for this claim — "forward-only" — asserted here
+       and in the re-measurement suite below. Two spellings of the same
+       requirement is how a reword ends up failing in one place and passing in
+       the other. */
     expect(g, "ANT-GUIDE stopped saying the repair only helps what you archive afterwards")
-      .toMatch(/fixed forward/i);
+      .toMatch(/forward-only/i);
   });
 
   test("the narrowed caveat no longer calls the whole board rough", () => {
@@ -1364,5 +1368,48 @@ describe("the guide separates what was observed from what was exercised", () => 
       .toMatch(/`All clear` only when nothing is being watched/i);
     expect(g, "the guide stopped naming the Watch verdict a reader will actually see")
       .toMatch(/reads \*\*`Watch`\*\* instead/);
+  });
+});
+
+/* A claim is not "verified" because it was true when written — it is verified
+   if it has been re-measured since the code beneath it last changed. Two claims
+   in this guide sit on code that moved late in the day, and both are pinned to
+   the property that would make them false rather than to the reading. */
+describe("claims are re-measured after their foundations move", () => {
+  const prose = () => read("ANT-GUIDE.md").replace(/\s+/g, " ").replace(/>\s*/g, "");
+
+  test("the archive warning reports both measurable and unmeasurable records", () => {
+    /* archive.ts changed at 16:09 (7be12d2) and the guide was re-measured
+       against the running server afterwards: 360 of 578 records stamped, 218
+       not. The shape that matters is that BOTH are reported — an average would
+       hide the unmeasurable ones behind the measured ones. */
+    const app = read("src/server/app.ts");
+    expect(app, "deliveredRetention stopped separating measurable from unmeasurable")
+      .toMatch(/unmeasurable/);
+    expect(app, "retention is no longer measured from the records themselves")
+      .toContain("deliveredRetention(");
+    expect(prose(), "the guide stopped reporting how many records cannot be measured")
+      .toMatch(/do not\./i);
+    expect(prose(), "the guide stopped saying the repair is forward-only")
+      .toMatch(/forward-only/i);
+  });
+
+  test("the archive guide does not claim a term it has not yet observed", () => {
+    /* The mechanism is verifiable now; the thirty-day outcome is not, and
+       cannot be for thirty days. A guide that says "fixed" without that
+       distinction invites a reader to trust a term nobody has watched elapse. */
+    expect(prose(), "the guide now implies the full retention term has been demonstrated")
+      .toMatch(/has not been demonstrated yet/i);
+    expect(prose(), "the guide stopped saying the clock starts right rather than the term being proven")
+      .toMatch(/clock now starts in the right place/i);
+  });
+
+  test("the gate table's unobserved rows are still unobserved", () => {
+    /* snapshot-agent.ts changed at 16:20 (858a993). Re-measured live after:
+       the observable rows match, and unique-cwd and died remain absent from the
+       board, so the "tested, not yet witnessed" note is still the true one. If
+       it is ever dropped, it must be because a row was actually seen. */
+    expect(prose(), "the guide stopped admitting two rows have not been witnessed")
+      .toMatch(/Tested, not yet witnessed/i);
   });
 });
