@@ -339,11 +339,18 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),
-      errors: [
+      /* Deduplicated. `sourceErrors` is flattened across providers, and a fault
+         that stops the whole aggregate stops all four of them, so one deadline
+         arrived here as ten entries. Harmless while this was only counted; the
+         card now prints the first and appends "(+N more)", which turned two
+         real faults into "(+9 more)" and sent an operator looking for eight
+         problems that did not exist. Per-provider errors keep their copies —
+         that is what `staleSources` is derived from. */
+      errors: [...new Set([
         ...operationalCmuxErrors,
         ...sourceErrors,
         ...(archiveLoadError ? [archiveLoadError] : []),
-      ],
+      ])],
       staleSources,
       ...(debris ? { debris } : {}),
     },
