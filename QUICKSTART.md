@@ -161,6 +161,11 @@ of these is a guarantee, not a missing feature:
   short shelf life. If the board's evidence is too old to trust, the write is
   refused rather than sent to where the agent used to be.
 
+And one it promises always to do: **tell you when a view cannot show you
+everything.** A cost window reports what falls outside it rather than presenting
+its own horizon as the whole record — the server returns that figure today, and
+the card is being taught to print it.
+
 **Focus is exempt from all of it, on purpose.** Looking costs nothing and going
 to the pane is how you recover, so there is always a way in. The board is never
 the reason you cannot reach an agent — it is the reason you do not reach the

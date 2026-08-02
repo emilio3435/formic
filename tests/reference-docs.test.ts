@@ -1163,3 +1163,75 @@ describe("the cost window's limits are documented as the code enforces them", ()
       .not.toMatch(/3[0-9]\.\d\s*%/);
   });
 });
+
+/* Three claims added when priorSpend landed and the archive audit closed. Each
+   one is a promise about incompleteness, which is the hardest kind to keep
+   honest: the failure mode is silence, so nothing breaks when it lapses. */
+describe("what the docs promise about incompleteness", () => {
+  const guide = () => read("ANT-GUIDE.md");
+  const flat = (d: string) => d.replace(/\s+/g, " ");
+
+  test("the prior-spend guarantee names the field the server actually returns", () => {
+    const burnbar = read("src/server/burnbar.ts");
+    expect(burnbar, "priorSpend left the payload; the guide promises it").toContain("priorSpend");
+    for (const field of ["earliestAt", "invocations", "measuredCostUsd"]) {
+      expect(burnbar, `priorSpend.${field} is gone`).toContain(field);
+    }
+    expect(flat(guide()), "ANT-GUIDE stopped stating the tell-you-what-is-missing guarantee")
+      .toMatch(/tell you when a view cannot show you everything/i);
+  });
+
+  test("the guide says the card does not print it yet, while that is true", () => {
+    /* The whole point of writing this down. The server computes priorSpend and
+       the client fetches the payload that carries it, but no cost reader in
+       app.js touches the field, so the card still looks complete. If the client
+       ever reads it, this test fails and the "not yet" sentence comes out. */
+    const app = read("src/web/app.js");
+    expect(app, "the client fetches the summary that carries priorSpend").toContain("/api/usage/summary?");
+    expect(app, "the client now reads priorSpend — delete the 'not yet' sentence from the guide")
+      .not.toContain("priorSpend");
+    expect(flat(guide()), "ANT-GUIDE claims the card prints it; verify that shipped first")
+      .toMatch(/does not print it yet/i);
+  });
+
+  test("the archive warning matches the clock the code actually uses", () => {
+    const archive = read("src/server/archive.ts");
+    const days = Number(archive.match(/ARCHIVE_RETENTION_MS = (\d+) \* 24/)?.[1]);
+    expect(days, "the archive retention constant was reshaped").toBeGreaterThan(0);
+    /* Retention is measured from the AGENT's last activity, and nothing stores
+       when the operator archived. Both are why delivered < advertised. */
+    /* The premise, stated so it survives the fix that is landing. The warning
+       is warranted while retention can still be measured from the AGENT's
+       timestamp rather than the archive's. Before the fix that was the only
+       clock; after it, `archivedAt ?? updatedAt` keeps the old clock for every
+       record stored before the fix — which is why the guide distinguishes what
+       you archive from here on from what is already in there. This fails only
+       when the updatedAt path is gone entirely, at which point the warning has
+       genuinely expired. */
+    expect(archive, "retention no longer falls back to the agent's own timestamp — the warning can go")
+      .toMatch(/archivedAt \?\? agent\.updatedAt|nowMs - updatedAtMs <= ARCHIVE_RETENTION_MS/);
+    expect(read("src/server/app.ts"), "retentionDays is no longer a constant — re-check the warning")
+      .toContain("retentionDays: ARCHIVE_RETENTION_MS /");
+    const g = flat(guide());
+    expect(g, `ANT-GUIDE stopped advertising the ${days}-day figure it is warning about`)
+      .toContain(`**${days} days**`);
+    expect(g, "ANT-GUIDE stopped saying the clock starts at last activity, not at archive time")
+      .toMatch(/from the session's last activity/i);
+    expect(g, "ANT-GUIDE stopped warning that an old session can be pruned immediately")
+      .toMatch(/pruned on the next save/i);
+    /* Unpinned until a mutation deleted it and nothing failed. The fix works by
+       stamping the archive time, so it cannot reach records stored before it —
+       a reader who takes "fixed" to mean "my existing archive is safe" has been
+       misled by the good news rather than the bad. */
+    expect(g, "ANT-GUIDE stopped saying the repair only helps what you archive afterwards")
+      .toMatch(/fixed forward/i);
+  });
+
+  test("the narrowed caveat no longer calls the whole board rough", () => {
+    const g = flat(guide());
+    expect(g, "the blanket 'treat the aggregate counters as rough' warning came back")
+      .not.toMatch(/treat the aggregate counters as rough/i);
+    expect(g, "the caveat stopped naming the two gaps that remain")
+      .toMatch(/two things that are still being fixed/i);
+  });
+});

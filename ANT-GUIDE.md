@@ -20,13 +20,19 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 > something, it says so instead of showing a plausible number. A blank is
 > usually honest, not broken.
 
-> **And the one caveat.** That rule is about *missing* numbers. A few of the
-> counters on the board are being reworked right now because they had the
-> opposite problem: arithmetically correct, but labelled as something they do
-> not measure — a total that counts the same thing twice, or a span that calls
-> dormant time working time. **Trust the verdicts and the lists; treat the
-> aggregate counters as rough until this note goes away.** The current list of
-> which ones is in `docs/` alongside the audit that found them.
+> **And two things that are still being fixed.** The counters that were
+> arithmetically correct but mislabelled — a total that counted the same tokens
+> twice, a span that called dormant time working time — are now either corrected
+> or named for what they measure, so the board's numbers are no longer
+> wholesale "rough". Two specific gaps remain, both about *completeness* rather
+> than arithmetic:
+>
+> - **Cost figures do not yet say what falls outside your window.** The server
+>   knows; the card does not print it. See *Usage has its own windows* below.
+> - **Archive keeps things for less time than it says.** See *Archive does not
+>   keep things as long as it claims* at the end.
+>
+> Everything else on the board is either measured or blank.
 
 ---
 
@@ -108,7 +114,7 @@ its process is still alive, and the four buttons that act on it.
 | **Focus** | Jumps you to that session's terminal window |
 | **Send** | Types an instruction into it |
 | **Interrupt** | Stops what it is doing |
-| **Archive** | Removes a finished session from the board |
+| **Archive** | Removes a finished session from the board — but see the retention warning at the end before relying on it to *keep* anything |
 
 The first three need cmux (see the glossary). Without it they grey out with a
 reason, and the board still watches everything perfectly well.
@@ -225,6 +231,20 @@ since, it has hidden more, silently, while reading exactly the same.
 Treat any figure here as *spend inside the window you chose*, never as total
 spend. "Our 30-day cost" and "what this has cost us" are different questions,
 and only one of them has a button.
+
+**The guarantee being built here: this product will tell you when a view cannot
+show you everything.** Not "show you less and look complete" — say so, and say
+how much is outside. The measurement already exists. Ask the server for the last
+30 days today and it answers with the window's spend *and* what sits before it:
+on this machine, **$13,916 inside the window beside $33,570 of prior measured
+spend reaching back to 28 March**. A view that hides seventy percent of the
+record while looking whole is the same defect as a cost of `$0` that means
+*unknown*, and it gets the same treatment.
+
+*Where this stands today:* the server computes and returns it — the number above
+is a live reading, not a plan. The Usage card does not print it yet, so for now
+you get the honest answer by asking, not by looking. When the card carries it,
+this paragraph loses its last sentence and nothing else changes.
 
 </details>
 
@@ -538,6 +558,42 @@ box**, and remember `Idle` and `History` apply their own lookback window.
 That is the loading skeleton, shown while the first data is fetched. It should be
 replaced within a second or two. If it persists, the page is waiting on a server
 that is not answering — restart it.
+
+</details>
+
+<details>
+<summary><b>Archive does not keep things as long as it claims</b></summary>
+
+**Known, being fixed. If you archive something because you want to keep it,
+read this first.**
+
+The board advertises **30 days** of archive retention. What you actually get is
+30 days *from the session's last activity*, not from the moment you archived it
+— the clock was already running before you pressed the button, and nothing
+records when you pressed it.
+
+So the retention you receive is 30 days **minus however stale the session
+already was**:
+
+| You archive a session last active… | You keep it for about |
+|---|---|
+| today | 30 days |
+| 20 days ago | 10 days |
+| 31+ days ago | **it is pruned on the next save — possibly before you look again** |
+
+The last row is the one that costs you something. `Archive` returns success and
+the record can already be gone. Meanwhile the number the board reports is a
+fixed constant, so it will keep saying 30 regardless of what was delivered.
+
+**Until this is fixed:** if a finished session matters, copy what you need out
+of its drawer rather than trusting `Archive` to hold it. Archiving a *recently
+active* session behaves as advertised; it is old sessions that evaporate.
+
+**And when it is fixed, it will be fixed forward.** The repair works by
+recording the moment you archive, so it can only help records archived after it
+ships. Anything already in the archive has no such stamp and keeps running on
+the old clock, so treat the warning above as permanent for today's contents and
+retired only for what you archive afterwards.
 
 </details>
 
