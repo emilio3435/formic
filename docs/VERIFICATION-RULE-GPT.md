@@ -41,6 +41,13 @@ as support for a conclusion.
    a timestamp is an anecdote.
 4. **The check itself.** State what the verification command would return if the claim were
    false. A check that cannot fail is not a check — see the trap below.
+5. **Magnitude.** For any number with no on-screen referent — no denominator, no bound, no
+   neighbour it must agree with — state what would have to be true for the value to be
+   *correct*, and check that story holds. **If I would have accepted any value within an order
+   of magnitude, I have not checked it.**
+
+Check 5 is not provenance and the first four do not catch it. A number can be measured by me,
+quoted correctly, and still be meaningless — see "the magnitude blind spot" below.
 
 ---
 
@@ -135,6 +142,35 @@ document whose whole purpose was correcting the first one.
 
 **What the rule would have caught.** Check 2, scope of a quote: read the assertions under the
 comment. They were four lines away.
+
+---
+
+## The magnitude blind spot: a number everyone verified and nobody checked
+
+Checks 1–4 are about **provenance** — did I open the artifact this rests on. There is a second
+way to be wrong that provenance cannot reach.
+
+**The instance.** A program rollup read `1.60B tokens`; a single session read `391.4M`. Six
+lanes audited that surface across two days. I measured the number myself, quoted it in a table,
+and wrote a finding about the cell it sits in — I flagged that it renders truncated as
+`680.4M t…` and never asked whether `680.4M` could be true. It was `sum(sessionTotal)` over
+genuinely the program's agents, so it passed every provenance question anyone thought to ask.
+It was also ~99% cache re-reads of the same conversation counted once per turn: arithmetically
+correct, semantically not tokens consumed. Full working in
+`docs/IMPLAUSIBLE-MAGNITUDES-GPT.md`.
+
+**The general form.** A number is checkable by inspection only when the screen carries something
+to check it against — a bound, a denominator, or a neighbour it must agree with. `78% peak` is
+bounded 0–100. `6 working` cannot exceed the agent count. `Needs you 1` must match the rows
+below it. An unbounded aggregate has none of that, so it is read as a *magnitude* — big swarm,
+big number — and any value within orders of magnitude passes unchallenged.
+
+**The guard is check 5**, and the reason it must be separate: everyone *did* open this artifact.
+Opening the file harder would never have caught it. The question that catches it is arithmetic,
+asked once: *what would have to be true for this to be correct?* For 391M against a 1M context
+window the only available story is "cumulative across turns, dominated by cache re-reads" —
+which is a different quantity from the one the label claims, and noticing that takes one
+sentence.
 
 ---
 
