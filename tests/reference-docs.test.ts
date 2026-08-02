@@ -23,6 +23,8 @@ const readme = read("README.md");
 const architecture = read("ARCHITECTURE.md");
 const quickstart = read("QUICKSTART.md");
 const triage = read("TRIAGE-WORKFLOW.md");
+const deploy = read("DEPLOY.md");
+const security = read("SECURITY.md");
 const pkg = read("package.json");
 
 const serverModules = readdirSync(join(ROOT, "src/server")).filter((n) => n.endsWith(".ts"));
@@ -295,5 +297,134 @@ describe("TRIAGE-WORKFLOW.md stays true to the triage subsystem", () => {
       expect(triage, `TRIAGE-WORKFLOW.md dropped the ${label} field`).toContain(`\`${label}\``);
       expect(triageSrc, `the built prompt no longer emits ${label}`).toContain(label);
     }
+  });
+});
+
+describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
+  /* Every line here is an instruction someone follows against production. A
+     stale sentence elsewhere wastes a minute; a wrong command here restarts the
+     live dashboard from the wrong place, so each claimed guard is pinned to the
+     line of shell that implements it. */
+  const deployScript = read("scripts/anthill-deploy.sh");
+  const previewScript = read("scripts/anthill-preview.sh");
+
+  test("every script it tells an operator to run exists", () => {
+    const named = [...deploy.matchAll(/scripts\/([a-z-]+\.sh)/g)].map((m) => m[1]);
+    expect(named.length, "the regex stopped finding script references").toBeGreaterThan(0);
+    for (const script of new Set(named)) {
+      expect(() => read(join("scripts", script)), `DEPLOY.md points at missing scripts/${script}`).not.toThrow();
+    }
+  });
+
+  test("the guards it promises are the guards the deploy script has", () => {
+    expect(deploy).toContain("Deploy worktree must be on `main`");
+    expect(deployScript).toContain('if [ "$BRANCH" != "main" ]');
+    expect(deploy).toContain("Red `tsc` or `bun test` aborts the deploy");
+    expect(deployScript).toContain("bunx tsc --noEmit ||");
+    expect(deployScript).toContain("bun test ||");
+    expect(deploy).toContain("then health-check");
+    expect(deployScript).toContain("/api/health");
+    expect(deploy).toContain("prints the exact rollback command");
+    expect(deployScript).toContain("reset --hard");
+  });
+
+  test("the ports it reserves are the ports the scripts use", () => {
+    /* The whole rulebook rests on 4701 being production and 471x being
+       disposable. If the preview script ever stopped refusing 4701, the
+       sentence telling people previews are safe becomes the dangerous one. */
+    expect(deploy).toContain("4710–4719");
+    expect(previewScript).toContain("PREVIEW_LO=4710");
+    expect(previewScript).toContain("PREVIEW_HI=4719");
+    expect(deploy).toContain("refuses 4701");
+    expect(previewScript).toContain("PROD_PORT=4701");
+    expect(deployScript).toContain("4701");
+  });
+
+  test("the launchd label it names is the one both scripts and the restart use", () => {
+    const label = "ai.imaginethat.anthill";
+    expect(deploy).toContain(label);
+    expect(deployScript).toContain(`LABEL="${label}"`);
+    expect(deploy).toContain("launchctl kickstart -k gui/$UID/ai.imaginethat.anthill");
+    expect(deployScript).toContain("launchctl kickstart -k");
+  });
+
+  test("the lane branches it names as sources exist", () => {
+    /* Named branches rot silently — `ant-hill/luna-ops-canvas-reconciled` lost
+       its date suffix and pointed at nothing for days. A reader cannot tell a
+       renamed branch from one they lack. */
+    const branches = [...deploy.matchAll(/\(`((?:ant-hill|feat)\/[a-z0-9/-]+)`\)/g)].map((m) => m[1]);
+    expect(branches.length, "the regex stopped finding branch references").toBeGreaterThan(0);
+    const known = Bun.spawnSync(["git", "branch", "-a", "--format=%(refname:short)"], { cwd: ROOT });
+    const refs = new Set(new TextDecoder().decode(known.stdout).split("\n").map((r) => r.replace(/^origin\//, "").trim()));
+    for (const branch of branches) {
+      expect(refs.has(branch), `DEPLOY.md names branch "${branch}", which no longer exists`).toBe(true);
+    }
+  });
+});
+
+describe("SECURITY.md describes the boundary the code implements", () => {
+  /* An overclaim here is the worst failure mode in the repo: it tells an
+     operator a defense exists. Each bullet is pinned to the guard behind it, so
+     removing a check fails the suite rather than quietly widening the boundary
+     while the doc still promises it. */
+
+  test("the control surface is exactly the four actions it lists", () => {
+    expect(security).toContain("`focus`, `instruct`, `interrupt`, and local `archive`");
+    expect(read("src/server/control.ts"))
+      .toContain('export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"]');
+  });
+
+  test("instruct really does reject CR/LF and oversized text", () => {
+    expect(security).toContain("`instruct` rejects CR/LF and oversized text");
+    // The newline guard lives in control.ts, the size cap in http.ts.
+    expect(read("src/server/control.ts")).toContain("/[\\r\\n]/.test(instruction)");
+    expect(read("src/server/http.ts")).toContain("MAX_INSTRUCTION_BYTES");
+  });
+
+  test("the 30-second freshness gate covers control and broadcast, and exempts archive", () => {
+    expect(security).toContain("older than 30 seconds");
+    expect(read("src/server/http.ts")).toContain("MAX_CONTROL_SNAPSHOT_AGE_MS = 30_000");
+    // Archive is exempt because it changes local data, not cmux.
+    expect(security).toContain("`archive` is exempt");
+    expect(read("src/server/http.ts")).toContain('parsed.action !== "archive"');
+    // Broadcast was documented as UNPROTECTED for a day after it was fixed.
+    expect(security).toContain("STALE_SNAPSHOT");
+    expect(read("src/server/broadcast.ts")).toContain("STALE_SNAPSHOT");
+  });
+
+  test("every route family it claims is origin-checked has its own gate", () => {
+    /* The doc names seven. They are enforced in six different files, so a
+       reader has no practical way to confirm this by hand — which is exactly
+       why the promise needs a test rather than trust. */
+    const gates: Record<string, string> = {
+      control: "src/server/http.ts",
+      broadcast: "src/server/broadcast.ts",
+      settings: "src/server/settings.ts",
+      attention: "src/server/app.ts",
+      triage: "src/server/triage.ts",
+      recollect: "src/server/app.ts",
+    };
+    for (const [route, file] of Object.entries(gates)) {
+      expect(security, `SECURITY.md stopped listing ${route}`).toContain(route);
+      expect(read(file), `${route} lost its ORIGIN_REJECTED gate in ${file}`).toContain("ORIGIN_REJECTED");
+    }
+  });
+
+  test("the loopback bind and the redacted diagnostics are real", () => {
+    // Flattened: these sentences wrap, and a reflow is not a security change.
+    const flowed = security.replace(/\s+/g, " ");
+    expect(flowed).toContain("bound to `127.0.0.1`");
+    expect(read("src/server/index.ts")).toContain('const HOSTNAME = "127.0.0.1"');
+    expect(flowed).toContain("omits raw process command lines");
+    expect(read("src/server/debug-identity.ts")).toContain('command: "[redacted]"');
+  });
+
+  test("the design record it defers to still exists", () => {
+    /* It is a recorded NO. If the link breaks, the reasoning that stops someone
+       re-proposing the separate-user broker becomes unreachable. */
+    for (const doc of [...security.matchAll(/\]\(([A-Za-z0-9./-]+\.md)\)/g)].map((m) => m[1])) {
+      expect(() => read(doc), `SECURITY.md links to missing ${doc}`).not.toThrow();
+    }
+    expect(security).toContain("AUTH-OS-SEPARATION-DESIGN.md");
   });
 });

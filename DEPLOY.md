@@ -16,8 +16,18 @@ Rule: **never** launch anything on 4701 by hand. Previews always go through
 
 ## Deploy = land into `main`, then run the deploy script
 
-`:4701` serves the **local files** of the `the-mountain-main` worktree (branch `main`).
-A fix is live only when it is committed on `main` *there* and the service is restarted.
+`:4701` serves the **local files** of the `the-mountain-main` worktree.
+A fix is live only when it is committed there and the service is restarted.
+
+The launchd job pins `WorkingDirectory` to that worktree, so **:4701 serves
+whichever branch the worktree is currently on** — not `main` by definition. On a
+shared checkout that is often some lane's branch. `anthill-deploy.sh` refuses to
+run unless the worktree is on `main`, which is the guard, but nothing stops the
+branch moving afterwards. Confirm before trusting what :4701 is showing:
+
+```bash
+git -C ~/Developer/the-mountain-main branch --show-current
+```
 
 ```bash
 # 1. Land your change onto main (cherry-pick from a lane, or merge). Example:
@@ -36,7 +46,7 @@ Rules the deploy script enforces so you don't have to remember them:
 ## Do NOT deploy a lane over `main`
 
 `main` is the integration target; other agents land multiple lanes into it. The
-canonical FE lane (`ant-hill/luna-ops-canvas-reconciled`) and BE lane
+canonical FE lane (`ant-hill/luna-ops-canvas-reconciled-20260722`) and BE lane
 (`feat/vitals-collectors-be`) are *sources*, not deploy targets — pointing :4701
 at a lane can regress work that was landed into `main` from elsewhere. Always
 land INTO `main`.
