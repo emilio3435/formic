@@ -29,7 +29,7 @@ myself before it ships.
 An unchecked relay may still go in a document — as an open question, explicitly marked, never
 as support for a conclusion.
 
-## Three checks before any count becomes a finding
+## Four checks before any count becomes a finding
 
 1. **Population.** When a number on the wire disagrees with a number on screen, prove the two
    count the same set before calling it a bug. `totals.attention`, `issues.length`, and "agents
@@ -39,6 +39,52 @@ as support for a conclusion.
    comment justifies the line beneath it, not the paragraph I wish it justified.
 3. **Freshness.** Every count names the read it came from. A live board moves; a number without
    a timestamp is an anecdote.
+4. **The check itself.** State what the verification command would return if the claim were
+   false. A check that cannot fail is not a check — see the trap below.
+
+---
+
+## The failure mode this rule exists to catch
+
+**Unchecked relays cluster where a finding feels strongest.**
+
+This is a general property of working through subagents, not an observation about one day. A
+worker's most striking sentence is simultaneously the most tempting to publish and the least
+likely to be reopened, because it already reads as conclusive. Verification effort naturally
+flows to claims that look shaky — which are, by construction, the ones least likely to be
+load-bearing.
+
+So the distribution is predictable: unverified claims will be few, and they will be the ones
+carrying the argument. Both times this lane published something false, the bad claim was the
+single best sentence in its section.
+
+The counter is procedural, not attitudinal: **the check is mandatory at triage, before I know
+which claim will end up carrying the argument.** Deciding what to verify after the shape of the
+finding is clear is deciding too late — by then the strongest claim has already earned trust it
+has not been audited for.
+
+---
+
+## The deeper trap: a re-verification method that cannot fail
+
+Catching a wrong claim is one level. Catching a wrong *method for checking claims* is the level
+underneath, and it is easier to miss because the check appears to have been done.
+
+**The instance.** Re-verifying which server fields the client consumes, I ran
+`grep -rl <field> src/web/ | wc -l` and read a non-zero count as "consumed". `contextPct`
+scored 1 and I nearly marked it verified-as-consumed. Opening the hits showed **both were
+inside comments** — prose *about* `contextPct`, in a file that never reads it. File presence is
+not consumption. The claim was right and my method for confirming it was wrong, which would
+have produced a confident correction in the wrong direction.
+
+**The general form.** A verification step that returns a signal under both hypotheses verifies
+nothing. `grep -l` answers "is this string in this file", not "does this code use this value" —
+those diverge exactly where a codebase discusses itself, which this one does constantly.
+
+**The guard is check 4:** before running a verification command, say what it returns if the
+claim is *false*. If the answer is "the same thing", the command is not a check. Prefer reading
+the hits over counting them; prefer the assertion over the comment; prefer the rendered value
+over the field's presence.
 
 ## Worker brief requirements
 
