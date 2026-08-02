@@ -84,7 +84,10 @@ export interface CmuxNotification {
   id?: string;
   surfaceId: string;
   workspaceId?: string;
-  createdAt: string;
+  /* Absent when the source timestamp could not be parsed. Deliberately not
+     defaulted: 1970 is the one value guaranteed to lose every "newer than"
+     comparison, so inventing it silenced live requests for a human forever. */
+  createdAt?: string;
   title?: string;
   subtitle?: string;
   body?: string;

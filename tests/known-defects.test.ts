@@ -145,7 +145,7 @@ describe("DEFECT: cmux.ts backdates an unreadable notification to the epoch", ()
     { id: "n1", surface_id: "SURF-A", workspace_id: "W", title: "Agent needs you", ...overrides },
   ]);
 
-  test.failing("an unparseable created_at is not backdated to the epoch", () => {
+  test("an unparseable created_at is not backdated to the epoch", () => {
     /* src/server/cmux.ts, parseCmuxNotifications.
 
        1970 is not a neutral default. Acknowledging a surface records
@@ -156,7 +156,7 @@ describe("DEFECT: cmux.ts backdates an unreadable notification to the epoch", ()
       .not.toBe("1970-01-01T00:00:00.000Z");
   });
 
-  test.failing("an unread notification survives an unreadable timestamp", async () => {
+  test("an unread notification survives an unreadable timestamp", async () => {
     /* The operator-facing harm. The surface was cleared once; a NEW
        notification arrives — the agent is asking for a human right now — but
        its timestamp will not parse, so it is stamped 1970 and silently
@@ -187,7 +187,7 @@ describe("DEFECT: cmux.ts backdates an unreadable notification to the epoch", ()
     expect(store.filter(arriving)).toHaveLength(1);
   });
 
-  test.failing("a notification with no surface id is not dropped without a trace", () => {
+  test("a notification with no surface id is not dropped without a trace", () => {
     // A flatMap returns [] for it, so the unread count silently shrinks.
     // Whatever the right handling is — attribute it, or report it — vanishing
     // is not it.

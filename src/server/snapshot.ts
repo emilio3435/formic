@@ -102,12 +102,19 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           .filter((candidate) => {
             if (candidate.surfaceId !== target.surfaceId) return false;
             const startedAtMs = source.startedAt ? Date.parse(source.startedAt) : Number.NaN;
+            if (!Number.isFinite(startedAtMs)) return true;
+            /* A notification whose time would not parse is kept. It cannot be
+               proven older than the session, and dropping it here would restore
+               the silence the parser stopped inventing: an agent asking for a
+               human, suppressed because its clock was unreadable. */
+            if (candidate.createdAt === undefined) return true;
             const notificationAtMs = Date.parse(candidate.createdAt);
-            return !Number.isFinite(startedAtMs) || (
-              Number.isFinite(notificationAtMs) && notificationAtMs >= startedAtMs
-            );
+            return Number.isFinite(notificationAtMs) && notificationAtMs >= startedAtMs;
           })
-          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+          // Newest first; an unknown time sorts last so a dated notification is
+          // preferred when both exist, without discarding the undated one.
+          .sort((left, right) =>
+            (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))[0]
       : undefined;
     // Only let the cmux pane own program grouping when the session cwd agrees.
     // Otherwise a home-cwd orchestrator in a project-titled workspace gets filed
