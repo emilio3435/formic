@@ -830,21 +830,31 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
        is missing. Every consumer that treats this as a complete total already
        checks costKnown first (pulse.ts does), so none of them can bank a floor
        by accident. */
-    const estimatedCostUsd = invocations === 0
-      ? null
-      : byProvider.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
-    /* The floor: what the priced providers actually cost. `estimatedCostUsd`
-       above stays null whenever ANY provider is unpriced, which is right for a
-       field that claims to be the total — but it was the ONLY cost on the wire,
-       so a single unpriced provider erased every measured dollar beside it. */
+    /* Both cost figures are the SAME additive floor, and that is the fix.
+
+       estimatedCostUsd used to sum `row.costUsd ?? 0`. A provider holding any
+       unpriced row has costUsd null — right for a strict per-provider total —
+       and `?? 0` then dropped that provider's ENTIRE measured cost to zero
+       without saying so. Not the strict total (which would be null), not the
+       floor: a third quantity nobody had defined.
+
+       Measured live, it silently deleted $6,563.55 as soon as the window was
+       wide enough to include the provider concerned — invisible at 1d, 7d and
+       30d, present from 60d out. Anything summing estimatedCostUsd against
+       priorSpend (which uses the floor) therefore lost exactly that much, and
+       only past the point where the two populations diverged.
+
+       This is the c58d85c defect for the third time: a partial measure
+       suppressed because part of it was missing. `?? 0` is how it hid here —
+       an absent value coerced to a confident zero. Both fields now come from
+       the same additive floor, so the identity holds at EVERY window rather
+       than at the ones we happen to check. costKnown still carries whether the
+       figure is complete; that is its job, not the value's. */
     const pricedProviders = byProvider.filter((row) => row.measuredCostUsd != null);
     const measuredCostUsd = pricedProviders.length === 0
       ? null
       : pricedProviders.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0);
-    /* measuredCostUsd sums the providers' own floors, so it includes the money
-       a partly-priced provider DID measure; estimatedCostUsd sums their strict
-       totals, which are null for such a provider. measuredCostUsd is therefore
-       the larger and more complete of the two, and stays the figure to render. */
+    const estimatedCostUsd = invocations === 0 ? null : measuredCostUsd;
     /* Summed from the providers' own gaps, so it counts the calls that were
        actually unpriced rather than every call belonging to a nulled provider. */
     const costMissingInvocations = byProvider

@@ -137,9 +137,16 @@ describe("a partial measurement reports what it measured beside what it missed",
        qualifying it. costKnown below is what now carries "not all of it". */
     expect(usage.estimatedCostUsd).not.toBeNull();
     expect(usage.measuredCostUsd).not.toBeNull();
-    /* And the floor stays the LARGER of the two, because it includes the money
-       a partly-priced provider did measure. It remains the figure to render. */
-    expect(usage.measuredCostUsd!).toBeGreaterThan(usage.estimatedCostUsd!);
+    /* They are now the SAME figure, and that assertion is corrected rather than
+       relaxed. It used to require the floor to be strictly LARGER, which was
+       true only because estimatedCostUsd summed each provider's strict total
+       with `?? 0` and so coerced a partly-priced provider's whole measured cost
+       to zero. The gap this pinned was the defect, not a design: live it was
+       $6,563.55, visible only once the window widened enough to include that
+       provider. Both figures are one additive floor now; costKnown carries
+       completeness, which is its job and not the value's. */
+    expect(usage.measuredCostUsd).toBe(usage.estimatedCostUsd);
+    expect(usage.measuredCostUsd!).toBeGreaterThan(0);
     expect(usage.costMissingInvocations).toBeGreaterThan(0);
     expect(usage.costKnown).toBe(false);
   });

@@ -334,6 +334,42 @@ describe("window plus prior does not depend on where the window is drawn", () =>
     });
   });
 
+  test.skipIf(!canSqlcipher)("the identity holds on estimatedCostUsd too, not only on the floor", async () => {
+    /* The window this file checked was the floor, and estimatedCostUsd was a
+       different quantity: it summed each provider's STRICT total with `?? 0`,
+       so a provider holding any unpriced row had its whole measured cost
+       coerced to zero. Live, that deleted $6,563.55 — and only once the window
+       was wide enough to include that provider, so 1d, 7d and 30d all agreed
+       while 60d and beyond did not.
+
+       A conservation law is only worth having if it covers every field a
+       consumer might add up. Checking one of them is how this survived. */
+    await withRows(SPLIT_FIXTURE, async () => {
+      const sums: number[] = [];
+      for (const from of SPLITS) {
+        const usage = await getUsageSummary(from, TO);
+        sums.push((usage.estimatedCostUsd ?? 0) + (usage.priorSpend.measuredCostUsd ?? 0));
+      }
+
+      expect(new Set(sums.map((value) => value.toFixed(6))).size, `sums: ${sums.join(", ")}`).toBe(1);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("an unpriced provider never zeroes the measured cost beside it", async () => {
+    /* The mechanism, isolated. `?? 0` on an absent provider total is an absent
+       value coerced into a confident zero — the same shape as every other
+       defect removed today, and the hardest to see because zero looks like an
+       answer. */
+    await withRows(SPLIT_FIXTURE, async () => {
+      const usage = await getUsageSummary("2026-07-01T00:00:00.000Z", TO);
+      const unpriced = usage.byProvider.find((row) => row.costUsd == null);
+
+      expect(unpriced, "fixture no longer contains an unpriced provider").toBeDefined();
+      expect(unpriced!.measuredCostUsd).toBeGreaterThan(0);
+      expect(usage.estimatedCostUsd).toBeGreaterThanOrEqual(unpriced!.measuredCostUsd!);
+    });
+  });
+
   test.skipIf(!canSqlcipher)("invocations are conserved across the split too", async () => {
     /* The same property on the count, because a dedup that drops rows would
        satisfy the money invariant while quietly deleting sessions. */
