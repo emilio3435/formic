@@ -1167,6 +1167,25 @@ describe("the cost window's limits are documented as the code enforces them", ()
 /* Three claims added when priorSpend landed and the archive audit closed. Each
    one is a promise about incompleteness, which is the hardest kind to keep
    honest: the failure mode is silence, so nothing breaks when it lapses. */
+/* A ledger discipline, not a claim about the board: any figure in the guide
+   that came from a one-off measurement has to be either re-measured or removed,
+   because a measured number ages into a false one silently. The token-ratio
+   warning said "roughly five hundred times", measured in an earlier session;
+   re-measured live it was 1802x. The fix was not a fresher number — it was to
+   state the shape, which does not age, and to say explicitly that any specific
+   ratio is stale. This pins that no such figure creeps back. */
+describe("no one-off measurement is presented as a standing fact", () => {
+  test("the token-scale warning describes a shape, not a multiplier", () => {
+    const g = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    const warning = g.slice(g.indexOf("They are not the same unit"), g.indexOf("do not add up the column"));
+    expect(warning, "the token warning went missing").toContain("not the sum of its rows");
+    expect(warning, "a specific multiplier came back into the token warning")
+      .not.toMatch(/\b(five hundred|\d{2,4})\s*(times|x)\b/i);
+    expect(warning, "the warning stopped telling the reader that quoted ratios are stale")
+      .toMatch(/moves daily|out of date/i);
+  });
+});
+
 describe("what the docs promise about incompleteness", () => {
   const guide = () => read("ANT-GUIDE.md");
   const flat = (d: string) => d.replace(/\s+/g, " ");

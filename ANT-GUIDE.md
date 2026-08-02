@@ -91,16 +91,19 @@ it launched.
 > included — on a real board, about a third of it came from sessions that are
 > already finished.
 >
-> They are not the same unit and **the program is not the sum of its rows.**
-> Measured here: `1.58B` on a program bar against `682k` on a row — roughly five
-> hundred times apart. If you want to know what a session has used in total,
+> They are not the same unit and **the program is not the sum of its rows.** The
+> gap runs to three or four orders of magnitude — a program bar in the hundreds
+> of millions above a row in the hundreds of thousands — and the multiplier moves
+> daily, so treat any specific ratio you have been told as out of date. What does
+> not move is the rule: if you want to know what a session has used in total,
 > open its drawer and read *used this session*; do not add up the column.
 >
 > One exception, in `History` only: a handful of sessions archived before this
-> distinction existed carry no unit at all, and their Tokens cell shows a
-> whole-session total instead — a few rows out of hundreds, each reading around
-> ten times its neighbours. If a History row looks wildly heavier than the rest,
-> that is why: check its drawer rather than the cell.
+> distinction existed carry no token unit at all. Their Tokens cell is **blank**
+> — measured on the live board, 18 rows out of 534 finished ones, reporting
+> neither a turn nor a session figure. A blank there is the honest answer rather
+> than a fault: the record predates the distinction, so no number can be labelled
+> correctly. Read its drawer if you need the total.
 
 ### 4. Click it, deal with it, press `Escape`
 
