@@ -204,6 +204,28 @@ you, so `Needs you` leads.
 `Idle` and `History` also apply a *lookback* window (6 hours by default) that you
 can widen from the filter bar.
 
+**Usage has its own windows, and the widest one you can ask for is narrower
+than what has been kept.** Two ceilings, and neither is the end of the data:
+
+| What you can ask for | Limit |
+|---|---|
+| The preset buttons | `1h`, `24h`, `7d`, **`30d`** |
+| **Custom**, typed in **hours** | 90 days (`2160`) — also the most the server will answer |
+
+The cost database keeps going after that. So `30d` is not "everything", it is
+the widest *button*; `90d` is not "everything" either, it is the widest
+*question*. On a machine that has been running for months, both are a recent
+slice of the record, and **nothing on the card says so** — a window always looks
+complete, which is what makes this a limit you meet by being surprised rather
+than by reading.
+
+The gap only widens. On day 30 the `30d` view was the whole record; every day
+since, it has hidden more, silently, while reading exactly the same.
+
+Treat any figure here as *spend inside the window you chose*, never as total
+spend. "Our 30-day cost" and "what this has cost us" are different questions,
+and only one of them has a button.
+
 </details>
 
 <details>

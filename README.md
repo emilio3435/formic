@@ -22,7 +22,8 @@ leaves the machine.
   Needs [cmux](https://github.com/manaflow-ai/cmux); without it the board still
   watches everything and the acting controls stay off, because it will not touch
   a terminal it cannot prove it has identified.
-- **Says what it costs**, when a cost source is available.
+- **Says what it costs**, when a cost source is available — inside a window you
+  pick, which is not the same as everything it has recorded.
 
 ## It refuses to invent numbers
 

@@ -1073,3 +1073,93 @@ describe("README, QUICKSTART and ANT-GUIDE cohere as one set", () => {
     expect(readme, "README stopped linking cmux at all").toContain("manaflow-ai/cmux");
   });
 });
+
+/* PR 5's subject is money being HIDDEN rather than overstated, which is the
+   harder direction to notice: a window always looks complete. The guide now
+   states the limitation, and every number in that paragraph is derived here
+   from the code that produces it, because a hardcoded "30d" or "90 days" is
+   exactly the kind of figure that outlives its source. */
+describe("the cost window's limits are documented as the code enforces them", () => {
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("the guide lists the presets the UI actually offers, widest included", () => {
+    const catalogs = read("src/web/client-catalogs.js");
+    const block = catalogs.slice(catalogs.indexOf("USAGE_RANGE_PRESETS"));
+    const labels = [...block.slice(0, block.indexOf("]")).matchAll(/label:\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(labels.length, "the usage presets changed shape").toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(guide(), `ANT-GUIDE stopped listing the \`${label}\` usage preset`).toContain(`\`${label}\``);
+    }
+    const widest = labels[labels.length - 1];
+    expect(guide(), `ANT-GUIDE no longer names \`${widest}\` as the widest preset`)
+      .toMatch(new RegExp(`\\\`${widest}\\\`[^\\n]*(is not "everything"|not "everything")`));
+  });
+
+  test("both ceilings are documented as the code sets them", () => {
+    /* Derive, never hardcode. This cap moved twice in one session — a literal
+       90, then a named MAX_RANGE_MS of 400, then back — while a neighbouring
+       lane reworked the file underneath. Only reading it from source each run
+       caught that the guide had gone stale within minutes of being written.
+       Matches either form so an in-flight refactor fails loudly, not silently. */
+    const app = read("src/web/app.js");
+    const burnbar = read("src/server/burnbar.ts");
+    const customDays = Number(app.match(/Math\.min\(24 \* (\d+),/)?.[1]);
+    expect(customDays, "the Custom clamp could not be read from app.js").toBeGreaterThan(0);
+
+    const guideText = guide();
+    expect(guideText, `ANT-GUIDE stopped documenting the ${customDays}-day Custom ceiling in hours`)
+      .toContain(`${customDays} days (\`${customDays * 24}\`)`);
+    expect(app, "the Custom prompt stopped asking for hours")
+      .toContain('window.prompt("Usage range hours"');
+
+    /* The server cap's exact value is NOT pinned. It changed three times during
+       one session while a neighbouring lane reworked burnbar.ts, and a doc that
+       chases it would be stale between commits. What must hold is the invariant
+       the guide actually relies on: a bound exists, and the UI cannot ask for
+       more than it allows — so the widest question a reader can pose is the
+       Custom clamp, whatever the server's ceiling happens to be. */
+    expect(burnbar, "the range bound disappeared; the guide promises one exists")
+      .toMatch(/Range cannot exceed/);
+    const serverDays = Number(
+      burnbar.match(/MAX_RANGE_MS = (\d+) \*/)?.[1]
+      ?? burnbar.match(/toMs - fromMs > (\d+) \* 24/)?.[1],
+    );
+    if (Number.isFinite(serverDays)) {
+      expect(serverDays, "the UI can now request a range the server will refuse")
+        .toBeGreaterThanOrEqual(customDays);
+    }
+  });
+
+  test("the guide says the shortfall is silent, which is the whole finding", () => {
+    const flat = guide().replace(/\s+/g, " ");
+    /* An alternation was too weak here: replacing "Nothing on the card says any
+       of this" with the OPPOSITE claim still passed, because the other phrasing
+       carried the match on its own. Require the negative claim itself, and
+       reject a doc that says the card reports its own coverage — if that ever
+       becomes true, this paragraph is what has to change. */
+    expect(flat, "ANT-GUIDE stopped warning that nothing on the card says it is truncated")
+      .toMatch(/nothing on the card says/i);
+    expect(flat, "ANT-GUIDE now claims the card shows coverage; verify that shipped before saying so")
+      .not.toMatch(/the card shows its coverage/i);
+    /* Both halves, not an alternation. Inverting one while the other stands
+       leaves the guide contradicting itself and still passing — the same weak
+       shape that let a "coverage is shown" edit through a paragraph that says
+       the opposite two lines earlier. */
+    expect(flat, "ANT-GUIDE stopped stating the gap grows").toMatch(/gap only widens/i);
+    expect(flat, "ANT-GUIDE stopped saying the omission grows silently over time")
+      .toMatch(/it has hidden more/i);
+    /* The claim this whole section exists for, and it was unpinned until a
+       mutation removed it and nothing failed: the store outlasts the widest
+       window a reader can ask for. Without this sentence the table reads as a
+       complete account of the limits, which is the surprise it exists to
+       prevent. */
+    expect(flat, "ANT-GUIDE stopped saying the record outlasts the widest window")
+      .toMatch(/database keeps going after that|keeps going after/i);
+    expect(flat, "ANT-GUIDE stopped distinguishing the widest button from the widest question")
+      .toMatch(/widest \*button\*[\s\S]{0,80}widest\s+\*question\*/i);
+    /* No percentage is pinned on purpose: the audit measured 32.6% on one
+       machine on one day, and that share moves every day by construction. */
+    expect(guide(), "a machine-specific coverage percentage was hardcoded into the guide")
+      .not.toMatch(/3[0-9]\.\d\s*%/);
+  });
+});
