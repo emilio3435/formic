@@ -80,9 +80,9 @@ concluding nothing was collected.
 
 - **An empty board** reading `Watching. No sessions running yet.`, with a line
   beneath it counting **healthy** collectors — `4 of 4 collectors healthy` on a
-  machine that has just been set up. Nothing has run yet, and only sessions from
-  roughly the last day and a half are scanned. That count is the proof the board
-  is working: a stalled client cannot manufacture a ticking snapshot age. If a
+  machine that has just been set up. Nothing has run yet, and the scan window
+  above still applies. That count is the proof the board is working: a stalled
+  client cannot manufacture a ticking snapshot age. If a
   collector really is degraded it says so there instead, because an empty board
   with a blind collector is an *unknown* fleet rather than an empty one.
 - **A `Blocked` health card**, offering one next step: `Start cmux, then Refresh
@@ -95,10 +95,6 @@ concluding nothing was collected.
   wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
-
-<!-- pr4:sourceAbsent — the calm day-one board and the healthy count depend on
-     the absent-vs-degraded split. On main today a no-cmux first run still reads
-     "1 of 4 collectors degraded"; this section describes the fixed behaviour. -->
 
 ### Why it still says 4 of 4 when you have none of them
 
@@ -160,15 +156,10 @@ of these is a guarantee, not a missing feature:
   outlives the agent and usually belongs to your shell by then, so an
   instruction to a dead agent would land in whatever is sitting there now. Once
   the board has checked and found the process gone, the Send is refused and says
-  the pane may now belong to someone else. <!-- pr4:processKnownDead -->
+  the pane may now belong to someone else.
 - **It will never act on a stale picture.** Which terminal an agent is on has a
   short shelf life. If the board's evidence is too old to trust, the write is
   refused rather than sent to where the agent used to be.
-  <!-- pr4:MAX_CONTROL_SNAPSHOT_AGE_MS — merged for Send/Interrupt; the
-       attention path gets the same gate in PR 4. -->
-- **It never invents a number.** A cost with no source reads `unavailable`, not
-  `$0`. A collector that was never installed reads *absent*, not *broken*.
-  <!-- pr4:sourceAbsent — absent-vs-degraded ships in PR 4. -->
 
 **Focus is exempt from all of it, on purpose.** Looking costs nothing and going
 to the pane is how you recover, so there is always a way in. The board is never

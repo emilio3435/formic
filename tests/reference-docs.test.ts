@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /* README.md and ARCHITECTURE.md drift faster than anyone re-reads them. A label
@@ -991,65 +991,17 @@ describe("the safety promises the docs make on the product's behalf", () => {
   });
 });
 
-/* PR 4 is open; PR 3 merged. A doc that describes unmerged behaviour is the same
-   defect as one describing a fix that never landed, so every statement in these
-   docs that depends on code still in flight carries an HTML marker naming the
-   symbol it waits on: <!-- pr4:SYMBOL ... -->.
-
-   This test is what makes the marker worth writing. It fails if a marked claim
-   names a symbol that exists nowhere in src/ — which catches both halves of the
-   risk: a doc shipped ahead of its code, and a marker left behind after the code
-   was renamed. On merge, grep for "pr4:" and delete the markers; the claims
-   underneath are already true by then. */
-describe("claims that depend on unmerged code are marked and traceable", () => {
-  const MARKER = /<!--\s*pr4:([A-Za-z_][A-Za-z0-9_]*)/g;
-  const srcTree = (() => {
-    const walk = (dir: string): string[] =>
-      readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
-        e.isDirectory() ? walk(join(dir, e.name))
-          : /\.(ts|js)$/.test(e.name) ? [readFileSync(join(ROOT, dir, e.name), "utf8")] : [],
-      );
-    return walk("src").join("\n");
-  })();
-
-  test("every pr4 marker names a symbol that exists in src/", () => {
-    const marked = [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const;
-    let total = 0;
-    for (const [name, doc] of marked) {
-      for (const [, symbol] of doc.matchAll(MARKER)) {
-        total += 1;
-        expect(srcTree, `${name} marks a claim as waiting on "${symbol}", which is in no source file`)
-          .toContain(symbol);
-      }
-    }
-    expect(total, "the pr4 markers vanished; either PR 4 merged (delete this test) or they were lost")
-      .toBeGreaterThan(0);
-  });
-
-  /* A count alone was too weak: stripping one doc's markers still passed,
-     because the other doc's kept the total above zero. Tie each marker to the
-     CLAIM it guards, so a marker cannot be removed while the claim it covers
-     stays behind. */
-  test("each unmerged claim carries its own marker in the doc that makes it", () => {
-    const guards = [
-      { symbol: "processKnownDead", claim: /already exited|process is gone|process has died/i },
-      { symbol: "sourceAbsent", claim: /never installed reads \*absent\*|4 of 4 when you have none/i },
-    ];
-    for (const [name, doc] of [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const) {
-      for (const { symbol, claim } of guards) {
-        if (!claim.test(doc.replace(/\s+/g, " "))) continue;
-        expect(doc, `${name} makes a claim that waits on ${symbol} but carries no pr4 marker for it`)
-          .toContain(`pr4:${symbol}`);
-      }
-    }
-  });
-
-  test("the dead-process claim matches what the code does, not what it will do", async () => {
-    /* The guide says a dead row shows a LIT Send that refuses on press, rather
-       than a greyed one. That is not a softening — controlsFor grants the
-       capability and control.ts refuses the write, so the button and the gate
-       genuinely disagree. If controlsFor ever learns liveness, this flips and
-       the guide's "read the chip rather than the button" paragraph must go. */
+/* PR 3 and PR 4 are both merged, so the pr4:SYMBOL markers and the test that
+   enforced them are gone — every claim they guarded is now true of main. This
+   one assertion outlived them, because it is not about merge state: the guide
+   tells a reader that a dead row shows a LIT Send which refuses on press, and
+   that is only worth saying while the button and the gate disagree. */
+describe("the guide describes the dead-row controls as they actually behave", () => {
+  test("controlsFor still grants instruct on a process the gate will refuse", async () => {
+    /* control.ts refuses the write via processKnownDead, but controlsFor never
+       learned liveness, so the capability comes back enabled. If it ever does
+       learn, this flips and the guide's "read the chip rather than the button"
+       paragraph must go with it. */
     const { controlsFor } = await import("../src/server/snapshot-agent");
     const attested = { surfaceId: "s1", resolution: "exact", attestation: "attested", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
     const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
@@ -1059,5 +1011,65 @@ describe("claims that depend on unmerged code are marked and traceable", () => {
     const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
     expect(guide, "the guide stopped warning that a dead row's Send still looks live")
       .toMatch(/refused when pressed|still shows a lit/i);
+  });
+});
+
+/* Read as a SET, not three files. Each was edited many times in one day by
+   different passes, and the failure mode stopped being staleness and became
+   contradiction: the same claim restated in a third vocabulary, or two
+   sentences that cannot both be true. These pin the seams between the files. */
+describe("README, QUICKSTART and ANT-GUIDE cohere as one set", () => {
+  const flat = (d: string) => d.replace(/\s+/g, " ");
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("one state, one name: the health verdict a reader is told to look for", () => {
+    /* ANT-GUIDE's table said `Blocked` and its troubleshooting said `Blocking`
+       for the same cmux-less state. The card headline is "Blocked"
+       (SEVERITY_HEADLINE in app.js); "Blocking" is an internal severity label.
+       A guide that uses both teaches a word the screen never shows. */
+    expect(read("src/web/app.js"), "the card headline stopped being Blocked")
+      .toMatch(/SEVERITY_HEADLINE\s*=\s*\{\s*blocking:\s*"Blocked"/);
+    for (const [name, doc] of [["ANT-GUIDE.md", guide()], ["QUICKSTART.md", quickstart]] as const) {
+      expect(doc, `${name} tells the reader to look for "Blocking", which no card shows`)
+        .not.toMatch(/`Blocking`/);
+    }
+  });
+
+  test("the identity promise is stated once per document, not three times", () => {
+    /* It appeared three times in ANT-GUIDE alone, in three vocabularies —
+       "cannot name", "cannot positively identify", "cannot prove it has
+       identified" — which reads as three different rules. One statement per
+       file: README summarises, QUICKSTART and the guide each promise it once. */
+    const phrasings = /(refuses|refuse|will not|would not|never) to type into a terminal it cannot|not type into a terminal it cannot|type into a terminal it cannot/gi;
+    const count = (d: string) => (flat(d).match(phrasings) ?? []).length;
+    expect(count(guide()), "ANT-GUIDE states the identity promise more than once again").toBeLessThanOrEqual(1);
+    expect(count(readme), "README states the identity promise more than once").toBeLessThanOrEqual(1);
+    expect(count(quickstart), "QUICKSTART states the identity promise more than once").toBeLessThanOrEqual(1);
+  });
+
+  test("the cost-honesty rule is not restated inside QUICKSTART", () => {
+    /* README owns this rule. QUICKSTART gives the concrete monitoring-only
+       case once; it used to also carry a general restatement of both examples. */
+    const mentions = (flat(quickstart).match(/reads? `?unavailable`?|never invents a number/gi) ?? []).length;
+    expect(mentions, "QUICKSTART states the cost-honesty rule twice again").toBeLessThanOrEqual(1);
+    expect(readme, "README stopped owning the honesty rule").toContain("It refuses to invent numbers");
+  });
+
+  test("every cross-document link resolves to a file that exists", () => {
+    for (const [name, doc] of [["README.md", readme], ["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", guide()]] as const) {
+      for (const [, target] of doc.matchAll(/\]\(\.\/([A-Za-z0-9._/-]+)\)/g)) {
+        expect(existsSync(join(ROOT, target)), `${name} links to ./${target}, which does not exist`).toBe(true);
+      }
+    }
+  });
+
+  test("the cmux link points at the project this actually integrates with", () => {
+    /* mountain-labs/cmux 404s even authenticated — it never existed. The real
+       one is manaflow-ai/cmux, the Ghostty-based macOS terminal for AI coding
+       agents whose panes and notifications this reads. A stranger's first
+       click from the front door must not land on a 404. */
+    expect(readme, "README points at a cmux repo that does not exist")
+      .not.toContain("mountain-labs/cmux");
+    expect(readme, "README stopped linking cmux at all").toContain("manaflow-ai/cmux");
   });
 });

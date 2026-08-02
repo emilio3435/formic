@@ -128,9 +128,6 @@ So the two are gated differently:
 | the session's process is gone | on | **refused when pressed** |
 | ambiguous, or no pane found | off | greyed out |
 
-<!-- pr4:processKnownDead — the dead-process row depends on the liveness gate in
-     src/server/control.ts. Until that ships, a dead row accepts a Send. -->
-
 Two of those look different in the window. A row the board cannot name greys the
 button out before you touch it. A row whose **process has died still shows a lit
 Send**, and refuses only once you press it, telling you why. Same guarantee
@@ -338,10 +335,10 @@ your browser. "The board is stale" means the snapshot stopped updating.
 **cmux**
 : A separate terminal manager. With it, the Ant Hill knows which terminal window
 each session lives in, which is what makes **Focus** and **Send** possible.
-Without it the dashboard still watches everything; it just refuses to type into a
-terminal it cannot positively identify.
+Without it the dashboard still watches everything, and the write controls stay
+off — see *The promise behind that table*.
 
-**Positively identify** *(what that phrase costs you)*
+**Name a session** *(what the phrase costs you)*
 : Not "found a likely pane" — *cmux names this session on this pane*, evidenced
 by the session's transcript file being held open there or its ID appearing in the
 command that started it. A pane merely sitting in the right folder is a guess,
@@ -387,9 +384,9 @@ card already names an action no re-pull can perform — closing a pane, say —
 there is no button, because the only one available would be the one that cannot
 help.
 
-**By far the most common is a cmux-related `Blocking` on a machine where cmux was
-never set up.** That is expected, not a fault — the Ant Hill deliberately refuses
-to type into a terminal it cannot prove it has identified. If you only want to
+**By far the most common is a cmux-related `Blocked` on a machine where cmux was
+never set up.** That is expected, not a fault — it is the first guarantee in
+*The promise behind that table* above, doing its job. If you only want to
 watch, ignore it forever. If you want Focus and Send, install cmux and run
 `bun run setup:cmux` once.
 
@@ -420,8 +417,6 @@ agent is not discarded — it lands in whatever is on that terminal now. Note th
 one does **not** grey the button out: the row shows a `died` chip and a lit Send,
 and the refusal arrives when you press it. Trust the chip over the button.
 → *Fix:* none needed. The session is over. Read it, then `Archive` it.
-
-<!-- pr4:processKnownDead — refusal lives in src/server/control.ts. -->
 
 **The board's picture is too old to act on.** Which terminal an agent is on goes
 stale quickly, so a write is refused rather than sent to where it *used* to be.

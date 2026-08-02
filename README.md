@@ -19,9 +19,9 @@ leaves the machine.
 - **Opens on what needs you.** Not on everything. If nothing is waiting, it says
   so and you close the tab.
 - **Acts on a session.** Jump to its terminal, type an instruction, interrupt it.
-  Needs [cmux](https://github.com/mountain-labs/cmux); without it the board still
-  watches everything, it just refuses to type into a terminal it cannot prove it
-  has identified.
+  Needs [cmux](https://github.com/manaflow-ai/cmux); without it the board still
+  watches everything and the acting controls stay off, because it will not touch
+  a terminal it cannot prove it has identified.
 - **Says what it costs**, when a cost source is available.
 
 ## It refuses to invent numbers
