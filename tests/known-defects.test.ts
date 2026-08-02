@@ -109,7 +109,7 @@ describe("DEFECT: collectors.ts undercounts OMP tokens past a corrupt record", (
   const clean = () => parseOmpJsonl([head, msg(good(1000)), msg(good(3000))].join("\n"), meta);
   const corrupt = () => parseOmpJsonl([head, msg(good(1000)), msg(UNREADABLE), msg(good(3000))].join("\n"), meta);
 
-  test.failing("a dropped usage record does not pass as a smaller honest total", () => {
+  test("a dropped usage record does not pass as a smaller honest total", () => {
     /* src/server/collectors.ts, createOmpParser: the Number.isFinite guard
        `continue`s past an unreadable usage record.
 
@@ -125,7 +125,7 @@ describe("DEFECT: collectors.ts undercounts OMP tokens past a corrupt record", (
     expect(corrupt()?.tokens).not.toEqual(clean()?.tokens);
   });
 
-  test.failing("a session with unreadable usage does not claim clean observation", () => {
+  test("a session with unreadable usage does not claim clean observation", () => {
     // Either the total accounts for every record, or provenance stops saying
     // "observed". Doing neither is the defect.
     expect(corrupt()?.tokens.provenance).not.toBe("observed");

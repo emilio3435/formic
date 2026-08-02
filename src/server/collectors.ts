@@ -301,6 +301,14 @@ function createOmpParser(): IncrementalParser {
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
   let sessionTotal = 0;
   let sessionCachedInput = 0;
+  /* Set when a usage record could not be read. The guard below `continue`s past
+     such a record, which silently turns corruption into a believable SMALLER
+     number: a session that burned more than a clean one reported exactly the
+     same total, with provenance still claiming "observed". Claude's parser has
+     no such guard and propagates NaN to null — "not reported", which is loud
+     and correct. The count here cannot be repaired, so the claim about it is
+     withdrawn instead. */
+  let usageUnreadable = false;
   let exited = false;
   let index = 0;
 
@@ -334,7 +342,10 @@ function createOmpParser(): IncrementalParser {
         const cachedInput = Number(usage.cacheRead ?? 0);
         const cacheWrite = Number(usage.cacheWrite ?? 0);
         const total = Number(usage.totalTokens ?? input + output + cachedInput + cacheWrite);
-        if (![input, output, cachedInput, total].every(Number.isFinite)) continue;
+        if (![input, output, cachedInput, total].every(Number.isFinite)) {
+          usageUnreadable = true;
+          continue;
+        }
         latestUsage = { input, output, cachedInput, total };
         /* `total` is this call's SIZE and includes the re-read prefix; summing it
            over the session counts a cached token once per later call. Measured on
@@ -356,7 +367,17 @@ function createOmpParser(): IncrementalParser {
         startedAt: isoTimestamp(session.timestamp),
         updatedAt: updatedAt ?? isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta),
         tokens: latestUsage
-          ? { ...latestUsage, sessionTotal, sessionCachedInput, scope: "latest-turn", provenance: "observed" }
+          ? {
+            ...latestUsage,
+            sessionTotal,
+            sessionCachedInput,
+            scope: "latest-turn",
+            /* Not "observed": at least one record was skipped, so the totals are
+               a floor rather than a measurement. Everything downstream that
+               requires observed evidence — contextPct, burn coverage — now
+               declines to use them, which is the point. */
+            provenance: usageUnreadable ? "estimated" : "observed",
+          }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
         humanMessages: humanMessages(messages),
