@@ -186,6 +186,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? `${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`.slice(-MAX_TRANSCRIPT_TAIL_CHARS)
         : source.transcriptTail,
       elapsedMs: source.startedAt ? Math.max(0, elapsedEndMs - Date.parse(source.startedAt)) : undefined,
+      ...(source.activeMs === undefined ? {} : { activeMs: source.activeMs }),
       git: surface
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,

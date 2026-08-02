@@ -1,4 +1,5 @@
 import { getUsageSummary, type UsageSummary } from "./burnbar";
+import { AGENT_IDLE_GAP_MS } from "./types";
 import type {
   AgentSnapshot,
   HubPulse,
@@ -8,7 +9,9 @@ import type {
 
 const BUCKET_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60_000;
-const STALL_THRESHOLD_MS = 15 * 60_000;
+// One definition of "quiet long enough to not be working", shared with the
+// collectors' active-time accumulator so the two cannot drift apart.
+const STALL_THRESHOLD_MS = AGENT_IDLE_GAP_MS;
 const BURN_REFRESH_TTL_MS = 60_000;
 const BURN_REFRESH_TIMEOUT_MS = 20_000;
 const MAX_BUCKETS = 13;

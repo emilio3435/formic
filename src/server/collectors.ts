@@ -9,7 +9,7 @@ import {
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
-import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import { AGENT_IDLE_GAP_MS, MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 
@@ -102,6 +102,40 @@ function parserFor(
   if (provider === "codex") return createCodexParser();
   if (provider === "claude") return createClaudeParser();
   throw new Error(`incremental parser unavailable for ${provider}: ${parser.name}`);
+}
+
+/* Working time, accumulated turn by turn.
+
+   Elapsed on the board is updatedAt − startedAt, which is a SPAN: the magnitude
+   audit found one agent reading 87.1 days, arithmetically right and about 204x
+   any generous activity bound, because every dormant hour between the first
+   touch and the last sits inside it. This counts only the gaps short enough to
+   be one working stretch, so a session that was picked up again after a week
+   contributes the work, not the week.
+
+   Bounded by construction: every increment is a real interval between two
+   recorded turns, so the sum can never exceed the span it is drawn from. */
+class ActiveTime {
+  #lastMs?: number;
+  #activeMs = 0;
+
+  observe(timestamp: string | undefined): void {
+    if (!timestamp) return;
+    const atMs = Date.parse(timestamp);
+    if (!Number.isFinite(atMs)) return;
+    if (this.#lastMs !== undefined) {
+      const gap = atMs - this.#lastMs;
+      // Out-of-order rows contribute nothing rather than a negative.
+      if (gap > 0 && gap <= AGENT_IDLE_GAP_MS) this.#activeMs += gap;
+    }
+    if (this.#lastMs === undefined || atMs > this.#lastMs) this.#lastMs = atMs;
+  }
+
+  /* Undefined until at least one interval was observed: a single-turn session
+     has no measurable working time, and 0 would read as "did nothing". */
+  get value(): number | undefined {
+    return this.#activeMs > 0 ? this.#activeMs : undefined;
+  }
 }
 
 function isoTimestamp(value: unknown): string | undefined {
@@ -214,6 +248,7 @@ function makeAgent(input: {
   updatedAt: string;
   tokens: TokenUsage;
   transcriptTail?: string;
+  activeMs?: number;
   parentSourceSessionId?: string;
   runtimeSessionId?: string;
   threadDepth?: number;
@@ -278,6 +313,7 @@ function makeAgent(input: {
     threadDepth: input.threadDepth,
     nickname: input.nickname,
     transcriptTail: input.transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
+    activeMs: input.activeMs,
     artifacts: input.meta.sourcePath
       ? [{
           label: `${input.provider.toUpperCase()} transcript`,
@@ -298,6 +334,7 @@ function createOmpParser(): IncrementalParser {
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
   let sessionTotal = 0;
   let sessionCachedInput = 0;
@@ -322,6 +359,7 @@ function createOmpParser(): IncrementalParser {
         exited ||= row.type === "custom" && row.data?.kind === "session_exit";
         const timestamp = isoTimestamp(row.timestamp ?? row.message?.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
+        activeTime.observe(timestamp);
         if (row.type !== "message") continue;
 
         const text = plainText(row.message?.content);
@@ -380,6 +418,7 @@ function createOmpParser(): IncrementalParser {
           }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
@@ -399,6 +438,7 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
 function createCodexParser(): IncrementalParser {
   let sessionRow: JsonRecord | undefined;
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let model: string | undefined;
   let effort: string | undefined;
   let task: string | undefined;
@@ -415,6 +455,7 @@ function createCodexParser(): IncrementalParser {
         if (!sessionRow && row.type === "session_meta") sessionRow = row;
         const timestamp = isoTimestamp(row.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
+        activeTime.observe(timestamp);
         const payload = row.payload ?? row;
         if (typeof payload.effort === "string" && payload.effort.trim()) effort = payload.effort.trim();
         if (row.type === "event_msg" && payload.type === "user_message") {
@@ -499,6 +540,7 @@ function createCodexParser(): IncrementalParser {
         threadDepth,
         nickname,
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
         meta,
@@ -540,6 +582,7 @@ function createClaudeParser(): IncrementalParser {
   let cwd: string | undefined;
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let model: string | undefined;
   let effort: string | undefined;
   let runtimeSessionId: string | undefined;
@@ -578,6 +621,7 @@ function createClaudeParser(): IncrementalParser {
           startedAt ??= timestamp;
           if (!updatedAt || timestamp > updatedAt) updatedAt = timestamp;
         }
+        activeTime.observe(timestamp);
         const text = plainText(row.message?.content);
         if (row.type === "user") {
           if (row.isMeta !== true) exited = false;
@@ -654,6 +698,7 @@ function createClaudeParser(): IncrementalParser {
             }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
         meta,

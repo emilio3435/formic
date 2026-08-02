@@ -39,6 +39,11 @@ export interface CollectedAgent {
      front window, so a question asked after an explanation never survived it. */
   lastAgentClosing?: string | null;
   transcriptTail?: string;
+  /* Time the agent was actually working: the sum of gaps between consecutive
+     recorded turns, counting only gaps short enough to be one stretch. Bounded
+     by construction — it can never exceed updatedAt − startedAt, and on a
+     session that sat dormant for weeks it is a small fraction of it. */
+  activeMs?: number;
   artifacts: Artifact[];
   gates: string[];
   /** True only when the latest provider turn contains an explicit clean-completion record. */
@@ -92,6 +97,13 @@ export interface CmuxNotification {
   subtitle?: string;
   body?: string;
 }
+
+/* How long a gap between two recorded turns still counts as one working
+   stretch. Not a new number: it is the board's own stall threshold, already
+   shipped as pulse.momentum.stallThresholdMs and already the point at which a
+   quiet session is called stalled. Reusing it means active time and "stalled"
+   cannot drift apart into two different opinions about the same silence. */
+export const AGENT_IDLE_GAP_MS = 15 * 60_000;
 
 export interface CollectionResult<T> {
   value: T;

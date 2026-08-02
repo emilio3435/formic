@@ -226,6 +226,13 @@ export interface AgentSnapshot {
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;
+  /* Working time, as distinct from elapsed. `elapsedMs` is updatedAt − startedAt:
+     a SPAN, which on a session picked up again after a fortnight counts the
+     fortnight. This counts only the gaps between consecutive recorded turns that
+     are short enough to be one stretch, so a renderer can say how long an agent
+     actually worked instead of how long ago it started. Absent when the session
+     recorded too few turns to measure an interval — never 0 as a stand-in. */
+  activeMs?: number;
   tokens: TokenUsage;
   /** Observed session token occupancy as a percentage of the reported context window. */
   contextPct?: number;
