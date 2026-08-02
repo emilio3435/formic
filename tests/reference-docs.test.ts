@@ -21,6 +21,8 @@ const read = (name: string) => readFileSync(join(ROOT, name), "utf8");
 
 const readme = read("README.md");
 const architecture = read("ARCHITECTURE.md");
+const quickstart = read("QUICKSTART.md");
+const triage = read("TRIAGE-WORKFLOW.md");
 const pkg = read("package.json");
 
 const serverModules = readdirSync(join(ROOT, "src/server")).filter((n) => n.endsWith(".ts"));
@@ -173,6 +175,125 @@ describe("README.md stays true to the product", () => {
   test("every sibling document it links to exists", () => {
     for (const doc of [...readme.matchAll(/\]\(\.\/([A-Za-z0-9./-]+\.md)\)/g)].map((m) => m[1])) {
       expect(() => read(doc), `README.md links to missing ${doc}`).not.toThrow();
+    }
+  });
+});
+
+describe("QUICKSTART.md stays true to a first run", () => {
+  /* QUICKSTART is read once, by someone with no way to tell a stale doc from
+     their own mistake. Every string it quotes is something they will compare
+     against their terminal character by character, so a drifted one reads as
+     "I broke it" rather than "the doc is old". */
+
+  test("the messages it tells a beginner to expect are the ones that get printed", () => {
+    const startScript = read("scripts/anthill-start.sh");
+    const noCmux = "cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled).";
+    expect(quickstart, "QUICKSTART.md stopped quoting the no-cmux start message").toContain(noCmux);
+    expect(startScript, "anthill-start.sh no longer prints that message").toContain(noCmux);
+
+    /* This one was vague until it was pinned — "a message asking you to open
+       cmux first" cannot drift because it never said anything exact. It quotes
+       the real line now, which is both more useful and checkable. */
+    const setupHint = "Open cmux once so it creates the template, then re-run.";
+    expect(quickstart).toContain(setupHint);
+    expect(read("scripts/setup-cmux-password.ts")).toContain(setupHint);
+  });
+
+  test("the board strings it quotes are strings the client renders", () => {
+    /* Prose wraps a long quote across lines, so compare against the doc with
+       whitespace flattened — otherwise a markdown reflow reads as drift and the
+       real thing hides behind a false alarm. */
+    const flowed = quickstart.replace(/\s+/g, " ");
+    for (const quoted of [
+      "cmux unreachable — terminal titles and Focus/Send stay offline.",
+      "Start cmux, then Refresh — Focus and Send come back on their own.",
+      "The ant hill is still — no tracked agents.",
+      "All clear",
+    ]) {
+      expect(flowed, `QUICKSTART.md stopped quoting "${quoted}"`).toContain(quoted);
+      expect(client, `"${quoted}" is not a string the client renders any more`).toContain(quoted);
+    }
+    // The verdict a monitoring-only install lands on, and the badge that means healthy.
+    expect(quickstart).toContain("`Blocked`");
+    expect(client).toContain('blocking: "Blocked"');
+    expect(quickstart).toContain("**Live**");
+    expect(client).toContain('live: "Live"');
+  });
+
+  test("the lookback trap it warns about is the real one", () => {
+    /* The board opens on 6 hours while 36 are scanned, so a reader whose last
+       session was 8 hours ago sees an empty board and concludes the install
+       failed. If either number moves, the warning stops matching the trap. */
+    const catalogs = read("src/web/client-catalogs.js");
+    expect(quickstart).toContain("**6-hour**");
+    expect(catalogs).toContain("DEFAULT_LOOKBACK_HOURS = 6");
+    expect(quickstart).toContain("**36 hours**");
+    expect(read("src/server/settings.ts")).toContain("DEFAULT_SCAN_WINDOW_HOURS = 36");
+    expect(quickstart).toContain("1h / 6h / 24h / 36h");
+    expect(catalogs).toContain("LOOKBACK_PRESETS = [1, 6, 24, 36]");
+  });
+
+  test("every command and file it tells a reader to run or copy exists", () => {
+    for (const command of [...quickstart.matchAll(/`?bun run ([a-z:]+)`?/g)].map((m) => m[1])) {
+      expect(pkg, `QUICKSTART.md tells a reader to run missing script "${command}"`).toContain(`"${command}"`);
+    }
+    expect(() => read("config/programs.example.json"), "the example config it says to copy is gone").not.toThrow();
+    // "no runtime dependencies" is a promise about what lands on their machine.
+    expect(quickstart).toContain("no runtime dependencies");
+    expect(JSON.parse(pkg).dependencies, "the app grew a runtime dependency").toBeUndefined();
+    // `bun start` binds the port the doc sends them to.
+    expect(quickstart).toContain("127.0.0.1:4701");
+    expect(read("scripts/anthill-start.sh")).toContain('PORT="${MOUNTAIN_PORT:-4701}"');
+  });
+});
+
+describe("TRIAGE-WORKFLOW.md stays true to the triage subsystem", () => {
+  /* This doc describes a path that launches a subprocess against a real repo.
+     Its safety claims are the kind a reader trusts without checking, so each
+     one is pinned to the constant that makes it true. */
+  const triageSrc = read("src/server/triage.ts");
+
+  test("the endpoints it documents are registered", () => {
+    for (const path of [...triage.matchAll(/`(?:POST|GET) (\/api\/triage\/[a-z]+)`/g)].map((m) => m[1])) {
+      expect(server, `${path} is documented but not registered`).toContain(path);
+    }
+    // Guard: the regex still finds them, so an empty match set cannot pass silently.
+    expect(triage).toContain("/api/triage/generate");
+    expect(triage).toContain("/api/triage/run");
+  });
+
+  test("the launch it describes is the launch that happens", () => {
+    /* Model, sandbox and reported label are the difference between "a read-only
+       diagnostic" and "something with write access to your repo". */
+    expect(triage).toContain("GPT-5.6 Luna · XHIGH");
+    expect(triageSrc).toContain('model: "GPT-5.6 Luna · XHIGH · read-only"');
+    expect(triage).toContain("read-only sandbox");
+    expect(triageSrc).toContain('"--sandbox", "read-only"');
+    expect(triageSrc).toContain('"--model", "gpt-5.6-luna"');
+  });
+
+  test("the four states it names are the four the store validates", () => {
+    const states = ["queued", "running", "completed", "blocked"];
+    for (const state of states) {
+      expect(triage, `TRIAGE-WORKFLOW.md stopped naming the ${state} state`).toContain(state);
+    }
+    expect(triageSrc).toContain('["queued", "running", "completed", "blocked"]');
+  });
+
+  test("the server-side limits it promises are fixed in code", () => {
+    expect(triage).toContain("ten-minute runtime limit");
+    expect(triageSrc).toContain("10 * 60_000");
+    /* Idempotent queue, non-idempotent launch. The doc claimed for a week that
+       a repeat launch returns the existing run; it is refused with 409, and the
+       two halves are easy to conflate again. */
+    expect(triage).toContain("409");
+    expect(triageSrc).toContain("requeue it before running again");
+  });
+
+  test("the prompt contract it publishes is the prompt that gets built", () => {
+    for (const label of ["Goal:", "Success means:", "Evidence:", "Recommended path:", "Stop when:"]) {
+      expect(triage, `TRIAGE-WORKFLOW.md dropped the ${label} field`).toContain(`\`${label}\``);
+      expect(triageSrc, `the built prompt no longer emits ${label}`).toContain(label);
     }
   });
 });

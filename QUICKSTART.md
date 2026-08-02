@@ -90,8 +90,9 @@ Requires cmux installed. Once, then restart:
 bun run setup:cmux
 ```
 
-Skip it if you only want to watch. Running it without cmux installed exits with
-a message asking you to open cmux first.
+Skip it if you only want to watch. Running it before cmux has ever started exits
+with `Open cmux once so it creates the template, then re-run.` — cmux writes its
+config file on first launch, and there is nothing to edit until it has.
 
 ## Group sessions by project (optional)
 
