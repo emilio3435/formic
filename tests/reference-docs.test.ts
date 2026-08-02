@@ -1754,3 +1754,40 @@ describe("TODAY.md names the absent-zero assertion, not just the omission", () =
       .toMatch(/silence invites a question/i);
   });
 });
+
+/* The five-hour update. TODAY.md was written at 18:00 and the evening produced
+   findings that change what a reader should believe about how settled the
+   verification is — chiefly that the first EXTERNAL check ran tonight, found a
+   disagreement on its first pass, and its verdict rests on arithmetic no test
+   repeats. Pinned so the section cannot decay into "we checked and it was fine". */
+describe("TODAY.md is honest about how young the verification is", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it says the external check is new and that the board held", () => {
+    const t = today();
+    expect(t, "TODAY.md stopped saying the board was checked against an outside record")
+      .toMatch(/checked against an outside record for the first time/i);
+    expect(t, "TODAY.md stopped saying our collector was the correct one")
+      .toMatch(/Our collector was right/i);
+    expect(t, "TODAY.md stopped explaining why BurnBar's figure was lower")
+      .toMatch(/cumulative row had stopped advancing/i);
+  });
+
+  test("it separates the audited mechanism from the unaudited verdict", () => {
+    /* The distinction that keeps this honest: the prefix rule has tests in both
+       directions (session-calls.test.ts), while the one adjudication actually
+       performed was a hand recomputation recorded in prose. Conflating them
+       would make the story sound finished. */
+    const t = today();
+    expect(t, "TODAY.md stopped saying the adjudication mechanism is tested")
+      .toMatch(/mechanism is properly tested, in both directions/i);
+    expect(t, "TODAY.md stopped admitting the verdict itself is unrepeated")
+      .toMatch(/established \*\*by hand from the raw transcript\*\*/i);
+    expect(t, "TODAY.md stopped saying nothing would catch a wrong recomputation")
+      .toMatch(/nothing here would catch it/i);
+    /* And the mechanism it credits must actually exist with both directions. */
+    const arb = read("tests/session-calls.test.ts");
+    expect(arb, "the prefix rule lost its positive case").toMatch(/equal to a prefix is recognisable/i);
+    expect(arb, "the prefix rule lost its negative case").toMatch(/NOT a prefix does not match/i);
+  });
+});

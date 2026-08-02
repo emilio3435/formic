@@ -2,7 +2,9 @@
 
 Five lanes worked this board all day. Git has the changelog; this is the part
 git cannot tell you — **which of these you can now rely on, and which you
-cannot.** Two minutes.
+cannot.** Five minutes — it was two when written at 18:00, and the evening
+added a section that changes what you should believe. If you have only two,
+read **Start here** and **What the last five hours changed**.
 
 **Start here:** open <http://127.0.0.1:4701> and read `Needs you`. It is the
 shortlist of sessions actually waiting on a human, it is what the board opens
@@ -90,6 +92,41 @@ sitting outside your chosen window. The card does not print it, so a 30-day view
 still *looks* complete. The number is available; the pixel is not.
 
 ---
+
+## What the last five hours changed
+
+*This document was written at 18:00. Read this section before trusting the rest
+of it — the verification story is less settled than the sections above imply.*
+
+**The board was checked against an outside record for the first time, and it
+held.** Until tonight every number here was verified against itself. A new test
+joins per-session totals to OpenBurnBar's independent record, and it immediately
+found a disagreement: one session where the board counted 293,235 and BurnBar
+recorded 112,258, 161% apart. **Our collector was right.** 112,258 turned out to
+be the sum of that session's first three calls of seven — BurnBar's cumulative
+row had stopped advancing.
+
+That is the strongest evidence produced today, and stronger than anything
+self-verification could give you: an outside record disagreed, and the
+adjudication went our way on the merits rather than by assumption.
+
+**But read how it was settled.** A new endpoint publishes the board's per-call
+series so a foreign total can be prefix-matched — if it equals a prefix, the
+other side is behind; if it falls between call boundaries, the disagreement is
+real. That mechanism is properly tested, in both directions.
+
+**The verdict itself is not.** That the 112,258 was a three-call prefix was
+established **by hand from the raw transcript** and lives in prose and comments.
+No test re-derives it. So the machinery for adjudicating the next disagreement
+is audited, while the one adjudication actually performed rests on a
+recomputation nobody has repeated. If that hand arithmetic was wrong, nothing
+here would catch it.
+
+**Two things follow for a reader.** The board's numbers now have one external
+corroboration rather than none, which is a real change in their standing. And
+the verification story is *younger* than it looks: the first outside check ran
+tonight, found something on its first pass, and its conclusion is one person's
+arithmetic.
 
 ## Still open
 

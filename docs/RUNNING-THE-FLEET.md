@@ -126,6 +126,15 @@ argument.
 The tell that you have not really read something: **you can quote the line but
 not its surroundings.**
 
+**Check the state again immediately before you send it.** Not when you found it.
+Three times in one evening I prepared a routing note for something another lane
+had already fixed — twice while I was still writing it. Detection was sound;
+*dispatch latency* was the defect, and a finding routed after it is fixed is not
+harmless: it costs the reader a wrong belief about the state of the system,
+which is the same failure as a stale number in a document arriving by a
+different route. Same discipline as dating a measurement, pointed at a claim
+about someone else's work.
+
 Full working, with two worked failures: [`VERIFICATION-RULE-GPT.md`](./VERIFICATION-RULE-GPT.md).
 
 ---
