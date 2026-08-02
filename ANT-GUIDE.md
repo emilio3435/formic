@@ -158,12 +158,16 @@ applies and what would bring it back.
 
 *How much of this has been seen rather than reasoned:* the first and last rows
 are ordinary and visible on any busy board. The middle two are not — a healthy
-fleet spends almost no time in either, and when this was written the live board
-held **none** of them across 556 sessions. Both were confirmed by exercising the
-code that decides them rather than by watching a row do it: the capability
-function returns Send-off with the matching reason for a folder match and for a
-dead process, and the write path issues no command at all in either case. Tested,
-not yet witnessed.
+fleet spends almost no time in either, and the live board has held **none** of
+them all day across 556 sessions.
+
+Both have now been produced deliberately and watched, on a probe agent in an
+isolated instance pointed at a real cmux pane. A folder-matched row came back
+with **Focus enabled, Send disabled**, carrying exactly the reason quoted below;
+a row whose process was known dead came back the same way. So these rows are
+observed behaviour rather than inference — though produced on demand rather than
+met in the wild, which is a weaker thing than seeing a real fleet do it and is
+worth saying.
 
 ### The promise behind that table
 

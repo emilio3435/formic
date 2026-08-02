@@ -1352,8 +1352,12 @@ describe("the guide separates what was observed from what was exercised", () => 
   test("the gate table admits which rows have not been seen on a live board", () => {
     expect(guide(), "the guide stopped distinguishing seen from reasoned")
       .toMatch(/seen rather than reasoned/i);
-    expect(guide(), "the guide stopped saying the middle rows were exercised, not watched")
-      .toMatch(/Tested, not yet witnessed/i);
+    /* Superseded: both rows have since been produced on a probe and watched.
+       The requirement is now that the guide keeps the weaker qualifier rather
+       than the stronger claim — asserted in the re-measurement suite below, in
+       one place rather than two spellings. */
+    expect(guide(), "the guide stopped qualifying how the two rare rows were seen")
+      .toMatch(/produced on demand rather than met in the wild/i);
   });
 
   test("the collapsed summary line does not promise All clear unconditionally", () => {
@@ -1409,7 +1413,15 @@ describe("claims are re-measured after their foundations move", () => {
        the observable rows match, and unique-cwd and died remain absent from the
        board, so the "tested, not yet witnessed" note is still the true one. If
        it is ever dropped, it must be because a row was actually seen. */
-    expect(prose(), "the guide stopped admitting two rows have not been witnessed")
-      .toMatch(/Tested, not yet witnessed/i);
+    /* Both rows have now been produced on a probe agent and watched through a
+       running server (unique-cwd via a synthetic transcript resolved onto a
+       real unclaimed pane; died via a seeded binding whose PIDs are gone). The
+       note changed from "not yet witnessed" to observed — but the guide must
+       keep the weaker qualifier, because producing a state on demand is not the
+       same as meeting it in the wild. */
+    expect(prose(), "the guide overstates the evidence for the two rare rows")
+      .toMatch(/produced on demand rather than met in the wild/i);
+    expect(prose(), "the guide stopped saying the rare rows were actually observed")
+      .toMatch(/observed behaviour rather than inference/i);
   });
 });
