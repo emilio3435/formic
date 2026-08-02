@@ -237,8 +237,49 @@ describe("the range parameter means what it says", () => {
     }
   });
 
-  test("a range longer than the 90-day ceiling is still refused", async () => {
-    // The shorthand must not become a way around an existing bound.
-    expect((await get("range=120d")).status).toBe(400);
+  test("a window the data supports is answered, not refused", async () => {
+    /* 120d used to be a 400 while the source held ~130 days of history, so the
+       ceiling was refusing questions the data could answer. */
+    expect((await get("range=120d")).status).toBe(200);
+  });
+
+  test("the bound still exists, so the shorthand is not a way around it", async () => {
+    /* The other half, and why the cap did not simply go away: it is a query
+       bound, not a retention policy. Finite so a malformed request cannot scan
+       without limit, wide enough that no real history is unreachable. */
+    const response = await get("range=500d");
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error?.code).toBe("INVALID_RANGE");
+  });
+});
+
+describe("a window says what it cannot see", () => {
+  test.skipIf(!canSqlcipher)("spend before the window is reported, not silently dropped", async () => {
+    /* The retention finding. The UI offered at most 30 days while the source
+       held ~130, so a 30-day view showed $13,842 of $47,412 — 29% — and nothing
+       said so. Same rule as costKnown: a view that cannot show everything
+       states what it cannot see rather than implying completeness. */
+    await withFixture(MIXED_ROWS, async () => {
+      const later = await getUsageSummary("2026-07-23T00:00:00.000Z", "2026-07-24T00:00:00.000Z");
+
+      expect(later.invocations).toBe(0);
+      expect(later.priorSpend.invocations).toBe(4);
+      expect(later.priorSpend.measuredCostUsd).toBeCloseTo(83, 6);
+      // And how far back the source goes, so a card can offer to widen.
+      expect(later.priorSpend.earliestAt).toBe("2026-07-22T10:00:00.000Z");
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("a window with nothing before it claims nothing before it", async () => {
+    /* Absent-first, and the control: no prior rows is "nothing there", never
+       $0.00 of prior spend, which would read as a measured claim. */
+    await withFixture(MIXED_ROWS, async () => {
+      const earliest = await getUsageSummary("2026-07-01T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
+
+      expect(earliest.priorSpend.invocations).toBe(0);
+      expect(earliest.priorSpend.measuredCostUsd).toBeNull();
+      expect(earliest.priorSpend.earliestAt).toBeNull();
+    });
   });
 });

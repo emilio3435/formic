@@ -63,6 +63,7 @@ function usageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     tokensKnown: true,
     tokensMissing: 0,
     aggregatedInvocations: 0,
+    priorSpend: { earliestAt: null, invocations: 0, measuredCostUsd: null },
     estimatedCostUsd: 1.25,
     measuredCostUsd: 1.25,
     costMissingInvocations: 0,

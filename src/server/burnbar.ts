@@ -56,6 +56,23 @@ export interface UsageSummary {
      not own. Reported rather than repaired: the money is real, the unit is what
      is wrong. */
   aggregatedInvocations: number;
+  /* What exists BEFORE this window, so a view can say what it is not showing.
+
+     The UI offered 1h/24h/7d/30d and the API refused anything over 90 days,
+     while the database holds ~130 days. Measured: a 30-day view shows
+     $13,216.67 of $42,886.25 — it silently omitted $29,669.59, 69.2% of all
+     recorded spend, on the surface an operator uses to judge what a fleet
+     costs. Nothing said so.
+
+     Same rule as costKnown: a view that cannot show everything states what it
+     cannot see rather than suppressing the value or implying completeness.
+     `earliestAt` is how far back the source goes at all, so a card can offer to
+     widen rather than leaving the operator to guess a bound. */
+  priorSpend: {
+    earliestAt: string | null;
+    invocations: number;
+    measuredCostUsd: number | null;
+  };
   /* The COMPLETE cost of the window, or null when any invocation in it is
      unpriced. Kept strict: a consumer reading this alone must never mistake a
      floor for a total. */
@@ -184,6 +201,13 @@ export interface CostResult {
    tokens than this per invocation cannot be describing single calls. Read from
    config rather than hardcoded so a fleet on bigger models raises the bound
    instead of quietly reclassifying its ordinary rows as aggregates. */
+/* A query bound, not a retention policy: finite so a malformed request cannot
+   scan without limit, wide enough that no real history is unreachable. Named
+   rather than inline because reference-docs derives the documented ceiling from
+   it — the guide's claim that each limit is stricter than the next only holds
+   if all three are read from source. */
+const MAX_RANGE_MS = 400 * 24 * 60 * 60 * 1_000;
+
 const MAX_CONTEXT_WINDOW = Math.max(
   ...Object.values(MODEL_CONFIG.claudeContextWindows ?? {}),
   1_000_000,
@@ -479,7 +503,13 @@ function parseRange(url: URL): { from: string; to: string } | string {
       : toMs - 24 * 60 * 60 * 1_000;
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return "from and to must be ISO timestamps.";
   if (fromMs >= toMs) return "from must be earlier than to.";
-  if (toMs - fromMs > 90 * 24 * 60 * 60 * 1_000) return "Range cannot exceed 90 days.";
+  /* Was 90 days, which refused windows the DATA supports: the source holds
+     ~130 days, so a 120-day query returned 400 while queryable spend sat behind
+     the refusal. The bound exists to stop an unbounded scan, not to decide what
+     an operator may ask about. */
+  if (toMs - fromMs > MAX_RANGE_MS) {
+    return `Range cannot exceed ${Math.round(MAX_RANGE_MS / 86_400_000)} days.`;
+  }
   return { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() };
 }
 
@@ -541,6 +571,9 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     processedTokens: null,
     // Nothing was read, so nothing can be classified as an aggregate either.
     aggregatedInvocations: 0,
+    // And nothing is known about what lies before the window, which is not the
+    // same as knowing there is nothing.
+    priorSpend: { earliestAt: null, invocations: 0, measuredCostUsd: null },
     estimatedCostUsd: null,
     // Nothing was read, so there is no measured floor either.
     measuredCostUsd: null,
@@ -652,6 +685,30 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       };
     });
     const aggregatedInvocations = rows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
+    /* One aggregate over everything older than this window. Cheap, and it is
+       the only way the card can distinguish "nothing was spent before this" from
+       "we did not look". */
+    const [priorRow] = await runEncryptedQuery(
+      `SELECT
+         COUNT(*) AS invocations,
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
+         MIN(startTime) AS earliest
+       FROM token_usage
+       WHERE startTime < ?`,
+      [dbFrom],
+    );
+    const priorInvocations = num(priorRow?.invocations) ?? 0;
+    const priorEarliestRaw = str(priorRow?.earliest);
+    const priorSpend = {
+      /* SQLite gives back BurnBar's own "yyyy-MM-dd HH:mm:ss.SSS" UTC text;
+         hand it on as ISO so a consumer is not left parsing a private format. */
+      earliestAt: priorEarliestRaw
+        ? new Date(`${priorEarliestRaw.replace(" ", "T")}Z`).toISOString()
+        : null,
+      invocations: priorInvocations,
+      // Absent-first: no rows before the window is "nothing there", not "$0 spent".
+      measuredCostUsd: priorInvocations === 0 ? null : num(priorRow?.measuredCost) ?? 0,
+    };
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
     const tokensMissing = byProvider.reduce((sum, row) => sum + row.tokensMissing, 0);
     const tokensKnown = tokensMissing === 0;
@@ -706,6 +763,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       tokensKnown,
       tokensMissing,
       aggregatedInvocations,
+      priorSpend,
       estimatedCostUsd,
       measuredCostUsd,
       costMissingInvocations,
