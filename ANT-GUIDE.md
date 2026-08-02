@@ -48,9 +48,13 @@ Four steps. Do these in order and you have used the tool correctly.
 nothing to report is absent, not empty — so the shape of the band is itself the
 signal. Above, two cards: work in flight, and one session near its context limit.
 
-**When nothing at all needs you it collapses to a single line** — what is
-shipping, what it is burning, and `All clear`. No cards, no numbers to read past.
-That line is the answer, and you can close the tab.
+**When nothing needs you it collapses to a single line** — what is shipping,
+what it is burning, and a one-word verdict. No cards, no numbers to read past.
+That word is `All clear` only when nothing is being watched either; if any
+session has gone quiet it reads **`Watch`** instead, with the count beside it.
+Observed live: `4 shipping · 31k tok/min · $4.81 last hour · 6 quiet 15m+ ·
+Watch`. Both are answers you can close the tab on — `Watch` means nothing is
+asking for you, not that something is wrong.
 
 When cards are showing, **only `Findings` is a to-do list** — it names both what
 is wrong and what to do about it. The rest are context, not tasks: how much is
@@ -144,10 +148,19 @@ and the button and the server are now decided by the same rule rather than by
 two places agreeing. Hover any greyed control and it tells you which of these
 applies and what would bring it back.
 
+*How much of this has been seen rather than reasoned:* the first and last rows
+are ordinary and visible on any busy board. The middle two are not — a healthy
+fleet spends almost no time in either, and when this was written the live board
+held **none** of them across 556 sessions. Both were confirmed by exercising the
+code that decides them rather than by watching a row do it: the capability
+function returns Send-off with the matching reason for a folder match and for a
+dead process, and the write path issues no command at all in either case. Tested,
+not yet witnessed.
+
 ### The promise behind that table
 
-Every Send that table withholds — greyed out or refused on press — is the
-cockpit declining to do something on your behalf that it cannot prove is safe.
+Every Send that table withholds is the cockpit declining to do something on your
+behalf that it cannot prove is safe.
 Read the rows as guarantees, because that is what they are:
 
 **It will not type into a terminal it cannot name.** Not "probably the right

@@ -1258,3 +1258,34 @@ describe("what the docs promise about incompleteness", () => {
       .toMatch(/two things that are still being fixed/i);
   });
 });
+
+/* Separating "true of the running product" from "true of a commit that landed".
+   The guide's gate table has four rows; two of them describe states a healthy
+   board almost never occupies, so they cannot be observed on demand. That is
+   not a reason to drop them — they are the safety behaviour — but it IS a
+   reason to say which rows have been watched and which were exercised at the
+   gate. These pin the honesty of that distinction rather than the states. */
+describe("the guide separates what was observed from what was exercised", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("the gate table admits which rows have not been seen on a live board", () => {
+    expect(guide(), "the guide stopped distinguishing seen from reasoned")
+      .toMatch(/seen rather than reasoned/i);
+    expect(guide(), "the guide stopped saying the middle rows were exercised, not watched")
+      .toMatch(/Tested, not yet witnessed/i);
+  });
+
+  test("the collapsed summary line does not promise All clear unconditionally", () => {
+    /* app.js: once anything is being watched the trailing verdict CANNOT read
+       "All clear" — it reads the calm verdict instead. Observed live as
+       "Watch" beside a quiet count, while the guide claimed "All clear". */
+    const app = read("src/web/app.js");
+    expect(app, "the watched-verdict branch went away; re-check the guide")
+      .toMatch(/cannot read "All clear"/);
+    const g = guide();
+    expect(g, "the guide promises All clear unconditionally again")
+      .toMatch(/`All clear` only when nothing is being watched/i);
+    expect(g, "the guide stopped naming the Watch verdict a reader will actually see")
+      .toMatch(/reads \*\*`Watch`\*\* instead/);
+  });
+});
