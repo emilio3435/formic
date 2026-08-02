@@ -364,7 +364,13 @@ export interface UsageWardResponse {
      left unscored because one of their windows had unmeasured rows — without
      it, "no spikes" would read as an all-clear the ward never actually
      established. */
-  spikeCoverage: { complete: boolean; skipped: number };
+  /* `truncated` counts spikes RANKED BUT NOT RETURNED because the response caps
+     the list. Without it the cap was silent: measured with 15 models spiking,
+     the ward returned 12 and reported `complete: true, skipped: 0` — a field
+     named coverage asserting it had covered everything while three alarms were
+     dropped. Nothing else on the board computes spikes, so no second figure
+     would ever have contradicted that. */
+  spikeCoverage: { complete: boolean; skipped: number; truncated: number };
   quotaPressure: Array<{ provider: string; label: string; usedPercent: number; resetsAt?: string }>;
   /* The ward answers from two independent sources: spikes from the encrypted
      database, quota pressure from the provider_quotas.json sidecar. Either can
@@ -1179,6 +1185,11 @@ export async function getUsageQuotas(): Promise<UsageQuotasResponse> {
   }
 }
 
+/** The ward returns the worst offenders, not all of them; the count it dropped
+    is disclosed rather than left to be inferred from a list that happens to be
+    exactly this long. */
+const MAX_WARD_SPIKES = 12;
+
 export async function getUsageWard(from: string, to: string): Promise<UsageWardResponse> {
   const fromMs = Date.parse(from);
   const toMs = Date.parse(to);
@@ -1266,8 +1277,13 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       source: "burnbar",
       from,
       to,
-      spikes: spikes.slice(0, 12),
-      spikeCoverage: { complete: unmeasured.size === 0, skipped: unmeasured.size },
+      spikes: spikes.slice(0, MAX_WARD_SPIKES),
+      spikeCoverage: {
+        // Complete means BOTH: nothing left unscored, and nothing ranked away.
+        complete: unmeasured.size === 0 && spikes.length <= MAX_WARD_SPIKES,
+        skipped: unmeasured.size,
+        truncated: Math.max(0, spikes.length - MAX_WARD_SPIKES),
+      },
       quotaPressure: quotaPressure.slice(0, 12),
       quotas: quotas.available
         ? { available: true }
@@ -1283,7 +1299,7 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       to,
       spikes: [],
       // Nothing was scored, so nothing is claimed about spikes either.
-      spikeCoverage: { complete: false, skipped: 0 },
+      spikeCoverage: { complete: false, skipped: 0, truncated: 0 },
       quotaPressure: [],
       // The database failed before the sidecar was ever consulted.
       quotas: { available: false, error: "Quotas were not read." },

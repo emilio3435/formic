@@ -626,7 +626,7 @@ db.close();
       const ward = await getUsageWard("2026-07-22T00:00:00.000Z", "2026-07-23T00:00:00.000Z");
       expect(ward.spikes.length).toBe(1);
       expect(ward.spikes[0]).toMatchObject({ provider: "Codex", model: "m" });
-      expect(ward.spikeCoverage).toEqual({ complete: true, skipped: 0 });
+      expect(ward.spikeCoverage).toEqual({ complete: true, skipped: 0, truncated: 0 });
     } finally {
       for (const [name, value] of Object.entries({
         BURNBAR_SUPPORT_DIR: previous.support,
