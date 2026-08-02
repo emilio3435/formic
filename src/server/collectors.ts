@@ -338,6 +338,7 @@ function createOmpParser(): IncrementalParser {
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
   let sessionTotal = 0;
   let sessionCachedInput = 0;
+  let sessionProcessed = 0;
   /* Set when a usage record could not be read. The guard below `continue`s past
      such a record, which silently turns corruption into a believable SMALLER
      number: a session that burned more than a clean one reported exactly the
@@ -391,6 +392,8 @@ function createOmpParser(): IncrementalParser {
            new tokens are input + output + cacheWrite. */
         sessionTotal += input + output + cacheWrite;
         sessionCachedInput += cachedInput;
+        // The same rows summed cache-INCLUSIVE: BurnBar's unit, not ours.
+        sessionProcessed += input + output + cacheWrite + cachedInput;
       }
     },
     result(meta) {
@@ -409,6 +412,7 @@ function createOmpParser(): IncrementalParser {
             ...latestUsage,
             sessionTotal,
             sessionCachedInput,
+            sessionProcessed,
             scope: "latest-turn",
             /* Not "observed": at least one record was skipped, so the totals are
                a floor rather than a measurement. Everything downstream that
@@ -488,6 +492,9 @@ function createCodexParser(): IncrementalParser {
             total: Number(usage.total_tokens ?? input + output),
             sessionTotal: Math.max(0, sessionInput - sessionCached) + sessionOutput,
             sessionCachedInput: sessionCached,
+            /* Codex's session input already CONTAINS the cached prefix, so the
+               processed total is simply input + output — no re-adding. */
+            sessionProcessed: sessionInput + sessionOutput,
             contextWindow: Number(payload.info.model_context_window) || undefined,
             scope: payload.info.last_token_usage ? "latest-turn" : "session",
             provenance: "observed",
@@ -674,6 +681,11 @@ function createClaudeParser(): IncrementalParser {
         usage.input + usage.output + usage.cacheCreationInput;
       const sessionTotal = uniqueUsage.reduce((total, usage) => total + usageNew(usage), 0);
       const sessionCachedInput = uniqueUsage.reduce((total, usage) => total + usage.cachedInput, 0);
+      /* Computed from the rows rather than as sessionTotal + sessionCachedInput.
+         The identity holds today, and deriving it would make this field follow
+         whatever those two mean later — which is exactly how a bridge to an
+         outside source stops measuring what the outside source measures. */
+      const sessionProcessed = uniqueUsage.reduce((total, usage) => total + usageTotal(usage), 0);
       return makeAgent({
         provider: "claude",
         sourceSessionId: identity.sessionId,
@@ -692,6 +704,7 @@ function createClaudeParser(): IncrementalParser {
               total: usageTotal(latestUsage),
               sessionTotal,
               sessionCachedInput,
+              sessionProcessed,
               contextWindow: claudeContextWindow(model),
               scope: "latest-turn",
               provenance: "observed",

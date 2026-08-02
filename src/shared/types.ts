@@ -34,6 +34,24 @@ export interface TokenUsage {
   sessionTotal?: number;
   /** Session-cumulative cache READS. Re-read context, billed at a fraction. */
   sessionCachedInput?: number;
+  /* The session's PROCESSED total: every call's size summed, cache re-reads
+     included. Deliberately the one figure this board shares a unit with an
+     outside source.
+
+     `sessionTotal` is consumption — each prompt token counted once — which is
+     the right number for "what did this cost" and is measured by nothing else
+     on this machine. OpenBurnBar, a separate application that has no idea this
+     repo exists, derives usage from its own store and records the PROCESSED
+     total per session. Both derivations reach the same sessions (46 of 50 rows
+     in a 24h window carry a sessionId matching a board sourceSessionId
+     exactly), but they could not be compared, because the board published only
+     consumption and BurnBar publishes only processed — the 2.6x-16.9x spread
+     between them was just the cache multiplier, not a disagreement.
+
+     Publishing this puts the two on the same unit, which makes it the first
+     figure on this board that can be checked against a source outside it.
+     Everything else verifies internal consistency. */
+  sessionProcessed?: number;
   contextWindow?: number;
   scope?: "latest-turn" | "session" | "unknown";
   provenance: "observed" | "estimated" | "unknown";
