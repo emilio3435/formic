@@ -4487,6 +4487,22 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Resting-state critique §2.2. The collapsed calm line hard-coded "done this
+     hour" while the tracker had observed 5 minutes — it did not merely drop the
+     MOMENTUM card's qualifier, it upgraded a partial observation into a stronger
+     claim than the data supports. One derivation, shared by both surfaces. */
+  test("(2.2) a partial observation window is never rendered as a full hour", () => {
+    expect(M.completionWindowText({ completionsLastHour: 24, observedWindowMs: 300_000 }))
+      .toBe("↑24 done in 5m observed");
+    expect(M.completionWindowText({ completionsLastHour: 52, observedWindowMs: 3_600_000 }))
+      .toBe("↑52 done this hour");
+    // Nothing observed yet says nothing at all rather than "0 done this hour".
+    expect(M.completionWindowText({ completionsLastHour: 0, observedWindowMs: 0 })).toBe("");
+    expect(M.completionWindowText(null)).toBe("");
+    // The calm line consumes the shared helper rather than forking the wording.
+    expect(source).not.toContain('" done this hour"');
+  });
+
   /* Cockpit audit §10 and §11. Docked at 1440 the program header rendered
      "169 a…  13 wo…  1 alert  1.15B t…" — three of four cells clipped to
      fragments, and "0 al…" is not information in any language. Notably

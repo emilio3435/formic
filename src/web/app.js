@@ -593,6 +593,21 @@ function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
+/* How long the completion tracker has ACTUALLY watched. A freshly restarted
+   tracker must never let a partial window read as a full one: the MOMENTUM card
+   carried this qualifier from the start, and the collapsed calm line dropped it
+   and hard-coded "this hour". That did not merely lose a caveat — it upgraded a
+   partial observation into a stronger claim than the data supports, which is
+   exactly what an orchestrator extrapolating a rate would be misled by. Measured
+   on the live board: observedWindowMs was 300000, five minutes, printed as an
+   hour. One derivation now, shared by both surfaces. */
+function completionWindowText(momentum) {
+  if (!momentum || !(momentum.observedWindowMs > 0)) return "";
+  const full = momentum.observedWindowMs >= 3_600_000;
+  return "↑" + momentum.completionsLastHour + " done "
+    + (full ? "this hour" : "in " + fmtElapsed(momentum.observedWindowMs) + " observed");
+}
+
 function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed, queueError = state.queueError) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
@@ -701,12 +716,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       // 5-min bucket there is no completion window to report at all; stall
       // detection reads updatedAt directly, so it stays valid immediately.
       const parts = [];
-      if (momentum.observedWindowMs > 0) {
-        const windowText = momentum.observedWindowMs < 3_600_000
-          ? "in " + fmtElapsed(momentum.observedWindowMs) + " observed"
-          : "this hour";
-        parts.push("↑" + momentum.completionsLastHour + " done " + windowText);
-      }
+      const windowText = completionWindowText(momentum);
+      if (windowText) parts.push(windowText);
       if (momentum.stalled) parts.push(`${momentum.stalled} quiet 15m+`);
       if (parts.length) sublabel = parts.join(" · ");
     }
@@ -855,7 +866,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -1761,7 +1772,8 @@ function renderPulseCalm(healthData) {
      form of the noise this band exists to remove. */
   const parts = [totals.working + " shipping"];
   if (pulse) {
-    parts.push("↑" + pulse.momentum.completionsLastHour + " done this hour");
+    const windowText = completionWindowText(pulse.momentum);
+    if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
   }
   const line = el("div", { class: "pulse-calm", role: "status" },
