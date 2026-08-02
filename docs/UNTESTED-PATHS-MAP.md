@@ -55,7 +55,7 @@ loud, and we restart it constantly. Listed for completeness, not urgency.
 
 | # | Location | What it is | Silent-failure cost |
 |---|---|---|---|
-| 3 | `burnbar.ts:927–1022` (**95 lines**) | the whole of `getUsageSeries` | the Usage chart draws wrong or empty. Nothing else reads the series, so no other number contradicts it |
+| 3 | `burnbar.ts:927–1022` (**95 lines**) | the whole of `getUsageSeries` | **CLOSED — and it was already broken.** The chart summed cumulative session snapshots the summary had stopped counting: 4.65B tokens and $3,489.57 more than the headline over 30 days, from 28 rows. Fixed and pinned in `tests/usage-series.test.ts` |
 | 4 | `cursor.ts:919–973`, plus ~40 scattered | Cursor GUI metadata parse, `hasConversation`, window filter | Cursor sessions silently absent from the board — the failure mode of two of the five reproduced defects |
 | 5 | `identity.ts:577–584` | conflicting recognised-command identity conflict | a misattributed session, which is the write gate's input |
 | 6 | `state.ts:259–263` | `unavailableSessions()` — what every collector reports when the aggregate deadline fires | on a slow machine the whole fleet reports failure at once; the shape of that report is untested |
@@ -78,4 +78,17 @@ what is never *run*, and says nothing about what is run but unchecked. Today
 produced two defects that hid in exactly that second category, behind assertions
 that measured a fixture rather than the producer.
 
-Entry 1 is closed by `tests/burnbar-query.test.ts`.
+## Progress
+
+| Entry | State |
+|---|---|
+| 1 `burnbar-query.ts` | closed — `tests/burnbar-query.test.ts` |
+| 3 `getUsageSeries` | closed — `tests/usage-series.test.ts`, **and it found a live defect** |
+
+Worth recording after two: **both entries worked so far have yielded a defect
+rather than only coverage.** Entry 1's comment-stripping turned out to be
+covered only by accident, by a neighbouring guard; entry 3's chart disagreed
+with the headline by a third. That is a small sample, but it argues the ranking
+is pointing at the right places — and it is the reason the map is a map rather
+than a queue: the value has been in what each entry revealed, not in the line
+being closed.
