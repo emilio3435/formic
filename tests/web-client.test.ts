@@ -3282,8 +3282,11 @@ describe("program-header at-a-glance rollups (C2)", () => {
     // The aggregation core is defined exactly once.
     expect((source.match(/function programRollupCells\(/g) ?? []).length).toBe(1);
     // BOTH DOM builders feed off it rather than re-deriving counts/tokens.
-    const drawer = source.match(/function programRollupLine\(program\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
-    const header = source.match(/function programHeadRollup\(agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    /* Signature-agnostic: both builders now take the server's rollup alongside
+       the agents so the token aggregate can defer to the wire. What this test
+       guards is that they share ONE core, not what arguments it takes. */
+    const drawer = source.match(/function programRollupLine\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const header = source.match(/function programHeadRollup\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
     expect(drawer).toContain("programRollupCells(");
     expect(header).toContain("programRollupCells(");
     // The token reduce — the one bit of arithmetic that could drift — lives ONLY in
@@ -4501,6 +4504,35 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* The seam the needsYou mess came from: two derivations of one number. A
+     session reporting 391.4M against a program reporting 1.60B is under repair
+     server-side, so the client must render whatever the wire carries rather than
+     holding a second opinion — while NOT deferring the counts, which have a
+     client-side invariant to keep. */
+  test("(agg) the rollup renders the server's token aggregate when it ships one", () => {
+    const agents = [
+      agent({ id: "a:1", status: "running", tokens: { provenance: "observed", sessionTotal: 1_000 } }),
+      agent({ id: "a:2", status: "running", tokens: { provenance: "observed", sessionTotal: 2_000 } }),
+    ];
+    const tokenCell = (cells: Array<{ key?: string; value: string }>) => cells.find((c) => c.key === "tokens");
+
+    // No server figure: the client sums, and says which quantity it summed.
+    expect(tokenCell(M.programRollupCells(agents))?.value).toBe(M.fmtTok(3_000));
+    expect(M.programRollupCells(agents).find((c: { key?: string }) => c.key === "tokens")?.label).toBe("session tokens");
+
+    // Server figure present: the client renders it and does NOT sum.
+    const served = M.programRollupCells(agents, { sessionTokens: 4_242_000 });
+    expect(tokenCell(served)?.value).toBe(M.fmtTok(4_242_000));
+
+    /* Counts stay client-derived even when the server ships them, because the
+       alert cell must agree with the Needs-you tab, and that tab is necessarily
+       client-side. Deferring here would re-open the divergence. */
+    const alerting = [agent({ id: "a:3", status: "attention", activity: "idle", outcome: "needs-you" })];
+    const cells = M.programRollupCells(alerting, { needsYou: 0, working: 99 });
+    expect(cells.find((c: { label: string }) => c.label === "alert")).toBeDefined();
+    expect(cells.find((c: { label: string }) => c.label === "working")?.value).toBe("0");
+  });
+
   /* Cockpit audit §16 and §21: chrome that does not earn its space. The
      placeholder measured 389px inside a 333px input once the drawer docked, so
      the field list it enumerated was unreadable exactly when the box was

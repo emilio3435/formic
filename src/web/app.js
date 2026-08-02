@@ -208,7 +208,23 @@ const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by fold
    (programHeadRollup). Counts are always client-derivable, so they always
    render; the token aggregate is omitted honestly when no agent reports a
    session total (never faked). Alert cells flag themselves for ink gating. */
-function programRollupCells(agents) {
+/* `rollup` is the SERVER's figures for this program when it has them.
+
+   Counts stay client-derived on purpose: the rollup's alert cell must agree with
+   the Needs-you tab beside it, and that tab is necessarily client-side because it
+   depends on the active filters and lookback. Deferring the count to the server
+   would re-open exactly the divergence that produced the needsYou mess — one
+   surface counting alerting() and its neighbour counting something else. They
+   currently agree (measured: 215/215 total, 9/9 working, 0/0 needsYou), and the
+   way to keep them agreeing is one derivation, not two that happen to match.
+
+   The TOKEN total is the opposite case. It has no client-side invariant to
+   preserve, it is a pure aggregate, and it is under active repair server-side —
+   a session reporting 391.4M against a program reporting 1.60B, both wrong. So
+   the moment the server ships a token figure in the rollup, this renders that
+   instead of summing its own. Until then it sums, and says which quantity it
+   summed. */
+function programRollupCells(agents, rollup = null) {
   const r = deriveRollup(agents);
   const cells = [
     { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
@@ -220,9 +236,15 @@ function programRollupCells(agents) {
       ? [{ value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: true }]
       : []),
   ];
+  /* Server first. Two derivations of one number is the seam that produced every
+     token defect on this board; when the wire carries the aggregate, the client
+     has no business computing a second opinion about it. */
+  const reported = rollup && Number.isFinite(rollup.sessionTokens) ? rollup.sessionTokens : null;
   const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
-  if (withTokens.length) {
-    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+  if (reported != null || withTokens.length) {
+    const total = reported != null
+      ? reported
+      : withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
     // key "tokens" lets the header rollup drop this cell first on narrow screens
     // (it is the least critical; the alerts cell is never dropped).
     /* "session tokens", not "tokens". This sums sessionTotal across every agent
@@ -3164,7 +3186,7 @@ function programShellSig(program, agents, ui) {
     programOpen(program, ui) ? "open" : "shut",
     // Header counts the whole program, so the signature must watch the whole
     // program too — otherwise a change outside the active filter never repaints.
-    programRollupCells(program.agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    programRollupCells(program.agents, program.rollup).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
     ui.selecting ? "1" : "0",
     ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
     ui.renaming === key ? "1" : "0",
@@ -3404,8 +3426,8 @@ function renderPrograms() {
    .program-rollup cluster A4 established. The alert count takes ember ink
    (is-alerting → --ember) only when alerts exist; calm earns no color. The
    accessible name carries the data itself, extending the drawer's aria pattern. */
-function programHeadRollup(agents) {
-  const cells = programRollupCells(agents);
+function programHeadRollup(agents, rollup = null) {
+  const cells = programRollupCells(agents, rollup);
   const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
   return el("span", { class: "program-rollup", "aria-label": label },
     cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") + (c.key ? " program-rollup-cell--" + c.key : "") },
@@ -3420,7 +3442,7 @@ function renderProgram(program, agents) {
      filter kept. Rolling up the filtered list made the header disagree with its
      own drawer — "1 agent" above a program holding 32 — because a filter is a
      lens on the board, not a change to what the program contains. */
-  const rollup = programHeadRollup(program.agents);
+  const rollup = programHeadRollup(program.agents, program.rollup);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -4311,7 +4333,7 @@ function investigationHeadAction(item) {
    omitted when no agent on the client reports session usage — an aggregate we
    cannot derive is never faked to zero. */
 function programRollupLine(program) {
-  const cells = programRollupCells(program.agents || []);
+  const cells = programRollupCells(program.agents || [], program.rollup);
   return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
     cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
       el("span", { class: "dw-rollup-value mono", text: c.value }),
