@@ -594,13 +594,118 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
   };
 }
 
+/* The aggregation, applied to ANY set of deduplicated rows.
+
+   It lived inline and served only the window; priorSpend summed measuredCost
+   straight from SQL instead. The two disagreed in a way nobody would guess: a
+   model group holding BOTH exact and unpriced rows has its whole cost nulled
+   here when the model has no published price, discarding the exact cost inside
+   it, while a raw SUM kept that. So window + prior varied by $3,899 depending
+   on where the split fell - after the dedup fix had already closed a $17,698
+   version of the same disagreement.
+
+   One function, called by both halves. Two paths that must agree eventually do
+   not; today that has happened four times. */
+function aggregateRows(queryRows: readonly QueryRow[]) {
+  const byModel = queryRows.map((row) => {
+    const costMissing = num(row.costMissing) ?? 0;
+    const measuredCost = num(row.measuredCost) ?? 0;
+    const derived = resolveUsageCost({
+      model: str(row.model),
+      inputTokens: num(row.unpricedInputTokens) ?? 0,
+      outputTokens: num(row.unpricedOutputTokens) ?? 0,
+      cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
+      cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
+      measuredCostUsd: null,
+    });
+    const cost = costMissing === 0
+      ? { costUsd: measuredCost, costProvenance: "measured" as const }
+      : derived.costUsd == null
+        ? derived
+        : {
+          costUsd: measuredCost + derived.costUsd,
+          costProvenance: "derived_estimate" as const,
+          pricingVersion: derived.pricingVersion,
+        };
+    return {
+      provider: str(row.provider) || "unknown",
+      // null here means every row in the group was unmeasured, which
+      // tokensMissing states outright — 0 is the measured subtotal, not a claim.
+      tokens: num(row.tokens) ?? 0,
+      tokensMissing: num(row.tokensMissing) ?? 0,
+      invocations: num(row.invocations) ?? 0,
+      /* The floor for THIS group, always a number and never nulled.
+
+         `costUsd` above goes null when the group holds an unpriced row, which
+         is right for a total and throws away the exact cost sitting beside it.
+         Provider floors were rebuilt from those nulls, so the floor was not
+         additive: splitting a mixed group at a window boundary could separate
+         its exact rows from its unpriced ones and RAISE the total. Measured as
+         a $1,824 disagreement at the 30-day split alone.
+
+         This is the c58d85c defect one level further down — a partial measure
+         suppressed because part of it was missing. */
+      floorUsd: measuredCost + (derived.costUsd ?? 0),
+      ...cost,
+    };
+  });
+  const providers = new Map<string, typeof byModel>();
+  for (const row of byModel) {
+    const group = providers.get(row.provider) ?? [];
+    group.push(row);
+    providers.set(row.provider, group);
+  }
+  const byProvider = [...providers].map(([provider, group]) => {
+    const unknown = group.some((row) => row.costUsd == null);
+    const derived = group.some((row) => row.costProvenance === "derived_estimate");
+    /* A provider is nulled whole as soon as ONE of its models is unpriced,
+       which is right for `costUsd` (a provider TOTAL) and wrong for everything
+       downstream that used to be derived from it. Cursor bills two calls, one
+       priced at $3.00 and one on a model with no published rate: the gate
+       suppressed the $3.00 it did measure AND, because the fleet gap counted
+       the invocations of every nulled provider, reported 2 unpriced calls
+       where exactly 1 was. It undercut the floor and inflated the hole beside
+       it, from the same cause. The provider row now carries its own floor and
+       its own gap, the same shape the fleet carries. */
+    const priced = group.filter((row) => row.costUsd != null);
+    return {
+      provider,
+      tokens: group.reduce((sum, row) => sum + row.tokens, 0),
+      tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
+      costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
+      /* Summed from every group's own floor, so it is additive: the same rows
+         produce the same floor however they are partitioned.
+
+         Null when NOTHING in the provider could be priced at all, because a
+         floor of 0 asserts "we measured no spend here" where the truth is "we
+         could price none of it" — absent-first, which summing alone would have
+         quietly repealed. */
+      measuredCostUsd: group.every((row) => row.costUsd == null && row.floorUsd === 0)
+        ? null
+        : group.reduce((sum, row) => sum + row.floorUsd, 0),
+      costMissingInvocations: group
+        .filter((row) => row.costUsd == null)
+        .reduce((sum, row) => sum + row.invocations, 0),
+      costProvenance: unknown ? "unknown" as const
+        : derived ? "derived_estimate" as const
+        : "measured" as const,
+      invocations: group.reduce((sum, row) => sum + row.invocations, 0),
+    };
+  });
+  return { byProvider };
+}
+
 export async function getUsageSummary(from: string, to: string): Promise<UsageSummary> {
   try {
     const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
     const rows = await runEncryptedQuery(
       `SELECT
+         /* The window and everything before it come from ONE scan, split here
+            rather than fetched by two queries that must agree. */
+         CASE WHEN startTime < ? THEN 1 ELSE 0 END AS isPrior,
          provider,
          COALESCE(model, 'unknown') AS model,
+         MIN(startTime) AS earliestStart,
          COUNT(*) AS invocations,
          -- Bare SUM skips NULLs instead of scoring them zero, so this is the
          -- sum of what was actually measured; tokensMissing carries the rest.
@@ -651,97 +756,36 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
             far larger data loss than the one being fixed. */
          SELECT *, MAX(endTime) AS latestEndTime, COUNT(*) AS snapshotRows
          FROM token_usage
-         WHERE startTime >= ? AND startTime < ?
+         WHERE startTime < ?
          GROUP BY provider, COALESCE(NULLIF(sessionId, ''), id)
        )
-       GROUP BY provider, model
+       GROUP BY isPrior, provider, model
        ORDER BY tokens DESC`,
-      // Bound order follows the SQL text: both SELECT placeholders precede WHERE's.
-      [MAX_CONTEXT_WINDOW, MAX_CONTEXT_WINDOW, dbFrom, dbTo],
+      // Bound order follows the SQL text: the isPrior split, the two
+      // context-window bounds, then the inner scan's upper bound.
+      [dbFrom, MAX_CONTEXT_WINDOW, MAX_CONTEXT_WINDOW, dbTo],
     );
-    const byModel = rows.map((row) => {
-      const costMissing = num(row.costMissing) ?? 0;
-      const measuredCost = num(row.measuredCost) ?? 0;
-      const derived = resolveUsageCost({
-        model: str(row.model),
-        inputTokens: num(row.unpricedInputTokens) ?? 0,
-        outputTokens: num(row.unpricedOutputTokens) ?? 0,
-        cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
-        cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
-        measuredCostUsd: null,
-      });
-      const cost = costMissing === 0
-        ? { costUsd: measuredCost, costProvenance: "measured" as const }
-        : derived.costUsd == null
-          ? derived
-          : {
-            costUsd: measuredCost + derived.costUsd,
-            costProvenance: "derived_estimate" as const,
-            pricingVersion: derived.pricingVersion,
-          };
-      return {
-        provider: str(row.provider) || "unknown",
-        // null here means every row in the group was unmeasured, which
-        // tokensMissing states outright — 0 is the measured subtotal, not a claim.
-        tokens: num(row.tokens) ?? 0,
-        tokensMissing: num(row.tokensMissing) ?? 0,
-        invocations: num(row.invocations) ?? 0,
-        ...cost,
-      };
-    });
-    const providers = new Map<string, typeof byModel>();
-    for (const row of byModel) {
-      const group = providers.get(row.provider) ?? [];
-      group.push(row);
-      providers.set(row.provider, group);
-    }
-    const byProvider = [...providers].map(([provider, group]) => {
-      const unknown = group.some((row) => row.costUsd == null);
-      const derived = group.some((row) => row.costProvenance === "derived_estimate");
-      /* A provider is nulled whole as soon as ONE of its models is unpriced,
-         which is right for `costUsd` (a provider TOTAL) and wrong for everything
-         downstream that used to be derived from it. Cursor bills two calls, one
-         priced at $3.00 and one on a model with no published rate: the gate
-         suppressed the $3.00 it did measure AND, because the fleet gap counted
-         the invocations of every nulled provider, reported 2 unpriced calls
-         where exactly 1 was. It undercut the floor and inflated the hole beside
-         it, from the same cause. The provider row now carries its own floor and
-         its own gap, the same shape the fleet carries. */
-      const priced = group.filter((row) => row.costUsd != null);
-      return {
-        provider,
-        tokens: group.reduce((sum, row) => sum + row.tokens, 0),
-        tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
-        costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
-        measuredCostUsd: priced.length === 0
-          ? null
-          : priced.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
-        costMissingInvocations: group
-          .filter((row) => row.costUsd == null)
-          .reduce((sum, row) => sum + row.invocations, 0),
-        costProvenance: unknown ? "unknown" as const
-          : derived ? "derived_estimate" as const
-          : "measured" as const,
-        invocations: group.reduce((sum, row) => sum + row.invocations, 0),
-      };
-    });
-    const aggregatedInvocations = rows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
-    const attributableTokens = rows.reduce((sum, row) => sum + (num(row.attributableTokens) ?? 0), 0);
-    const supersededSnapshots = rows.reduce((sum, row) => sum + (num(row.supersededRows) ?? 0), 0);
-    /* One aggregate over everything older than this window. Cheap, and it is
-       the only way the card can distinguish "nothing was spent before this" from
-       "we did not look". */
-    const [priorRow] = await runEncryptedQuery(
-      `SELECT
-         COUNT(*) AS invocations,
-         SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
-         MIN(startTime) AS earliest
-       FROM token_usage
-       WHERE startTime < ?`,
-      [dbFrom],
-    );
-    const priorInvocations = num(priorRow?.invocations) ?? 0;
-    const priorEarliestRaw = str(priorRow?.earliest);
+    /* One scan, split at the window's lower bound, both halves deduplicated by
+       the same subquery AND summed by the same function. window + prior is then
+       the same total however the window is drawn, by construction. */
+    const windowRows = rows.filter((row) => (num(row.isPrior) ?? 0) === 0);
+    const priorRows = rows.filter((row) => (num(row.isPrior) ?? 0) === 1);
+    const { byProvider } = aggregateRows(windowRows);
+    const prior = aggregateRows(priorRows);
+    const aggregatedInvocations = windowRows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
+    const attributableTokens = windowRows.reduce((sum, row) => sum + (num(row.attributableTokens) ?? 0), 0);
+    const supersededSnapshots = windowRows.reduce((sum, row) => sum + (num(row.supersededRows) ?? 0), 0);
+    /* Prior spend, from the SAME rows and the SAME aggregation as the window.
+       It was a separate query summing measuredCost directly, so it kept adding
+       raw snapshots after the window learned not to, and disagreed again on
+       unpriced model groups. The field added to disclose what a window cannot
+       see was the least trustworthy number on the payload. */
+    const priorInvocations = prior.byProvider.reduce((sum, row) => sum + row.invocations, 0);
+    const pricedPrior = prior.byProvider.filter((row) => row.measuredCostUsd != null);
+    const priorEarliestRaw = priorRows
+      .map((row) => str(row.earliestStart))
+      .filter(Boolean)
+      .sort()[0] ?? "";
     const priorSpend = {
       /* SQLite gives back BurnBar's own "yyyy-MM-dd HH:mm:ss.SSS" UTC text;
          hand it on as ISO so a consumer is not left parsing a private format. */
@@ -750,7 +794,9 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
         : null,
       invocations: priorInvocations,
       // Absent-first: no rows before the window is "nothing there", not "$0 spent".
-      measuredCostUsd: priorInvocations === 0 ? null : num(priorRow?.measuredCost) ?? 0,
+      measuredCostUsd: pricedPrior.length === 0
+        ? null
+        : pricedPrior.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0),
     };
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
     const tokensMissing = byProvider.reduce((sum, row) => sum + row.tokensMissing, 0);

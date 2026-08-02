@@ -276,3 +276,136 @@ describe("a session's running total is counted once, not once per snapshot", () 
     });
   });
 });
+
+/* THE INVARIANT, pinned as an invariant rather than as values.
+
+   Window + prior is the same total spend split at a different point, so it must
+   not depend on where the split falls. It did: $44,526.91 at 30 days, $29,764.74
+   at 60, $26,828.92 at 90 — a $17,698 spread — because priorSpend was a separate
+   query that kept summing raw snapshots after the window learned to deduplicate
+   them. Fixing that left $3,899 because the two halves still summed differently.
+
+   Values would have caught neither. Both halves were individually defensible;
+   what was wrong was the relationship between them. */
+describe("window plus prior does not depend on where the window is drawn", () => {
+  const SPLIT_FIXTURE = `
+    ('a1','Claude Code','sess-A','p','claude-opus-5',900000,60000,400000000,1000000,401960000,500.00,'exact','2026-07-10 10:00:00.000','2026-07-10 10:05:00.000'),
+    ('a2','Claude Code','sess-A','p','claude-opus-5',900000,60000,460000000,1000000,461960000,575.00,'exact','2026-07-10 10:00:00.000','2026-07-10 10:09:00.000'),
+    ('b1','Codex','sess-B','p','gpt-5.6-terra',600000,50000,0,0,650000,7.00,'exact','2026-07-20 10:00:00.000','2026-07-20 10:01:00.000'),
+    ('c1','Hermes','sess-C','p','x-ai/grok-4.5',400000,20000,0,0,420000,3.00,'exact','2026-07-25 10:00:00.000','2026-07-25 10:01:00.000'),
+    /* A MIXED group — SAME provider AND model, one exact row and one unpriced —
+       on a model with no published rate, so the group's costUsd goes null and
+       the exact $11 inside it used to be discarded. Splitting the two apart
+       recovered it, which is precisely the non-additivity. An earlier draft put
+       these on different models and formed two separate groups, so it
+       reproduced nothing; both mutations survived it. */
+    ('d1','Cursor','sess-D','p','a-model-with-no-published-price',400000,10000,0,0,410000,11.00,'exact','2026-07-27 10:00:00.000','2026-07-27 10:01:00.000'),
+    ('d2','Cursor','sess-E','p','a-model-with-no-published-price',400000,10000,0,0,410000,NULL,'estimate','2026-07-27 11:00:00.000','2026-07-27 11:01:00.000'),
+    /* A DERIVED group: a priced model with a non-exact row carrying tokens, so
+       the floor includes an estimate a raw SUM(measuredCost) would miss. */
+    ('e1','Codex','sess-F','p','claude-opus-4-8',500000,20000,0,0,520000,NULL,'estimate','2026-07-28 10:00:00.000','2026-07-28 10:01:00.000')`;
+
+  const TO = "2026-08-01T00:00:00.000Z";
+  /* The splits have to fall where they actually divide something. An earlier
+     draft used only midnights, so the mixed pair (both on 07-27) always landed
+     on the same side and the derived row was never in `prior` — two mutations
+     survived a test that looked thorough and separated nothing. */
+  const SPLITS = [
+    "2026-07-05T00:00:00.000Z",
+    "2026-07-15T00:00:00.000Z",
+    "2026-07-22T00:00:00.000Z",
+    "2026-07-26T00:00:00.000Z",
+    // Between d1 (10:00) and d2 (11:00): splits the mixed model group apart.
+    "2026-07-27T10:30:00.000Z",
+    // After e1: puts the derived-estimate group into prior.
+    "2026-07-29T00:00:00.000Z",
+  ];
+
+  test.skipIf(!canSqlcipher)("the total is identical wherever the split falls", async () => {
+    await withRows(SPLIT_FIXTURE, async () => {
+      const sums: number[] = [];
+      for (const from of SPLITS) {
+        const usage = await getUsageSummary(from, TO);
+        sums.push((usage.measuredCostUsd ?? 0) + (usage.priorSpend.measuredCostUsd ?? 0));
+      }
+
+      // Not "each is correct" — that both halves were is exactly what hid this.
+      expect(new Set(sums.map((value) => value.toFixed(6))).size, `sums: ${sums.join(", ")}`).toBe(1);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("invocations are conserved across the split too", async () => {
+    /* The same property on the count, because a dedup that drops rows would
+       satisfy the money invariant while quietly deleting sessions. */
+    await withRows(SPLIT_FIXTURE, async () => {
+      const counts: number[] = [];
+      for (const from of SPLITS) {
+        const usage = await getUsageSummary(from, TO);
+        counts.push((usage.invocations ?? 0) + usage.priorSpend.invocations);
+      }
+
+      expect(new Set(counts).size, `counts: ${counts.join(", ")}`).toBe(1);
+        // 7 rows, 6 sessions: sess-A's two snapshots collapse to one.
+      expect(counts[0]).toBe(6);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("the split actually moves spend, so the invariant is not vacuous", async () => {
+    /* A window that is always empty, or always everything, satisfies any
+       conservation law. This proves the splits genuinely divide the data. */
+    await withRows(SPLIT_FIXTURE, async () => {
+      const windows: number[] = [];
+      for (const from of SPLITS) {
+        const usage = await getUsageSummary(from, TO);
+        windows.push(usage.measuredCostUsd ?? 0);
+      }
+
+      expect(new Set(windows).size).toBeGreaterThan(1);
+      expect(Math.min(...windows)).toBeLessThan(Math.max(...windows));
+    });
+  });
+});
+
+describe("deduplication must not quietly close the gap it is meant to disclose", () => {
+  const UNPRICED_SNAPSHOTS = `
+    ('u1','Cursor','sess-U','p','a-model-with-no-published-price',400,100,0,0,500,NULL,'estimate','${at(1)}','${at(2)}'),
+    ('u2','Cursor','sess-U','p','a-model-with-no-published-price',800,200,0,0,1000,NULL,'estimate','${at(1)}','${at(6)}')`;
+
+  test.skipIf(!canSqlcipher)("collapsing unpriced snapshots leaves the gap reported, not zeroed", async () => {
+    /* The failure mode worth guarding: costMissingInvocations is the field that
+       DISCLOSES an incomplete measurement, and a dedup that dropped rows before
+       counting them would turn an honest partial into a confident-looking
+       total — the defect this whole thread has been removing, reintroduced by
+       the fix for a different one. */
+    await withRows(UNPRICED_SNAPSHOTS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.invocations).toBe(1);
+      // One session, unpriced. Not zero.
+      expect(usage.costMissingInvocations).toBe(1);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("the gap is counted on the same basis as invocations", async () => {
+    /* Both post-dedup, and that pairing is the point: a gap of 2 beside an
+       invocation count of 1 would read as "2 of 1 calls unpriced", which is not
+       a sentence about anything. */
+    await withRows(UNPRICED_SNAPSHOTS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.costMissingInvocations).toBeLessThanOrEqual(usage.invocations ?? 0);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("nothing priced still means unknown, not a floor of zero", async () => {
+    /* The boundary the original test protects, restated against deduplicated
+       rows: summing floors alone would return 0 here, which asserts "we
+       measured no spend" where the truth is "we could price none of it". */
+    await withRows(UNPRICED_SNAPSHOTS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.measuredCostUsd).toBeNull();
+      expect(usage.costProvenance).toBe("unknown");
+    });
+  });
+});
