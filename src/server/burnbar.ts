@@ -164,6 +164,16 @@ export interface UsageInvocationsResponse {
   from: string;
   to: string;
   limit: number;
+  /* How many rows the window actually holds, so a caller can tell a complete
+     answer from a truncated one.
+
+     LIMIT returned the first 500 by startTime and said nothing about the rest.
+     A reader counting from it — as I did while auditing token magnitudes, and
+     briefly concluded two queries disagreed — sees a plausible, complete-looking
+     list that describes a fifth of the window. Same rule the window horizon now
+     follows: a view that cannot show everything says what it cannot see. */
+  matched: number;
+  truncated: boolean;
   invocations: UsageInvocation[];
   error?: string;
 }
@@ -1027,6 +1037,14 @@ export async function getUsageInvocations(
        LIMIT ?`,
       [dbFrom, dbTo, capped],
     );
+    /* Counted, not inferred from rows.length === capped. A window holding
+       exactly 500 rows is complete, and guessing from the boundary would
+       report it as truncated forever. */
+    const [totalRow] = await runEncryptedQuery(
+      `SELECT COUNT(*) AS matched FROM token_usage WHERE startTime >= ? AND startTime < ?`,
+      [dbFrom, dbTo],
+    );
+    const matched = num(totalRow?.matched) ?? rows.length;
     return {
       ok: true,
       available: true,
@@ -1035,6 +1053,8 @@ export async function getUsageInvocations(
       from,
       to,
       limit: capped,
+      matched,
+      truncated: matched > rows.length,
       invocations: rows.map((row) => {
         const model = str(row.model) || "unknown";
         return {
@@ -1066,6 +1086,10 @@ export async function getUsageInvocations(
       from,
       to,
       limit: capped,
+      // Nothing was read, so nothing is known about how much there was. 0
+      // matched with truncated false would claim an empty window.
+      matched: 0,
+      truncated: false,
       invocations: [],
       error: error instanceof Error ? error.message : String(error),
     };

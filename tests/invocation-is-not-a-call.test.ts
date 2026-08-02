@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getUsageSummary } from "../src/server/burnbar";
+import { getUsageInvocations, getUsageSummary } from "../src/server/burnbar";
 
 /* One day held 26% of a 30-day cost headline, and the reason was the unit.
 
@@ -407,5 +407,65 @@ describe("deduplication must not quietly close the gap it is meant to disclose",
       expect(usage.measuredCostUsd).toBeNull();
       expect(usage.costProvenance).toBe("unknown");
     });
+  });
+});
+
+describe("a capped list says how much it is not showing", () => {
+  const many = (count: number): string => Array.from({ length: count }, (_, index) =>
+    `('m${index}','Codex','sess-${index}','p','gpt-5.6-terra',100,10,0,0,110,0.01,'exact','2026-07-30 10:00:00.000','2026-07-30 10:00:01.000')`).join(",\n    ");
+
+  test.skipIf(!canSqlcipher)("a truncated list reports the size of the window it is a slice of", async () => {
+    /* getUsageInvocations returned the first N by startTime and said nothing
+       about the rest. On the live board that is 500 rows of 3,037 — a
+       plausible, complete-looking list describing a sixth of the window. I read
+       one myself while auditing token magnitudes and briefly concluded two
+       queries disagreed; they did not, the sample was just cut off.
+
+       Same rule the window horizon follows: a view that cannot show everything
+       states what it cannot see. */
+    await withRows(many(12), async () => {
+      const result = await getUsageInvocations(WINDOW.from, WINDOW.to, 5);
+
+      expect(result.invocations).toHaveLength(5);
+      expect(result.matched).toBe(12);
+      expect(result.truncated).toBe(true);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("a complete list is not marked truncated", async () => {
+    await withRows(many(4), async () => {
+      const result = await getUsageInvocations(WINDOW.from, WINDOW.to, 5);
+
+      expect(result.matched).toBe(4);
+      expect(result.truncated).toBe(false);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("a window holding exactly the limit is complete, not truncated", async () => {
+    /* The off-by-one a cheaper implementation gets wrong: inferring truncation
+       from `rows.length === limit` would mark this window incomplete forever,
+       which is a false alarm rather than a false all-clear but still a lie. */
+    await withRows(many(5), async () => {
+      const result = await getUsageInvocations(WINDOW.from, WINDOW.to, 5);
+
+      expect(result.invocations).toHaveLength(5);
+      expect(result.matched).toBe(5);
+      expect(result.truncated).toBe(false);
+    });
+  });
+
+  test("an unreadable source claims no match count rather than an empty window", async () => {
+    const previous = process.env.BURNBAR_DB_PATH;
+    process.env.BURNBAR_DB_PATH = join(tmpdir(), "anthill-truncation-absent.sqlite");
+    try {
+      const result = await getUsageInvocations(WINDOW.from, WINDOW.to, 5);
+      if (!result.available) {
+        expect(result.truncated).toBe(false);
+        expect(result.invocations).toEqual([]);
+      }
+    } finally {
+      if (previous == null) delete process.env.BURNBAR_DB_PATH;
+      else process.env.BURNBAR_DB_PATH = previous;
+    }
   });
 });
