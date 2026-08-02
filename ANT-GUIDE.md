@@ -266,17 +266,23 @@ the record is outside the default view. A window that hides the majority of the
 record while looking whole is the same defect as a cost of `$0` that means
 *unknown*, and it gets the same treatment.
 
-**What that buys you is one number that means something.** Add any window to the
-spend before it and you get the whole recorded history — and you get the *same*
-whole whichever window you started from. Measured on this machine at 17:05 on
-2026-08-02: **about $32,471 across the entire record**, identical from a 1-day
-window, a 30-day one, and a 399-day one, with invocation counts agreeing too.
+**What that buys you is one number that means something.** Add a window to the
+spend before it and you get the whole recorded history. Measured on this machine
+at 17:11 on 2026-08-02: **about $32,471 of total measured spend across the
+entire record.**
 
-That is the figure to quote if you need one, **and it is a reading rather than a
-constant** — it grows as the fleet works, and it counts only what a cost source
-priced. What is durable is not the amount but the property: the total no longer
-depends on which window you happened to ask through. If you ever see two windows
-disagree about the whole, that is a bug and it has happened twice today.
+Read that with two things attached to it, not appended after it.
+
+**It is a reading, not a fact.** It grows as the fleet works, it counts only
+what a cost source priced, and every input to it is still being repaired. Quote
+it with its date or do not quote it.
+
+**The widest queries still under-report, and that is under investigation.** Ask
+through a short window and the arithmetic reconciles; ask through a long one and
+the figures disagree with each other by several thousand dollars — a fixed
+block of older spend that one of the reported figures includes and another
+leaves out. Which means: **prefer narrow windows when the number has to be
+right**, and treat a long-window total as provisional until this is closed.
 
 *Where this stands today:* the server computes and returns it — the number above
 is a live reading, not a plan. The Usage card does not print it yet, so for now
