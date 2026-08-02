@@ -4,8 +4,27 @@ You framed it correctly: transcripts are the arbiter, nothing audits the arbiter
 transcript would produce **a correlated failure dressed as independent confirmation** — the
 collector and the hand-recomputation reading the same wrong file and agreeing perfectly.
 
-**Three detectors exist. One I tested and it does not work. Two do, partially. And there is a case
-nothing available can catch, which I will name rather than paper over.**
+---
+
+## Stated first, because it is the finding and not the remainder
+
+**A transcript that was already truncated the first time we read it cannot be detected by anything
+available on this machine.**
+
+Not by the file's own integrity pointer — the file is self-consistent, demonstrated below. Not by
+our own historical floor — the floor was recorded *from* the truncated file, so it is already wrong
+and monotonicity still holds. Not by the cross-source check — it would show board **below** burnbar,
+and burnbar is unreadable and demonstrably incomplete, so that direction cannot be resolved without
+the transcript under suspicion.
+
+**The only thing that would settle it is a source that counts the same events independently and
+that we can inspect. That does not exist here.** The provider's own account-level usage record
+would be one; nothing in this codebase reaches it, and I will not describe a capability we do not
+have as a mitigation.
+
+**The regress bottoms out at the first read.** Everything after it is auditable against time;
+nothing before it is auditable at all. The three detectors below are partial mitigations of that
+known blind spot — not a search that happened to leave a remainder.
 
 ---
 
@@ -63,6 +82,24 @@ the most inspectable store we have.
 **Its boundary:** it detects truncation that happens **after** we first observed the session. It
 cannot see truncation that happened **before**.
 
+**And I tested the premise rather than assuming it.** The shapes are comparable — archive and live
+carry the *same ten keys*, so there is no unit trap. The check also **fires today**, on 2 of 5
+sampled sessions present in both:
+
+```
+13b1622c  archived 6,578,092 → live 6,576,897   −1,195   (0.018%)
+d2eb460e  archived    41,383 → live    39,836   −1,547   (3.7%)
+```
+
+**Those are almost certainly not truncation.** `sessionTotal` sums over `uniqueUsage`
+(`collectors.ts:689`) — deduplicated records — and the dedup logic changed tonight. Tiny relative
+deltas, on the day `collectors.ts` moved, are the signature of a better sum rather than a lost one.
+
+**Which is the design constraint the routing needs:** a naive monotonic assertion **fires on every
+improvement to the collector.** It would go red tonight for the right reason and be switched off by
+Thursday — precisely the health-card failure the Pilot design warns about. It needs a
+collector-version guard and a magnitude threshold, not a bare `>=`.
+
 ## Detector 3 — burnbar, which is exactly the check that fired tonight
 
 The cross-source comparison **is** a truncated-transcript detector. It simply cannot attribute —
@@ -81,25 +118,12 @@ in the opposite direction and, on tonight's evidence, we would investigate rathe
 That is a real answer, and weaker than it sounds only because attribution still needs the
 substrate — which in that direction is the thing under suspicion.
 
-## Where the regress bottoms out, plainly
+## The blind spot, restated against the three detectors
 
-**A transcript that was already truncated the first time we read it is undetectable with anything
-available here.**
-
-- Detector 1 cannot see it — the file is self-consistent.
-- Detector 2 cannot see it — our floor was recorded *from* the truncated file, so the floor is
-  already wrong and monotonicity holds.
-- Detector 3 would show board < burnbar — **but burnbar is unreadable and demonstrably
-  incomplete**, so a disagreement in that direction cannot be resolved without the very transcript
-  under suspicion.
-
-**The only thing that would settle it is a source that counts the same events independently and
-that we can inspect. On this machine, that does not exist.** The provider's own account-level usage
-record would be one; nothing in this codebase reaches it, and I am not going to describe a
-capability we do not have as a mitigation.
-
-**So: the regress bottoms out at the first read.** Everything after it is auditable by time;
-nothing before it is auditable at all.
+Each detector fails on the first-read case for its own reason — see the top of this document for
+the plain statement. Detector 1: the file is self-consistent. Detector 2: the floor inherits the
+truncation. Detector 3: the only direction that would implicate us is the one burnbar cannot
+adjudicate.
 
 ## What I would route
 
@@ -119,8 +143,8 @@ nothing before it is auditable at all.
 - **Detector 1's negative result is from one file and two truncation depths.** A format that wrote
   `last-prompt` once at the end would behave differently; this one writes it 252 times, which is
   what defeats the check.
-- **I have not verified that archived token totals are directly comparable** to a fresh
-  recomputation — the `sessionTotal` versus `total` distinction bit me once already tonight, and
-  the floor check must reconcile units before it can fire.
+- **Comparability is now verified** — archive and live carry identical token keys — but the
+  *premise* is only conditionally true: monotonicity holds for a fixed collector version and breaks
+  on every legitimate change to how the sum is derived.
 - **I did not test detector 2 against a real truncation**, only established that the floor data
   exists.
