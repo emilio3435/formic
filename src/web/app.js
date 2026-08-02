@@ -836,6 +836,17 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
               ? "cmux unreachable — terminal titles and Focus/Send stay offline."
+              /* The error TEXT, not just how many there are. The server writes
+                 sentences here — "probe failed 2 times … so Focus, Send and
+                 Interrupt stay off until it answers" — and the card rendered
+                 only the count, so an operator watching Send disappear read "1
+                 error" and could not tell a failed probe from a changed policy.
+                 The message exists to be read; counting it is the same defect
+                 as withholding it. */
+              : errors > 0
+                ? (errors === 1
+                  ? control.errors[0]
+                  : `${control.errors[0]} (+${errors - 1} more)`)
               : source && source.degraded > 0
                 ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
                 : "Source or control evidence needs review.",

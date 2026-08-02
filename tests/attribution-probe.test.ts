@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { enrichCmuxIdentity } from "../src/server/identity";
 import type { CmuxSurface, CommandResult, CommandRunner } from "../src/server/types";
 
@@ -149,5 +149,61 @@ describe("when it still fails, the operator can tell a probe from a policy", () 
     const errors = await errorsFrom(runner);
 
     expect(errors.filter((error) => error.includes("attribution"))).toEqual([]);
+  });
+});
+
+/* The other half of legibility: the message has to reach the BOARD.
+
+   The server wrote a sentence naming the probe, the attempts and the cost, and
+   the health card rendered `${errors} error${...}` — a count. So an operator
+   watching Send disappear read "1 degraded source · 0 stale · 1 error" and
+   still could not tell a failed probe from a changed policy. A message that
+   exists only in the payload is not a message to anyone; counting it is the
+   same defect as withholding it. */
+describe("the failure is legible on the board, not only in the payload", () => {
+  let M: { summaryWidgetData: (id: string, snap: unknown, conn: string) => { sublabel: string } };
+
+  beforeAll(async () => {
+    // @ts-expect-error the dependency-free browser client has no declaration file
+    await import("../src/web/app.js");
+    M = (globalThis as unknown as { TheAntHill: typeof M }).TheAntHill;
+  });
+
+  const PROBE_MESSAGE = "cmux process attribution probe failed 2 times (timed out after 4000ms;"
+    + " timed out after 4000ms). Session identity for panes without a tty is unavailable this scan,"
+    + " so Focus, Send and Interrupt stay off until it answers.";
+
+  const board = (errors: readonly string[]) => ({
+    generatedAt: new Date().toISOString(),
+    controlHealth: { cmuxReachable: true, lastCheckedAt: new Date().toISOString(), errors: [...errors], staleSources: [] },
+    totals: { live: 1, tracked: 1, attention: 0, sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 } },
+    programs: [],
+  });
+
+  test("the probe's own words are what the card shows", () => {
+    const detail = M.summaryWidgetData("health", board([PROBE_MESSAGE]), "live").sublabel;
+
+    expect(detail).toContain("probe failed");
+    // The consequence clause is the part an operator acts on.
+    expect(detail).toContain("Focus, Send and Interrupt");
+    // And it is not the old bare count.
+    expect(detail).not.toMatch(/^\d+ degraded source/);
+  });
+
+  test("a second error is disclosed rather than hidden behind the first", () => {
+    /* Showing one message and silently dropping the rest would trade a count
+       for a different kind of undercount. */
+    const detail = M.summaryWidgetData("health", board([PROBE_MESSAGE, "cmux notification discovery exited 1"]), "live").sublabel;
+
+    expect(detail).toContain("probe failed");
+    expect(detail).toContain("+1 more");
+  });
+
+  test("a board with no errors keeps its existing summary", () => {
+    // The control: this must not turn every clear board into an empty string.
+    const detail = M.summaryWidgetData("health", board([]), "live").sublabel;
+
+    expect(detail).toBeTruthy();
+    expect(detail).not.toContain("probe failed");
   });
 });
