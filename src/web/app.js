@@ -54,6 +54,7 @@ import {
   controlUnavailableText,
   elapsedDataset,
   focusDestinationHint,
+  focusButtonLabel,
   identityTraceView,
   investigationView,
   issueLifecycle,
@@ -1067,7 +1068,7 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
-  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
@@ -5639,7 +5640,13 @@ function renderDockTool(agent, cap, action, opts = {}) {
     },
   },
     icon(action === "focus" ? "focus" : action === "interrupt" ? "interrupt" : "archive"),
-    busy ? label + "…" : label);
+    /* Focus names where it is about to take you, on the rows where that is not
+       provable. Everything else keeps its plain label. */
+    busy
+      ? label + "…"
+      : action === "focus"
+        ? focusButtonLabel(agent, deriveControlState(agent))
+        : label);
 }
 
 function sourceWorkspaceLabel(target) {

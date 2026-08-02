@@ -257,6 +257,30 @@ export function elapsedDataset(agent, generatedAt) {
     : {};
 }
 
+/* The destination as a VISIBLE label, not a tooltip.
+
+   focusDestinationHint below is a `title` attribute — the weakest disclosure
+   surface there is. It never appears on keyboard focus or touch, and an
+   operator who moves the mouse to the button and clicks reads nothing. The
+   strong wording lives in the drawer banner, which requires having already
+   stopped to investigate.
+
+   That is backwards for the row it matters on. `unique-cwd` is matched by
+   folder among panes carrying no identity evidence, so Focus can walk an
+   operator to a stranger's terminal while the row still reads healthy — and
+   naming the destination is what this project chose INSTEAD of gating the
+   control, because looking is how an operator recovers once the write controls
+   are off. A name nobody sees is not an alternative to gating.
+
+   Only on unproven rows: on a `linked` row the destination is proven and a
+   suffix on every button would be noise that trains the eye to skip it. */
+export function focusButtonLabel(agent, controlState) {
+  if (controlState !== "unproven") return "Focus";
+  const id = terminalIdentity(agent);
+  const name = id ? (id.paneFolder || id.title) : "";
+  return name ? "Focus → " + name : "Focus";
+}
+
 export function focusDestinationHint(agent) {
   const id = terminalIdentity(agent);
   if (!id) return "Jump to terminal pane";

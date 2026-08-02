@@ -207,3 +207,41 @@ describe("the failure is legible on the board, not only in the payload", () => {
     expect(detail).not.toContain("probe failed");
   });
 });
+
+/* Focus was deliberately NOT gated on a folder-matched row: it types nothing,
+   and going to look at the pane is how an operator recovers once the write
+   controls are off. Naming the destination was chosen instead of closing the
+   control — so the name has to be visible, or it is not an alternative to
+   gating, it is the absence of one.
+
+   It was a `title` attribute: invisible to keyboard and touch, and unread by
+   anyone who moves the mouse to the button and clicks. */
+describe("Focus names its destination where the destination is not proven", () => {
+  let P: { focusButtonLabel: (agent: unknown, controlState: string) => string };
+
+  beforeAll(async () => {
+    // @ts-expect-error the dependency-free browser client has no declaration file
+    P = await import("../src/web/presentation.js");
+  });
+
+  const row = (resolution: string) => ({
+    target: { surfaceId: "S1", resolution, workspaceTitle: "wave6", surfaceCwd: "/Users/me/other-project" },
+  });
+
+  test("an unproven row shows where Focus will take it", () => {
+    /* The rotation case: this row may read ALPHA while the pane is BRAVO's, so
+       the destination beside the button is what makes the mismatch visible
+       without opening anything. */
+    expect(P.focusButtonLabel(row("unique-cwd"), "unproven")).toBe("Focus → other-project");
+  });
+
+  test("a proven row keeps the plain label", () => {
+    /* Not on every row. A suffix everywhere is noise, and noise is what trains
+       an eye to skip the one row where it mattered. */
+    expect(P.focusButtonLabel(row("exact"), "linked")).toBe("Focus");
+  });
+
+  test("a row with no nameable pane says Focus rather than an empty arrow", () => {
+    expect(P.focusButtonLabel({ target: { resolution: "missing" } }, "unproven")).toBe("Focus");
+  });
+});
