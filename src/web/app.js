@@ -3408,6 +3408,26 @@ function rowStateWords(activity, outcome, view) {
   return words;
 }
 
+/* The roster's copy of the name, with the program suffix removed.
+
+   Audit §9: .agent-name renders at 15px/700 and on a real board four of six rows
+   carried the identical string, because sourceAgentName ends in the working
+   directory and every row in a program shares it — while the session tag, the
+   only value that differs, sat below at 10.5px/400/muted. Scanning meant reading
+   the faintest element on each row while the loudest repeated the program header
+   directly above it.
+
+   Stripped only when the name genuinely ends in " · <program>", so a cmux-titled
+   session ("⠐ Deploy backend fixes via Codex") is untouched, and never below one
+   remaining word. The full name stays in the row's title and aria-label. */
+function rosterName(displayName, program) {
+  const full = String(displayName || "");
+  const suffix = " · " + programName(program);
+  if (!program || !full.endsWith(suffix)) return full;
+  const trimmed = full.slice(0, -suffix.length).trim();
+  return trimmed || full;
+}
+
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -3459,7 +3479,17 @@ function renderAgentRow(agent, program, opts = {}) {
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
     el("span", { class: "agent-name-wrap" },
-      el("span", { class: "agent-name", text: displayName }),
+      el("span", { class: "agent-name", text: rosterName(displayName, program) }),
+      /* The disambiguator rides the loud line. It used to sit on the tag row
+         below in the faintest style on the row, which put the only value that
+         separates two rows furthest from the eye. */
+      nameTag
+        ? el("span", {
+          class: "row-session-tag is-inline",
+          title: "Session " + nameTag + " — this display name is shared by other rows.",
+          text: "#" + nameTag,
+        })
+        : null,
       state.selecting ? null : el("button", {
         type: "button",
         class: "agent-rename",
@@ -3478,13 +3508,6 @@ function renderAgentRow(agent, program, opts = {}) {
          rides the existing identity-tags line rather than adding a row, and it
          is the same short id the drawer and the copy-id buttons speak, so an
          operator can carry it between the two. */
-      nameTag
-        ? el("span", {
-          class: "row-session-tag",
-          title: "Session " + nameTag + " — this display name is shared by other rows.",
-          text: "#" + nameTag,
-        })
-        : null,
       // De-noised: only the cwd-mismatch state keeps a visible mark — a small
       // ember dot with an accessible label. The full sentence rides the row
       // tooltip + aria-label and the drawer; no naming prose on the row.

@@ -1457,6 +1457,14 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Session tag on rows whose display name is shared. Mono and quiet: it is a
    handle for telling twins apart, not a status — it must never compete with the
    alert rails or the instrument cluster for attention. */
+/* Inline on the name line, where it does the work: bigger and darker than the
+   old tag-row treatment, because it is the value that tells two rows apart. */
+.agent-name-wrap .row-session-tag.is-inline {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
 .row-session-tag {
   font-family: var(--font-mono);
   font-size: 10.5px;

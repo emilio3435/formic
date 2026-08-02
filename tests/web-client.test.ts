@@ -4478,6 +4478,34 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §9. Measured on the live roster: .agent-name renders the
+     identical text at 15px/700/near-black while .row-session-tag — the only
+     value that differs between rows — renders at 10.5px/400/muted on the
+     subordinate line. Scanning the board meant reading the smallest, faintest
+     element on each row while the loudest one repeated the program header
+     directly above it. */
+  test("(9a) the roster's distinguishing value rides the name, not the tag line", () => {
+    const twin = (id: string, session: string) => agent({
+      id, sourceSessionId: session, provider: "claude", displayName: "Claude · the-mountain-main", programId: "p",
+    });
+    const a = twin("claude:1", "aaaaaaaa-1111"), b = twin("claude:2", "bbbbbbbb-2222");
+    const program = { id: "p", name: "the-mountain-main", agents: [a, b] };
+    const ambiguous = M.ambiguousNames([a, b]);
+    const row = withDom(() => M.renderAgentRow(a, program, { ambiguousNames: ambiguous }));
+
+    // The tag now sits inside the name wrapper, beside the loud text.
+    const wrap = byClass(row, "agent-name-wrap");
+    expect(wrap).not.toBeNull();
+    expect(textOf(wrap)).toContain("#" + M.sessionTag(a));
+
+    /* The program name is stripped from the roster's copy of the name: the
+       program header carries it two rows up, so repeating it spends the loudest
+       text on the row on the one word every row shares. */
+    expect(textOf(byClass(row, "agent-name"))).toBe("Claude");
+    // The full name survives where it is not competing for scan attention.
+    expect(row.attributes["aria-label"]).toContain("Claude · the-mountain-main");
+  });
+
   /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
      Two live sessions share one cmux pane" beside "Advisory · 1 degraded source"
      — the second in a full-width row. attentionSummary and topSourceIssue read
@@ -5249,7 +5277,10 @@ describe("FE-B: harness-backed client behavior", () => {
     const body = root.children[0].children[root.children[0].children.length - 1];
     expect(body.children.length).toBe(2); // column header + the rescued row
     const rowText = textOf(body.children[1]);
-    expect(rowText).toContain("Codex · w6-server");
+    /* The roster drops the " · <program>" suffix (audit §9) — the program header
+       two rows up already carries it — so the rescued row identifies itself as
+       "Codex" here. What this test is about is that it PAINTS at all. */
+    expect(rowText).toContain("Codex");
     expect(rowText).toContain("Alert"); // and it reads as needing a human
 
     // The guard: a program of finished, healthy agents still collapses, so this
