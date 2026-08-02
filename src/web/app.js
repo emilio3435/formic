@@ -200,6 +200,15 @@ const GLOSSARY = {
   "Ready · linked": READY_LINKED_HINT,
 };
 
+const CONTROL_STATE_TEXT = {
+  linked: "Ready",
+  // Focus can reach this pane; nothing may be typed into it. "Ready" would have
+  // told a screen-reader operator the row accepts input, which it does not.
+  unproven: "Look only — session not proven",
+  quarantined: "Quarantined",
+  "observed-only": "View only",
+};
+
 const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by folder", ambiguous: "ambiguous", missing: "no link" };
 
 
@@ -1021,7 +1030,7 @@ globalThis.TheAntHill = {
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
-  broadcastEligible, broadcastIneligibleReason,
+  broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
@@ -3858,7 +3867,6 @@ function providerMark(agent) {
 // state. The agent row folds Access into its aria-label; the drawer status line
 // renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
-const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
 
 /* What the Status cell should say, given the tab the operator is already in.
 
@@ -5333,6 +5341,14 @@ function renderControlBanner(agent, control) {
   if (!locked) return null;
   const brief = quarantineBrief(agent, control);
 
+  /* Deliberately NOT the server's reason string, though it is right there on
+     the capability. This chrome is pinned to plain operator language and to
+     leaking no cmux identifiers, because resolver reasons carry raw evidence
+     ("surface a1b2 is claimed by two sessions (lsof evidence conflicts)").
+     My first pass rendered the served reason on the "render what the server
+     sends" rule and a test caught it. That rule governs NUMBERS, where two
+     derivations drift; this is an explanation, where the server's audience is
+     an API client and the banner's audience is a person. */
   const copy = el("div", { class: "control-banner-copy" },
     el("strong", { text: brief.title }),
     " ",
@@ -5965,9 +5981,17 @@ function controlLinkSentence(target) {
   if (!target) return null;
   const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
   const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
-  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+  if (target.resolution === "exact") {
     return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
       + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  /* A directory match routes a Focus and nothing else. Claiming "for Focus and
+     Send" here is the sentence form of the same overclaim the chip made. */
+  if (target.resolution === "unique-cwd") {
+    return (terminal ? "Focus only, to " + terminal : "Focus only")
+      + " · " + resolution + ", not attested by cmux"
       + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
       + ".";
   }
@@ -6332,7 +6356,11 @@ function broadcastIneligibleReason(agent) {
   if (deriveActivity(agent) === "ended") {
     return (agent.status === "archived" || agent.activity === "archived") ? "archived" : "ended";
   }
-  return deriveControlState(agent) === "quarantined" ? "quarantined" : "view only";
+  const control = deriveControlState(agent);
+  if (control === "quarantined") return "quarantined";
+  // Distinct from "view only": this row HAS a pane, it just cannot be proven.
+  if (control === "unproven") return "session not proven";
+  return "view only";
 }
 
 function toggleSelect(agentId) {

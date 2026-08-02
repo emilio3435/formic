@@ -207,6 +207,14 @@ export function conciseText(value, limit = 88) {
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
 export function controlUnavailableText(controlState) {
+  /* Three sentences, because a refusal an operator cannot act on reads as a
+     fault: what is off, why, and what turns it back on. Send is OFF here, not
+     broken, and saying so is what stops the retry. */
+  if (controlState === "unproven") {
+    return "Send and Interrupt are switched off — this pane was matched by its working directory,"
+      + " not attested by cmux, so the session on it cannot be proven and typing here could reach a"
+      + " different agent. Focus still works, and both return as soon as cmux attests the session.";
+  }
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
     : "Controls are unavailable — no safe cmux target is linked to this session.";
@@ -444,6 +452,23 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
   if (control === "linked") return null;
   const view = identityTraceView(agent);
   const cause = identityCause(view);
+  /* Without this branch the banner throws. It renders whenever a write control
+     is disabled, and the fail-closed gate disables Send on a routable pane —
+     a state that previously could not exist, so this returned null and the
+     caller read .title off it. */
+  if (control === "unproven") {
+    return {
+      title: "Send is off for this row.",
+      summary: controlUnavailableText(control),
+      why: "cmux reports no session on this pane, so the board matched it by working directory alone."
+        + " A pane that changes directory into another's folder matches just as well, which is how an"
+        + " instruction reaches the wrong agent.",
+      nextStep: "Open the pane with Focus and check which session is on it."
+        + " Send returns by itself once cmux attests the session — there is nothing to repair here.",
+      cause,
+      steps: view.steps,
+    };
+  }
   return {
     title: control === "quarantined" ? "Control routing locked." : "Controls unavailable.",
     summary: controlUnavailableText(control),

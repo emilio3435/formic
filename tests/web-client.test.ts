@@ -517,6 +517,70 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* A cwd string is not an identity, and the UI must not call it one.
+
+     Proven against probe agents: a Send addressed to ALPHA executed on BRAVO's
+     tty and returned ok: true. control.ts authorised writes on `exact` OR
+     `unique-cwd`, and unique-cwd picks among panes whose identity evidence is
+     EMPTY, by elimination on a directory string. The trigger is mundane — one
+     pane cds away, another cds in.
+
+     The server now refuses the write. This pins the half an operator sees: a
+     greyed button with no explanation reads as a bug and gets retried, which is
+     the exact behaviour that makes a safety gate useless. */
+  test("a pane matched only by directory is its own state, not Linked", () => {
+    const attested = agent({ target: { surfaceId: "s1", resolution: "exact" } });
+    const guessed = agent({ target: { surfaceId: "s1", resolution: "unique-cwd" } });
+
+    expect(M.deriveControlState(attested)).toBe("linked");
+    expect(M.deriveControlState(guessed)).toBe("unproven");
+    // The word the operator reads must not claim a link the server will refuse.
+    expect(M.CONTROL_LABELS.unproven).not.toMatch(/linked/i);
+
+    /* The refusal has to carry all three, or it reads as a fault: what is off,
+       why, and what turns it back on. */
+    const text = M.controlUnavailableText("unproven");
+    expect(text).toMatch(/working directory/i);              // the cause
+    expect(text).toMatch(/different agent/i);                // the risk
+    expect(text).toMatch(/as soon as cmux attests/i);        // the way back
+    expect(text).toMatch(/switched off/i);                   // off, not broken
+    expect(text).toMatch(/Focus still works/i);              // what still works
+
+    /* Without a brief the banner throws: it renders whenever a write control is
+       disabled, and this is a routable pane with Send off — a combination that
+       could not previously exist, so quarantineBrief returned null and the
+       caller read .title off it. */
+    const brief = M.quarantineBrief(guessed, "unproven");
+    expect(brief).not.toBeNull();
+    expect(brief.title).toMatch(/off/i);
+    expect(brief.nextStep).toMatch(/Focus/);
+    // Nothing to repair — saying so is what stops the retry.
+    expect(brief.nextStep).toMatch(/nothing to repair/i);
+
+    /* The row's accessible name must not tell a screen-reader operator the row
+       is Ready when it accepts no input. */
+    expect(M.CONTROL_STATE_TEXT.unproven).toBe("Look only — session not proven");
+    expect(M.CONTROL_STATE_TEXT.unproven).not.toBe("Ready");
+
+    /* Eligibility is read from the SERVER capability, so it fails closed on its
+       own — but the reason shown must distinguish "has a pane we cannot prove"
+       from "has no pane". */
+    const off = agent({
+      target: { surfaceId: "s1", resolution: "unique-cwd" },
+      controls: [{ action: "instruct", enabled: false, reason: "x" }],
+    });
+    expect(M.broadcastEligible ? M.broadcastEligible(off) : false).toBe(false);
+    expect(M.broadcastIneligibleReason(off)).toBe("session not proven");
+
+    // The gate is a gate, not a wall: an attested row keeps everything.
+    const on = agent({
+      target: { surfaceId: "s1", resolution: "exact" },
+      controls: [{ action: "instruct", enabled: true }],
+    });
+    expect(M.broadcastIneligibleReason(on)).not.toBe("session not proven");
+    expect(M.quarantineBrief(on, "linked")).toBeNull();
+  });
+
   /* Day one. Every measurement this project ever took was at 380-441 agents, so
      the board had never been seen with nothing on it — which is exactly the
      state a new operator meets on first run. It read "The ant hill is still — no

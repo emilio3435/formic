@@ -42,7 +42,19 @@ export function deriveControlState(agent) {
   if (agent.controlState) return agent.controlState;
   if (deriveActivity(agent) === "ended") return "observed-only";
   const t = agent.target || {};
-  if (t.surfaceId && (t.resolution === "exact" || t.resolution === "unique-cwd")) return "linked";
+  /* "exact" and "unique-cwd" are not the same claim and must not share a word.
+
+     exact means cmux ATTESTS this session is on that surface. unique-cwd picks
+     among panes whose identity evidence is EMPTY, by elimination on a directory
+     string — by construction a pane cmux cannot identify. Calling both "Linked"
+     is what let a Send addressed to one agent execute on another's terminal and
+     return ok: true (proven against probe agents, adc1da0).
+
+     The server now refuses the write. If the chip still read "Linked" beside a
+     dead Send button, the operator would read a bug and retry it, which is the
+     precise failure this state exists to prevent. */
+  if (t.surfaceId && t.resolution === "exact") return "linked";
+  if (t.surfaceId && t.resolution === "unique-cwd") return "unproven";
   return t.resolution === "ambiguous" ? "quarantined" : "observed-only";
 }
 

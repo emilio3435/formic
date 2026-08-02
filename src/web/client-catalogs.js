@@ -2,7 +2,15 @@
 
 export const ACTIVITY_LABELS = { working: "Working", idle: "Idle", ended: "Ended", unknown: "Unknown" };
 export const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Alert", blocked: "Blocked", failed: "Failed" };
-export const CONTROL_LABELS = { linked: "Linked", "observed-only": "Observed only", quarantined: "Quarantined" };
+/* "Unverified pane" sits between Linked and Observed only: cmux can route a
+   Focus there, but cannot attest which session is on it, so nothing may be typed
+   into it. Its own word, because it is its own state — see deriveControlState. */
+export const CONTROL_LABELS = {
+  linked: "Linked",
+  unproven: "Unverified pane",
+  "observed-only": "Observed only",
+  quarantined: "Quarantined",
+};
 
 /* Attention first, deliberately. The board used to open on "now" — every routine
    working agent — with the attention tab reading 0 beside it. A cockpit whose
