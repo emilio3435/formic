@@ -125,7 +125,16 @@ describe("publish state", () => {
   });
 
   test("no origin is a real answer, not a failure to report", async () => {
-    const state = await readPublishState(gitRunner({}), "/repo", NOW);
+    /* The stub must confirm this IS a repository. It previously failed every
+       command, so it proved only that SOMETHING went wrong — the same ambiguity
+       the code had, since `git remote get-url` fails identically for "no remote"
+       and "not a repo". A fixture that cannot tell two causes apart cannot pin
+       a message that names one. */
+    const state = await readPublishState(
+      gitRunner({ "rev-parse --is-inside-work-tree": ok("true\n") }),
+      "/repo",
+      NOW,
+    );
 
     expect(state.available).toBe(false);
     expect(state.reason).toContain("No origin remote");
@@ -165,5 +174,30 @@ describe("publish state", () => {
       .toBe("https://github.com/emilio3435/the-ant-hill.git");
     expect(displayRemote("git@github.com:emilio3435/the-ant-hill.git"))
       .toBe("git@github.com:emilio3435/the-ant-hill.git");
+  });
+});
+
+describe("the reason names the cause it actually checked", () => {
+  test("a folder that is not a repository says so, rather than blaming the remote", async () => {
+    /* `git remote get-url origin` fails for BOTH "no remote configured" and
+       "not a repository at all" — someone who downloaded a zip rather than
+       cloning. Reporting the first for the second sends them to configure a
+       remote on a directory git will not touch, which is a cause we never
+       established. */
+    const notARepo = gitRunner({});
+    const state = await readPublishState(notARepo, "/downloads/anthill", NOW);
+
+    expect(state.available).toBe(false);
+    expect(state.reason).toContain("not a git repository");
+    expect(state.reason).not.toContain("origin remote");
+  });
+
+  test("a repository with no remote still blames the remote, correctly", async () => {
+    // The control: the original message must survive for the case it describes.
+    const noRemote = gitRunner({ "rev-parse --is-inside-work-tree": ok("true\n") });
+    const state = await readPublishState(noRemote, "/repo", NOW);
+
+    expect(state.available).toBe(false);
+    expect(state.reason).toContain("No origin remote");
   });
 });
