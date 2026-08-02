@@ -4504,6 +4504,37 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* GPT day review 3.1: the rail said "No completion data yet" while
+     completionsLastHour was 2. The sentence was gated on observedWindowMs, so a
+     restarted tracker reported NOTHING KNOWN rather than this-much-known. A
+     principled honesty string stating something false is worse than no string. */
+  test("(3.1) a known count is not reported as no data just because the window is young", () => {
+    expect(M.completionWindowText({ completionsLastHour: 2, observedWindowMs: 0 }))
+      .toBe("↑2 done · rate window not established");
+    // Nothing known really is nothing.
+    expect(M.completionWindowText({ completionsLastHour: 0, observedWindowMs: 0 })).toBe("");
+    // And an established window is unchanged.
+    expect(M.completionWindowText({ completionsLastHour: 2, observedWindowMs: 600_000 }))
+      .toBe("↑2 done in 10m observed");
+  });
+
+  /* GPT day review 3.2, which they credit to their own §8 — silencing the scope
+     note was right about the restated counts and wrong about the lookback, the
+     one thing only that line disclosed. History read 37 against 388 ended agents
+     on the wire, and the note renders only once you are already in that view. */
+  test("(3.2) a lookback-filtered tab count discloses its window", () => {
+    expect(M.lookbackApplies("history")).toBe(true);
+    expect(M.lookbackApplies("idle")).toBe(true);
+    expect(M.lookbackApplies("now")).toBe(false);
+    expect(M.lookbackApplies("needs-you")).toBe(false);
+    // The suffix is built from the same label the filter bar uses, so the tab and
+    // the control that changes it can never name different windows.
+    expect(M.lookbackLabel(6)).toBe("6h");
+    expect(source).toContain('" · " + lookbackLabel(state.lookbackHours)');
+    // Unfiltered views get no suffix — the count is the whole truth there.
+    expect(source).toContain("lookbackApplies(view) && state.lookbackHours != null");
+  });
+
   /* The seam the needsYou mess came from: two derivations of one number. A
      session reporting 391.4M against a program reporting 1.60B is under repair
      server-side, so the client must render whatever the wire carries rather than

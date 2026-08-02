@@ -685,9 +685,17 @@ function noDataWidget(sublabel) {
    on the live board: observedWindowMs was 300000, five minutes, printed as an
    hour. One derivation now, shared by both surfaces. */
 function completionWindowText(momentum) {
-  if (!momentum || !(momentum.observedWindowMs > 0)) return "";
+  if (!momentum) return "";
+  const done = momentum.completionsLastHour;
+  if (!(momentum.observedWindowMs > 0)) {
+    /* A restarted tracker knows a COUNT before it has a window to rate it over.
+       Saying "No completion data yet" while completionsLastHour is 2 states
+       something false in the name of honesty — the honest sentence is what is
+       known plus what is not. (GPT day review 3.1.) */
+    return done > 0 ? "↑" + done + " done · rate window not established" : "";
+  }
   const full = momentum.observedWindowMs >= 3_600_000;
-  return "↑" + momentum.completionsLastHour + " done "
+  return "↑" + done + " done "
     + (full ? "this hour" : "in " + fmtElapsed(momentum.observedWindowMs) + " observed");
 }
 
@@ -2922,7 +2930,19 @@ function renderTabs() {
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
         ).length
       : null;
-    countNode.textContent = count == null ? "" : String(count);
+    /* The lookback rides the tab it filters. History reads 37 while 388 ended
+       agents are on the wire — correct, because of the 6h window — but the scope
+       note that disclosed it renders only once you are already IN that view, so
+       from anywhere else the count silently understated by 351.
+
+       The GPT lane's §8 asked for the scope line to fall silent when no filter is
+       active and I implemented it; that was right about the restated counts and
+       wrong about the lookback, which was the one thing only that line said. The
+       disclosure belongs on the count it qualifies. (Day review 3.2.) */
+    const window = count != null && lookbackApplies(view) && state.lookbackHours != null
+      ? " · " + lookbackLabel(state.lookbackHours)
+      : "";
+    countNode.textContent = count == null ? "" : String(count) + window;
     // The Alerts (needs-you) tab count takes ember ink when there is anything to
     // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
     if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
