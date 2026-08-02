@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -34,6 +34,40 @@ const server = serverModules.map((n) => read(join("src/server", n))).join("\n");
    string the docs quote can move between files without a reader seeing anything
    change. These assertions are about what the CLIENT produces, not where. */
 const client = clientModules.map((n) => read(join("src/web", n))).join("\n");
+
+/* The client's own model layer, driven directly. Grepping a source file proves
+   the file contains a string and nothing else — a comment satisfies it, which
+   is how "cost unavailable" stayed pinned while living in prose ABOUT the
+   feature. These assertions call the functions that PRODUCE the strings, so
+   deleting the render fails them. app.js guards its DOM wiring behind a
+   `typeof document` check and hangs its pure helpers on globalThis, so it
+   imports safely here without a browser. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let M: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let agentModel: any;
+beforeAll(async () => {
+  // @ts-expect-error the dependency-free browser client has no declaration file
+  await import("../src/web/app.js");
+  M = (globalThis as unknown as { TheAntHill: unknown }).TheAntHill;
+  /* livenessView is not on the global, and adding it there would mean editing
+     a file another lane owns. It is a plain ES module, so import it directly. */
+  // @ts-expect-error same, no declaration file
+  agentModel = await import("../src/web/agent-model.js");
+});
+
+const agentFixture = (o: Record<string, unknown> = {}) => ({
+  id: "codex:pin", provider: "codex", sourceSessionId: "pin", displayName: "Pin",
+  programId: "p1", status: "running", activity: "working", controlState: "linked",
+  updatedAt: "2026-08-02T12:00:00.000Z", tokens: { provenance: "observed", total: 10 },
+  artifacts: [], gates: [], ...o,
+});
+const snapFixture = (o: Record<string, unknown> = {}) => ({
+  generatedAt: "2026-08-02T12:00:00.000Z",
+  controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
+  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+  issues: [], programs: [{ id: "p1", name: "p1", agents: [agentFixture()] }], ...o,
+});
 
 describe("ARCHITECTURE.md stays true to the code it maps", () => {
   test("it names every module that exists, and every module it names exists", () => {
@@ -116,9 +150,21 @@ describe("README.md stays true to the product", () => {
        promise a stranger reads in the first fifteen seconds, so the strings
        behind it have to be strings the client actually renders. */
     expect(readme).toContain("`unavailable`, never `$0`");
-    expect(client).toContain("cost unavailable");
+    /* Driven, not grepped: a burn payload carrying a null cost must RENDER the
+       word, and must never render a zero. */
+    const noCost = snapFixture({ pulse: { burn: { tokensPerMin: 10, windowMs: 300000, costLastHourUsd: null, costProvenance: "unavailable", coverage: { reporting: 1, eligible: 1, unknown: 0 } }, momentum: { working: 1, completionsLastHour: 0, observedWindowMs: 0, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900000 }, activity: { bucketMinutes: 5, windowMinutes: 60, observedSince: "x", buckets: [] } } });
+    const burn = M.summaryWidgetData("burn", noCost, "live", "percent", [], false);
+    expect(burn.sublabel, "a null cost stopped rendering as unavailable").toContain("cost unavailable");
+    expect(burn.sublabel, "a null cost is being rendered as a zero").not.toContain("$0");
     expect(readme).toContain("no process evidence");
-    expect(client).toContain('label: "No process evidence"');
+    /* Driven: an ended agent with no process evidence must PRODUCE that chip.
+       This is the case README points a stranger at — a session that stopped
+       without proof either way is not reported as dead. */
+    const noEvidence = agentModel.livenessView(agentFixture({
+      activity: "ended", processState: "unknown", processAlive: undefined, processIds: [],
+    }));
+    expect(noEvidence?.label, "an ended agent with no evidence stopped reading as 'No process evidence'")
+      .toBe("No process evidence");
   });
 
   test("the ports and failure mode it sends a stranger to are real", () => {
@@ -226,11 +272,18 @@ describe("QUICKSTART.md stays true to a first run", () => {
       "All clear",
     ]) {
       expect(flowed, `QUICKSTART.md stopped quoting "${quoted}"`).toContain(quoted);
-      expect(client, `"${quoted}" is not a string the client renders any more`).toContain(quoted);
     }
-    // The verdict a monitoring-only install lands on, and the badge that means healthy.
+    /* The two cmux sentences and the Blocked verdict are what a monitoring-only
+       install actually lands on, so drive that exact payload rather than
+       grepping: cmux unreachable, everything else fine. */
+    const noCmux = snapFixture({ controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: ["gone"], staleSources: [] } });
+    const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
     expect(quickstart).toContain("`Blocked`");
-    expect(client).toContain('blocking: "Blocked"');
+    expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
+    expect(blocked.sublabel).toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
+    expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
+    // And the clear case QUICKSTART promises once cmux is running.
+    expect(M.summaryWidgetData("health", snapFixture(), "live", "percent", [], false).value).toBe("All clear");
     expect(quickstart).toContain("**Live**");
     expect(client).toContain('live: "Live"');
   });
