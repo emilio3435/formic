@@ -5,19 +5,19 @@ corrected one of my own routings.**
 
 ---
 
-## The three zones
+## The three states
 
-| Figure | Assertions | Corroborated? | Zone |
+| Figure | Assertions | Sibling? | State |
 |---|---:|---|---|
-| triage `affectedAgents` / `affectedPrograms` | **0** | no | **1 — both** |
-| `quotaPressure.usedPercent` | **1, round-trip** | no | **1 — both** |
-| `controlErrors` | 1 | no | **1 — both** |
-| `activeMs` | 11 | no | 2 |
-| `contextPeak` / `contextPct` | 12 / 7 | no | 2 |
-| `observedWindowMs` | **14 across 13 files** | no | 2 |
-| partition counts, provider sums, window+prior | many | yes | 3 |
+| triage `affectedAgents` / `affectedPrograms` | **0** | no | **UNWATCHED** |
+| `quotaPressure.usedPercent` | **1, round-trip** | no | **UNWATCHED** |
+| `controlErrors` | 1 | no | **UNWATCHED** |
+| `activeMs` | 11 | no | PINNED BUT UNPROVEN |
+| `contextPeak` / `contextPct` | 12 / 7 | no | PINNED BUT UNPROVEN |
+| `observedWindowMs` | **14 across 13 files** | no | PINNED BUT UNPROVEN |
+| partition counts, provider sums, window+prior | many | yes | ATTESTED |
 
-## Zone 1, and one of them is wrong right now
+## UNWATCHED — and one of them is wrong right now
 
 ### triage `affectedAgents` — 0 assertions, and stale
 
@@ -60,10 +60,10 @@ expect(quotas.quotas[0]?.buckets[0]?.usedPercent).toBe(80);   // asserts 80
 wrong, or measuring a different quantity than the label claims. The highest-consequence
 uncorroborated figure on the board has **one assertion, and that assertion is transport.**
 
-## Zone 2 is the finding, and tonight's RED test proves it
+## PINNED BUT UNPROVEN is the finding, and tonight's RED test proves it
 
 `observedWindowMs` has **14 assertions across 13 files.** `contextPeak` has 12. `activeMs` has 11.
-**All three remain tier-0 uncorroborated.**
+**All three remain PINNED BUT UNPROVEN — no sibling anywhere.**
 
 **Being heavily tested does not make a figure corroborated.** Tests assert what the code produces;
 they do not check it against the world. If the behaviour is wrong, **the tests pin the wrong
@@ -71,19 +71,25 @@ behaviour with more confidence.**
 
 **And this is no longer an argument — it is tonight's result.** The board's token totals are
 heavily tested, internally consistent, and passed every identity I wrote. Their **first external
-check came back 161% high.** Zone 2 is exactly where that figure lived.
+check came back 161% high.** PINNED BUT UNPROVEN is exactly where that figure lived.
 
-So the ranking that matters is not *untested → tested*. It is:
+So the axis that matters is not *untested → tested*. It is:
 
 ```
-zone 1  untested and uncorroborated   →  nothing would notice
-zone 2  tested but uncorroborated     →  tests would notice a CHANGE, nothing would notice it being WRONG
-zone 3  corroborated                  →  something can disagree
+UNWATCHED            no tests, no sibling   →  nothing would notice
+PINNED BUT UNPROVEN  tests, no sibling      →  tests notice a CHANGE; nothing notices it being WRONG
+ATTESTED             a sibling can disagree →  something outside can contradict it
 ```
 
-**Zone 2 is the largest and most dangerous zone, because it looks like zone 3 from the inside.**
-A green suite over a well-covered figure reads as confidence, and measures only that the figure has
-not moved.
+**Names, not numbers, because a danger zone you have to look up is one nobody checks.** And they
+are deliberately the write gate's own vocabulary — `missing` / *unproven* / `exact` — so nobody has
+to learn a second scheme. **A pane matched by folder but not attested by cmux is an unproven
+target; a figure held in place by assertions but attested by nothing is an unproven figure.** Same
+distinction, same word, one layer up.
+
+**PINNED BUT UNPROVEN is the largest and most dangerous, because from the inside it is
+indistinguishable from ATTESTED.** A green suite over a well-covered figure reads as confidence and
+measures only that the figure has not moved.
 
 ## On the 161%, offered as a hypothesis not a finding
 
@@ -106,7 +112,7 @@ mentions the field and discriminates nothing.
 
 **The version worth building** joins three columns per figure: *assertion count*, *non-vacuous
 evaluation count* (the counter already routed), and *corroboration tier*. A figure with many
-assertions, zero non-vacuous evaluations and tier 0 is the worst cell in the table, and nothing
+assertions, zero non-vacuous evaluations and no sibling is the worst cell in the table, and nothing
 today would show it as different from a healthy one.
 
 ## Limits
