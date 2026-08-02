@@ -951,9 +951,13 @@ export async function collectCursorSessions(
       if (transcriptPath) {
         try {
           const evidence = await transcriptEvidence(transcriptPath);
-        if (evidence.subagentsError) errors.push(evidence.subagentsError);
           ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = evidence);
-          // An unreadable subagents directory is a live agent we could not see.
+          /* An unreadable subagents directory is a live agent we could not see.
+             Pushed ONCE: this line existed twice, so a single unreadable
+             directory reported two faults. Harmless while the health card only
+             counted errors; fd20ea3 now prints the first and appends "(+N
+             more)", so the duplicate reads as a second, different problem an
+             operator would go looking for. */
           if (evidence.subagentsError) errors.push(evidence.subagentsError);
         } catch (error) {
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
