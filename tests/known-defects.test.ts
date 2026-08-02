@@ -63,7 +63,7 @@ describe("DEFECT: cursor.ts dereferences metadata that parses to null", () => {
   const parse = (metaJson: string) =>
     parseCursorSession({ sessionId: CURSOR_SESSION, metaJson, nowMs: NOW_MS });
 
-  test.failing("literal null metadata is refused rather than throwing", () => {
+  test("literal null metadata is refused rather than throwing", () => {
     /* src/server/cursor.ts, parseCursorSession.
 
        JSON.parse("null") SUCCEEDS, so the try/catch around it never fires, and

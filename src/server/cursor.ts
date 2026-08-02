@@ -162,12 +162,24 @@ function cursorTranscript(jsonl: string): CursorTranscript {
 
 export function parseCursorSession(input: CursorSessionInput): CollectedAgent | null {
   if (!UUID_PATTERN.test(input.sessionId)) return null;
-  let meta: CursorMeta;
+  /* JSON.parse("null") SUCCEEDS, so the catch never fired and the next line
+     read .hasConversation off null — a TypeError that escaped the per-session
+     map callback into collectSessions' bare Promise.all, taking OMP, Codex and
+     Claude down with Cursor. One meta.json containing the four characters
+     `null` blanked the entire fleet.
+
+     Every other non-object shape was already refused, but only by accident:
+     property lookup on a string, number, boolean or array yields undefined, so
+     the cwd check caught them. Null is the one shape that throws instead. State
+     the requirement rather than relying on that. */
+  let parsed: unknown;
   try {
-    meta = JSON.parse(input.metaJson);
+    parsed = JSON.parse(input.metaJson);
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const meta = parsed as CursorMeta;
   if (meta.hasConversation === false || typeof meta.cwd !== "string") return null;
   if (input.store?.agentId && input.store.agentId !== input.sessionId) return null;
 
