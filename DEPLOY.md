@@ -61,6 +61,25 @@ Foreground, self-cleaning (Ctrl-C kills it — no orphans). To see what's runnin
 bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 ```
 
+## The other two scripts
+
+```bash
+bash ~/Developer/the-mountain-main/scripts/anthill-start.sh   # what `bun start` runs
+bash ~/Developer/the-mountain-main/scripts/anthill-hygiene.sh # repairs the service
+```
+
+`anthill-start.sh` binds **4701** — the production port — and reuses a running
+instance rather than starting a second one. It is the ordinary onboarding
+command, so the "never launch anything on 4701 by hand" rule is reachable
+through it; that is deliberate, and reusing beats colliding.
+
+`anthill-hygiene.sh` **restarts production and can kill processes.** It rewrites
+the LaunchAgent plist if it points somewhere stale, then `launchctl bootout`s the
+service, `kill -9`s whatever is still holding :4701, and bootstraps it back. The
+kill is scoped to PIDs that `lsof` reports listening on that port — but anything
+else holding 4701 dies too. It repairs the worktree the script itself lives in
+(`ANTHILL_REPO` overrides), so run it from the worktree you mean to fix.
+
 ## Shared-checkout hazard
 
 These worktrees get concurrent commits from other agents mid-session. Before any

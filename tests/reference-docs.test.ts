@@ -476,3 +476,72 @@ describe("the publish surface is documented as what it actually is", () => {
     expect(guide).toContain("It is an endpoint today, not a card on the board.");
   });
 });
+
+describe("the executable scripts do what DEPLOY.md says they do", () => {
+  /* These are files an operator or an agent runs against production. A comment
+     that describes a guard is not the guard; each assertion below reads the
+     line that actually enforces it. The guards themselves were verified by
+     executing anthill-deploy.sh with its effects stubbed — on a lane branch it
+     aborts before reaching bunx/bun/launchctl/curl, on main it proceeds in the
+     documented order, and a red typecheck or red test stops it before restart. */
+  const shellScripts = readdirSync(join(ROOT, "scripts")).filter((n) => n.endsWith(".sh"));
+
+  test("DEPLOY.md accounts for every shell script that exists", () => {
+    /* anthill-hygiene.sh ran `kill -9` and `launchctl bootout` against
+       production while appearing in no live document. A destructive script the
+       rulebook does not mention is one an operator meets for the first time
+       while using it. */
+    expect(shellScripts.length, "no shell scripts found — the glob broke").toBeGreaterThan(0);
+    for (const script of shellScripts) {
+      expect(deploy, `DEPLOY.md never mentions scripts/${script}`).toContain(script);
+    }
+  });
+
+  test("the on-main guard is a real comparison, not a comment", () => {
+    const deployScript = read("scripts/anthill-deploy.sh");
+    // It must read the branch of its OWN worktree, not the caller's cwd.
+    expect(deployScript).toContain('ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"');
+    expect(deployScript).toContain('cd "$ROOT"');
+    expect(deployScript).toContain('BRANCH="$(git branch --show-current)"');
+    expect(deployScript).toContain('if [ "$BRANCH" != "main" ]; then');
+    // And the abort must be an exit, not just a message.
+    expect(deployScript).toMatch(/Deploy worktree must be on 'main'[\s\S]{0,120}exit 1/);
+  });
+
+  test("a red typecheck or red test aborts before anything restarts", () => {
+    const deployScript = read("scripts/anthill-deploy.sh");
+    /* The `||` form matters: under `set -e` a bare failure would also stop, but
+       the explicit exit is what makes the abort loud instead of silent. */
+    expect(deployScript).toMatch(/bunx tsc --noEmit \|\| \{[^}]*exit 1/);
+    expect(deployScript).toMatch(/bun test \|\| \{[^}]*exit 1/);
+    // Order: both gates precede the restart.
+    const tscAt = deployScript.indexOf("bunx tsc --noEmit");
+    const testAt = deployScript.indexOf("bun test ||");
+    const restartAt = deployScript.indexOf("launchctl kickstart");
+    expect(tscAt).toBeGreaterThan(-1);
+    expect(testAt).toBeGreaterThan(tscAt);
+    expect(restartAt, "the restart no longer comes after both gates").toBeGreaterThan(testAt);
+  });
+
+  test("the preview script cannot land on the production port", () => {
+    const preview = read("scripts/anthill-preview.sh");
+    // Two independent defenses: the search range excludes 4701 ...
+    expect(preview).toContain("PREVIEW_LO=4710");
+    expect(preview).toContain("PREVIEW_HI=4719");
+    // ... and an explicit refusal if it somehow arrives there anyway.
+    expect(preview).toMatch(/if \[ "\$PORT" = "\$PROD_PORT" \]; then[\s\S]{0,160}exit 1/);
+    /* It SETS MOUNTAIN_PORT from the port it picked rather than reading the
+       operator's, so an inherited env var cannot push a preview onto 4701. */
+    expect(preview).toContain('MOUNTAIN_PORT="$PORT" bun src/server/index.ts');
+  });
+
+  test("the hygiene script's kill is scoped to the port it is freeing", () => {
+    const hygiene = read("scripts/anthill-hygiene.sh");
+    /* An unscoped kill -9 in a script an operator runs to "fix" things is the
+       kind of thing that is only noticed afterwards. */
+    expect(hygiene).toMatch(/lsof -nP -iTCP:"\$\{PORT\}" -sTCP:LISTEN -t[\s\S]{0,140}kill -9/);
+    // And it repairs the worktree it lives in, not a hardcoded path.
+    expect(hygiene).toContain('REPO="${ANTHILL_REPO:-${ROOT}}"');
+    expect(deploy, "DEPLOY.md stopped warning that hygiene restarts production").toContain("restarts production and can kill processes");
+  });
+});
