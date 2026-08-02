@@ -18,6 +18,7 @@ import type {
   ProcessState,
 } from "../shared/types";
 import { MODEL_CONFIG, cursorNativeFamily } from "./model-config";
+import { transmitRefusal } from "./targets";
 import type { CollectedAgent } from "./types";
 
 /* Why Send and Interrupt are gated harder than Focus: `unique-cwd` matches a
@@ -32,22 +33,18 @@ import type { CollectedAgent } from "./types";
    leaving a dead button that looks broken. */
 export function controlsFor(agent: CollectedAgent, target: AgentSnapshot["target"], archived: boolean): ControlCapability[] {
   const routed = Boolean(target.surfaceId) && (target.resolution === "exact" || target.resolution === "unique-cwd");
-  const proven = Boolean(target.surfaceId) && target.resolution === "exact";
   const targetReason = target.reason ?? "No safe cmux target is available.";
-  const unprovenReason =
-    "This pane was matched by its working directory, not attested by cmux, so the session on it cannot be proven."
-    + " Sending here could reach a different agent. Focus still works, and this returns as soon as cmux attests the session.";
-  const writeReason = archived
-    ? "Agent is archived."
-    : proven
-      ? undefined
-      : routed
-        ? unprovenReason
-        : targetReason;
+  /* The SAME predicate executeControl consults, so the button and the endpoint
+     cannot disagree. They did: 26a4585 gated the endpoint on liveness and left
+     this function offering Send on a row whose process was known dead. Nothing
+     unsafe happened, and that is exactly the point — a control the system will
+     refuse is a promise the board should never have made. Agreement by
+     construction, not by remembering to edit both. */
+  const refusal = transmitRefusal({ target, processState: processStateFor(agent), archived });
   return [
     { action: "focus", enabled: routed && !archived, reason: routed && !archived ? undefined : archived ? "Agent is archived." : targetReason },
-    { action: "instruct", enabled: proven && !archived, reason: writeReason },
-    { action: "interrupt", enabled: proven && !archived, reason: writeReason },
+    { action: "instruct", enabled: !refusal, reason: refusal?.reason },
+    { action: "interrupt", enabled: !refusal, reason: refusal?.reason },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
   ];
 }

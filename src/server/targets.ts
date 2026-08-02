@@ -1,4 +1,4 @@
-import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier } from "../shared/types";
+import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier, ProcessState } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -307,6 +307,54 @@ export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resol
    "end_turn"` — the end of a TURN, not of a session. An agent waiting for your
    reply reads "exited". Refusing writes there would switch off Send on exactly
    the agents that are waiting for a human. */
+/* ONE predicate for "may we put characters into this pane", read by the button
+   and by the endpoint.
+
+   26a4585 closed executeControl and left controlsFor untouched, so the board
+   offered Send on a row whose process was known dead and the endpoint then
+   answered 409. Nothing unsafe happened - and that is the point: a surface
+   claiming something the system will not honour is the class this project has
+   spent two days removing, and it recurred here because agreement depended on
+   two call sites being edited together. It had already failed that way once
+   with unique-cwd, in app.ts.
+
+   So agreement is by construction. Both callers ask this and neither restates
+   the rule. Returns the refusal an operator should read, or null to transmit. */
+export interface TransmitRefusal {
+  code: "AGENT_ARCHIVED" | "UNSAFE_TARGET" | "AGENT_NOT_RUNNING";
+  reason: string;
+}
+
+export function transmitRefusal(agent: {
+  target: Pick<CmuxTarget, "surfaceId" | "resolution" | "attestation" | "reason">;
+  processState?: ProcessState;
+  archived?: boolean;
+}): TransmitRefusal | null {
+  if (agent.archived) return { code: "AGENT_ARCHIVED", reason: "Agent is archived." };
+  if (!canAddressTarget(agent.target)) {
+    return {
+      code: "UNSAFE_TARGET",
+      reason: agent.target.reason ?? "No safe cmux surface target is available.",
+    };
+  }
+  if (processKnownDead(agent)) {
+    return {
+      code: "AGENT_NOT_RUNNING",
+      reason: "This agent's process was checked and is gone, so its pane may now belong to someone else."
+        + " Sending here could reach whoever took it over."
+        + " Archive the row, or start the agent again.",
+    };
+  }
+  if (!canWriteToTarget(agent.target)) {
+    return {
+      code: "UNSAFE_TARGET",
+      reason: "This pane was matched by its working directory, not attested by cmux, so the session on it cannot be proven."
+        + " Sending here could reach a different agent. Focus still works, and this returns as soon as cmux attests the session.",
+    };
+  }
+  return null;
+}
+
 export function processKnownDead(agent: Pick<AgentSnapshot, "processState">): boolean {
   return agent.processState === "died";
 }

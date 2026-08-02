@@ -59,9 +59,16 @@ describe("one gate, so a caller cannot be fixed alone", () => {
     const read = async (path: string): Promise<string> =>
       Bun.file(new URL(`../${path}`, import.meta.url)).text();
 
-    for (const path of ["src/server/app.ts", "src/server/control.ts"]) {
+    for (const [path, gate] of [
+      ["src/server/app.ts", "canWriteToTarget"],
+      /* control.ts and snapshot-agent.ts share transmitRefusal, which wraps
+         canWriteToTarget along with liveness and addressability — one answer for
+         the button and the endpoint, after they disagreed twice. */
+      ["src/server/control.ts", "transmitRefusal"],
+      ["src/server/snapshot-agent.ts", "transmitRefusal"],
+    ] as const) {
       const source = await read(path);
-      expect(source, `${path} does not use the shared write gate`).toContain("canWriteToTarget");
+      expect(source, `${path} does not use a shared write gate`).toContain(gate);
       expect(source, `${path} still carries its own copy of the both-tiers test`)
         .not.toContain('["exact", "unique-cwd"]');
     }

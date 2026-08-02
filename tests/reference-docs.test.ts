@@ -980,7 +980,7 @@ describe("the safety promises the docs make on the product's behalf", () => {
 
      test.failing: flips the moment any authorisation path reads agent liveness,
      at which point drop .failing and keep the assertion. */
-  test.failing("no write is authorised against a process the board knows is dead", async () => {
+  test("no write is authorised against a process the board knows is dead", async () => {
     const { controlsFor } = await import("../src/server/snapshot-agent");
     const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
     const attested = { surfaceId: "s1", resolution: "exact", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
@@ -997,20 +997,24 @@ describe("the safety promises the docs make on the product's behalf", () => {
    tells a reader that a dead row shows a LIT Send which refuses on press, and
    that is only worth saying while the button and the gate disagree. */
 describe("the guide describes the dead-row controls as they actually behave", () => {
-  test("controlsFor still grants instruct on a process the gate will refuse", async () => {
-    /* control.ts refuses the write via processKnownDead, but controlsFor never
-       learned liveness, so the capability comes back enabled. If it ever does
-       learn, this flips and the guide's "read the chip rather than the button"
-       paragraph must go with it. */
+  test("controlsFor greys instruct on a process the gate will refuse", async () => {
+    /* It learned. controlsFor and control.ts now read one predicate
+       (transmitRefusal), so the capability comes back disabled and the guide's
+       "read the chip rather than the button" paragraph went with it, exactly as
+       this test said it must. */
     const { controlsFor } = await import("../src/server/snapshot-agent");
     const attested = { surfaceId: "s1", resolution: "exact", attestation: "attested", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
     const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
     const instruct = controlsFor(dead, attested, false).find((c) => c.action === "instruct");
-    expect(instruct?.enabled, "controlsFor now greys a dead row — update the guide's button paragraph")
-      .toBe(true);
+    expect(instruct?.enabled, "a dead row is offering Send again").toBe(false);
     const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
-    expect(guide, "the guide stopped warning that a dead row's Send still looks live")
-      .toMatch(/refused when pressed|still shows a lit/i);
+    /* The guide must no longer tell a reader to distrust the button, because
+       the button is now the truth. A doc that still says "refused when pressed"
+       would be describing a behaviour the code no longer has. */
+    expect(guide, "the guide still says a dead row's Send looks live")
+      .not.toMatch(/refused when pressed|still shows a lit/i);
+    expect(guide, "the guide stopped saying a dead row's Send is greyed out")
+      .toMatch(/greyed out to match|Send is greyed/i);
   });
 });
 

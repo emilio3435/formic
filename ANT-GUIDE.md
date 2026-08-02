@@ -134,14 +134,15 @@ So the two are gated differently:
 |---|---|---|
 | cmux names the session on that pane, and its process is alive | on | **accepted** |
 | matched only by its folder | on | **greyed out** |
-| the session's process is gone | on | **refused when pressed** |
+| the session's process is gone | on | **greyed out** |
 | ambiguous, or no pane found | off | greyed out |
 
-Two of those look different in the window. A row the board cannot name greys the
-button out before you touch it. A row whose **process has died still shows a lit
-Send**, and refuses only once you press it, telling you why. Same guarantee
-either way — nothing reaches the wrong terminal — but the second costs you a
-click to discover, so read the `died` chip rather than the button.
+All of them look the same in the window: if a write cannot be honoured, the
+button is not offered. That used to be untrue of one row — a dead process kept a
+lit Send and refused only once you pressed it — which was safe but dishonest,
+and the button and the server are now decided by the same rule rather than by
+two places agreeing. Hover any greyed control and it tells you which of these
+applies and what would bring it back.
 
 ### The promise behind that table
 
@@ -458,9 +459,9 @@ that launched it.
 
 **The session's process is gone.** The pane outlives the agent, and by the time
 you get there it usually belongs to your shell again. An instruction to a dead
-agent is not discarded — it lands in whatever is on that terminal now. Note this
-one does **not** grey the button out: the row shows a `died` chip and a lit Send,
-and the refusal arrives when you press it. Trust the chip over the button.
+agent is not discarded — it lands in whatever is on that terminal now. The row
+shows a `died` chip and Send is greyed out to match it; hovering says the process
+was checked and is gone.
 → *Fix:* none needed. The session is over. Read it, then `Archive` it.
 
 **The board's picture is too old to act on.** Which terminal an agent is on goes
