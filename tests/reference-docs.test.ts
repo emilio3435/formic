@@ -1453,6 +1453,23 @@ describe("the catch-up summary stays true to the code it summarises", () => {
       .toMatch(/copy it out of the drawer/i);
   });
 
+  test("it tells a returning reader what to do first, not only what to believe", () => {
+    /* Knowing what is trustworthy does not tell you where to start. The first
+       action is the product's own answer to the only question it exists to
+       answer, which also makes it a live smoke test: if the board cannot load
+       or cannot say, that is the first thing worth knowing. */
+    const t = today();
+    expect(t, "the summary stopped telling a reader where to start")
+      .toMatch(/Start here/i);
+    expect(t, "the start-here line no longer points at the running board")
+      .toContain("127.0.0.1:4701");
+    expect(t, "the start-here line stopped naming the tab that answers the question")
+      .toMatch(/`Needs you`/);
+    /* And it must stay honest about the empty case, which is the common one. */
+    expect(t, "the summary stopped saying an empty Needs you is an answer")
+      .toMatch(/nothing needs you then nothing does/i);
+  });
+
   test("it keeps an open section rather than reading as a victory lap", () => {
     const t = today();
     expect(t, "the summary dropped its 'still open' section").toMatch(/Still open/i);

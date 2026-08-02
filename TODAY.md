@@ -4,6 +4,11 @@ Five lanes worked this board all day. Git has the changelog; this is the part
 git cannot tell you — **which of these you can now rely on, and which you
 cannot.** Two minutes.
 
+**Start here:** open <http://127.0.0.1:4701> and read `Needs you`. It is the
+shortlist of sessions actually waiting on a human, it is what the board opens
+on, and if it says nothing needs you then nothing does and you can close the
+tab. Everything below is context for when it does.
+
 ---
 
 ## You can rely on this now
