@@ -3651,3 +3651,126 @@ but they are the only coverage of BurnBar's encrypted-DB paths, so on any
 machine without OpenBurnBar installed they vanish silently and `burnbar.ts`
 loses its already-thin 62.86% line coverage. Worth knowing before trusting a
 green suite from CI.
+
+# Lane Report — known-defects-handoff-20260802
+
+Five defects found by mutation testing, all in `src/server` (backend lane's).
+Each is reproduced by a `test.failing` in `tests/known-defects.test.ts`, which
+runs on every commit, passes while the defect is real, and hard-fails with
+"marked as failing but it passed" the moment the behaviour is fixed. Removing
+the marker at that point leaves a permanent regression guard.
+
+## The method note worth keeping
+
+Twice in the session that produced these, a test of mine looked correct and
+discriminated nothing, and both times it was caught only by mutating the
+implementation after writing the test. Once the URL parser normalised the
+traversal away before the handler ever saw it, so a path-containment test
+asserted on a request that could not reach the branch it named. Once three
+credential-parsing assertions held under mutation because a second, redundant
+guard covered the same input.
+
+**A test that passes on both the correct and the broken implementation is worse
+than no test, because it converts an absence of coverage into a false report of
+coverage. Writing the assertion is not the work; proving it can fail is.**
+
+Across ~88 mutants the pre-existing suite produced zero hollow assertions — it
+was thin in places, never decorative. All five hollow assertions found this
+session were in tests I had written myself.
+
+## 1. `cursor.ts` — metadata that parses to `null` crashes the collector
+
+- **Trigger:** a `meta.json` containing literally `null`.
+- **Why it escapes:** `JSON.parse("null")` succeeds, so the try/catch never
+  fires; the next line reads `meta.hasConversation` off `null`. Every other
+  non-object shape (`[]`, `"str"`, `42`, `true`, `{}`) is refused cleanly, which
+  is itself evidence the guard was meant to cover this.
+- **Observed:** `TypeError: null is not an object`. The throw escapes into the
+  per-session map callback (try/caught around the meta READ, not the parse),
+  `Promise.all` rejects, and `collectSessions` (`collectors.ts`) runs all four
+  providers in a bare `Promise.all` — so **OMP, Codex and Claude go down with
+  Cursor**. `HubState.capture()` contains it and records "session collection
+  failed", so the board degrades loudly to zero agents rather than lying. One
+  corrupt file blanks the fleet.
+- **Test:** `DEFECT: cursor.ts dereferences metadata that parses to null`.
+- **Shape of fix:** require a non-null object before reading it.
+
+## 2. `collectors.ts` — OMP silently undercounts past a corrupt usage record
+
+- **Trigger:** an assistant message whose `usage.totalTokens` will not parse
+  (e.g. a locale-formatted `"1,234"`).
+- **Why it escapes:** the `Number.isFinite` guard `continue`s past it. The guard
+  is what makes it silent — skipping turns corruption into a believable smaller
+  number.
+- **Observed:** a clean 2-record session and a 3-record session whose middle
+  record is unreadable produce **byte-identical** output: `sessionTotal: 4000`,
+  `provenance: "observed"`. The dropped record's 2000 tokens vanish with no
+  error and no provenance downgrade. Claude's parser has no such guard and
+  propagates NaN → `null` on the wire → "not reported": loud, and correct.
+- **Test:** `DEFECT: collectors.ts undercounts OMP tokens past a corrupt record`
+  (two assertions: totals must differ, and provenance must stop saying
+  "observed"). Either fix direction flips one of them; both flip both.
+
+## 3. `cmux.ts` — an unreadable timestamp silences a live request for a human
+
+- **Trigger:** a notification whose `created_at` is missing or unparseable.
+- **Why it escapes:** it is stamped `1970-01-01`. Acknowledging a surface records
+  `throughAt: notification.createdAt`, and `filter()` keeps only notifications
+  **newer** than it, so the epoch is the one value guaranteed to lose that
+  comparison forever.
+- **Observed:** same surface, same operator state, only the timestamp differs —
+  parseable → shown to operator: **1**; unparseable → **0**. An agent asking for
+  a human is silently suppressed. For a cockpit whose whole job is surfacing what
+  needs attention, a parse failure rendering as "nobody needs you" is the most
+  expensive silence available.
+- **Secondary:** a notification with no `surface_id` is dropped by a `flatMap`
+  returning `[]`, silently shrinking the unread count.
+- **Test:** `DEFECT: cmux.ts backdates an unreadable notification to the epoch`.
+
+## 4. `identity.ts` — a running process reported dead for an unfamiliar name
+
+- **Trigger:** an agent with known `processIds` whose command no longer matches
+  `isRecognizedAgentProcess` — a CLI rename is enough.
+- **Why it escapes:** liveness is scored against
+  `allProcesses.filter(isRecognizedAgentProcess)` rather than the process table,
+  and `snapshot-agent` turns `processAlive === false` plus known pids into
+  `"died"`.
+- **Observed:** pid 4242 present and running. `codex --model x` → running;
+  `/usr/local/bin/codex-next --model x` → **DIED**; pid absent → died (correct).
+  The operator chases a phantom crash while the real agent keeps working
+  unwatched. A false alarm rather than a false calm, but the same root as the
+  others: absent evidence treated as positive evidence.
+- **Test:** `DEFECT: identity.ts reports a running process dead for an
+  unfamiliar name`.
+- **Shape of fix:** "not alive" needs the pid to be missing, not merely
+  unfamiliar — score against the full table.
+
+## 5. `cursor.ts` — an unreadable subagents directory removes a live agent
+
+- **Trigger:** `agent-transcripts/<id>/subagents` unreadable for any non-ENOENT
+  reason (EACCES, ENOTDIR, EMFILE under a fleet scan).
+- **Why it escapes:** `collectCursorChildSessions` bare-catches `readdir` and
+  returns `[]`; `transcriptEvidence` does the same and returns
+  `subagentCount: 0`. Neither records anything. ENOENT — a parent with genuinely
+  no subagents — is the common case and legitimately 0, which is why the bare
+  catch exists; it conflates that with real IO failure. Every sibling failure
+  path in the same file pushes to `errors`.
+- **Observed:** readable → parent **and** child, `subagentCount: 1`,
+  `errors: []`. Unreadable → parent only (**child gone**), `subagentCount: 0`,
+  `errors: []`. A live subagent is removed from the roster, the parent reports
+  zero descendants, and the board still says Operational.
+- **Test:** `DEFECT: cursor.ts swallows an unreadable subagents directory`.
+
+## Verification status of the reproductions
+
+Each fix was simulated in a scratch copy: **seven of the eight** failing tests
+flip to "marked as failing but it passed". The eighth asserts content in the
+collector's `errors[]`, which no one-line edit can plumb, but its own control
+asserts that array is empty on the readable path — so the channel is
+demonstrably reachable and observable from that fixture.
+
+Every failing test is paired with passing controls, because a defect test that
+throws for the wrong reason — broken fixture, renamed export, a path the code
+never reaches — looks identical to a real reproduction. An earlier draft of the
+subagents fixture collected no agents at all and would have "reproduced" the
+defect by reaching none of the code.
