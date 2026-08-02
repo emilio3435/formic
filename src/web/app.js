@@ -919,7 +919,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, calmSpendText, bandContextPct, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -1816,6 +1816,17 @@ function renderWidgetCustomizer() {
 /* Calm collapse — the whole strip is one moss line: verdict, shipping count,
    pulse numbers when the server reports them (graceful without them), a small
    activity sparkline, and the trailing health micro-chip. */
+/* Spend for the collapsed line. The band's collapse carried the token RATE and
+   dropped money entirely, and for an orchestrator running hundreds of sessions a
+   rate is not a substitute for cost — recovering it meant leaving the board for
+   Usage → Custom 1h. Same wording as the BURN card on purpose: one number should
+   not have two phrasings depending on whether the band happens to be collapsed.
+   Absent when BurnBar priced nothing, never a fabricated $0. */
+function calmSpendText(burn) {
+  const cost = burn && burn.costLastHourUsd;
+  return typeof cost === "number" ? "$" + cost.toFixed(2) + " last hour" : "";
+}
+
 function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   const snap = state.snap;
   const totals = totalsOf(snap);
@@ -1828,6 +1839,8 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
     const windowText = completionWindowText(pulse.momentum);
     if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
+    const spend = calmSpendText(pulse.burn);
+    if (spend) parts.push(spend);
   }
   const line = el("div", { class: "pulse-calm" + (watch.length ? " is-watching" : ""), role: "status" },
     el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
@@ -2576,6 +2589,21 @@ const CONTEXT_BAND_ALARM_PCT = 85;
    remedy. Stall in particular is NOT promoted to an alarm on purpose: on this
    fleet many quiet sessions are waiting by design, so the honest treatment is to
    say the number and let the operator judge it. */
+/* The one context reading the BAND reasons about.
+
+   The calm predicate walked per-agent tokens (peakContext) while the CONTEXT PEAK
+   card and the watch clause read snap.contextPeak, which the server derives from
+   the same per-agent contextPct the CTX column shows. Two derivations of one
+   quantity, sitting at the two ends of the calm cliff: the board could display
+   12% and refuse to go calm because the client walk found 89% — or the reverse.
+   The card was moved onto the server's number for exactly this reason; the
+   predicate was left behind. */
+function bandContextPct(snap) {
+  if (snap && Number.isFinite(snap.contextPeak)) return snap.contextPeak;
+  const walked = peakContext(snap);
+  return walked ? walked.pct : null;
+}
+
 /* Sessions the tracker has watched go 15 minutes without moving. Neither working
    nor done, and computed by pulse.ts long before anything rendered it. */
 function stalledCount(snap) {
@@ -2591,7 +2619,7 @@ function watchClauses(snap) {
      below the alarm — above 85% it is no longer early, and the stressed grid
      gives it a cell of its own, so the murmur stands down rather than saying the
      same number twice. */
-  const peak = snap && Number.isFinite(snap.contextPeak) ? snap.contextPeak : null;
+  const peak = bandContextPct(snap);
   if (peak != null && peak >= CONTEXT_WATCH_PCT && peak < CONTEXT_BAND_ALARM_PCT) {
     clauses.push(`peak ctx ${peak}%`);
   }
@@ -2609,13 +2637,13 @@ function calmVerdict(clauses) {
 function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent", queueError = "") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
-  const peak = peakContext(snap);
+  const bandPct = bandContextPct(snap);
   /* Calm is a claim about the WHOLE board, so it cannot be made while one of the
      board's inputs is missing. An unreachable triage queue contributes zero
      findings exactly like an empty one; without this the strip would fold into
      its calm line and hide the fact that it is reasoning on partial evidence. */
   const calm = !!snap && !!attention && attention.count === 0
-    && status.key === "operational" && !(peak && peak.pct >= CONTEXT_BAND_ALARM_PCT) && !queueError;
+    && status.key === "operational" && !(bandPct != null && bandPct >= CONTEXT_BAND_ALARM_PCT) && !queueError;
   // `display` is threaded so renderHealthRail can compute each widget's data
   // ONCE and reuse it for the paint signature, the cell and the calm line —
   // it used to derive the same three from scratch on every paint.

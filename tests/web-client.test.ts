@@ -4490,6 +4490,37 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Found while verifying §4 in the browser: the calm predicate walked per-agent
+     tokens while the CONTEXT PEAK card and the watch clause read the server's
+     snap.contextPeak. Two derivations of one quantity at the two ends of the calm
+     cliff — the board could display 12% and refuse to go calm because the walk
+     found 89%. The card was moved onto the server's number precisely because
+     "two derivations of one number drift"; the predicate was left behind. */
+  test("(4b) the band reasons about the same context number it displays", () => {
+    const snap = snapshot({ contextPeak: 12 });
+    expect(M.bandContextPct(snap)).toBe(12);
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("12%");
+    // Falls back to the client walk only when the server did not report one.
+    const walked = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } })] }] });
+    expect(M.bandContextPct(walked)).toBe(90);
+    expect(M.bandContextPct(snapshot())).toBeNull();
+  });
+
+  /* Resting-state critique §4. The collapse carried the token RATE and dropped
+     spend entirely, and for an orchestrator running hundreds of sessions a rate
+     is not a substitute for money — recovering it meant Usage → Custom 1h. */
+  test("(4a) the calm line carries spend when there is spend to carry", () => {
+    const priced = { burn: { tokensPerMin: 3_400_000, costLastHourUsd: 11.76 }, momentum: { completionsLastHour: 38, observedWindowMs: 900_000 }, activity: { buckets: [] } };
+    expect(M.calmSpendText(priced.burn)).toBe("$11.76 last hour");
+    /* Same wording as the BURN card, deliberately: an operator moving between
+       the collapsed line and the expanded card must not have to work out that
+       two phrasings are one number. */
+    expect(M.calmSpendText({ tokensPerMin: 1, costLastHourUsd: null })).toBe("");
+    expect(M.calmSpendText(null)).toBe("");
+    // Never a fabricated zero when BurnBar has nothing priced.
+    expect(M.calmSpendText({ costLastHourUsd: undefined })).toBe("");
+  });
+
   /* Resting-state critique §2.1. The resting copy asserted "every tracked
      session is working or done" while 12 of 18 live agents were stalled — a
      stalled session is the third state that sentence denies exists. The claim is
