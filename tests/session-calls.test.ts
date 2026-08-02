@@ -232,6 +232,64 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.prefixSums).not.toContain(150_000);
   });
 
+  test("a provider with no call boundaries says why, rather than answering null", async () => {
+    /* Codex through the endpoint, not just the parser. The distinction the
+       whole surface turns on: `calls: null` with no explanation is
+       indistinguishable from a failure, and a caller prefix-matching against it
+       would conclude the board disagreed with itself. The reason is what makes
+       the absence readable. */
+    const root = await mkdtemp(join(tmpdir(), "anthill-session-calls-codex-"));
+    roots.push(root);
+    const source = join(root, "codex.jsonl");
+    const text = [
+      { type: "session_meta", timestamp: at(0), payload: { id: "11111111-2222-3333-4444-555555555555", cwd: "/p" } },
+      {
+        type: "event_msg", timestamp: at(1),
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: { input_tokens: 90_000, output_tokens: 5_000, cached_input_tokens: 80_000 },
+            last_token_usage: { input_tokens: 9_000, output_tokens: 500, cached_input_tokens: 8_000 },
+          },
+        },
+      },
+    ].map((entry) => JSON.stringify(entry)).join("\n");
+    await writeFile(source, text);
+    const parsed = parseCodexJsonl(text, { sourcePath: source, nowMs: Date.parse(at(9)) })!;
+    const agent = { ...parsed, artifacts: [{ kind: "transcript", path: source, label: "Transcript" } as never] };
+
+    const { body } = await serve([agent], agent.id);
+
+    expect(body.ok).toBe(true);
+    expect(body.calls).toBeNull();
+    expect(body.unavailable).toMatch(/session-cumulative/i);
+  });
+
+  test("an agent with no transcript at all is distinguished from one with no usage", async () => {
+    /* Two different absences that must not collapse into one message. No
+       transcript means the evidence was never on disk; a transcript with no
+       usage means it was read and the session genuinely made no calls. An
+       operator chasing a disagreement needs to know which. */
+    const withNothing = await withTranscript(claudeTranscript());
+    const noArtifact = { ...withNothing, artifacts: [] };
+    const noUsage = await withTranscript(JSON.stringify({
+      type: "user", timestamp: at(0), sessionId: "s", session_id: "s", cwd: "/p",
+      message: { role: "user", content: "go" },
+    }));
+
+    const absent = await serve([noArtifact], withNothing.id);
+    const empty = await serve([noUsage], noUsage.id);
+
+    expect(absent.body.calls).toBeNull();
+    expect(absent.body.source).toBeNull();
+    expect(absent.body.unavailable).toMatch(/no transcript on disk/i);
+
+    expect(empty.body.calls).toBeNull();
+    expect(empty.body.unavailable).toMatch(/records no usage/i);
+    // Different reasons, so the two absences stay distinguishable.
+    expect(empty.body.unavailable).not.toBe(absent.body.unavailable);
+  });
+
   test("an unknown agent is a 404 rather than an empty series", async () => {
     const agent = await withTranscript(claudeTranscript());
     const { status, body } = await serve([agent], "claude:not-here");
