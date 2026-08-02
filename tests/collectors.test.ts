@@ -50,8 +50,13 @@ describe("collector identity and usage truth", () => {
       input: 570,
       output: 385,
       cachedInput: 74_711,
+      /* `total` is the call's SIZE and keeps the re-read prefix, because a cached
+         token still occupies the window. `sessionTotal` is CONSUMPTION and does
+         not: 570 + 385 + 487 of cache writes. The 74,711 it used to swallow is
+         the same context re-read, and it now has its own name. */
       total: 76_153,
-      sessionTotal: 76_153,
+      sessionTotal: 1_442,
+      sessionCachedInput: 74_711,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -192,7 +197,9 @@ describe("collector identity and usage truth", () => {
       output: 4,
       cachedInput: 5,
       total: 13,
-      sessionTotal: 76_166,
+      // Two calls of new work; the 74,716 of re-reads is carried separately.
+      sessionTotal: 1_450,
+      sessionCachedInput: 74_716,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -237,7 +244,11 @@ describe("collector identity and usage truth", () => {
       output: 561,
       cachedInput: 24_192,
       total: 37_448,
-      sessionTotal: 61_701,
+      /* Codex's own cumulative total_tokens re-charges the re-read prefix every
+         turn, because its input_tokens already contains cached_input_tokens.
+         Cumulative input minus cached, plus output. */
+      sessionTotal: 27_909,
+      sessionCachedInput: 33_792,
       contextWindow: 258_400,
       scope: "latest-turn",
       provenance: "observed",
@@ -279,7 +290,7 @@ describe("collector identity and usage truth", () => {
     const agent = parseCodexJsonl(session, { nowMs });
 
     expect(agent?.tokens.total).toBe(37_448);
-    expect(agent?.tokens.sessionTotal).toBe(61_701);
+    expect(agent?.tokens.sessionTotal).toBe(27_909);
   });
 
   test("Codex omits the context window when its observed token event does not report one", () => {
@@ -449,7 +460,9 @@ describe("collector identity and usage truth", () => {
       output: 1_598,
       cachedInput: 0,
       total: 50_790,
+      // No cache reads in this fixture, so consumption and size agree.
       sessionTotal: 50_790,
+      sessionCachedInput: 0,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -526,7 +539,12 @@ describe("collector identity and usage truth", () => {
       output: 8,
       cachedInput: 7,
       total: 26,
-      sessionTotal: 126,
+      /* Consumption, deduplicated: msg-one 10+40+20 = 70 counted ONCE despite
+         two rows, plus msg-two 5+8+6 = 19. Double-counting the repeat would
+         read 159, and summing cache reads too would read 126 — the old value. */
+      sessionTotal: 89,
+      // The re-reads those two calls made, under their own name: 30 + 7.
+      sessionCachedInput: 37,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -683,5 +701,30 @@ describe("collector identity and usage truth", () => {
     writeFileSync(replacement, `${session("replacement-session")}\n${user("Replacement task.")}\n`);
     renameSync(replacement, path);
     await expectMatchesFullRead();
+  });
+
+  /* A directory we cannot scan is not a provider with no sessions. The walk
+     used to swallow every readdir failure and return [], so a permissions or
+     I/O fault reported zero agents AND zero errors — which state.ts reads as a
+     healthy source, putting a confident empty fleet on the board. */
+  test("an unscannable sessions directory degrades the source instead of reporting zero agents", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-unreadable-"));
+    // A plain file where the sessions directory belongs: readdir gives ENOTDIR,
+    // which is a real fault, unlike the ENOENT of a provider that never ran.
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "sessions"), "not a directory");
+
+    const codex = (await collectSessions(home)).codex;
+    expect(codex.value).toEqual([]);
+    expect(codex.errors.length).toBeGreaterThan(0);
+    expect(codex.errors.join(" ")).toContain("codex");
+  });
+
+  test("a provider that has never run stays silent rather than reporting an error", async () => {
+    // ENOENT is the normal state before a provider writes its first session.
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-absent-"));
+    const codex = (await collectSessions(home)).codex;
+    expect(codex.value).toEqual([]);
+    expect(codex.errors).toEqual([]);
   });
 });

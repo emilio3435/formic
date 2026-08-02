@@ -60,7 +60,11 @@ function usageSummary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     from: iso(base - HOUR_MS),
     to: iso(base),
     processedTokens: 100,
+    tokensKnown: true,
+    tokensMissing: 0,
     estimatedCostUsd: 1.25,
+    measuredCostUsd: 1.25,
+    costMissingInvocations: 0,
     costKnown: true,
     invocations: 2,
     burnRateTokensPerHour: 100,
@@ -74,38 +78,13 @@ async function flushBurnReader(): Promise<void> {
 }
 
 describe("PulseTracker", () => {
-  test("counts working-to-idle/ended transitions, ages them out, and ignores disappearance", () => {
-    const tracker = new PulseTracker(undefined, base);
-    tracker.observe(snapshot([agent({ updatedAt: iso(base + 1_000) })]), base + 1_000);
-    tracker.observe(
-      snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + 2_000) })]),
-      base + 2_000,
-    );
-    expect(tracker.report(base + 2_000).momentum.completionsLastHour).toBe(1);
-
-    tracker.observe(snapshot([]), base + 3_000);
-    expect(tracker.report(base + 3_000).momentum.completionsLastHour).toBe(1);
-
-    const disappeared = new PulseTracker(undefined, base);
-    disappeared.observe(snapshot([agent({ updatedAt: iso(base + 1_000) })]), base + 1_000);
-    disappeared.observe(snapshot([]), base + 2_000);
-    expect(disappeared.report(base + 2_000).momentum.completionsLastHour).toBe(0);
-
-    tracker.observe(snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + HOUR_MS + 1_000) })]), base + HOUR_MS + 1_000);
-    expect(tracker.report(base + HOUR_MS + 3_000).momentum.completionsLastHour).toBe(0);
-  });
-
-  test("uses the agent completion time rather than the later observation time", () => {
-    const tracker = new PulseTracker(undefined, base);
-    tracker.observe(snapshot([agent({ updatedAt: iso(base) })]), base);
-    tracker.observe(
-      snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + 60_000) })]),
-      base + 50 * 60_000,
-    );
-
-    expect(tracker.report(base + 50 * 60_000).momentum.completionsLastHour).toBe(1);
-    expect(tracker.report(base + HOUR_MS + 60_001).momentum.completionsLastHour).toBe(0);
-  });
+  /* Two tests stood here: "counts working-to-idle/ended transitions, ages them
+     out, and ignores disappearance" and "uses the agent completion time rather
+     than the later observation time". Both pinned the mechanics of a counter
+     that has been removed, because the edge it counted was never a completion —
+     see tests/completions-counter.test.ts, which pins that those same scenarios
+     now score nothing. Deleted rather than adapted: there is no quantity left
+     for them to be about. */
 
   test("includes only healthy live sessions quiet for at least fifteen minutes", () => {
     const now = base + HOUR_MS;
@@ -161,7 +140,7 @@ describe("PulseTracker", () => {
     const changedAsOf = iso(base + 4 * 60_000);
     const summaries: UsageSummary[] = [
       usageSummary({ available: false, provenance: "unavailable", estimatedCostUsd: null, costKnown: false, to: iso(base + 1 * 60_000) }),
-      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, costUsd: null, invocations: 2 }] }),
+      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, tokensMissing: 0, costUsd: null, measuredCostUsd: null, costMissingInvocations: 0, invocations: 2 }] }),
       usageSummary({ estimatedCostUsd: 1.234, to: firstAsOf }),
       usageSummary({ estimatedCostUsd: 1.231, to: sameRoundedAsOf }),
       usageSummary({ estimatedCostUsd: 1.239, to: changedAsOf }),
@@ -196,6 +175,54 @@ describe("PulseTracker", () => {
     tracker.maybeRefreshBurnCost(base + 240_001);
     await flushBurnReader();
     expect(tracker.report(base + 240_001).burn).toMatchObject({ costLastHourUsd: 1.24, costAsOf: changedAsOf });
+  });
+
+  /* The BURN card was seen reporting 37k/min, "cost unavailable" and
+     "9 of 9 reporting" at once. All three numbers were individually true, but
+     burn.coverage counts agents reporting TOKEN totals — it is the coverage of
+     tokensPerMin and never described the cost, which comes from the encrypted
+     BurnBar database instead. With no reason to print beside "cost
+     unavailable", the card reached for the token coverage. The payload now
+     carries the cost's own reason, so the two are never conflated again. */
+  test("an unavailable cost states its own reason rather than leaving the card to borrow coverage", async () => {
+    const tracker = new PulseTracker(
+      async () => usageSummary({
+        available: false,
+        provenance: "unavailable",
+        estimatedCostUsd: null,
+        costKnown: false,
+        error: "BurnBar database not found",
+      }),
+      base,
+    );
+    // A fleet whose tokens ARE fully covered: this is the exact shape that made
+    // the card contradict itself.
+    tracker.observe(snapshot([agent({ tokens: { sessionTotal: 1_000, provenance: "observed" } })]), base);
+    tracker.maybeRefreshBurnCost(base);
+    await flushBurnReader();
+
+    const burn = tracker.report(base + 1_000).burn;
+    expect(burn.costLastHourUsd).toBeNull();
+    expect(burn.costProvenance).toBe("unavailable");
+    // The cost explains itself...
+    expect(burn.costNote).toBe("BurnBar database not found");
+    // ...while coverage keeps describing the token rate, its actual subject.
+    expect(burn.coverage).toMatchObject({ reporting: 1, eligible: 1 });
+  });
+
+  test("a priced window with no cost reports the absence of priced invocations, not a source failure", async () => {
+    const tracker = new PulseTracker(
+      async () => usageSummary({ available: true, estimatedCostUsd: null, costKnown: false }),
+      base,
+    );
+    tracker.maybeRefreshBurnCost(base);
+    await flushBurnReader();
+
+    const burn = tracker.report(base + 1_000).burn;
+    expect(burn.costLastHourUsd).toBeNull();
+    // A reachable source that priced nothing is a different fact from a source
+    // that could not be read, and the operator acts differently on each.
+    expect(burn.costNote).toBe("No priced invocations in this window.");
   });
 
   test("a burn reader deadline marks stale cost unavailable and permits a later retry", async () => {

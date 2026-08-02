@@ -100,6 +100,36 @@ export async function executeControl(
   if (!surfaceId || !["exact", "unique-cwd"].includes(agent.target.resolution)) {
     return failure(request, 409, "UNSAFE_TARGET", agent.target.reason ?? "No safe cmux surface target is available.");
   }
+  /* `exact` and `unique-cwd` are not the same claim, and this gate used to
+     accept them as if they were.
+
+     `exact` means cmux attests the session is on that surface. `unique-cwd`
+     (targets.ts) selects surfaces whose `sourceSessionIds` is EMPTY — panes
+     with no identity evidence at all — and picks one by process of elimination
+     on a directory string. It is, by construction, a pane cmux cannot identify.
+
+     The failure is the most ordinary thing an operator does. A pane cds away,
+     another pane cds in; nothing closes and no agent ends. The row re-resolves
+     onto the second pane, still showing instruct as available, and a Send
+     addressed to ALPHA executes on BRAVO's tty and returns ok: true while ALPHA
+     receives nothing. Proven end to end against probe agents in adc1da0.
+
+     So a directory match may inform DISPLAY, but it may not authorise input.
+     This codebase's stated principle is that it refuses to type into a terminal
+     it cannot positively identify; unique-cwd is the definition of one. Focus
+     is still permitted: it types nothing, and going to look at the pane is how
+     an operator recovers when the write controls are off. */
+  const writesInput = request.action === "instruct" || request.action === "interrupt";
+  if (writesInput && agent.target.resolution !== "exact") {
+    return failure(
+      request,
+      409,
+      "UNSAFE_TARGET",
+      "This pane was matched by its working directory, not attested by cmux, so the session on it cannot be proven."
+        + " Sending here could reach a different agent, so Send and Interrupt are switched off for this row rather than risked."
+        + " They return as soon as cmux attests the session.",
+    );
+  }
   const executable = dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
   const commands: string[][] = [];
   if (request.action === "focus") {

@@ -162,12 +162,24 @@ function cursorTranscript(jsonl: string): CursorTranscript {
 
 export function parseCursorSession(input: CursorSessionInput): CollectedAgent | null {
   if (!UUID_PATTERN.test(input.sessionId)) return null;
-  let meta: CursorMeta;
+  /* JSON.parse("null") SUCCEEDS, so the catch never fired and the next line
+     read .hasConversation off null — a TypeError that escaped the per-session
+     map callback into collectSessions' bare Promise.all, taking OMP, Codex and
+     Claude down with Cursor. One meta.json containing the four characters
+     `null` blanked the entire fleet.
+
+     Every other non-object shape was already refused, but only by accident:
+     property lookup on a string, number, boolean or array yields undefined, so
+     the cwd check caught them. Null is the one shape that throws instead. State
+     the requirement rather than relying on that. */
+  let parsed: unknown;
   try {
-    meta = JSON.parse(input.metaJson);
+    parsed = JSON.parse(input.metaJson);
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const meta = parsed as CursorMeta;
   if (meta.hasConversation === false || typeof meta.cwd !== "string") return null;
   if (input.store?.agentId && input.store.agentId !== input.sessionId) return null;
 
@@ -604,22 +616,34 @@ function composerEffort(selectedModels: unknown): string | undefined {
 // (roots and subagents alike). "default" means "no explicit model", so it is treated as
 // unreported. The state.vscdb is a live WAL database; callers open it read-only and may
 // lack the cursorDiskKV table on older installs, so the query is guarded.
+/* Returning {} for a failed read made it identical to a session that simply
+   has no composerData, and an absent model renders as the model policy
+   "unreported" — whose summary tells the operator "Cursor did not expose an
+   authoritative model for this session". That is a confident claim about
+   Cursor's behaviour made from a local failure to read Cursor's database, and
+   the two have opposite remedies. Absence still returns {}; a failure now
+   throws, so the caller records it against the cursor source instead. */
 function composerModelForSession(database: Database, sessionId: string): CursorStoreEvidence {
   let row: { value?: string | Uint8Array } | null;
   try {
     row = database.query("select value from cursorDiskKV where key = ?").get(`composerData:${sessionId}`) as
       | { value?: string | Uint8Array }
       | null;
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(
+      `composerData lookup failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+  // No row is a real answer: this session never wrote composerData.
   if (row?.value === undefined || row.value === null) return {};
   let parsed: unknown;
   try {
     const value = typeof row.value === "string" ? row.value : Buffer.from(row.value).toString("utf8");
     parsed = JSON.parse(value);
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(
+      `composerData for ${sessionId} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   const modelConfig = asRecord(asRecord(parsed)?.modelConfig);
   const modelName = nonEmptyString(modelConfig?.modelName);
@@ -647,13 +671,22 @@ async function cursorChildAgents(
   trackingModels: ReadonlyMap<string, string>,
   nowMs: number,
   windowMs: number,
+  errors: string[] = [],
 ): Promise<CollectedAgent[]> {
   if (!transcriptPath) return [];
   const directory = join(dirname(transcriptPath), "subagents");
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    /* ENOENT is a parent with genuinely no subagents — the common case, and
+       legitimately an empty list. Every other failure (EACCES, ENOTDIR, EMFILE
+       under a fleet scan) is a live subagent we could not see, and returning []
+       for it removed a running agent from the roster with nothing recorded.
+       Every sibling failure path in this file pushes to errors. */
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      errors.push(`cursor subagents at ${directory}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return [];
   }
   const agents = await Promise.all(entries.map(async (entry): Promise<CollectedAgent | null> => {
@@ -682,6 +715,7 @@ async function cursorChildAgents(
 async function transcriptEvidence(
   transcriptPath: string | undefined,
 ): Promise<{
+  subagentsError?: string;
   transcriptJsonl?: string;
   transcript?: CursorTranscript;
   subagentCount?: number;
@@ -692,13 +726,25 @@ async function transcriptEvidence(
   const transcriptJsonl = file.contents;
   const transcript = file.transcript;
   const transcriptMtimeMs = file.mtimeMs;
+  const subagentsDirectory = join(transcriptPath, "../subagents");
   try {
-    const subagentCount = (await readdir(join(transcriptPath, "../subagents"), { withFileTypes: true }))
+    const subagentCount = (await readdir(subagentsDirectory, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .length;
     return { transcriptJsonl, transcript, subagentCount, transcriptMtimeMs };
-  } catch {
-    return { transcriptJsonl, transcript, subagentCount: 0, transcriptMtimeMs };
+  } catch (error) {
+    /* A parent with no subagents directory really has none, so 0 is right. A
+       directory that could not be READ must not borrow that same confident 0 —
+       leave the count unknown and name the failure. */
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { transcriptJsonl, transcript, subagentCount: 0, transcriptMtimeMs };
+    }
+    return {
+      transcriptJsonl,
+      transcript,
+      transcriptMtimeMs,
+      subagentsError: `cursor subagents at ${subagentsDirectory}: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
@@ -761,8 +807,17 @@ async function collectCursorGuiSessions(
       try {
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
-        // PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
-        const composer = cachedComposerModel(state, row.id);
+        if (evidence.subagentsError) errors.push(evidence.subagentsError);
+        /* PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
+           The lookup is enrichment, not existence: a damaged model record must
+           degrade the source without deleting the session from the board, so it
+           is isolated from the per-row catch below. */
+        let composer: CursorStoreEvidence = {};
+        try {
+          composer = cachedComposerModel(state, row.id);
+        } catch (error) {
+          errors.push(`cursor GUI ${row.id} composerData: ${error instanceof Error ? error.message : String(error)}`);
+        }
         const parsed = parseCursorSession({
           sessionId: row.id,
           metaJson: JSON.stringify({
@@ -788,7 +843,7 @@ async function collectCursorGuiSessions(
         });
         if (parsed) {
           agents.push(parsed);
-          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs));
+          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs, errors));
         }
       } catch (error) {
         errors.push(`cursor GUI ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -815,15 +870,17 @@ async function fillMissingCursorModels(
 ): Promise<void> {
   const missing = agents.filter((agent) => !agent.model);
   if (missing.length === 0 || !state?.hasComposerData) return;
-  try {
-    for (const agent of missing) {
+  // Per-session isolation: one unreadable record must not stop the remaining
+  // sessions from being filled, and each failure is named on its own.
+  for (const agent of missing) {
+    try {
       const composer = cachedComposerModel(state, agent.sourceSessionId);
       if (!composer.model) continue;
       agent.model = composer.model;
       if (composer.effort && !agent.effort) agent.effort = composer.effort;
+    } catch (error) {
+      errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    errors.push(`cursor composerData fallback: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -887,7 +944,11 @@ export async function collectCursorSessions(
       let transcriptMtimeMs: number | undefined;
       if (transcriptPath) {
         try {
-          ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = await transcriptEvidence(transcriptPath));
+          const evidence = await transcriptEvidence(transcriptPath);
+        if (evidence.subagentsError) errors.push(evidence.subagentsError);
+          ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = evidence);
+          // An unreadable subagents directory is a live agent we could not see.
+          if (evidence.subagentsError) errors.push(evidence.subagentsError);
         } catch (error) {
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
         }

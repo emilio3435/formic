@@ -4,11 +4,12 @@ import { open, readdir, stat } from "node:fs/promises";
 import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
 import {
   extractLastHumanMessage,
+  extractClosingByRole,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
-import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import { AGENT_IDLE_GAP_MS, MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 
@@ -101,6 +102,40 @@ function parserFor(
   if (provider === "codex") return createCodexParser();
   if (provider === "claude") return createClaudeParser();
   throw new Error(`incremental parser unavailable for ${provider}: ${parser.name}`);
+}
+
+/* Working time, accumulated turn by turn.
+
+   Elapsed on the board is updatedAt − startedAt, which is a SPAN: the magnitude
+   audit found one agent reading 87.1 days, arithmetically right and about 204x
+   any generous activity bound, because every dormant hour between the first
+   touch and the last sits inside it. This counts only the gaps short enough to
+   be one working stretch, so a session that was picked up again after a week
+   contributes the work, not the week.
+
+   Bounded by construction: every increment is a real interval between two
+   recorded turns, so the sum can never exceed the span it is drawn from. */
+class ActiveTime {
+  #lastMs?: number;
+  #activeMs = 0;
+
+  observe(timestamp: string | undefined): void {
+    if (!timestamp) return;
+    const atMs = Date.parse(timestamp);
+    if (!Number.isFinite(atMs)) return;
+    if (this.#lastMs !== undefined) {
+      const gap = atMs - this.#lastMs;
+      // Out-of-order rows contribute nothing rather than a negative.
+      if (gap > 0 && gap <= AGENT_IDLE_GAP_MS) this.#activeMs += gap;
+    }
+    if (this.#lastMs === undefined || atMs > this.#lastMs) this.#lastMs = atMs;
+  }
+
+  /* Undefined until at least one interval was observed: a single-turn session
+     has no measurable working time, and 0 would read as "did nothing". */
+  get value(): number | undefined {
+    return this.#activeMs > 0 ? this.#activeMs : undefined;
+  }
 }
 
 function isoTimestamp(value: unknown): string | undefined {
@@ -213,6 +248,7 @@ function makeAgent(input: {
   updatedAt: string;
   tokens: TokenUsage;
   transcriptTail?: string;
+  activeMs?: number;
   parentSourceSessionId?: string;
   runtimeSessionId?: string;
   threadDepth?: number;
@@ -268,6 +304,8 @@ function makeAgent(input: {
     ),
     lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
     lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
+    // End-anchored and role-attributed: what the agent actually stopped on.
+    lastAgentClosing: extractClosingByRole(input.provider, input.humanMessages ?? [], "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,
@@ -275,6 +313,7 @@ function makeAgent(input: {
     threadDepth: input.threadDepth,
     nickname: input.nickname,
     transcriptTail: input.transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
+    activeMs: input.activeMs,
     artifacts: input.meta.sourcePath
       ? [{
           label: `${input.provider.toUpperCase()} transcript`,
@@ -295,8 +334,18 @@ function createOmpParser(): IncrementalParser {
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
   let sessionTotal = 0;
+  let sessionCachedInput = 0;
+  /* Set when a usage record could not be read. The guard below `continue`s past
+     such a record, which silently turns corruption into a believable SMALLER
+     number: a session that burned more than a clean one reported exactly the
+     same total, with provenance still claiming "observed". Claude's parser has
+     no such guard and propagates NaN to null — "not reported", which is loud
+     and correct. The count here cannot be repaired, so the claim about it is
+     withdrawn instead. */
+  let usageUnreadable = false;
   let exited = false;
   let index = 0;
 
@@ -310,6 +359,7 @@ function createOmpParser(): IncrementalParser {
         exited ||= row.type === "custom" && row.data?.kind === "session_exit";
         const timestamp = isoTimestamp(row.timestamp ?? row.message?.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
+        activeTime.observe(timestamp);
         if (row.type !== "message") continue;
 
         const text = plainText(row.message?.content);
@@ -330,9 +380,17 @@ function createOmpParser(): IncrementalParser {
         const cachedInput = Number(usage.cacheRead ?? 0);
         const cacheWrite = Number(usage.cacheWrite ?? 0);
         const total = Number(usage.totalTokens ?? input + output + cachedInput + cacheWrite);
-        if (![input, output, cachedInput, total].every(Number.isFinite)) continue;
+        if (![input, output, cachedInput, total].every(Number.isFinite)) {
+          usageUnreadable = true;
+          continue;
+        }
         latestUsage = { input, output, cachedInput, total };
-        sessionTotal += total;
+        /* `total` is this call's SIZE and includes the re-read prefix; summing it
+           over the session counts a cached token once per later call. Measured on
+           real rows the four parts are disjoint (570+385+74711+487 = 76153), so
+           new tokens are input + output + cacheWrite. */
+        sessionTotal += input + output + cacheWrite;
+        sessionCachedInput += cachedInput;
       }
     },
     result(meta) {
@@ -347,9 +405,20 @@ function createOmpParser(): IncrementalParser {
         startedAt: isoTimestamp(session.timestamp),
         updatedAt: updatedAt ?? isoTimestamp(session.timestamp) ?? fallbackUpdatedAt(meta),
         tokens: latestUsage
-          ? { ...latestUsage, sessionTotal, scope: "latest-turn", provenance: "observed" }
+          ? {
+            ...latestUsage,
+            sessionTotal,
+            sessionCachedInput,
+            scope: "latest-turn",
+            /* Not "observed": at least one record was skipped, so the totals are
+               a floor rather than a measurement. Everything downstream that
+               requires observed evidence — contextPct, burn coverage — now
+               declines to use them, which is the point. */
+            provenance: usageUnreadable ? "estimated" : "observed",
+          }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
@@ -369,6 +438,7 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
 function createCodexParser(): IncrementalParser {
   let sessionRow: JsonRecord | undefined;
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let model: string | undefined;
   let effort: string | undefined;
   let task: string | undefined;
@@ -385,6 +455,7 @@ function createCodexParser(): IncrementalParser {
         if (!sessionRow && row.type === "session_meta") sessionRow = row;
         const timestamp = isoTimestamp(row.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
+        activeTime.observe(timestamp);
         const payload = row.payload ?? row;
         if (typeof payload.effort === "string" && payload.effort.trim()) effort = payload.effort.trim();
         if (row.type === "event_msg" && payload.type === "user_message") {
@@ -399,13 +470,24 @@ function createCodexParser(): IncrementalParser {
           const input = Number(usage.input_tokens ?? 0);
           const sessionInput = Number(sessionUsage.input_tokens ?? 0);
           const sessionOutput = Number(sessionUsage.output_tokens ?? 0);
+          const sessionCached = Number(sessionUsage.cached_input_tokens ?? 0);
           const output = Number(usage.output_tokens ?? 0);
+          /* Codex's own `total_token_usage.total_tokens` is input + output where
+             `input_tokens` already CONTAINS `cached_input_tokens` — so its
+             cumulative total re-charges the whole re-read prefix on every turn,
+             the same defect the Claude parser had. Containment verified on a real
+             rollout: cumulative input−cached (56564−37376 = 19188) equals the sum
+             of the per-turn input−cached (15511 + 3677 = 19188).
+             `cache_write_input_tokens` is 0 in every rollout on disk and its
+             containment is therefore untestable, so it is not added — adding an
+             already-contained field would double-count. */
           tokens = {
             input,
             output,
             cachedInput: Number(usage.cached_input_tokens ?? 0),
             total: Number(usage.total_tokens ?? input + output),
-            sessionTotal: Number(sessionUsage.total_tokens ?? sessionInput + sessionOutput),
+            sessionTotal: Math.max(0, sessionInput - sessionCached) + sessionOutput,
+            sessionCachedInput: sessionCached,
             contextWindow: Number(payload.info.model_context_window) || undefined,
             scope: payload.info.last_token_usage ? "latest-turn" : "session",
             provenance: "observed",
@@ -458,6 +540,7 @@ function createCodexParser(): IncrementalParser {
         threadDepth,
         nickname,
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
         meta,
@@ -499,6 +582,7 @@ function createClaudeParser(): IncrementalParser {
   let cwd: string | undefined;
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
+  const activeTime = new ActiveTime();
   let model: string | undefined;
   let effort: string | undefined;
   let runtimeSessionId: string | undefined;
@@ -537,6 +621,7 @@ function createClaudeParser(): IncrementalParser {
           startedAt ??= timestamp;
           if (!updatedAt || timestamp > updatedAt) updatedAt = timestamp;
         }
+        activeTime.observe(timestamp);
         const text = plainText(row.message?.content);
         if (row.type === "user") {
           if (row.isMeta !== true) exited = false;
@@ -576,9 +661,19 @@ function createClaudeParser(): IncrementalParser {
       const fallback = fallbackUpdatedAt(meta);
       const uniqueUsage = [...usageByMessage.values()].sort((left, right) => left.index - right.index);
       const latestUsage = uniqueUsage.at(-1);
+      /* Size of one call — cache reads included, because they occupy the window. */
       const usageTotal = (usage: NonNullable<typeof latestUsage>): number =>
         usage.input + usage.output + usage.cachedInput + usage.cacheCreationInput;
-      const sessionTotal = uniqueUsage.reduce((total, usage) => total + usageTotal(usage), 0);
+      /* Consumption over the session — cache reads EXCLUDED. Every call re-sends
+         the whole cached prefix, so summing usageTotal charges the same token
+         once per later call and grows with the square of the conversation. Each
+         prompt token is counted once here, as `input` if it missed the cache or
+         as `cacheCreationInput` if it was written to it; a re-write after the
+         cache expires is real work and is counted again, correctly. */
+      const usageNew = (usage: NonNullable<typeof latestUsage>): number =>
+        usage.input + usage.output + usage.cacheCreationInput;
+      const sessionTotal = uniqueUsage.reduce((total, usage) => total + usageNew(usage), 0);
+      const sessionCachedInput = uniqueUsage.reduce((total, usage) => total + usage.cachedInput, 0);
       return makeAgent({
         provider: "claude",
         sourceSessionId: identity.sessionId,
@@ -596,12 +691,14 @@ function createClaudeParser(): IncrementalParser {
               cachedInput: latestUsage.cachedInput,
               total: usageTotal(latestUsage),
               sessionTotal,
+              sessionCachedInput,
               contextWindow: claudeContextWindow(model),
               scope: "latest-turn",
               provenance: "observed",
             }
           : { scope: "unknown", provenance: "unknown" },
         transcriptTail: tail,
+        activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
         meta,
@@ -616,14 +713,29 @@ export function parseClaudeJsonl(jsonl: string, meta: ParseMetadata = {}): Colle
   return parser.result(meta);
 }
 
-async function recentJsonlFiles(root: string, maxDepth: number, windowMs: number): Promise<string[]> {
+/* Returns the files it could see AND what stopped it seeing more. A bare catch
+   here turned a permissions or I/O failure into an empty file list, which reads
+   downstream as a provider that simply has no sessions — a healthy, empty
+   fleet. An absent directory really is "this provider never ran here"; every
+   other failure is evidence we lost and must degrade the source. */
+async function recentJsonlFiles(
+  root: string,
+  maxDepth: number,
+  windowMs: number,
+): Promise<CollectionResult<string[]>> {
   const files: string[] = [];
+  const errors: string[] = [];
   const nowMs = Date.now();
+  const absent = (error: unknown): boolean =>
+    (error as NodeJS.ErrnoException).code === "ENOENT";
+  const describe = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
   async function walk(directory: string, depth: number): Promise<void> {
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (!absent(error)) errors.push(`${directory}: ${describe(error)}`);
       return;
     }
     await Promise.all(
@@ -634,14 +746,15 @@ async function recentJsonlFiles(root: string, maxDepth: number, windowMs: number
         try {
           const details = await stat(path);
           if (nowMs - details.mtimeMs <= windowMs) files.push(path);
-        } catch {
-          // A source disappearing during a scan is harmless.
+        } catch (error) {
+          // A source disappearing mid-scan is harmless; unreadable is not.
+          if (!absent(error)) errors.push(`${path}: ${describe(error)}`);
         }
       }),
     );
   }
   await walk(root, maxDepth);
-  return files;
+  return { value: files, errors };
 }
 
 function completeJsonRecords(buffer: Buffer): { rows: JsonRecord[]; remainder: Buffer } {
@@ -691,7 +804,9 @@ async function collectProvider(
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
-  const files = await recentJsonlFiles(root, depth, windowMs);
+  const scan = await recentJsonlFiles(root, depth, windowMs);
+  const files = scan.value;
+  for (const error of scan.errors) errors.push(`${provider} ${error}`);
   const currentPaths = new Set(files);
   for (const [path, cached] of fileCache) {
     if (cached.provider === provider && !currentPaths.has(path)) fileCache.delete(path);

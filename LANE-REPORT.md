@@ -3418,3 +3418,359 @@ Usable routes moved from one weak cwd fallback to ten exact session routes. This
 - No push, merge, deployment, or launchd action was performed.
 
 ---
+
+# Lane Report — testing-ux-audit-20260731
+
+Swarm audit, testing & UX lane. Four tasks: coverage audit, live-dashboard UX
+review, error-handling review, dead-code scan.
+
+## Verification
+
+- `bunx tsc --noEmit` clean.
+- `bun test` — **658 pass / 0 fail**, three consecutive runs on the final tree.
+- Baseline at lane start was 619 pass / 0 fail; the delta includes tests other
+  lanes landed in the shared worktree concurrently, not only this lane's 17.
+- Live server sha256 of `app.js` matches the repo working tree, so the UX review
+  below describes what is actually being served on :4701.
+
+## 1. Test coverage
+
+Added 17 tests in two new files. Neither touches an existing test file, to keep
+the shared worktree conflict-free.
+
+| File | Covers |
+|---|---|
+| `tests/program-hints.test.ts` (6) | `loadProgramHints` — previously **zero** tests |
+| `tests/snapshot-edges.test.ts` (11) | 0 agents, null/absent optional fields, off-union status, unreachable cmux, stale-with/without process evidence, Cursor parent-model gaps |
+
+Coverage moved:
+
+| File | Lines before | after |
+|---|---|---|
+| `src/server/snapshot.ts` | 98.68% | **100%** |
+| `src/server/state.ts` | 92.31% | **97.59%** |
+| `src/server/command.ts` | 100% | 100% (branch behaviour corrected, see §3) |
+
+Edge cases the tests pin, with the reason each matters:
+
+- **Empty fleet** returns real zeroes for counts but leaves `tokens`,
+  `tokenMedian`, `contextPeak`, `contextMedian` **undefined**. "Zero tokens
+  burned" and "nobody reported tokens" are different claims; reporting 0 would
+  tell the operator the fleet is free.
+- **Off-union status** degrades to `activity: "unknown"` and is excluded from
+  working/idle/ended, but stays in `tracked` — an unreadable session must not
+  vanish from the board nor be promoted into the working count.
+- **Stale + provably-live process** stays `idle`, not `ended` — pinning the
+  invariant that keeps focus/instruct controls attached.
+- **`cmuxReachable: false`** counts as 1 of 4 degraded sources.
+
+### Gaps deliberately left open (largest remaining, ranked)
+
+1. `src/server/burnbar.ts` — **62.86% lines**, the worst file in the repo. Lines
+   543-634 and 758-841 are whole uncovered functions. Highest-value next target.
+2. `src/web/app.js` — 80.22% lines across 7,423 lines: the largest absolute
+   volume of untested code.
+3. `src/server/cursor.ts` — 85.88%; 856-906 uncovered contiguously.
+4. `src/server/debug-identity.ts` — 86.38%; 160-184 uncovered.
+
+### Transient red observed mid-lane — resolved by its owning lane, not flaky
+
+The suite went red partway through this lane on
+`reduced-motion universally disables the full WS-A animation set (A6 regression
+guard)`. Diagnosis: another lane added the first-paint board skeleton, whose
+`sk-pulse` keyframe was not yet in the guard's pinned keyframe inventory. It
+reproduced 6/6 against that snapshot of the tree, then went green once the
+owning lane updated the expected list. Nothing to fix — recorded because the
+guard behaved exactly as designed: a new animation could not enter the
+stylesheet without its author confirming reduced-motion coverage.
+
+Worth knowing for anyone auditing a shared worktree: a full-suite result here is
+only valid against the tree as of that second. Two of this lane's readings were
+against trees that no longer existed by the time they were interpreted.
+
+## 2. UX / accessibility review (live dashboard)
+
+The console is in good shape — skip link, `visually-hidden` form labels, live
+regions, `aria-pressed`/`aria-expanded`/`aria-controls`, `prefers-reduced-motion`,
+Escape-to-close with focus returned to the opening control, and a `data-fkey`
+focus-restore contract that survives full re-renders. Findings are narrow:
+
+- **`--amber` (#9a6b12) fails WCAG AA for body text on two surfaces**: 4.28:1 on
+  `--canvas`, 3.97:1 on `--sand` (needs 4.5:1). Passes on `--surface` (4.56:1),
+  which is where the connection badge sits, so the exposure is `.verdict-degraded`
+  and `.finding .state.st-warm` wherever they paint on canvas/sand. `--clay` on
+  `--sand` is also 4.30:1. Darkening amber to ~#8a5f10 clears canvas.
+- **Breakpoint conflict at exactly 1180px.** The inspector splits on
+  `min-width: 1180px` / `max-width: 1179px` (clean), but the summary rail and
+  agent grid use `max-width: 1180px`. At exactly 1180px **both** apply: the
+  desktop two-pane inspector renders with the narrow-viewport 5-column agent
+  grid inside a ~40% pane. One-character fix (`1179px`); left alone to avoid
+  colliding with the design lane.
+- **Error toasts announce politely.** `#toast` is `role="status"` +
+  `aria-live="polite"`, and `toast(msg, "err")` reuses it, so failures like
+  "Copy failed" or a rejected settings write can be missed by a screen reader
+  user. An `err` toast warrants `role="alert"`.
+- **`window.prompt` for the custom usage range** (`app.js:3140`) is the only
+  native modal in an otherwise fully custom console: unstyleable, unlabelled,
+  and it blocks the page.
+
+Checked and **clean** (no defect): every `id` in `index.html` is driven by JS
+(the `#count-*` spans are written via a computed `"count-" + view` lookup);
+`#filter-bar` keeps `hidden` and `aria-hidden` in sync on all three paths;
+`#empty-retry` is wired; the disconnected state is explicit ("Can't reach the
+Ant Hill server." + host-specific hint + retry); tooltips explain provenance and
+scan-window semantics rather than restating labels.
+
+## 3. Error handling — fixed
+
+- **`loadProgramHints` (`src/server/state.ts`) swallowed every failure.** A
+  malformed or mis-keyed `config/programs.json` silently ungrouped the entire
+  board, indistinguishable from "no config written yet". Now each failure mode
+  still returns `[]` (the hub must boot) but announces itself on
+  `console.error` in the existing `[HubState]` idiom, and a partially-bad file
+  keeps the entries that parsed while reporting how many were dropped. ENOENT
+  stays silent — that one really is the normal pre-config state.
+- **`BunCommandRunner.run` (`src/server/command.ts`) leaked its kill-timer.**
+  `clearTimeout` ran only on the success path, so a rejected pipe read left the
+  deadline armed: it held the event loop open and later fired
+  `process.kill(-pid)` on a process group this call no longer owned — the pid is
+  recyclable once the child is reaped. Moved to a `finally`.
+
+Reviewed and judged sound: the browser `apiFetch` wrapper already applies
+`AbortSignal.timeout` with per-class budgets (10s read / 30s transcript / 30s
+write) and rewrites aborts into a named timeout error; every frontend request
+goes through it — there are no bare `fetch(` calls. `localStorage` catches are
+correctly silent (blocked storage is not an operator problem). The scheduled
+refresh in `index.ts` has a `.catch`.
+
+## 4. Dead code
+
+Scanned every `export` in `src/server` and `src/shared` for references outside
+its defining file, then re-checked internal use to separate dead code from a
+merely redundant `export` keyword.
+
+- **Safe to delete — 1 symbol.** `scanWindowMs` (`src/server/settings.ts:47`),
+  a 3-line function declared once and referenced nowhere in `src/`, `tests/`,
+  or `scripts/`. Reported, not deleted.
+- **68 exports are internal-only** — the `export` keyword is redundant but the
+  code is live (mostly `interface`/`type` declarations used only within their
+  own module, e.g. 17 in `burnbar.ts`, 9 in `app.ts`). Harmless; removing the
+  keyword is churn, not cleanup. Not recommended.
+- `src/web/app.js` has **zero** uncalled top-level functions.
+
+## Findings raised, not acted on
+
+- **`cursorModelPolicy` contradicts its own comment.** The comment says a
+  non-native model "is a routing violation regardless of the parent model", but
+  the parent-unreported branch (`snapshot.ts:245-253`) returns before the
+  native-family check. A Cursor child running a demonstrably non-native model
+  (e.g. `gpt-5.6-sol`) is therefore classified `unreported`, not `mismatch`, and
+  is excluded from the "Cursor model routing mismatches" issue — purely because
+  its parent didn't report a model. Pinned as-built in
+  `tests/snapshot-edges.test.ts`; flagged because it silently suppresses a real
+  policy violation. Owner decision: reorder the checks, or amend the comment.
+- **A degraded source can be unexplainable.** `buildSnapshot` counts
+  `cmuxReachable: false` toward `sourceHealth.degraded` but only emits the
+  `system:cmux-control` issue when `cmuxErrors` is non-empty. `HubState` derives
+  one from the other (`state.ts:286`), so production always ships both — the
+  invariant is real but implicit and was unpinned. Now pinned by test.
+
+## Follow-up: hunting the "failure renders as a plausible number" class
+
+Brief: find code paths where a failure reaches the operator as a believable
+number rather than an error. BurnBar showing a failed query as no spend is the
+archetype.
+
+### The archetype is fixed, and is now pinned so it cannot come back
+
+The whole BurnBar chain was checked end to end and is honest today:
+
+- `loadPricingConfig` falls back to an empty price sheet on any failure, but
+  `resolveUsageCost` returns `costUsd: null` for an unpriced model rather than
+  0 — so a lost `config/models.json` reads "cost unavailable", not "$0.00".
+- `unavailableSummary` and the three sibling failure returns null every number
+  and set `available: false`; they never zero a total.
+- `getUsageSummary` nulls the fleet cost when any provider's cost is unknown,
+  and when `invocations === 0`, instead of summing to a confident zero.
+- The frontend burn widget renders nulls as "No data" / "cost unavailable" and
+  a genuine zero hour as "0" / "$0.00".
+
+`tests/silent-failure-rendering.test.ts` (14 tests) fixes both sides of that
+boundary. Each pair asserts the failure case *and* the real-zero case, because
+a suite that only pinned the failure case would still pass if the success case
+collapsed onto the same value.
+
+### Live defect found — momentum widget prints a raw `undefined`
+
+`summaryWidgetData("momentum", …)` at `src/web/app.js:1073` concatenates
+`momentum.completionsLastHour` into the sublabel with no guard:
+
+    parts.push("↑" + momentum.completionsLastHour + " done " + windowText);
+
+A pulse report carrying `observedWindowMs > 0` without a completion count
+renders **"↑undefined done in 10m observed"** in the summary rail; a null
+renders "↑null done". Proven with a test, which is not committed because
+`src/web/app.js` is another lane's domain and a red test blocks four other
+agents sharing this checkout. Suggested guard, matching the surrounding style:
+
+    if (momentum.observedWindowMs > 0 && Number.isFinite(momentum.completionsLastHour)) {
+
+### Latent asymmetry — the usage ward can render a failed query as reassurance
+
+`renderUsageWard` (`src/web/app.js:7145`) is the only one of the four usage
+renderers whose `available === false` check is conditional:
+
+    if (!ward || (ward.available === false && !(ward.quotaPressure && ward.quotaPressure.length)))
+
+Its siblings (`renderUsageSeriesChart` 6992, summary 7044, invocations 7107)
+check `available === false` outright. Today `getUsageWard`'s catch returns an
+empty `quotaPressure`, so the guard fires and nothing is wrong. But any future
+failure path that populates `quotaPressure` while marking the response
+unavailable falls straight through to "No abrupt rate jumps vs the trailing
+baseline." — a failed query rendered as an all-clear. Not testable from here:
+`renderUsageWard` is not on the `TheAntHill` export surface.
+
+### Checked and found honest (no change needed)
+
+- `tokenSummary`: absent/null total reads "not reported" with `known: false`;
+  a real 0 reads "0 tokens". The two are distinct.
+- `contextUsage`: refuses to compute a percentage without an observed total
+  *and* a positive context window — it will not fabricate a denominator.
+- `applySnapshotDelta`: throws on any missing agent id rather than painting a
+  partial board.
+- `snapshotFreshness(undefined)` → `{ state: "unknown", ageMs: null }`.
+- `totalsOf`: its client-side recount keys on `??`, so a truthful server
+  "0 working" survives instead of being overridden by a walk of `programs`.
+
+### Test-suite integrity audit
+
+No test in `tests/` is assertion-free, tautological, or `.only`-pinned, and
+none is unconditionally skipped. The two `test.skipIf(!canSqlcipher)` cases in
+`burnbar.test.ts` do run on this machine (the OpenBurnBar dylib is present) —
+but they are the only coverage of BurnBar's encrypted-DB paths, so on any
+machine without OpenBurnBar installed they vanish silently and `burnbar.ts`
+loses its already-thin 62.86% line coverage. Worth knowing before trusting a
+green suite from CI.
+
+# Lane Report — known-defects-handoff-20260802
+
+Five defects found by mutation testing, all in `src/server` (backend lane's).
+Each is reproduced by a `test.failing` in `tests/known-defects.test.ts`, which
+runs on every commit, passes while the defect is real, and hard-fails with
+"marked as failing but it passed" the moment the behaviour is fixed. Removing
+the marker at that point leaves a permanent regression guard.
+
+## The method note worth keeping
+
+Twice in the session that produced these, a test of mine looked correct and
+discriminated nothing, and both times it was caught only by mutating the
+implementation after writing the test. Once the URL parser normalised the
+traversal away before the handler ever saw it, so a path-containment test
+asserted on a request that could not reach the branch it named. Once three
+credential-parsing assertions held under mutation because a second, redundant
+guard covered the same input.
+
+**A test that passes on both the correct and the broken implementation is worse
+than no test, because it converts an absence of coverage into a false report of
+coverage. Writing the assertion is not the work; proving it can fail is.**
+
+Across ~88 mutants the pre-existing suite produced zero hollow assertions — it
+was thin in places, never decorative. All five hollow assertions found this
+session were in tests I had written myself.
+
+## 1. `cursor.ts` — metadata that parses to `null` crashes the collector
+
+- **Trigger:** a `meta.json` containing literally `null`.
+- **Why it escapes:** `JSON.parse("null")` succeeds, so the try/catch never
+  fires; the next line reads `meta.hasConversation` off `null`. Every other
+  non-object shape (`[]`, `"str"`, `42`, `true`, `{}`) is refused cleanly, which
+  is itself evidence the guard was meant to cover this.
+- **Observed:** `TypeError: null is not an object`. The throw escapes into the
+  per-session map callback (try/caught around the meta READ, not the parse),
+  `Promise.all` rejects, and `collectSessions` (`collectors.ts`) runs all four
+  providers in a bare `Promise.all` — so **OMP, Codex and Claude go down with
+  Cursor**. `HubState.capture()` contains it and records "session collection
+  failed", so the board degrades loudly to zero agents rather than lying. One
+  corrupt file blanks the fleet.
+- **Test:** `DEFECT: cursor.ts dereferences metadata that parses to null`.
+- **Shape of fix:** require a non-null object before reading it.
+
+## 2. `collectors.ts` — OMP silently undercounts past a corrupt usage record
+
+- **Trigger:** an assistant message whose `usage.totalTokens` will not parse
+  (e.g. a locale-formatted `"1,234"`).
+- **Why it escapes:** the `Number.isFinite` guard `continue`s past it. The guard
+  is what makes it silent — skipping turns corruption into a believable smaller
+  number.
+- **Observed:** a clean 2-record session and a 3-record session whose middle
+  record is unreadable produce **byte-identical** output: `sessionTotal: 4000`,
+  `provenance: "observed"`. The dropped record's 2000 tokens vanish with no
+  error and no provenance downgrade. Claude's parser has no such guard and
+  propagates NaN → `null` on the wire → "not reported": loud, and correct.
+- **Test:** `DEFECT: collectors.ts undercounts OMP tokens past a corrupt record`
+  (two assertions: totals must differ, and provenance must stop saying
+  "observed"). Either fix direction flips one of them; both flip both.
+
+## 3. `cmux.ts` — an unreadable timestamp silences a live request for a human
+
+- **Trigger:** a notification whose `created_at` is missing or unparseable.
+- **Why it escapes:** it is stamped `1970-01-01`. Acknowledging a surface records
+  `throughAt: notification.createdAt`, and `filter()` keeps only notifications
+  **newer** than it, so the epoch is the one value guaranteed to lose that
+  comparison forever.
+- **Observed:** same surface, same operator state, only the timestamp differs —
+  parseable → shown to operator: **1**; unparseable → **0**. An agent asking for
+  a human is silently suppressed. For a cockpit whose whole job is surfacing what
+  needs attention, a parse failure rendering as "nobody needs you" is the most
+  expensive silence available.
+- **Secondary:** a notification with no `surface_id` is dropped by a `flatMap`
+  returning `[]`, silently shrinking the unread count.
+- **Test:** `DEFECT: cmux.ts backdates an unreadable notification to the epoch`.
+
+## 4. `identity.ts` — a running process reported dead for an unfamiliar name
+
+- **Trigger:** an agent with known `processIds` whose command no longer matches
+  `isRecognizedAgentProcess` — a CLI rename is enough.
+- **Why it escapes:** liveness is scored against
+  `allProcesses.filter(isRecognizedAgentProcess)` rather than the process table,
+  and `snapshot-agent` turns `processAlive === false` plus known pids into
+  `"died"`.
+- **Observed:** pid 4242 present and running. `codex --model x` → running;
+  `/usr/local/bin/codex-next --model x` → **DIED**; pid absent → died (correct).
+  The operator chases a phantom crash while the real agent keeps working
+  unwatched. A false alarm rather than a false calm, but the same root as the
+  others: absent evidence treated as positive evidence.
+- **Test:** `DEFECT: identity.ts reports a running process dead for an
+  unfamiliar name`.
+- **Shape of fix:** "not alive" needs the pid to be missing, not merely
+  unfamiliar — score against the full table.
+
+## 5. `cursor.ts` — an unreadable subagents directory removes a live agent
+
+- **Trigger:** `agent-transcripts/<id>/subagents` unreadable for any non-ENOENT
+  reason (EACCES, ENOTDIR, EMFILE under a fleet scan).
+- **Why it escapes:** `collectCursorChildSessions` bare-catches `readdir` and
+  returns `[]`; `transcriptEvidence` does the same and returns
+  `subagentCount: 0`. Neither records anything. ENOENT — a parent with genuinely
+  no subagents — is the common case and legitimately 0, which is why the bare
+  catch exists; it conflates that with real IO failure. Every sibling failure
+  path in the same file pushes to `errors`.
+- **Observed:** readable → parent **and** child, `subagentCount: 1`,
+  `errors: []`. Unreadable → parent only (**child gone**), `subagentCount: 0`,
+  `errors: []`. A live subagent is removed from the roster, the parent reports
+  zero descendants, and the board still says Operational.
+- **Test:** `DEFECT: cursor.ts swallows an unreadable subagents directory`.
+
+## Verification status of the reproductions
+
+Each fix was simulated in a scratch copy: **seven of the eight** failing tests
+flip to "marked as failing but it passed". The eighth asserts content in the
+collector's `errors[]`, which no one-line edit can plumb, but its own control
+asserts that array is empty on the readable path — so the channel is
+demonstrably reachable and observable from that fixture.
+
+Every failing test is paired with passing controls, because a defect test that
+throws for the wrong reason — broken fixture, renamed export, a path the code
+never reaches — looks identical to a real reproduction. An earlier draft of the
+subagents fixture collected no agents at all and would have "reproduced" the
+defect by reaching none of the code.

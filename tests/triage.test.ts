@@ -547,7 +547,12 @@ describe("JSON triage queue durability", () => {
       const store = await JsonTriageQueueStore.open(path);
 
       expect(store.list()).toEqual([]);
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining(`Ignoring unreadable queue at ${path}`));
+      /* An empty queue is not a queue with nothing in it: every investigation
+         the operator queued has vanished, and /api/triage/queue would serve
+         `items: []` — indistinguishable from a calm board. The console is no
+         longer the only witness. */
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining(`could not be read from ${path}`));
+      expect(store.loadError() ?? "").toContain("showing empty");
     } finally {
       logged.mockRestore();
       await rm(directory, { recursive: true, force: true });
@@ -617,5 +622,43 @@ describe("native triage investigation guards", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("an unreadable queue is not a calm queue", () => {
+  /* Third of a family, after the archive and the attention store: operator
+     state that failed to load must not be served as empty. Every investigation
+     the operator queued is gone in that state, and `items: []` is exactly what
+     a board with nothing queued looks like. */
+  class UnreadableQueueStore extends MemoryTriageQueueStore {
+    override loadError(): string | undefined {
+      return "queued investigations could not be read from /virtual/triage-queue.json, so the queue is showing empty: bad JSON";
+    }
+  }
+
+  test("the queue endpoint reports the failure beside the empty list", async () => {
+    const response = await handleTriageRequest(
+      new Request("http://127.0.0.1:4701/api/triage/queue", { headers: { origin: "http://127.0.0.1:4701" } }),
+      { schemaVersion: 1, generatedAt: new Date().toISOString(), programs: [] } as never,
+      new UnreadableQueueStore(),
+    );
+    const body = await response.json() as { items: unknown[]; queue: { healthy: boolean; error?: string } };
+
+    expect(body.items).toEqual([]);
+    expect(body.queue.healthy).toBe(false);
+    expect(body.queue.error).toContain("showing empty");
+  });
+
+  test("a genuinely empty queue reports healthy", async () => {
+    // The control: silence must still be available as an honest answer.
+    const response = await handleTriageRequest(
+      new Request("http://127.0.0.1:4701/api/triage/queue", { headers: { origin: "http://127.0.0.1:4701" } }),
+      { schemaVersion: 1, generatedAt: new Date().toISOString(), programs: [] } as never,
+      new MemoryTriageQueueStore(),
+    );
+    const body = await response.json() as { items: unknown[]; queue: { healthy: boolean } };
+
+    expect(body.items).toEqual([]);
+    expect(body.queue).toEqual({ healthy: true });
   });
 });

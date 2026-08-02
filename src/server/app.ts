@@ -12,6 +12,8 @@ import {
   type AttentionStore,
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
+import { readPublishState, type PublishState } from "./publish-state";
+import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
@@ -46,6 +48,7 @@ const SECURITY_HEADERS = {
   "x-frame-options": "DENY",
 };
 
+export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
 export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
@@ -69,6 +72,12 @@ export type NewOperatorAction = Omit<OperatorAction, "id" | "at">;
 export interface ActionLogStore {
   list(limit: number): readonly OperatorAction[];
   append(action: NewOperatorAction): Promise<OperatorAction>;
+  /* Why the list may be short. appendAction deliberately swallows a persist
+     failure — the control it is journalling has already run, so failing the
+     response would invite the operator to repeat a completed action — but that
+     left the failure nowhere except stderr, and /api/actions went on serving a
+     silently incomplete history as though it were the whole record. */
+  persistError?(): string | undefined;
 }
 
 const ACTION_ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -89,6 +98,7 @@ function createActionId(nowMs: number): string {
 export class MemoryActionLogStore implements ActionLogStore {
   protected actions: OperatorAction[] = [];
   private mutationQueue: Promise<void> = Promise.resolve();
+  private lastPersistError?: string;
 
   constructor(
     protected readonly now: () => number = Date.now,
@@ -116,9 +126,20 @@ export class MemoryActionLogStore implements ActionLogStore {
     this.actions = retainActions(actions, this.now());
   }
 
+  persistError(): string | undefined {
+    return this.lastPersistError;
+  }
+
   private async commit(actions: readonly OperatorAction[]): Promise<void> {
     const retained = retainActions(actions, this.now());
-    await this.persist(retained);
+    try {
+      await this.persist(retained);
+    } catch (error) {
+      // Remember it, then rethrow so append() still rejects as it always has.
+      this.lastPersistError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
+    this.lastPersistError = undefined;
     this.actions = retained;
   }
 
@@ -260,6 +281,9 @@ export interface MountainAppDependencies {
   cmuxExecutable?: string;
   now?: () => number;
   webRoot: string;
+  /* Repository root for the read-only publish surface. Defaults to the web
+     root's parent, which is the checkout in every deployment we ship. */
+  repoRoot?: string;
 }
 
 export interface MountainFetch {
@@ -475,7 +499,19 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
     const nextFingerprint = compactSnapshotFingerprint(snapshot);
-    if (nextFingerprint === fingerprint) return;
+    /* The fingerprint deliberately ignores generatedAt, controlHealth
+       .lastCheckedAt and elapsedMs, so "no material change" still means "newer
+       evidence". Returning early used to leave currentSnapshot pinned to an old
+       object while /api/health reported the age of state.get(): the two
+       endpoints answered from different snapshots, and a quiet fleet could hold
+       /api/snapshot's generatedAt past the 60s staleness line while health kept
+       saying ok. Adopt every snapshot; spend a sequence number and an SSE delta
+       only on a material one. */
+    if (nextFingerprint === fingerprint) {
+      currentSnapshot = snapshot;
+      currentSnapshotEvent = snapshotEvent(snapshot, snapshotSequence);
+      return;
+    }
     const baseSequence = snapshotSequence;
     snapshotSequence += 1;
     const deltaEvent = snapshotDeltaEvent(
@@ -489,10 +525,25 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     }
   });
 
+  /* Reading the publish state costs a handful of git calls, so it is computed
+     on demand and held briefly rather than recomputed on every poll. */
+  let publishCache: { atMs: number; value: PublishState } | undefined;
+  const publishState = async (): Promise<PublishState> => {
+    const nowMs = dependencies.now?.() ?? Date.now();
+    if (publishCache && nowMs - publishCache.atMs < PUBLISH_CACHE_MS) return publishCache.value;
+    const value = await readPublishState(
+      dependencies.runner,
+      dependencies.repoRoot ?? resolve(dependencies.webRoot, ".."),
+      nowMs,
+    );
+    publishCache = { atMs: nowMs, value };
+    return value;
+  };
+
   const fetch = (async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (!isLoopback(url.hostname)) {
-      if (url.pathname === "/api/transcript" || url.pathname === "/api/actions") {
+      if (["/api/transcript", "/api/actions", "/api/publish"].includes(url.pathname)) {
         return responseError(403, "ORIGIN_REJECTED", "Read endpoints require exact same-origin loopback access.");
       }
       return new Response("Forbidden", { status: 403, headers: SECURITY_HEADERS });
@@ -508,12 +559,30 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       if (limit instanceof Response) return limit;
       return transcriptResponse(dependencies.state.get(), agentId, limit, SECURITY_HEADERS);
     }
+    if (url.pathname === "/api/publish") {
+      if (request.method !== "GET") {
+        /* Read-only by construction. Publishing is the operator's decision and
+           stays manual, so this surface reports and never acts: there is no
+           POST here and no push anywhere behind it. */
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use GET. This surface reports and never publishes.");
+      }
+      return Response.json(await publishState(), {
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
+    }
     if (url.pathname === "/api/actions") {
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");
       const limit = limitFrom(url, 100, 500);
       if (limit instanceof Response) return limit;
+      const store = await actionLogStore;
+      const journalError = store.persistError?.();
       return Response.json(
-        { ok: true, actions: (await actionLogStore).list(limit) },
+        {
+          ok: true,
+          actions: store.list(limit),
+          // An incomplete history must not read as a complete one.
+          journal: journalError ? { healthy: false, error: journalError } : { healthy: true },
+        },
         { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
       );
     }
@@ -672,6 +741,27 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         ? Math.max(0, (dependencies.now?.() ?? Date.now()) - generatedAtMs)
         : null;
       const healthy = ageMs !== null && ageMs <= MAX_HEALTH_SNAPSHOT_AGE_MS;
+      /* Freshness is not completeness. A collector that times out or errors
+         still leaves a freshly generated snapshot behind, so a partial or empty
+         board answered "healthy" for the next 60 seconds and liveness
+         monitoring reported green over data that was missing.
+         `ok` deliberately stays a liveness verdict — a supervisor must not
+         restart a perfectly live process because one provider hiccupped — so
+         the data verdict rides alongside it instead of collapsing into it.
+         Read from staleSources and cmuxReachable rather than the sourceHealth
+         scalars: those count a different population than their own byProvider
+         map, which is a separate unresolved defect this must not inherit. */
+      const staleSources = snapshot.controlHealth?.staleSources ?? [];
+      const cmuxReachable = snapshot.controlHealth?.cmuxReachable ?? null;
+      const controlErrors = snapshot.controlHealth?.errors?.length ?? 0;
+      /* Operator state that failed to load is an incompleteness of what the
+         board is showing, not of the fleet: acknowledged notifications come
+         back unread, so the board asks for attention it was already given. */
+      const operatorStateError = (await attentionStore).loadError?.();
+      /* Built-in model defaults standing in for a config that failed to load
+         change context percentages and compliance verdicts without looking
+         wrong, so the health surface names it rather than leaving it in stderr. */
+      const configError = modelConfigLoadError();
       return Response.json(
         {
           ok: healthy,
@@ -680,6 +770,15 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             generatedAt: snapshot.generatedAt,
             ageMs,
             maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
+          },
+          data: {
+            complete: staleSources.length === 0 && cmuxReachable !== false
+              && !operatorStateError && !configError,
+            staleSources: [...staleSources],
+            cmuxReachable,
+            controlErrors,
+            ...(operatorStateError ? { operatorStateError } : {}),
+            ...(configError ? { configError } : {}),
           },
         },
         {

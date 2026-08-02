@@ -41,9 +41,11 @@ separate-user broker.
   terminal after the observed state has gone stale. `archive` is exempt because
   it changes Ant Hill's local data, not cmux.
 
-  This guard is not universal today: `/api/broadcast` currently dispatches
-  `instruct` actions without the same 30-second check. Do not treat broadcast as
-  freshness-protected until the common execution path enforces that policy.
+  `/api/broadcast` enforces the same 30-second check: it rejects a stale
+  snapshot with `STALE_SNAPSHOT` before dispatching any `instruct` action
+  (`src/server/broadcast.ts`). The gate is still duplicated in the two routes
+  rather than centralized in the shared execution path, so a third caller
+  would not inherit it.
 
 - **Redacted identity diagnostics.** The debug identity endpoint omits raw
   process command lines. This reduces accidental disclosure of arguments and

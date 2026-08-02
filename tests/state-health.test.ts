@@ -29,7 +29,7 @@ describe("cmux collection time truth", () => {
 
     const boot = state.get();
     expect(boot.pulse?.momentum).toMatchObject({
-      completionsLastHour: 0,
+      completionsLastHour: null,
       observedWindowMs: 0,
     });
     expect(state.get().pulse?.momentum.completionsLastHour).toBe(boot.pulse?.momentum.completionsLastHour);
@@ -38,7 +38,7 @@ describe("cmux collection time truth", () => {
     state.markIssueVerifying("system:cmux-control");
     const decorated = state.get();
     expect(decorated.pulse?.momentum).toMatchObject({
-      completionsLastHour: 0,
+      completionsLastHour: null,
       observedWindowMs: 20 * 60_000,
     });
     expect(state.get().pulse?.momentum.completionsLastHour).toBe(decorated.pulse?.momentum.completionsLastHour);

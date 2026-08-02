@@ -42,16 +42,27 @@ cd ~/anthill && bun start
 ```
 
 It prints the address it bound (`bun start` defaults to
-<http://127.0.0.1:4702>) and opens your browser there. Leave that terminal
+<http://127.0.0.1:4701>) and opens your browser there. Leave that terminal
 running — closing it stops the server.
 
-Without cmux installed you'll see:
+4701 is also the port the production instance uses. If one is already
+running, `bun start` detects it and just opens the browser instead of
+starting a second server.
+
+Without cmux installed you'll see all three of these, in this order:
 
 ```
+cmux binary not found.
 cmux not detected — starting in this shell (monitoring only; Focus/Send stay disabled).
+The Ant Hill: http://127.0.0.1:4701 · no cmux auth (titles/controls may stay offline)
 ```
 
-That is the expected message, not an error.
+**All three are expected, including the first.** `cmux binary not found.` is
+printed to standard error, so your terminal may colour it red — it is the
+dashboard reporting that it looked for cmux and did not find one, which is
+exactly right on a machine without it. The board comes up regardless. Focus and
+Send are the only things you lose, and [§ Optional](#optional-enable-focus-and-send)
+turns them on later if you want them.
 
 ## 4. See something
 
@@ -61,15 +72,26 @@ Cursor). A row appears within about five seconds — no refresh needed.
 **Working correctly when:** the badge top-right reads **Live**, and a new session
 shows up on its own.
 
+The board opens on a **6-hour** window even though the last **36 hours** are
+scanned. If it looks empty, widen the lookback (1h / 6h / 24h / 36h) before
+concluding nothing was collected.
+
 ## Expected on a monitoring-only install
 
-- **A red "CMUX control is degraded" verdict in the header.** Correct behavior:
-  without cmux, the dashboard can't prove which terminal owns which session, so
-  it refuses to type into one. Focus and Send stay disabled by design.
+- **A `Blocked` health card.** It reads `cmux unreachable — terminal titles and
+  Focus/Send stay offline.` and offers one next step: `Start cmux, then Refresh
+  — Focus and Send come back on their own.` Correct behavior: without cmux, the
+  dashboard can't prove which terminal owns which session, so it refuses to type
+  into one. Focus and Send stay disabled by design. With cmux running and nothing
+  wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
-- **An empty list** reading `The ant hill is still — no tracked agents.` — nothing
-  has run yet, and only sessions from roughly the last day and a half are scanned.
+- **An empty board** reading `Watching. No sessions running yet.` with a line
+  beneath it counting healthy collectors — nothing has run yet, and only sessions
+  from roughly the last day and a half are scanned. That collector count is the
+  proof the board is working; if any collector is degraded it says so there
+  instead, because an empty board with a blind collector is an unknown one rather
+  than an empty one.
 
 ## Optional: enable Focus and Send
 
@@ -79,8 +101,28 @@ Requires cmux installed. Once, then restart:
 bun run setup:cmux
 ```
 
-Skip it if you only want to watch. Running it without cmux installed exits with
-a message asking you to open cmux first.
+Skip it if you only want to watch. Running it before cmux has ever started exits
+with `Open cmux once so it creates the template, then re-run.` — cmux writes its
+config file on first launch, and there is nothing to edit until it has.
+
+**cmux installed is not the same as cmux naming your session.** With cmux
+running you may still find **Send and Interrupt greyed out on a row where Focus
+works**, with a reason that says the pane was matched by its working directory
+rather than attested by cmux. That is deliberate, and it is worth knowing before
+you meet it, because the row otherwise looks completely healthy.
+
+The Ant Hill will type into a terminal only when cmux names the session on that
+pane — evidenced by the session's transcript file being held open there, or the
+session ID appearing in the command that started it. Matching a pane by the
+folder it happens to be sitting in is a guess, and a guess is enough to move the
+board's view but not enough to authorise input: two panes in the same project,
+one `cd`ing away as another `cd`s in, will silently re-point the row at the wrong
+terminal. Focus stays on in that state on purpose — looking costs nothing, and
+going to the pane is how you recover.
+
+So: **start agents inside cmux panes and leave them there**, and the write
+controls stay on. There is no setting for this and nothing to restart; the
+buttons re-enable within a few seconds of cmux naming the session.
 
 ## Group sessions by project (optional)
 

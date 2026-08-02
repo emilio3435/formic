@@ -365,22 +365,47 @@ export class HubState {
   }
 }
 
+/* Program grouping is operator-authored config. Every way it can fail still
+   returns [] — the hub must boot — but a typo silently ungrouping the whole
+   board is indistinguishable from "no config written yet" unless we say so. */
 export async function loadProgramHints(path: string): Promise<ProgramHint[]> {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await readFile(path, "utf8"));
-    if (!Array.isArray(parsed?.programs)) return [];
-    return parsed.programs.filter(
-      (program: unknown): program is ProgramHint =>
-        Boolean(
-          program &&
-            typeof program === "object" &&
-            typeof (program as ProgramHint).id === "string" &&
-            typeof (program as ProgramHint).name === "string" &&
-            Array.isArray((program as ProgramHint).match) &&
-            (program as ProgramHint).match.every((match) => typeof match === "string"),
-        ),
-    );
-  } catch {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    // Absent file is the normal state until an operator writes one.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[HubState] could not read program hints at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return [];
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.error(`[HubState] program hints at ${path} are not valid JSON, so no programs are grouped: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+  const programs = (parsed as { programs?: unknown } | null)?.programs;
+  if (!Array.isArray(programs)) {
+    console.error(`[HubState] program hints at ${path} have no "programs" array, so no programs are grouped.`);
+    return [];
+  }
+  const hints = programs.filter(
+    (program: unknown): program is ProgramHint =>
+      Boolean(
+        program &&
+          typeof program === "object" &&
+          typeof (program as ProgramHint).id === "string" &&
+          typeof (program as ProgramHint).name === "string" &&
+          Array.isArray((program as ProgramHint).match) &&
+          (program as ProgramHint).match.every((match) => typeof match === "string"),
+      ),
+  );
+  if (hints.length < programs.length) {
+    console.error(
+      `[HubState] ${programs.length - hints.length} of ${programs.length} program hints in ${path} were dropped for a missing or non-string id, name, or match[].`,
+    );
+  }
+  return hints;
 }

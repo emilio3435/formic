@@ -1,4 +1,5 @@
 import { getUsageSummary, type UsageSummary } from "./burnbar";
+import { AGENT_IDLE_GAP_MS } from "./types";
 import type {
   AgentSnapshot,
   HubPulse,
@@ -8,7 +9,9 @@ import type {
 
 const BUCKET_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60_000;
-const STALL_THRESHOLD_MS = 15 * 60_000;
+// One definition of "quiet long enough to not be working", shared with the
+// collectors' active-time accumulator so the two cannot drift apart.
+const STALL_THRESHOLD_MS = AGENT_IDLE_GAP_MS;
 const BURN_REFRESH_TTL_MS = 60_000;
 const BURN_REFRESH_TIMEOUT_MS = 20_000;
 const MAX_BUCKETS = 13;
@@ -25,7 +28,6 @@ interface AgentMemory {
 interface ActivityBucket {
   startMs: number;
   activeSessions: number;
-  completions: number;
   tokens: number | null;
   activeAgentIds: Set<string>;
 }
@@ -36,7 +38,6 @@ export class PulseTracker {
   #burnReader: BurnReader;
   #agents = new Map<string, AgentMemory>();
   #buckets = new Map<number, ActivityBucket>();
-  #completions: number[] = [];
   #latestSnapshot?: HubSnapshot;
   #lastBurnRefreshMs?: number;
   #burnRefreshInFlight?: Promise<void>;
@@ -77,17 +78,12 @@ export class PulseTracker {
       const updatedAtAdvanced = previous === undefined
         || (Number.isFinite(lastUpdatedAtMs)
           && (!Number.isFinite(previous.lastUpdatedAtMs) || lastUpdatedAtMs > previous.lastUpdatedAtMs));
-      const completed = previous?.lastActivity === "working"
-        && (agent.activity === "idle" || agent.activity === "ended");
-      if (completed) {
-        const completionAtMs = Number.isFinite(lastUpdatedAtMs)
-          ? Math.min(lastUpdatedAtMs, nowMs)
-          : nowMs;
-        if (completionAtMs >= nowMs - HOUR_MS) {
-          this.#completions.push(completionAtMs);
-          this.#ensureBucket(Math.floor(completionAtMs / BUCKET_MS) * BUCKET_MS).completions += 1;
-        }
-      }
+      /* The `working -> idle|ended` edge used to be counted here as a
+         completion. It is not one: `activity` comes from `statusFrom()`, which
+         reads transcript recency alone, so this fired for an agent that thought
+         for three minutes. It also fired again on every subsequent pause, and
+         never once looked at whether the work succeeded. Nothing replaces it,
+         because nothing in the data supports the claim — see PulseMomentum. */
 
       if (
         updatedAtAdvanced
@@ -120,7 +116,6 @@ export class PulseTracker {
     for (const agentId of this.#agents.keys()) {
       if (!seen.has(agentId)) this.#agents.delete(agentId);
     }
-    this.#pruneCompletions(nowMs);
   }
 
   maybeRefreshBurnCost(nowMs = Date.now()): void {
@@ -149,7 +144,6 @@ export class PulseTracker {
   report(nowMs: number): HubPulse {
     const currentStartMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS;
     this.#ensureBucket(currentStartMs);
-    this.#pruneCompletions(nowMs);
 
     const completedBuckets = [...this.#buckets.values()]
       .filter((bucket) => bucket.startMs < currentStartMs)
@@ -197,7 +191,8 @@ export class PulseTracker {
     return {
       momentum: {
         working: this.#latestSnapshot?.totals.working ?? 0,
-        completionsLastHour: this.#completions.length,
+        completionsLastHour: null,
+        completionsProvenance: "not-observable",
         observedWindowMs,
         stalled: stalledAgentIds.length,
         stalledAgentIds,
@@ -211,7 +206,6 @@ export class PulseTracker {
         buckets: completedBuckets.map((bucket): PulseActivityBucket => ({
           start: new Date(bucket.startMs).toISOString(),
           activeSessions: bucket.activeSessions,
-          completions: bucket.completions,
           tokens: bucket.tokens,
         })),
       },
@@ -227,7 +221,6 @@ export class PulseTracker {
         this.#buckets.set(startMs, {
           startMs,
           activeSessions: 0,
-          completions: 0,
           tokens: null,
           activeAgentIds: new Set(),
         });
@@ -236,7 +229,6 @@ export class PulseTracker {
       this.#buckets.set(currentStartMs, {
         startMs: currentStartMs,
         activeSessions: 0,
-        completions: 0,
         tokens: null,
         activeAgentIds: new Set(),
       });
@@ -249,10 +241,6 @@ export class PulseTracker {
     return this.#buckets.get(currentStartMs)!;
   }
 
-  #pruneCompletions(nowMs: number): void {
-    const cutoff = nowMs - HOUR_MS;
-    this.#completions = this.#completions.filter((completedAtMs) => completedAtMs >= cutoff);
-  }
 
   #applyBurnSummary(summary: UsageSummary | undefined): void {
     const roundedCost = summary?.available
@@ -261,18 +249,39 @@ export class PulseTracker {
       && Number.isFinite(summary.estimatedCostUsd)
       ? Math.round(summary.estimatedCostUsd * 100) / 100
       : null;
-    if (this.#costInitialized && roundedCost === this.#costLastHourUsd) return;
-
     const cursorMissingInvocations = summary?.byProvider
       .filter(({ provider, costUsd, invocations }) => /cursor/i.test(provider) && costUsd === null)
       .reduce((total, row) => total + row.invocations, 0) ?? 0;
     const cursorUnknownCount = Math.max(this.#latestCursorUnknownCount, cursorMissingInvocations);
+
+    /* Why the cost is missing, in words the card can print. burn.coverage counts
+       agents reporting token totals — it is the coverage OF tokensPerMin and has
+       never described the cost, which comes from a different source entirely
+       (the encrypted BurnBar database). With no reason to show beside "cost
+       unavailable", the BURN card put the token coverage there instead, so a
+       real 37k/min rate, an unavailable cost and "9/9 reporting" appeared in one
+       sentence and read as three claims about the same number. Give the cost its
+       own reason so nothing has to be borrowed. */
+    const costNote = roundedCost === null
+      ? summary === undefined
+        ? "Cost source has not been read yet."
+        : summary.available === false
+          ? summary.error ?? "Cost source is unavailable."
+          : "No priced invocations in this window."
+      : cursorUnknownCount > 0
+        ? `${cursorUnknownCount} Cursor ${cursorUnknownCount === 1 ? "session reports" : "sessions report"} no billing data`
+        : undefined;
+
+    // The figure AND its explanation both count as displayed state: a read that
+    // returns the same dollar total for a new reason still changes the card.
+    if (this.#costInitialized
+      && roundedCost === this.#costLastHourUsd
+      && costNote === this.#costNote) return;
+
     this.#costLastHourUsd = roundedCost;
     this.#costProvenance = roundedCost === null ? "unavailable" : "burnbar";
     this.#costAsOf = roundedCost === null ? undefined : summary?.to;
-    this.#costNote = cursorUnknownCount > 0
-      ? `${cursorUnknownCount} Cursor ${cursorUnknownCount === 1 ? "session reports" : "sessions report"} no billing data`
-      : undefined;
+    this.#costNote = costNote;
     this.#costInitialized = true;
   }
 }

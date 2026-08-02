@@ -31,6 +31,7 @@ export class JsonArchiveStore implements ArchiveStore {
   readonly #agents = new Map<string, StoredAgent>();
   #writeQueue: Promise<void> = Promise.resolve();
   #writeNumber = 0;
+  #loadError?: string;
 
   private constructor(
     private readonly path: string,
@@ -69,12 +70,24 @@ export class JsonArchiveStore implements ArchiveStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         store.#agentIds.clear();
         store.#agents.clear();
-        console.error(
-          `[JsonArchiveStore] Ignoring unreadable archive at ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        /* An archive we could not read is not an empty archive. Clearing it
+           silently puts every previously dismissed agent back on the board as
+           live work, so the operator sees more running than exists and no
+           reason for it — a wrong number stated confidently, with the console
+           as the only record. Boot on empty, but say so out loud. */
+        store.#loadError = `archived agents could not be read from ${path}, so the board is showing every session as unarchived: `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[JsonArchiveStore] ${store.#loadError}`);
       }
     }
     return store;
+  }
+
+  /* Undefined when the archive on disk is the one in force, or when there was
+     never a file. Set only when an empty archive is standing in for one we
+     failed to read. */
+  loadError(): string | undefined {
+    return this.#loadError;
   }
 
   has(agentId: string): boolean {
@@ -208,6 +221,14 @@ function archiveCopy(agent: CollectedAgent, archiveKind: ArchiveKind): StoredAge
     lastHumanMessage: agent.lastHumanMessage,
     lastUserMessage: agent.lastUserMessage,
     lastAgentMessage: agent.lastAgentMessage,
+    /* Measured on the live board after the restart: 362 agents, 269 of them
+       unreadable by the attention layer, and 133 of those were archived records
+       carrying lastAgentMessage but not this. An archived session that ended by
+       asking a question is exactly the one an operator can still act on, so
+       dropping the closing line here made the whole history permanently blind —
+       and the layer reported that blindness as "we could not read", correctly
+       but avoidably. */
+    lastAgentClosing: agent.lastAgentClosing,
     transcriptTail: agent.transcriptTail,
     artifacts: agent.artifacts.map((artifact) => ({ ...artifact })),
     gates: [...agent.gates],

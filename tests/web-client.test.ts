@@ -420,10 +420,11 @@ function listUi(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/* The three drawer panels, rendered and flattened to text. */
+/* The drawer's panels, rendered and flattened to text. `operate` is gone — the
+   Operate panel was deleted in the drawer overhaul, so the shelf is one Thread
+   pane plus the collapsed Evidence rail. */
 function panelTexts(a: Record<string, unknown>) {
   return withDom(() => ({
-    operate: textOf(M.renderOperate(a, { id: "p", name: "P", agents: [] })),
     chat: textOf(M.renderChat(a)),
     evidence: textOf(M.renderEvidence(a)),
   }));
@@ -471,6 +472,405 @@ describe("summary status and widgets", () => {
       controlHealth: { ...healthy.controlHealth, cmuxReachable: false, errors: ["conflicting session files"] },
     });
     expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
+  });
+
+  /* The empty state froze at first paint. programsPaintSig is built from the
+     VISIBLE ROWS, so when a view has none the signature is constant and the
+     whole block below it — the all-clear verdict, its vitals, the open-findings
+     line — was skipped forever after the first render. Measured in the browser:
+     the client's collection said BETA while the DOM still named a finding from
+     minutes earlier, and the resting board's "37 live · 7 working" vitals were
+     frozen with it. Those numbers exist so an operator can tell "nothing is
+     wrong" from "nothing is loading", which a stale number cannot do.
+
+     Pre-existing, and invisible while the block held only static prose. */
+  test("the empty state repaints when what it renders changes", () => {
+    const calm = agent({ id: "a", outcome: "healthy", activity: "working" });
+    const sig = (issues: unknown[], live: number) => M.programsPaintSig([], {
+      ...M.state,
+      view: "needs-you",
+      snap: snapshot({
+        programs: [{ id: "p", name: "P", agents: [calm] }],
+        issues,
+        totals: { live, tracked: live, working: live, idle: 0, history: 0, attention: 0 },
+      }),
+    });
+    const fault = (title: string) => [{
+      id: "system:z", kind: "system", severity: "warning", title,
+      summary: "s", affectedAgentIds: [],
+    }];
+
+    // Nothing open vs something open must differ, or the all-clear can survive
+    // a finding arriving.
+    expect(sig([], 3)).not.toBe(sig(fault("ALPHA"), 3));
+
+    /* Same id, different wording. Keying the signature on finding ids alone
+       repainted once and then froze again — this is the assertion that caught
+       it, after the browser did. */
+    expect(sig(fault("ALPHA"), 3)).not.toBe(sig(fault("BETA"), 3));
+
+    // The vitals are rendered too, so a changed fleet must repaint them.
+    expect(sig([], 3)).not.toBe(sig([], 4));
+
+    // And an unchanged empty state must still be stable, or every snapshot
+    // repaints the board for nothing.
+    expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
+  });
+
+  /* A cwd string is not an identity, and the UI must not call it one.
+
+     Proven against probe agents: a Send addressed to ALPHA executed on BRAVO's
+     tty and returned ok: true. control.ts authorised writes on `exact` OR
+     `unique-cwd`, and unique-cwd picks among panes whose identity evidence is
+     EMPTY, by elimination on a directory string. The trigger is mundane — one
+     pane cds away, another cds in.
+
+     The server now refuses the write. This pins the half an operator sees: a
+     greyed button with no explanation reads as a bug and gets retried, which is
+     the exact behaviour that makes a safety gate useless. */
+  test("a pane matched only by directory is its own state, not Linked", () => {
+    const attested = agent({ target: { surfaceId: "s1", resolution: "exact" } });
+    const guessed = agent({ target: { surfaceId: "s1", resolution: "unique-cwd" } });
+
+    expect(M.deriveControlState(attested)).toBe("linked");
+    expect(M.deriveControlState(guessed)).toBe("unproven");
+    // The word the operator reads must not claim a link the server will refuse.
+    expect(M.CONTROL_LABELS.unproven).not.toMatch(/linked/i);
+
+    /* The refusal has to carry all three, or it reads as a fault: what is off,
+       why, and what turns it back on. */
+    const text = M.controlUnavailableText("unproven");
+    expect(text).toMatch(/working directory/i);              // the cause
+    expect(text).toMatch(/different agent/i);                // the risk
+    expect(text).toMatch(/as soon as cmux attests/i);        // the way back
+    expect(text).toMatch(/switched off/i);                   // off, not broken
+    expect(text).toMatch(/Focus still works/i);              // what still works
+
+    /* Without a brief the banner throws: it renders whenever a write control is
+       disabled, and this is a routable pane with Send off — a combination that
+       could not previously exist, so quarantineBrief returned null and the
+       caller read .title off it. */
+    const brief = M.quarantineBrief(guessed, "unproven");
+    expect(brief).not.toBeNull();
+    expect(brief.title).toMatch(/off/i);
+    expect(brief.nextStep).toMatch(/Focus/);
+    // Nothing to repair — saying so is what stops the retry.
+    expect(brief.nextStep).toMatch(/nothing to repair/i);
+
+    /* The row's accessible name must not tell a screen-reader operator the row
+       is Ready when it accepts no input. */
+    expect(M.CONTROL_STATE_TEXT.unproven).toBe("Look only — session not proven");
+    expect(M.CONTROL_STATE_TEXT.unproven).not.toBe("Ready");
+
+    /* Eligibility is read from the SERVER capability, so it fails closed on its
+       own — but the reason shown must distinguish "has a pane we cannot prove"
+       from "has no pane". */
+    const off = agent({
+      target: { surfaceId: "s1", resolution: "unique-cwd" },
+      controls: [{ action: "instruct", enabled: false, reason: "x" }],
+    });
+    expect(M.broadcastEligible ? M.broadcastEligible(off) : false).toBe(false);
+    expect(M.broadcastIneligibleReason(off)).toBe("session not proven");
+
+    // The gate is a gate, not a wall: an attested row keeps everything.
+    const on = agent({
+      target: { surfaceId: "s1", resolution: "exact" },
+      controls: [{ action: "instruct", enabled: true }],
+    });
+    expect(M.broadcastIneligibleReason(on)).not.toBe("session not proven");
+    expect(M.quarantineBrief(on, "linked")).toBeNull();
+  });
+
+  /* Day one. Every measurement this project ever took was at 380-441 agents, so
+     the board had never been seen with nothing on it — which is exactly the
+     state a new operator meets on first run. It read "The ant hill is still — no
+     tracked agents" beside a mound, with no evidence a collector had ever run.
+
+     An empty cockpit is ambiguous between WATCHING AND FOUND NOTHING and NOT
+     WATCHING. Those could not be more different, and passive prose picks
+     neither. */
+  test("an empty board asserts health and proves it, or admits it cannot see", () => {
+    const at = "2026-08-02T11:45:51.447Z";
+    const healthy = M.emptyBoardVerdict({
+      generatedAt: at, totals: { sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+    });
+    expect(healthy.degraded).toBe(false);
+    expect(healthy.message).toBe("Watching. No sessions running yet.");
+    /* The proof is the point: a count of collectors and a timestamp are evidence
+       a stalled client cannot manufacture, which is what distinguishes this from
+       a board that simply never loaded. */
+    expect(healthy.sources).toBe("4 of 4 collectors healthy");
+    expect(healthy.checkedAt).toBe(at);
+    // No passive "still", which described absence and asserted nothing.
+    expect(healthy.message).not.toContain("still");
+
+    /* A blind collector makes an empty board an UNKNOWN one, not an empty one.
+       Claiming health here would be the false all-clear again, on the day it
+       matters most. */
+    const blind = M.emptyBoardVerdict({
+      generatedAt: at, totals: { sourceHealth: { healthy: 2, degraded: 2, total: 4 } },
+    });
+    expect(blind.degraded).toBe(true);
+    expect(blind.sources).toBe("2 of 4 collectors degraded");
+    expect(blind.message).not.toContain("Watching");
+    expect(blind.hint).toContain("incomplete rather than empty");
+
+    // No source data is no claim about sources — never an invented "0 of 0".
+    const bare = M.emptyBoardVerdict({ generatedAt: at, totals: {} });
+    expect(bare.sources).toBeNull();
+    expect(bare.checkedAt).toBe(at);
+    expect(M.emptyBoardVerdict(null).checkedAt).toBeNull();
+  });
+
+  /* Usage tab, day one: BurnBar is optional and a new operator will not have it.
+     "not reported" for a window with no activity said the wrong thing about why. */
+  test("an empty usage window says nothing happened, not that pricing failed", () => {
+    const quiet = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, invocations: 0, byProvider: [],
+    });
+    expect(quiet.value).toBe("not reported");
+    expect(quiet.sub).toBe("no activity in this range");
+
+    // Activity that could not be priced is still a different sentence.
+    const unpriceable = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, invocations: 45,
+      byProvider: [{ provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 }],
+    });
+    expect(unpriceable.sub).toBe("no priced rows in this range");
+  });
+
+  /* Usage audit §1. The cost headline read "not reported" while the same payload
+     carried $11,939.92 of measured, provenance-tagged spend. burnbar.ts:33 sets
+     costKnown false as soon as ANY invocation lacks a price, so Cursor at 45 of
+     2,980 calls suppressed the figure for the other four providers. The string
+     "cost missing on some rows" was literally true; the belief it created was
+     false. costKnown may gate a qualifier, never the value. */
+  test("a partly-priced window shows the floor and its gap in one glance", () => {
+    /* The live wire, measured: estimatedCostUsd null while measuredCostUsd
+       carries $11,934.61 and 42 of 2,973 calls cannot be priced. estimatedCostUsd
+       is deliberately strict — null unless EVERY invocation is priced — so a
+       card that reads it alone reports "not reported" over real money. The
+       qualifier belongs beside the value, never as a gate on it, which is the
+       shape processedTokens/tokensMissing has had on the wire all along. */
+    const partial = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 11_934.61, costMissingInvocations: 42, invocations: 2973,
+    });
+    expect(partial.value).toBe("≥$11,934.61");
+    expect(partial.sub).toBe("measured floor · 42 of 2973 calls unpriced");
+
+    /* Grouped above four figures, on the integer part only. A first attempt
+       used one non-global lookahead and rendered "$1,234567.89" — a separator
+       that fires once and gives up is worse than none, because it looks like it
+       worked. */
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 1_234_567.89 }).value)
+      .toBe("$1,234,567.89");
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 999.5 }).value).toBe("$999.50");
+    // The failure this replaces: real money rendered as an absence.
+    expect(partial.value).not.toBe("not reported");
+
+    /* The ≥ must travel WITH the number. A skimmed, clipped or read-aloud
+       sublabel is exactly how a floor gets banked as a total, which is the
+       misreading the server's own contract comment warns about. */
+    expect(partial.value.startsWith("≥")).toBe(true);
+
+    // A complete total is not a floor and carries no qualifier.
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 28.37 }))
+      .toEqual({ value: "$28.37", sub: "from BurnBar cost" });
+
+    // Fully priced via measuredCostUsd with nothing missing: no floor mark.
+    const whole = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 12.5, costMissingInvocations: 0, invocations: 10,
+    });
+    expect(whole).toEqual({ value: "$12.50", sub: "measured" });
+
+    /* No denominator means no share is claimed — the gap is still named in
+       absolute terms, because that much is true. */
+    const noTotal = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 5, costMissingInvocations: 1, invocations: null,
+    });
+    expect(noTotal.sub).toBe("measured floor · 1 call unpriced");
+
+    /* "not reported" survives only where it is the whole truth: nothing priced
+       at all. Never a fabricated $0.00. */
+    const none = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, measuredCostUsd: null, invocations: 45,
+    });
+    expect(none.value).toBe("not reported");
+    expect(none.sub).toBe("no priced rows in this range");
+  });
+
+  /* Usage audit §3. Same label, four answers: 45.1M/h at 1h, 5.7M/h at 24h,
+     16.0M/h at 7d, 36.4M/h at 30d on one unchanged fleet. An 8x swing between
+     adjacent selector positions reads as burn exploding. */
+  test("the burn rate names the window it averaged", () => {
+    expect(M.usageRateWindowText({ from: "2026-08-02T00:00:00Z", to: "2026-08-03T00:00:00Z" }))
+      .toBe("24.0h average, not a current rate");
+    expect(M.usageRateWindowText({ from: "2026-07-03T00:00:00Z", to: "2026-08-02T00:00:00Z" }))
+      .toContain("30d average");
+    // No window on the wire means no window claim, not an invented one.
+    expect(M.usageRateWindowText({})).toBe("tokens per hour");
+    expect(M.usageRateWindowText({ from: "x", to: "y" })).toBe("tokens per hour");
+  });
+
+  /* Usage audit §2. OpenBurnBar emits UTC text with no zone marker, Date.parse
+     reads it as local, and every row aged by exactly the offset — a 24-minute-old
+     row rendering "2.2h ago" makes the freshest data look stale. */
+  test("zone-less BurnBar timestamps are read as UTC, and ISO is left alone", () => {
+    expect(M.burnbarInstant("2026-08-02 11:15:48.670")).toBe("2026-08-02T11:15:48.670Z");
+    expect(M.burnbarInstant("2026-08-02 11:15:48")).toBe("2026-08-02T11:15:48Z");
+
+    /* Idempotent with the server-side fix the audit routes: anything already
+       carrying a zone is untouched, so this cannot double-correct once the
+       boundary emits proper ISO. */
+    for (const iso of ["2026-08-02T11:15:48.670Z", "2026-08-02T11:15:48+02:00", "2026-08-02T11:15:48Z"]) {
+      expect(M.burnbarInstant(iso)).toBe(iso);
+    }
+
+    // The bug it fixes, stated as arithmetic rather than as a string.
+    const at = Date.parse("2026-08-02T11:39:32Z");
+    const ageMs = at - Date.parse(M.burnbarInstant("2026-08-02 11:15:48.670"));
+    expect(Math.round(ageMs / 60_000)).toBe(24);
+  });
+
+  /* Render-first audit §1, the composition itself. The three surfaces were each
+     individually correct and each individually tested, which is exactly why this
+     shipped: no test asked what they say TOGETHER. Reproduced on the board in
+     one capture — rail "Needs you 1 finding", tab "Needs you 0", headline
+     "Nothing needs you" — a false all-clear on the one question this cockpit
+     exists to answer.
+
+     This asserts the invariant that composition must hold, not the three strings
+     separately: the all-clear may only be claimed over an empty collection, and
+     the word "needs you" may only be spent on the agent population. */
+  test("no all-clear may render while any finding is open", () => {
+    const fault = {
+      id: "system:collector-errors", kind: "system", severity: "warning",
+      title: "Collection problems", summary: "1 collector problem", affectedAgentIds: [],
+    };
+    // The exact board state that composed the false all-clear: a system finding,
+    // and not one agent waiting on a human.
+    const calm = agent({ id: "a", outcome: "healthy", activity: "working" });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [calm] }], issues: [fault] });
+
+    const findings = M.issuesOf(snap);
+    const waiting = [calm].filter((a) => M.alerting(a));
+    expect(findings.length).toBe(1);
+    expect(waiting.length).toBe(0);
+
+    /* The rail counts findings and must not spend the tab's phrase on them. */
+    const card = M.summaryWidgetData("needs-you", snap);
+    expect(card.value).toBe("1");
+    expect(card.unit).toBe("finding");
+    const railLabel = M.WIDGET_CATALOG.find((w: { id: string }) => w.id === "needs-you")?.label;
+    expect(railLabel).toBe("Findings");
+    expect(railLabel?.toLowerCase()).not.toContain("needs you");
+
+    /* And the all-clear is gated on the COLLECTION, not on the row list. With a
+       finding open it must not render, however empty the Alerts view is. */
+    expect(findings.length === 0 && waiting.length === 0).toBe(false);
+
+    // With nothing open at all, the all-clear is true and may render.
+    const quiet = snapshot({ programs: [{ id: "p", name: "P", agents: [calm] }], issues: [] });
+    expect(M.issuesOf(quiet).length).toBe(0);
+  });
+
+  /* Magnitude audit §5. The activity sparkline's accessible name claimed "last
+     hour" while the tracker held 12.7 minutes of buckets — a 4.7x window
+     overstatement, invisible to sighted readers, which is why it survived every
+     visual review. The window is a function of bucket count and must be read
+     from it. */
+  test("sparkline names the window it actually holds, not an assumed hour", () => {
+    // 12 five-minute buckets is the hour the label used to assert unconditionally.
+    expect(M.sparklineLabel(new Array(12).fill(0))).toContain("last 60m");
+    // The state that was lying: a freshly restarted tracker with two buckets.
+    expect(M.sparklineLabel([1, 2])).toContain("last 10m");
+    expect(M.sparklineLabel([1, 2])).not.toContain("hour");
+    // No buckets is no window — not a zero-length hour.
+    expect(M.sparklineLabel([])).toContain("no window observed yet");
+  });
+
+  /* Magnitude audit §6. "230 agents" was 33 live and 197 ended: 5.8x the
+     operational population under one word, the needsYou defect in a different
+     cell. Both cohorts are named — but only when they account for the whole
+     roster, or the fix would silently drop "unknown" the way the bug dropped
+     "ended". */
+  test("program rollup names live and ended separately, and only when they add up", () => {
+    const labels = (cells: Array<{ value: string; label: string }>) =>
+      cells.map((c) => c.value + " " + c.label);
+
+    const mixed = [
+      agent({ id: "a", activity: "working" }),
+      agent({ id: "b", activity: "idle" }),
+      agent({ id: "c", activity: "ended" }),
+      agent({ id: "d", activity: "ended" }),
+    ];
+    expect(labels(M.programRollupCells(mixed))).toEqual(
+      expect.arrayContaining(["2 live", "2 ended"]),
+    );
+    expect(labels(M.programRollupCells(mixed)).join(" ")).not.toContain("4 agents");
+
+    // Nothing ended yet: one population, so one word is honest.
+    const allLive = [agent({ id: "a", activity: "working" }), agent({ id: "b", activity: "idle" })];
+    expect(labels(M.programRollupCells(allLive))).toContain("2 agents");
+
+    /* An unaccounted-for cohort means the split cannot be trusted to sum, so the
+       total is the only true claim. This is the guard, not an edge case: naming
+       two of three populations is the original bug. */
+    const withUnknown = [...mixed, agent({ id: "e", activity: "unknown", lastActivityAt: null })];
+    const unknownCells = labels(M.programRollupCells(withUnknown));
+    expect(unknownCells).toContain("5 agents");
+    expect(unknownCells.join(" ")).not.toContain("live");
+  });
+
+  /* Magnitude audit §3. Two figures that could not both be true — 5,089,747
+     tok/min beside $4.41, an implied 1.5c per million against a real floor about
+     35x higher. The backend fixed the maths. What was left on this side was the
+     rate being shown as a bare "/min" while the payload carried windowMs=300000,
+     so a five-minute average read as an instantaneous rate, and a coverage suffix
+     counting eligible LIVE agents against a rate summed over every reporter
+     including ended ones. A rate whose window is unstated is a rate the operator
+     will divide against an hourly cost, which is exactly how this was found. */
+  test("BURN states the averaging window and does not attach live-only coverage to it", () => {
+    const snap = snapshot({
+      pulse: {
+        burn: {
+          tokensPerMin: 10_546,
+          windowMs: 300_000,
+          costLastHourUsd: null,
+          coverage: { reporting: 8, eligible: 33, unknown: 3 },
+        },
+      },
+    });
+    const data = M.summaryWidgetData("burn", snap, "live", "percent", [], false);
+
+    expect(data.sublabel).toContain("5m average");
+    /* The ratio described a different population than the rate: verified in
+       src/server/pulse.ts, where the delta loop walks every agent while
+       coverage.reporting/eligible count live ones only. */
+    expect(data.sublabel).not.toContain("8/33");
+    expect(data.sublabel).not.toMatch(/\d+\/\d+ reporting/);
+
+    /* But an absence is safe to name where completeness was not. `unknown`
+       counts live agents whose provider reports no tokens at all, so they
+       contribute zero to the rate forever — a subtotal shown as a total. */
+    expect(data.sublabel).toContain("3 not reporting tokens");
+
+    const fullCoverage = M.summaryWidgetData("burn", snapshot({
+      pulse: { burn: { tokensPerMin: 10_546, windowMs: 300_000, costLastHourUsd: null,
+        coverage: { reporting: 33, eligible: 33, unknown: 0 } } },
+    }), "live", "percent", [], false);
+    expect(fullCoverage.sublabel).not.toContain("not reporting");
+
+    // No window on the wire means no window claim — never a fabricated default.
+    const noWindow = M.summaryWidgetData(
+      "burn", snapshot({ pulse: { burn: { tokensPerMin: 10_546, costLastHourUsd: null } } }),
+      "live", "percent", [], false,
+    );
+    expect(noWindow.sublabel).not.toContain("average");
+    expect(noWindow.value).toBe(M.fmtTok(10_546));
   });
 
   /* F2: the BURN card read "cost unavailable" because the cost source returns
@@ -651,9 +1051,8 @@ describe("provider-aware row summaries", () => {
       transcriptTail: TAIL,
     });
     const panels = panelTexts(rich);
-    // Bookshelf seam: Chat shows readable You/Agent turns only — the raw
-    // transcript tail is Evidence-only machinery behind the disclosure.
-    expect(panels.operate).not.toContain(TAIL);
+    // Thread shows readable You/Agent turns only — the raw transcript tail is
+    // Evidence-only machinery behind the disclosure.
     expect(panels.chat).toContain("pushed the branch");
     expect(panels.chat).not.toContain(TAIL);
     expect(panels.evidence).toContain(TAIL);
@@ -803,11 +1202,25 @@ describe("token honesty", () => {
 });
 
 describe("latest-turn token semantics", () => {
-  test("latest-turn usage is labeled as the latest call, not session usage", () => {
+  /* This test's own name claimed the value was "labeled as the latest call"
+     while asserting the VISIBLE text read "42k tokens" — the scope lived in
+     .label and .title, neither of which the row renders. That is how a row came
+     to show "128k tokens" beside a program's "65.7M session tokens": ~500x
+     apart, not summable, and qualified only on hover. (Render-first audit §2.) */
+  test("latest-turn usage says so in the text a reader can actually see", () => {
     const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 42_000, input: 40_000, output: 2000 });
     expect(s.label).toBe("latest call");
-    expect(s.text).toBe("42k tokens");
+    expect(s.text).toBe("42k latest call");
     expect(s.title).toContain("latest model call");
+
+    /* The word must not appear where it would be a lie. A scope the source did
+       not report gets the neutral noun, not an invented precision. */
+    expect(M.tokenSummary({ provenance: "observed", total: 1200 }).text).toBe("1k tokens");
+    expect(M.tokenSummary({ provenance: "observed", scope: "session", total: 1200 }).text).toBe("1k tokens");
+
+    // The estimate mark survives in front of the scope, not instead of it.
+    expect(M.tokenSummary({ provenance: "estimated", scope: "latest-turn", total: 42_000 }).text)
+      .toBe("≈42k latest call");
   });
 
   test("legacy tokens without a scope keep the neutral label", () => {
@@ -960,9 +1373,46 @@ describe("modelShort — Cursor-native short forms within the 18-char bound", ()
 });
 
 describe("issues", () => {
-  test("normalized server issues pass through untouched", () => {
-    const issues = [{ id: "system:x", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }];
-    expect(M.issuesOf({ programs: [], issues })).toBe(issues);
+  /* Render-first audit §1, the false all-clear. issuesOf used to return
+     snap.issues by identity, which short-circuited the client derivation below
+     it — so the rail counted the SERVER's agent rule (outcome not healthy and
+     not ended) while the tab counted alerting(). Reproduced on the board: rail
+     "Needs you 1 finding", tab "Needs you 0", headline "Nothing needs you", all
+     in one capture, each correct for its own hidden population.
+
+     The rule now: the server owns findings the client cannot see; the client
+     owns the agent half, so it is the tab's population by construction. */
+  test("server system findings survive verbatim; the agent half is re-derived", () => {
+    const sys = { id: "system:x", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const passed = M.issuesOf({ programs: [], issues: [sys] });
+    expect(passed).toEqual([sys]);
+    expect(passed[0]).toBe(sys); // not rebuilt, not reworded
+
+    /* A server agent finding for an agent the client does NOT consider alerting
+       must not survive — that is the exact row that made the rail disagree with
+       the tab. */
+    const healthy = agent({ id: "calm", outcome: "healthy", activity: "working" });
+    const stale = {
+      id: "agent:calm", kind: "agent", severity: "warning",
+      title: "calm needs review", summary: "", affectedAgentIds: ["calm"],
+    };
+    const merged = M.issuesOf({ programs: [{ id: "p", name: "P", agents: [healthy] }], issues: [sys, stale] });
+    expect(merged.map((i: { id: string }) => i.id)).toEqual(["system:x"]);
+
+    /* And an agent the client DOES consider alerting gets a finding even when
+       the server shipped none for it — the attentionSignal case the server's
+       outcome-only rule misses. */
+    const waiting = agent({
+      id: "waiting", outcome: "healthy", activity: "working",
+      attentionSignal: { evidence: "asked a question" },
+    });
+    const derived = M.issuesOf({ programs: [{ id: "p", name: "P", agents: [waiting] }], issues: [sys] });
+    expect(derived.map((i: { id: string }) => i.id)).toEqual(["system:x", "agent:waiting"]);
+
+    /* The invariant the whole fix exists to hold: the collection's agent half
+       and the Alerts tab's population are the same set, always. */
+    const agentFindings = derived.filter((i: { kind: string }) => i.kind === "agent").length;
+    expect(agentFindings).toBe([waiting].filter((a) => M.alerting(a)).length);
   });
 
   test("fallback surfaces collector errors as a system issue even with zero attention agents", () => {
@@ -1014,8 +1464,13 @@ describe("search", () => {
     expect(input).toBeDefined();
     const placeholder = input!.match(/placeholder="([^"]*)"/)?.[1] ?? "";
     const title = input!.match(/title="([^"]*)"/)?.[1] ?? "";
-    // Both surfaces name the same searchable fields; every advertised field is
-    // one matchesQuery actually indexes — no promise the search can't keep.
+    /* The AFFORDANCE advertises them, not the placeholder specifically. The
+       placeholder used to enumerate all seven and measured 389px inside a 333px
+       input once the drawer docked, so the list was unreadable exactly when the
+       box was smallest (audit §16). The enumeration moved to the title, which is
+       where a field list belongs; the property being guarded — every advertised
+       field is one matchesQuery actually indexes, no promise search cannot keep —
+       is unchanged and still checked below. */
     const program = { id: "p", name: "Prog" };
     const probes: Array<[string, string]> = [
       ["name", "ridge-scout"], ["model", "gpt-5.6-sol"], ["cwd", "/Users/emilio/Developer/deep-ridge"],
@@ -1025,11 +1480,14 @@ describe("search", () => {
       displayName: "ridge-scout", model: "gpt-5.6-sol", cwd: "/Users/emilio/Developer/deep-ridge",
       provider: "codex", role: "verifier", status: "running", sourceSessionId: "sess-ridge-9",
     });
+    const label = html.match(/<label class="visually-hidden" for="search">([^<]*)</)?.[1] ?? "";
+    const advertised = (title + " " + label).toLowerCase();
     for (const [field, sample] of probes) {
-      expect(placeholder.toLowerCase()).toContain(field);
-      expect(title.toLowerCase()).toContain(field);
+      expect(advertised, field).toContain(field);
       expect(M.matchesQuery(a, program, sample.toLowerCase())).toBe(true);
     }
+    // The placeholder still says what the box is for, and now what focuses it.
+    expect(placeholder.toLowerCase()).toContain("search agents");
   });
 });
 
@@ -1340,7 +1798,7 @@ describe("calm program and agent list rendering", () => {
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
     const header = withDom(() => plan[0].build());
     expect(header.className).toContain("agent-column-header");
-    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Span"]) {
       expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -1349,22 +1807,36 @@ describe("calm program and agent list rendering", () => {
     expect(styles).toContain("-webkit-line-clamp: 3");
   });
 
-  test("status column is the state-colored activity word plus a red alert span, not a bare dot", () => {
+  test("the status column speaks only what the active tab does not already guarantee", () => {
+    /* Audit §7: with Now active, all six in-viewport rows printed "Working". A
+       column where every cell carries the same word is not a signal, and it was
+       spending the roster's scarcest space restating the tab the operator had
+       just chosen. viewMatches pins working/idle/history to one activity, so
+       there the tab IS the answer. */
+    expect(M.rowStateWords("working", "healthy", "now")).toEqual([]);      // the dominant case
+    expect(M.rowStateWords("working", "healthy", "working")).toEqual([]);  // pinned by the tab
+    expect(M.rowStateWords("idle", "healthy", "idle")).toEqual([]);        // pinned by the tab
+    expect(M.rowStateWords("ended", "healthy", "history")).toEqual([]);    // pinned by the tab
+
+    // An exceptional outcome is never silent, in any view.
+    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Alert"]);
+    expect(M.rowStateWords("working", "failed", "working")).toEqual(["Failed"]);
+    // A mixed view still distinguishes a non-dominant activity.
+    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Idle", "Alert"]);
+
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
-    // Full state still lives in the tooltip + row aria-label.
+    // Full state still lives in the tooltip + row aria-label, so nothing is lost
+    // to a reader who asks — it just stops being printed on every row.
     expect(row).toContain('title: stateText');
-    // The activity word carries the state color (act-<activity>); no duplicate dot glyph.
-    expect(row).toContain('class: "act-" + activity, text: ACTIVITY_LABELS[activity]');
     expect(row).not.toContain("act-glyph act-");
-    // The alert suffix rides its own red span rather than an uncolored word.
-    expect(row).toContain('class: "row-state-alert"');
+    expect(row).toContain('"row-state-alert"');
     expect(styles).toContain(".row-state-alert { color: var(--needs); }");
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
     const message = "Review the full terminal transcript before dispatch.";
-    const selected = agent({ lastHumanMessage: message, lastAgentMessage: "Evidence checked." });
+    const selected = agent({ lastUserMessage: message, lastAgentMessage: "Evidence checked." });
     const program = { id: "p1", name: "P", agents: [selected] };
     const row = withDom(() => M.renderAgentRow(selected, program));
     expect(row.attributes["aria-label"]).toContain(
@@ -1376,9 +1848,13 @@ describe("calm program and agent list rendering", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: selected, program });
       return pane;
     });
-    const humanMessage = byClass(drawer, "last-human-message");
-    expect(humanMessage).not.toBeNull();
-    expect(textOf(humanMessage)).toBe(message);
+    /* The drawer used to print the message a second time under "Last human
+       message". That panel is gone; the message now lives exactly once, as a
+       Thread turn, which is what this test should be guarding. */
+    expect(byClass(drawer, "last-human-message")).toBeNull();
+    const turn = byClass(drawer, "chat-turn-body");
+    expect(turn).not.toBeNull();
+    expect(textOf(turn)).toBe(message);
     expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
@@ -1585,7 +2061,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const header: any = withDom(() => M.renderAgentColumnHeader());
     const text = textOf(header);
-    for (const label of ["Agent", "Status", "Model", "Tokens", "Elapsed"]) {
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Span"]) {
       expect(text).toContain(label);
     }
   });
@@ -1904,7 +2380,7 @@ describe("source hygiene", () => {
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain(">Alerts<span");
+    expect(html).toContain(">Needs you<span");
     expect(source).toContain("function renderWidgetCustomizer()");
     expect(source).toContain("onchange: (event) => setWidgetEnabled");
     expect(source).toContain('aria-label": `Move ${widget.label} up`');
@@ -2073,9 +2549,52 @@ describe("pulse strip — verdict-first summary", () => {
     expect(source).toContain('"aria-controls": "pulse-findings"');
     expect(source).toContain('dataset: { fkey: "pulse-verdict" }');
     expect(source).toContain("onclick: togglePulseFindings");
-    expect(source).toContain('class: "pulse-calm", role: "status"');
+    /* The class now carries an is-watching modifier for the watch tier, so assert
+       the contract (a live status region) rather than the literal attribute
+       string, which was pinning a concatenation. */
+    expect(source).toMatch(/class: "pulse-calm"[^,]*, role: "status"/);
     expect(source).toContain("function renderPulseCalm(");
     expect(source).toContain("function renderHealthRail(");
+  });
+
+  /* A dead /api/triage/queue answered with console.warn and nothing else.
+     queueItems stayed [], which produces zero queue findings — indistinguishable
+     from a genuinely empty queue — so the strip collapsed to CALM while triage
+     work sat unseen on the server. An unreachable queue is not an empty one. */
+  test("an unreachable triage queue is never mistaken for a calm board", () => {
+    const clean = snapshot();
+    expect(M.pulseStripModel(clean, "live", [], "percent", "").calm).toBe(true);
+
+    const broken = M.pulseStripModel(clean, "live", [], "percent", "queue response was invalid");
+    expect(broken.calm).toBe(false);         // cannot declare calm on partial evidence
+    expect(broken.queueError).toBe("queue response was invalid");
+
+    // The Needs-you card is the one that means "stop and do something", so it is
+    // where the missing input has to be admitted.
+    const card = broken.cells.find((c: { id: string }) => c.id === "needs-you");
+    expect(card.data.sublabel).toContain("Triage queue unavailable");
+    expect(card.data.sublabel).toContain("queue response was invalid");
+
+    // A healthy queue says nothing extra — no permanent scold on a good board.
+    /* A healthy queue on a clean board says nothing at all now: the cell is
+       omitted rather than rendering "0 / No active findings". Absence IS the
+       "no permanent scold" assertion this line was making. */
+    expect(M.pulseStripModel(clean, "live", [], "percent", "").cells
+      .find((c: { id: string }) => c.id === "needs-you")).toBeUndefined();
+  });
+
+  test("fetchTriageQueue records the failure instead of only warning", async () => {
+    await withState({ queueItems: [], queueError: "" }, () =>
+      withRequests([{ status: 500, json: { ok: false } }], async () => {
+        await M.fetchTriageQueue();
+        expect(M.state.queueError).not.toBe("");
+      }));
+    // A recovered fetch must clear it, or one blip scolds forever.
+    await withState({ queueItems: [], queueError: "stale complaint" }, () =>
+      withRequests([{ status: 200, json: { ok: true, items: [] } }], async () => {
+        await M.fetchTriageQueue();
+        expect(M.state.queueError).toBe("");
+      }));
   });
 
   test("pulseStripModel collapses to calm only when nothing needs the operator", () => {
@@ -2398,13 +2917,16 @@ describe("fail-loud control invariants (source-level)", () => {
   });
 });
 
-describe("Take A agent drawer — Operate · Chat · Evidence", () => {
-  test("bookshelf shelf replaces tabs: Operate + Chat open, Evidence behind the caterpillar rail", () => {
+describe("agent drawer — Thread · Evidence", () => {
+  test("bookshelf shelf replaces tabs: Thread open, Evidence behind the caterpillar rail", () => {
     // No tab dance — the drawer is a horizontal shelf.
     expect(source).not.toContain("inspectorTabButton(");
     expect(source).toContain('class: "drawer-shelf"');
-    expect(source).toContain('key: "operate"');
-    expect(source).toContain('key: "chat"');
+    // One reading pane now. Operate was deleted: its message duplicated Thread's
+    // user turn, its task moved to the head, its role/model chips were third
+    // printings of facts the row and head already carry.
+    expect(source).toContain('key: "thread"');
+    expect(source).not.toContain('key: "operate"');
     expect(source).toContain("renderEvidenceShelf(agent)");
     // Evidence is opt-in: collapsed caterpillar rail until the cog opens it.
     expect(source).toContain("evidenceOpen: false");
@@ -2419,9 +2941,6 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     );
     expect(evidenceShelf).not.toContain("renderVitals(agent)");
     expect(evidenceShelf).not.toContain("renderVitalsBand(agent)");
-    const operate = requiredSlice(source, /function renderOperate\([\s\S]*?\n}\n/, "renderOperate");
-    expect(operate).not.toContain("renderVitals(");
-    expect(operate).not.toContain("renderVitalsBand(");
     expect(styles).toContain(".drawer-shelf {");
     expect(styles).toContain(".shelf-evidence-rail {");
     // Widescreen split: roster rail ~40%, drawer ~60%.
@@ -2494,21 +3013,19 @@ describe("Take A agent drawer — Operate · Chat · Evidence", () => {
     ]);
   });
 
-  test("Operate shows task only when meaningfully different from the human message", () => {
-    // FE-B: rendered, not grepped. A task that merely restates the human message
-    // earns no second heading; a genuinely different one does.
+  test("the objective surfaces the task only when it is not a restatement", () => {
+    /* Task moved out of Operate and onto the head, because it is the one field
+       that says WHICH lane this is: on the live board 19 of 22 active agents
+       share a display name while their tasks differ. It must still stay silent
+       when it merely echoes the message. */
     const echoed = agent({ lastHumanMessage: "rebuild the collector", task: "Rebuild the collector." });
     const distinct = agent({ lastHumanMessage: "rebuild the collector", task: "Port the SEM forecast rate limiter", model: "claude-opus-4-8" });
     expect(M.taskMeaningfullyDifferent(echoed)).toBe(false);
     expect(M.taskMeaningfullyDifferent(distinct)).toBe(true);
-    const echoedPanel = withDom(() => M.renderOperate(echoed, { id: "p", name: "P", agents: [] }));
-    expect(textOf(echoedPanel)).not.toContain("Task");
-    const distinctPanel = withDom(() => M.renderOperate(distinct, { id: "p", name: "P", agents: [] }));
-    expect(textOf(distinctPanel)).toContain("Task");
-    expect(textOf(distinctPanel)).toContain("Port the SEM forecast rate limiter");
-    // Operate still carries the identity meta row (role/model), not vitals.
-    expect(byClass(distinctPanel, "operate-meta")).not.toBeNull();
-    expect(textOf(byClass(distinctPanel, "operate-meta"))).toContain("opus 4.8");
+    expect(M.drawerObjective(echoed)).toBe("");
+    expect(M.drawerObjective(distinct)).toContain("Port the SEM forecast rate limiter");
+    // And the role/model meta row is gone: model was a third printing.
+    expect(source).not.toContain('class: "operate-meta"');
   });
 });
 
@@ -2537,25 +3054,25 @@ describe("verdict head — act from the top (B2)", () => {
   }
   const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
 
-  test("drawer order: verdict head → banner → next action → vitals mount → shelf → lineage → dock", () => {
+  test("drawer order: verdict head → banner → vitals mount → shelf → lineage → dock", () => {
     const drawer = agentDrawer();
     expect(drawer).toBeTruthy();
     const headAt = drawer.indexOf("inspector-head inspector-verdict");
     const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
-    const nextAt = drawer.indexOf('class: "next-action"');
     const vitalsAt = drawer.indexOf('class: "inspector-vitals"');
     const shelfAt = drawer.indexOf('class: "drawer-shelf"');
     const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
     const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
-    for (const at of [headAt, bannerAt, nextAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
+    for (const at of [headAt, bannerAt, vitalsAt, shelfAt, lineageAt, dockAt]) {
       expect(at).toBeGreaterThan(-1);
     }
     // The banner stays state, pinned immediately after the head.
     expect(bannerAt).toBeGreaterThan(headAt);
-    // Next action directly under the head; the vitals mount (B3's slot) sits
-    // between next-action and the Operate | Chat shelf.
-    expect(nextAt).toBeGreaterThan(bannerAt);
-    expect(vitalsAt).toBeGreaterThan(nextAt);
+    /* next-action is gone: across 243 live agents it held three distinct strings
+       and 214 read "Review this session in history." — a restatement of
+       activity === "ended" dressed as per-agent advice. */
+    expect(drawer).not.toContain('class: "next-action"');
+    expect(vitalsAt).toBeGreaterThan(bannerAt);
     expect(shelfAt).toBeGreaterThan(vitalsAt);
     // Lineage is demoted below the shelf — context, not action — and the
     // command dock stays pinned at the bottom.
@@ -2565,16 +3082,16 @@ describe("verdict head — act from the top (B2)", () => {
     expect(styles).toContain(".inspector-vitals:empty { display: none; }");
   });
 
-  test("the head carries the gate chip and one primary-action control", () => {
+  test("the head carries the gate chip and exactly one Focus button exists", () => {
     const drawer = agentDrawer();
     const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
     expect(head).toContain("verdictGate(");
-    expect(head).toContain("headPrimaryAction(");
-    // headPrimaryAction reuses the dock's derivation — capability() +
-    // renderDockTool() — never a duplicated action implementation.
-    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(headFn).toContain('capability(agent, "focus")');
-    expect(headFn).toContain("renderDockTool(");
+    /* The head's primary action is deleted. It rendered a literal copy of a dock
+       tool while the dock is position:sticky at the bottom of the same pane, so
+       one Focus button was on screen twice. */
+    expect(head).not.toContain("headPrimaryAction(");
+    expect(source).not.toContain("function headPrimaryAction(");
+    expect(styles).toContain("position: sticky"); // the dock keeps Focus reachable
     // The gate is ember ink + outline, never a filled banner.
     const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
     expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
@@ -2650,43 +3167,6 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     }
   }
 
-  test("headPrimaryAction: safe-locked → null; focus leads; interrupt only as sole lever; both enabled → focus wins; absent → null", () => {
-    const locked = agent({ controls: [
-      { action: "focus", enabled: false, reason: "no route" },
-      { action: "instruct", enabled: true },
-      { action: "interrupt", enabled: true },
-    ] });
-    expect(withDom(() => M.headPrimaryAction(locked))).toBeNull();
-
-    const focusReady = agent({ controls: [
-      { action: "focus", enabled: true },
-      { action: "instruct", enabled: true },
-    ] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const focusTool: any = withDom(() => M.headPrimaryAction(focusReady));
-    expect(focusTool).not.toBeNull();
-    expect(focusTool.className).toContain("dock-tool");
-    expect(focusTool.dataset.fkey).toBe("head:act:codex:a1:focus");
-
-    const interruptOnly = agent({ controls: [{ action: "interrupt", enabled: true }] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const interruptTool: any = withDom(() => M.headPrimaryAction(interruptOnly));
-    expect(interruptTool).not.toBeNull();
-    expect(interruptTool.dataset.fkey).toBe("head:act:codex:a1:interrupt");
-
-    // Priority head-to-head: both focus and interrupt enabled at once — focus
-    // must win, not just when interrupt is absent entirely.
-    const bothEnabled = agent({ controls: [
-      { action: "focus", enabled: true },
-      { action: "interrupt", enabled: true },
-    ] });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bothTool: any = withDom(() => M.headPrimaryAction(bothEnabled));
-    expect(bothTool).not.toBeNull();
-    expect(bothTool.dataset.fkey).toBe("head:act:codex:a1:focus");
-
-    expect(withDom(() => M.headPrimaryAction(agent({ controls: [] })))).toBeNull();
-  });
 
   test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
     // Visible text from gates; statusReason empty → the tooltip carries the
@@ -2726,16 +3206,18 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     expect(M.quietSourceLine(calm)).toBeNull();
   });
 
-  test("instance-scoped keys: head prefixes its fkeys; confirm strip and Escape bind to one instance", () => {
-    const dockToolFn = source.match(/function renderDockTool\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(dockToolFn).toContain('opts.fkeyPrefix || ""');
-    // The confirm strip renders only for the instance that opened it.
+  /* The head no longer renders a primary action, so the instance-scoping that
+     existed only to keep two copies of one Focus button from stealing each
+     other's confirm strip is gone with it. The dock's own scoping is still
+     load-bearing and is asserted here. */
+  test("the dock still scopes its confirm strip to the instance that opened it", () => {
+    const dockToolFn = requiredSlice(source, /function renderDockTool\([\s\S]*?\n\}\n/, "renderDockTool");
     expect(dockToolFn).toContain("state.confirming === fkey");
     expect(dockToolFn).toContain("state.confirming = fkey");
-    const headFn = source.match(/function headPrimaryAction\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(headFn).toContain('fkeyPrefix: "head:"');
     // Escape restores focus to the exact instance fkey stored in state.confirming.
     expect(source).toContain('document.querySelector(`[data-fkey="${CSS.escape(key)}"]`)');
+    // And there is exactly one Focus button in the drawer now: the dock's.
+    expect(source).not.toContain('fkeyPrefix: "head:"');
   });
 });
 
@@ -2788,51 +3270,82 @@ describe("vitals instrument band (B3)", () => {
     return s;
   }
 
-  test("(a) renderVitalsBand is exported and renders mono-classed values for a live agent", () => {
+  test("(a) one context tile carries both magnitudes, in a sentence", () => {
     expect(typeof M.renderVitalsBand).toBe("function");
+    /* The reported defect was two sibling NOUN labels — "Context" beside
+       "Session tokens" — both reading as "an amount of tokens". Prepositions
+       separate them where nouns could not, and one tile removes the side-by-side
+       adjacency that invited the comparison in the first place. */
     const live = agent({
-      model: "gpt-5-codex",
-      tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      tokens: { provenance: "observed", scope: "latest-turn", total: 120000, contextWindow: 1000000, sessionTotal: 480000 },
       elapsedMs: 125000,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const band: any = withDom(() => M.renderVitalsBand(live));
     expect(band).not.toBeNull();
-    expect(band.className).toContain("vitals");
+    const text = textOf(band).replace(/\s+/g, " ");
+    // Both magnitudes, each exactly once, against wording that cannot be swapped.
+    /* Counted as plain substrings: textOf concatenates sibling nodes without
+       separators, so "…window480k…" has no word boundary to anchor on. */
+    const count = (needle: string) => text.split(needle).length - 1;
+    expect(count("120k")).toBe(1);
+    expect(count("480k")).toBe(1);
+    /* The percentage is spoken once, by the ring. The sentence carries only what
+       the ring cannot: the absolute size it is a fraction of, and the session
+       total. Printing the pct in both was the same quantity twice inside one
+       tile — the defect, committed inside its own fix. */
+    expect(count("12%")).toBe(1);
+    expect(text).toContain("of 1.0M window");
+    expect(text).toContain("used this session");
+    // The numerator is never bare: 120k means nothing without its denominator.
+    expect(text).toContain("1.0M");
     const classes = classesOf(band);
-    // Values ride the canonical "vital-big mono" convention (DESIGN rule 2).
-    expect(classes.some((c) => c.includes("vital-big") && c.includes("mono"))).toBe(true);
-    // An observed context window renders a real SVG ring; uptime is present.
     expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
-    const text = textOf(band);
-    expect(text).toContain("40k"); // observed context total
-    expect(text).toContain("2m");  // 125s uptime → fmtElapsed "2m"
+    // Past the threshold the same tile takes ember ink rather than appearing.
+    const hot = agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 900000, contextWindow: 1000000, sessionTotal: 480000 } });
+    expect(classesOf(withDom(() => M.renderVitalsBand(hot))).some((c) => c.includes("is-hot"))).toBe(true);
+    expect(classes.some((c) => c.includes("is-hot"))).toBe(false);
   });
 
-  test("(b) missing vitals render honest fallbacks — observed count without a fabricated window, omit-empty otherwise", () => {
-    // Claude-style: observed total but NO context window → absolute count, never a
-    // fabricated percentage/ring (no invented denominator).
+  test("(b) the band never invents a denominator, and the deleted tiles stay deleted", () => {
+    // Observed total but NO context window → no ring, no fabricated percentage,
+    // and now no consolation tile either: with nothing to compare against there
+    // is no alarm to raise, and Evidence's `latest call` row carries the count.
     const noWindow = agent({
       provider: "claude",
       tokens: { provenance: "observed", total: 40000 },
       elapsedMs: undefined,
       updatedAt: undefined,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const band: any = withDom(() => M.renderVitalsBand(noWindow));
-    expect(band).not.toBeNull();
-    const classes = classesOf(band);
-    expect(classes.some((c) => c.includes("vital-ring"))).toBe(false); // no fabricated ring
-    const text = textOf(band);
-    expect(text).toContain("40k");   // honest observed count
-    expect(text).not.toContain("%"); // no invented percentage
-    // Nothing reported at all → the band is omitted entirely (never a fake $0/0 tile).
+    expect(withDom(() => M.renderVitalsBand(noWindow))).toBeNull();
+
     const blank = withDom(() => M.renderVitalsBand(
       agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
     ));
     expect(blank).toBeNull();
-    // The honest "not reported" string itself stays byte-identical.
     expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
+
+    /* The three deleted tiles, each for its own reason:
+       - Session tokens duplicated Evidence's `session total`, which already
+         carries SESSION_TOTAL_HINT — the correct label AND the definition.
+       - cache hit used cachedInput/input, but `input` is the UNCACHED remainder,
+         so the true rate is cachedInput/(cachedInput+input). The wrong
+         denominator can exceed 1 (hence the old Math.min clamp) and printed a
+         constant "100%" on nearly every active agent.
+       - Uptime timed since START, not since movement: 200h for an agent that had
+         been silent for an hour. */
+    const rich = agent({
+      tokens: { provenance: "observed", scope: "latest-turn", total: 180000, contextWindow: 200000, sessionTotal: 27000000, cachedInput: 90000, input: 10000 },
+      elapsedMs: 125000,
+    });
+    const text = textOf(withDom(() => M.renderVitalsBand(rich)));
+    expect(text).not.toContain("Session tokens");
+    expect(text).not.toContain("cache hit");
+    expect(text).not.toContain("Uptime");
+    // Evidence still owns the session figure, with its definition attached —
+    // asserted at source level here because this describe's local fake document
+    // is narrower than the shared one renderEvidence needs.
+    expect(source).toContain("cumulative this session");
   });
 
   test("(c) renderEvidenceShelf no longer builds the vitals block — it moved to the band", () => {
@@ -3028,9 +3541,12 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     // in agent-rows, WS-C's territory, and is out of scope for this task).
     const perType = styles.slice(
       styles.indexOf("/* ---------- inspector: per-type drawer states"),
-      styles.indexOf("/* ---------- vitals band"),
+      // Landmark renamed with the section: the vitals band became the context
+      // alarm when its session/cache/uptime tiles were cut.
+      styles.indexOf("/* ---------- context alarm"),
     );
     expect(perType).toBeTruthy();
+    expect(styles).toContain("/* ---------- context alarm"); // the landmark exists
     expect(perType).not.toContain("#fff");
     // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
     // those class strings, or it would render as an unstyled element. Back the
@@ -3179,7 +3695,7 @@ describe("program-header at-a-glance rollups (C2)", () => {
     expect(textOf(alerting[0])).toContain("1alert");
   });
 
-  test("(b) calm earns no color: 0 alerts renders the count WITHOUT the ember class", () => {
+  test("(b) calm earns no cell at all: zero alerts renders nothing", () => {
     const agents = [
       mk({ id: "codex:w1", status: "running" }),
       mk({ id: "codex:w2", status: "running" }),
@@ -3188,8 +3704,12 @@ describe("program-header at-a-glance rollups (C2)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rollup: any = withDom(() => M.programHeadRollup(agents));
     const text = textOf(rollup);
-    expect(text).toContain("0alerts");                       // the alert cell still renders...
-    expect(allByClass(rollup, "is-alerting").length).toBe(0); // ...but takes no ember ink at zero
+    /* Was: the cell renders at 0 but takes no ember ink. Audit §11 goes further —
+       "0 alerts" on every program is one of three widgets asserting that nothing
+       needs you, and a counter that always reads 0 stops being read. Absence is
+       the stronger version of "earns no color". */
+    expect(text).not.toContain("alert");
+    expect(allByClass(rollup, "is-alerting").length).toBe(0);
   });
 
   test("(c) honest omission: an un-derivable token aggregate drops the token cell", () => {
@@ -3202,15 +3722,21 @@ describe("program-header at-a-glance rollups (C2)", () => {
     const text = textOf(rollup);
     expect(text).toContain("2agents");                              // counts are always derivable
     expect(text).not.toContain("tokens");                          // no session total → no faked aggregate
-    expect(allByClass(rollup, "program-rollup-cell").length).toBe(3); // agents · working · alert only
+    /* agents · working only. These two are healthy, so there is no alerts cell
+       either — audit §11. The subject of this test is the TOKEN cell's honest
+       omission, which still holds. */
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(2);
   });
 
   test("(d) header and drawer rollups share ONE aggregation source — no duplicated arithmetic", () => {
     // The aggregation core is defined exactly once.
     expect((source.match(/function programRollupCells\(/g) ?? []).length).toBe(1);
     // BOTH DOM builders feed off it rather than re-deriving counts/tokens.
-    const drawer = source.match(/function programRollupLine\(program\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
-    const header = source.match(/function programHeadRollup\(agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    /* Signature-agnostic: both builders now take the server's rollup alongside
+       the agents so the token aggregate can defer to the wire. What this test
+       guards is that they share ONE core, not what arguments it takes. */
+    const drawer = source.match(/function programRollupLine\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    const header = source.match(/function programHeadRollup\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
     expect(drawer).toContain("programRollupCells(");
     expect(header).toContain("programRollupCells(");
     // The token reduce — the one bit of arithmetic that could drift — lives ONLY in
@@ -3219,10 +3745,13 @@ describe("program-header at-a-glance rollups (C2)", () => {
     // renderProgram delegates its header rollup to the shared builder and keeps no
     // parallel arithmetic; the old rollupParts text summary is gone.
     const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(rp).toContain("programHeadRollup(agents)");
+    // Delegation is the contract; WHICH list it rolls up is asserted behaviorally
+    // in "a filtered view leaves the program header counting the whole program".
+    expect(rp).toContain("programHeadRollup(");
     expect(rp).not.toContain("deriveRollup(agents)");
     expect(source).not.toContain("rollupParts");
   });
+
 
   test("(e) rollup data rides the header's accessible text (extends the drawer aria pattern)", () => {
     const agents = [
@@ -3237,7 +3766,10 @@ describe("program-header at-a-glance rollups (C2)", () => {
     expect(label).toContain("3 agents");        // …and carries the data itself
     expect(label).toContain("2 working");
     expect(label).toContain("1 alert");
-    expect(label).toContain("30k tokens");
+    /* "session tokens", because this cell sums sessionTotal across the whole
+       program while a ROW's token cell is that agent's latest turn — two
+       quantities that must not share one word. */
+    expect(label).toContain("30k session tokens");
   });
 });
 
@@ -3367,11 +3899,17 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background: var(--ink)");
   });
 
-  test("index.html seeds is-current on the default Now tab (honest guard — the markup already does)", () => {
-    // renderTabs re-derives the active marker on every render, but the first paint
-    // before JS runs must already present Now as current. This locks the seed markup
-    // so a future edit to the tab list can't ship a currentless first frame.
-    expect(html).toContain('class="view-tab is-current" data-view="now" aria-pressed="true"');
+  test("index.html seeds is-current on the default tab, and that tab is the attention one", () => {
+    /* renderTabs re-derives the active marker on every render, but the first
+       paint before JS runs must already present a current tab. The seeded tab is
+       now needs-you: a cockpit whose landing state is "show me all routine work"
+       cannot also claim to stay silent about what does not need a human. */
+    expect(html).toContain('class="view-tab is-current" data-view="needs-you" aria-pressed="true"');
+    expect(html).not.toContain('class="view-tab is-current" data-view="now"');
+    // …and the markup order matches the model, so the first tab is the seeded one.
+    expect(html.indexOf('data-view="needs-you"')).toBeLessThan(html.indexOf('data-view="now"'));
+    expect(M.OPS_VIEWS[0]).toBe("needs-you");
+    expect(M.state.view).toBe("needs-you");
   });
 });
 
@@ -3480,7 +4018,7 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     // sk-pulse is the first-paint skeleton shimmer; it is inside the universal
     // guard above like every other one, which is what this list exists to force
     // a new animation's author to confirm.
-    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "status-pulse", "sun-pulse"]);
+    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "sun-pulse"]);
     // Every live `animation:` usage keys off one of those keyframes — none escapes.
     const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
     expect(new Set(animated)).toEqual(new Set(keyframes));
@@ -3692,14 +4230,16 @@ describe("scroll shell: review fixes", () => {
     const rollup = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rollup).toContain("min-width: 0");
     expect(rollup).toContain("flex: 0 1 auto");   // shrinks after the name truncates
+    /* The cells no longer shrink-and-clip individually. Docked at 1440 that
+       produced "169 a…  13 wo…  1 alert  1.15B t…" — the shrink order was
+       carefully tuned and the outcome was still fragments. The row wraps to a
+       second line instead, so no cell is ever cropped and the alerts cell needs
+       no special pinning to survive. */
+    expect(rollup).toContain("flex-wrap: wrap");
     const cell = styles.match(/\.program-rollup-cell\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(cell).toContain("min-width: 0");
-    expect(cell).toContain("overflow: hidden");
-    // The alerts cell is pinned against shrink — it is the last thing to give.
-    const alert = styles.match(/\.program-rollup-cell\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(alert).toContain("flex-shrink: 0");
+    expect(cell).not.toContain("overflow: hidden");
     // The tokens cell (tagged by JS with a key) is dropped on narrow screens.
-    expect(source).toContain('label: "tokens", key: "tokens"');
+    expect(source).toContain('label: "session tokens", key: "tokens"');
     expect(source).toContain('" program-rollup-cell--" + c.key');
     const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
     expect(mobile).toContain(".program-rollup-cell--tokens { display: none; }");
@@ -3820,9 +4360,223 @@ describe("FE-A: a failed snapshot refresh is visible instead of swallowed", () =
     // Degraded tone is what puts the existing Refresh affordance on screen.
     const failed = M.summaryWidgetData("health", healthy, "live", "percent", [], true);
     expect(failed.tone).toBe("degraded");
-    expect(failed.value).toBe("Degraded");
+    // The card headlines the SEVERITY, not the generic verdict — a failed
+    // refresh is the "Stale" kind, which is what the operator needs to read.
+    expect(failed.value).toBe("Stale");
     expect(failed.sublabel).toContain("refresh failed");
     expect(M.summaryWidgetData("health", healthy, "live", "percent", [], false).sublabel).not.toContain("refresh failed");
+  });
+});
+
+/* Screenshot on the live board: the HEALTH card's headline read "Degraded" in
+   amber, and directly beneath it a badge read ADVISORY over the sentence "The
+   board is usable; evidence needs tidying." The card argued with itself, and an
+   advisory carried the identical visual weight as an unreachable control plane.
+   The headline has to be the severity it is actually reporting. */
+describe("the health card's headline agrees with its own severity", () => {
+  const advisory = () => snapshot({
+    totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      sourceHealth: { healthy: 1, degraded: 1, total: 2 } },
+  });
+
+  test("an advisory says Advisory, not Degraded", () => {
+    const snap = advisory();
+    // The underlying system verdict is unchanged — it is the CARD that lied.
+    expect(M.systemStatus(snap, "live", false).label).toBe("Degraded");
+    expect(M.degradedSeverity(snap, "live", false).key).toBe("advisory");
+
+    const card = M.summaryWidgetData("health", snap, "live", "percent", [], false);
+    expect(card.value).toBe("Advisory");
+    expect(card.value).not.toBe("Degraded");
+    expect(card.tone).toBe("advisory");
+    // The consequence sentence travels with the data so the card can render it
+    // without asking degradedSeverity a second question.
+    expect(card.severityKey).toBe("advisory");
+    expect(card.severityDetail).toContain("usable");
+    expect(card.sublabel).toContain("degraded source");
+  });
+
+  test("a blocking or stale problem keeps its full weight", () => {
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    const blockedCard = M.summaryWidgetData("health", blocked, "live", "percent", [], false);
+    expect(blockedCard.value).toBe("Blocked");
+    expect(blockedCard.tone).toBe("degraded");
+
+    const stale = M.summaryWidgetData("health", snapshot(), "live", "percent", [], true);
+    expect(stale.value).toBe("Stale");
+    expect(stale.tone).toBe("degraded");
+    expect(stale.sublabel).toContain("refresh failed");
+
+    /* Offline and the healthy verdict are untouched by the severity split. The
+       healthy card now reads "All clear" rather than "Operational": the status
+       KEY is still `operational`, but the card speaks the operator's word for
+       it instead of the system's. Only the wording moved — this test's subject,
+       that blocking and stale keep their full weight, is asserted above. */
+    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
+    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("All clear");
+  });
+
+  test("an advisory is rendered lighter than a real degradation", () => {
+    const weightOf = (snap: unknown, failed: boolean) =>
+      M.pulseStripModel(snap, "live", [], "percent", "").cells.find((c: { id: string }) => c.id === "health").weight;
+    /* Advisory used to shrink to micro on the reasoning that "in both cases
+       there is nothing for the operator to do right now". That premise no
+       longer holds: a non-clear verdict now carries a remedy and a pane list,
+       and micro renders the headline alone — so shrinking it deletes the answer
+       the card exists to give. An advisory keeps its cell.
+
+       The subject of this test is unchanged and still asserted, one layer down:
+       advisory is LIGHTER than a real degradation. That distinction now lives
+       in tone (amber `advisory` vs `degraded`), which is where a severity
+       difference belongs — not in whether the operator is shown what to do. */
+    expect(weightOf(advisory(), false)).toBe("normal");
+    expect(M.summaryWidgetData("health", advisory(), "live", "percent", [], false).tone).toBe("advisory");
+    // A blocking problem stays full size, and reads at the heavier tone.
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(weightOf(blocked, false)).toBe("normal");
+    expect(M.summaryWidgetData("health", blocked, "live", "percent", [], false).tone).toBe("degraded");
+    /* A clear board no longer rides at micro — it does not ride at all. "Nothing
+       is wrong" is now said by the cell being absent rather than by a quiet chip
+       asserting it, which is the convention audit §5 asked for. */
+    expect(M.pulseStripModel(snapshot(), "live", [], "percent", "").cells
+      .find((c: { id: string }) => c.id === "health")).toBeUndefined();
+  });
+
+  test("shrinking the advisory cell does not delete its explanation", async () => {
+    // At micro weight the health cell is just a chip, so the consequence
+    // sentence has nowhere to live but the title. Losing the alarm must not
+    // also lose the reason.
+    let chip: any;
+    await withState({ snap: advisory() }, () => withDom(() => {
+      chip = M.renderSummaryWidget("health", "micro",
+        M.summaryWidgetData("health", advisory(), "live", "percent", [], false));
+    }));
+    expect(textOf(chip)).toContain("Advisory");
+    expect(textOf(chip)).not.toContain("AdvisoryAdvisory"); // the old duplicate badge
+    // The chip itself is the only node left, so read its title directly.
+    expect(chip.children[0].attributes.title).toContain("usable");
+  });
+
+  test("a full-weight degradation states its severity once, not twice", async () => {
+    const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    let card: any;
+    await withState({ snap: blocked }, () => withDom(() => {
+      card = M.renderSummaryWidget("health", "normal",
+        M.summaryWidgetData("health", blocked, "live", "percent", [], false));
+    }));
+    const text = textOf(card);
+    expect(text).toContain("Blocked");
+    // The removed badge rendered the severity label a second time in caps.
+    expect(text).not.toContain("BLOCKING");
+    // The consequence sentence survives at full weight, in the body.
+    expect(text).toContain("Focus and Send");
+  });
+});
+
+/* Screenshot from the live board: in the drawer, the "Ready · linked" chip sat
+   ON TOP of the OPERATE panel's text, leaving the last human message unreadable
+   behind it. The dock is position: sticky over scrolling content, and its
+   background mixed --surface with TRANSPARENT — so the text passed through the
+   bar instead of behind it. A sticky bar that overlaps content must be opaque. */
+/* Screenshot from the live board: 56 rows all reading "Claude · the-mountain-main"
+   — same provider, same working directory, several on the same model — with
+   nothing on the row to tell one live agent from another. The name is genuinely
+   not unique; the session id is. */
+describe("rows with identical names carry a disambiguator", () => {
+  const twin = (id: string, session: string) => agent({
+    id, sourceSessionId: session, provider: "claude", displayName: "Claude · the-mountain-main",
+  });
+
+  test("sessionTag is short, stable, and derived from the session's own identity", () => {
+    expect(M.sessionTag(twin("claude:9b66776a", "9b66776a-e6c3-4a73-937e-2079b4b92084"))).toBe("2079b4b92084".slice(-8));
+    // Stable across calls — a disambiguator that moves is worse than none.
+    const a = twin("claude:x", "60224113-57b0-4948-94bb-6a8f10019216");
+    expect(M.sessionTag(a)).toBe(M.sessionTag(a));
+    // Falls back to the agent id when no session id was reported, and never
+    // invents one for an agent with neither.
+    expect(M.sessionTag({ id: "codex:abcdef12-3456" })).toBeTruthy();
+    expect(M.sessionTag(null)).toBe("");
+    expect(M.sessionTag({})).toBe("");
+  });
+
+  /* The bug the first implementation shipped with. Codex issues UUIDv7, whose
+     leading segment is a TIMESTAMP: four real sessions started in the same
+     minute all tagged "#019fb496" and told the operator nothing. These ids are
+     verbatim from the live board. */
+  test("sessions that share a UUIDv7 timestamp prefix still get distinct tags", () => {
+    const realCodexIds = [
+      "019fb496-eb57-7430-8c2c-dec15174ebc5",
+      "019fb496-d560-7950-a3e7-71290fde77fd",
+      "019fb496-e025-72b1-aba3-09500a01b2aa",
+      "019fb496-f419-70b0-acba-2a371519f037",
+    ];
+    // Every one of these shares the first segment — that is the whole point.
+    expect(new Set(realCodexIds.map((id) => id.split("-")[0])).size).toBe(1);
+    const tags = realCodexIds.map((id) => M.sessionTag(twin("codex:" + id, id)));
+    expect(new Set(tags).size).toBe(realCodexIds.length); // all four distinct
+    expect(tags.every((t: string) => t.length === 8)).toBe(true);
+  });
+
+  test("ambiguousNames flags only the names that actually repeat", () => {
+    const board = [
+      twin("claude:1", "aaaaaaaa-1"), twin("claude:2", "bbbbbbbb-2"),
+      agent({ id: "codex:3", displayName: "Codex · solo" }),
+    ];
+    const names = M.ambiguousNames(board);
+    expect(names.has("Claude · the-mountain-main")).toBe(true);
+    expect(names.has("Codex · solo")).toBe(false); // a unique name stays clean
+    expect(M.ambiguousNames([board[2]]).size).toBe(0);
+  });
+
+  test("the row shows the tag only when its name is ambiguous", () => {
+    const program = { id: "p", name: "P" };
+    const dup = twin("claude:1", "9b66776a-e6c3-4a73");
+    const ambiguous = M.ambiguousNames([dup, twin("claude:2", "60224113-57b0-4948")]);
+
+    const marked = withDom(() => M.renderAgentRow(dup, program, { ambiguousNames: ambiguous }));
+    expect(textOf(marked)).toContain(M.sessionTag(dup));
+    // It is reachable to a screen reader as a disambiguator, not decoration.
+    expect(marked.attributes["aria-label"]).toContain(M.sessionTag(dup));
+
+    // A row whose name is unique must not be cluttered with a hash.
+    const clean = withDom(() => M.renderAgentRow(dup, program, { ambiguousNames: new Set() }));
+    expect(textOf(clean)).not.toContain(M.sessionTag(dup));
+  });
+
+  test("ambiguity is part of the row signature, so the tag can appear and vanish", () => {
+    const dup = twin("claude:1", "9b66776a-e6c3");
+    const ui = listUi();
+    const withTag = M.agentRowSig(dup, ui, { ambiguousNames: new Set(["Claude · the-mountain-main"]) });
+    const withoutTag = M.agentRowSig(dup, ui, { ambiguousNames: new Set() });
+    // Without this the row keeps its cached node when a twin appears or leaves.
+    expect(withTag).not.toBe(withoutTag);
+  });
+});
+
+describe("the command dock does not paint over the text it sits above", () => {
+  // Declarations only — a comment explaining why transparency was removed must
+  // not read as transparency still being there.
+  const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const dockRule = () => stripComments(styles.match(/\.command-dock\s*\{[^}]*\}/)?.[0] ?? "");
+
+  test("the sticky dock is opaque, so scrolling content passes behind it", () => {
+    const rule = dockRule();
+    expect(rule).not.toBe("");
+    // It really is a sticky overlay — that is what makes opacity load-bearing.
+    expect(rule).toContain("position: sticky");
+    // No transparency in the dock's own background, at any stop.
+    expect(rule).not.toContain("transparent");
+    expect(rule).toMatch(/background:\s*var\(--raise\)/);
+  });
+
+  test("the soft top edge survives as a scrim above the bar, not through it", () => {
+    // The gradient was doing real visual work; it moves ABOVE the dock so it
+    // fades the scrolling content instead of revealing it through the controls.
+    const scrim = styles.match(/\.command-dock::before\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(scrim).not.toBe("");
+    expect(scrim).toContain("bottom: 100%");     // sits above the bar
+    expect(scrim).toContain("pointer-events: none"); // never eats a click
+    expect(scrim).toContain("transparent");      // the fade itself
   });
 });
 
@@ -4087,7 +4841,7 @@ describe("FE-B: harness-backed client behavior", () => {
       { bucketStart: "2026-07-28T02:00:00.000Z", tokens: 4_000, provider: "codex" },
     ];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chart: any = withDom(() => M.renderUsageSeriesChart(points));
+    const chart: any = withDom(() => M.renderUsageSeriesChart({ available: true, points }));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rects = findAll(chart, (n: any) => n.tagName === "rect");
     expect(rects.length).toBe(2);
@@ -4104,6 +4858,45 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toBe(M.usageBarTitle("2026-07-28T01:00:00.000Z", 12_000));
     expect(first.textContent).toContain("2026-07-28T01:00:00.000Z");
     expect(first.textContent).toContain("12k");
+  });
+
+  /* Routed from the docs lane: `.select-toggle[hidden]` did not hide.
+
+     The UA rule `[hidden] { display: none }` loses to any AUTHOR rule that sets
+     display — author origin beats user-agent regardless of specificity — so
+     `.btn { display: inline-flex }` defeated the attribute on every button.
+     Measured on the board before the fix: #select-toggle with hidden set still
+     occupied 120x38px reading "Select to send", and #empty-retry still offered
+     "Retry connection" on a board with no fault to retry.
+
+     This asserts the GLOBAL guard, not the one selector, because the bug is a
+     class: the stylesheet already carried five per-element `[hidden]` patches,
+     which is the same defect fixed five times at the call site. A test pinned to
+     `.select-toggle` would pass while the sixth button shipped broken. */
+  test("the hidden attribute cannot be overridden by an author display rule", () => {
+    const bare = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // The guard exists, is unqualified, and outranks author rules by origin.
+    expect(bare).toMatch(/(^|\n)\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+
+    /* The condition that made it necessary: something still sets display on
+       .btn. If that ever stops being true the guard is merely harmless, but
+       while it holds, the guard is the only thing hiding a hidden button. */
+    expect(bare).toMatch(/\.btn\s*\{[^}]*display:\s*inline-flex/);
+
+    /* And no rule may re-show a hidden element. Every display declaration in
+       every [hidden] rule has to be none — checked by reading the values rather
+       than by a negative lookahead, which silently passed everything here on the
+       first attempt because `\s*` backtracks to zero width. */
+    const hiddenRuleDisplays = [...bare.matchAll(/\[hidden[^\]]*\][^{}]*\{([^}]*)\}/g)]
+      .flatMap((m) => [...m[1].matchAll(/display:\s*([a-z-]+)/g)].map((d) => d[1]));
+    expect(hiddenRuleDisplays.length).toBeGreaterThan(0);
+    expect([...new Set(hiddenRuleDisplays)]).toEqual(["none"]);
+
+    /* `until-found` would be a legitimate exception to the !important guard;
+       the client does not use it, and if it ever does, this is where that
+       decision gets made rather than discovered. */
+    expect(html).not.toContain("until-found");
   });
 
   /* -------- finding 8: ~40 orphaned CSS classes still shipped --------------
@@ -4200,6 +4993,441 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* GPT day review §2 again: pulse.ts ships stallThresholdMs and the client
+     hardcoded "15m+" in three places — the momentum card, the watch clause and
+     the resting vitals. Change the threshold to 10 minutes and all three keep
+     saying 15, confidently, about a count now measuring something else. */
+  test("(2d) the stall phrase takes its threshold from the wire", () => {
+    const snap = (ms: number | undefined, stalled = 18) =>
+      snapshot({ pulse: { momentum: { stalled, stallThresholdMs: ms }, burn: {}, activity: { buckets: [] } } });
+    expect(M.stallText(snap(900_000))).toBe("18 quiet 15m+");
+    expect(M.stallText(snap(600_000))).toBe("18 quiet 10m+");
+    // No threshold on the wire keeps the historical wording rather than blanking.
+    expect(M.stallText(snap(undefined))).toBe("18 quiet 15m+");
+    // Nothing stalled says nothing.
+    expect(M.stallText(snap(900_000, 0))).toBe("");
+    /* And the literal is gone from the CODE, so there is one source. Comments are
+       stripped first: a comment explaining why the constant was removed must not
+       read as the constant still being there. */
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect((code.match(/quiet 15m\+/g) ?? []).length).toBe(0);
+  });
+
+  /* GPT day review §2: the client recomputed contextPct from tokens.total while
+     the server shipped its own on 392 of 432 agents. They agreed — which is the
+     dangerous kind of agreement, two derivations that happen to match. Token
+     accounting is being corrected server-side and tokens.total is the input the
+     client walk divides by, so a corrected server figure beside an uncorrected
+     client one is the needsYou seam again, one field over. */
+  test("(2c) one agent's context percentage comes from the server when it ships one", () => {
+    const served = agent({ contextPct: 42, tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } });
+    // The walk would say 90; the wire says 42, and the wire wins.
+    expect(M.contextUsage(served.tokens).pct).toBe(90);
+    expect(M.agentContextPct(served)).toBe(42);
+
+    // Falls back to the walk only when the server reported nothing.
+    const walkOnly = agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } });
+    expect(M.agentContextPct(walkOnly)).toBe(90);
+
+    /* The walk accepts only latest-turn scope, so it can suppress a reading the
+       server considers authoritative. Session scope now survives. */
+    const sessionScope = agent({ contextPct: 37, tokens: { provenance: "observed", scope: "session", total: 5, contextWindow: 100 } });
+    expect(M.contextUsage(sessionScope.tokens)).toBeNull();
+    expect(M.agentContextPct(sessionScope)).toBe(37);
+
+    expect(M.agentContextPct(agent({ tokens: { provenance: "unknown" } }))).toBeNull();
+  });
+
+  /* GPT day review 3.1: the rail said "No completion data yet" while
+     completionsLastHour was 2. The sentence was gated on observedWindowMs, so a
+     restarted tracker reported NOTHING KNOWN rather than this-much-known. A
+     principled honesty string stating something false is worse than no string. */
+  test("(3.1) a known count is not reported as no data just because the window is young", () => {
+    expect(M.completionWindowText({ completionsLastHour: 2, observedWindowMs: 0 }))
+      .toBe("↑2 done · rate window not established");
+    // Nothing known really is nothing.
+    expect(M.completionWindowText({ completionsLastHour: 0, observedWindowMs: 0 })).toBe("");
+    // And an established window is unchanged.
+    expect(M.completionWindowText({ completionsLastHour: 2, observedWindowMs: 600_000 }))
+      .toBe("↑2 done in 10m observed");
+  });
+
+  /* GPT day review 3.2, which they credit to their own §8 — silencing the scope
+     note was right about the restated counts and wrong about the lookback, the
+     one thing only that line disclosed. History read 37 against 388 ended agents
+     on the wire, and the note renders only once you are already in that view. */
+  test("(3.2) a lookback-filtered tab count discloses its window", () => {
+    expect(M.lookbackApplies("history")).toBe(true);
+    expect(M.lookbackApplies("idle")).toBe(true);
+    expect(M.lookbackApplies("now")).toBe(false);
+    expect(M.lookbackApplies("needs-you")).toBe(false);
+    // The suffix is built from the same label the filter bar uses, so the tab and
+    // the control that changes it can never name different windows.
+    expect(M.lookbackLabel(6)).toBe("6h");
+    expect(source).toContain('" · " + lookbackLabel(state.lookbackHours)');
+    // Unfiltered views get no suffix — the count is the whole truth there.
+    expect(source).toContain("lookbackApplies(view) && state.lookbackHours != null");
+  });
+
+  /* The seam the needsYou mess came from: two derivations of one number. A
+     session reporting 391.4M against a program reporting 1.60B is under repair
+     server-side, so the client must render whatever the wire carries rather than
+     holding a second opinion — while NOT deferring the counts, which have a
+     client-side invariant to keep. */
+  test("(agg) the rollup renders the server's token aggregate when it ships one", () => {
+    const agents = [
+      agent({ id: "a:1", status: "running", tokens: { provenance: "observed", sessionTotal: 1_000 } }),
+      agent({ id: "a:2", status: "running", tokens: { provenance: "observed", sessionTotal: 2_000 } }),
+    ];
+    const tokenCell = (cells: Array<{ key?: string; value: string }>) => cells.find((c) => c.key === "tokens");
+
+    // No server figure: the client sums, and says which quantity it summed.
+    expect(tokenCell(M.programRollupCells(agents))?.value).toBe(M.fmtTok(3_000));
+    expect(M.programRollupCells(agents).find((c: { key?: string }) => c.key === "tokens")?.label).toBe("session tokens");
+
+    // Server figure present: the client renders it and does NOT sum.
+    const served = M.programRollupCells(agents, { sessionTokens: 4_242_000 });
+    expect(tokenCell(served)?.value).toBe(M.fmtTok(4_242_000));
+
+    /* Counts stay client-derived even when the server ships them, because the
+       alert cell must agree with the Needs-you tab, and that tab is necessarily
+       client-side. Deferring here would re-open the divergence. */
+    const alerting = [agent({ id: "a:3", status: "attention", activity: "idle", outcome: "needs-you" })];
+    const cells = M.programRollupCells(alerting, { needsYou: 0, working: 99 });
+    expect(cells.find((c: { label: string }) => c.label === "alert")).toBeDefined();
+    expect(cells.find((c: { label: string }) => c.label === "working")?.value).toBe("0");
+  });
+
+  /* Cockpit audit §16 and §21: chrome that does not earn its space. The
+     placeholder measured 389px inside a 333px input once the drawer docked, so
+     the field list it enumerated was unreadable exactly when the box was
+     smallest; and the masthead spent a row of its resting state on a tagline. */
+  test("(16a) the search box states its purpose and keeps its field list reachable", () => {
+    const input = html.match(/<input id="search"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain("Search agents");
+    expect(input).not.toContain("Search name, model, cwd, provider, role, status, session id");
+    // The enumeration is not deleted, it moves to where it does not compete,
+    // and the new shortcut is discoverable from the control it acts on.
+    expect(input).toContain("session id");
+    expect(input).toContain("Press / to focus");
+  });
+
+  test("(21a) the masthead tagline stays for a screen reader and stops taking a row", () => {
+    const eyebrow = html.match(/<p class="eyebrow[^"]*">/)?.[0] ?? "";
+    expect(eyebrow).toContain("visually-hidden");
+    expect(html).toContain("Live multi-agent control room");
+  });
+
+  /* Cockpit audit §19. Select rendered unconditionally, and on the resting board
+     it offered multi-select over zero selectable rows. A control that cannot do
+     anything is one the operator learns to skip — and it named itself rather than
+     the operation it enables. */
+  test("(19a) Select appears only when something can actually receive a broadcast", () => {
+    const reachable = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
+    const unreachable = agent({ id: "codex:no", status: "running", activity: "working", outcome: "healthy", controlState: "quarantined", controls: [] });
+    expect(M.broadcastEligible(reachable)).toBe(true);
+    expect(M.broadcastEligible(unreachable)).toBe(false);
+    // The gate the toolbar reads, expressed against the same predicate the
+    // broadcast bar itself uses — so the button cannot promise what Send refuses.
+    expect(source).toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
+    // And it names the operation rather than itself.
+    expect(source).toContain('"Select to send"');
+  });
+
+  /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with
+     the six view tabs each taking one of the stops ahead of it — reaching the
+     board's primary filter meant tabbing past every view. A cockpit is a keyboard
+     surface. */
+  test("(15a) the tab strip is one stop and search has a shortcut", () => {
+    // Left/Right wrap; a six-item strip is small enough that wrapping beats
+    // reversing, and it is what the tablist pattern specifies.
+    expect(M.nextViewIndex(0, "ArrowRight", 6)).toBe(1);
+    expect(M.nextViewIndex(5, "ArrowRight", 6)).toBe(0);
+    expect(M.nextViewIndex(0, "ArrowLeft", 6)).toBe(5);
+    expect(M.nextViewIndex(2, "Home", 6)).toBe(0);
+    expect(M.nextViewIndex(2, "End", 6)).toBe(5);
+    expect(M.nextViewIndex(2, "Enter", 6)).toBe(-1);  // not a key it owns
+    expect(M.nextViewIndex(0, "ArrowRight", 0)).toBe(-1);
+
+    // A shortcut that steals a keystroke from a text field is worse than none.
+    expect(M.isTypingTarget({ tagName: "INPUT" })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "TEXTAREA" })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "BUTTON" })).toBe(false);
+    expect(M.isTypingTarget(null)).toBe(false);
+
+    // Only the current tab is reachable by Tab; the rest are arrow-reachable.
+    expect(source).toContain("btn.tabIndex = isCurrent ? 0 : -1;");
+  });
+
+  /* Found while verifying §4 in the browser: the calm predicate walked per-agent
+     tokens while the CONTEXT PEAK card and the watch clause read the server's
+     snap.contextPeak. Two derivations of one quantity at the two ends of the calm
+     cliff — the board could display 12% and refuse to go calm because the walk
+     found 89%. The card was moved onto the server's number precisely because
+     "two derivations of one number drift"; the predicate was left behind. */
+  test("(4b) the band reasons about the same context number it displays", () => {
+    const snap = snapshot({ contextPeak: 12 });
+    expect(M.bandContextPct(snap)).toBe(12);
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("12%");
+    // Falls back to the client walk only when the server did not report one.
+    const walked = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } })] }] });
+    expect(M.bandContextPct(walked)).toBe(90);
+    expect(M.bandContextPct(snapshot())).toBeNull();
+  });
+
+  /* Resting-state critique §4. The collapse carried the token RATE and dropped
+     spend entirely, and for an orchestrator running hundreds of sessions a rate
+     is not a substitute for money — recovering it meant Usage → Custom 1h. */
+  test("(4a) the calm line carries spend when there is spend to carry", () => {
+    const priced = { burn: { tokensPerMin: 3_400_000, costLastHourUsd: 11.76 }, momentum: { completionsLastHour: 38, observedWindowMs: 900_000 }, activity: { buckets: [] } };
+    expect(M.calmSpendText(priced.burn)).toBe("$11.76 last hour");
+    /* Same wording as the BURN card, deliberately: an operator moving between
+       the collapsed line and the expanded card must not have to work out that
+       two phrasings are one number. */
+    expect(M.calmSpendText({ tokensPerMin: 1, costLastHourUsd: null })).toBe("");
+    expect(M.calmSpendText(null)).toBe("");
+    // Never a fabricated zero when BurnBar has nothing priced.
+    expect(M.calmSpendText({ costLastHourUsd: undefined })).toBe("");
+  });
+
+  /* Resting-state critique §2.1. The resting copy asserted "every tracked
+     session is working or done" while 12 of 18 live agents were stalled — a
+     stalled session is the third state that sentence denies exists. The claim is
+     gone; the count that replaces it must actually surface. */
+  test("(2.1) the resting state names its stalled sessions instead of denying them", () => {
+    expect(M.stalledCount(snapshot({ pulse: { momentum: { stalled: 12 } } }))).toBe(12);
+    expect(M.stalledCount(snapshot())).toBe(0);
+    expect(M.stalledCount(null)).toBe(0);
+    // And the old false claim is not in the client anywhere.
+    expect(source).not.toContain("Every tracked session is working or done");
+  });
+
+  /* Resting-state critique §3, and §2.3 with it. The calm/alarmed response was a
+     boolean: driving pulseStripModel up an escalation ladder, a board where ALL
+     live agents were stalled rendered pixel-identical to a perfectly healthy one,
+     and the single graded input was a 1-point cliff (84% calm, 85% full grid).
+     There was no murmur between silence and the scream.
+
+     The watch tier is that murmur: the same one line with clauses appended, no
+     layout change. Escalation to the grid still requires a finding. */
+  test("(3a) signals that used to pass silently now murmur, without changing the layout", () => {
+    const stalled = snapshot({ pulse: { momentum: { completionsLastHour: 3, observedWindowMs: 600_000, stalled: 12 }, burn: {}, activity: { buckets: [] } } });
+    expect(M.watchClauses(stalled)).toContain("12 quiet 15m+");
+
+    // Context peak is an EARLY warning, so it speaks below the 85% alarm.
+    expect(M.watchClauses(snapshot({ contextPeak: 81 }))).toContain("peak ctx 81%");
+    expect(M.watchClauses(snapshot({ contextPeak: 59 }))).toEqual([]);   // routine
+    /* At and above the alarm the stressed grid takes over and CONTEXT PEAK gets
+       its own cell, so the murmur stands down rather than saying it twice. */
+    expect(M.watchClauses(snapshot({ contextPeak: 90 }))).toEqual([]);
+
+    // A clean board still murmurs nothing.
+    expect(M.watchClauses(snapshot())).toEqual([]);
+
+    /* The layout does not change: watching is still calm, so the band stays one
+       line. That is the whole point — a volume knob, not a switch. */
+    const model = M.pulseStripModel(stalled, "live", [], "percent", "");
+    expect(model.calm).toBe(true);
+    expect(model.watch).toContain("12 quiet 15m+");
+
+    /* §2.3: "All clear" is a verdict on everything computed from a predicate that
+       never read stall, debris or context. It cannot stand beside a warning. */
+    expect(M.calmVerdict([])).toBe("All clear");
+    expect(M.calmVerdict(["12 quiet 15m+"])).toBe("Watch");
+    // The glyph and tone move with the word — a green check beside "Watch" is
+    // the chip contradicting itself.
+    expect(source).toContain('value: calmVerdict(watch), tone: "advisory", icon: "warning"');
+  });
+
+  /* Resting-state critique §2.2. The collapsed calm line hard-coded "done this
+     hour" while the tracker had observed 5 minutes — it did not merely drop the
+     MOMENTUM card's qualifier, it upgraded a partial observation into a stronger
+     claim than the data supports. One derivation, shared by both surfaces. */
+  test("(2.2) a partial observation window is never rendered as a full hour", () => {
+    expect(M.completionWindowText({ completionsLastHour: 24, observedWindowMs: 300_000 }))
+      .toBe("↑24 done in 5m observed");
+    expect(M.completionWindowText({ completionsLastHour: 52, observedWindowMs: 3_600_000 }))
+      .toBe("↑52 done this hour");
+    // Nothing observed yet says nothing at all rather than "0 done this hour".
+    expect(M.completionWindowText({ completionsLastHour: 0, observedWindowMs: 0 })).toBe("");
+    expect(M.completionWindowText(null)).toBe("");
+    // The calm line consumes the shared helper rather than forking the wording.
+    expect(source).not.toContain('" done this hour"');
+  });
+
+  /* Cockpit audit §10 and §11. Docked at 1440 the program header rendered
+     "169 a…  13 wo…  1 alert  1.15B t…" — three of four cells clipped to
+     fragments, and "0 al…" is not information in any language. Notably
+     scrollWidth did NOT report clipping, so this is only provable from pixels;
+     the guard here is the two structural causes instead. */
+  test("(10a) the rollup drops a zero-alert cell and is allowed to wrap rather than clip", () => {
+    const calm = [agent({ id: "a:1", status: "running", activity: "working", outcome: "healthy" })];
+    const keys = M.programRollupCells(calm).map((c: { label: string }) => c.label);
+    expect(keys).not.toContain("alerts");   // nothing to say at zero
+    expect(keys).not.toContain("alert");
+
+    const alerting = [agent({ id: "a:2", status: "attention", activity: "idle", outcome: "needs-you" })];
+    expect(M.programRollupCells(alerting).map((c: { label: string }) => c.label)).toContain("alert");
+
+    /* Wrapping is what stops four cells ellipsising into fragments in a
+       550px-wide docked roster. nowrap was the cause. */
+    const rule = styles.match(/\.program-rollup \{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toContain("flex-wrap: nowrap");
+    expect(rule).toContain("flex-wrap: wrap");
+  });
+
+  /* Cockpit audit §9. Measured on the live roster: .agent-name renders the
+     identical text at 15px/700/near-black while .row-session-tag — the only
+     value that differs between rows — renders at 10.5px/400/muted on the
+     subordinate line. Scanning the board meant reading the smallest, faintest
+     element on each row while the loudest one repeated the program header
+     directly above it. */
+  test("(9a) the roster's distinguishing value rides the name, not the tag line", () => {
+    const twin = (id: string, session: string) => agent({
+      id, sourceSessionId: session, provider: "claude", displayName: "Claude · the-mountain-main", programId: "p",
+    });
+    const a = twin("claude:1", "aaaaaaaa-1111"), b = twin("claude:2", "bbbbbbbb-2222");
+    const program = { id: "p", name: "the-mountain-main", agents: [a, b] };
+    const ambiguous = M.ambiguousNames([a, b]);
+    const row = withDom(() => M.renderAgentRow(a, program, { ambiguousNames: ambiguous }));
+
+    // The tag now sits inside the name wrapper, beside the loud text.
+    const wrap = byClass(row, "agent-name-wrap");
+    expect(wrap).not.toBeNull();
+    expect(textOf(wrap)).toContain("#" + M.sessionTag(a));
+
+    /* The program name is stripped from the roster's copy of the name: the
+       program header carries it two rows up, so repeating it spends the loudest
+       text on the row on the one word every row shares. */
+    expect(textOf(byClass(row, "agent-name"))).toBe("Claude");
+    // The full name survives where it is not competing for scan attention.
+    expect(row.attributes["aria-label"]).toContain("Claude · the-mountain-main");
+  });
+
+  /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
+     Two live sessions share one cmux pane" beside "Advisory · 1 degraded source"
+     — the second in a full-width row. attentionSummary and topSourceIssue read
+     the same issues array, so when the top finding IS the system fault, the two
+     cells are the same sentence at different altitudes.
+
+     They genuinely diverge, so HEALTH is suppressed only in that exact overlap. */
+  test("(6a) one system fault is narrated by one cell, not two", () => {
+    const overlap = snapshot({
+      issues: [{ id: "system:pane", kind: "system", severity: "warning", title: "Two live sessions share one cmux pane", summary: "s", affectedAgentIds: [] }],
+      totals: { live: 1, tracked: 1, attention: 1, working: 1, idle: 0, history: 0, sourceHealth: { healthy: 3, degraded: 1, total: 4 } },
+    });
+    const ids = M.pulseStripModel(overlap, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(ids).toContain("needs-you");
+    expect(ids).not.toContain("health");
+
+    /* Divergence must survive. A dead control plane is NOT in the issues list the
+       way a pane conflict is, so HEALTH keeps its cell and speaks alone. */
+    const blocked = snapshot({ issues: [], controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    const blockedIds = M.pulseStripModel(blocked, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(blockedIds).toContain("health");
+    expect(blockedIds).not.toContain("needs-you");
+
+    /* An agent-level finding leaves HEALTH silent anyway — sources are fine.
+       The finding is carried by an agent the client considers alerting, not by a
+       server issues[] entry: since the false-all-clear fix, kind:"agent" entries
+       on the wire are dropped and the agent half is re-derived, so a server
+       finding with no alerting agent behind it renders nothing at all. That is
+       the point of the fix, and asserting it here keeps this test honest about
+       where an agent finding now comes from. */
+    const agentOnly = snapshot({
+      issues: [],
+      programs: [{ id: "p", name: "P", agents: [agent({ id: "x", outcome: "failed", activity: "working" })] }],
+    });
+    const agentIds = M.pulseStripModel(agentOnly, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(agentIds).toContain("needs-you");
+    expect(agentIds).not.toContain("health");
+
+    // A wire finding with no alerting agent behind it is exactly what used to
+    // make the rail disagree with the tab. It now renders no cell.
+    const orphan = snapshot({ issues: [{ id: "agent:ghost", kind: "agent", severity: "warning", title: "t", summary: "s", affectedAgentIds: ["ghost"] }] });
+    expect(M.pulseStripModel(orphan, "live", [], "percent", "").cells.map((c: { id: string }) => c.id))
+      .not.toContain("needs-you");
+  });
+
+  /* Regression caught in a browser screenshot: the drawer rendered the task as
+     the head objective AND as a Thread turn, six lines apart. The task is a
+     floor for the case where nothing else carries the session's prose — not a
+     fixture that prints alongside the head. */
+  test("(2b) the task never prints as both the objective and a Thread turn", () => {
+    const both = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "start with the buckets", lastAgentMessage: "done" });
+    expect(M.drawerObjective(both)).toContain("Port the SEM forecast");
+    expect(textOf(withDom(() => M.renderChat(both)))).not.toContain("Port the SEM forecast");
+
+    // With no turns at all the floor still holds: the drawer cannot go empty.
+    const bare = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "", lastAgentMessage: "", lastHumanMessage: "Port the SEM forecast rate limiter" });
+    expect(M.drawerObjective(bare)).toBe("");
+    expect(textOf(withDom(() => M.renderChat(bare)))).toContain("Port the SEM forecast");
+  });
+
+  /* Cockpit audit §5 and §11: widgets that render their empty state instead of
+     not rendering. A cell reporting ABSENCE is noise surrounding the one cell
+     reporting a fault, and three separate widgets asserting "nothing needs you"
+     teach the operator to stop reading the one that will eventually say 1. */
+  test("(5a) a cell with nothing to report is omitted, not rendered empty", () => {
+    const quiet = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: null }, momentum: { completionsLastHour: 0, observedWindowMs: 0, stalled: 0 }, activity: { buckets: [] } } });
+    const ids = M.pulseStripModel(quiet, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
+    expect(ids).not.toContain("needs-you");   // zero findings says nothing
+    expect(ids).not.toContain("burn");        // no rate and no cost
+    expect(ids).not.toContain("context-peak");// no live context reports
+    expect(ids).not.toContain("health");      // operational is silence
+
+    // A real finding brings its cell back.
+    const busy = snapshot({ issues: [{ id: "e", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }] });
+    expect(M.pulseStripModel(busy, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("needs-you");
+    /* A finding alone does not degrade systemStatus — sources and control are
+       still fine — so HEALTH stays silent and NEEDS YOU carries it. HEALTH speaks
+       when the system itself is at fault. */
+    const degraded = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(M.pulseStripModel(degraded, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("health");
+  });
+
+  /* Cockpit audit §4. The HEALTH cell named the correct action — close one of the
+     conflicting sessions — and then rendered a REFRESH button, which does
+     something else entirely. The only affordance present was the one that cannot
+     help. A control is offered only when re-pulling evidence could actually
+     change the answer. */
+  test("(4a) the health cell offers refresh only when refreshing could change the answer", () => {
+    // A failed fetch is exactly what retrying fixes.
+    expect(M.healthRefreshAction({ fetchFailed: true, conn: "live", snap: snapshot() })).toMatchObject({ label: "Retry snapshot" });
+    // A feed that is not live is the same class of problem.
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "reconnecting", snap: snapshot() })).toMatchObject({ label: "Retry snapshot" });
+    // cmux down is repaired OUTSIDE the app, so the button confirms the repair.
+    const unreachable = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "live", snap: unreachable })).toMatchObject({ label: "Verify repair" });
+    /* An evidence-based advisory — two live sessions sharing a pane — is fixed by
+       closing one, and the collector rescans on its own. Offering a button here
+       is offering the wrong lever. */
+    expect(M.healthRefreshAction({ fetchFailed: false, conn: "live", snap: snapshot() })).toBeNull();
+  });
+
+  /* Cockpit audit §3. The tile rendered "BURN / No data / $19.54 last hour ·
+     31/31 reporting" — a verdict of "no data" printed directly above a dollar
+     figure and a claim of COMPLETE coverage. The operator could not tell whether
+     spend was unknown or $19.54. The rate and the cost have different sources
+     (the rate needs completed 5-minute buckets; the cost comes from BurnBar), so
+     one being absent says nothing about the other. */
+  test("(3a) BURN never calls itself empty while it is reporting a cost", () => {
+    const withCost = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: 19.54, coverage: { reporting: 31, eligible: 31 } } } });
+    const data = M.summaryWidgetData("burn", withCost, "live", "percent");
+    expect(data.value).not.toBe("No data");
+    expect(data.value).toContain("rate");
+    expect(data.sublabel).toContain("$19.54");
+
+    // A rate present is unchanged — the headline is still the number.
+    const full = snapshot({ pulse: { burn: { tokensPerMin: 8200, costLastHourUsd: 5.01, coverage: { reporting: 14, eligible: 14 } } } });
+    expect(M.summaryWidgetData("burn", full, "live", "percent").value).toBe(M.fmtTok(8200));
+
+    // Neither number present is still an honest empty tile.
+    const neither = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: null } } });
+    expect(M.summaryWidgetData("burn", neither, "live", "percent").value).toBe("No data");
+  });
+
   test("(8) CONTEXT PEAK reports the server's peak and median", () => {
     const withCtx = snapshot({
       contextPeak: 74,
@@ -4208,7 +5436,11 @@ describe("FE-B: harness-backed client behavior", () => {
     });
     const data = M.summaryWidgetData("context-peak", withCtx, "live", "percent");
     expect(data.value).toBe("74%"); // server's number wins over the client's 25%
-    expect(data.sublabel).toContain("Peak 74% · Median 31%");
+    /* The headline is already "74%", so repeating "Peak 74%" here printed one
+       number twice in one tile — audit §12, the same defect the drawer's context
+       tile had fixed. The median stays: it is what the headline cannot say. */
+    expect(data.sublabel).toContain("Median 31%");
+    expect(data.sublabel).not.toContain("Peak 74%");
     expect(data.meterPct).toBe(74);
     expect(data.tone).toBe("ok");
 
@@ -4222,7 +5454,7 @@ describe("FE-B: harness-backed client behavior", () => {
     const bare = M.summaryWidgetData("context-peak", serverOnly, "live", "percent");
     expect(bare.value).toBe("91%");
     expect(bare.value).not.toBe("No data");
-    expect(bare.sublabel).toContain("Peak 91% · Median 12%");
+    expect(bare.sublabel).toContain("Median 12%");
     expect(bare.tone).toBe("hot"); // 91% is a real ceiling warning
 
     // Tokens display still reads the peak agent's own totals, not a percentage.
@@ -4302,6 +5534,44 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(custom.dataset.fkey).toBe("lookback:custom");
   });
 
+  /* fetchSettings' only failure record was `state.settingsLoaded = false`, and
+     nothing anywhere read that field — the flag was written and never consulted,
+     so a dead /api/settings was invisible by construction. Meanwhile the scan
+     chip printed the hard-coded 36 as "36h window", which reads as a value the
+     server reported. */
+  test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
+    const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
+      M.renderFilterBar(listUi({ view: "idle", ...ui }));
+      const bar = domById.get("filter-bar");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
+    });
+
+    // Settings answered: the number is reported, so state it plainly.
+    const ok = textOfChip({ scanWindowHours: 12, settingsError: "" });
+    expect(textOf(ok)).toContain("12h window");
+    expect(ok.className).not.toContain("is-unverified");
+
+    // Settings failed and no snapshot corroborates it: say so instead of
+    // passing the built-in default off as the server's answer.
+    const bad = textOfChip({ scanWindowHours: 36, settingsError: "settings 500" });
+    expect(textOf(bad)).toContain("window unverified");
+    expect(textOf(bad)).not.toContain("36h window");
+    expect(bad.className).toContain("is-unverified");
+    expect(bad.attributes.title).toContain("settings 500"); // the reason is reachable
+    expect(bad.attributes.title).toContain("36h");          // and so is the fallback used
+
+    // A snapshot IS authoritative, so it overrides a failed settings call —
+    // no false alarm once the real number has arrived by another route.
+    const rescued = textOfChip({
+      scanWindowHours: 36,
+      settingsError: "settings 500",
+      snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
+    });
+    expect(textOf(rescued)).toContain("24h window");
+    expect(rescued.className).not.toContain("is-unverified");
+  });
+
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
@@ -4366,6 +5636,48 @@ describe("FE-B: harness-backed client behavior", () => {
        Cancel buttons are gated behind state.confirming / state.broadcastConfirming.
        All three carry an fkey now, but they are covered by inspection, not here —
        said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
+  });
+
+  /* A failed BurnBar query answers {ok:true, available:false, points:[]}. The
+     panel used to read only .points/.invocations, so a SQLCipher failure drew an
+     empty chart and an empty table — reporting "you spent nothing" when the
+     truth was "the database never answered". Summary and ward already checked
+     availability; series and invocations did not. These two assert the operator
+     is told the difference, and fail if either guard is dropped again. */
+  test("an unavailable usage series says so instead of drawing an empty chart", () => {
+    const failed = withDom(() =>
+      M.renderUsageSeriesChart({ available: false, points: [], error: "unable to open database file" }));
+    expect(textOf(failed)).toContain("unable to open database file");
+    expect(textOf(failed)).not.toContain("No series points in this range.");
+
+    // A genuinely empty range must still read as empty, not as a failure.
+    const empty = withDom(() => M.renderUsageSeriesChart({ available: true, points: [] }));
+    expect(textOf(empty)).toContain("No series points in this range.");
+  });
+
+  test("an unavailable invocations query says so instead of reporting zero activity", () => {
+    const failed = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: false, invocations: [], error: "database is locked" },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(failed)).toContain("database is locked");
+    expect(textOf(failed)).not.toContain("No invocations in this range.");
+
+    const quiet = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 0, invocations: 0, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: true, invocations: [] },
+      });
+      return domById.get("usage-panel");
+    });
+    expect(textOf(quiet)).toContain("No invocations in this range.");
   });
 
   /* -------- finding 2: one agent's tick rebuilt the whole list -------------
@@ -4566,6 +5878,36 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(alphaBody.children[2]).toBe(rowS2);
   });
 
+  /* A filter is a lens on the board, not a change to what a program contains.
+     The header used to roll up the FILTERED list while the drawer used the full
+     program, so under the default Now filter a program holding 32 agents
+     announced "1 agent" — the header contradicting its own drawer on screen.
+     The shell signature has to watch the full program for the same reason, or a
+     change outside the active filter would never repaint the header. */
+  test("a filtered view leaves the program header counting the whole program", () => {
+    const mk = (id: string, over: Record<string, unknown> = {}) => agent({ id, status: "running", ...over });
+    const all = [mk("codex:f1"), mk("codex:f2", { status: "idle" }), mk("codex:f3", { status: "idle" })];
+    const program = { id: "filtered", name: "Filtered", agents: all };
+    // The active filter keeps one row; the program still holds three.
+    const visible = [{ program, agents: [all[0]!] }];
+    const root = newNode("div");
+    const ui = listUi({ snap: { schemaVersion: 1, programs: [program] } });
+
+    const shown = withDom(() => M.syncProgramList(root, visible, ui));
+
+    expect(shown).toBe(1); // the body lists only what the filter kept
+    // section = [visually-hidden h2, head, ...body]; the rollup rides the head.
+    const head = root.children[0].children[1];
+    expect(textOf(head)).toContain("3agents");
+    expect(textOf(head)).not.toContain("1agent");
+
+    // The signature must move when the program changes outside the filter,
+    // otherwise the corrected header would cache and go stale.
+    const grown = { ...program, agents: [...all, mk("codex:f4", { status: "idle" })] };
+    expect(M.programShellSig(grown, [all[0]!], ui))
+      .not.toBe(M.programShellSig(program, [all[0]!], ui));
+  });
+
   /* -------- first-paint skeleton ------------------------------------------
      boot() paints nothing until the first /api/snapshot resolves, so the board
      was blank for the length of that request — and any render() triggered in
@@ -4749,7 +6091,10 @@ describe("FE-B: harness-backed client behavior", () => {
     const body = root.children[0].children[root.children[0].children.length - 1];
     expect(body.children.length).toBe(2); // column header + the rescued row
     const rowText = textOf(body.children[1]);
-    expect(rowText).toContain("Codex · w6-server");
+    /* The roster drops the " · <program>" suffix (audit §9) — the program header
+       two rows up already carries it — so the rescued row identifies itself as
+       "Codex" here. What this test is about is that it PAINTS at all. */
+    expect(rowText).toContain("Codex");
     expect(rowText).toContain("Alert"); // and it reads as needing a human
 
     // The guard: a program of finished, healthy agents still collapses, so this
@@ -5039,30 +6384,27 @@ describe("FE-B: harness-backed client behavior", () => {
      function names, their ordering, even the blank lines between them. Those
      assertions were replaced with the rendered-DOM ones above and below, and
      the functions deleted. What the drawer actually builds is the contract. */
-  test("(5) the agent drawer builds Operate + Chat + the Evidence rail, and no swarm section", () => {
-    const a = agent({
-      lastHumanMessage: "ship it",
-      lastAgentMessage: "done",
-      cwd: "/repos/x",
-      controls: [{ action: "focus", enabled: true }, { action: "instruct", enabled: true }],
+  test("(5) the agent drawer builds one Thread pane + the Evidence rail, and no swarm section", () => {
+    const rich = agent({
+      lastUserMessage: "rebase onto main",
+      lastAgentMessage: "rebased, 412 tests green",
+      task: "Port the SEM forecast rate limiter",
     });
-    const program = { id: "p", name: "P", agents: [a] };
-    const drawer = withDom(() => {
-      const pane = newNode("div");
-      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
-      return pane;
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shelves = findAll(drawer, (n: any) => n.dataset && n.dataset.shelf).map((n) => n.dataset.shelf);
-    expect(shelves).toEqual(["operate", "chat"]);
-    expect(byClass(drawer, "shelf-evidence-rail")).not.toBeNull();
-    // renderSwarmSection's output — the thing the "do not delete" comment was
-    // protecting — is nowhere in the drawer; renderLineageSpine superseded it.
-    expect(byClass(drawer, "swarm-section")).toBeNull();
-    expect(byClass(drawer, "swarm-link")).toBeNull();
-    // The command dock still owns the lock copy renderPrimaryActions claimed to
-    // keep "discoverable" — proof the alias carried nothing of its own.
-    expect(textOf(drawer)).toContain("Send");
+    const pane = newNode("div");
+    withState({ snap: snapshot({ programs: [{ id: "p", name: "P", agents: [rich] }] }) }, () =>
+      withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: rich, program: { id: "p", name: "P", agents: [rich] } })));
+    const text = textOf(pane);
+    expect(text).toContain("Thread");
+    expect(text).not.toContain("Operate");
+    expect(text).toContain("Evidence");
+    // Both turns survive, each exactly once, under honest role labels.
+    expect(text).toContain("rebase onto main");
+    expect(text).toContain("rebased, 412 tests green");
+    expect(text).toContain("You");
+    expect(text).toContain("Agent");
+    // The objective rides the head, not a second panel heading.
+    expect(text).toContain("Port the SEM forecast rate limiter");
+    expect(text).not.toContain("Last human message");
   });
 
   /* -------- finding 9: the shadowed `state` identifier ---------------------- */
@@ -5730,14 +7072,14 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.titleWithAlerts(M.titleWithAlerts(base, 3), 0)).toBe(base);
   });
 
-  /* F3: "Alerts off" sat silently beside four waiting agents. The button
+  /* F3: "Notifications off" sat silently beside four waiting agents. The button
      reported the delivery channel and never the backlog, so muting the channel
      also hid the work. The count must therefore survive every muted state. */
   test("(4) the waiting count rides every toggle state, muted and blocked included", () => {
     const off = M.notifyToggleView({ enabled: false, permission: "default" }, true, 4);
-    expect(off.label).toBe("Alerts off");
+    expect(off.label).toBe("Notifications off");
     expect(off.count).toBe(4);
-    expect(off.ariaLabel).toBe("Alerts off, 4 agents waiting on you");
+    expect(off.ariaLabel).toBe("Notifications off, 4 agents waiting on you");
     expect(off.title).toContain("4 waiting on you");
 
     // Blocked and unsupported are exactly the states where the operator has no
@@ -5748,11 +7090,11 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // A quiet fleet stays quiet: no badge, no count noise in the label or title.
     const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
     expect(calmView.count).toBe(0);
-    expect(calmView.ariaLabel).toBe("Alerts on");
+    expect(calmView.ariaLabel).toBe("Notifications on");
     expect(calmView.title).not.toContain("waiting on you");
     // Singular reads as English, not "1 agents".
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
-      .toBe("Alerts off, 1 agent waiting on you");
+      .toBe("Notifications off, 1 agent waiting on you");
 
     // The badge is a real node carrying the digit, not text glued onto the label.
     expect(source).toContain('class: "notify-badge"');
@@ -5770,13 +7112,13 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
     // The control states an operator can actually reach.
-    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Alerts off");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true).label).toBe("Notifications off");
     expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true))
-      .toMatchObject({ label: "Alerts on", pressed: true, disabled: false });
+      .toMatchObject({ label: "Notifications on", pressed: true, disabled: false });
     // Denied: stated once, disabled, no nagging and no repeated prompt.
     const denied = M.notifyToggleView({ enabled: false, permission: "denied" }, true);
     expect(denied.disabled).toBe(true);
-    expect(denied.label).toBe("Alerts blocked");
+    expect(denied.label).toBe("Notifications blocked");
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, false).disabled).toBe(true);
 
     // The one requestPermission call in the client is inside the click handler.

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeContextWindow } from "../src/server/collectors";
@@ -7,6 +7,7 @@ import {
   cursorNativeFamily,
   DEFAULT_MODEL_CONFIG,
   loadModelConfig,
+  modelConfigLoadError,
   modelFamily,
 } from "../src/server/model-config";
 
@@ -112,5 +113,54 @@ describe("model knowledge config", () => {
 
     expect(claudeContextWindow("claude-fable-5", config)).toBe(750_000);
     expect(claudeContextWindow("claude-haiku-5[1m]", config)).toBe(1_000_000);
+  });
+});
+
+describe("defaults standing in for a config that failed to load", () => {
+  /* config/models.json ships with the repo, so a missing or malformed file is a
+     fault, not an absence. Every failure returned the built-in defaults and
+     said nothing — and those defaults supply claudeContextWindows (which
+     becomes an agent's contextWindow and therefore its context percentage),
+     the display labels, and the Cursor-native policy behind compliance
+     verdicts. Wrong defaults do not look wrong; they look like numbers. */
+  test("a malformed config reports why the defaults are in force", () => {
+    const directory = mkdtempSync(join(tmpdir(), "anthill-model-config-"));
+    const path = join(directory, "models.json");
+    writeFileSync(path, "{ not json");
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadModelConfig(path)).toEqual(DEFAULT_MODEL_CONFIG);
+      expect(modelConfigLoadError() ?? "").toContain("not valid JSON");
+      expect(modelConfigLoadError() ?? "").toContain("defaults are in force");
+    } finally {
+      logged.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a config with the wrong shape is distinguished from unreadable", () => {
+    const directory = mkdtempSync(join(tmpdir(), "anthill-model-shape-"));
+    const path = join(directory, "models.json");
+    writeFileSync(path, JSON.stringify({ nope: true }));
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadModelConfig(path)).toEqual(DEFAULT_MODEL_CONFIG);
+      expect(modelConfigLoadError() ?? "").toContain("expected shape");
+    } finally {
+      logged.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a good config clears the error, so a recovered load is not reported forever", () => {
+    const directory = mkdtempSync(join(tmpdir(), "anthill-model-good-"));
+    const path = join(directory, "models.json");
+    writeFileSync(path, JSON.stringify(DEFAULT_MODEL_CONFIG));
+    try {
+      expect(loadModelConfig(path)).toEqual(DEFAULT_MODEL_CONFIG);
+      expect(modelConfigLoadError()).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

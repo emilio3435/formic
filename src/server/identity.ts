@@ -315,9 +315,22 @@ export async function enrichCmuxIdentity(
     };
   }
   const allProcesses = parseProcessTable(processResult.stdout);
-  const liveAgentProcessIds = allProcesses
-    .filter((process) => isRecognizedAgentProcess(process.command))
-    .map(({ pid }) => pid);
+  /* Liveness, so every pid in the table counts — recognition is a question
+     about ATTRIBUTION and answers a different one.
+
+     This used to keep only isRecognizedAgentProcess commands, so a pid that was
+     present and running but wearing an unfamiliar name scored as not alive, and
+     snapshot-agent turns processAlive === false plus known pids into "died".
+     A CLI rename was enough: `codex` read as running, `codex-next` at the same
+     pid read as DIED, and the operator chased a phantom crash while the agent
+     kept working unwatched. "Not alive" is a claim that needs the pid to be
+     MISSING, not merely unfamiliar.
+
+     Both consumers ask only "is this pid still running" — here, and the binding
+     bridge in identity-bindings.ts — so neither loses attribution by this.
+     (The name now understates the set; renaming it touches two more files and
+     is left as a separate tidy.) */
+  const liveAgentProcessIds = allProcesses.map(({ pid }) => pid);
   const processes = allProcesses.filter(
     (process) => (process.tty !== undefined && ttyNames.has(process.tty)) || allAttributedPids.has(process.pid),
   );

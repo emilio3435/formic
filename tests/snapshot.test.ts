@@ -407,9 +407,9 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("reports peak and median context across live agents", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 50 } }),
-        collected({ id: "codex:high", sourceSessionId: "high", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 90 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 50 } }),
+        collected({ id: "codex:high", sourceSessionId: "high", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 90 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -441,7 +441,14 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(25);
   });
 
-  test("uses the session total for session context", () => {
+  test("session context is measured by prompt size, not by what the session consumed", () => {
+    /* Occupancy is a SIZE: how full the window is right now, cache reads
+       included, because a cached token still takes up room. Consumption is a
+       FLOW and excludes re-reads. They were the same number for every real
+       session-scope agent — codex sets total and sessionTotal from one
+       total_token_usage — so the old branch was invisible until sessionTotal
+       stopped counting re-reads. Reading it here would understate a session's
+       fill by exactly the cached prefix it is still carrying. */
     const snapshot = buildSnapshot({
       agents: [
         collected({
@@ -459,7 +466,7 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
 
-    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(60);
+    expect(snapshot.programs[0]?.agents[0]?.contextPct).toBe(25);
   });
 
   test("rejects latest-turn context that exceeds its window", () => {
@@ -521,9 +528,9 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("excludes ended and archived agents from context peak and median", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 40 } }),
-        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 100 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 40 } }),
+        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 100 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -537,10 +544,10 @@ describe("snapshot control safety and SSE deduplication", () => {
   test("rounds the even live-agent context median", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 10 } }),
-        collected({ id: "codex:twenty", sourceSessionId: "twenty", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 20 } }),
-        collected({ id: "codex:seventy", sourceSessionId: "seventy", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 70 } }),
-        collected({ id: "codex:eighty", sourceSessionId: "eighty", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, sessionTotal: 80 } }),
+        collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 10 } }),
+        collected({ id: "codex:twenty", sourceSessionId: "twenty", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
+        collected({ id: "codex:seventy", sourceSessionId: "seventy", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 70 } }),
+        collected({ id: "codex:eighty", sourceSessionId: "eighty", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 80 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -705,7 +712,12 @@ describe("snapshot control safety and SSE deduplication", () => {
       outcome: "needs-you",
       controlState: "observed-only",
     });
-    expect(snapshot.totals).toMatchObject({ working: 1, idle: 2, ended: 1, history: 1, needsYou: 1 });
+    /* needsYou means AGENTS WAITING ON A HUMAN. None of these is: the
+       "attention" status was set directly on the fixture without a cmux
+       notification object, so nothing here actually asks for anyone. The
+       operator issue it raises is a SYSTEM finding and is counted as one. */
+    expect(snapshot.totals).toMatchObject({ working: 1, idle: 2, ended: 1, history: 1, needsYou: 0 });
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
   });
 
   test("cmux identity failures become one human-readable system issue", () => {
@@ -723,16 +735,178 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
 
+    /* The title names the situation and the summary names the remedy.
+       "CMUX identity conflicts" told an operator nothing they could act on:
+       it described the scanner's internal state, not theirs. */
     expect(snapshot.issues).toEqual([
       expect.objectContaining({
         id: "system:cmux-identity-conflicts",
-        title: "CMUX identity conflicts",
+        title: "Two live sessions share one cmux pane",
         affectedAgentIds: [source.id],
         technicalDetails: expect.arrayContaining([expect.stringContaining("ttys003"), expect.stringContaining("ttys005")]),
       }),
     ]);
-    expect(snapshot.totals.needsYou).toBe(1);
+    expect(snapshot.issues?.[0]?.summary).toContain("until one is closed");
+    /* A cmux identity conflict is a system finding, not an agent waiting on a
+       human — different populations, different words. Folding them into one
+       number is what made "needs you" unreadable. */
+    expect(snapshot.totals.systemFindings).toBe(1);
+    expect(snapshot.totals.needsYou).toBe(0);
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+  });
+
+  /* An identity conflict costs one thing: controls stay quarantined for the
+     sessions on that pane. A pane whose sessions have all ended is withholding
+     controls from nobody, and nobody will ever close a pane from a wave that
+     finished last week — so it reported a permanent error, the board could
+     never reach Operational, and an operator learned to ignore the one signal
+     that was supposed to mean "look at me". */
+  test("a pane whose sessions have all ended is debris, not a fault", () => {
+    const finished = collected({
+      id: "codex:finished-wave",
+      sourceSessionId: "finished-wave",
+      // Outside the activity window: buildSnapshot derives this as "ended".
+      updatedAt: "2026-07-14T09:00:00.000Z",
+      status: "archived",
+    });
+    const snapshot = buildSnapshot({
+      agents: [finished],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [finished.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // Nothing is asked of the operator...
+    expect((snapshot.issues ?? []).filter(({ id }) => id === "system:cmux-identity-conflicts")).toEqual([]);
+    // ...and nothing drives the board red: this is what makes Operational reachable.
+    expect(snapshot.controlHealth.errors).toEqual([]);
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+
+    // But the debris is still named, counted, and carries what to do about it.
+    expect(snapshot.controlHealth.debris).toMatchObject({
+      kind: "abandoned-cmux-panes",
+      count: 1,
+      surfaceIds: ["SURFACE-UNIQUE"],
+    });
+    expect(snapshot.controlHealth.debris?.remedy).toContain("Close 1 cmux pane");
+    expect(snapshot.controlHealth.debris?.detail).toHaveLength(1);
+  });
+
+  /* Unlike an abandoned pane, this one belongs in errors: every session the
+     operator dismissed is back on the board as work in flight, so the count of
+     what is running is wrong until someone fixes it. */
+  test("an archive that failed to load is a fault on the board, not just a console line", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore: {
+        ...archiveStore,
+        loadError: () => "archived agents could not be read from /virtual/archive.json, so the board is showing every session as unarchived: bad JSON",
+      },
+      cmuxReachable: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.controlHealth.errors.some((error) => error.includes("unarchived"))).toBe(true);
+    // It is a fault, so it must NOT be filed as tidy-up debris.
+    expect(snapshot.controlHealth.debris).toBeUndefined();
+  });
+
+  test("a healthy archive adds nothing to the board", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      cmuxReachable: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.controlHealth.errors).toEqual([]);
+  });
+
+  test("the same pane becomes a fault again the moment a live session appears on it", () => {
+    const live = collected({ id: "codex:live-again", sourceSessionId: "live-again" });
+    const snapshot = buildSnapshot({
+      agents: [live],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [live.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // No threshold to tune and no state to reset: the classification follows
+    // the evidence, so reopening work in the pane restores the alarm.
+    expect(snapshot.controlHealth.debris).toBeUndefined();
+    expect(snapshot.controlHealth.errors).toHaveLength(1);
+    expect(snapshot.totals.sourceHealth?.degraded).toBe(1);
+    const issue = (snapshot.issues ?? []).find(({ id }) => id === "system:cmux-identity-conflicts");
+    expect(issue?.severity).toBe("error");
+    expect(issue?.affectedAgentIds).toEqual([live.id]);
+  });
+
+  test("agents quarantined for an unrelated reason are not blamed on pane conflicts", () => {
+    /* affectedAgentIds was `controlState === "quarantined" || <named by a
+       conflicted surface>`. The first clause swept in every quarantined agent
+       whatever the cause, so a fleet quarantined for sharing one cwd — a
+       different condition with a different remedy — was reported as collateral
+       of surface conflicts it had no connection to. */
+    const onConflictedPane = collected({ id: "codex:on-pane", sourceSessionId: "on-pane" });
+    /* Two live sessions in one worktree with a surface that cannot tell them
+       apart: cwd resolution goes ambiguous, which quarantines both. This is the
+       everyday shape of a multi-agent swarm sharing a checkout, and it has
+       nothing to do with the conflicted pane above. */
+    const sharedCwdA = collected({
+      id: "codex:shared-a",
+      sourceSessionId: "shared-a",
+      cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+    });
+    const sharedCwdB = collected({
+      id: "codex:shared-b",
+      sourceSessionId: "shared-b",
+      cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+    });
+    const snapshot = buildSnapshot({
+      agents: [onConflictedPane, sharedCwdA, sharedCwdB],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [onConflictedPane.sourceSessionId],
+        identityConflict: "conflicting open agent session files on ttys009",
+      }, {
+        workspaceId: "WORKSPACE-SHARED",
+        surfaceId: "SURFACE-SHARED",
+        paneId: "PANE-SHARED",
+        cwd: "/Users/emilionunezgarcia/Developer/shared-lane",
+        sourceSessionIds: [],
+      }],
+      cmuxErrors: ["cmux SURFACE-UNIQUE has conflicting open agent session files on ttys009"],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // The fixture only proves anything if those two really are quarantined.
+    const quarantined = snapshot.programs
+      .flatMap(({ agents }) => agents)
+      .filter(({ controlState }) => controlState === "quarantined")
+      .map(({ id }) => id);
+    expect(quarantined).toContain(sharedCwdA.id);
+    expect(quarantined).toContain(sharedCwdB.id);
+
+    const issue = (snapshot.issues ?? []).find(({ id }) => id === "system:cmux-identity-conflicts");
+    expect(issue?.affectedAgentIds).toEqual([onConflictedPane.id]);
+    expect(issue?.affectedAgentIds).not.toContain(sharedCwdA.id);
+    expect(issue?.affectedAgentIds).not.toContain(sharedCwdB.id);
   });
 
   test("identity-conflict issues link agents named by the conflicting process evidence", () => {
@@ -1112,7 +1286,8 @@ describe("snapshot control safety and SSE deduplication", () => {
     const pulse: HubPulse = {
       momentum: {
         working: 1,
-        completionsLastHour: 0,
+        completionsLastHour: null,
+        completionsProvenance: "not-observable",
         observedWindowMs: 0,
         stalled: 0,
         stalledAgentIds: [],
@@ -1337,8 +1512,12 @@ describe("a stale transcript is silence, not an ending", () => {
     // the agent's own controls[], which reported focus/instruct as enabled.
     expect(live.controlState).toBe("linked");
     expect(live.controls.find(({ action }) => action === "instruct")?.enabled).toBe(true);
-    // And the operator is no longer sent to history to find a running session.
-    expect(live.nextAction).not.toContain("history");
+    /* And the operator is no longer sent to history to find a running session.
+       Stronger than it used to be: a quiet, healthy, linked session has nothing
+       the operator must do, so it now says nothing at all rather than filling
+       the row with a restatement of its own state. */
+    expect(live.nextAction ?? "").not.toContain("history");
+    expect(live.nextAction).toBeUndefined();
   });
 
   test("the elapsed clock keeps running for a session that never ended", () => {
@@ -1392,5 +1571,214 @@ describe("a stale transcript is silence, not an ending", () => {
     });
     // Two quiet-but-alive sessions are live; only the evidence-free one is history.
     expect(snapshot.totals).toMatchObject({ idle: 2, ended: 1, history: 1 });
+  });
+});
+
+describe("a dead session is never given an instruction", () => {
+  /* Measured on the live board: six agents carried an attentionSignal and every
+     one had status "archived". Rows read "Answer the question it stopped on"
+     and "Answer it: cmux reports it is waiting on you" while the SAME row's
+     controls[] had focus, instruct and interrupt all disabled. Across 364 ended
+     agents not one could be focused, instructed or interrupted; the only control
+     ever enabled on them is `archive`, which dismisses the row rather than
+     answering it.
+
+     So the payload contradicted itself, and the frontend was about to wire
+     attentionSignal onto the attention surfaces — which would have turned a
+     quiet inconsistency into a loud instruction nobody can carry out. */
+  test("an archived agent that ended mid-question carries no signal and no next action", () => {
+    const asking = collected({
+      id: "codex:asked-then-died",
+      sourceSessionId: "asked-then-died",
+      status: "archived",
+      lastAgentClosing: "Publishing is your call. Should I roll the migration back?",
+      updatedAt: "2026-07-14T09:00:00.000Z",
+    });
+    const snapshot = buildSnapshot({
+      agents: [asking],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.activity).toBe("ended");
+    expect(agent?.attentionSignal).toBeUndefined();
+    expect(agent?.nextAction).toBeUndefined();
+    // The invariant behind the rule: nothing on this row can be answered.
+    expect(agent?.controls.filter(({ action }) => action !== "archive")
+      .every(({ enabled }) => !enabled)).toBe(true);
+  });
+
+  test("the same closing words on a live session still speak", () => {
+    // The control: silencing the dead must not silence the living.
+    const live = collected({
+      id: "codex:still-asking",
+      sourceSessionId: "still-asking",
+      lastAgentClosing: "Publishing is your call. Should I roll the migration back?",
+    });
+    const snapshot = buildSnapshot({
+      agents: [live],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.activity).not.toBe("ended");
+    expect(agent?.attentionSignal?.kind).toBe("question-pending");
+    expect(agent?.nextAction).toBeTruthy();
+  });
+
+  test("ended rows are counted as out of scope, not as coverage the layer earned", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:done", sourceSessionId: "done", status: "archived",
+          lastAgentClosing: "All landed.", updatedAt: "2026-07-14T09:00:00.000Z" }),
+        collected({ id: "codex:alive", sourceSessionId: "alive", lastAgentClosing: "All landed." }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // Crediting skipped rows as "readable" would inflate the layer's apparent
+    // reach with sessions it deliberately never looks at.
+    expect(snapshot.attentionCoverage).toMatchObject({ agents: 2, ended: 1, readable: 1 });
+  });
+});
+
+describe("needs you means agents waiting on a human", () => {
+  /* One phrase had three meanings and they could not agree: totals.needsYou
+     counted system findings (issues.length), the program rollup counted any
+     agent whose outcome was not healthy, and the client counted attention
+     signals. The tab is named for the third, ANT-GUIDE.md promises the third in
+     writing, and the north star is about the third. All three now read the same
+     collection, and system findings keep their own word. */
+  const asking = () => collected({
+    id: "codex:asking",
+    sourceSessionId: "asking",
+    lastAgentClosing: "Publishing is your call.",
+  });
+
+  test("an agent waiting on a human is counted, in the totals and in its program rollup", () => {
+    const snapshot = buildSnapshot({
+      agents: [asking()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.attentionSignal?.kind).toBe("handoff-stated");
+    expect(snapshot.totals.needsYou).toBe(1);
+    // The rollup cell and the totals must never disagree again.
+    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(1);
+  });
+
+  test("a failed agent that asks nothing is NOT a to-do", () => {
+    /* The old rollup counted any non-healthy outcome. A failed session is a
+       fact about the work, not a request for a person — and the board already
+       shows the failure. */
+    const failed = collected({
+      id: "codex:failed",
+      sourceSessionId: "failed",
+      gates: ["build failed"],
+      lastAgentClosing: "The build failed on the third target.",
+    });
+    const snapshot = buildSnapshot({
+      agents: [failed],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.outcome).not.toBe("healthy");
+    expect(agent?.attentionSignal).toBeUndefined();
+    expect(snapshot.totals.needsYou).toBe(0);
+    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(0);
+  });
+
+  test("a system finding is counted separately and never as a to-do", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: ["cmux SURFACE-X is unreachable"],
+      cmuxReachable: false,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
+    expect(snapshot.totals.needsYou).toBe(0);
+  });
+
+  test("an agent waiting and a system finding are counted in different words", () => {
+    // Both present at once: the two numbers must be independent.
+    const snapshot = buildSnapshot({
+      agents: [asking()],
+      surfaces: [],
+      cmuxErrors: ["cmux SURFACE-X is unreachable"],
+      cmuxReachable: false,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.totals.needsYou).toBe(1);
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe("context coverage ships with the number it describes", () => {
+  /* The frontend lane measured the context card's suffix reading 8/9 while 32
+     live agents were reporting contextPct: it had borrowed
+     totals.tokenReporting/tokenEligible, which counts working agents reporting
+     TOKENS. Wrong population, wrong quantity. Deriving one client-side would
+     have made a third population, because the headline comes from the server's
+     own liveAgents filter — so the coverage now comes off the same array. */
+  const reporting = (contextWindow: number, total: number, over: Record<string, unknown> = {}) =>
+    collected({
+      id: `codex:c${total}`,
+      sourceSessionId: `c${total}`,
+      tokens: { provenance: "observed", scope: "latest-turn", contextWindow, total },
+      ...over,
+    });
+
+  test("coverage counts the live agents that reported, over the live agents scanned", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        reporting(100, 40),
+        reporting(100, 90),
+        // Live, but no context to report: eligible and not reporting.
+        collected({ id: "codex:quiet", sourceSessionId: "quiet", tokens: { provenance: "unknown" } }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBe(90);
+    expect(snapshot.contextReporting).toBe(2);
+    expect(snapshot.contextEligible).toBe(3);
+  });
+
+  test("ended agents are outside the population, exactly as contextPeak is", () => {
+    /* The property that makes this coverage trustworthy: it cannot disagree
+       with the headline, because both read the same filter. */
+    const snapshot = buildSnapshot({
+      agents: [
+        reporting(100, 40),
+        reporting(100, 99, { id: "codex:done", sourceSessionId: "done", status: "archived" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // The archived 99 is excluded from the peak, so it must be excluded here too.
+    expect(snapshot.contextPeak).toBe(40);
+    expect(snapshot.contextReporting).toBe(1);
+    expect(snapshot.contextEligible).toBe(1);
   });
 });

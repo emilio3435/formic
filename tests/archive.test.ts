@@ -54,7 +54,11 @@ describe("durable archive state", () => {
     ]);
   });
 
-  test("a corrupt archive degrades to empty with a loud log", async () => {
+  /* An archive we could not read is not an empty archive. Booting on empty is
+     right — the hub must start — but it silently returns every dismissed
+     session to the board as live work, so the count of what is running is
+     wrong and the console was the only place that said why. */
+  test("a corrupt archive degrades to empty and reports why, not just to the console", async () => {
     const files: ArchiveFileOperations = {
       readText: async () => "{",
       makeDirectory: async () => {},
@@ -66,10 +70,29 @@ describe("durable archive state", () => {
       const store = await JsonArchiveStore.open("/virtual/archive.json", files);
 
       expect(store.archivedAgents()).toEqual([]);
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining("Ignoring unreadable archive"));
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining("could not be read"));
+      // The part the console cannot deliver: a value the snapshot can carry.
+      expect(store.loadError() ?? "").toContain("/virtual/archive.json");
+      expect(store.loadError() ?? "").toContain("unarchived");
     } finally {
       logged.mockRestore();
     }
+  });
+
+  test("an archive that was never written is not reported as a failure", async () => {
+    // ENOENT is the normal state before anything has been archived.
+    const files: ArchiveFileOperations = {
+      readText: async () => {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
+      makeDirectory: async () => {},
+      writeText: async () => {},
+      rename: async () => {},
+    };
+    const store = await JsonArchiveStore.open("/virtual/absent-archive.json", files);
+
+    expect(store.archivedAgents()).toEqual([]);
+    expect(store.loadError()).toBeUndefined();
   });
 
   test("persists enough source truth to render an archive after the live file leaves the scan window", async () => {
@@ -106,6 +129,7 @@ describe("durable archive state", () => {
       lastHumanMessage: "Review the final routing diff.",
       lastUserMessage: "Please review the final routing diff.",
       lastAgentMessage: "PASS with exact identity evidence.",
+      lastAgentClosing: "Everything checks out, but publishing is your call.",
       transcriptTail: "PASS with exact identity evidence.",
       artifacts: [{ label: "Cursor transcript", path: "/Users/me/transcript.jsonl" }],
       gates: ["review passed"],
@@ -137,6 +161,20 @@ describe("durable archive state", () => {
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
     });
+    /* Measured live after the restart: 133 archived agents carried
+       lastAgentMessage but no closing line, because this projection dropped it.
+       An archived session that ended by handing a decision back is exactly the
+       one still worth acting on, so the history was permanently unreadable to
+       the attention layer — reported honestly as "could not read", but
+       avoidably so. The round trip has to carry it. */
+    expect(archived.lastAgentClosing).toBe(source.lastAgentClosing);
+    /* The closing line survives as EVIDENCE a human can read in the drawer, not
+       as a signal. An archived row carries no attentionSignal at all now: its
+       controls are disabled, so any instruction on it would be one nobody could
+       carry out. Round-tripping the words is still worth doing; asking the
+       operator to answer them is not. */
+    expect(archived.attentionSignal).toBeUndefined();
+    expect(archived.nextAction).toBeUndefined();
     expect(reopened.archivedAgents()[0]?.allowCwdFallback).toBeFalse();
     expect(archived.controls.every((control) => !control.enabled)).toBeTrue();
   });

@@ -189,8 +189,19 @@ describe("GET /api/transcript", () => {
       const readable = await readableFetch(get("/api/transcript?agent=codex%3Atest-session"));
       const unreadable = await unreadableFetch(get("/api/transcript?agent=codex%3Atest-session"));
 
+      /* Both are empty; only one is silent by choice. The unreadable case used
+         to null its source, which made it byte-identical to "this agent has no
+         transcript artifact" — the endpoint asserting no evidence exists when
+         it merely failed to reach it. The path we tried is kept and the failure
+         is named, so the distinction this test claims is one the payload can
+         actually carry. */
       expect(await readable.json()).toMatchObject({ source: readablePath, lines: [] });
-      expect(await unreadable.json()).toMatchObject({ source: null, lines: [] });
+      const unreadableBody = await unreadable.json();
+      expect(unreadableBody).toMatchObject({ source: unreadablePath, lines: [] });
+      expect(unreadableBody.error).toBe("The transcript file is no longer present.");
+      // A genuinely empty transcript must not acquire a phantom failure.
+      expect((await readableFetch(get("/api/transcript?agent=codex%3Atest-session")).then((r) => r.json())).error)
+        .toBeUndefined();
     } finally {
       readableFetch.dispose();
       unreadableFetch.dispose();
@@ -208,6 +219,40 @@ describe("GET /api/transcript", () => {
   });
 });
 
+describe("GET /api/publish", () => {
+  /* The cockpit's answer to "what is finished but unpublished". It reports and
+     never acts: publishing is the operator's decision and stays manual, so the
+     surface has no verb at all. */
+  test("reports read-only and refuses any method that could imply an action", async () => {
+    const runner = new StubRunner([
+      { exitCode: 1, stdout: "", stderr: "no origin", timedOut: false },
+    ]);
+    const fetch = app(snapshot(), { runner });
+    try {
+      const read = await fetch(get("/api/publish"));
+      expect(read.status).toBe(200);
+      expect(await read.json()).toMatchObject({ available: false });
+
+      // No POST, no push, no one-click anything.
+      const written = await fetch(new Request(`${ORIGIN}/api/publish`, { method: "POST" }));
+      expect(written.status).toBe(405);
+      expect(await written.json()).toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
+    } finally {
+      fetch.dispose();
+    }
+  });
+
+  test("is same-origin loopback only, like the other read endpoints", async () => {
+    const fetch = app(snapshot());
+    try {
+      const foreign = await fetch(new Request("http://evil.example:4701/api/publish"));
+      expect(foreign.status).toBe(403);
+    } finally {
+      fetch.dispose();
+    }
+  });
+});
+
 describe("operator action log", () => {
   test("allows browser-style GETs without Origin while the app-wide loopback gate rejects a foreign host", async () => {
     const fetch = app(snapshot());
@@ -217,6 +262,41 @@ describe("operator action log", () => {
     expect(browserGet.status).toBe(200);
     expect(foreignHost.status).toBe(403);
     fetch.dispose();
+  });
+
+  /* appendAction swallows a persist failure on purpose: the control it is
+     journalling has already run, so failing the response would invite the
+     operator to repeat a completed action. But that left the failure in stderr
+     and nowhere else, and /api/actions kept serving a silently short history as
+     though it were the whole record — the endpoint asserting "these are the
+     actions taken" when it means "these are the ones we managed to write". */
+  test("a journal that cannot be written says so instead of serving a short history as complete", async () => {
+    class UnwritableActionLogStore extends MemoryActionLogStore {
+      protected override async persist(): Promise<void> {
+        throw new Error("action log volume is read-only");
+      }
+    }
+    const store = new UnwritableActionLogStore(() => Date.parse("2026-07-28T09:12:03.114Z"));
+    const fetch = app(snapshot(), { actions: store });
+    try {
+      const healthy = await (await fetch(get("/api/actions"))).json();
+      // Nothing has failed yet, so nothing is claimed.
+      expect(healthy.journal).toEqual({ healthy: true });
+
+      await expect(store.append({
+        kind: "focus",
+        agentIds: ["codex:test-session"],
+        outcome: "ok",
+        detail: "Focused the fixture session.",
+      })).rejects.toThrow("read-only");
+
+      const degraded = await (await fetch(get("/api/actions"))).json();
+      expect(degraded.actions).toEqual([]);
+      expect(degraded.journal.healthy).toBe(false);
+      expect(degraded.journal.error).toContain("read-only");
+    } finally {
+      fetch.dispose();
+    }
   });
 
   test("records staged control failure and partial broadcast exactly once each, newest first", async () => {

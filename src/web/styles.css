@@ -65,6 +65,23 @@
 }
 
 * { box-sizing: border-box; }
+
+/* The `hidden` attribute means hidden, and no author rule gets a vote.
+
+   The UA stylesheet's `[hidden] { display: none }` loses to ANY author rule that
+   sets display, because author beats user-agent regardless of specificity. So
+   `.btn { display: inline-flex }` silently defeated `hidden` on every button —
+   measured, `#select-toggle` with the attribute set still occupied 120x38px and
+   read "Select to send", and `#empty-retry` still rendered a "Retry connection"
+   button, which invites a click that reports a fault on a board that has none.
+
+   This is why five per-element `[hidden] { display: none }` rules already exist
+   in this file: the same bug, patched five times at the call site. One rule at
+   the top prevents the sixth. `!important` is load-bearing here rather than
+   lazy — a later `.thing { display: flex }` must not be able to un-hide an
+   element the client has hidden. Those five are now redundant; they are left
+   alone because they are not this change's to remove. */
+[hidden] { display: none !important; }
 html { height: 100%; }
 
 body {
@@ -385,24 +402,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
-/* Degraded severity class, ahead of the reason. Blocking takes ember (the
-   intervention ink used everywhere an operator is actually stuck); stale and
-   advisory take amber, because the board still works. A mono chip like
-   .reading-repair below rather than a banner — this is a qualifier on a
-   sentence, not an alarm. */
-.health-severity {
-  margin-right: 0.35rem;
-  padding: 0 0.3rem;
-  border-radius: 3px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--amber);
-  background: var(--amber-soft);
-}
-.health-severity-blocking { color: var(--ember); background: var(--ember-soft); }
+/* The uppercase severity badge that used to sit here is gone. It existed to
+   qualify a headline that read the bare word "Degraded" for all three
+   severities; the headline is the severity itself now, so the badge only
+   printed ADVISORY underneath Advisory. The verdict chip carries the ink. */
+.verdict-advisory { color: var(--amber); }
 /* Degraded verdict's inline repair: re-pull the latest snapshot evidence.
    A quiet mono instrument chip — the amber ink signals status without a filled
    hospital-banner flood. */
@@ -424,6 +428,40 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-radius: 4px;
 }
 .reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
+
+/* The health card's instruction line: the one sentence that tells an operator
+   what to do. It reads at ink weight because a remedy the eye skips is the
+   same as no remedy — the surrounding .reading-sub stays muted. */
+.reading-remedy {
+  margin: 0.3rem 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.reading-panes { color: var(--slate); border-color: color-mix(in srgb, var(--slate) 42%, var(--line-strong)); }
+.reading-panes:hover { color: var(--ink); border-color: var(--slate); background: color-mix(in srgb, var(--slate) 10%, var(--raise)); }
+
+/* Named evidence for the instruction: which panes, and how long they have been
+   quiet. Capped and scrollable so a long tail never pushes the strip open. */
+.health-pane-list {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 9.5rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+.health-pane-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.22rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.health-pane-name { color: var(--ink); overflow-wrap: anywhere; }
+.health-pane-age { color: var(--faint); font-family: var(--font-mono); white-space: nowrap; }
+.health-pane-more { color: var(--faint); font-style: italic; }
 
 /* the Health verdict chip (full cell when degraded, micro-chip when OK) */
 .verdict-chip {
@@ -485,12 +523,29 @@ body.feed-frozen .programs { opacity: 0.62; }
   max-width: var(--frame);
   margin: 0 auto;
   display: flex;
+  /* The stage sizes to its content and stops (see .ops-stage), so on a quiet
+     board it must sit at the top of the space rather than being centred in it. */
+  align-items: flex-start;
 }
 
 /* One docked instrument: workboard + Details share a bordered shell with an
    internal divider — not two floating panes with a canvas gap between them. */
 .ops-stage {
-  flex: 1;
+  /* Sized to content, capped at the viewport — NOT stretched to fill it.
+
+     Every pixel of this cockpit was measured against 380-441 agents, where the
+     stage is always taller than the screen and `flex: 1` is invisible. The first
+     operator to open it has three. Measured at n=1: 151px of rows inside a 635px
+     bordered white box — the panel was three times the height of everything in
+     it, and a large empty bordered container is the single strongest "this
+     failed to load" signal an interface can send.
+
+     `flex: 0 1 auto` + max-height keeps both readings correct: a full fleet
+     still fills the screen and scrolls inside #main, and a quiet board draws a
+     small card that ends where its content ends. A calm instrument at rest,
+     rather than an empty frame. */
+  flex: 0 1 auto;
+  max-height: 100%;
   min-height: 0;
   width: 100%;
   display: flex;
@@ -554,6 +609,17 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Calm collapse: the whole cell row folds to one moss line. The pulse-cleared
    class washes moss in once, then transitions back out when it is dropped on
    the next paint — a one-shot delight, no keyframe loop. */
+/* The watch murmur: amber, on the same line, never its own row. It has to read
+   as "worth knowing" without reading as "act now" — that distinction is the
+   whole reason the tier exists between silence and the stressed grid. */
+.pulse-watch {
+  margin-left: 0.55rem;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--amber);
+  white-space: nowrap;
+}
+.pulse-watch::before { content: "⚠ "; }
 .pulse-calm {
   /* The line renders inside .rail-inner (a flex row); fill the row and carry
      the frame gutter itself so calm and stressed states share one left edge. */
@@ -1030,6 +1096,14 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-color: var(--ink);
   background: color-mix(in srgb, var(--ink) 8%, var(--surface));
 }
+/* A value the server never confirmed. Dashed border reuses the same "this is not
+   established fact" language the unknown-liveness chip already speaks, and amber
+   keeps it advisory — an unverified default is not an intervention. */
+.filter-chip.is-unverified {
+  color: var(--amber);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
 
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
 .search-wrap { flex: 1 1 240px; }
@@ -1119,11 +1193,16 @@ body.feed-frozen .programs { opacity: 0.62; }
    then the rollup shrinks HONESTLY (min-width:0 + per-cell overflow) instead of
    being silently cropped by the .program overflow:clip ancestor. The alerts cell
    never shrinks and so is the last thing to go — it must always stay legible. */
-.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
-.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* Wraps rather than clips. Docked at 1440 the roster is ~550px and four cells
+   ellipsised into "169 a…  13 wo…  1 alert  1.15B t…" — fragments that carry no
+   meaning, with the alerts cell the one truncated hardest. scrollWidth agreed
+   with the clipped box, so nothing in the DOM reported a problem; only pixels
+   did. A second line costs one row of header height and loses nothing. */
+.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: none; min-width: 0; }
 .program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.program-rollup-label { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.program-rollup-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -1425,6 +1504,26 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .agent-rename .ico { width: 0.9rem; height: 0.9rem; }
 .row-identity-tags { grid-column: 2; display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.12rem; }
+/* Session tag on rows whose display name is shared. Mono and quiet: it is a
+   handle for telling twins apart, not a status — it must never compete with the
+   alert rails or the instrument cluster for attention. */
+/* Inline on the name line, where it does the work: bigger and darker than the
+   old tag-row treatment, because it is the value that tells two rows apart. */
+.agent-name-wrap .row-session-tag.is-inline {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.row-session-tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+}
 .role-chip {
   display: inline-flex;
   align-items: center;
@@ -1558,6 +1657,40 @@ body.feed-frozen .programs { opacity: 0.62; }
 .swarm-anchor:hover { background: var(--sand); }
 .swarm-anchor-arrow { font-size: 13px !important; }
 
+/* All-clear is an ANSWER, not an absence, so it is typeset like one. A verdict
+   mark plus a headline at weight plus live vitals — the operator can tell at a
+   glance that the board is loaded and clear rather than blank and loading,
+   which is the one thing an empty cockpit must never leave ambiguous. */
+.no-match.is-all-clear { color: var(--ink); padding-top: 3.5rem; }
+.all-clear-mark { margin: 0 0 0.5rem; color: var(--moss); }
+.all-clear-mark .ico { width: 2rem; height: 2rem; }
+.all-clear-head { margin: 0; font-size: 1.15rem; font-weight: 640; letter-spacing: -0.01em; color: var(--ink); }
+/* "No agents are waiting on you" over a non-empty findings list. Amber, not the
+   all-clear's calm ink: this state is NOT the check mark, and it must not read
+   like one. It is the sentence that used to be "Nothing needs you" while the
+   rail beside it counted an open finding. */
+/* Day-one proof of life. Quiet by default — this is a healthy board, not a
+   finding — and amber only when a collector is degraded, which is the case where
+   "empty" means "unknown" rather than "nothing". */
+/* A zero tab count keeps its place and stops competing. At n=3 three of five
+   tabs read zero, and a row of full-strength zeros is a newcomer's first
+   impression of the whole interface. Hiding them would change the shape of the
+   navigation as the fleet grows; receding them does not. */
+.view-tab .count.is-zero { color: var(--faint); font-weight: 400; }
+.view-tab.is-current .count.is-zero { color: var(--muted); }
+
+.empty-proof { margin: 0.5rem 0 0; font-size: 12.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.empty-proof.is-degraded { color: var(--amber); }
+
+.empty-findings { margin: 0.35rem 0 0; font-size: 13.5px; color: var(--muted); }
+.empty-findings strong { color: var(--amber); font-weight: 620; }
+.all-clear-quiet { color: var(--amber); font-weight: 650; }
+.all-clear-vitals {
+  margin: 0.4rem 0 1rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
 .no-match { padding: 1.6rem 1rem; text-align: center; color: var(--faint); font-size: 13.5px; }
 .no-match .btn { margin-top: 0.7rem; }
 
@@ -1590,7 +1723,14 @@ body.feed-frozen .programs { opacity: 0.62; }
    With an agent open, the roster keeps ~40% as a scannable rail (trees of
    agent/workspace/program) and the drawer takes ~60% — the reading surface.
    the model/tokens/elapsed instruments fold away; they live in full in the drawer. */
-@media (min-width: 1180px) {
+/* 1025px, not 1180px. Below 1025 the drawer is a full-viewport sheet and the row
+   is not on screen at all; from 1025 up it docks BESIDE the row. The old 1180
+   boundary therefore left a 155px-wide window in which the drawer and the row
+   both rendered model, context %, tokens and elapsed — the duplication this
+   overhaul exists to remove, present at exactly the widths a laptop runs at.
+   Folding at the same breakpoint the layout changes at makes "the row already
+   shows it" true wherever it is claimed. */
+@media (min-width: 1025px) {
   body.inspector-open .pane-list {
     flex: 0 0 clamp(380px, 40%, 760px);
   }
@@ -1603,11 +1743,42 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .agent-column-header {
     grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
   }
-  /* Keep identity + status; drop the model/tokens/elapsed instruments and their
-     header labels (columns 3–5). */
-  body.inspector-open .agent-grid .ri-model,
-  body.inspector-open .agent-grid .ri-tokens,
-  body.inspector-open .agent-grid .ri-elapsed,
+  /* The docked roster used to DELETE model, context, tokens and elapsed from
+     every row — measured on the live board: an unselected row still held
+     "opus 5 · 67%", "668k tokens" and "35.3h", all display:none. Those are
+     exactly the fields that decide which agent to open NEXT, so blanking them on
+     all 275 rows because one drawer is open forces the operator to open drawers
+     serially to triage a swarm. That is the cockpit failing at its one job.
+
+     There genuinely is not room for five columns in a 40%-width roster, so the
+     answer is fewer COLUMNS, not less information: the instrument cluster stops
+     being display:contents and becomes one compact run under the name, reading
+     "opus 5 · 67% · 668k · 35.3h". */
+  body.inspector-open .agent-grid > .row-instruments {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0 0.45rem;
+    grid-column: 2;
+    min-width: 0;
+  }
+  body.inspector-open .agent-grid .ri-cell { grid-column: auto; }
+  body.inspector-open .agent-grid .ri-value { font-size: 11px; font-weight: 600; }
+  /* The SELECTED row alone stays quiet: its drawer carries these facts inches
+     away, so there the instruments really are a duplicate. */
+  body.inspector-open .agent-row.is-selected .ri-model,
+  body.inspector-open .agent-row.is-selected .ri-tokens,
+  body.inspector-open .agent-row.is-selected .ri-elapsed,
+  /* The row summary is conciseText(lastHumanMessage, 120) — the first 120
+     characters of the very prose the Thread pane renders in full, inches away.
+     The largest duplicate on screen, and the one nobody had named.
+
+     Folded on the SELECTED row only. An earlier pass folded it on every row and
+     that was wrong: while a drawer is open the operator is still scanning the
+     roster to choose what to open NEXT, and the summary is what they scan by.
+     Only the selected row's copy is a duplicate — the other 200 are the board. */
+  body.inspector-open .agent-row.is-selected .row-description,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
 }
 
@@ -1615,9 +1786,14 @@ body.feed-frozen .programs { opacity: 0.62; }
    Operate and Chat stay open side by side (the showcase); Evidence — vitals,
    paths, routing, transcript — collapses to a caterpillar/cog rail that
    progressively reveals as a third column. */
+/* Two tracks, not three. The shelf was built for Operate | Chat | rail and kept
+   splitting the pane in half after Operate was deleted — so the one long-form
+   surface in the drawer was squeezed into a narrow column while a collapsed
+   decorative rail held 40% of the width. Thread takes the room; the rail is a
+   strip until it is asked for. */
 .drawer-shelf {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) 2.75rem;
+  grid-template-columns: minmax(0, 1fr) 2.75rem;
   gap: 0.65rem;
   align-items: stretch;
   min-width: 0;
@@ -1625,7 +1801,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   flex: 1 1 auto;
 }
 .drawer-shelf.is-evidence-open {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(12rem, 0.95fr);
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.8fr);
 }
 .shelf-section {
   border: 1px solid var(--line);
@@ -1743,7 +1919,13 @@ body.feed-frozen .programs { opacity: 0.62; }
     flex-direction: row;
     justify-content: center;
     border-radius: var(--radius-sm);
+    /* A COLLAPSED rail is a strip, not a panel. It inherits min-height:100% from
+       the widescreen column, and in the stacked layout that let a decorative
+       dashed blob grow to ~150px under the thread — more vertical space than the
+       message it was hiding behind. Seen in a browser, not in the diff. */
     min-height: 44px;
+    height: 44px;
+    align-self: start;
     padding: 0.45rem 0.85rem;
   }
   .shelf-rail-spine { flex-direction: row; padding: 0; }
@@ -1952,6 +2134,29 @@ body.feed-frozen .programs { opacity: 0.62; }
 .inspector-id { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
 .inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+/* Session tag beside the drawer title. Same disambiguator the row uses, so an
+   operator carries one token between the two surfaces. Quiet mono — it is a
+   handle, never a status. */
+.inspector-tag {
+  margin-left: 0.4rem;
+  font-size: 0.62em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+  vertical-align: middle;
+}
+/* The standing objective, promoted out of the old Operate panel. It is the line
+   that says WHICH lane this is when 19 of 22 drawers share a title. */
+.inspector-objective {
+  margin: 0.3rem 0 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  font-weight: 550;
+}
 .inspector-sub { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .inspector-note { margin: 0; color: var(--muted); font-size: 13.5px; }
 
@@ -2061,6 +2266,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   margin-top: 0.15rem; font-size: 12.5px; color: var(--muted);
 }
 .status-line-sep { color: var(--line-strong); }
+.status-line-activity { font-weight: 650; }
+.status-line-activity.act-working { color: var(--working); }
+.status-line-activity.act-idle { color: var(--idle); }
+.status-line-activity.act-ended { color: var(--ended); }
+/* Hidden only where the roster row beside the drawer is actually carrying it.
+   Below this width the drawer is a full sheet and the roster is occluded, so the
+   word is the operator's only way to know if the session is running. */
+@media (min-width: 1025px) {
+  body.inspector-open .status-line-activity { display: none; }
+}
 .status-line-live {
   display: inline-flex; align-items: center; gap: 0.35rem;
   font-weight: 650; color: var(--muted);
@@ -2076,16 +2291,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .status-line-item.outcome-blocked,
 .status-line-item.outcome-failed { color: var(--needs); font-weight: 650; }
 .status-line-item.policy-mismatch { color: var(--failed); font-weight: 650; }
-.status-pulse {
-  width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--working);
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--working) 35%, transparent);
-  animation: status-pulse 1.6s ease-in-out infinite;
-}
-@keyframes status-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--working) 35%, transparent); opacity: 1; }
-  50% { box-shadow: 0 0 0 5px transparent; opacity: 0.7; }
-}
-
 .control-banner {
   display: flex; gap: 0.55rem; align-items: flex-start;
   padding: 0.65rem 0.75rem; border-radius: var(--radius-sm);
@@ -2157,9 +2362,27 @@ body.feed-frozen .programs { opacity: 0.62; }
   margin-right: calc(-1 * var(--inspector-pad-x));
   padding: 0.7rem var(--inspector-pad-x) 1rem;
   border-top: 1px solid var(--line);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 55%, transparent), var(--raise) 32%);
+  /* OPAQUE, deliberately. This bar is sticky over scrolling drawer content, and
+     its background used to mix --surface with `transparent` — so the OPERATE
+     panel's text showed THROUGH the bar and collided with the "Ready · linked"
+     chip, leaving the last human message unreadable. Content has to pass behind
+     a sticky overlay, never through it. */
+  background: var(--raise);
   box-shadow: 0 -12px 28px -22px rgba(18, 24, 32, 0.4);
   display: flex; flex-direction: column; gap: 0.45rem;
+}
+/* The soft top edge the old gradient provided, moved ABOVE the bar. It fades the
+   scrolling content on approach instead of revealing it through the controls,
+   which is the part the gradient was actually good at. */
+.command-dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.25rem;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--raise));
 }
 /* Linked dock: a moss hairline marks the live control link; the lock story
    stays with the control banner, so the dock never repeats it. */
@@ -2225,7 +2448,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
 .next-action { margin: 0; font-size: 13.5px; color: var(--muted); }
-.next-key { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.25rem; }
 
 .inspector-panel { display: flex; flex-direction: column; gap: 0.85rem; }
 .names-disclosure {
@@ -2256,8 +2478,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .label-status { margin: 0; color: var(--faint); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }
-.last-human-message,
-.operate-task,
 .chat-turn-body {
   margin: -0.2rem 0 0;
   padding: 0.7rem 0.8rem;
@@ -2267,30 +2487,12 @@ body.feed-frozen .programs { opacity: 0.62; }
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.operate-task { margin-top: 0; color: var(--muted); font-size: 13.5px; }
-.operate-outcome-note { margin: 0; font-size: 13px; color: var(--muted); }
-.operate-outcome-note.outcome-failed,
-.operate-outcome-note.outcome-blocked { color: var(--ember); font-weight: 650; }
-.operate-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem 0.85rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--raise);
-}
-.operate-meta-item { display: inline-flex; align-items: baseline; gap: 0.35rem; min-width: 0; font-size: 13px; }
-.operate-meta-label {
-  font: 700 10px/1.4 var(--font-mono);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
 
-/* ---------- vitals band: the instrument tiles ----------
-   The numbers an operator acts on (context ring, session tokens + cache, uptime)
-   rendered as instruments in a compact row directly under the verdict head — the
+/* ---------- context alarm ----------
+   Formerly a permanent instrument row (context ring + session tokens + cache +
+   uptime). It is now a single tile that renders ONLY above the context
+   threshold: on the live board no active agent had ever exceeded 54%, so the
+   row spent the drawer's best space saying "nothing is wrong" — the
    band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
    absent tiles are never rendered, so the band flexes to whatever the source
    reports; when the source reports nothing the mount's :empty rule collapses it. */
@@ -2312,12 +2514,15 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--faint);
   margin-bottom: 0.4rem;
 }
+/* The disambiguating sentence under the context figure. Prepositions, not
+   sibling nouns: "12% of the window · 480k used this session" cannot be misread
+   as one measurement the way "Context" beside "Session tokens" could. */
+.vital-note { margin-top: 0.2rem; font-size: 11.5px; line-height: 1.35; color: var(--muted); }
+.vital-ring-wrap.is-hot .vital-big { color: var(--ember); }
 .vital-big { font-size: 1.45rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1; color: var(--ink); }
 .vital-big small { font-size: 0.7rem; font-weight: 500; color: var(--faint); letter-spacing: 0; }
-.vital-sub { font: 500 10.5px/1.3 var(--font-mono); color: var(--faint); margin-top: 0.35rem; }
 .vital-ring-wrap { display: flex; align-items: center; gap: 0.6rem; }
 .vital-figure { min-width: 0; }
-.vital-bar { display: block; width: 100%; height: 6px; margin-top: 0.5rem; }
 
 /* SVG donut ring — arc via stroke-dasharray geometry (CSP-safe), tone by severity. */
 .vital-ring { width: 44px; height: 44px; flex: none; }
@@ -2329,8 +2534,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .ring-fill.warn { stroke: var(--amber); }
 .ring-fill.hot { stroke: var(--ember); }
 .ring-pct { text-anchor: middle; dominant-baseline: central; font: 700 9px var(--font-mono); fill: var(--ink); }
-.vital-bar .tm-track { fill: var(--sand); }
-.vital-bar .tm-fill { fill: var(--moss); }
 .chat-turn { display: flex; flex-direction: column; gap: 0.3rem; }
 .chat-turn-role {
   font: 700 10px/1.3 var(--font-mono);
@@ -2341,7 +2544,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .chat-turn--assistant .chat-turn-body {
   border-left: 2px solid color-mix(in srgb, var(--moss) 45%, var(--line));
 }
-.chat-transcript-link { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .evidence-control-link { display: flex; flex-direction: column; gap: 0.4rem; }
 .evidence-control-sentence { margin: 0; font-size: 13.5px; line-height: 1.4; }
 .evidence-ids { display: flex; flex-wrap: wrap; gap: 0.35rem; }

@@ -5,11 +5,139 @@
    file directly; DOM wiring only runs when a document exists. */
 
 import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
-import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
+import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
+import { state } from "./client-state.js";
+import { setRepaint } from "./repaint.js";
 import {
-  ACTIVITY_LABELS, CONTROL_LABELS, DEFAULT_LOOKBACK_HOURS, DEFAULT_WIDGET_IDS,
-  LOOKBACK_PRESETS, LOOKBACK_STORAGE_KEY, MODEL_POLICY_LABELS, OPS_VIEWS,
-  OUTCOME_LABELS, USAGE_RANGE_PRESETS, VIEWS, WIDGET_CATALOG, WIDGET_IDS,
+  clocksFrozen,
+  feedAlarm,
+  feedFrozen,
+  snapshotFreshness,
+  SNAPSHOT_FRESH_MS,
+  SNAPSHOT_STALE_MS,
+} from "./feed-freshness.js";
+import {
+  ACTION_KIND_LABELS,
+  actionRecipients,
+  loadActions,
+  normalizeActions,
+  refreshActions,
+  renderActionLog,
+  renderActionsPanel,
+} from "./action-log.js";
+import {
+  loadTranscript,
+  normalizeTranscript,
+  renderTranscriptPanel,
+  transcriptWindow,
+  TRANSCRIPT_RENDER_CAP,
+} from "./transcript.js";
+import {
+  applyNotifications,
+  deliverNotification,
+  loadNotifyPreference,
+  needsHumanIds,
+  notificationPlan,
+  notifyToggleView,
+  renderNotifyToggle,
+  titleWithAlerts,
+  toggleNotifications,
+} from "./notifications.js";
+
+import {
+  actionOutcomeView,
+  agentLabelEligible,
+  agentLabelTarget,
+  agentName,
+  collisionLine,
+  conciseText,
+  controlUnavailableText,
+  elapsedDataset,
+  focusDestinationHint,
+  identityTraceView,
+  investigationView,
+  issueLifecycle,
+  issueLifecycleNote,
+  issueTimestamp,
+  issuesOf,
+  lastActionFor,
+  liveElapsedText,
+  modelPolicyView,
+  preferredRenameTarget,
+  presentationLabelKey,
+  provenanceLabel,
+  quarantineBrief,
+  recentlyResolvedOf,
+  roleView,
+  roomLabelTarget,
+  snapshotAgents,
+  sourceAgentName,
+  staleControlNote,
+  surfaceCollisions,
+  terminalBreadcrumb,
+  terminalIdentity,
+  terminalSourceName,
+  workspaceLabelTarget,
+  agentsById,
+  IDENTITY_TIER_LABELS,
+  INVESTIGATION_STATE_VIEW,
+  ROLE_LABELS,
+} from "./presentation.js";
+
+import {
+  actionsFailureText,
+  actionsUrl,
+  ACTIONS_DEFAULT_LIMIT,
+  ACTIONS_MAX_LIMIT,
+  apiFetch,
+  API_READ_TIMEOUT_MS,
+  API_TRANSCRIPT_TIMEOUT_MS,
+  API_WRITE_TIMEOUT_MS,
+  clampActionsLimit,
+  clampTranscriptLimit,
+  nextTranscriptLimit,
+  readEndpointOriginNote,
+  serverUnreachableHint,
+  transcriptFailureText,
+  transcriptUrl,
+  TRANSCRIPT_DEFAULT_LIMIT,
+  TRANSCRIPT_LIMIT_STEPS,
+  TRANSCRIPT_MAX_LIMIT,
+} from "./api-client.js";
+import {
+  alerting,
+  buildClusters,
+  contextUsage,
+  deriveActivity,
+  deriveControlState,
+  deriveOutcome,
+  deriveRollup,
+  LIVENESS_ENDED_UNKNOWN,
+  LIVENESS_VIEW,
+  LIVENESS_WORDS,
+  livenessState,
+  livenessView,
+  lookbackApplies,
+  parseLookbackHours,
+  programRollup,
+  tokenSummary,
+  viewMatches,
+  withinLookback,
+} from "./agent-model.js";
+import {
+  ACTIVITY_LABELS,
+  CONTROL_LABELS,
+  DEFAULT_LOOKBACK_HOURS,
+  DEFAULT_WIDGET_IDS,
+  LOOKBACK_PRESETS,
+  LOOKBACK_STORAGE_KEY,
+  MODEL_POLICY_LABELS,
+  OPS_VIEWS,
+  OUTCOME_LABELS,
+  USAGE_RANGE_PRESETS,
+  VIEWS,
+  WIDGET_CATALOG,
+  WIDGET_IDS,
   WIDGET_STORAGE_KEY,
 } from "./client-catalogs.js";
 
@@ -72,196 +200,110 @@ const GLOSSARY = {
   "Ready · linked": READY_LINKED_HINT,
 };
 
-/* Plain words for provider-native enums that used to render raw. */
-const PROVENANCE_LABELS = { observed: "measured", estimated: "estimated", unknown: "unknown" };
-const provenanceLabel = (p) => PROVENANCE_LABELS[p] || p || "unknown";
+const CONTROL_STATE_TEXT = {
+  linked: "Ready",
+  // Focus can reach this pane; nothing may be typed into it. "Ready" would have
+  // told a screen-reader operator the row accepts input, which it does not.
+  unproven: "Look only — session not proven",
+  quarantined: "Quarantined",
+  "observed-only": "View only",
+};
+
 const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by folder", ambiguous: "ambiguous", missing: "no link" };
 
-/* ---------- derivations (narrow fallbacks for the transitional schema) ----------
-   The server now emits activity/outcome/controlState directly; when a snapshot
-   predates those fields we derive them from the provider-native status only. */
-
-function deriveActivity(agent) {
-  if (agent.activity) return agent.activity;
-  switch (agent.status) {
-    case "running": return "working";
-    case "waiting":
-    case "attention": return "idle";
-    case "stale":
-    case "archived": return "ended";
-    default: return "unknown";
-  }
-}
-
-function deriveOutcome(agent) {
-  if (agent.outcome) return agent.outcome;
-  if (deriveActivity(agent) === "ended") return "healthy";
-  return agent.status === "attention" ? "needs-you" : "healthy";
-}
-
-function deriveControlState(agent) {
-  if (agent.controlState) return agent.controlState;
-  if (deriveActivity(agent) === "ended") return "observed-only";
-  const t = agent.target || {};
-  if (t.surfaceId && (t.resolution === "exact" || t.resolution === "unique-cwd")) return "linked";
-  return t.resolution === "ambiguous" ? "quarantined" : "observed-only";
-}
-
-/* ---------- process liveness (additive, absent-first) ----------
-
-   A crashed agent and a cleanly finished one both simply stop, so "needs me"
-   and "done" look identical. The backend now separates them and the field it
-   emits is `processState`, carrying exactly "running" | "exited" | "died" |
-   "unknown" (src/shared/types.ts). This client was written before that name was
-   settled and read only `processLiveness` / `liveness`, so the whole feature
-   rendered nothing against real snapshots; `processState` is read FIRST now and
-   is the carrier of record. Verified against a live snapshot: 96 agents, 14
-   `running`, 82 `unknown`.
-
-   The absent-first rules are unchanged, because they are what makes this safe
-   to ship ahead of, or behind, any emitter:
-
-     - absent  -> null, and NOTHING new is rendered. The board looks exactly as
-                  it does before the field exists. Absence is not evidence of
-                  death.
-     - present but a word we do not recognise -> "unknown". Guessing "died" from
-       a vocabulary we do not own is the one mistake that would make this
-       feature worse than not shipping it.
-
-   `processLiveness` and `liveness` are kept as tolerated aliases (a bare string
-   or an object with `state`/`status`), and the word vocabulary stays wide —
-   including the `process-alive` / `process-gone` / `no-evidence` spelling the
-   collector lane proposed. Dropping them would buy nothing and would re-open the
-   exact failure this comment records. */
-const LIVENESS_WORDS = {
-  running: "running", alive: "running", live: "running", "process-alive": "running",
-  up: "running", active: "running",
-  exited: "exited", "exited-clean": "exited", "clean-exit": "exited", clean: "exited",
-  finished: "exited", completed: "exited", complete: "exited", done: "exited",
-  died: "died", dead: "died", "process-gone": "died", gone: "died", crashed: "died",
-  killed: "died", terminated: "died",
-  unknown: "unknown", "no-evidence": "unknown", unclear: "unknown", indeterminate: "unknown",
-};
-
-const LIVENESS_VIEW = {
-  running: { label: "Process live", tone: "ok", detail: "The agent's process is still running." },
-  exited: { label: "Exited cleanly", tone: "calm", detail: "The process finished and its transcript ended cleanly — this one is done." },
-  died: { label: "Died", tone: "alert", detail: "The process is gone and nothing ended cleanly. This session stopped without finishing." },
-  /* "Liveness unknown" named the tool's gap rather than the world's state, and
-     read as a defect. For an agent still on the board, unknown means the prober
-     has not reported yet — ordinary and temporary, so say that. */
-  unknown: { label: "Awaiting first check", tone: "quiet", detail: "No process check has reported for this session yet." },
-};
-
-/* The same wire value on an ENDED session is a different fact: nothing is going
-   to check it, so "awaiting" would send the operator off to wait for something
-   that is never coming. On the live board this is not an edge case — 135 of the
-   140 unknowns are ended sessions. */
-const LIVENESS_ENDED_UNKNOWN = {
-  label: "No process evidence",
-  tone: "quiet",
-  detail: "This session ended without process evidence, so whether it finished cleanly or crashed cannot be recovered.",
-};
-
-function livenessState(agent) {
-  // `processState` first: it is the field the server actually emits, so an
-  // agent that carries both must be read off the real one.
-  const raw = agent && agent.processState != null ? agent.processState
-    : agent && agent.processLiveness != null ? agent.processLiveness
-      : agent && agent.liveness != null ? agent.liveness
-        : null;
-  if (raw == null) return null;
-  const word = typeof raw === "string"
-    ? raw
-    : typeof raw === "object" && raw
-      ? (typeof raw.state === "string" ? raw.state : typeof raw.status === "string" ? raw.status : null)
-      : null;
-  if (typeof word !== "string" || !word.trim()) return "unknown";
-  return LIVENESS_WORDS[word.trim().toLowerCase()] || "unknown";
-}
-
-/* Null when the field is absent — every call site treats null as "render
-   nothing", which is what keeps an old snapshot looking exactly like today. */
-function livenessView(agent) {
-  const key = livenessState(agent);
-  if (!key) return null;
-  // Same wire value, two different facts — see LIVENESS_ENDED_UNKNOWN. The key
-  // is untouched, so the chip's styling and every existing selector still match.
-  if (key === "unknown" && deriveActivity(agent) === "ended") {
-    return { key, ...LIVENESS_ENDED_UNKNOWN };
-  }
-  return { key, ...LIVENESS_VIEW[key] };
-}
-
-/* Is this agent asking for a human RIGHT NOW — the single verdict the "now" and
-   Alerts views, the program expander and the notifier all read, so they can
-   never disagree about the same agent.
-
-   `activity: "ended"` means the transcript stopped, NOT that the process is
-   gone. A live snapshot carried two sessions reading ended while processState
-   was still "running" and status was "attention" — genuinely waiting on a
-   person, yet absent from every default view.
-
-   The liveness check is what keeps this honest in the other direction. Letting
-   any ended-and-unhealthy agent alert would resurrect stale verdicts from
-   archived sessions and flood Now with finished failures. So an ended agent
-   alerts only on POSITIVE evidence its process is still there; absent or
-   unknown liveness stays in History, which is the absent-first rule the
-   liveness block above already commits to. */
-function alerting(agent) {
-  if (deriveOutcome(agent) === "healthy") return false;
-  if (deriveActivity(agent) !== "ended") return true;
-  return livenessState(agent) === "running";
-}
-
-function deriveRollup(agents) {
-  const act = (a) => deriveActivity(a);
-  const out = (a) => deriveOutcome(a);
-  return {
-    total: agents.length,
-    live: agents.filter((a) => act(a) === "working" || act(a) === "idle").length,
-    working: agents.filter((a) => act(a) === "working").length,
-    idle: agents.filter((a) => act(a) === "idle").length,
-    ended: agents.filter((a) => act(a) === "ended").length,
-    needsYou: agents.filter((a) => out(a) !== "healthy" && act(a) !== "ended").length,
-    blocked: agents.filter((a) => out(a) === "blocked").length,
-    failed: agents.filter((a) => out(a) === "failed").length,
-    linked: agents.filter((a) => deriveControlState(a) === "linked").length,
-  };
-}
-
-const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
 /* At-a-glance rollup cells — the ONE aggregation source shared by the program
    drawer head (programRollupLine) and the left-tree program header
    (programHeadRollup). Counts are always client-derivable, so they always
    render; the token aggregate is omitted honestly when no agent reports a
    session total (never faked). Alert cells flag themselves for ink gating. */
-function programRollupCells(agents) {
+/* `rollup` is the SERVER's figures for this program when it has them.
+
+   Counts stay client-derived on purpose: the rollup's alert cell must agree with
+   the Needs-you tab beside it, and that tab is necessarily client-side because it
+   depends on the active filters and lookback. Deferring the count to the server
+   would re-open exactly the divergence that produced the needsYou mess — one
+   surface counting alerting() and its neighbour counting something else. They
+   currently agree (measured: 215/215 total, 9/9 working, 0/0 needsYou), and the
+   way to keep them agreeing is one derivation, not two that happen to match.
+
+   The TOKEN total is the opposite case. It has no client-side invariant to
+   preserve, it is a pure aggregate, and it is under active repair server-side —
+   a session reporting 391.4M against a program reporting 1.60B, both wrong. So
+   the moment the server ships a token figure in the rollup, this renders that
+   instead of summing its own. Until then it sums, and says which quantity it
+   summed. */
+function programRollupCells(agents, rollup = null) {
   const r = deriveRollup(agents);
   const cells = [
-    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
-    { value: String(r.working), label: "working" },
-    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+    /* "230 agents" was 33 live and 197 ended — 5.8x the operational population
+       with no ended denominator beside it, which is the needsYou defect in a
+       different cell: two populations sharing one word. Both are named when both
+       exist; a program with nothing finished still just reads "N agents".
+       (Magnitude audit §6.) */
+    ...(r.ended > 0 && r.live > 0 && r.live + r.ended === agents.length
+      ? [{ value: String(r.live), label: "live" }, { value: String(r.ended), label: "ended" }]
+      /* The split must ACCOUNT for everyone. deriveActivity also returns
+         "unknown", and naming two cohorts that do not sum to the roster would
+         silently drop the third — the same disappearing-population bug wearing
+         the fix's clothes. When they do not add up, the total is the only
+         claim that is true. */
+      : [{ value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" }]),
+    /* "1 agent · 1 working" is one fact wearing two cells, and at n=1 the
+       operator can see the entire program in the single row beneath it. The
+       rule already lives in this function — `0 alerts` is suppressed at zero —
+       it was simply never extended to a count that is trivially implied,
+       because at 400 agents the case does not arise. (Quiet-board audit §3.)
+
+       Deliberately narrower than the audit's "or when it equals the agent
+       count". At n>=2, "2 agents · 2 working" is NOT a restatement: two agents
+       could be none working, so the cell carries the fact that all of them are
+       live-working, and a collapsed program does not show the rows that would
+       say so otherwise. And "1 agent · 0 working" stays, because that cell is
+       what proves the client derives this count itself rather than trusting a
+       server figure — there is a test pinning exactly that drift. Only the
+       tautology goes. */
+    ...(agents.length === 1 && r.working === 1
+      ? []
+      : [{ value: String(r.working), label: "working" }]),
+    ...(r.needsYou > 0
+      /* Audit §11: "0 alerts" per program is one of three widgets that spent
+         pixels asserting nothing needs you. An operator who learns a counter
+         always reads 0 stops reading it, which is exactly when it turns 1. */
+      ? [{ value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: true }]
+      : []),
   ];
+  /* Server first. Two derivations of one number is the seam that produced every
+     token defect on this board; when the wire carries the aggregate, the client
+     has no business computing a second opinion about it. */
+  const reported = rollup && Number.isFinite(rollup.sessionTokens) ? rollup.sessionTokens : null;
   const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
-  if (withTokens.length) {
-    const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
+  if (reported != null || withTokens.length) {
+    const total = reported != null
+      ? reported
+      : withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
     // key "tokens" lets the header rollup drop this cell first on narrow screens
     // (it is the least critical; the alerts cell is never dropped).
-    cells.push({ value: fmtTok(total), label: "tokens", key: "tokens" });
+    /* "session tokens", not "tokens". This sums sessionTotal across every agent
+       in the program — 35% of it from ended sessions on the live board — while a
+       ROW's token cell shows that agent's latest-turn total. Two different
+       quantities under one word invite the operator to read the program as the
+       sum of its rows, which it is not: measured, 1.58B here against 682k on a
+       row. Same vocabulary as the drawer's "used this session".
+       (GPT lane day-review 4.5, downgraded to relayed-unverified — verified
+       here, and it holds.) */
+    /* One agent means no aggregation to explain the gap. This header reads
+       "2.2M session tokens" beside its ONLY row reading "826k latest call" —
+       thirteen-fold apart, with the whole population visible. At 400 agents
+       "the header sums many rows" is at least an available explanation; at n=1
+       there is nothing between the two numbers and the operator cannot
+       reconcile them. The row already carries the figure, in the more honest
+       unit, so the header stops competing with it. (Quiet-board audit §1.) */
+    if (agents.length > 1) cells.push({ value: fmtTok(total), label: "session tokens", key: "tokens" });
   }
   return cells;
 }
 
-/* Plain-language control explanation for the Operate chrome. Never echoes
-   capability reasons here — live reasons carry raw cmux/session IDs, which
-   belong only in Evidence. */
-function controlUnavailableText(controlState) {
-  return controlState === "quarantined"
-    ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
-    : "Controls are unavailable — no safe cmux target is linked to this session.";
-}
 
 /* ---------- identity resolution: why a session is quarantined ----------
    The server ships `identityTrace` on every agent in the snapshot (it is only
@@ -271,149 +313,10 @@ function controlUnavailableText(controlState) {
    renderer, so the one failure mode that disables Focus and Send at scale
    surfaced as a fixed sentence with no reason and no way forward. */
 
-const IDENTITY_TIER_LABELS = {
-  recorded: "Recorded target",
-  session: "Session ID on a terminal",
-  cwd: "Working folder",
-};
-const IDENTITY_OUTCOME_LABELS = {
-  matched: "matched",
-  quarantined: "quarantined",
-  ambiguous: "ambiguous",
-  "no-match": "no match",
-  skipped: "skipped",
-  rejected: "rejected",
-};
-/* Why routing refused, and what the operator can actually DO about it — one
-   entry per shape the resolver produces. Deliberately ID-free: the banner is
-   Operate chrome and the established rule (controlUnavailableText, and the test
-   that pins it) is that raw cmux/session identifiers belong only in Evidence.
-   The specific "ttys082 has both of these open" answer is one click away in the
-   routing-evidence block, not in the banner. */
-const IDENTITY_CAUSES = {
-  "contested-terminal": {
-    why: "More than one session claims the same terminal, so there is no unambiguous target to type into.",
-    next: "End or close one of the sessions sharing that terminal — controls re-arm on the next scan, no restart needed.",
-  },
-  "shared-folder": {
-    why: "This session is not registered on any terminal, and more than one session shares its working folder — so matching by folder cannot pick one.",
-    next: "Give this session its own cmux pane, or end the other session running in that folder; the next scan then binds it.",
-  },
-  missing: {
-    why: "No cmux terminal reports this session, so there is nothing to route Focus or Send to.",
-    next: "Open it in a cmux pane (or start the agent from one) and the next scan binds it.",
-  },
-};
 
-/* Normalized, render-ready view of one agent's identity trace. Pure. */
-function identityTraceView(agent) {
-  const trace = (agent && agent.identityTrace) || null;
-  const target = (agent && agent.target) || {};
-  const rawSteps = trace && Array.isArray(trace.steps) ? trace.steps : [];
-  return {
-    resolution: (trace && trace.resolution) || target.resolution || "missing",
-    matchedTier: (trace && trace.matchedTier) || null,
-    reason: (trace && trace.reason) || null,
-    surfaceId: (trace && trace.surfaceId) || target.surfaceId || null,
-    bridge: (trace && trace.bindingBridge) || null,
-    steps: rawSteps.map((step) => ({
-      tier: step.tier,
-      tierLabel: IDENTITY_TIER_LABELS[step.tier] || step.tier,
-      outcome: step.outcome,
-      outcomeLabel: IDENTITY_OUTCOME_LABELS[step.outcome] || step.outcome,
-      detail: step.detail || "",
-    })),
-  };
-}
 
-/* Which of the three real refusal shapes this is. Read off the tier that
-   actually refused, not off the resolution alone: every quarantine resolves as
-   "ambiguous", but a terminal contested by two sessions and a folder shared by
-   two sessions need different instructions. (Measured against the live board:
-   9 quarantined sessions, all `ambiguous`, all refused at the cwd tier.) */
-function identityCause(view) {
-  const refused = (tier) => view.steps.some((step) =>
-    step.tier === tier && (step.outcome === "quarantined" || step.outcome === "ambiguous"));
-  if (refused("session")) return "contested-terminal";
-  if (refused("cwd")) return "shared-folder";
-  return "missing";
-}
 
-/* The banner's whole story: what happened, why, and what to do about it.
-   Returns null when controls route normally. Pure. */
-function quarantineBrief(agent, control = deriveControlState(agent)) {
-  if (control === "linked") return null;
-  const view = identityTraceView(agent);
-  const cause = identityCause(view);
-  return {
-    title: control === "quarantined" ? "Control routing locked." : "Controls unavailable.",
-    summary: controlUnavailableText(control),
-    why: IDENTITY_CAUSES[cause].why,
-    nextStep: IDENTITY_CAUSES[cause].next,
-    cause,
-    steps: view.steps,
-  };
-}
 
-/* Short form of a provider session id — long enough to tell two sessions on
-   one terminal apart, short enough to read in a sentence. */
-function shortSessionId(id) {
-  const text = String(id || "");
-  return text.length > 10 ? text.slice(0, 8) + "…" : text;
-}
-
-/* GET /api/debug/identity?agent=<id> → the sentence the operator needs: which
-   terminal, and which sessions are fighting over it. The pids/commands/open
-   files live only on CmuxSurface, which the snapshot does not carry, so this is
-   the one piece of evidence that has to be fetched on demand. Pure. */
-function surfaceCollisions(payload) {
-  const surfaces = (payload && Array.isArray(payload.relatedSurfaces)) ? payload.relatedSurfaces : [];
-  return surfaces.map((surface) => {
-    const trace = surface.identityTrace || {};
-    const commandByPid = new Map((trace.processes || []).map((proc) => [proc.pid, proc.command]));
-    const claims = [];
-    const seen = new Set();
-    for (const match of trace.openFileMatches || []) {
-      const key = match.provider + ":" + match.sessionId;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      claims.push({
-        provider: match.provider,
-        sessionId: match.sessionId,
-        pid: match.pid,
-        command: commandByPid.get(match.pid) || "",
-      });
-    }
-    return {
-      surfaceId: surface.surfaceId,
-      tty: surface.tty || "",
-      conflict: surface.identityConflict || trace.identityConflict || "",
-      claims,
-    };
-  });
-}
-
-function collisionClaimText(claim) {
-  const who = (PROVIDER_LABELS[claim.provider] || claim.provider) + " " + shortSessionId(claim.sessionId);
-  if (!claim.pid) return who;
-  return who + " (pid " + claim.pid + (claim.command ? ", " + conciseText(claim.command, 40) : "") + ")";
-}
-
-function collisionLine(collision) {
-  const where = collision.tty || collision.surfaceId || "this terminal";
-  if (!collision.claims.length) return where + " — no open agent session files observed.";
-  if (collision.claims.length === 1) return where + " — one session open: " + collisionClaimText(collision.claims[0]);
-  return where + " — " + collision.claims.length + " sessions claim it: "
-    + collision.claims.map(collisionClaimText).join(" · ");
-}
-
-function conciseText(value, limit = 88) {
-  const text = String(value || "").split("\n")[0].replace(/^(goal:|you are)\s*/i, "").trim();
-  if (text.length <= limit) return text;
-  const clipped = text.slice(0, limit - 1);
-  const boundary = clipped.lastIndexOf(" ");
-  return clipped.slice(0, boundary > limit * 0.65 ? boundary : clipped.length).trimEnd() + "…";
-}
 
 const NO_READABLE_MESSAGE = "No readable message yet";
 
@@ -422,137 +325,58 @@ function formatLastHumanMessage(agent, limit = 120) {
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
-/* Short folder/Home identity for when cmux titles are unavailable. */
-function cwdIdentityName(agent) {
-  if (!agent || typeof agent.cwd !== "string" || !agent.cwd.trim()) return "";
-  const normalized = agent.cwd.replace(/\/+$/, "");
-  const parts = normalized.split("/").filter(Boolean);
-  const provider = providerLabel(agent.provider);
-  if (parts.length <= 2 && (parts[0] === "Users" || parts[0] === "home")) {
-    return provider + " · Home";
-  }
-  const base = parts[parts.length - 1];
-  return base ? provider + " · " + base : provider + " · Home";
-}
 
-function sourceAgentName(agent) {
-  if (!agent) return "";
-  if (agent.nickname) return conciseText(agent.nickname);
-  const identity = cwdIdentityName(agent);
-  const display = typeof agent.displayName === "string" ? agent.displayName.trim() : "";
-  // Keep short provider·folder identities; replace prompt-as-title blobs.
-  const shortIdentity = display.length > 0 && display.length <= 56 && display.includes("·");
-  if (shortIdentity) return conciseText(display);
-  if (identity) return conciseText(identity);
-  return conciseText(display || agent.task || providerLabel(agent.provider) + " agent");
-}
 
-function presentationLabelKey(target) {
-  if (!target) return "";
-  if (target.kind === "program") return "program:" + target.programId;
-  if (target.kind === "workspace") return "workspace:" + target.workspaceId;
-  if (target.kind === "room") return "room:" + target.surfaceId;
-  if (target.kind === "agent") return "agent:" + target.agentId;
-  return "";
-}
 
 const programLabelTarget = (program) => ({ kind: "program", programId: program.id });
-const workspaceLabelTarget = (workspaceId) => ({ kind: "workspace", workspaceId });
-const roomLabelTarget = (surfaceId) => ({ kind: "room", surfaceId });
-const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id });
-/* Every live agent can take a presentation label. Prefer editing the linked
-   cmux workspace when present so Ant Hill names stay hunt-able in the wild. */
-const agentLabelEligible = (agent) => Boolean(agent && agent.id);
 
-/* Live cmux / terminal title for this session, when routing knows one. */
-function terminalSourceName(agent) {
-  const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
-    ? agent.target.workspaceTitle.trim()
-    : "";
-  return title ? conciseText(title) : "";
-}
+/* ---------- disambiguating identical rows ----------
 
-/* Human-readable terminal destination for a LINKED pane, built only from fields
-   the client target actually carries: the workspace/terminal title and the live
-   pane cwd (surfaceCwd). Only exact / unique-cwd links resolve a safe target, so
-   ambiguous / missing / ended-observed rows return null and stay silent. Note:
-   the client target exposes no discrete "surface title" — the pane's folder (the
-   tail of surfaceCwd) is the closest identity we can honestly show. */
-function terminalIdentity(agent) {
-  const t = agent && agent.target;
-  if (!t || (t.resolution !== "exact" && t.resolution !== "unique-cwd")) return null;
-  const title = typeof t.workspaceTitle === "string" ? conciseText(t.workspaceTitle.trim(), 40) : "";
-  const paneCwd = typeof t.surfaceCwd === "string" ? t.surfaceCwd.trim() : "";
-  const parts = paneCwd.replace(/\/+$/, "").split("/").filter(Boolean);
-  const paneFolder = parts.length ? parts[parts.length - 1] : "";
-  if (!title && !paneCwd) return null;
-  return { title, paneCwd, paneFolder };
-}
+   A live board carried 56 rows all reading "Claude · the-mountain-main": same
+   provider, same working directory, several on the same model, nothing on the
+   row to tell one from another. The name is genuinely not unique — one folder
+   can hold any number of concurrent sessions — so no naming rule fixes this.
+   The session id IS unique, and it is what the drawer, Evidence and every
+   copy-id button already speak, so a short form of it is the disambiguator.
 
-/* Compact terminal breadcrumb for the row identity tags: workspace title · pane
-   folder, with any segment that merely repeats the display name dropped (the
-   name often already IS the terminal title). Returns "" when nothing new
-   survives, so the tag never echoes the name back at the operator. */
-function terminalBreadcrumb(agent, displayName) {
-  const id = terminalIdentity(agent);
-  if (!id) return "";
-  const name = String(displayName || "").trim().toLowerCase();
-  const seen = new Set();
-  const parts = [];
-  for (const seg of [id.title, id.paneFolder]) {
-    const key = seg.toLowerCase();
-    if (!seg || key === name || seen.has(key)) continue;
-    seen.add(key);
-    parts.push(seg);
-  }
-  return parts.join(" · ");
-}
-
-/* Focus jumps to the linked pane — preview WHERE it lands (terminal title + pane
-   cwd) so the operator sees the destination before clicking. Falls back to the
-   generic label when no destination resolves. */
-function focusDestinationHint(agent) {
-  const id = terminalIdentity(agent);
-  if (!id) return "Jump to terminal pane";
-  const dest = [id.title, id.paneCwd].filter(Boolean).join(" · ");
-  return dest ? "Jump to " + dest : "Jump to terminal pane";
-}
-
-/* Rename target: workspace first (shared terminal identity), else the agent. */
-function preferredRenameTarget(agent) {
-  if (agent && agent.target && agent.target.workspaceId) {
-    return workspaceLabelTarget(agent.target.workspaceId);
-  }
-  return agentLabelTarget(agent);
-}
-
-function agentName(agent) {
+   Shown ONLY on rows whose name repeats: a hash on every row would be noise on
+   a board where most names are already distinct. */
+function sessionTag(agent) {
   if (!agent) return "";
-  const agentLabel = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
-  if (agentLabel) return agentLabel;
-  if (agent.target && agent.target.workspaceId) {
-    const workspaceLabel = state.aliases.get(presentationLabelKey(workspaceLabelTarget(agent.target.workspaceId)));
-    if (workspaceLabel) return workspaceLabel;
-  }
-  // Prefer the cmux terminal title only when the session cwd agrees with the
-  // pane. A home-cwd orch parked in a project-titled workspace must stay
-  // "Codex · Home" — not borrow the workspace name.
-  const terminal = terminalSourceName(agent);
-  if (terminal && !agent.target?.cwdMismatch) return terminal;
-  return sourceAgentName(agent);
+  const raw = agent.sourceSessionId || String(agent.id || "").split(":").slice(1).join(":") || "";
+  const trimmed = String(raw).trim();
+  if (!trimmed) return "";
+  /* The TAIL, not the head. Codex issues UUIDv7, whose leading segment is a
+     timestamp — every session started in the same minute shares it. Tagging by
+     prefix produced "#019fb496" on four different rows and disambiguated
+     nothing; on the live board 20 of 27 duplicate-name groups collided that way.
+     The trailing segment is the random part, so it is what actually separates
+     two sessions. Verified against 213 live agents: no collisions. */
+  const segments = trimmed.split("-").filter(Boolean);
+  const tail = segments.length ? segments[segments.length - 1] : trimmed;
+  return tail.slice(-8);
 }
 
-/* Presentation-only labels. Source identities stay stable; the label is a
-   display value the operator controls. */
+/* Names that appear more than once across the agents given. Built once per
+   paint from the whole board, not per program — two twins in different programs
+   are exactly as confusing as two in the same one. */
+function ambiguousNames(agents) {
+  const seen = new Map();
+  for (const agent of agents || []) {
+    const name = agentName(agent);
+    if (!name) continue;
+    seen.set(name, (seen.get(name) || 0) + 1);
+  }
+  const repeated = new Set();
+  for (const [name, count] of seen) if (count > 1) repeated.add(name);
+  return repeated;
+}
+
 function programName(program) {
   const alias = program && state.aliases.get(presentationLabelKey(programLabelTarget(program)));
   return alias || (program ? program.name : "");
 }
 
-function snapshotAgents(snap) {
-  if (!snap) return [];
-  return snap.programs.flatMap((p) => p.agents.map((agent) => ({ agent, program: p })));
-}
 
 function totalsOf(snap) {
   const t = (snap && snap.totals) || {};
@@ -564,7 +388,6 @@ function totalsOf(snap) {
     history: t.history ?? count((a) => deriveActivity(a) === "ended"),
     live: t.live ?? count((a) => deriveActivity(a) === "working" || deriveActivity(a) === "idle"),
     tracked: t.tracked ?? agents.length,
-    needsYouAgents: count((a) => deriveActivity(a) !== "ended" && deriveOutcome(a) !== "healthy"),
     tokens: t.tokens,
     tokenMedian: t.tokenMedian,
     tokenReporting: t.tokenReporting,
@@ -574,86 +397,8 @@ function totalsOf(snap) {
   };
 }
 
-function issuesOf(snap) {
-  if (!snap) return [];
-  if (Array.isArray(snap.issues)) return snap.issues;
-  // Narrow fallback for snapshots that predate normalized issues.
-  const issues = [];
-  const errors = (snap.controlHealth && snap.controlHealth.errors) || [];
-  if (errors.length) {
-    issues.push({
-      id: "system:collector-errors",
-      kind: "system",
-      severity: "warning",
-      title: "Collection problems",
-      summary: `${errors.length} collector problem${errors.length === 1 ? "" : "s"} may make session data incomplete.`,
-      affectedAgentIds: [],
-      technicalDetails: [...errors],
-    });
-  }
-  for (const { agent } of snapshotAgents(snap)) {
-    const live = deriveActivity(agent) !== "ended";
-    const outcome = deriveOutcome(agent);
-    if (live && outcome !== "healthy") {
-      issues.push({
-        id: "agent:" + agent.id,
-        kind: "agent",
-        severity: outcome === "failed" ? "error" : "warning",
-        title: outcome === "failed" ? `${agentName(agent)} failed` : `${agentName(agent)} needs review`,
-        summary: agent.statusReason,
-        affectedAgentIds: [agent.id],
-      });
-    }
-    const policy = modelPolicyView(agent);
-    if (live && policy && policy.state === "mismatch") {
-      issues.push({
-        id: "policy:" + agent.id,
-        kind: "policy",
-        severity: "error",
-        title: `${agentName(agent)} is running a non-approved model`,
-        summary: policy.summary + (policy.expected ? ` Expected: ${policy.expected}.` : ""),
-        affectedAgentIds: [agent.id],
-      });
-    }
-  }
-  return issues;
-}
 
 /* ---------- views, search, facets ---------- */
-
-function viewMatches(view, agent) {
-  const act = deriveActivity(agent);
-  const out = deriveOutcome(agent);
-  switch (view) {
-    // Both read the shared alerting() verdict, so Now and Alerts can never
-    // disagree about whether a given agent is waiting on a person.
-    case "now": return act === "working" || alerting(agent);
-    case "needs-you": return alerting(agent);
-    case "working": return act === "working";
-    case "idle": return act === "idle";
-    case "history": return act === "ended";
-    case "usage": return false;
-    default: return true;
-  }
-}
-
-function parseLookbackHours(raw) {
-  if (raw == null || raw === "" || raw === "all") return null;
-  const hours = Number(raw);
-  if (!Number.isFinite(hours) || hours <= 0) return DEFAULT_LOOKBACK_HOURS;
-  return Math.min(24 * 30, Math.max(1, Math.round(hours)));
-}
-
-function withinLookback(agent, lookbackHours, nowMs = Date.now()) {
-  if (lookbackHours == null) return true;
-  const updated = Date.parse(agent.updatedAt);
-  if (!Number.isFinite(updated)) return false;
-  return nowMs - updated <= lookbackHours * 3_600_000;
-}
-
-function lookbackApplies(view) {
-  return view === "idle" || view === "history";
-}
 
 const ROW_STALE_AFTER_MS = 10 * 60_000;
 /* A running / waiting row whose last update is older than 10 minutes earns a
@@ -687,60 +432,6 @@ function matchesQuery(agent, program, query) {
   return hay.includes(query);
 }
 
-function buildClusters(agents) {
-  const ids = new Set(agents.map((a) => a.id));
-  const children = new Map();
-  const roots = [];
-  for (const a of agents) {
-    if (a.parentAgentId && ids.has(a.parentAgentId)) {
-      const list = children.get(a.parentAgentId) || [];
-      list.push(a);
-      children.set(a.parentAgentId, list);
-    } else {
-      roots.push(a);
-    }
-  }
-  return { roots, children };
-}
-
-/* ---------- token honesty ----------
-   When tokens.scope === "latest-turn", total/input/output/cachedInput describe
-   the latest invocation — that is the primary number everywhere, labeled as
-   such. Cumulative session usage (tokens.sessionTotal) belongs in Evidence.
-   Dense list widgets may still say "not reported"; the agent drawer omits
-   empty fields entirely (Take C). */
-
-function tokenSummary(tokens) {
-  const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
-  if (!tokens || (tokens.total == null && tokens.input == null && tokens.output == null && tokens.cachedInput == null)) {
-    const provenance = tokens ? tokens.provenance : "unknown";
-    return {
-      label,
-      text: "not reported",
-      known: false,
-      title: "This source does not report token usage locally (provenance: " + provenance + ")",
-    };
-  }
-  const marks = { observed: "", estimated: "≈", unknown: "" };
-  const parts = [];
-  if (tokens.input != null) parts.push("in " + fmtTok(tokens.input));
-  if (tokens.output != null) parts.push("out " + fmtTok(tokens.output));
-  if (tokens.cachedInput != null) parts.push("cache " + fmtTok(tokens.cachedInput));
-  const scopeNote = tokens.scope === "latest-turn" ? "latest model call · " : "";
-  const title = scopeNote + (parts.length ? parts.join(" · ") + " · " : "") + "provenance: " + tokens.provenance;
-  const text = tokens.total != null
-    ? marks[tokens.provenance] + fmtTok(tokens.total) + " tokens"
-    : marks[tokens.provenance] + parts.join(" · ");
-  return { label, text, known: true, title };
-}
-
-function contextUsage(tokens) {
-  if (!tokens || tokens.scope !== "latest-turn" || tokens.provenance !== "observed" ||
-      !Number.isFinite(tokens.total) || !Number.isFinite(tokens.contextWindow) || !(tokens.contextWindow > 0)) return null;
-  const rawPct = Math.max(0, Math.round((tokens.total / tokens.contextWindow) * 100));
-  return { pct: Math.min(100, rawPct), text: fmtTok(tokens.total) + " of " + fmtTok(tokens.contextWindow) + " (" + rawPct + "%)" };
-}
-
 const CONTEXT_DISPLAY_LABELS = { percent: "Context %", tokens: "Context tokens" };
 
 function contextDisplayLabel() {
@@ -766,63 +457,8 @@ function contextDisplayValue(tokens, display = state.contextDisplay) {
   return "not reported";
 }
 
-const ROLE_LABELS = {
-  orchestrator: "Orchestrator",
-  frontend: "Frontend / designer",
-  backend: "Backend implementer",
-  verifier: "Verifier",
-  tester: "Tester",
-  automation: "Automation",
-  agent: "Agent",
-};
 
-const ROLE_ALIASES = {
-  orchestrator: "orchestrator",
-  orchestration: "orchestrator",
-  coordinator: "orchestrator",
-  "swarm owner": "orchestrator",
-  frontend: "frontend",
-  "front end": "frontend",
-  designer: "frontend",
-  design: "frontend",
-  ui: "frontend",
-  ux: "frontend",
-  "frontend / designer": "frontend",
-  backend: "backend",
-  "back end": "backend",
-  server: "backend",
-  engine: "backend",
-  implementer: "backend",
-  "backend implementer": "backend",
-  verifier: "verifier",
-  reviewer: "verifier",
-  auditor: "verifier",
-  gatekeeper: "verifier",
-  validator: "verifier",
-  tester: "tester",
-  testing: "tester",
-  test: "tester",
-  qa: "tester",
-  "test lane": "tester",
-  automation: "automation",
-  autopilot: "automation",
-  automated: "automation",
-};
 
-function roleView(role) {
-  const normalized = String(role || "agent")
-    .trim()
-    .toLowerCase()
-    .replace(/[-_]+/g, " ")
-    .replace(/\s*\/\s*/g, " / ")
-    .replace(/\s+/g, " ");
-  const key = ROLE_ALIASES[normalized] || ROLE_LABELS[normalized] ? normalized : "agent";
-  const canonical = ROLE_ALIASES[key] || (ROLE_LABELS[key] ? key : "agent");
-  return { key: canonical, label: ROLE_LABELS[canonical] };
-}
-
-/* Header "Typical request": prefer the server-computed median; otherwise a
-   narrow fallback — the median of live latest-invocation totals we can see. */
 function typicalRequestOf(snap) {
   if (!snap) return null;
   const t = snap.totals || {};
@@ -859,41 +495,10 @@ function cursorPolicyParts(health) {
   ];
 }
 
-function modelPolicyView(agent) {
-  const p = agent.modelPolicy;
-  if (!p || !MODEL_POLICY_LABELS[p.state]) return null;
-  // Never name this `state` — the module-level app-state singleton is what the
-  // rest of this file means by that identifier, and shadowing it here is a trap
-  // for the next edit that reaches for state.contextDisplay or state.aliases.
-  const policyState = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
-  return {
-    state: policyState,
-    label: MODEL_POLICY_LABELS[p.state],
-    expected: p.expected || null,
-    summary: p.summary || (
-      policyState === "mismatch" ? "The reported model is outside the approved model policy."
-      : p.state === "compliant" ? "The reported model matches the approved model policy."
-      : "The model is unavailable, so policy compliance cannot be verified."),
-  };
-}
 
 /* ---------- shared elapsed-clock helpers ---------- */
 
-function elapsedDataset(agent, generatedAt) {
-  const live = deriveActivity(agent) !== "ended" && agent.elapsedMs != null && generatedAt;
-  return live
-    ? { elapsedBase: String(agent.elapsedMs), elapsedFrom: generatedAt }
-    : {};
-}
 
-function liveElapsedText(agent, generatedAt) {
-  if (agent.elapsedMs == null) return "—";
-  if (deriveActivity(agent) !== "ended" && generatedAt) {
-    const drift = Date.now() - Date.parse(generatedAt);
-    if (Number.isFinite(drift) && drift > 0) return fmtElapsed(agent.elapsedMs + drift);
-  }
-  return fmtElapsed(agent.elapsedMs);
-}
 
 /* ---------- summary widgets ---------- */
 
@@ -992,6 +597,105 @@ function topSourceIssue(snap) {
   return findings.find((issue) => issue.severity === "error") || findings[0];
 }
 
+/* The third question the card never answered: what do I do about it?
+
+   "CMUX identity conflicts" names a symptom in the collector's vocabulary and
+   leaves the operator with nowhere to go. This turns the top finding into a
+   consequence an operator recognises and an instruction they can carry out.
+
+   CONTRACT WITH THE BACKEND LANE — when an OperatorIssue carries `remedy`, its
+   wording wins and is rendered verbatim, so severity and phrasing stay owned by
+   the lane reclassifying them:
+
+     remedy?: { instruction: string; problem?: string }
+
+   Until that field lands this derives both from evidence already in the
+   snapshot, so the card is useful today and defers the moment it arrives.
+
+   The derivation is deliberately narrow. It sizes the alarm by the sessions an
+   operator genuinely cannot drive — live AND quarantined — not by every session
+   the issue touches. Today's identity-conflict row implicates 37 sessions, but
+   26 of them have already ended; counting all 37 is what made a tidy-up read
+   like an outage. An instruction is only asserted for issues whose remedy is
+   actually derivable; anything else falls back to the issue's own summary
+   rather than inventing a next step. */
+function healthRemedy(snap) {
+  const control = (snap && snap.controlHealth) || null;
+  const debris = (control && control.debris) || null;
+  const issue = topSourceIssue(snap);
+  if (!issue && !(debris && debris.count)) return null;
+  const entries = snapshotAgents(snap);
+
+  /* Which panes, in the operator's terms. The backend names the surfaces; this
+     maps them back to the sessions that opened them so the list reads as pane
+     titles rather than UUIDs. One pane can hold several ended sessions, so it
+     is collapsed to one row — the operator closes panes, not sessions. */
+  const debrisIds = new Set((debris && debris.surfaceIds) || []);
+  const byPane = new Map();
+  for (const { agent } of entries) {
+    const surfaceId = agent.target && agent.target.surfaceId;
+    const claimed = surfaceId && debrisIds.has(surfaceId);
+    if (!claimed) continue;
+    const existing = byPane.get(surfaceId);
+    if (!existing || (agent.updatedAt || "") > (existing.updatedAt || "")) {
+      byPane.set(surfaceId, {
+        name: (agent.target && agent.target.workspaceTitle) || agent.displayName || surfaceId,
+        updatedAt: agent.updatedAt,
+      });
+    }
+  }
+  let panes = [...byPane.values()];
+  /* Before the split lands, or when a surface names no session we can resolve,
+     fall back to the ended sessions the issue itself implicates. */
+  if (!panes.length && issue) {
+    const affected = new Set(issue.affectedAgentIds || []);
+    panes = entries
+      .filter((entry) => affected.has(entry.agent.id) && entry.agent.activity === "ended")
+      .map((entry) => ({ name: entry.agent.displayName || entry.agent.id, updatedAt: entry.agent.updatedAt }));
+  }
+
+  const blocked = issue
+    ? entries.filter((entry) => new Set(issue.affectedAgentIds || []).has(entry.agent.id)
+      && entry.agent.controlState === "quarantined" && entry.agent.activity !== "ended").length
+    : 0;
+
+  return {
+    // Nothing live is wrong when only debris remains, so this stays empty and
+    // the card keeps its all-clear headline rather than inventing a complaint.
+    problem: issue
+      ? (blocked
+        ? `${blocked} live session${blocked === 1 ? "" : "s"} can't take commands.`
+        : issue.summary)
+      : "",
+    /* The instruction must answer the problem actually stated. The debris
+       remedy says, in its own words, "this is tidying, not a fault" — printing
+       it under "3 live sessions can't take commands" offers a fix for a
+       different problem and reads as a contradiction. So it is reserved for the
+       case where debris IS the complaint; a live fault uses its own remedy, or
+       the summary the backend wrote for it, which carries the fix in prose.
+       Either way the wording is the backend's, never paraphrased. */
+    instruction: issue
+      ? (issue.remedy || (blocked && issue.summary ? issue.summary : ""))
+      : (debris && debris.remedy) || "",
+    paneCount: (debris && debris.count) || panes.length,
+    blockedCount: blocked,
+    // The pane list is evidence for the tidy-up instruction. Offering it beside
+    // a live fault points the operator at panes that would not unblock anything.
+    panes: issue ? [] : panes,
+    tidy: !issue,
+  };
+}
+
+/* Local to the health card: the pane list is a disclosure on this cell, not
+   board state, so it stays out of the shared client-state module another lane
+   owns. */
+let healthPanesOpen = false;
+
+function toggleHealthPanes() {
+  healthPanesOpen = !healthPanesOpen;
+  renderHealthRail();
+}
+
 /* "Since when" for a Degraded verdict: the most recent moment a currently-degraded
    source was last healthy, as a relative suffix (" · last healthy 12m ago"). Reuses
    agoText. A source that has never been healthy (lastHealthyAt null) contributes
@@ -1015,7 +719,35 @@ function noDataWidget(sublabel) {
   return { value: "No data", unit: "", sublabel, tone: "missing" };
 }
 
-function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed) {
+/* How long the completion tracker has ACTUALLY watched. A freshly restarted
+   tracker must never let a partial window read as a full one: the MOMENTUM card
+   carried this qualifier from the start, and the collapsed calm line dropped it
+   and hard-coded "this hour". That did not merely lose a caveat — it upgraded a
+   partial observation into a stronger claim than the data supports, which is
+   exactly what an orchestrator extrapolating a rate would be misled by. Measured
+   on the live board: observedWindowMs was 300000, five minutes, printed as an
+   hour. One derivation now, shared by both surfaces. */
+function completionWindowText(momentum) {
+  if (!momentum) return "";
+  const done = momentum.completionsLastHour;
+  /* Null is the server declining to guess, not a zero. It counted `working ->
+     idle` edges, which is "stopped writing for three minutes" — the audit's
+     worst number, whose true value could be 0 while it rendered 17. Say nothing
+     rather than print "↑null done". */
+  if (done == null) return "";
+  if (!(momentum.observedWindowMs > 0)) {
+    /* A restarted tracker knows a COUNT before it has a window to rate it over.
+       Saying "No completion data yet" while completionsLastHour is 2 states
+       something false in the name of honesty — the honest sentence is what is
+       known plus what is not. (GPT day review 3.1.) */
+    return done > 0 ? "↑" + done + " done · rate window not established" : "";
+  }
+  const full = momentum.observedWindowMs >= 3_600_000;
+  return "↑" + done + " done "
+    + (full ? "this hour" : "in " + fmtElapsed(momentum.observedWindowMs) + " observed");
+}
+
+function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed, queueError = state.queueError) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
     // trailing micro-chip; degraded promotes to a full cell with its reason.
@@ -1024,15 +756,61 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const source = snap && snap.totals && snap.totals.sourceHealth;
     const stale = (control && control.staleSources && control.staleSources.length) || 0;
     const errors = (control && control.errors && control.errors.length) || 0;
+    /* The card used to headline the bare word "Degraded" for all three
+       severities, then contradict itself one line down with an ADVISORY badge
+       and the sentence "the board is usable" — an advisory shouting in the same
+       amber as an unreachable control plane. The headline IS the severity now,
+       so the two cannot disagree, and `advisory` gets its own tone so the strip
+       can render it at the weight it deserves. */
+    const severity = status.key === "degraded" ? degradedSeverity(snap, conn, fetchFailed) : null;
+    /* A healthy board has to read as actively clear, not merely silent. "All
+       clear" is the operator's word for it; "Operational" described the system
+       to itself and left a reader unsure whether the board was fine or just
+       not talking. */
+    const SEVERITY_HEADLINE = { blocking: "Blocked", stale: "Stale", advisory: "Advisory" };
+    /* Computed even when the board is clear. Once the backend moves abandoned
+       panes out of `errors` and into `debris`, a tidy-up no longer degrades the
+       verdict — but it must still be discoverable, or the cleanup becomes
+       invisible the moment it stops being an alarm. */
+    const derived = healthRemedy(snap);
+    /* A blocking fault outranks any tidy-up: telling an operator to close panes
+       while Focus and Send cannot route at all points them at the wrong problem.
+       But suppressing the wrong instruction must not leave none — a card that
+       says the board is Blocked and stops there is the symptom-without-a-remedy
+       the whole rewrite exists to remove. These severities are decided here, in
+       the client, so their next step is named here too. */
+    const blockingStep = !snap || conn === "offline"
+      ? "Check the hub is running, then Refresh."
+      : control && control.cmuxReachable !== true
+        ? "Start cmux, then Refresh — Focus and Send come back on their own."
+        : "";
+    /* Offline is its own status key rather than a `degraded` severity, so it
+       needs naming here too — it is the one state where the operator is most
+       stranded and least able to guess the next move. */
+    const severityStep = (severity && severity.key === "blocking") || status.key === "offline"
+      ? blockingStep
+      : severity && severity.key === "stale" ? "Refresh to re-pull the evidence."
+      : "";
+    const remedy = severityStep
+      ? { ...(derived || { problem: "", paneCount: 0, blockedCount: 0, panes: [], tidy: false }),
+          instruction: severityStep, panes: [] }
+      : derived;
     return {
-      value: status.label,
+      value: (severity && SEVERITY_HEADLINE[severity.key])
+        || (status.key === "operational" ? "All clear" : status.label),
       unit: "",
+      remedy,
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
         : status.key === "operational"
+          /* "Nothing needs you" is the whole point of the clear state, so it is
+             only claimed when it is true. Pending tidy-up says so plainly and
+             stays optional — offered, not demanded. */
           ? (source && source.total > 0
-            ? `${source.healthy}/${source.total} sources healthy · controls reachable.`
-            : "Sources and controls healthy.")
+            ? `${source.healthy}/${source.total} sources healthy · controls reachable`
+              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you.")
+            : "Sources and controls healthy"
+              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you."))
           : conn !== "live" ? "Live snapshot feed is not healthy."
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
@@ -1040,8 +818,12 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
               : source && source.degraded > 0
                 ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
                 : "Source or control evidence needs review.",
-      tone: status.tone,
+      // An advisory is not an alarm: it takes its own tone so the strip shrinks
+      // it to a micro cell instead of sizing it like a blocked control plane.
+      tone: severity && severity.key === "advisory" ? "advisory" : status.tone,
       icon: status.key === "operational" ? "check" : status.key === "offline" ? "offline" : "warning",
+      severityKey: severity ? severity.key : null,
+      severityDetail: severity ? severity.detail : "",
     };
   }
   if (!snap) return noDataWidget("Waiting for the first snapshot.");
@@ -1050,11 +832,18 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   if (id === "needs-you") {
     const attention = attentionSummary(snap);
     const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
+    /* This card is the one that means "stop reading and go do something", so a
+       missing input has to be admitted HERE rather than only in a console warning.
+       Queued triage items are part of its findings list; when the queue did not
+       answer, the count below is a floor, not a total. */
+    const queueDown = queueError
+      ? "Triage queue unavailable (" + queueError + ") — findings may be missing."
+      : "";
     return {
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
-      sublabel: attention.count && top ? top : "No active findings.",
-      tone: attention.count ? "hot" : "ok",
+      sublabel: queueDown || (attention.count && top ? top : "No active findings."),
+      tone: attention.count || queueDown ? "hot" : "ok",
     };
   }
   if (id === "momentum") {
@@ -1066,13 +855,10 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       // 5-min bucket there is no completion window to report at all; stall
       // detection reads updatedAt directly, so it stays valid immediately.
       const parts = [];
-      if (momentum.observedWindowMs > 0) {
-        const windowText = momentum.observedWindowMs < 3_600_000
-          ? "in " + fmtElapsed(momentum.observedWindowMs) + " observed"
-          : "this hour";
-        parts.push("↑" + momentum.completionsLastHour + " done " + windowText);
-      }
-      if (momentum.stalled) parts.push(`${momentum.stalled} quiet 15m+`);
+      const windowText = completionWindowText(momentum);
+      if (windowText) parts.push(windowText);
+      const stall = stallText(snap, momentum.stalled);
+      if (stall) parts.push(stall);
       if (parts.length) sublabel = parts.join(" · ");
     }
     return { value: String(totals.working), unit: "shipping", sublabel, tone: "ok" };
@@ -1084,13 +870,49 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const cost = burn.costLastHourUsd != null
       ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
-    const coverage = burn.coverage
-      ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
+    /* No coverage suffix. It counted ELIGIBLE LIVE agents while the rate sums
+       deltas from every tracked reporter including ended ones — the same
+       wrong-population defect just removed from CONTEXT PEAK, and the same
+       reason: a coverage ratio attached to a figure it does not describe reads
+       as a completeness guarantee for a number it never measured.
+       (Magnitude audit §3, "two extras found here".) */
+    const coverage = "";
+    /* The rate and the cost come from different places — the rate needs completed
+       five-minute buckets, the cost comes from BurnBar — so one being absent says
+       nothing about the other. Headlining "No data" above a real dollar figure
+       and a claim of complete coverage left the operator unable to tell whether
+       spend was unknown or $19.54. Only the missing half says it is missing. */
+    const hasRate = burn.tokensPerMin != null;
+    const hasCost = burn.costLastHourUsd != null;
+    /* Both missing is still "No data", but it keeps the sublabel rather than
+       swapping in a generic one: "cost unavailable" is the honest phrasing for a
+       failed BurnBar query and must never degrade into a rendered $0. */
+    const sub = cost + coverage + (burn.costNote ? " · " + burn.costNote : "");
+    if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
+    /* The rate is an average over a window the payload carries and the widget
+       never printed. windowMs is 300000 here — a five-minute average shown as a
+       bare "/min" invites reading it as an instantaneous rate, which is how a
+       rate and an hourly cost end up divided against each other. Say the window.
+       (Magnitude audit §3.) */
+    const windowNote = hasRate && Number.isFinite(burn.windowMs) && burn.windowMs > 0
+      ? " · " + fmtElapsed(burn.windowMs) + " average"
+      : "";
+    /* What the rate cannot see. This is the honest half of the coverage suffix
+       deleted above: `unknown` counts LIVE agents whose provider reports no
+       token totals at all — measured, all 3 are Cursor — so they contribute
+       exactly zero to the rate, permanently, and the figure is a subtotal shown
+       as a total. Naming an absence is safe where asserting completeness was
+       not: it does not claim the rate's denominator, it only says who is
+       invisible to it. Audit §20 — coverage speaks only when incomplete. */
+    const blindNote = hasRate && burn.coverage && Number.isFinite(burn.coverage.unknown)
+      && burn.coverage.unknown > 0
+      ? ` · ${burn.coverage.unknown} not reporting tokens`
+      : "";
     return {
-      value: burn.tokensPerMin != null ? fmtTok(burn.tokensPerMin) : "No data",
-      unit: burn.tokensPerMin != null ? "/min" : "",
-      sublabel: cost + coverage + (burn.costNote ? " · " + burn.costNote : ""),
-      tone: burn.tokensPerMin != null ? "ok" : "missing",
+      value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
+      unit: hasRate ? "/min" : "",
+      sublabel: sub + windowNote + blindNote,
+      tone: hasRate ? "ok" : "missing",
     };
   }
   if (id === "context-peak") {
@@ -1108,11 +930,26 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const median = Number.isFinite(snap.contextMedian) ? snap.contextMedian : null;
     if (!peak && reported == null) return noDataWidget("No live context reports.");
     const pct = reported != null ? reported : peak.pct;
-    const coverage = totals.tokenReporting != null && totals.tokenEligible != null
-      ? ` · ${totals.tokenReporting}/${totals.tokenEligible} reporting` : "";
-    /* Peak alone hides the shape of the fleet: one agent at 90% and every agent
-       at 90% are the same headline and very different situations. */
-    const spread = median != null ? `Peak ${pct}% · Median ${median}%` : "Highest observed";
+    /* No coverage suffix. It used to read `${tokenReporting}/${tokenEligible}
+       reporting`, which counts TOKEN reporters — measured live at 8/9 while 32
+       live agents were reporting contextPct. A coverage figure for the context
+       reading that counts a different population is worse than none: it looks
+       like a completeness guarantee and is measuring something else.
+
+       Deriving one client-side would be a THIRD population, since the headline
+       comes from the server's own contextPeak over its liveAgents filter. The
+       honest fix is to stop asserting it here; if context coverage matters, the
+       server should ship contextReporting/contextEligible beside contextPeak so
+       the number and its coverage come from one derivation.
+       (GPT lane day-review 4.4, downgraded to relayed-unverified — verified
+       here, and it holds.) */
+    const coverage = "";
+    /* The headline already IS the peak percentage, so repeating "Peak 62%"
+       underneath printed one number twice about 40px apart — the same defect the
+       drawer's context tile had, whose fix never reached the band. Peak alone
+       hides the shape of the fleet, so the median stays: one agent at 90% and
+       every agent at 90% are the same headline and very different situations. */
+    const spread = median != null ? `Median ${median}%` : "Highest observed";
     return {
       value: peak && display === "tokens" ? contextDisplayValue(peak.agent.tokens, display) : pct + "%",
       unit: display === "tokens" && peak ? "" : "peak window",
@@ -1144,55 +981,7 @@ const WORK_STATE_VIEW = {
   cleared: { key: "cleared", label: "Cleared", tone: "moss" },
 };
 
-// Progress 0–100 per work state (normative). blocked keeps a mid value but
-// its ember tone (not the %) carries the alarm.
-/* One server enum, one operator vocabulary. Every surface that names an
-   investigation state reads from here: the plan chip, the queue button and its
-   note, the pulse row's work state, the drawer eyebrow and the drawer status
-   sentence. Before this table `completed` read "Complete" on the chip,
-   "complete · verifying" on the button, "verifying" in the pulse row,
-   "Verifying" in the drawer eyebrow and "complete · waiting for fresh data" in
-   the drawer status — four different words for one state, on one board.
-   `work` maps into WORK_STATE_VIEW, which stays the downstream row vocabulary. */
-const INVESTIGATION_STATE_VIEW = {
-  queued: {
-    work: "queued", label: "Queued", tone: "cool",
-    button: "✓ Investigation queued",
-    note: "Queued and ready for explicit launch",
-    status: "queued and ready for explicit launch",
-  },
-  running: {
-    work: "investigating", label: "Running", tone: "warm",
-    button: "● Investigation running",
-    note: "Investigation running",
-    status: "running",
-  },
-  completed: {
-    work: "verifying", label: "Verifying", tone: "ok",
-    button: "✓ Investigation verifying",
-    note: "Investigation verifying · waiting for fresh data",
-    status: "verifying · waiting for fresh data",
-  },
-  blocked: {
-    work: "blocked", label: "Blocked", tone: "hot",
-    button: "! Investigation blocked",
-    note: "Investigation blocked · review result",
-    status: "blocked · review result",
-  },
-};
 
-/* A state the server adds later reads as its own word everywhere rather than
-   as a confident wrong label on one surface and a raw enum on the next. */
-function investigationView(stateKey) {
-  if (INVESTIGATION_STATE_VIEW[stateKey]) return INVESTIGATION_STATE_VIEW[stateKey];
-  const raw = String(stateKey || "queued");
-  return {
-    work: "queued", label: raw, tone: "cool",
-    button: "Investigation " + raw,
-    note: "Investigation " + raw,
-    status: raw,
-  };
-}
 
 const PROGRESS_BY_WORK = {
   needs: 0, watching: 0, triaging: 15, planned: 35, queued: 50,
@@ -1232,23 +1021,26 @@ globalThis.TheAntHill = {
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
-  sourceAgentName, presentationLabelKey, agentLabelEligible, programName,
+  sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
   preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail, verdictGate, headPrimaryAction, renderVitalsBand,
-  renderAgentRow, renderAgentColumnHeader,
+  quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
+  renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
-  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText,
+  withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
+  agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
-  broadcastEligible, broadcastIneligibleReason,
+  broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  usageCostReading, usageTokenReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
-  renderAgentDrawer, renderOperate, renderChat, renderEvidence, renderNamesDisclosure,
+  renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
   identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
   renderControlBanner, renderIdentityBlock,
   el,
@@ -1268,7 +1060,7 @@ globalThis.TheAntHill = {
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
   // block, exactly the TDZ hazard the comment above describes. The behavior it
   // gates is asserted through handleRowNavigation instead.
-  nextRowIndex, handleRowNavigation, firstLoadPending, renderSkeleton, renderEmpty,
+  nextRowIndex, handleRowNavigation, nextViewIndex, handleCockpitKeys, isTypingTarget, firstLoadPending, renderSkeleton, renderEmpty,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
@@ -1277,67 +1069,8 @@ globalThis.TheAntHill = {
 
 const STALE_AFTER_MS = 60_000;
 
-/* Freshness is a property of the DATA, never of the transport. The server
-   heartbeats every 25s from a timer that knows nothing about the collector, so a
-   heartbeat proves only that the socket is open — it must never be able to make
-   a 91-hour-old snapshot read as "Live". Age is measured against
-   snapshot.generatedAt, which the server already sends. The collector refreshes
-   every 4s, so anything past SNAPSHOT_FRESH_MS is already behind; past
-   SNAPSHOT_STALE_MS the board is not showing "now" in any useful sense. */
-const SNAPSHOT_FRESH_MS = 15_000;
-const SNAPSHOT_STALE_MS = 60_000;
 
-function snapshotFreshness(generatedAt, now = Date.now()) {
-  const at = generatedAt ? Date.parse(generatedAt) : NaN;
-  if (!Number.isFinite(at)) return { state: "unknown", ageMs: null };
-  const ageMs = Math.max(0, now - at);
-  if (ageMs <= SNAPSHOT_FRESH_MS) return { state: "fresh", ageMs };
-  return { state: ageMs > SNAPSHOT_STALE_MS ? "stale" : "lagging", ageMs };
-}
 
-/* The badge tells the truth once you look at it — the ALARM is what makes you
-   look. :4701 served a 91-hour-frozen snapshot behind a green "Live" badge and
-   the operator acted on a world that had ended four days earlier. A badge in the
-   corner is not a warning; a full-width bar in the reading path is.
-
-   One predicate decides the whole staleness story, so the alarm, the clocks and
-   the controls can never disagree with each other. Pure, so the rule is testable
-   without a browser. Returns null when the board is trustworthy. */
-function feedAlarm(conn, generatedAt, now = Date.now()) {
-  if (conn === "offline") {
-    return {
-      kind: "offline",
-      headline: "Server unreachable — this board is not updating",
-      detail: "Nothing below is current. Focus, Send, Interrupt, Archive and Broadcast are held until the server answers.",
-      ageMs: null,
-    };
-  }
-  const fresh = snapshotFreshness(generatedAt, now);
-  if (fresh.state !== "stale") return null;
-  const age = fmtElapsed(fresh.ageMs);
-  return {
-    kind: "frozen",
-    headline: "Feed frozen — last snapshot " + age + " ago",
-    detail: "Every agent, count and clock below is " + age + " old. Controls are held: routing on stale evidence can type into the wrong terminal.",
-    ageMs: fresh.ageMs,
-  };
-}
-
-/* Stale data has to LOOK stale everywhere it is displayed, not just in the bar.
-   Same predicate as the alarm by construction. */
-function clocksFrozen(conn, generatedAt, now = Date.now()) {
-  return feedAlarm(conn, generatedAt, now) !== null;
-}
-
-function feedFrozen(ui = state, now = Date.now()) {
-  return clocksFrozen(ui && ui.conn, ui && ui.snap && ui.snap.generatedAt, now);
-}
-
-/* tickClocks extrapolated elapsed from data-elapsed-base plus wall-clock drift
-   every 5s, so on a frozen board a dead agent's uptime kept climbing — the most
-   convincing lie on the page, because it was the one thing visibly moving. When
-   the feed is frozen the clock holds at the value the snapshot actually
-   reported. Returns null when the dataset cannot be read at all. */
 function elapsedTickText(base, fromIso, now, frozen) {
   const b = Number(base);
   if (!Number.isFinite(b)) return null;
@@ -1347,112 +1080,6 @@ function elapsedTickText(base, fromIso, now, frozen) {
   return fmtElapsed(b + Math.max(0, drift));
 }
 
-/* Why a control is held. Kept separate from the capability reasons the dock is
-   forbidden to echo — this is about the feed, not about routing. */
-function staleControlNote(alarm) {
-  if (!alarm) return "";
-  return alarm.kind === "offline"
-    ? "Held — the server is unreachable, so there is no safe route to this session."
-    : "Held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Refresh before sending.";
-}
-
-const state = {
-  snap: null,
-  // Sequence of the whole snapshot in `snap`. A delta is eligible only when
-  // its baseSequence matches this exactly; null means only a full snapshot can
-  // establish a safe base.
-  snapshotSequence: null,
-  fetchFailed: false,
-  conn: "connecting", // connecting | live | reconnecting | stale | offline
-  // The server's own /api/health verdict. null until first polled; stays null
-  // in any environment without fetch, so the mark simply never speaks.
-  serverHealth: null,
-  lastEventAt: 0,
-  view: "now",
-  query: "",
-  facetProgram: "",
-  facetProvider: "",
-  lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
-  scanWindowHours: 36,
-  settingsLoaded: false,
-  settingsPending: false,
-  usageRangeId: "24h",
-  usageCustomHours: 24,
-  usageLoading: false,
-  usageError: "",
-  usageSummary: null,
-  usageSeries: null,
-  usageWard: null,
-  usageInvocations: null,
-  usageFetchedAt: 0,
-  contextDisplay: "percent", // percent | tokens
-  labels: new Map(),           // stable presentation target key -> label
-  aliases: null,               // compatibility name for the existing program-alias seam
-  labelsLoading: false,
-  labelsLoaded: false,
-  labelLoadError: "",
-  renaming: null,              // presentation target key currently being edited
-  widgetIds: defaultWidgetIds(),
-  widgetCustomizerOpen: false,
-  renameDraft: "",
-  renamePending: false,
-  renameError: "",
-  selecting: false,            // selection/broadcast mode
-  selection: new Set(),        // selected agent ids
-  broadcastDraft: "",
-  broadcastConfirming: false,
-  broadcastPending: false,
-  broadcastError: "",
-  broadcastResults: null,      // Map agentId -> { ok, error }
-  programOverrides: new Map(), // programId -> "open" | "closed"
-  selectedId: null,
-  selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
-  evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
-  // Terminal-level identity evidence for the open drawer. The pids, commands
-  // and open-file matches that say "ttys082 has both of these sessions open"
-  // live on CmuxSurface, which /api/snapshot does not carry — so they are
-  // fetched on demand from the read-only GET /api/debug/identity.
-  identity: { agentId: null, loading: false, error: "", data: null },
-  // Inline transcript for the open drawer. Scoped to one agent id for the same
-  // reason `identity` is: a drawer switched mid-flight must never adopt the
-  // previous agent's transcript.
-  transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
-  // Persistent operator journal (GET /api/actions). `available` latches false on
-  // a build with no such route so a missing endpoint is asked for once, not
-  // every five seconds forever.
-  actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
-  actionsOpen: false,
-  // Operator attention verdicts (POST /api/attention). The snapshot carries the
-  // effect, never the record, so the server's own answer is kept here to name
-  // what was done. An expired snooze is dropped by attentionRecord(), which is
-  // what lets a returning alert read as a return.
-  attention: new Map(),        // agentId -> { action, updatedAt, snoozedUntil? }
-  attentionPending: new Set(), // agentId
-  attentionErrors: new Map(),  // agentId -> operator-facing sentence
-  // Out-of-page attention. `seen` is null until the first snapshot is adopted,
-  // which is what makes opening the page to a backlog silent.
-  notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
-  drafts: new Map(),      // agentId -> instruct draft text
-  confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
-  pending: new Set(),     // `${agentId}:${action}`
-  feedback: new Map(),    // agentId -> { ok, action, message }
-  triage: new Map(),      // issueId -> recommendation
-  triagePending: new Set(),
-  triageErrors: new Map(),
-  queueItems: [],
-  // Inline pulse expansion. The needs-you verdict button opens a capped
-  // findings panel in place; "+N more" reveals the rest. Both are transient —
-  // not persisted, so a reload returns to the collapsed strip.
-  pulseExpanded: false,
-  pulseShowAll: false,
-  // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
-  // content is unchanged across SSE snapshots (stops the 4s strobe).
-  // `alarm` and `actions` start null, not "": their calm signature IS the empty
-  // string, so a "" seed would make the very first paint a no-op and leave both
-  // surfaces showing whatever markup they were served with.
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
-};
-state.aliases = state.labels;
 
 function loadLookback() {
   try {
@@ -1484,22 +1111,6 @@ function setLookbackHours(hours) {
   render();
 }
 
-const API_READ_TIMEOUT_MS = 10_000;
-const API_TRANSCRIPT_TIMEOUT_MS = 30_000;
-const API_WRITE_TIMEOUT_MS = 30_000;
-
-// A hung loopback socket otherwise never reaches the request's recovery path.
-async function apiFetch(url, options = {}, timeoutMs = API_READ_TIMEOUT_MS) {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-  try {
-    return await fetch(url, { ...options, signal });
-  } catch (error) {
-    const endpoint = String(url);
-    if (timeout.aborted) throw new Error(endpoint + " timed out after " + (timeoutMs / 1000) + "s");
-    throw new Error(endpoint + " request failed: " + (error instanceof Error ? error.message : String(error)));
-  }
-}
 
 async function fetchSettings() {
   try {
@@ -1508,10 +1119,15 @@ async function fetchSettings() {
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
-    state.settingsLoaded = true;
-  } catch {
-    state.settingsLoaded = false;
+    state.settingsError = "";
+  } catch (err) {
+    /* The scan window falls back to a hard-coded 36, and the filter chip printed
+       that as fact. A snapshot carries the real value and overrides it, so this
+       only bites before the first snapshot or when one omits the field — which
+       is exactly when the operator has no other way to notice. */
+    state.settingsError = err && err.message ? err.message : "Settings unavailable";
   }
+  renderFilterBar();
 }
 
 async function postScanWindow(hours) {
@@ -2102,8 +1718,40 @@ function widgetLabelNode(id, label) {
 /* Compact verdict chip — the health cell's OK form (trailing micro-chip on
    both the stressed grid and the calm line). */
 function healthMicroChip(data) {
-  return el("span", { class: "verdict-chip verdict-" + data.tone, title: data.sublabel },
+  /* An advisory rides at micro too, so this chip is the ONLY place its
+     consequence sentence can still be read — carry it, or shrinking the cell
+     would silently delete the explanation along with the alarm. */
+  /* A clear board rides at micro, so this chip is where pending tidy-up has to
+     survive: the instruction rides on the tooltip rather than being promoted
+     into a cell it has not earned. Quiet, but not lost. */
+  const detail = [data.severityDetail, data.sublabel, data.remedy && data.remedy.instruction]
+    .filter(Boolean).join(" ");
+  return el("span", { class: "verdict-chip verdict-" + data.tone, title: detail || data.sublabel },
     icon(data.icon), data.value);
+}
+
+/* Which repair control, if any, the health cell should offer.
+
+   It used to offer "Refresh" for every degraded and advisory state. Measured on
+   the live board: the cell said "4 live sessions can't take commands … until one
+   is closed" and then rendered a button that re-pulls the snapshot — naming the
+   correct action and offering a different one, with the only affordance present
+   being the one that cannot help.
+
+   A control is offered only when re-pulling evidence could change the answer:
+   the fetch itself failed, the feed is not live, or the fault is repaired OUTSIDE
+   this app (cmux is down; the operator starts it, then confirms). An
+   evidence-based advisory — two sessions sharing a pane — is fixed by closing one
+   and the collector rescans on its own, so there is nothing to offer. */
+function healthRefreshAction(ui = state) {
+  if (ui.fetchFailed || ui.conn !== "live") {
+    return { label: "Retry snapshot", title: "Re-pull the latest snapshot evidence" };
+  }
+  const control = ui.snap && ui.snap.controlHealth;
+  if (control && control.cmuxReachable !== true) {
+    return { label: "Verify repair", title: "Re-probe cmux after starting it" };
+  }
+  return null;
 }
 
 function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
@@ -2145,34 +1793,71 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   }
   // A Degraded verdict names its reason (the top live finding) beside the chip
   // and exposes the existing refresh control right there.
-  const degraded = id === "health" && data.tone === "degraded";
+  const degraded = id === "health" && (data.tone === "degraded" || data.tone === "advisory");
   const reason = degraded ? topSourceIssue(state.snap) : null;
   const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
-  /* The severity class leads, because "am I blocked?" is the question the bare
-     word Degraded never answered. It carries its own consequence sentence, so
-     the reason that follows explains WHAT is wrong rather than having to imply
-     how much it matters. */
-  const severity = degraded ? degradedSeverity(state.snap) : null;
-  if (severity) {
-    subNode.append(el("span", {
-      class: "health-severity health-severity-" + severity.key,
-      title: severity.detail,
-      text: severity.label,
-    }));
+  /* The severity badge used to lead this line because the headline was the bare
+     word "Degraded" and could not answer "am I blocked?". The headline is the
+     severity itself now, so repeating it here just printed ADVISORY under
+     Advisory. The consequence sentence is the part that was carrying the
+     information, and it stays. */
+  /* Three answers in the order an operator asks for them: what is wrong, what
+     to do about it, then the controls to do it. The finding's title used to
+     occupy this first line, which spent the card's most-read sentence on the
+     collector's name for the problem ("CMUX identity conflicts") instead of its
+     consequence for the operator. The title is still reachable — it labels the
+     Refresh control — but it no longer stands in for an explanation. */
+  const remedy = data.remedy;
+  /* The generic severity blurb and a specific problem sentence contradict each
+     other when both print: "The board is usable; evidence needs tidying. 3 live
+     sessions can't take commands." is the same self-disagreement the headline
+     used to have with its own badge. The specific sentence wins outright. */
+  /* The severity's own detail already IS the consequence sentence, so printing
+     the generic sublabel after it says cmux is unreachable twice in one line.
+     Seen on the live board: "cmux unreachable — Focus and Send cannot route.
+     cmux unreachable — terminal titles and Focus/Send stay offline." */
+  const problemText = (remedy && remedy.problem)
+    || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
+  const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
+  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  if (remedy && remedy.instruction) {
+    subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
-  subNode.append(el("span", {
-    text: (severity ? severity.detail + " " : "") + (reason ? reason.title : data.sublabel) + sinceNote + snapNote,
-  }));
-  if (degraded) {
+  // Naming a remedy an operator cannot locate is only half an answer, so the
+  // panes it refers to are one click away rather than a hunt through cmux. This
+  // rides outside the `degraded` branch: on a clear board the cleanup is still
+  // offered, just without the alarm around it.
+  if (remedy && remedy.panes.length) {
+    subNode.append(el("button", {
+      type: "button",
+      class: "reading-repair reading-panes",
+      "aria-expanded": String(healthPanesOpen),
+      "aria-label": (healthPanesOpen ? "Hide" : "Show") + " the "
+        + remedy.panes.length + " leftover cmux panes",
+      dataset: { fkey: "health-panes" },
+      onclick: toggleHealthPanes,
+    }, healthPanesOpen ? "Hide panes" : "Show " + remedy.panes.length + " panes"));
+  }
+  const refresh = degraded ? healthRefreshAction() : null;
+  if (refresh) {
     subNode.append(el("button", {
       type: "button",
       class: "reading-repair",
-      title: "Re-pull the latest snapshot evidence",
-      "aria-label": reason ? "Refresh snapshot — " + reason.title : "Refresh snapshot",
+      title: refresh.title,
+      "aria-label": reason ? refresh.label + " — " + reason.title : refresh.label,
       dataset: { fkey: "degraded-refresh" },
       onclick: () => recollectSnapshot(),
-    }, "Refresh"));
+    }, refresh.label));
+  }
+  if (healthPanesOpen && remedy && remedy.panes.length) {
+    subNode.append(el("ul", { class: "health-pane-list" },
+      ...remedy.panes.slice(0, 12).map((pane) => el("li", {},
+        el("span", { class: "health-pane-name", text: pane.name }),
+        el("span", { class: "health-pane-age", text: pane.updatedAt ? "quiet " + agoText(pane.updatedAt) : "" }))),
+      remedy.panes.length > 12
+        ? el("li", { class: "health-pane-more", text: "+" + (remedy.panes.length - 12) + " more" })
+        : null));
   }
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
 }
@@ -2248,23 +1933,76 @@ function renderWidgetCustomizer() {
 /* Calm collapse — the whole strip is one moss line: verdict, shipping count,
    pulse numbers when the server reports them (graceful without them), a small
    activity sparkline, and the trailing health micro-chip. */
-function renderPulseCalm(healthData) {
+/* Spend for the collapsed line. The band's collapse carried the token RATE and
+   dropped money entirely, and for an orchestrator running hundreds of sessions a
+   rate is not a substitute for cost — recovering it meant leaving the board for
+   Usage → Custom 1h. Same wording as the BURN card on purpose: one number should
+   not have two phrasings depending on whether the band happens to be collapsed.
+   Absent when BurnBar priced nothing, never a fabricated $0. */
+function calmSpendText(burn) {
+  const cost = burn && burn.costLastHourUsd;
+  return typeof cost === "number" ? "$" + cost.toFixed(2) + " last hour" : "";
+}
+
+/* What the activity sparkline is actually showing. Five-minute buckets, so the
+   window is a function of how many exist — a freshly restarted tracker holds two
+   of them and must not call that an hour. */
+function sparklineLabel(buckets) {
+  const n = Array.isArray(buckets) ? buckets.length : 0;
+  const span = n * 5 * 60_000;
+  return "Active sessions per 5-minute bucket"
+    + (span > 0 ? ", last " + fmtElapsed(span) : ", no window observed yet");
+}
+
+function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   const snap = state.snap;
   const totals = totalsOf(snap);
   const pulse = snap && snap.pulse;
-  const parts = ["All clear", totals.working + " shipping"];
-  if (pulse) {
-    parts.push("↑" + pulse.momentum.completionsLastHour + " done this hour");
+  /* The health micro-chip at the end of this line already says "All clear", so
+     leading with it printed the same verdict twice in one sentence — the purest
+     form of the noise this band exists to remove. */
+  /* Nothing tracked means no fleet to describe. "0 shipping" over an empty board
+     is a fleet aggregate about a fleet that does not exist, and it restates the
+     emptiness the board below already states — the exact defect this band exists
+     to remove, in the one state nobody had ever looked at. The trailing health
+     chip still speaks, so the line stays an affirmative verdict rather than
+     vanishing. (Day-one review.) */
+  const parts = totals.tracked > 0 ? [totals.working + " shipping"] : [];
+  if (pulse && totals.tracked > 0) {
+    const windowText = completionWindowText(pulse.momentum);
+    if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
+    const spend = calmSpendText(pulse.burn);
+    if (spend) parts.push(spend);
   }
-  const line = el("div", { class: "pulse-calm", role: "status" },
+  const line = el("div", { class: "pulse-calm" + (watch.length ? " is-watching" : ""), role: "status" },
     el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
     el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+  /* The murmur. Appended to the same line rather than promoted into a cell,
+     because these signals are worth mentioning and not worth rearranging the
+     board around — a volume knob instead of a switch. */
+  for (const clause of watch) {
+    line.append(el("span", { class: "pulse-watch", text: clause }));
+  }
   const spark = pulse
-    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
+    /* The label used to claim "last hour" while the tracker held 12.7 minutes of
+       buckets — a 4.7x window overstatement, in an accessibility label no sighted
+       reader ever sees, which is why it took an audit to find. It now says the
+       window it actually has. (Magnitude audit §5.) */
+    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: sparklineLabel(pulse.activity.buckets) })
     : null;
   if (spark) line.append(spark);
-  line.append(healthMicroChip(healthData || summaryWidgetData("health", snap, state.conn)));
+  /* Once anything is being watched the trailing verdict cannot read "All clear":
+     that was a claim about the whole board computed from a predicate that never
+     read stall, debris or context occupancy. The words narrow to what is known. */
+  const health = healthData || summaryWidgetData("health", snap, state.conn);
+  line.append(healthMicroChip(watch.length
+    /* Tone and glyph move with the word. Overriding only the text left a green
+       check sitting beside "Watch" — the chip contradicting itself in three
+       characters, which is the same self-disagreement the health headline had
+       with its own badge. */
+    ? { ...health, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
+    : health));
   return line;
 }
 
@@ -2278,7 +2016,7 @@ let pulseNeedsYouWas = 0;
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
-  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay);
+  const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay, state.queueError);
   // One derivation per widget per paint. The signature, the cell and the calm
   // line all read this map; each used to call summaryWidgetData again, and each
   // of those calls re-derived the whole findings list underneath.
@@ -2288,7 +2026,7 @@ function renderHealthRail() {
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
   const sig = [
     state.conn,
-    model.calm ? "calm" : "stressed",
+    model.calm ? "calm:" + (model.watch || []).join("|") : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
     state.pulseExpanded ? "1" : "0",
@@ -2297,7 +2035,10 @@ function renderHealthRail() {
     model.findings.map(findingPaintKey).join("|"),
     // The calm line renders momentum/burn/health regardless of which widgets
     // are enabled, so sign its actual inputs — not the customized cell list.
-    (model.calm ? ["momentum", "burn", "health"] : state.widgetIds).map((id) => {
+    (model.calm
+      ? ["momentum", "burn", "health"]
+      : state.widgetIds.filter((id) => dataById.has(id))
+    ).map((id) => {
       const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
@@ -2316,11 +2057,19 @@ function renderHealthRail() {
 
   widgets.textContent = "";
   if (model.calm) {
-    widgets.append(renderPulseCalm(dataById.get("health")));
+    widgets.append(renderPulseCalm(dataById.get("health"), model.watch));
   } else {
+    /* The MODEL decides what speaks; this loop only orders it. It used to walk
+       state.widgetIds and fall back to summaryWidgetData for any id the model had
+       omitted — which meant every suppression decided in pulseStripModel (a cell
+       with nothing to report, a health cell already narrated by NEEDS YOU)
+       rendered anyway. The omissions were real in the model and invisible on
+       screen; caught by counting .reading-widget nodes in the browser against the
+       model's own cell list. */
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
-      widgets.append(renderSummaryWidget(id, cell ? cell.weight : "normal", dataById.get(id)));
+      if (!cell) continue;
+      widgets.append(renderSummaryWidget(id, cell.weight, cell.data));
     }
   }
   renderPulseFindings(model);
@@ -2336,35 +2085,13 @@ const ISSUE_STATE_LABELS = {
   blocked: "Blocked",
 };
 
-function issueLifecycle(issue) {
-  return issue && issue.lifecycle && issue.lifecycle.state
-    ? issue.lifecycle
-    : { state: "open" };
-}
 
 function issueStateLabel(issue) {
   return ISSUE_STATE_LABELS[issueLifecycle(issue).state] || "Open";
 }
 
-function issueTimestamp(iso) {
-  if (!iso || Number.isNaN(Date.parse(iso))) return "unknown time";
-  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
 
-function recentlyResolvedOf(snap) {
-  return snap && Array.isArray(snap.recentlyResolved) ? snap.recentlyResolved : [];
-}
 
-function issueLifecycleNote(issue) {
-  const lifecycle = issueLifecycle(issue);
-  if (lifecycle.state === "verifying") {
-    return `Verifying since ${issueTimestamp(lifecycle.verificationStartedAt)} · waiting for a fresh source snapshot to clear the finding.`;
-  }
-  if (lifecycle.state === "blocked") {
-    return `Blocked${lifecycle.result ? ` · ${lifecycle.result}` : " · external action is required."}`;
-  }
-  return "";
-}
 
 async function fetchTriageQueue() {
   try {
@@ -2372,9 +2099,18 @@ async function fetchTriageQueue() {
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || !Array.isArray(body.items)) throw new Error("queue response was invalid");
     state.queueItems = body.items;
+    state.queueError = "";
     renderHealthRail();
   } catch (err) {
+    /* This used to be console.warn and nothing else. queueItems then stayed [],
+       which yields zero queue findings — the same output a genuinely empty queue
+       gives — so the strip collapsed to CALM while triage work sat unseen on the
+       server. The last known items are kept rather than cleared (dropping them
+       would lose real information); the error is what stops them being read as
+       the whole truth. */
+    state.queueError = err && err.message ? err.message : "Triage queue unavailable";
     console.warn("triage queue fetch failed:", err);
+    renderHealthRail();
   }
 }
 
@@ -2966,23 +2702,164 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    no session near its context ceiling. cells carry the fixed-order weighting
    (urgency changes weight via cell-hot/cell-micro, never order); findings is
    the ordered inline-expansion list. */
-function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent") {
+const fetchFailedNow = () => Boolean(state && state.fetchFailed);
+
+const CONTEXT_WATCH_PCT = 60;
+/* The BAND's alarm, distinct from the drawer's CONTEXT_ALARM_PCT: the drawer
+   speaks about one agent's own window, this is the fleet peak that flips the
+   whole summary out of its calm line. Named so the calm predicate and the watch
+   clause below read the same number — they were the two ends of the 1-point
+   cliff the critique measured, and a drift between them would reopen it. */
+const CONTEXT_BAND_ALARM_PCT = 85;
+
+/* The watch tier: signals real enough to mention and not urgent enough to
+   rearrange the board around.
+
+   The calm/alarmed response used to be a boolean. Driving pulseStripModel up an
+   escalation ladder, a board where every live agent was stalled rendered
+   pixel-identical to a perfectly healthy one, and the only graded input was a
+   one-point cliff — 84% context calm, 85% a full three-cell grid. The cockpit was
+   silent until it screamed.
+
+   These clauses are the murmur. They ride the same one line, so the layout does
+   not move; escalation to the stressed grid still requires a finding with a
+   remedy. Stall in particular is NOT promoted to an alarm on purpose: on this
+   fleet many quiet sessions are waiting by design, so the honest treatment is to
+   say the number and let the operator judge it. */
+/* The one context reading the BAND reasons about.
+
+   The calm predicate walked per-agent tokens (peakContext) while the CONTEXT PEAK
+   card and the watch clause read snap.contextPeak, which the server derives from
+   the same per-agent contextPct the CTX column shows. Two derivations of one
+   quantity, sitting at the two ends of the calm cliff: the board could display
+   12% and refuse to go calm because the client walk found 89% — or the reverse.
+   The card was moved onto the server's number for exactly this reason; the
+   predicate was left behind. */
+function bandContextPct(snap) {
+  if (snap && Number.isFinite(snap.contextPeak)) return snap.contextPeak;
+  const walked = peakContext(snap);
+  return walked ? walked.pct : null;
+}
+
+/* Sessions the tracker has watched go 15 minutes without moving. Neither working
+   nor done, and computed by pulse.ts long before anything rendered it. */
+function stalledCount(snap) {
+  const momentum = snap && snap.pulse && snap.pulse.momentum;
+  return momentum && momentum.stalled > 0 ? momentum.stalled : 0;
+}
+
+/* "18 quiet 15m+", with the 15 coming off the wire.
+
+   pulse.ts ships stallThresholdMs and the client hardcoded "15m+" in three
+   separate places — the momentum card, the watch clause and the resting vitals.
+   Three copies of a server-owned constant: change the threshold to 10 minutes
+   and every one of them keeps saying 15, confidently and wrongly, on a count
+   that is now measuring something else. (GPT day review §2.) */
+function stallText(snap, count = stalledCount(snap)) {
+  if (!count) return "";
+  const momentum = snap && snap.pulse && snap.pulse.momentum;
+  const ms = momentum && Number.isFinite(momentum.stallThresholdMs) ? momentum.stallThresholdMs : null;
+  return `${count} quiet ${ms ? fmtElapsed(ms) : "15m"}+`;
+}
+
+function watchClauses(snap) {
+  const clauses = [];
+  const stalled = stalledCount(snap);
+  if (stalled) clauses.push(stallText(snap, stalled));
+  /* Context peak is an EARLY warning, which means the range that matters is
+     below the alarm — above 85% it is no longer early, and the stressed grid
+     gives it a cell of its own, so the murmur stands down rather than saying the
+     same number twice. */
+  const peak = bandContextPct(snap);
+  if (peak != null && peak >= CONTEXT_WATCH_PCT && peak < CONTEXT_BAND_ALARM_PCT) {
+    clauses.push(`peak ctx ${peak}%`);
+  }
+  return clauses;
+}
+
+/* "All clear" was a claim about the whole board computed from a four-input
+   predicate that never read stall, debris or context occupancy. Rather than
+   widen the predicate to match the words, the words narrow to what is actually
+   known: once anything is being watched, the verdict is Watch. */
+function calmVerdict(clauses) {
+  return clauses.length ? "Watch" : "All clear";
+}
+
+function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent", queueError = "") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
-  const peak = peakContext(snap);
+  const bandPct = bandContextPct(snap);
+  /* Calm is a claim about the WHOLE board, so it cannot be made while one of the
+     board's inputs is missing. An unreachable triage queue contributes zero
+     findings exactly like an empty one; without this the strip would fold into
+     its calm line and hide the fact that it is reasoning on partial evidence. */
   const calm = !!snap && !!attention && attention.count === 0
-    && status.key === "operational" && !(peak && peak.pct >= 85);
+    && status.key === "operational" && !(bandPct != null && bandPct >= CONTEXT_BAND_ALARM_PCT) && !queueError;
   // `display` is threaded so renderHealthRail can compute each widget's data
   // ONCE and reuse it for the paint signature, the cell and the calm line —
   // it used to derive the same three from scratch on every paint.
+  /* A cell that has nothing to report does not render. This is the single
+     convention behind audit §5, §11, §14 and §20: four findings that were all
+     the same bug — widgets rendering their EMPTY state instead of not rendering.
+     Four cells reporting absence around one cell reporting a fault is how a band
+     that always renders loses the ability to signal by rendering.
+
+     "Nothing needs you" in particular was asserted by three separate widgets at
+     once, and an operator who learns that a counter always reads 0 stops reading
+     it — which is exactly when it turns 1. */
+  const speaks = (id, data) => {
+    if (id === "needs-you") return Boolean(queueError) || data.value !== "0";
+    if (id === "health") return data.tone !== "ok";
+    // The rest are instruments: they speak when they have a reading.
+    return data.tone !== "missing" && data.value !== "No data";
+  };
   const cells = DEFAULT_WIDGET_IDS.map((id) => {
-    const data = summaryWidgetData(id, snap, conn, display, queueItems);
+    const data = summaryWidgetData(id, snap, conn, display, queueItems, undefined, queueError);
+    /* Weight follows actionability, not tone. An advisory used to ride at micro
+       on the reasoning that there was "nothing for the operator to do right
+       now" — true when the card could only name a symptom, false now that a
+       non-clear verdict carries a remedy. Micro renders the headline alone, so
+       collapsing an advisory deletes the very answer the card exists to give:
+       the board would say something needs tidying and hide what to do about it.
+
+       A clear verdict still rides at micro. Nothing is wrong, so the card makes
+       no claim to justify, and a cockpit that stays quiet when quiet is the
+       truth is the point. Pending tidy-up is carried on the chip's tooltip
+       rather than promoted into a cell it does not deserve. */
     const weight = id === "health"
       ? (data.tone === "ok" ? "micro" : "normal")
       : data.tone === "hot" ? "hot" : "normal";
-    return { id, weight, data };
+    return { id, weight, data, speaks: speaks(id, data) };
   });
-  return { calm, cells, findings: pulseFindings(snap, queueItems) };
+  /* Audit §6: when the board's top finding IS the system fault, NEEDS YOU and
+     HEALTH are the same sentence at two altitudes — "1 finding · Two live
+     sessions share one cmux pane" beside "Advisory · 1 degraded source", the
+     second in a full-width row. attentionSummary and topSourceIssue read the same
+     issues array, so the overlap is structural rather than coincidental.
+
+     They genuinely diverge — a dead control plane is not in the issues list, and
+     a lone agent failure leaves sources healthy — so HEALTH is suppressed only in
+     that exact overlap, and it hands its remedy to the cell that survives so the
+     "what to do about it" is not suppressed with it. */
+  const top = topSourceIssue(snap);
+  const overlap = conn === "live" && !fetchFailedNow()
+    && status.key === "degraded"
+    && !!(snap && snap.controlHealth && snap.controlHealth.cmuxReachable === true)
+    && !!top && top.kind === "system"
+    && cells.some((cell) => cell.id === "needs-you" && cell.speaks);
+  const kept = cells.filter((cell) => cell.speaks && !(overlap && cell.id === "health"));
+  if (overlap) {
+    const needs = kept.find((cell) => cell.id === "needs-you");
+    const remedy = healthRemedy(snap);
+    if (needs && remedy) needs.data = { ...needs.data, remedy };
+  }
+  return {
+    calm,
+    watch: calm ? watchClauses(snap) : [],
+    cells: kept,
+    findings: pulseFindings(snap, queueItems),
+    queueError,
+  };
 }
 
 function findingFromIssue(issue, kind, snap = state.snap) {
@@ -3105,6 +2982,52 @@ function currentFilter() {
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
 
+/* Where an arrow key inside the tab strip lands. Pure so the wrap rules are
+   testable without a browser: Left/Right WRAP (a six-item strip is small enough
+   that wrapping is faster than reversing, and it is what the tablist pattern
+   specifies), Home/End jump to the ends. */
+function nextViewIndex(current, key, count) {
+  if (count <= 0) return -1;
+  switch (key) {
+    case "ArrowRight": return (current + 1 + count) % count;
+    case "ArrowLeft": return (current - 1 + count) % count;
+    case "Home": return 0;
+    case "End": return count - 1;
+    default: return -1;
+  }
+}
+
+/* Is the operator typing? A shortcut that steals a keystroke from a text field
+   is worse than no shortcut. */
+function isTypingTarget(target) {
+  if (!target || !target.tagName) return false;
+  const tag = String(target.tagName).toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable === true;
+}
+
+/* Board-level keys. `/` is the search shortcut every list-shaped tool has had
+   for thirty years, and its absence is why search was eleven stops away. */
+function handleCockpitKeys(e, ui = state) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.key === "/" && !isTypingTarget(e.target)) {
+    const box = $("search");
+    if (!box) return false;
+    e.preventDefault();
+    box.focus();
+    if (typeof box.select === "function") box.select();
+    return true;
+  }
+  const inStrip = e.target && e.target.closest && e.target.closest("#views");
+  if (!inStrip) return false;
+  const next = nextViewIndex(VIEWS.indexOf(ui.view), e.key, VIEWS.length);
+  if (next < 0) return false;
+  e.preventDefault();
+  setView(VIEWS[next]);
+  const btn = document.querySelector(`#views .view-tab[data-view="${VIEWS[next]}"]`);
+  if (btn) btn.focus();
+  return true;
+}
+
 function renderTabs() {
   const agents = snapshotAgents(state.snap).map((x) => x.agent);
   for (const view of OPS_VIEWS) {
@@ -3115,7 +3038,39 @@ function renderTabs() {
           viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
         ).length
       : null;
-    countNode.textContent = count == null ? "" : String(count);
+    /* The lookback rides the tab it filters. History reads 37 while 388 ended
+       agents are on the wire — correct, because of the 6h window — but the scope
+       note that disclosed it renders only once you are already IN that view, so
+       from anywhere else the count silently understated by 351.
+
+       The GPT lane's §8 asked for the scope line to fall silent when no filter is
+       active and I implemented it; that was right about the restated counts and
+       wrong about the lookback, which was the one thing only that line said. The
+       disclosure belongs on the count it qualifies. (Day review 3.2.) */
+    /* A lookback qualifies a number. There is no number to qualify at zero, and
+       "Idle 0 · 6h" spends three glyphs saying a window narrowed nothing. */
+    const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
+      ? " · " + lookbackLabel(state.lookbackHours)
+      : "";
+    countNode.textContent = count == null ? "" : String(count) + window;
+    /* Zero counts go quiet rather than disappearing.
+
+       At n=3 the navigation reads "Needs you 0 | Now 3 | Working 3 | Idle 0 |
+       History 0" — three of five tabs at zero, and a row of zero counters is a
+       new operator's first impression of the interface. The audit asked for
+       Idle and History to be HIDDEN at zero, matching the summary band.
+
+       I disagree, for the reason I gave when rejecting the same proposal for the
+       Needs-you tab: a band cell is an instrument and a tab is a destination. A
+       tab that appears only once it has content never gets learned, the nav
+       changes shape underneath the operator as the fleet grows, and on the quiet
+       board — the one case this is meant to serve — it would teach a newcomer
+       that the board has three views when it has five.
+
+       Weight is the honest lever, and it is the counter-proposal I offered that
+       lane at the time: the tab keeps its place and its label, the zero recedes.
+       Nothing is hidden and nothing shouts. */
+    countNode.classList.toggle("is-zero", count === 0);
     // The Alerts (needs-you) tab count takes ember ink when there is anything to
     // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
     if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
@@ -3124,12 +3079,26 @@ function renderTabs() {
     const isCurrent = btn.dataset.view === state.view;
     btn.setAttribute("aria-pressed", String(isCurrent));
     btn.classList.toggle("is-current", isCurrent);
+    /* Roving tabindex: the tab strip is ONE stop, not six. Measured before this
+       change, search sat at the 11th tab stop with the six tabs occupying six of
+       the ten ahead of it — reaching the board's primary filter meant tabbing
+       through every view first. Arrows move within the strip, which is the
+       standard tablist contract and what a screen-reader user already expects. */
+    btn.tabIndex = isCurrent ? 0 : -1;
   }
   const toggle = $("select-toggle");
   if (toggle) {
-    toggle.hidden = state.view === "usage";
+    /* Audit §19: Select rendered unconditionally and named itself rather than the
+       operation it enables. Measured on the resting board it sat there offering
+       multi-select over zero selectable rows — a control that cannot do anything
+       is a control the operator learns to skip. It speaks only when at least one
+       visible agent can actually receive a broadcast, and it says what it is for. */
+    const selectable = state.view !== "usage"
+      && snapshotAgents(state.snap).some(({ agent }) =>
+        broadcastEligible(agent) && viewMatches(state.view, agent));
+    toggle.hidden = !selectable && !state.selecting;
     toggle.setAttribute("aria-pressed", String(state.selecting));
-    toggle.textContent = state.selecting ? "Done selecting" : "Select";
+    toggle.textContent = state.selecting ? "Done selecting" : "Select to send";
   }
   const search = $("search");
   const opsRow = $("ops-toolbar-row");
@@ -3144,7 +3113,9 @@ function renderTabs() {
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
-    class: "filter-chip" + (active ? " is-active" : ""),
+    // is-unverified marks a chip whose value the server never confirmed, so a
+    // built-in default cannot pass for a reported one.
+    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : ""),
     "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
@@ -3217,16 +3188,30 @@ function renderFilterBar(ui = state) {
     { fkey: "lookback:custom" },
   ));
   bar.append(el("span", { class: "filter-lead", text: "Scan" }));
-  const scanHours = Number((ui.snap && ui.snap.scanWindowHours) || ui.scanWindowHours) || 36;
+  /* The snapshot is the authoritative carrier; /api/settings is the boot path
+     that fills this in before one arrives. When neither answered, the number is
+     a hard-coded default, and printing "36h window" claims the server confirmed
+     it. Say it is unverified instead — the chip still works, it just stops
+     asserting. */
+  const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
+  const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
+  const unverified = !confirmed && !!ui.settingsError;
   bar.append(filterChip(
-    scanHours + "h window",
+    unverified ? "window unverified" : scanHours + "h window",
     false,
     () => {
       const raw = window.prompt("Collector scan window hours (1–168)", String(scanHours));
       if (raw == null) return;
       void postScanWindow(raw);
     },
-    { disabled: ui.settingsPending, title: "How far back collectors harvest sessions", fkey: "scan-window" },
+    {
+      disabled: ui.settingsPending,
+      title: unverified
+        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h."
+        : "How far back collectors harvest sessions",
+      fkey: "scan-window",
+      alert: unverified,
+    },
   ));
 }
 
@@ -3242,16 +3227,28 @@ function renderScopeNote(shown) {
         : "");
     return;
   }
-  if (!state.snap) { note.textContent = ""; return; }
-  const t = totalsOf(state.snap);
-  const scan = state.snap.scanWindowHours || state.scanWindowHours;
-  let text = `${shown} shown · ${t.live} live · ${t.tracked} tracked`;
-  if (lookbackApplies(state.view)) {
-    text += ` · lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`;
+  if (!state.snap) { note.textContent = ""; note.hidden = true; return; }
+  /* Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
+     already showing Now 12 / Idle 19 / History 44 — twelve numeric occurrences
+     carrying nine distinct values, with the three 12s being one set. Worse,
+     `shown` is the active tab AFTER search and facets while the tab counts omit
+     them, so the two silently disagree the moment a filter is on, and `tracked`
+     has no threshold, no change and no action attached to it.
+
+     It now renders only what CHANGES the interpretation of what is on screen —
+     a filter is narrowing the list, a lookback window is hiding rows, or the
+     last refresh failed. Otherwise the tab bar has already said it. */
+  const parts = [];
+  if (state.query || state.facetProgram || state.facetProvider) {
+    parts.push(`${shown} matching`);
   }
-  if (state.query || state.facetProgram || state.facetProvider) text += " · filters applied";
-  if (state.fetchFailed) text += " · last refresh failed";
-  note.textContent = text;
+  if (lookbackApplies(state.view)) {
+    const scan = state.snap.scanWindowHours || state.scanWindowHours;
+    parts.push(`lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`);
+  }
+  if (state.fetchFailed) parts.push("last refresh failed");
+  note.textContent = parts.join(" · ");
+  note.hidden = parts.length === 0;
 }
 
 /* ---------- program list ---------- */
@@ -3335,7 +3332,9 @@ function programShellSig(program, agents, ui) {
     programName(program),
     ui.labels.has(key) ? "1" : "0",
     programOpen(program, ui) ? "open" : "shut",
-    programRollupCells(agents).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    // Header counts the whole program, so the signature must watch the whole
+    // program too — otherwise a change outside the active filter never repaints.
+    programRollupCells(program.agents, program.rollup).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
     ui.selecting ? "1" : "0",
     ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
     ui.renaming === key ? "1" : "0",
@@ -3365,6 +3364,10 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.contextDisplay || "",
     String(opts.depth || 0),
     String(opts.childCount || 0),
+    // Whether this row is showing a session tag. Without it the row keeps its
+    // cached node when a twin arrives or leaves, so the tag would never appear
+    // and never go away.
+    opts.ambiguousNames && opts.ambiguousNames.has(agentName(agent)) ? "amb" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -3415,7 +3418,35 @@ function programsPaintSig(visible, ui) {
         ui.labels.get(presentationLabelKey(agentLabelTarget(a))) || "",
       ].join(":")).join(","),
     ).join("|"),
+    emptyStateSig(visible, ui),
   ].join("\u001f");
+}
+
+/* Everything the empty state renders, and nothing when there is no empty state.
+
+   When no rows are visible the row signature above is CONSTANT, so this whole
+   paint was skipped and the block froze at its first render — permanently.
+   Measured on the board: the client's findings collection said BETA while the
+   DOM still named a finding from a snapshot minutes earlier, and the all-clear
+   vitals ("37 live · 7 working · 30 idle") were frozen alongside it. Those
+   numbers exist precisely so an operator can tell "nothing is wrong" from
+   "nothing is loading", which a stale number cannot do.
+
+   This predates the false-all-clear fix and was invisible while the block held
+   only static prose. The open-findings line made it consequential. */
+function emptyStateSig(visible, ui) {
+  if (visible.length || !ui.snap) return "";
+  const t = totalsOf(ui.snap);
+  return [
+    t.live, t.working, t.idle, t.tracked,
+    stalledCount(ui.snap),
+    /* id AND title: the line renders titles, and a finding can keep its id while
+       its wording changes ("2 collector problems" becoming "3"). Keying on the
+       id alone repainted once and then froze again — caught by driving two
+       findings through the same id in the browser. A paint signature has to
+       contain what is painted. */
+    issuesOf(ui.snap).map((finding) => finding.id + "~" + finding.title).join("+"),
+  ].join(":");
 }
 
 /* Two levels of keyed reconciliation instead of one wholesale rebuild: program
@@ -3508,18 +3539,81 @@ function renderPrograms() {
   } else {
     const emptyByView = {
       "now": `No active work right now — idle sessions remain available in Idle.`,
-      "needs-you": "No alerts. System interventions may still require operator action.",
+      "needs-you": "Nothing needs you",
       "working": "No agents are working right now.",
       "idle": "No idle agents.",
       "history": "No ended sessions recorded yet.",
     };
-    const wrap = el("div", { class: "no-match" }, el("p", { text: emptyByView[state.view] || "Nothing here." }));
+    /* An operator glancing at an empty cockpit must be able to tell "nothing is
+       wrong" from "nothing has loaded". Those look identical when the only
+       difference is small grey text on a large white field — and on the
+       attention view, empty is the GOOD state and the one they will see most.
+
+       So the all-clear reads as a finding in its own right: a verdict mark, the
+       headline at weight, and underneath it the fleet's vital signs with a
+       ticking age. The numbers are the proof of life — a board that is still
+       loading cannot say "18 live · 6 working" or count seconds since its last
+       snapshot. Every other empty view stays muted prose, because absence there
+       is a filter result rather than an answer. */
+    /* The all-clear may only render over an EMPTY findings collection, not over
+       an empty row list. This view filters by alerting(), so a board carrying a
+       collector fault and no waiting agent rendered a check mark and the words
+       "Nothing needs you" while the rail beside it counted the fault. Each
+       surface was correct; the composition told the operator to go home.
+
+       Zero waiting agents is now said in those words, and the findings that do
+       exist are named and pointed at rather than papered over. */
+    const openFindings = state.view === "needs-you" ? issuesOf(state.snap) : [];
+    const allClear = state.view === "needs-you" && openFindings.length === 0;
+    const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
+    if (allClear) {
+      const t = totalsOf(state.snap);
+      wrap.append(
+        el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check")),
+        el("p", { class: "all-clear-head", text: emptyByView["needs-you"] }),
+        el("p", { class: "all-clear-vitals" },
+          el("span", { text: `${t.live} live · ${t.working} working · ${t.idle} idle` }),
+          /* A stalled session is neither working nor done — it is the third
+             state, and pulse.ts computes it while nothing rendered it. The
+             earlier copy here went further and asserted "every tracked session is
+             working or done", which was flatly false on two thirds of the live
+             fleet. The claim is gone; this is the number that replaces it. */
+          ...(stalledCount(state.snap) ? [
+            el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
+            el("span", { class: "all-clear-quiet", text: stallText(state.snap) }),
+          ] : []),
+          el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
+          el("span", {
+            dataset: { ago: state.snap.generatedAt },
+            text: "checked " + agoText(state.snap.generatedAt),
+          })));
+    } else if (state.view === "needs-you") {
+      /* Not an all-clear and not a blank: no agent is waiting, AND something is
+         open. Both sentences, in that order, because the operator's next move is
+         the Summary rail rather than this list. */
+      wrap.append(
+        el("p", { class: "all-clear-head", text: "No agents are waiting on you" }),
+        el("p", { class: "empty-findings" },
+          el("strong", {
+            text: openFindings.length === 1
+              ? "1 open finding"
+              : `${openFindings.length} open findings`,
+          }),
+          el("span", { text: " in Summary — " + openFindings.slice(0, 2).map((f) => f.title).join(" · ") })));
+    } else {
+      wrap.append(el("p", { text: emptyByView[state.view] || "Nothing here." }));
+    }
+    /* The escape hatch has to agree with the sentence above it. On the attention
+       view the answer to "nothing needs you" is the whole board, not the
+       archive — offering History there sent the operator to finished work while
+       the copy told them to open Now. */
+    const exitView = state.view === "needs-you" ? "now" : "history";
     if (state.view !== "history" && tracked) {
       wrap.append(el("button", {
         type: "button", class: "btn",
-        dataset: { fkey: "goto-history" },
-        onclick: () => setView("history"),
-      }, "Open history"));
+        dataset: { fkey: "goto-" + exitView },
+        onclick: () => setView(exitView),
+      }, exitView === "now" ? "Open Now" : "Open history"));
     }
     root.append(wrap);
   }
@@ -3530,8 +3624,8 @@ function renderPrograms() {
    .program-rollup cluster A4 established. The alert count takes ember ink
    (is-alerting → --ember) only when alerts exist; calm earns no color. The
    accessible name carries the data itself, extending the drawer's aria pattern. */
-function programHeadRollup(agents) {
-  const cells = programRollupCells(agents);
+function programHeadRollup(agents, rollup = null) {
+  const cells = programRollupCells(agents, rollup);
   const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
   return el("span", { class: "program-rollup", "aria-label": label },
     cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") + (c.key ? " program-rollup-cell--" + c.key : "") },
@@ -3542,7 +3636,11 @@ function programHeadRollup(agents) {
 function renderProgram(program, agents) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
-  const rollup = programHeadRollup(agents);
+  /* The header describes the PROGRAM; the body lists the agents the active
+     filter kept. Rolling up the filtered list made the header disagree with its
+     own drawer — "1 agent" above a program holding 32 — because a filter is a
+     lens on the board, not a change to what the program contains. */
+  const rollup = programHeadRollup(program.agents, program.rollup);
 
   const label = programName(program);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -3658,6 +3756,9 @@ function agentRowPlan(program, agents, ui = state) {
   }
   const { roots, children } = buildClusters(program.agents.filter((agent) => relevantIds.has(agent.id)));
   const fullById = new Map(snapshotAgents(ui.snap).map(({ agent }) => [agent.id, agent]));
+  // Computed from the WHOLE board, not this program: two twins in different
+  // programs are exactly as confusing as two in the same one.
+  const ambiguous = ambiguousNames([...fullById.values()]);
   const fullChildren = new Map();
   for (const a of fullById.values()) {
     if (a.parentAgentId) fullChildren.set(a.parentAgentId, [...(fullChildren.get(a.parentAgentId) || []), a.id]);
@@ -3672,7 +3773,7 @@ function agentRowPlan(program, agents, ui = state) {
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || []).filter((id) => relevantIds.has(id)).length;
     if (visibleIds.has(agent.id)) {
-      const opts = { depth, childCount: descendantCount(agent.id), fullById };
+      const opts = { depth, childCount: descendantCount(agent.id), fullById, ambiguousNames: ambiguous };
       plan.push({
         key: "row:" + agent.id,
         sig: agentRowSig(agent, ui, opts),
@@ -3703,7 +3804,21 @@ function renderAgentColumnHeader() {
     el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
-    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
+    /* "Span", not "Elapsed". The value is updatedAt − startedAt: first touch to
+       last touch, with every dormant hour inside it. One agent reads 87.1 days
+       and the arithmetic is CORRECT — startedAt really is 2026-05-06 — but
+       "Elapsed" beside a row invites "this has been grinding for three months",
+       which overstates actual activity by roughly 204x. 19 agents exceed 36
+       hours on this board and 8 exceed 30 days.
+
+       This is the sessionTotal disease in a different column: a true number whose
+       label claims something else. The number is not wrong, so the fix is the
+       word, not the maths. */
+    el("span", {
+      class: "agent-column-label ri-col-label",
+      title: "First activity to last activity, dormancy included — not time spent working",
+      text: "Span",
+    }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -3752,7 +3867,69 @@ function providerMark(agent) {
 // state. The agent row folds Access into its aria-label; the drawer status line
 // renders it visibly (renderStatusLine), so both constants stay live.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
-const CONTROL_STATE_TEXT = { linked: "Ready", quarantined: "Quarantined", "observed-only": "View only" };
+
+/* What the Status cell should say, given the tab the operator is already in.
+
+   Audit §7: with the Now tab active, all six in-viewport rows printed "Working"
+   — a column where every cell carries the same word is not a signal, and it was
+   consuming the roster's scarcest space to restate the choice the operator had
+   just made. viewMatches pins working/idle/history to exactly one activity, so
+   in those views the activity is guaranteed by the tab itself.
+
+   The cell speaks what the tab does NOT guarantee: an exceptional outcome
+   always, and the activity only where a view genuinely mixes them and the row is
+   not the dominant case. Healthy working rows in Now say nothing. */
+const ACTIVITY_PINNED_VIEWS = new Set(["working", "idle", "history"]);
+
+function rowStateWords(activity, outcome, view) {
+  const words = [];
+  if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
+    words.push(ACTIVITY_LABELS[activity] || activity);
+  }
+  if (outcome !== "healthy") words.push(OUTCOME_LABELS[outcome] || outcome);
+  return words;
+}
+
+/* The roster's copy of the name, with the program suffix removed.
+
+   Audit §9: .agent-name renders at 15px/700 and on a real board four of six rows
+   carried the identical string, because sourceAgentName ends in the working
+   directory and every row in a program shares it — while the session tag, the
+   only value that differs, sat below at 10.5px/400/muted. Scanning meant reading
+   the faintest element on each row while the loudest repeated the program header
+   directly above it.
+
+   Stripped only when the name genuinely ends in " · <program>", so a cmux-titled
+   session ("⠐ Deploy backend fixes via Codex") is untouched, and never below one
+   remaining word. The full name stays in the row's title and aria-label. */
+function rosterName(displayName, program) {
+  const full = String(displayName || "");
+  const suffix = " · " + programName(program);
+  if (!program || !full.endsWith(suffix)) return full;
+  const trimmed = full.slice(0, -suffix.length).trim();
+  return trimmed || full;
+}
+
+/* The authoritative context percentage for ONE agent.
+
+   The server computes contextPct per agent (392 of 432 carry it on the live
+   board) and the client was recomputing its own from tokens.total via
+   contextUsage. They agree today — measured, 0 disagreements — but that is the
+   dangerous kind of agreement: two derivations that happen to match. The client
+   walk also accepts ONLY latest-turn scope, so it can suppress a reading the
+   server considers authoritative.
+
+   It matters now rather than eventually: token accounting is being corrected
+   server-side (a session reporting 391.4M when ~99% of that magnitude is cache
+   re-reads), and tokens.total is exactly the input the client walk divides by. A
+   corrected contextPct beside an uncorrected client recomputation is the same
+   seam that produced the needsYou mess, one field over. Server first; the walk
+   stays for the absolute figures it alone can build. */
+function agentContextPct(agent) {
+  if (agent && Number.isFinite(agent.contextPct)) return agent.contextPct;
+  const walked = contextUsage(agent && agent.tokens);
+  return walked ? walked.pct : null;
+}
 
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
@@ -3776,6 +3953,12 @@ function renderAgentRow(agent, program, opts = {}) {
   const nameKey = presentationLabelKey(nameTarget);
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
+  /* Empty unless another visible row carries this exact name — see sessionTag.
+     opts.ambiguousNames is absent on the drawer/preview call paths, which is
+     why this defaults to no tag rather than to computing one. */
+  const nameTag = opts.ambiguousNames && opts.ambiguousNames.has(displayName)
+    ? sessionTag(agent)
+    : "";
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
@@ -3799,7 +3982,17 @@ function renderAgentRow(agent, program, opts = {}) {
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
     el("span", { class: "agent-name-wrap" },
-      el("span", { class: "agent-name", text: displayName }),
+      el("span", { class: "agent-name", text: rosterName(displayName, program) }),
+      /* The disambiguator rides the loud line. It used to sit on the tag row
+         below in the faintest style on the row, which put the only value that
+         separates two rows furthest from the eye. */
+      nameTag
+        ? el("span", {
+          class: "row-session-tag is-inline",
+          title: "Session " + nameTag + " — this display name is shared by other rows.",
+          text: "#" + nameTag,
+        })
+        : null,
       state.selecting ? null : el("button", {
         type: "button",
         class: "agent-rename",
@@ -3814,6 +4007,10 @@ function renderAgentRow(agent, program, opts = {}) {
         },
       }, icon("rename"))),
     el("span", { class: "row-identity-tags" },
+      /* Session tag, only when this row's name is not unique on the board. It
+         rides the existing identity-tags line rather than adding a row, and it
+         is the same short id the drawer and the copy-id buttons speak, so an
+         operator can carry it between the two. */
       // De-noised: only the cwd-mismatch state keeps a visible mark — a small
       // ember dot with an accessible label. The full sentence rides the row
       // tooltip + aria-label and the drawer; no naming prose on the row.
@@ -3861,17 +4058,26 @@ function renderAgentRow(agent, program, opts = {}) {
   // vitals-band precedent. Access + the naming detail fold into the aria-label.
   const ctxUsage = contextUsage(agent.tokens);
   const modelText = modelShort(agent.model) || "not reported";
-  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const ctxPct = agentContextPct(agent);
+  const modelCtx = ctxPct != null ? modelText + " · " + ctxPct + "%" : modelText;
   const tokens = tokenSummary(agent.tokens);
 
   const instruments = el("span", { class: "row-instruments" },
-    el("span", {
-      class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
-      title: stateText,
-      "aria-label": "Status: " + stateText,
-    },
-      el("span", { class: "act-" + activity, text: ACTIVITY_LABELS[activity] }),
-      outcome !== "healthy" ? el("span", { class: "row-state-alert", text: " · " + OUTCOME_LABELS[outcome] }) : null),
+    /* Silent when the tab already guarantees the answer. The full state stays in
+       the title and the row's aria-label, so nothing is lost to a reader who
+       asks — it just stops being printed 275 times. */
+    (() => {
+      const words = rowStateWords(activity, outcome, state.view);
+      if (!words.length) return null;
+      return el("span", {
+        class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+        title: stateText,
+        "aria-label": "Status: " + stateText,
+      }, el("span", {
+        class: outcome !== "healthy" ? "row-state-alert" : "act-" + activity,
+        text: words.join(" · "),
+      }));
+    })(),
     el("span", {
       class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
       "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
@@ -3889,7 +4095,8 @@ function renderAgentRow(agent, program, opts = {}) {
     elapsed && elapsed !== "—"
       ? el("span", {
         class: "ri-cell ri-elapsed",
-        "aria-label": "Elapsed: " + elapsed,
+        "aria-label": "Span, first to last activity: " + elapsed,
+        title: "First activity to last activity, dormancy included",
       },
         el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
       : null);
@@ -3928,7 +4135,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}. Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;
@@ -4279,6 +4486,14 @@ function resolveSelection(sel) {
   return null;
 }
 
+function drawerAccent(pane, kind) {
+  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
+}
+
+function dwEyebrow(kindClass, iconName, text) {
+  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
+}
+
 function missingDrawer() {
   return [
     el("div", { class: "inspector-head" },
@@ -4288,34 +4503,6 @@ function missingDrawer() {
   ];
 }
 
-/* An immutable snapshot yields the same index every time, but affectedImpact
-   rebuilt it once PER ISSUE — O(issues × agents) per pass, and renderHealthRail
-   drives several passes per paint. Keyed on the snapshot object itself, so
-   adopting a new snapshot invalidates it for free and nothing has to be cleared
-   by hand. Callers read it; nobody mutates it. */
-const agentIndexCache = new WeakMap();
-function agentsById(snap = state.snap) {
-  if (!snap || typeof snap !== "object") return new Map();
-  const cached = agentIndexCache.get(snap);
-  if (cached) return cached;
-  const index = new Map(snapshotAgents(snap).map(({ agent, program }) => [agent.id, { agent, program }]));
-  agentIndexCache.set(snap, index);
-  return index;
-}
-
-function drawerAccent(pane, kind) {
-  pane.append(el("div", { class: "dw-accent dw-accent--" + kind, "aria-hidden": "true" }));
-}
-
-function dwEyebrow(kindClass, iconName, text) {
-  return el("span", { class: "dw-eyebrow dw-eyebrow--" + kindClass }, iconName ? icon(iconName) : null, text);
-}
-
-/* Shared verdict head for the five entity drawers (B4). One totem shape mirrors
-   the agent drawer: the status kicker + title (+ an optional sub line) on the
-   left, Close and the one promoted action stacked on the right. The agent drawer
-   keeps its own richer head (provider rail, status line, gate); the entity
-   drawers share this so the five near-identical heads are not hand-rolled. */
 function drawerVerdictHead({ eyebrow, title, sub, action }) {
   return el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
@@ -4380,7 +4567,7 @@ function investigationHeadAction(item) {
    omitted when no agent on the client reports session usage — an aggregate we
    cannot derive is never faked to zero. */
 function programRollupLine(program) {
-  const cells = programRollupCells(program.agents || []);
+  const cells = programRollupCells(program.agents || [], program.rollup);
   return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
     cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
       el("span", { class: "dw-rollup-value mono", text: c.value }),
@@ -4854,23 +5041,53 @@ function renderAttentionBlock(agent, ui = state, now = Date.now()) {
   return block;
 }
 
-/* The single most-relevant action control for the verdict head. Reuses the
-   dock's derivation (capability + renderDockTool) so head and dock behave
-   identically. Focus (jump to the pane) leads; Interrupt only when it is the
-   sole enabled lever. When safe controls are locked the head stays empty —
-   the control banner owns that story. */
-function headPrimaryAction(agent) {
-  const focusCap = capability(agent, "focus");
-  const instructCap = capability(agent, "instruct");
-  if ([focusCap, instructCap].some((c) => c && !c.enabled)) return null;
-  if (focusCap && focusCap.enabled) return renderDockTool(agent, focusCap, "focus", { fkeyPrefix: "head:" });
-  const interruptCap = capability(agent, "interrupt");
-  if (interruptCap && interruptCap.enabled) return renderDockTool(agent, interruptCap, "interrupt", { fkeyPrefix: "head:" });
-  return null;
-}
 
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
+/* The disambiguator for a drawer whose title is shared with other agents. Reuses
+   the row's ambiguousNames/sessionTag pair so both surfaces name a session the
+   same way — an operator who reads "#f263450b" on a row finds the same token at
+   the top of the drawer it opens. Silent when the name is already unique. */
+function drawerSessionTag(agent, ui = state) {
+  const all = snapshotAgents(ui.snap).map((x) => x.agent);
+  return ambiguousNames(all).has(agentName(agent)) ? sessionTag(agent) : "";
+}
+
+/* Two texts that begin the same way are the same text to a reader, even when
+   neither contains the other. Containment alone is not enough here: the server
+   truncates long prose and appends an ellipsis, so `lastUserMessage` is
+   frequently a shortened `task` ending in a character the original never had —
+   which defeats includes() in both directions while looking identical on screen.
+   Verified in a browser: the head and the "You" turn printed the same wall of
+   prompt preamble six lines apart, and every containment check passed. */
+function sameOpening(a, b) {
+  const n = Math.min(a.length, b.length, 120);
+  return n >= 24 && a.slice(0, n) === b.slice(0, n);
+}
+
+/* The standing objective, promoted out of Operate.
+
+   `taskMeaningfullyDifferent` compares `task` against `lastHumanMessage`, which
+   was the right question while Operate rendered that field — but Thread renders
+   `lastUserMessage`, and on a live board the task is frequently byte-identical
+   to THAT instead. Verified in a browser rather than in the diff: the head
+   printed a wall of prompt preamble and the "You" turn printed the same wall
+   again, six lines apart. Comparing against the wrong neighbour reintroduced the
+   exact duplication this overhaul was commissioned to remove.
+
+   So compare against every turn Thread can actually paint. */
+function drawerObjective(agent) {
+  const task = String(agent.task || "").trim();
+  if (!task || !taskMeaningfullyDifferent(agent)) return "";
+  const norm = normalizeCompareText(task);
+  if (!norm) return "";
+  for (const other of [agent.lastUserMessage, agent.lastAgentMessage]) {
+    const cmp = normalizeCompareText(String(other || "").trim());
+    if (cmp && sameOpening(norm, cmp)) return "";
+  }
+  return conciseText(task, 140);
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const activity = deriveActivity(agent);
@@ -4882,14 +5099,35 @@ function renderAgentDrawer(pane, view) {
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
 
-  // Verdict head — name, status words, the gate when blocked, and the one
-  // most-relevant action: verdict first, act from the top.
+  /* Verdict head.
+
+     The title used to be agentName alone, and on the live board that identified
+     nothing: 19 of the 22 agents an operator is actively running all render
+     "Claude · the-mountain-main". Opening four drawers in a row gave four
+     identical headings. Two changes fix it without a semantic swap:
+
+       - the session tag rides the title whenever the name is shared, reusing the
+         same disambiguator the ROW already solved this with, so the two surfaces
+         speak one language;
+       - `task` — the standing objective, distinct on 8 of those 22 where the name
+         managed 2 — is promoted out of the Operate panel to sit directly under
+         the title. It is the line that says WHICH lane this is.
+
+     The head no longer carries a primary action. headPrimaryAction rendered a
+     literal copy of a dock tool, and the dock is position:sticky at the bottom of
+     the pane — the same Focus button was on screen twice, with instance-scoped
+     confirm keys existing only to stop the two copies stealing each other's
+     focus. */
   const sourceLine = quietSourceLine(agent);
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  const headAction = headPrimaryAction(agent);
+  const tag = drawerSessionTag(agent);
+  const objective = drawerObjective(agent);
   pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
-      el("h2", { class: "inspector-title", text: agentName(agent) }),
+      el("h2", { class: "inspector-title" },
+        agentName(agent),
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
+      objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
       sourceLine
         ? el("p", {
           class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
@@ -4905,9 +5143,7 @@ function renderAgentDrawer(pane, view) {
       renderStatusLine(agent, activity, outcome, control, policy),
       verdictLiveness(agent),
       verdictGate(agent, outcome)),
-    el("div", { class: "verdict-side" },
-      closeButton(),
-      headAction ? el("div", { class: "verdict-action" }, headAction) : null)));
+    el("div", { class: "verdict-side" }, closeButton())));
 
   const attentionBlock = renderAttentionBlock(agent);
   if (attentionBlock) pane.append(attentionBlock);
@@ -4915,10 +5151,11 @@ function renderAgentDrawer(pane, view) {
   const banner = renderControlBanner(agent, control);
   if (banner) pane.append(banner);
 
-  if (agent.nextAction) {
-    pane.append(el("p", { class: "next-action" },
-      el("span", { class: "next-key", text: "Next" }), " ", agent.nextAction));
-  }
+  /* `nextAction` is gone. It rendered on 100% of agents and looked like per-agent
+     guidance, but across 243 live agents it held THREE distinct strings and 214
+     of them read "Review this session in history." — a restatement of
+     `activity === "ended"` dressed as advice. A directive that is the same
+     sentence on nine agents out of ten is not a directive. */
 
   // Vitals promoted to an instrument band directly under the verdict head —
   // the numbers an operator acts on, no longer buried in the Evidence shelf.
@@ -4938,14 +5175,8 @@ function renderAgentDrawer(pane, view) {
     "aria-label": "Agent sections",
   },
     renderShelfSection({
-      key: "operate",
-      title: "Operate",
-      open: true,
-      body: renderOperate(agent, program),
-    }),
-    renderShelfSection({
-      key: "chat",
-      title: "Chat",
+      key: "thread",
+      title: "Thread",
       open: true,
       body: renderChat(agent),
     }),
@@ -5023,36 +5254,69 @@ function renderEvidenceShelf(agent) {
   return section;
 }
 
-/* One calm status sentence under the title — replaces the pill cluster. */
+/* One line under the title, and it earns every word it prints.
+
+   It used to read "Working · Healthy · View only" on almost every agent. Measured
+   against the live board: `outcome` is `healthy` on 243/243, so that word carried
+   zero bits; `activity` is the word already printed on the row the operator just
+   clicked; and `control` is stated again, with its reason and its remedy, by
+   renderControlBanner directly below. Three items, no information.
+
+   What this line answers instead is the question the drawer could not answer at
+   all: "went quiet 20 minutes ago — dead, or thinking?" That is time-since-update
+   plus process liveness. `statusReason` is 100% populated on the wire and was
+   rendered on zero agents; it is the sentence that says which. */
 function renderStatusLine(agent, activity, outcome, control, policy) {
+  /* The activity word is emitted ALWAYS and hidden by CSS only at the widths
+     where the roster row that carries it is actually beside the drawer. Below
+     1025px the drawer is a full-viewport sheet and the roster is completely
+     covered — measured, not assumed — so deleting the word outright left an
+     operator on a 1024px window unable to tell whether the session they were
+     reading was running or parked. It also never reached a screen reader at any
+     width, because the age text encoded activity only as a colour. */
   const line = el("div", {
     class: "status-line",
     role: "status",
-    "aria-label": "Session status",
+    "aria-label": "Session status: " + (ACTIVITY_LABELS[activity] || activity),
   });
-
-  const live = el("span", { class: "status-line-live act-" + activity });
-  if (activity === "working") live.append(el("span", { class: "status-pulse", "aria-hidden": "true" }));
-  else live.append(el("span", { class: "act-glyph act-" + activity, "aria-hidden": "true" }));
-  live.append(ACTIVITY_LABELS[activity] || activity);
-  line.append(live);
-
-  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
   line.append(el("span", {
-    class: "status-line-item outcome-" + outcome,
-    text: OUTCOME_LABELS[outcome] || outcome,
+    class: "status-line-activity act-" + activity,
+    text: ACTIVITY_LABELS[activity] || activity,
   }));
+  line.append(el("span", { class: "status-line-sep status-line-activity", "aria-hidden": "true", text: "·" }));
 
-  line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-  const controlNode = el("span", {
-    class: "status-line-item control-" + control,
-    title: CONTROL_HINTS[control] || null,
-  });
-  if (control === "quarantined" || control === "linked" || control === "observed-only") {
-    controlNode.append(icon(CONTROL_ICONS[control] || "observed"));
+  // Time since the source last moved — the live fact, not uptime. Uptime measured
+  // the wrong clock: it read 200h for an agent that had been silent for an hour.
+  if (agent.updatedAt) {
+    line.append(el("span", {
+      class: "status-line-live act-" + activity,
+      dataset: { ago: agent.updatedAt },
+      text: agoText(agent.updatedAt),
+    }));
   }
-  controlNode.append(CONTROL_STATE_TEXT[control] || CONTROL_LABELS[control] || control);
-  line.append(controlNode);
+
+  /* statusReason only when it adds a fact the clock did not. On a working agent
+     it reads "Source activity within 3 minutes." directly beside "11s ago" —
+     the same observation at coarser precision, which is repeat information under
+     a different label. It earns its place on everything else, where it explains
+     a silence the clock can only measure ("No source activity in the last 45
+     minutes", "Archived by source or operator"). */
+  const reason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
+  if (reason && activity !== "working") {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
+  }
+
+  /* Escalations only. A policy mismatch is real trouble and nothing else says it;
+     `outcome` speaks only when it stops being healthy, which is the whole point
+     of deleting it from the nominal line. */
+  if (outcome !== "healthy") {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", {
+      class: "status-line-item outcome-" + outcome,
+      text: OUTCOME_LABELS[outcome] || outcome,
+    }));
+  }
 
   if (policy && policy.state === "mismatch") {
     line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
@@ -5077,6 +5341,14 @@ function renderControlBanner(agent, control) {
   if (!locked) return null;
   const brief = quarantineBrief(agent, control);
 
+  /* Deliberately NOT the server's reason string, though it is right there on
+     the capability. This chrome is pinned to plain operator language and to
+     leaking no cmux identifiers, because resolver reasons carry raw evidence
+     ("surface a1b2 is claimed by two sessions (lsof evidence conflicts)").
+     My first pass rendered the served reason on the "render what the server
+     sends" rule and a test caught it. That rule governs NUMBERS, where two
+     derivations drift; this is an explanation, where the server's audience is
+     an API client and the banner's audience is a person. */
   const copy = el("div", { class: "control-banner-copy" },
     el("strong", { text: brief.title }),
     " ",
@@ -5440,47 +5712,60 @@ function vitalTile(label, figure) {
    :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
    the type but is never populated — real cost is program/pulse-level only, and
    program cost has no place inside a single agent's band. */
+const CONTEXT_ALARM_PCT = 70;
+
 function renderVitalsBand(agent) {
   const t = agent.tokens || {};
   const tiles = [];
 
-  // Context pressure — a ring when we have an observed window, else the raw token
-  // summary so any source with tokens still gets a tile.
+  /* ONE tile, two numbers, and the words between them do the disambiguating.
+
+     The reported defect was "SESSION TOKENS 23.7M" sitting beside "CONTEXT 272k"
+     under sibling NOUN labels — both read as "an amount of tokens", so the
+     operator had to infer that one is a fill level and one is a running meter.
+     Nouns cannot fix that; two tiles side by side actively invite the comparison.
+     Prepositions fix it: "12% of the window" and "used this session" cannot be
+     read as the same measurement.
+
+     Both magnitudes still appear, because both answer real questions — how much
+     room is left, and how much this lane has cost — but each appears exactly
+     once, in one tile, in a sentence. */
   const ctx = contextUsage(t);
   if (ctx) {
+    const hot = ctx.pct >= CONTEXT_ALARM_PCT;
+    /* The percentage is spoken ONCE, by the ring, which is the gauge an operator
+       reads at a glance. An earlier pass printed it in the ring AND again in the
+       sentence beside it — the same quantity encoded twice inside a single tile,
+       which is the defect this overhaul exists to remove, committed inside the
+       fix for it. The sentence now carries only what the ring cannot: the
+       absolute size the percentage is a fraction OF, and the session total. */
+    const lines = [fmtTok(t.total) + " of " + fmtTok(t.contextWindow) + " window"];
+    // Omitted honestly rather than zeroed when the source reports no session sum.
+    if (t.sessionTotal != null) lines.push(fmtTok(t.sessionTotal) + " used this session");
     tiles.push(vitalTile("Context",
-      el("div", { class: "vital-ring-wrap" },
+      el("div", { class: "vital-ring-wrap" + (hot ? " is-hot" : "") },
         svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
         el("div", { class: "vital-figure" },
-          el("div", { class: "vital-big mono" },
-            fmtTok(t.total), el("small", { text: " /" + fmtTok(t.contextWindow) }))))));
-  } else {
-    const tok = tokenSummary(t);
-    if (tok.known) {
-      tiles.push(vitalTile(tok.label === "latest call" ? "Latest call" : "Tokens",
-        el("div", { class: "vital-big mono", title: tok.title, text: tok.text })));
-    }
+          el("div", { class: "vital-note mono", text: lines[0] }),
+          lines[1] ? el("div", { class: "vital-note", text: lines[1] }) : null))));
+  } else if (t.sessionTotal != null) {
+    // No window means no percentage can be honest, so the session sum stands
+    // alone under wording that never implies a fill level.
+    tiles.push(vitalTile("Tokens",
+      el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) + " used this session" })));
   }
 
-  // Session spend + cache-hit efficiency (computed, not raw).
-  const cacheHit = (t.cachedInput != null && t.input) ? Math.min(100, Math.round((t.cachedInput / t.input) * 100)) : null;
-  if (t.sessionTotal != null) {
-    tiles.push(vitalTile("Session tokens",
-      el("div", {},
-        el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) }),
-        cacheHit != null ? el("div", { class: "vital-sub", text: cacheHit + "% cache hit last call" }) : null,
-        cacheHit != null ? svgMeter(cacheHit, "vital-bar", { label: cacheHit + "% cached" }) : null)));
-  }
+  /* Deleted, each for its own reason:
 
-  // Uptime.
-  const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
-  if (elapsed && elapsed !== "—") {
-    tiles.push(vitalTile("Uptime",
-      el("div", { class: "vital-big mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed })));
-  } else if (agent.updatedAt) {
-    tiles.push(vitalTile("Last update",
-      el("div", { class: "vital-big mono", dataset: { ago: agent.updatedAt }, text: agoText(agent.updatedAt) })));
-  }
+     - "N% cache hit last call": computed as cachedInput/input, but `input` is the
+       UNCACHED remainder, so the true rate is cachedInput/(cachedInput+input).
+       The wrong denominator can exceed 1 — the Math.min(100, …) clamp was the
+       tell — and on the live board it printed exactly "100%" on nearly every
+       active agent. A constant rendered as a bar chart.
+     - "Uptime": measured the wrong clock. It read 200h for an agent that had been
+       silent for an hour, because it times since start, not since movement. The
+       question it looked like it answered — "quiet 20 minutes, dead or thinking?"
+       — is now answered honestly by the status line's time-since-update. */
 
   if (!tiles.length) return null;
   const band = el("div", { class: "vitals" });
@@ -5488,104 +5773,115 @@ function renderVitalsBand(agent) {
   return band;
 }
 
-function renderOperateMeta(agent) {
-  const items = [];
-  if (agent.role && agent.role !== "agent") {
-    items.push({
-      label: "role",
-      hint: GLOSSARY.role,
-      node: el("span", { text: ROLE_LABELS[agent.role] || agent.role }),
-    });
-  }
-  if (agent.model) {
-    items.push({
-      label: "model",
-      hint: GLOSSARY.model,
-      node: el("span", { class: "mono", text: modelShort(agent.model) || agent.model }),
-    });
-  }
-  // Uptime, token, and context figures now lead the drawer in the vitals
-  // instrument band under the verdict head. This meta row stays identity-only.
-  if (!items.length) return null;
+/* renderOperate and renderOperateMeta are deleted, not merged.
 
-  const row = el("div", { class: "operate-meta", "aria-label": "Session meta" });
-  for (const item of items) {
-    row.append(el("span", { class: "operate-meta-item" },
-      el("span", {
-        class: "operate-meta-label term-hint",
-        tabindex: "0",
-        title: item.hint || null,
-        "aria-label": item.hint ? `${item.label}: ${item.hint}` : item.label,
-        text: item.label,
-      }),
-      item.node));
-  }
-  return row;
-}
+   Operate was never a tab; it was four fields from four different domains sharing
+   a heading, and every one of them had a better home:
 
-function renderOperate(agent, _program) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  const message = typeof agent.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  if (message) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Last human message" }),
-      el("p", { class: "last-human-message", tabindex: "0", text: agent.lastHumanMessage }));
-  }
+     "Last human message" -> deleted. Byte-identical to Thread's user turn on 37%
+        of the board, and on active agents it was the ASSISTANT's prose printed
+        under a label claiming a human wrote it.
+     "Task"               -> the head, as the objective line. It is the only field
+        that distinguishes one lane from another when 19 of 22 share a name.
+     outcome note         -> the status line, which now speaks only on escalation.
+     role + model chips   -> deleted. The row renders the role chip on exactly the
+        same condition, and model is already in the head's provider chip. Both
+        were third printings.
 
-  if (taskMeaningfullyDifferent(agent)) {
-    panel.append(
-      el("h3", { class: "section-title", text: "Task" }),
-      el("p", { class: "operate-task", text: agent.task.trim() }));
-  }
+   With those redistributed the function returned an empty panel and its own
+   "No operate digest yet" placeholder — a tab whose only remaining content was an
+   apology for having none. */
 
-  const outcome = deriveOutcome(agent);
-  if (outcome !== "healthy" && agent.statusReason) {
-    panel.append(el("p", {
-      class: "operate-outcome-note outcome-" + outcome,
-      text: (OUTCOME_LABELS[outcome] || outcome) + " — " + agent.statusReason,
-    }));
-  }
-
-  // Vitals lead the drawer as an instrument band under the verdict head — Operate
-  // stays a calm digest so Chat + Operate can showcase side by side.
-  const meta = renderOperateMeta(agent);
-  if (meta) panel.append(meta);
-  if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No operate digest yet for this session." }));
-  }
-  return panel;
-}
+const TURN_ROLE_LABELS = { user: "You", assistant: "Agent", task: "Task" };
 
 function renderChatTurn(role, text) {
   return el("div", { class: "chat-turn chat-turn--" + role },
-    el("div", { class: "chat-turn-role", text: role === "user" ? "User" : "Assistant" }),
+    el("div", { class: "chat-turn-role", text: TURN_ROLE_LABELS[role] || role }),
     el("p", { class: "chat-turn-body", tabindex: "0", text }));
 }
 
+/* Drops any turn whose text repeats one already shown. This is the rule that
+   makes "every surviving field appears exactly once" true by construction rather
+   than by inspection: the three message fields overlap constantly on real data —
+   lastHumanMessage was byte-identical to lastAgentMessage on 18 of 22 active
+   agents — so any renderer that trusts the field NAMES prints the same prose
+   twice under two labels. Compare the text, not the field. */
+/* Two normalised strings that are the same prose. Either identical, or one is
+   the server's truncation of the other — the collectors cut long text and append
+   an ellipsis, so the short copy is a prefix of the long one and ends in "…". */
+function isSameProse(a, b) {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 24 || !long.startsWith(short.replace(/…$/, ""))) return false;
+  return /…$/.test(short);
+}
+
+function dedupeTurns(candidates) {
+  const seen = [];
+  const kept = [];
+  for (const turn of candidates) {
+    const text = typeof turn.text === "string" ? turn.text.trim() : "";
+    if (!text) continue;
+    const norm = normalizeCompareText(text);
+    /* Repetition, not containment. This used to drop a turn whenever either text
+       contained the other, which is a much bigger net than it looks: an agent
+       that quotes the operator's instruction back before answering — extremely
+       common — was judged a repeat of the user turn and dropped WITH its answer
+       attached, so the operator saw their own message and no reply from an agent
+       that had replied.
+
+       A turn is a repeat only if it says the same thing: identical after
+       normalising, or the same text with one side truncated by the server (which
+       appends an ellipsis, so the shorter copy is a prefix that ends in one). */
+    if (!norm || seen.some((prev) => isSameProse(prev, norm))) continue;
+    seen.push(norm);
+    kept.push({ ...turn, text });
+  }
+  return kept;
+}
+
+/* Thread — the drawer's one reading surface, and the only place a message is
+   printed. Operate is gone: its "Last human message" was the SAME string as this
+   panel's user turn on 37% of the board, and on active agents it was actually the
+   ASSISTANT's prose under a label claiming a human wrote it. Its task moved to the
+   head, its outcome note to the status line, its role/model chips were the third
+   printing of facts the row and the head already carry.
+
+   `lastHumanMessage` is deliberately NOT a fallback here. The server documents it
+   as "the latest provider-shaped assistant OR user prose", so using it to fill a
+   turn labelled "You" is how the mislabel got in. When there is no user message,
+   the honest stand-in is the task the operator actually set. */
 function renderChat(agent) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  // Readable You/Agent turns only — the raw transcript tail lives in Evidence.
-  const userRaw = agent.lastUserMessage !== undefined ? agent.lastUserMessage : agent.lastHumanMessage;
-  const user = typeof userRaw === "string" ? userRaw.trim() : "";
-  const assistant = typeof agent.lastAgentMessage === "string" ? agent.lastAgentMessage.trim() : "";
-  if (user) panel.append(renderChatTurn("user", userRaw));
-  if (assistant) panel.append(renderChatTurn("assistant", agent.lastAgentMessage));
+  /* `task` is the last candidate, and it is what stops three independently
+     reasonable dedup rules from composing into an empty drawer: the head
+     suppresses the objective when it equals the message, Thread reads only the
+     two turn fields, and the row summary is folded on the selected row — so an
+     agent whose only prose is `task` could end up with the head silent, Thread
+     saying "no messages", and the roster copy hidden, for a session whose task
+     is populated on the wire. Recovering it meant leaving the cockpit.
 
-  const artifact = transcriptArtifact(agent);
-  if (artifact && artifact.path) {
-    panel.append(el("p", { class: "chat-transcript-link" },
-      el("span", { text: "Transcript: " }),
-      el("code", { text: artifact.path }),
-      " ",
-      el("button", {
-        type: "button", class: "btn sm",
-        dataset: { fkey: `copy-transcript:${agent.id}` },
-        onclick: () => copyText(artifact.path),
-      }, "Copy path")));
-  }
+     dedupeTurns still drops it when a turn already says the same thing, so this
+     adds a floor without adding a duplicate: at least one copy always survives. */
+  /* The task is a FLOOR, not a fixture: it appears here only when nothing else
+     carries it. The head already prints it as the objective whenever it differs
+     from the turns, so including it unconditionally rendered the same prose
+     twice in one drawer — six lines apart, which is the exact defect this
+     overhaul was commissioned to remove, reintroduced by the fix for the
+     opposite failure (a drawer that could go completely empty). */
+  const turns = dedupeTurns([
+    { role: "user", text: agent.lastUserMessage },
+    { role: "assistant", text: agent.lastAgentMessage },
+    { role: "task", text: drawerObjective(agent) ? "" : agent.task },
+  ]);
+  for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
+
+  /* The transcript path is not here. Evidence's artifact list already renders the
+     same path with its own Copy button, and raw paths are exactly what "evidence
+     stays collapsed as the place for raw detail" means. */
 
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No chat turns available yet." }));
+    panel.append(el("p", { class: "inspector-note", text: "No messages captured for this session yet." }));
   }
   return panel;
 }
@@ -5685,9 +5981,17 @@ function controlLinkSentence(target) {
   if (!target) return null;
   const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
   const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
-  if (target.resolution === "exact" || target.resolution === "unique-cwd") {
+  if (target.resolution === "exact") {
     return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
       + " · " + resolution
+      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
+      + ".";
+  }
+  /* A directory match routes a Focus and nothing else. Claiming "for Focus and
+     Send" here is the sentence form of the same overclaim the chip made. */
+  if (target.resolution === "unique-cwd") {
+    return (terminal ? "Focus only, to " + terminal : "Focus only")
+      + " · " + resolution + ", not attested by cmux"
       + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
       + ".";
   }
@@ -5821,201 +6125,14 @@ function renderSurfaceEvidence(agent, ui = state) {
    exceptions — the source guard that forbids markup assignment covers this file
    as a whole, and every string below goes through el({ text }). */
 
-const TRANSCRIPT_DEFAULT_LIMIT = 200;
-const TRANSCRIPT_MAX_LIMIT = 1000;         // the contract's hard cap
-const TRANSCRIPT_LIMIT_STEPS = [200, 500, 1000];
-// Painting a 1000-line transcript as 1000 nodes on every drawer repaint is how
-// an inspector becomes unusable. The window is the tail, which is the part the
-// operator is asking about; the count it is hiding is stated, never implied.
-const TRANSCRIPT_RENDER_CAP = 300;
-const TRANSCRIPT_ROLES = new Set(["user", "assistant", "tool", "system", "unknown"]);
-const TRANSCRIPT_ROLE_LABELS = {
-  user: "You", assistant: "Agent", tool: "Tool", system: "System", unknown: "—",
-};
 
-function clampTranscriptLimit(n) {
-  const v = Math.floor(Number(n));
-  if (!Number.isFinite(v)) return TRANSCRIPT_DEFAULT_LIMIT;
-  return Math.min(TRANSCRIPT_MAX_LIMIT, Math.max(1, v));
-}
 
-function nextTranscriptLimit(current) {
-  return TRANSCRIPT_LIMIT_STEPS.find((step) => step > clampTranscriptLimit(current)) || null;
-}
 
-function transcriptUrl(agentId, limit) {
-  return "/api/transcript?agent=" + encodeURIComponent(agentId) + "&limit=" + clampTranscriptLimit(limit);
-}
 
-/* The wire shape, defended. Everything in it is agent-derived: an unknown role
-   collapses to "unknown", a non-string `text` is dropped rather than String()-ed
-   into "[object Object]", and a missing `source` stays null instead of becoming
-   a plausible-looking path. Never invent content. */
-function normalizeTranscript(body) {
-  const rows = Array.isArray(body && body.lines) ? body.lines : [];
-  const lines = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object" || typeof row.text !== "string") continue;
-    lines.push({
-      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
-      role: TRANSCRIPT_ROLES.has(row.role) ? row.role : "unknown",
-      text: row.text,
-    });
-  }
-  return {
-    source: typeof body.source === "string" && body.source ? body.source : null,
-    truncated: body.truncated === true,
-    lines,
-  };
-}
 
-/* Why this refusal gets its own sentence.
 
-   These two GETs used to demand an `Origin` header that a browser never sends
-   on a same-origin GET, so both features were dark in the browser and only
-   worked from curl. That is FIXED on the server: verified live, both routes
-   answer 200 to a request with no `Origin` at all.
 
-   The code still exists, and now means something entirely different — the
-   routes are served only over a loopback hostname, so a page that reached the
-   server by any other name gets it. So the copy must NOT still tell the
-   operator that "the server's read endpoints have to stop requiring one": that
-   would send them to route a fix that has already shipped, which is the same
-   expensive lie as "not available in this build", pointed at a different team.
-   Name the address instead — it is the one thing they can act on. */
-function readEndpointOriginNote(what) {
-  return what + " are refused by the server (ORIGIN_REJECTED): these reads are served only over a "
-    + "loopback address, and this page reached the server under another hostname. Open the board at "
-    + "127.0.0.1 or localhost.";
-}
 
-/* Degrade honestly. This client ships ahead of the route, so the common failure
-   is a 404 with no JSON envelope — which means "this build cannot show you a
-   transcript", NOT "this agent has no transcript". Saying the second would be a
-   lie the operator would act on. */
-function transcriptFailureText(status, body) {
-  const code = body && body.error && body.error.code;
-  const message = body && body.error && body.error.message;
-  if (!status) return "Could not reach the server for this transcript.";
-  if (code === "AGENT_NOT_FOUND") return "This session is no longer tracked, so its transcript cannot be resolved.";
-  if (code === "ORIGIN_REJECTED") return readEndpointOriginNote("Transcripts");
-  if (status === 404 && !code) return "Transcript view is not available in this build.";
-  return "Transcript unavailable"
-    + (code ? " [" + code + "]" : "")
-    + (message ? ": " + message : " (HTTP " + status + ")");
-}
-
-function transcriptWindow(lines, cap = TRANSCRIPT_RENDER_CAP) {
-  const total = lines.length;
-  if (total <= cap) return { shown: lines, hidden: 0, total };
-  return { shown: lines.slice(total - cap), hidden: total - cap, total };
-}
-
-async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {
-  const want = clampTranscriptLimit(limit);
-  state.transcript = { agentId, loading: true, error: "", data: null, limit: want };
-  render();
-  let next;
-  try {
-    const res = await apiFetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } }, API_TRANSCRIPT_TIMEOUT_MS);
-    let body = null;
-    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
-    next = !res.ok || !body || body.ok !== true
-      ? { agentId, loading: false, error: transcriptFailureText(res.status, body), data: null, limit: want }
-      : { agentId, loading: false, error: "", data: normalizeTranscript(body), limit: want };
-  } catch {
-    next = { agentId, loading: false, error: transcriptFailureText(0, null), data: null, limit: want };
-  }
-  // The operator moved on — never paint one agent's transcript into another's drawer.
-  if (state.transcript.agentId !== agentId) return;
-  state.transcript = next;
-  render();
-}
-
-function transcriptLineNode(line) {
-  return el("div", { class: "tr-line", dataset: { role: line.role } },
-    el("div", { class: "tr-meta" },
-      el("span", { class: "tr-role", text: TRANSCRIPT_ROLE_LABELS[line.role] || line.role }),
-      line.at ? el("span", { class: "tr-at", title: line.at, text: agoText(line.at) }) : null),
-    // UNTRUSTED. textContent via el({ text }) — never innerHTML.
-    el("p", { class: "tr-text", tabindex: "0", text: line.text }));
-}
-
-function renderTranscriptPanel(agent, ui = state) {
-  const view = (ui && ui.transcript) || {};
-  const mine = view.agentId === agent.id;
-  const section = el("section", { class: "transcript-view" },
-    el("h3", { class: "section-title", text: "Transcript" }));
-
-  if (!mine) {
-    section.append(el("button", {
-      type: "button", class: "btn sm transcript-load",
-      dataset: { fkey: "transcript-load:" + agent.id },
-      onclick: () => void loadTranscript(agent.id),
-    }, "Read the transcript"));
-    return section;
-  }
-
-  if (view.loading) {
-    // Bounded by construction: loadTranscript always resolves into data or an
-    // error, so this can never become a spinner that never resolves.
-    section.append(el("p", { class: "inspector-note", role: "status", text: "Reading the transcript…" }));
-    return section;
-  }
-
-  if (view.error) {
-    section.append(
-      el("p", { class: "inspector-note err", role: "status", text: view.error }),
-      el("button", {
-        type: "button", class: "btn sm transcript-load",
-        dataset: { fkey: "transcript-retry:" + agent.id },
-        onclick: () => void loadTranscript(agent.id, view.limit),
-      }, "Try again"));
-    return section;
-  }
-
-  const data = view.data || { lines: [], source: null, truncated: false };
-  const head = el("div", { class: "transcript-head" });
-  if (!data.lines.length) {
-    head.append(el("span", {
-      class: "transcript-source",
-      text: data.source
-        ? "The transcript file is present but has no readable turns."
-        : "No transcript file is recorded for this session.",
-    }));
-  } else {
-    const win = transcriptWindow(data.lines);
-    head.append(el("span", {
-      class: "transcript-source",
-      text: win.hidden
-        ? "Last " + win.shown.length + " of " + win.total + " loaded turns"
-        : win.total + (win.total === 1 ? " turn" : " turns"),
-    }));
-    if (data.truncated) head.append(el("span", { class: "transcript-more", text: "· older turns exist above this window" }));
-  }
-  if (data.source) head.append(el("code", { class: "transcript-source-path", text: data.source }));
-  head.append(el("button", {
-    type: "button", class: "btn sm transcript-load",
-    dataset: { fkey: "transcript-refresh:" + agent.id },
-    onclick: () => void loadTranscript(agent.id, view.limit),
-  }, "Refresh"));
-  const more = nextTranscriptLimit(view.limit);
-  if (more && data.truncated) {
-    head.append(el("button", {
-      type: "button", class: "btn sm transcript-load",
-      dataset: { fkey: "transcript-more:" + agent.id },
-      onclick: () => void loadTranscript(agent.id, more),
-    }, "Load " + more));
-  }
-  section.append(head);
-
-  if (data.lines.length) {
-    const log = el("div", { class: "transcript-log", tabindex: "0", "aria-label": "Transcript turns" });
-    for (const line of transcriptWindow(data.lines).shown) log.append(transcriptLineNode(line));
-    section.append(log);
-  }
-  return section;
-}
 
 function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
@@ -6239,7 +6356,11 @@ function broadcastIneligibleReason(agent) {
   if (deriveActivity(agent) === "ended") {
     return (agent.status === "archived" || agent.activity === "archived") ? "archived" : "ended";
   }
-  return deriveControlState(agent) === "quarantined" ? "quarantined" : "view only";
+  const control = deriveControlState(agent);
+  if (control === "quarantined") return "quarantined";
+  // Distinct from "view only": this row HAS a pane, it just cannot be proven.
+  if (control === "unproven") return "session not proven";
+  return "view only";
 }
 
 function toggleSelect(agentId) {
@@ -6329,163 +6450,10 @@ async function sendBroadcast() {
    leaving, not on the first paint (opening the page to six waiting agents is
    not six pieces of news), and never on routine churn. */
 
-const NOTIFY_STORAGE_KEY = "mtn3-notify";
-const NOTIFY_NAME_LIMIT = 3;
-const NOTIFY_TAG = "anthill-needs-you";  // replaces its predecessor; never stacks
 
-/* Who actually needs a human — the same verdict the Alerts view and the beacon
-   read, so the notification can never disagree with the board it came from. */
-function needsHumanIds(snap) {
-  const ids = [];
-  // alerting() is that verdict — sharing it is what stops the notifier from
-  // announcing a different set of agents than the Alerts view shows.
-  for (const { agent } of snapshotAgents(snap)) if (alerting(agent)) ids.push(agent.id);
-  return ids.sort();
-}
 
-/* Pure. `prev === null` means "we have not looked yet": seed the baseline and
-   stay silent, which is what stops a reload from announcing the whole backlog. */
-function notificationPlan(prev, next, nameFor = null) {
-  const ids = next.slice().sort();
-  if (prev === null || prev === undefined) return { fire: false, ids, reason: "seeded" };
-  const before = new Set(prev);
-  const fresh = ids.filter((id) => !before.has(id));
-  if (!fresh.length) return { fire: false, ids, reason: "no new agent needs you" };
-  const names = fresh.slice(0, NOTIFY_NAME_LIMIT).map((id) => (nameFor && nameFor(id)) || id);
-  const rest = fresh.length - names.length;
-  return {
-    fire: true,
-    ids,
-    reason: "new",
-    title: fresh.length === 1 ? "1 agent needs you" : fresh.length + " agents need you",
-    body: names.join(", ") + (rest > 0 ? " and " + rest + " more" : ""),
-  };
-}
 
-/* The zero-permission escalation: a background tab shows its own alert count. */
-function titleWithAlerts(base, count) {
-  const clean = String(base).replace(/^\(\d+\)\s*/, "");
-  return count > 0 ? "(" + count + ") " + clean : clean;
-}
 
-function notificationsSupported() {
-  return typeof Notification !== "undefined";
-}
-
-function loadNotifyPreference() {
-  try {
-    state.notify.enabled = localStorage.getItem(NOTIFY_STORAGE_KEY) === "on";
-  } catch { state.notify.enabled = false; }
-  if (notificationsSupported()) state.notify.permission = Notification.permission;
-  // Permission revoked in browser settings between sessions: the stored
-  // preference is stale, so do not carry a promise we cannot keep.
-  if (state.notify.enabled && state.notify.permission !== "granted") state.notify.enabled = false;
-}
-
-function saveNotifyPreference() {
-  try { localStorage.setItem(NOTIFY_STORAGE_KEY, state.notify.enabled ? "on" : "off"); }
-  catch { /* storage unavailable */ }
-}
-
-/* The ONLY place permission is requested, and it is reachable only from a click.
-   Never on load: an unprompted permission dialog is how a page gets denied
-   permanently, which would silently disable the feature forever. */
-async function toggleNotifications() {
-  if (state.notify.enabled) {
-    state.notify.enabled = false;
-    saveNotifyPreference();
-    renderNotifyToggle();
-    return;
-  }
-  if (!notificationsSupported()) { renderNotifyToggle(); return; }
-  let permission = Notification.permission;
-  if (permission === "default") {
-    try { permission = await Notification.requestPermission(); }
-    catch { permission = "denied"; }
-  }
-  state.notify.permission = permission;
-  state.notify.enabled = permission === "granted";
-  saveNotifyPreference();
-  renderNotifyToggle();
-}
-
-/* Denied is not an error state to shout about — the operator said no. The
-   control just reads "unavailable" and nothing else changes. */
-/* `count` is how many agents are waiting on a human right now, and it rides on
-   EVERY branch — muted, blocked and unsupported included. "Alerts off" sitting
-   silently beside four waiting agents was the whole defect: the button reported
-   the delivery channel and never the backlog. Turning notifications off is a
-   choice about interruption, not a reason to stop showing the number. */
-function notifyToggleView(notify, supported = notificationsSupported(), count = 0) {
-  const n = Number.isFinite(count) && count > 0 ? count : 0;
-  const suffix = n ? ` · ${n} waiting on you` : "";
-  const view = !supported
-    ? { label: "Alerts unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
-    : notify.permission === "denied"
-      ? { label: "Alerts blocked", pressed: false, disabled: true, title: "Notifications are blocked for this site in your browser settings." }
-      : notify.enabled
-        ? { label: "Alerts on", pressed: true, disabled: false, title: "Stop notifying me when an agent starts waiting." }
-        : { label: "Alerts off", pressed: false, disabled: false, title: "Notify me when an agent starts waiting, even in another window." };
-  return {
-    ...view,
-    count: n,
-    title: view.title + suffix,
-    // The button's accessible name carries the backlog too — a screen reader
-    // must not have to infer it from a bare digit beside the label.
-    ariaLabel: view.label + (n ? `, ${n} agent${n === 1 ? "" : "s"} waiting on you` : ""),
-  };
-}
-
-function renderNotifyToggle() {
-  const btn = $("notify-toggle");
-  if (!btn) return;
-  const view = notifyToggleView(state.notify, notificationsSupported(), needsHumanIds(state.snap).length);
-  btn.textContent = view.label;
-  // The count is its own node rather than text appended to the label, so it can
-  // take the ember treatment the tab counts already use and stays out of the
-  // button's text content.
-  if (view.count) btn.append(el("span", { class: "notify-badge", "aria-hidden": "true", text: String(view.count) }));
-  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
-  btn.setAttribute("title", view.title);
-  btn.setAttribute("aria-label", view.ariaLabel);
-  if (view.disabled) btn.setAttribute("disabled", "");
-  else btn.removeAttribute("disabled");
-  btn.classList.toggle("is-on", view.pressed);
-  btn.classList.toggle("is-alerting", view.count > 0);
-}
-
-/* Delivery, kept separate from the decision so every gate is assertable without
-   a browser. Each refusal returns its own reason rather than a shared silence,
-   because "we chose not to" and "the browser refused" are different facts. */
-function deliverNotification(plan, notify, ctor) {
-  if (!plan.fire) return plan.reason;
-  if (!notify.enabled) return "muted";
-  if (!ctor) return "unsupported";
-  if (notify.permission !== "granted") return "not-granted";
-  try {
-    // eslint-disable-next-line no-new
-    new ctor(plan.title, { body: plan.body, tag: NOTIFY_TAG });
-    return "sent";
-  } catch { return "refused"; }
-}
-
-/* Called on every adopted snapshot. The title always updates — it costs no
-   permission and cannot annoy anyone. The Notification only fires when the plan
-   says a NEW agent needs a human AND the operator opted in; denied, unsupported
-   or muted all degrade to the title alone, silently. */
-function applyNotifications(snap = state.snap) {
-  const next = needsHumanIds(snap);
-  const byId = agentsById(snap);
-  const plan = notificationPlan(state.notify.seen, next, (id) => {
-    const found = byId.get(id);
-    return found ? agentName(found.agent) : null;
-  });
-  state.notify.seen = plan.ids;
-  if (typeof document !== "undefined") {
-    document.title = titleWithAlerts(state.notify.baseTitle || document.title, next.length);
-  }
-  return deliverNotification(plan, state.notify, notificationsSupported() ? Notification : null);
-}
 
 /* ---------- action log ----------
 
@@ -6501,182 +6469,16 @@ function applyNotifications(snap = state.snap) {
      { ok, actions: [{ id, at, kind, agentIds, outcome, detail }] }   // newest first
    This is an OPERATOR log, not a transcript: it never carries agent output. */
 
-const ACTIONS_DEFAULT_LIMIT = 100;
-const ACTIONS_MAX_LIMIT = 500;             // the contract's hard cap
-const ACTIONS_RENDER_CAP = 100;
-const ACTION_KINDS = new Set(["focus", "instruct", "interrupt", "broadcast", "archive"]);
-const ACTION_KIND_LABELS = {
-  focus: "Focus", instruct: "Send", interrupt: "Interrupt",
-  broadcast: "Broadcast", archive: "Archive",
-};
-/* A log that shows only successes is worse than no log: it reads as proof the
-   instruction landed. Every outcome the contract can return gets its own word. */
-const ACTION_OUTCOME_VIEW = {
-  ok: { label: "Delivered", tone: "ok" },
-  failed: { label: "Failed", tone: "err" },
-  partial: { label: "Partly delivered", tone: "warn" },
-  staged: { label: "Staged — not submitted", tone: "warn" },
-};
 
-function actionOutcomeView(outcome) {
-  // An outcome the server adds later reads as the server's own word rather than
-  // as a confident wrong label — the same rule investigationView follows.
-  return ACTION_OUTCOME_VIEW[outcome] || { label: String(outcome || "unknown"), tone: "warn" };
-}
 
-function clampActionsLimit(n) {
-  const v = Math.floor(Number(n));
-  if (!Number.isFinite(v)) return ACTIONS_DEFAULT_LIMIT;
-  return Math.min(ACTIONS_MAX_LIMIT, Math.max(1, v));
-}
 
-function actionsUrl(limit = ACTIONS_DEFAULT_LIMIT) {
-  return "/api/actions?limit=" + clampActionsLimit(limit);
-}
 
-function normalizeActions(body) {
-  const rows = Array.isArray(body && body.actions) ? body.actions : [];
-  const out = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    if (typeof row.id !== "string" || !row.id) continue;
-    if (!ACTION_KINDS.has(row.kind)) continue;
-    out.push({
-      id: row.id,
-      at: typeof row.at === "string" && !Number.isNaN(Date.parse(row.at)) ? row.at : null,
-      kind: row.kind,
-      agentIds: Array.isArray(row.agentIds) ? row.agentIds.filter((id) => typeof id === "string" && id) : [],
-      outcome: typeof row.outcome === "string" && row.outcome ? row.outcome : "unknown",
-      detail: typeof row.detail === "string" ? row.detail : "",
-    });
-  }
-  return out;
-}
 
-/* "Did I already tell these lanes to rebase?" — answered per agent, in the one
-   place where sending again is a click away. Newest-first is the contract, so
-   the first match is the most recent; sorting here would fight it. */
-function lastActionFor(actions, agentId) {
-  return (actions || []).find((a) => a.agentIds.includes(agentId)) || null;
-}
 
-/* Who it went to, without a wall of session ids. `nameFor` resolves what the
-   snapshot still knows; an agent that has since disappeared keeps its raw id
-   rather than being silently dropped from the record. */
-function actionRecipients(action, nameFor) {
-  const ids = action.agentIds || [];
-  if (!ids.length) return "no recipients";
-  if (ids.length > 3) return ids.length + " sessions";
-  return ids.map((id) => (nameFor && nameFor(id)) || id).join(", ");
-}
 
-async function loadActions(limit = ACTIONS_DEFAULT_LIMIT) {
-  state.actions = { ...state.actions, loading: true, error: "" };
-  render();
-  let next;
-  try {
-    const res = await apiFetch(actionsUrl(limit), { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
-    let body = null;
-    try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
-    next = !res.ok || !body || body.ok !== true
-      ? { loading: false, error: actionsFailureText(res.status, body), available: !(res.status === 404 && !(body && body.error)), items: [], fetchedAt: 0 }
-      : { loading: false, error: "", available: true, items: normalizeActions(body), fetchedAt: Date.now() };
-  } catch {
-    next = { loading: false, error: actionsFailureText(0, null), available: true, items: [], fetchedAt: 0 };
-  }
-  state.actions = next;
-  render();
-}
 
-function actionsFailureText(status, body) {
-  const code = body && body.error && body.error.code;
-  const message = body && body.error && body.error.message;
-  if (!status) return "Could not reach the server for the action log.";
-  if (code === "ORIGIN_REJECTED") return readEndpointOriginNote("Action-log reads");
-  if (status === 404 && !code) return "The action log is not available in this build.";
-  return "Action log unavailable"
-    + (code ? " [" + code + "]" : "")
-    + (message ? ": " + message : " (HTTP " + status + ")");
-}
 
-/* Refresh the journal after anything that writes to it, but only once the log
-   has proved it exists — a build without the route must not be polled forever. */
-function refreshActions() {
-  if (state.actions.available && state.actions.fetchedAt) void loadActions();
-}
 
-function actionRowNode(action, nameFor) {
-  const outcome = actionOutcomeView(action.outcome);
-  return el("div", { class: "action-row", dataset: { tone: outcome.tone } },
-    el("span", { class: "action-when", title: action.at || null, text: action.at ? agoText(action.at) : "time unknown" }),
-    el("span", { class: "action-kind", text: ACTION_KIND_LABELS[action.kind] || action.kind }),
-    el("span", { class: "action-who", text: actionRecipients(action, nameFor) }),
-    el("span", { class: "action-outcome", text: outcome.label }),
-    action.detail ? el("span", { class: "action-detail", text: action.detail }) : null);
-}
-
-function renderActionLog(ui = state, nameFor = null) {
-  const log = ui.actions || {};
-  const panel = el("div", { class: "action-log" },
-    el("div", { class: "action-log-head" },
-      el("h2", { class: "action-log-title", text: "Recent operator actions" }),
-      el("button", {
-        type: "button", class: "btn sm",
-        disabled: log.loading ? "" : null,
-        dataset: { fkey: "actions-refresh" },
-        onclick: () => void loadActions(),
-      }, log.loading ? "Loading…" : "Refresh")));
-
-  if (log.error) {
-    panel.append(el("p", { class: "action-log-note err", role: "status", text: log.error }));
-    return panel;
-  }
-  if (log.loading && !log.items.length) {
-    panel.append(el("p", { class: "action-log-note", role: "status", text: "Reading the action log…" }));
-    return panel;
-  }
-  if (!log.items.length) {
-    panel.append(el("p", {
-      class: "action-log-note",
-      text: "No operator actions recorded yet. Focus, Send, Interrupt, Archive and Broadcast are journalled here as they happen — including the ones that fail.",
-    }));
-    return panel;
-  }
-
-  const rows = log.items.slice(0, ACTIONS_RENDER_CAP);
-  const list = el("div", { class: "action-rows" });
-  for (const action of rows) list.append(actionRowNode(action, nameFor));
-  panel.append(list);
-  if (log.items.length > rows.length) {
-    panel.append(el("p", { class: "action-log-note", text: "Showing the most recent " + rows.length + " of " + log.items.length + " recorded actions." }));
-  }
-  return panel;
-}
-
-function renderActionsPanel() {
-  const panel = $("actions-panel");
-  const toggle = $("actions-toggle");
-  if (!panel) return;
-  const open = state.actionsOpen && state.view !== "usage";
-  if (toggle) {
-    toggle.setAttribute("aria-pressed", open ? "true" : "false");
-    toggle.classList.toggle("is-open", open);
-  }
-  const log = state.actions;
-  // Same rule as the alarm: visibility every paint, rebuild only on change.
-  panel.hidden = !open;
-  const sig = [open ? "1" : "0", log.loading ? "1" : "0", log.error, String(log.fetchedAt),
-    log.items.map((a) => a.id + ":" + a.outcome).join(",")].join("|");
-  if (state.paintSig.actions === sig) return;
-  state.paintSig.actions = sig;
-  panel.textContent = "";
-  if (!open) return;
-  const byId = agentsById(state.snap);
-  panel.append(renderActionLog(state, (id) => {
-    const found = byId.get(id);
-    return found ? agentName(found.agent) : null;
-  }));
-}
 
 /* ---------- misc UI ---------- */
 
@@ -6791,26 +6593,6 @@ function renderBroadcastBar() {
   if (state.broadcastError) bar.append(el("p", { class: "broadcast-note err", role: "alert", text: state.broadcastError }));
 }
 
-/* The one screen a broken instance shows must name the address it was actually
-   served from: MOUNTAIN_PORT, anthill-start.sh and anthill-preview.sh all bind
-   different ports, and a preview on :4715 telling the operator to go check
-   :4701 sends them to a healthy production process. "v3 server" was internal
-   versioning that means nothing to the reader. host is a parameter so the rule
-   is testable without a browser. */
-function serverUnreachableHint(host) {
-  const where = host ? "on " + host : "at this address";
-  return "Check that the Ant Hill server is running " + where + ", then retry.";
-}
-
-/* The board is blank until the first snapshot resolves: the client is a deferred
-   module and boot() paints nothing before fetchSnapshot() returns. index.html
-   therefore ships the skeleton VISIBLE, so the shape of the board is on screen
-   before app.js has even parsed; this is only what takes it back down.
-
-   fetchFailed is the whole distinction. Without it an unreachable server would
-   sit under a shimmering placeholder indefinitely, which reads as "still
-   loading" rather than "this is broken" — #empty-state owns that message and
-   its retry button. */
 function firstLoadPending(ui = state) {
   return !ui.snap && !ui.fetchFailed;
 }
@@ -6838,10 +6620,82 @@ function renderEmpty() {
     $("empty-hint").textContent = serverUnreachableHint(typeof location === "undefined" ? "" : location.host);
     retry.hidden = false;
   } else {
-    $("empty-message").textContent = "The ant hill is still — no tracked agents.";
-    $("empty-hint").textContent = "Agents appear here as soon as a collector reports a session.";
+    /* Day one, and the least-exercised state in the product: every measurement
+       this project has taken was at 380-441 agents, so the board had never been
+       seen with nothing on it — which is exactly what a new operator meets.
+
+       Rendered before this change it read "The ant hill is still — no tracked
+       agents" beside a mound illustration, with no evidence anywhere that the
+       collectors had run. An empty cockpit is ambiguous between two states that
+       could not be more different — WATCHING AND FOUND NOTHING, and NOT
+       WATCHING — and passive prose picks neither. A new operator reasonably
+       reads it as broken.
+
+       So it asserts the healthy case and proves it, the same way the Alerts
+       all-clear does: a source count and a ticking snapshot age are evidence a
+       stalled client cannot manufacture. And when a source really is degraded it
+       says THAT instead, because an empty board with a blind collector is not an
+       empty fleet — it is an unknown one, and claiming health there would be the
+       false all-clear again on the day it matters most. */
+    const verdict = emptyBoardVerdict(state.snap);
+    $("empty-message").textContent = verdict.message;
+    $("empty-hint").textContent = verdict.hint;
+    const proof = $("empty-proof");
+    if (proof) {
+      proof.textContent = "";
+      proof.hidden = !verdict.sources && !verdict.checkedAt;
+      if (verdict.sources) proof.append(el("span", { text: verdict.sources }));
+      if (verdict.checkedAt) {
+        if (verdict.sources) proof.append(el("span", { "aria-hidden": "true", text: " · " }));
+        proof.append(el("span", {
+          dataset: { ago: verdict.checkedAt },
+          text: "checked " + agoText(verdict.checkedAt),
+        }));
+      }
+      proof.classList.toggle("is-degraded", verdict.degraded);
+    }
+    empty.classList.toggle("is-watching", !verdict.degraded);
     retry.hidden = true;
   }
+}
+
+/* What an empty board should say, decided separately from painting it — the
+   pulseStripModel split, so the sentence can be tested without a DOM.
+
+   Day one is the least-exercised state in this product: every measurement it has
+   ever taken was at 380-441 agents, so the board had never been seen with
+   nothing on it, which is precisely what a new operator meets. It read "The ant
+   hill is still — no tracked agents" beside a mound illustration, with no
+   evidence anywhere that a collector had ever run.
+
+   An empty cockpit is ambiguous between two states that could not be more
+   different — WATCHING AND FOUND NOTHING, and NOT WATCHING — and passive prose
+   picks neither, so a new operator reasonably reads it as broken. This asserts
+   the healthy case and proves it with a source count and a ticking snapshot
+   age, which a stalled client cannot manufacture.
+
+   When a collector IS degraded it says that instead. An empty board with a blind
+   collector is not an empty fleet, it is an unknown one, and claiming health
+   there would be the false all-clear again on the day it matters most. */
+function emptyBoardVerdict(snap) {
+  const sources = snap && snap.totals && snap.totals.sourceHealth;
+  const total = sources && Number.isFinite(sources.total) ? sources.total : 0;
+  const degraded = Boolean(sources && Number.isFinite(sources.degraded) && sources.degraded > 0);
+  return {
+    degraded,
+    message: degraded
+      ? "No sessions found — and not every collector can see."
+      : "Watching. No sessions running yet.",
+    hint: degraded
+      ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
+      : "Claude Code, Codex and Cursor sessions appear here on their own, within seconds of starting.",
+    sources: total > 0
+      ? (degraded
+        ? `${sources.degraded} of ${total} collectors degraded`
+        : `${sources.healthy} of ${total} collectors healthy`)
+      : null,
+    checkedAt: (snap && snap.generatedAt) || null,
+  };
 }
 
 function tickClocks(frozen = feedFrozen(), now = Date.now()) {
@@ -6880,9 +6734,141 @@ function usageRangeBounds() {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
+/* OpenBurnBar stores "yyyy-MM-dd HH:mm:ss.SSS" as UTC text with NO zone marker
+   (burnbar.ts:421-429) and the endpoint passes it through unchanged. Date.parse
+   reads a zone-less string as LOCAL time, so on this UTC+2 machine every row
+   aged by exactly the offset. Verified on the wire: startTime
+   "2026-08-02 11:15:48.670" read at 11:39:32Z is 24 minutes old and rendered
+   "2.2h ago" — the freshest data in the table looking stale, which is the one
+   thing that stops an operator trusting the tab at all.
+
+   The real fix is at the API boundary and the audit routes it there. This is the
+   render half and it is deliberately IDEMPOTENT with that fix: a string already
+   carrying Z or a numeric offset is returned untouched, so when the boundary
+   starts emitting proper ISO nothing here double-corrects. (Usage audit §2.) */
+const ZONELESS_SQL_INSTANT = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+function burnbarInstant(text) {
+  if (typeof text !== "string") return text;
+  const match = ZONELESS_SQL_INSTANT.exec(text.trim());
+  return match ? `${match[1]}T${match[2]}Z` : text;
+}
+
+/* What the cost reading should say, given a summary that may be only partly
+   priced.
+
+   The rule this replaces: `costKnown ? value : "not reported"`. burnbar.ts:33
+   sets costKnown false as soon as ANY invocation in the window lacks a price, so
+   one unpriced provider suppressed the whole figure. Measured at 30 days: the
+   headline read "not reported" while the same payload carried $11,939.92 of
+   measured, provenance-tagged spend — Codex $4,752.32, Claude Code $6,949.58,
+   Hermes $237.39, Factory $0.65 — with Cursor the only unpriced source at 45 of
+   2,980 calls. The string "cost missing on some rows" was literally true and the
+   belief it created, "we do not know what this cost", was false.
+
+   costKnown now gates a QUALIFIER, never the value. "not reported" is reserved
+   for a window with no priced rows at all, which is the only case where it is
+   the whole truth. (Usage audit §1.)
+
+   Server first, as everywhere else on this board: when the summary carries an
+   authoritative total it is rendered untouched. The byProvider sum is a stated
+   fallback for the payload as it stands today, and it should be DELETED the
+   moment the server ships a measured total of its own — two derivations of one
+   number is the seam that produced every attention and token defect here. */
+/* The same floor-and-gap treatment for tokens, which is where this codebase set
+   the precedent and then did not follow it on screen.
+
+   tokensMissing has been on the wire all along — the contract comment even gives
+   the intended sentence, "3,000 across 2 calls, 1 unmeasured" — but the card
+   rendered `processedTokens || 0` and a flat "BurnBar observed", so an
+   unmeasured invocation was indistinguishable from one that burned nothing and
+   the total was labelled observed either way. That is the same defect the cost
+   figure had, one reading to the left.
+
+   The `|| 0` was its own small lie: a null total, meaning nothing was measured,
+   printed as a measured zero. */
+function usageTokenReading(summary) {
+  if (!summary || !Number.isFinite(summary.processedTokens)) {
+    return { value: "not reported", sub: "no token measurements in this range" };
+  }
+  const missing = Number.isFinite(summary.tokensMissing) ? summary.tokensMissing : 0;
+  if (missing <= 0) return { value: fmtTok(summary.processedTokens), sub: "BurnBar observed" };
+  return {
+    value: "≥" + fmtTok(summary.processedTokens),
+    sub: `measured floor · ${missing} ${missing === 1 ? "call" : "calls"} unmeasured`,
+  };
+}
+
+function usageCostReading(summary) {
+  if (!summary) return { value: "not reported", sub: "no cost data" };
+  /* A complete total needs no qualifier and gets none. */
+  if (summary.costKnown && Number.isFinite(summary.estimatedCostUsd)) {
+    return { value: fmtUsd(summary.estimatedCostUsd), sub: "from BurnBar cost" };
+  }
+  const measured = Number.isFinite(summary.measuredCostUsd) ? summary.measuredCostUsd : null;
+  if (measured == null) {
+    /* Nothing priced because nothing happened is a different sentence from
+       nothing priced because nothing could be priced, and an empty window is
+       the day-one case. Neither invents $0.00. */
+    return {
+      value: "not reported",
+      sub: summary.invocations === 0 ? "no activity in this range" : "no priced rows in this range",
+    };
+  }
+  /* A measured-but-incomplete total is a FLOOR, and it is shown as one: the
+     figure and the size of its gap in a single glance, never one without the
+     other.
+
+     This is the shape `processedTokens` has always had on the wire — a measured
+     sum plus tokensMissing carrying the rest, on the rule that an understatement
+     is not a fabrication. Cost had the opposite rule: estimatedCostUsd is null
+     unless EVERY invocation is priced, which sent $11,934.61 of real money to
+     the card as "not reported" because 42 of 2,973 calls could not be priced.
+     The server now ships measuredCostUsd and costMissingInvocations beside it,
+     so the qualifier sits next to the value instead of gating it.
+
+     The `≥` is load-bearing rather than decorative. It travels with the number
+     if the sublabel is skimmed, clipped or read aloud, and it is the one mark
+     that stops a floor being banked as a total — the failure the server's own
+     comment warns about. */
+  const missing = Number.isFinite(summary.costMissingInvocations) ? summary.costMissingInvocations : 0;
+  if (missing <= 0) return { value: fmtUsd(measured), sub: "measured" };
+  const calls = Number.isFinite(summary.invocations) && summary.invocations > 0
+    ? `${missing} of ${summary.invocations} calls unpriced`
+    /* No denominator on the wire means no share is claimed. Naming the gap in
+       absolute terms is still true; inventing a percentage to sit beside it
+       would not be. */
+    : `${missing} ${missing === 1 ? "call" : "calls"} unpriced`;
+  return { value: "≥" + fmtUsd(measured), sub: "measured floor · " + calls };
+}
+
+/* The burn rate is processedTokens over the SELECTED window, not a current rate.
+   Measured across the selector on one unchanged fleet: 45.1M/h at 1h, 5.7M/h at
+   24h, 16.0M/h at 7d, 36.4M/h at 30d — same label, four answers, an 8x swing
+   between adjacent positions. An operator clicking 1h after 24h sees the rate
+   jump eightfold and concludes burn exploded. Nothing did. The window is the
+   missing half of the sentence. (Usage audit §3.) */
+function usageRateWindowText(summary) {
+  if (!summary) return "tokens per hour";
+  const from = Date.parse(summary.from);
+  const to = Date.parse(summary.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return "tokens per hour";
+  return fmtElapsed(to - from) + " average, not a current rate";
+}
+
 function fmtUsd(value) {
   if (value == null || !Number.isFinite(value)) return "not reported";
-  return "$" + value.toFixed(value >= 10 ? 2 : 3);
+  /* Grouped above four figures. This is the one number on the board Emilio
+     reads to decide spend, and "$11934.61" costs a beat to parse as eleven
+     thousand rather than one hundred and nineteen. Sub-$10 amounts keep three
+     decimals; nothing about their magnitude was ever in doubt.
+
+     Grouped on the integer part only, with a global match. The first attempt
+     used one non-global lookahead and produced "$1,234567.89" — a separator
+     that appears once and then gives up is worse than none, because it looks
+     like it worked. */
+  const fixed = value.toFixed(value >= 10 ? 2 : 3);
+  const [whole, fraction] = fixed.split(".");
+  return "$" + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + fraction;
 }
 
 function agentIdForSession(sessionId) {
@@ -6936,8 +6922,17 @@ function usageBarTitle(bucket, tokens) {
   return bucket + " · " + fmtTok(tokens) + " tokens";
 }
 
-function renderUsageSeriesChart(points) {
+/* Takes the whole series envelope, not just its points, because a failed
+   BurnBar query answers with available:false AND points:[]. Drawing that as an
+   empty chart tells the operator they spent nothing in this range when the
+   truth is the database never answered. Unavailable is not zero. */
+function renderUsageSeriesChart(series) {
   const wrap = el("div", { class: "usage-series" });
+  if (series && series.available === false) {
+    wrap.append(el("p", { class: "usage-empty", text: series.error || "Series data unavailable." }));
+    return wrap;
+  }
+  const points = series && series.points;
   if (!points || !points.length) {
     wrap.append(el("p", { class: "usage-empty", text: "No series points in this range." }));
     return wrap;
@@ -6986,17 +6981,28 @@ function renderUsagePanel(ui = state) {
   }
   const summary = ui.usageSummary;
   if (!summary || summary.available === false) {
+    /* "BurnBar database could not be unlocked" was printed for BOTH a real read
+       failure and a BurnBar that was simply never installed. On day one the
+       second is the normal case, and a new operator reads a diagnosis about
+       unlocking a database as a fault they have to go and fix. A reported error
+       is a fault; its absence is an absence. (Day-one review.) */
+    const fault = (summary && summary.error) || ui.usageError || null;
     root.append(el("div", { class: "usage-unavailable" },
-      el("h2", { class: "usage-title", text: "Usage unavailable" }),
+      el("h2", { class: "usage-title", text: fault ? "Usage unavailable" : "No cost source connected" }),
       el("p", {
-        text: (summary && summary.error) || ui.usageError ||
-          "BurnBar database could not be unlocked. Quotas sidecar may still be readable separately.",
+        text: fault
+          || "Cost and usage come from OpenBurnBar, which is optional and is not connected. Everything else on the board works without it.",
       }),
-      el("button", {
-        type: "button", class: "btn",
-        dataset: { fkey: "usage-retry" },
-        onclick: () => void loadUsageData(true),
-      }, "Retry")));
+      /* Retry only where retrying can change the answer. A fault may clear on a
+         second read; an absent optional tool will not, and offering the button
+         invites a new operator to click at a problem they do not have. */
+      ...(fault
+        ? [el("button", {
+          type: "button", class: "btn",
+          dataset: { fkey: "usage-retry" },
+          onclick: () => void loadUsageData(true),
+        }, "Retry")]
+        : [])));
     // Still show quotas/ward soft data if present without inventing spend zeros.
     if (ui.usageWard && ui.usageWard.quotaPressure && ui.usageWard.quotaPressure.length) {
       root.append(renderUsageWard(ui.usageWard, true));
@@ -7005,10 +7011,15 @@ function renderUsagePanel(ui = state) {
   }
 
   root.append(el("div", { class: "usage-kpis" },
-    reading("Processed tokens", el("span", { class: "reading-value", text: fmtTok(summary.processedTokens || 0) }),
-      el("span", { class: "reading-sub", text: "BurnBar observed" })),
-    reading("Estimated cost", el("span", { class: "reading-value", text: summary.costKnown ? fmtUsd(summary.estimatedCostUsd) : "not reported" }),
-      el("span", { class: "reading-sub", text: summary.costKnown ? "from BurnBar cost" : "cost missing on some rows" })),
+    reading("Processed tokens", el("span", { class: "reading-value", text: usageTokenReading(summary).value }),
+      el("span", { class: "reading-sub", text: usageTokenReading(summary).sub })),
+    /* "Cost", not "Estimated cost". Every figure this card can now show is
+       MEASURED — the server's own costProvenance says so — and the only thing
+       uncertain about a partial answer is its completeness, which the value's
+       floor mark and the sublabel both state. Calling a measured floor an
+       estimate blurs the one distinction the reading exists to make. */
+    reading("Cost", el("span", { class: "reading-value", text: usageCostReading(summary).value }),
+      el("span", { class: "reading-sub", text: usageCostReading(summary).sub })),
     reading("Invocations", el("span", { class: "reading-value", text: String(summary.invocations || 0) }),
       el("span", { class: "reading-sub", text: "in selected range" })),
     reading("Burn rate",
@@ -7016,7 +7027,7 @@ function renderUsagePanel(ui = state) {
         class: "reading-value",
         text: summary.burnRateTokensPerHour == null ? "—" : fmtTok(Math.round(summary.burnRateTokensPerHour)) + "/h",
       }),
-      el("span", { class: "reading-sub", text: "tokens per hour" }))));
+      el("span", { class: "reading-sub", text: usageRateWindowText(summary) }))));
 
   if (summary.byProvider && summary.byProvider.length) {
     const list = el("ul", { class: "usage-providers" });
@@ -7032,7 +7043,7 @@ function renderUsagePanel(ui = state) {
 
   root.append(el("section", { class: "usage-section" },
     el("h2", { class: "usage-title", text: "Series" }),
-    renderUsageSeriesChart(ui.usageSeries && ui.usageSeries.points)));
+    renderUsageSeriesChart(ui.usageSeries)));
 
   root.append(renderUsageWard(ui.usageWard, false));
 
@@ -7045,8 +7056,15 @@ function renderUsagePanel(ui = state) {
     el("th", { text: "Cost" }),
     el("th", { text: "Session" }))));
   const body = el("tbody");
-  const rows = (ui.usageInvocations && ui.usageInvocations.invocations) || [];
-  if (!rows.length) {
+  const invocations = ui.usageInvocations;
+  const rows = (invocations && invocations.invocations) || [];
+  // Same rule as the series: a query that failed is not a range that was quiet.
+  if (invocations && invocations.available === false) {
+    body.append(el("tr", {}, el("td", {
+      colspan: "6",
+      text: invocations.error || "Invocation data unavailable.",
+    })));
+  } else if (!rows.length) {
     body.append(el("tr", {}, el("td", { colspan: "6", text: "No invocations in this range." })));
   } else {
     for (const row of rows) {
@@ -7062,7 +7080,7 @@ function renderUsagePanel(ui = state) {
         }, row.sessionId.slice(0, 8))
         : el("span", { text: (row.sessionId || "—").slice(0, 8) });
       body.append(el("tr", {},
-        el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
+        el("td", { text: row.startTime ? agoText(burnbarInstant(row.startTime)) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
         el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
@@ -7084,7 +7102,22 @@ function renderUsageWard(ward, quotasOnly) {
     return section;
   }
   if (!quotasOnly) {
-    const spikes = ward.spikes || [];
+    /* A series with a zero baseline is not a spike, it is a first sighting.
+       burnbar.ts fires any zero-baseline series over 1,000 tok/h and encodes the
+       infinite ratio as sentinel 999, which rendered as "(new)" inside a ward
+       headed "Spike". Measured: "Cursor / grok-4.5 · 3k/h vs baseline 0/h (new)"
+       — a 24-hour average against a preceding 24-hour average in which that
+       series simply did not appear. No acceleration happened.
+
+       In a cockpit whose premise is silence unless a human is needed, an alert
+       that fires on "something started" is a wolf-cry. Both populations still
+       render — nothing is hidden — but under their own headings and their own
+       words, because a first sighting and a rate jump are different events.
+       Whether a first sighting should alert at all is the server's threshold
+       question and the audit routes it there. (Usage audit §4.) */
+    const all = ward.spikes || [];
+    const spikes = all.filter((spike) => spike.ratio !== 999);
+    const firstSeen = all.filter((spike) => spike.ratio === 999);
     if (!spikes.length) {
       section.append(el("p", { class: "usage-empty", text: "No abrupt rate jumps vs the trailing baseline." }));
     } else {
@@ -7092,9 +7125,20 @@ function renderUsageWard(ward, quotasOnly) {
       for (const spike of spikes.slice(0, 8)) {
         list.append(el("li", {},
           el("strong", { text: spike.provider + " / " + spike.model }),
-          ` · ${fmtTok(Math.round(spike.currentTokensPerHour))}/h vs baseline ${fmtTok(Math.round(spike.baselineTokensPerHour))}/h (${spike.ratio === 999 ? "new" : spike.ratio.toFixed(1) + "×"})`));
+          ` · ${fmtTok(Math.round(spike.currentTokensPerHour))}/h vs baseline ${fmtTok(Math.round(spike.baselineTokensPerHour))}/h (${spike.ratio.toFixed(1)}×)`));
       }
       section.append(list);
+    }
+    if (firstSeen.length) {
+      const list = el("ul", { class: "usage-ward-list" });
+      for (const item of firstSeen.slice(0, 8)) {
+        list.append(el("li", {},
+          el("strong", { text: item.provider + " / " + item.model }),
+          ` · ${fmtTok(Math.round(item.currentTokensPerHour))}/h · absent from the previous window`));
+      }
+      section.append(
+        el("h3", { class: "usage-subtitle", text: "First seen this window" }),
+        list);
     }
   }
   const pressure = ward.quotaPressure || [];
@@ -7133,6 +7177,8 @@ function stopBoot() {
 }
 
 function boot() {
+  // Register the painter for every module that was extracted off the render hub.
+  setRepaint(render);
   loadOverrides();
   loadWidgetPreferences();
   loadLookback();
@@ -7185,6 +7231,7 @@ function boot() {
   });
 
   document.addEventListener("keydown", (e) => { handleRowNavigation(e); });
+  document.addEventListener("keydown", (e) => { handleCockpitKeys(e); });
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

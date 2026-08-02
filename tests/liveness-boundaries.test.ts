@@ -1,0 +1,117 @@
+import { describe, expect, test } from "bun:test";
+import { parseClaudeJsonl } from "../src/server/collectors";
+import type { ParseMetadata } from "../src/server/collectors";
+
+/* The three activity bands every collector shares, driven through a real parser
+   rather than asserted against the private helper.
+
+   Mutation testing found this uncovered: widening the running band from 3
+   minutes to 30 killed no test in tests/collectors.test.ts, which has no
+   assertion on status transitions at all. That band is what the cockpit reads
+   as "this agent is working right now" — the whole board's Working/Idle split,
+   the momentum count, and whether an operator believes a session is moving.
+   Silence for 25 minutes reading as "working" is exactly the plausible-looking
+   wrong answer the board must never give.
+
+   Boundaries are asserted from both sides, because a test that only samples the
+   middle of a band cannot tell a threshold that moved from one that did not. */
+
+const NOW = Date.parse("2026-07-21T23:00:00.000Z");
+const MINUTE = 60_000;
+
+const at = (msAgo: number): ParseMetadata => ({
+  sourcePath: "/tmp/claude-session.jsonl",
+  mtimeMs: NOW - msAgo,
+  nowMs: NOW,
+});
+
+/* One user line whose timestamp is the only thing that varies. mtimeMs moves
+   with it so the file-mtime fallback cannot mask a wrong transcript timestamp. */
+const transcript = (msAgo: number): string =>
+  JSON.stringify({
+    type: "user",
+    sessionId: "c1",
+    cwd: "/tmp/proj",
+    timestamp: new Date(NOW - msAgo).toISOString(),
+    message: { role: "user", content: "go" },
+  });
+
+const statusAfter = (msAgo: number) => {
+  const agent = parseClaudeJsonl(transcript(msAgo), at(msAgo));
+  return { status: agent?.status, reason: agent?.statusReason };
+};
+
+describe("collector activity bands", () => {
+  test("fresh activity inside three minutes reads as running", () => {
+    expect(statusAfter(30_000).status).toBe("running");
+    expect(statusAfter(2 * MINUTE).status).toBe("running");
+  });
+
+  test("the running band closes at three minutes, not later", () => {
+    /* The upper edge. Without this, widening the band to 30 minutes — an agent
+       that has said nothing for half an hour still painted as working — passes
+       every other test in the suite. */
+    expect(statusAfter(2 * MINUTE + 59_000).status).toBe("running");
+    expect(statusAfter(3 * MINUTE + 1_000).status).not.toBe("running");
+    expect(statusAfter(3 * MINUTE + 1_000).status).toBe("waiting");
+  });
+
+  test("silence between three and forty-five minutes is waiting, not stale", () => {
+    // Waiting keeps its controls and stays on the live board; stale does not.
+    // Collapsing this band either strands a live agent in history or keeps a
+    // dead one on the board.
+    expect(statusAfter(10 * MINUTE).status).toBe("waiting");
+    expect(statusAfter(44 * MINUTE).status).toBe("waiting");
+  });
+
+  test("the waiting band closes at forty-five minutes, not later", () => {
+    expect(statusAfter(44 * MINUTE + 59_000).status).toBe("waiting");
+    expect(statusAfter(45 * MINUTE + 1_000).status).toBe("stale");
+  });
+
+  test("long silence reads as stale", () => {
+    expect(statusAfter(3 * 60 * MINUTE).status).toBe("stale");
+  });
+
+  test("each band explains itself in words the drawer can show", () => {
+    /* The reason string is rendered beside the status. A band that changed
+       without its sentence changing would tell the operator the wrong thing
+       while the status field stayed technically correct. */
+    expect(statusAfter(30_000).reason).toMatch(/within 3 minutes/i);
+    expect(statusAfter(10 * MINUTE).reason).toMatch(/no source activity/i);
+    expect(statusAfter(3 * 60 * MINUTE).reason).toMatch(/45 minutes/i);
+  });
+
+  /* A test asserting that a future timestamp is clamped to zero age used to sit
+     here. Mutation testing killed it: removing `Math.max(0, …)` changes nothing
+     observable, because a negative age is still below the three-minute bound
+     and still reads running. The clamp is defensive arithmetic with no reachable
+     effect on the bands, so there was no property to pin and the assertion could
+     never fail. Deleted rather than dressed up. */
+
+  test("a recorded session exit outranks the clock entirely", () => {
+    /* Age decides the band only for sessions the source has not closed. A
+       transcript that ended cleanly is archived no matter how recent its last
+       line is — otherwise a session that finished ten seconds ago is painted
+       "running" and the operator waits on an agent that already left. */
+    const endedNow = JSON.stringify({
+      type: "assistant",
+      sessionId: "c1",
+      timestamp: new Date(NOW - 10_000).toISOString(),
+      message: { role: "assistant", id: "r1", model: "claude-opus-4-8", content: "done", stop_reason: "end_turn" },
+    });
+    const opened = JSON.stringify({
+      type: "user",
+      sessionId: "c1",
+      cwd: "/tmp/proj",
+      timestamp: new Date(NOW - 20_000).toISOString(),
+      message: { role: "user", content: "go" },
+    });
+
+    const agent = parseClaudeJsonl([opened, endedNow].join("\n"), at(10_000));
+
+    // Ten seconds old: squarely inside the running band on age alone.
+    expect(agent?.status).toBe("archived");
+    expect(agent?.statusReason).toMatch(/session exit/i);
+  });
+});

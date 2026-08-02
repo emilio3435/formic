@@ -254,9 +254,24 @@ export async function transcriptResponse(
       },
       { headers: responseHeaders },
     );
-  } catch {
+  } catch (error) {
+    /* A transcript we could not read is not a session with nothing to say.
+       Returning the same {source:null, lines:[]} envelope as the no-artifact
+       branch above asserted that no evidence exists, when the truth is that the
+       evidence was unreachable — the strongest available claim made from the
+       weakest available position. Keep the path we tried, and say what stopped
+       us, so "gone" and "never had one" stay distinguishable. */
     return Response.json(
-      { ok: true, agentId, source: null, truncated: false, lines: [] },
+      {
+        ok: true,
+        agentId,
+        source,
+        truncated: false,
+        lines: [],
+        error: (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? "The transcript file is no longer present."
+          : error instanceof Error ? error.message : String(error),
+      },
       { headers: responseHeaders },
     );
   }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=bookshelf-seam-1">
+  <link rel="stylesheet" href="styles.css?v=safety-1">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -16,13 +16,17 @@
         <span id="nest-beacon" class="beacon" hidden aria-hidden="true"></span>
         <div class="wordmark">
           <h1>The Ant&nbsp;Hill</h1>
-          <p class="eyebrow">Live multi-agent control room</p>
+          <!-- Audit §21: the masthead spent its resting state on branding, which is
+               not one of the three things a pixel is allowed to do here. The
+               tagline keeps its accessible name so the page still announces what
+               it is; it just stops occupying a row of the calmest screen. -->
+          <p class="eyebrow visually-hidden">Live multi-agent control room</p>
         </div>
       </div>
       <div class="masthead-signals">
         <!-- Opt-in out-of-page alerts. Permission is requested from this click
              and nowhere else — never on load. -->
-        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Alerts off</button>
+        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Notifications off</button>
         <p id="conn-badge" class="conn conn-connecting">
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-label">Connecting</span>
@@ -65,8 +69,8 @@
       <main id="main" class="pane-list" tabindex="-1">
         <section class="toolbar" aria-label="Views, search, and selection">
           <nav class="views" role="group" aria-label="View" id="views">
-            <button type="button" class="view-tab is-current" data-view="now" aria-pressed="true">Now<span class="count" id="count-now"></span></button>
-            <button type="button" class="view-tab" data-view="needs-you" aria-pressed="false">Alerts<span class="count" id="count-needs-you"></span></button>
+            <button type="button" class="view-tab is-current" data-view="needs-you" aria-pressed="true">Needs you<span class="count" id="count-needs-you"></span></button>
+            <button type="button" class="view-tab" data-view="now" aria-pressed="false">Now<span class="count" id="count-now"></span></button>
             <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
             <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
             <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
@@ -76,7 +80,11 @@
           <div class="toolbar-row" id="ops-toolbar-row">
             <div class="search-wrap">
               <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
-              <input id="search" type="search" placeholder="Search name, model, cwd, provider, role, status, session id…" title="Search agents across name, model, cwd, provider, role, status, and session id" autocomplete="off">
+              <!-- Audit §16: the old placeholder measured 389px inside a 333px input
+                   once the drawer docked, so the field list it enumerated was
+                   unreadable exactly when the box was smallest. The list is not
+                   deleted, it moves to the title where it does not compete. -->
+              <input id="search" type="search" placeholder="Search agents…  /" title="Searches name, model, cwd, provider, role, status and session id. Press / to focus." autocomplete="off">
             </div>
             <button type="button" class="btn select-toggle" id="select-toggle" aria-pressed="false">Select</button>
             <button type="button" class="btn actions-toggle" id="actions-toggle" aria-pressed="false" aria-controls="actions-panel">Action log</button>
@@ -117,6 +125,12 @@
           </svg>
           <p id="empty-message">The colony is still.</p>
           <p id="empty-hint" class="empty-hint"></p>
+          <!-- Proof of life for the day-one board. An operator on first run
+               cannot tell "watching, found nothing" from "not watching", and
+               those are the two states an empty cockpit is ambiguous between.
+               The collector count and a ticking snapshot age are evidence a
+               stalled client cannot produce. -->
+          <p id="empty-proof" class="empty-proof" hidden></p>
           <button type="button" class="btn" id="empty-retry" hidden>Retry connection</button>
         </div>
       </main>
@@ -129,6 +143,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=bookshelf-seam-1"></script>
+  <script type="module" src="app.js?v=safety-1"></script>
 </body>
 </html>

@@ -51,25 +51,48 @@ export function scanWindowMs(settings: HubSettings): number {
 export class JsonSettingsStore {
   #settings: HubSettings;
   #writeQueue: Promise<void> = Promise.resolve();
+  readonly #loadError?: string;
 
   private constructor(
     private readonly path: string,
     private readonly files: SettingsFileOperations,
     settings: HubSettings,
+    loadError?: string,
   ) {
     this.#settings = settings;
+    this.#loadError = loadError;
   }
 
+  /* The scan window is operator-authored: it decides how far back the board
+     looks. Every failure here still returns defaults — the hub must boot — but
+     a corrupt or unreadable file used to be indistinguishable from "no settings
+     saved yet", because `settings` already held the defaults before the try and
+     the catch reassigned them to the same value. So a typo silently narrowed
+     the window from the operator's 168 hours to 36, older sessions dropped off
+     the board, and nothing anywhere said why. Absent is normal; unreadable is
+     not, and only one of them should pass without comment. */
   static async open(path: string, files: SettingsFileOperations = nodeFiles): Promise<JsonSettingsStore> {
     let settings = normalizeSettings(undefined);
+    let loadError: string | undefined;
     try {
       settings = normalizeSettings(JSON.parse(await files.readText(path)));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        loadError = `settings at ${path} could not be read, so defaults are in force `
+          + `(scanWindowHours ${DEFAULT_SCAN_WINDOW_HOURS}): `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[settings] ${loadError}`);
         settings = normalizeSettings(undefined);
       }
     }
-    return new JsonSettingsStore(path, files, settings);
+    return new JsonSettingsStore(path, files, settings, loadError);
+  }
+
+  /* Undefined when the settings in force are the ones on disk, or the defaults
+     because none were ever saved. Set only when defaults are standing in for
+     settings we failed to read. */
+  get loadError(): string | undefined {
+    return this.#loadError;
   }
 
   get(): HubSettings {

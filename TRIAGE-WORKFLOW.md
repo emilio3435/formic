@@ -33,7 +33,7 @@ Every queued investigation states:
 - Generation and queueing require an exact same-origin loopback request.
 - Queue persistence is serialized and idempotent by issue ID.
 - Launch accepts only an issue ID. Model, arguments, prompt, cwd, sandbox, output path, concurrency, and ten-minute runtime limit are fixed server-side.
-- Only one investigation runs at a time; repeat launch requests return the existing run instead of creating a duplicate.
+- Only one investigation runs at a time. Queueing is idempotent — re-queueing an issue returns the existing item — but launching is not: a launch against an item that is no longer `queued` is refused with 409 and must be requeued first.
 - Ambiguous cmux identities remain quarantined while triage is generated.
 - Recommendations describe proposed work; they never claim a fix ran.
 - Unrelated sessions, worktrees, ports, and provider processes remain untouched.

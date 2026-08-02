@@ -25,6 +25,10 @@ export interface AttentionStore {
   observe(notifications: readonly CmuxNotification[]): void;
   apply(surfaceId: string, action: AttentionAction, snoozedUntil?: string): Promise<AttentionRecord>;
   filter(notifications: readonly CmuxNotification[]): CmuxNotification[];
+  /* Set when empty attention state is standing in for state that could not be
+     read. Every notification the operator already acknowledged is unread again
+     in that case, so the board asks for attention it was previously given. */
+  loadError?(): string | undefined;
 }
 
 export class MemoryAttentionStore implements AttentionStore {
@@ -33,6 +37,11 @@ export class MemoryAttentionStore implements AttentionStore {
   private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(protected readonly now: () => number = Date.now) {}
+
+  /* In-memory state cannot fail to load; the durable subclass overrides this. */
+  loadError(): string | undefined {
+    return undefined;
+  }
 
   list(): readonly AttentionRecord[] {
     return [...this.records.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -45,9 +54,11 @@ export class MemoryAttentionStore implements AttentionStore {
   observe(notifications: readonly CmuxNotification[]): void {
     for (const notification of notifications) {
       const current = this.latest.get(notification.surfaceId);
-      if (!current || notification.createdAt > current.createdAt) {
-        this.latest.set(notification.surfaceId, notification);
-      }
+      // A known time always beats an unknown one; otherwise the later wins.
+      const newer = !current
+        || (notification.createdAt !== undefined
+          && (current.createdAt === undefined || notification.createdAt > current.createdAt));
+      if (newer) this.latest.set(notification.surfaceId, notification);
     }
   }
 
@@ -97,7 +108,15 @@ export class MemoryAttentionStore implements AttentionStore {
       if (!record) return true;
       const snoozedUntil = Date.parse(record.snoozedUntil ?? "");
       if (Number.isFinite(snoozedUntil) && snoozedUntil > nowMs) return false;
-      return !record.throughAt || notification.createdAt > record.throughAt;
+      /* Identity first, because it is the only thing that can retire a
+         notification whose time is unknown. The id is already recorded on
+         acknowledge; filter simply never read it, so the timestamp was doing
+         work it could not do. Without this, refusing to invent a time would
+         trade permanent silence for a permanent nag. */
+      if (record.notificationId && notification.id === record.notificationId) return false;
+      if (!record.throughAt) return true;
+      // An unknown time is not PROVABLY older, so it is shown rather than hidden.
+      return notification.createdAt === undefined || notification.createdAt > record.throughAt;
     });
   }
 
@@ -119,6 +138,11 @@ export class MemoryAttentionStore implements AttentionStore {
 
 export class JsonAttentionStore extends MemoryAttentionStore {
   private writeNumber = 0;
+  private lastLoadError?: string;
+
+  override loadError(): string | undefined {
+    return this.lastLoadError;
+  }
 
   private constructor(private readonly path: string, now: () => number) {
     super(now);
@@ -139,9 +163,14 @@ export class JsonAttentionStore extends MemoryAttentionStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         store.records.clear();
-        console.error(
-          `[JsonAttentionStore] Ignoring unreadable attention state at ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        /* Empty attention state is not neutral: every notification the operator
+           already acknowledged, snoozed or dismissed is unread again, so the
+           board asks for attention it was previously given and the count of
+           what needs a human is wrong. Start empty, but stop making the console
+           the only witness. */
+        store.lastLoadError = `attention state could not be read from ${path}, so acknowledged notifications are unread again: `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[JsonAttentionStore] ${store.lastLoadError}`);
       }
     }
     if (pruned) await store.persist(store.list());
@@ -274,12 +303,20 @@ export function parseCmuxNotifications(output: string): CmuxNotification[] {
   const notifications = Array.isArray(parsed) ? parsed : parsed?.notifications ?? parsed?.result?.notifications;
   if (!Array.isArray(notifications)) throw new Error("cmux response did not contain a notifications array");
   return notifications.flatMap((notification: Record<string, unknown>) => {
-    const surfaceId = stringValue(notification.surface_id, notification.surfaceId);
-    if (!surfaceId || notification.read === true || notification.is_read === true || notification.unread === false) return [];
+    if (notification.read === true || notification.is_read === true || notification.unread === false) return [];
+    /* An unattributable notification used to be dropped here, silently shrinking
+       the unread count. It cannot be matched to an agent without a surface, but
+       it can still be counted and shown: vanishing is the one handling that
+       tells the operator nothing. */
+    const surfaceId = stringValue(notification.surface_id, notification.surfaceId) ?? "";
     const createdAtRaw = stringValue(notification.created_at, notification.createdAt);
+    /* Left UNSET when unparseable rather than stamped 1970. Acknowledging a
+       surface records throughAt from the notification's own time and filter()
+       keeps only what is newer, so the epoch lost that comparison forever — a
+       parse failure rendered as "nobody needs you". */
     const createdAt = createdAtRaw && Number.isFinite(Date.parse(createdAtRaw))
       ? new Date(createdAtRaw).toISOString()
-      : new Date(0).toISOString();
+      : undefined;
     return [{
       id: stringValue(notification.id, notification.notification_id),
       surfaceId,

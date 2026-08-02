@@ -72,13 +72,48 @@ function isModelConfig(value: unknown): value is ModelConfig {
   );
 }
 
+/* Why the built-in defaults are standing in, when they are.
+
+   config/models.json ships with the repo, so a missing, unparseable or
+   wrong-shaped file is a fault rather than an absence. Every failure returned
+   DEFAULT_MODEL_CONFIG and said nothing, which is the quiet kind: the values it
+   supplies are claudeContextWindows (which becomes an agent's contextWindow and
+   therefore its context percentage), the model display labels, and the
+   Cursor-native policy that decides compliance verdicts. Wrong defaults do not
+   look wrong — they look like numbers. */
+let modelConfigError: string | undefined;
+
+export function modelConfigLoadError(): string | undefined {
+  return modelConfigError;
+}
+
 export function loadModelConfig(path: string): ModelConfig {
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return isModelConfig(parsed) ? parsed : DEFAULT_MODEL_CONFIG;
-  } catch {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    modelConfigError = `model config at ${path} could not be read, so built-in defaults are in force `
+      + `(context windows, display labels and Cursor policy): `
+      + (error instanceof Error ? error.message : String(error));
+    console.error(`[model-config] ${modelConfigError}`);
     return DEFAULT_MODEL_CONFIG;
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    modelConfigError = `model config at ${path} is not valid JSON, so built-in defaults are in force: `
+      + (error instanceof Error ? error.message : String(error));
+    console.error(`[model-config] ${modelConfigError}`);
+    return DEFAULT_MODEL_CONFIG;
+  }
+  if (!isModelConfig(parsed)) {
+    modelConfigError = `model config at ${path} does not match the expected shape, so built-in defaults are in force.`;
+    console.error(`[model-config] ${modelConfigError}`);
+    return DEFAULT_MODEL_CONFIG;
+  }
+  modelConfigError = undefined;
+  return parsed;
 }
 
 function canonicalModel(model: string): string {

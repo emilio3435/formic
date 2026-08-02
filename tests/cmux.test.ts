@@ -165,15 +165,24 @@ describe("persisted notification attention state", () => {
       );
       expect(expired.list()).toEqual([]);
 
+      /* Empty attention state is not neutral: everything the operator already
+         acknowledged is unread again, so the board asks for attention it was
+         previously given. Starting empty is right, but the console must not be
+         the only witness — /api/health carries this to the operator. */
       await writeFile(path, "{");
       const logged = spyOn(console, "error").mockImplementation(() => {});
       try {
         const recovered = await JsonAttentionStore.open(path, now);
         expect(recovered.list()).toEqual([]);
-        expect(logged).toHaveBeenCalledWith(expect.stringContaining("Ignoring unreadable attention state"));
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("could not be read"));
+        expect(recovered.loadError() ?? "").toContain("unread again");
       } finally {
         logged.mockRestore();
       }
+
+      // And state that was simply never written is not a failure.
+      const fresh = await JsonAttentionStore.open(join(directory, "never-written.json"), now);
+      expect(fresh.loadError()).toBeUndefined();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
