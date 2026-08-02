@@ -1728,3 +1728,56 @@ describe("needs you means agents waiting on a human", () => {
     expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
   });
 });
+
+describe("context coverage ships with the number it describes", () => {
+  /* The frontend lane measured the context card's suffix reading 8/9 while 32
+     live agents were reporting contextPct: it had borrowed
+     totals.tokenReporting/tokenEligible, which counts working agents reporting
+     TOKENS. Wrong population, wrong quantity. Deriving one client-side would
+     have made a third population, because the headline comes from the server's
+     own liveAgents filter — so the coverage now comes off the same array. */
+  const reporting = (contextWindow: number, total: number, over: Record<string, unknown> = {}) =>
+    collected({
+      id: `codex:c${total}`,
+      sourceSessionId: `c${total}`,
+      tokens: { provenance: "observed", scope: "latest-turn", contextWindow, total },
+      ...over,
+    });
+
+  test("coverage counts the live agents that reported, over the live agents scanned", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        reporting(100, 40),
+        reporting(100, 90),
+        // Live, but no context to report: eligible and not reporting.
+        collected({ id: "codex:quiet", sourceSessionId: "quiet", tokens: { provenance: "unknown" } }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.contextPeak).toBe(90);
+    expect(snapshot.contextReporting).toBe(2);
+    expect(snapshot.contextEligible).toBe(3);
+  });
+
+  test("ended agents are outside the population, exactly as contextPeak is", () => {
+    /* The property that makes this coverage trustworthy: it cannot disagree
+       with the headline, because both read the same filter. */
+    const snapshot = buildSnapshot({
+      agents: [
+        reporting(100, 40),
+        reporting(100, 99, { id: "codex:done", sourceSessionId: "done", status: "archived" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // The archived 99 is excluded from the peak, so it must be excluded here too.
+    expect(snapshot.contextPeak).toBe(40);
+    expect(snapshot.contextReporting).toBe(1);
+    expect(snapshot.contextEligible).toBe(1);
+  });
+});

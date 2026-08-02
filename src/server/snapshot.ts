@@ -232,6 +232,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     .filter((value): value is number => typeof value === "number")
     .sort((left, right) => left - right);
   const contextPeak = contextValues.length === 0 ? undefined : contextValues[contextValues.length - 1];
+  /* Coverage for contextPeak, from the SAME array it is taken from.
+
+     The card previously borrowed totals.tokenReporting/tokenEligible, which
+     counts working agents reporting TOKENS — a different population measuring a
+     different thing. Measured by the frontend lane: the suffix read 8/9 while
+     32 live agents were reporting contextPct. Deriving it client-side would
+     have been a third population, since the headline comes from this filter, so
+     the number and its coverage now ship together. */
+  const contextReporting = contextValues.length;
+  const contextEligible = liveAgents.length;
   const contextMedian = contextValues.length === 0
     ? undefined
     : contextValues.length % 2 === 1
@@ -281,6 +291,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     lookbackHours: scanWindowHours,
     contextPeak,
     contextMedian,
+    contextReporting,
+    contextEligible,
     attentionCoverage,
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,

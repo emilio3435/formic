@@ -439,6 +439,10 @@ export interface HubSnapshot {
   /** Alias of scanWindowHours for provenance labeling. */
   lookbackHours?: number;
   contextPeak?: number;
+  /** Live agents that reported a contextPct — the coverage of contextPeak. */
+  contextReporting?: number;
+  /** Live agents contextPeak was taken over, reporting or not. */
+  contextEligible?: number;
   contextMedian?: number;
   controlHealth: ControlHealth;
   attentionCoverage?: AttentionCoverageSummary;
