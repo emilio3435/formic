@@ -866,7 +866,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -1763,7 +1763,7 @@ function renderWidgetCustomizer() {
 /* Calm collapse — the whole strip is one moss line: verdict, shipping count,
    pulse numbers when the server reports them (graceful without them), a small
    activity sparkline, and the trailing health micro-chip. */
-function renderPulseCalm(healthData) {
+function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   const snap = state.snap;
   const totals = totalsOf(snap);
   const pulse = snap && snap.pulse;
@@ -1776,14 +1776,30 @@ function renderPulseCalm(healthData) {
     if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
   }
-  const line = el("div", { class: "pulse-calm", role: "status" },
+  const line = el("div", { class: "pulse-calm" + (watch.length ? " is-watching" : ""), role: "status" },
     el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
     el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+  /* The murmur. Appended to the same line rather than promoted into a cell,
+     because these signals are worth mentioning and not worth rearranging the
+     board around — a volume knob instead of a switch. */
+  for (const clause of watch) {
+    line.append(el("span", { class: "pulse-watch", text: clause }));
+  }
   const spark = pulse
     ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
     : null;
   if (spark) line.append(spark);
-  line.append(healthMicroChip(healthData || summaryWidgetData("health", snap, state.conn)));
+  /* Once anything is being watched the trailing verdict cannot read "All clear":
+     that was a claim about the whole board computed from a predicate that never
+     read stall, debris or context occupancy. The words narrow to what is known. */
+  const health = healthData || summaryWidgetData("health", snap, state.conn);
+  line.append(healthMicroChip(watch.length
+    /* Tone and glyph move with the word. Overriding only the text left a green
+       check sitting beside "Watch" — the chip contradicting itself in three
+       characters, which is the same self-disagreement the health headline had
+       with its own badge. */
+    ? { ...health, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
+    : health));
   return line;
 }
 
@@ -1807,7 +1823,7 @@ function renderHealthRail() {
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
   const sig = [
     state.conn,
-    model.calm ? "calm" : "stressed",
+    model.calm ? "calm:" + (model.watch || []).join("|") : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
     state.pulseExpanded ? "1" : "0",
@@ -1838,7 +1854,7 @@ function renderHealthRail() {
 
   widgets.textContent = "";
   if (model.calm) {
-    widgets.append(renderPulseCalm(dataById.get("health")));
+    widgets.append(renderPulseCalm(dataById.get("health"), model.watch));
   } else {
     /* The MODEL decides what speaks; this loop only orders it. It used to walk
        state.widgetIds and fall back to summaryWidgetData for any id the model had
@@ -2485,6 +2501,53 @@ function pulseFindings(snap, queueItems = state.queueItems) {
    the ordered inline-expansion list. */
 const fetchFailedNow = () => Boolean(state && state.fetchFailed);
 
+const CONTEXT_WATCH_PCT = 60;
+/* The BAND's alarm, distinct from the drawer's CONTEXT_ALARM_PCT: the drawer
+   speaks about one agent's own window, this is the fleet peak that flips the
+   whole summary out of its calm line. Named so the calm predicate and the watch
+   clause below read the same number — they were the two ends of the 1-point
+   cliff the critique measured, and a drift between them would reopen it. */
+const CONTEXT_BAND_ALARM_PCT = 85;
+
+/* The watch tier: signals real enough to mention and not urgent enough to
+   rearrange the board around.
+
+   The calm/alarmed response used to be a boolean. Driving pulseStripModel up an
+   escalation ladder, a board where every live agent was stalled rendered
+   pixel-identical to a perfectly healthy one, and the only graded input was a
+   one-point cliff — 84% context calm, 85% a full three-cell grid. The cockpit was
+   silent until it screamed.
+
+   These clauses are the murmur. They ride the same one line, so the layout does
+   not move; escalation to the stressed grid still requires a finding with a
+   remedy. Stall in particular is NOT promoted to an alarm on purpose: on this
+   fleet many quiet sessions are waiting by design, so the honest treatment is to
+   say the number and let the operator judge it. */
+function watchClauses(snap) {
+  const clauses = [];
+  const momentum = snap && snap.pulse && snap.pulse.momentum;
+  if (momentum && momentum.stalled > 0) {
+    clauses.push(`${momentum.stalled} quiet 15m+`);
+  }
+  /* Context peak is an EARLY warning, which means the range that matters is
+     below the alarm — above 85% it is no longer early, and the stressed grid
+     gives it a cell of its own, so the murmur stands down rather than saying the
+     same number twice. */
+  const peak = snap && Number.isFinite(snap.contextPeak) ? snap.contextPeak : null;
+  if (peak != null && peak >= CONTEXT_WATCH_PCT && peak < CONTEXT_BAND_ALARM_PCT) {
+    clauses.push(`peak ctx ${peak}%`);
+  }
+  return clauses;
+}
+
+/* "All clear" was a claim about the whole board computed from a four-input
+   predicate that never read stall, debris or context occupancy. Rather than
+   widen the predicate to match the words, the words narrow to what is actually
+   known: once anything is being watched, the verdict is Watch. */
+function calmVerdict(clauses) {
+  return clauses.length ? "Watch" : "All clear";
+}
+
 function pulseStripModel(snap, conn = "live", queueItems = [], display = "percent", queueError = "") {
   const attention = attentionSummary(snap);
   const status = systemStatus(snap, conn);
@@ -2494,7 +2557,7 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
      findings exactly like an empty one; without this the strip would fold into
      its calm line and hide the fact that it is reasoning on partial evidence. */
   const calm = !!snap && !!attention && attention.count === 0
-    && status.key === "operational" && !(peak && peak.pct >= 85) && !queueError;
+    && status.key === "operational" && !(peak && peak.pct >= CONTEXT_BAND_ALARM_PCT) && !queueError;
   // `display` is threaded so renderHealthRail can compute each widget's data
   // ONCE and reuse it for the paint signature, the cell and the calm line —
   // it used to derive the same three from scratch on every paint.
@@ -2555,6 +2618,7 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
   }
   return {
     calm,
+    watch: calm ? watchClauses(snap) : [],
     cells: kept,
     findings: pulseFindings(snap, queueItems),
     queueError,

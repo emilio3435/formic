@@ -575,6 +575,17 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Calm collapse: the whole cell row folds to one moss line. The pulse-cleared
    class washes moss in once, then transitions back out when it is dropped on
    the next paint — a one-shot delight, no keyframe loop. */
+/* The watch murmur: amber, on the same line, never its own row. It has to read
+   as "worth knowing" without reading as "act now" — that distinction is the
+   whole reason the tier exists between silence and the stressed grid. */
+.pulse-watch {
+  margin-left: 0.55rem;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--amber);
+  white-space: nowrap;
+}
+.pulse-watch::before { content: "⚠ "; }
 .pulse-calm {
   /* The line renders inside .rail-inner (a flex row); fill the row and carry
      the frame gutter itself so calm and stressed states share one left edge. */

@@ -2091,7 +2091,10 @@ describe("pulse strip — verdict-first summary", () => {
     expect(source).toContain('"aria-controls": "pulse-findings"');
     expect(source).toContain('dataset: { fkey: "pulse-verdict" }');
     expect(source).toContain("onclick: togglePulseFindings");
-    expect(source).toContain('class: "pulse-calm", role: "status"');
+    /* The class now carries an is-watching modifier for the watch tier, so assert
+       the contract (a live status region) rather than the literal attribute
+       string, which was pinning a concatenation. */
+    expect(source).toMatch(/class: "pulse-calm"[^,]*, role: "status"/);
     expect(source).toContain("function renderPulseCalm(");
     expect(source).toContain("function renderHealthRail(");
   });
@@ -4487,6 +4490,43 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Resting-state critique §3, and §2.3 with it. The calm/alarmed response was a
+     boolean: driving pulseStripModel up an escalation ladder, a board where ALL
+     live agents were stalled rendered pixel-identical to a perfectly healthy one,
+     and the single graded input was a 1-point cliff (84% calm, 85% full grid).
+     There was no murmur between silence and the scream.
+
+     The watch tier is that murmur: the same one line with clauses appended, no
+     layout change. Escalation to the grid still requires a finding. */
+  test("(3a) signals that used to pass silently now murmur, without changing the layout", () => {
+    const stalled = snapshot({ pulse: { momentum: { completionsLastHour: 3, observedWindowMs: 600_000, stalled: 12 }, burn: {}, activity: { buckets: [] } } });
+    expect(M.watchClauses(stalled)).toContain("12 quiet 15m+");
+
+    // Context peak is an EARLY warning, so it speaks below the 85% alarm.
+    expect(M.watchClauses(snapshot({ contextPeak: 81 }))).toContain("peak ctx 81%");
+    expect(M.watchClauses(snapshot({ contextPeak: 59 }))).toEqual([]);   // routine
+    /* At and above the alarm the stressed grid takes over and CONTEXT PEAK gets
+       its own cell, so the murmur stands down rather than saying it twice. */
+    expect(M.watchClauses(snapshot({ contextPeak: 90 }))).toEqual([]);
+
+    // A clean board still murmurs nothing.
+    expect(M.watchClauses(snapshot())).toEqual([]);
+
+    /* The layout does not change: watching is still calm, so the band stays one
+       line. That is the whole point — a volume knob, not a switch. */
+    const model = M.pulseStripModel(stalled, "live", [], "percent", "");
+    expect(model.calm).toBe(true);
+    expect(model.watch).toContain("12 quiet 15m+");
+
+    /* §2.3: "All clear" is a verdict on everything computed from a predicate that
+       never read stall, debris or context. It cannot stand beside a warning. */
+    expect(M.calmVerdict([])).toBe("All clear");
+    expect(M.calmVerdict(["12 quiet 15m+"])).toBe("Watch");
+    // The glyph and tone move with the word — a green check beside "Watch" is
+    // the chip contradicting itself.
+    expect(source).toContain('value: calmVerdict(watch), tone: "advisory", icon: "warning"');
+  });
+
   /* Resting-state critique §2.2. The collapsed calm line hard-coded "done this
      hour" while the tracker had observed 5 minutes — it did not merely drop the
      MOMENTUM card's qualifier, it upgraded a partial observation into a stronger
