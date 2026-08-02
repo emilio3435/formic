@@ -517,6 +517,69 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* Three refusals, three answers to "can I do anything about this?"
+
+     They all end in the same disabled button, and archived and dead both
+     collapse to the control state "observed-only", so before this they shared
+     one sentence about cmux routing. That sentence is wrong for both — most
+     wrong for archive, where nothing failed and the operator chose it. */
+  test("the three refusals are distinct, and each says whether it is recoverable", () => {
+    const routed = { surfaceId: "s1", resolution: "exact", workspaceTitle: "cmux: alpha" };
+    const brief = (a: Record<string, unknown>) => M.quarantineBrief(a, M.deriveControlState(a));
+
+    const pane = brief(agent({
+      activity: "working", status: "running",
+      target: { surfaceId: "s1", resolution: "unique-cwd", workspaceTitle: "cmux: alpha" },
+    }));
+    const dead = brief(agent({
+      activity: "ended", status: "stale", processState: "died", processAlive: false,
+      processIds: [123], target: routed,
+    }));
+    const archived = brief(agent({ activity: "ended", status: "archived", target: routed }));
+
+    // Three different sentences, not one message wearing three hats.
+    const titles = [pane.title, dead.title, archived.title];
+    expect(new Set(titles).size).toBe(3);
+    expect(archived.cause).toBe("archived");
+    expect(dead.cause).toBe("died");
+
+    /* The recoverable one offers the recovery. */
+    expect(pane.nextStep).toMatch(/Focus still works/);
+
+    /* The unrecoverable one refuses to invent one. Every other refusal on this
+       board ends with the thing that would fix it, and inventing a step here
+       would send an operator to retry what cannot work. */
+    expect(dead.nextStep).toMatch(/Nothing will bring it back/);
+    expect(dead.why).toMatch(/may since have been taken/);
+    expect(dead.nextStep).not.toMatch(/cmux|Focus|attest/i);
+
+    /* The chosen one must not read as a fault, and must not offer a repair for
+       a decision. */
+    expect(archived.summary).toMatch(/not because anything failed/);
+    expect(archived.nextStep).toMatch(/Nothing to do/);
+    expect(archived.nextStep).not.toMatch(/cmux|pane|repair/i);
+    expect(archived.why).not.toMatch(/cmux/i);
+
+    /* Archived beats dead beats routing: an archived session's controls are off
+       because it is archived, whatever its pane says. Naming a terminal-binding
+       problem for a session that has ENDED sends the operator to fix something
+       that no longer matters. */
+    const both = brief(agent({
+      activity: "ended", status: "archived", processState: "died",
+      processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
+    }));
+    expect(both.cause).toBe("archived");
+
+    // And the short form the dock's accessible text uses splits the same way.
+    expect(M.controlUnavailableText("observed-only", agent({ activity: "ended", status: "archived" })))
+      .toMatch(/archived/);
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", status: "stale", processState: "died", processAlive: false, processIds: [1],
+    }))).toMatch(/process is gone/);
+    // With no agent it still answers, rather than throwing on the old signature.
+    expect(M.controlUnavailableText("quarantined")).toMatch(/ambiguous/);
+  });
+
   /* A cwd string is not an identity, and the UI must not call it one.
 
      Proven against probe agents: a Send addressed to ALPHA executed on BRAVO's

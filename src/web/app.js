@@ -5402,7 +5402,7 @@ function renderControlBanner(agent, control) {
   const copy = el("div", { class: "control-banner-copy" },
     el("strong", { text: brief.title }),
     " ",
-    controlUnavailableText(control));
+    controlUnavailableText(control, agent));
   if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
   copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
   copy.append(el("button", {
@@ -5560,7 +5560,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   // Tests assert controlUnavailableText is used for unavailable safe controls.
   if (safeLocked) {
     dock.append(el("p", { class: "visually-hidden",
-      text: controlUnavailableText(deriveControlState(agent)) }));
+      text: controlUnavailableText(deriveControlState(agent), agent) }));
   }
 
   return dock;

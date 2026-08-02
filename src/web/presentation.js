@@ -17,7 +17,7 @@
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome, livenessState } from "./agent-model.js";
 import { state } from "./client-state.js";
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -206,7 +206,19 @@ export function conciseText(value, limit = 88) {
 /* Plain-language control explanation for the Operate chrome. Never echoes
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
-export function controlUnavailableText(controlState) {
+export function controlUnavailableText(controlState, agent = null) {
+  /* Archived and dead both arrive here as "observed-only". They are different
+     facts and the summary line must not flatten them into a routing complaint.
+     (quarantineBrief owns the long form; this is the short one the dock's
+     accessible text uses.) */
+  if (agent && deriveActivity(agent) === "ended") {
+    if (agent.status === "archived" || agent.activity === "archived") {
+      return "Controls are off because this session is archived.";
+    }
+    if (livenessState(agent) === "died") {
+      return "Controls are off because this session's process is gone — there is nothing left to receive them.";
+    }
+  }
   /* Three sentences, because a refusal an operator cannot act on reads as a
      fault: what is off, why, and what turns it back on. Send is OFF here, not
      broken, and saying so is what stops the retry. */
@@ -454,6 +466,47 @@ export function presentationLabelKey(target) {
 export const provenanceLabel = (p) => PROVENANCE_LABELS[p] || p || "unknown";
 
 export function quarantineBrief(agent, control = deriveControlState(agent)) {
+  /* Three refusals now end in the same disabled button, and they are not the
+     same message. The pane one is recoverable by looking; the dead one is not
+     recoverable at all; the archived one is a choice the operator made. Both
+     `archived` and `died` collapse to the control state "observed-only", so
+     before this they shared one sentence about cmux routing — which is wrong
+     for both of them, and most wrong for archive, where nothing is broken.
+
+     Checked before the routing branches on purpose: an archived session's
+     controls are off because it is archived, whatever its pane says, and a dead
+     process cannot be typed into however cleanly it resolves. Naming the
+     routing problem of a session that has ENDED sends the operator to fix a
+     terminal binding that no longer matters. */
+  const ended = deriveActivity(agent) === "ended";
+  if (ended && (agent.status === "archived" || agent.activity === "archived")) {
+    return {
+      title: "You archived this session.",
+      summary: "Controls are off because it is archived, not because anything failed.",
+      why: "Archiving files a session as finished and takes it off the working board. It stays readable in History.",
+      /* No repair step, because nothing is broken. Offering one would invent a
+         problem out of a deliberate choice. */
+      nextStep: "Nothing to do. Un-archive it from History if you filed it early.",
+      cause: "archived",
+      steps: [],
+    };
+  }
+  if (ended && livenessState(agent) === "died") {
+    return {
+      title: "This session's process is gone.",
+      summary: "Controls are off because there is nothing left running to receive them.",
+      why: "The process was checked and is no longer there, so its terminal pane may since have been taken by something else."
+        + " Typing into it would reach whatever is there now.",
+      /* Deliberately offers no recovery, because there is none. Every other
+         refusal on this board ends with the thing that would fix it, and
+         inventing one here would send an operator to retry something that
+         cannot work — the exact failure the whole refusal vocabulary exists to
+         prevent. */
+      nextStep: "Nothing will bring it back. Read the transcript below, then archive it when you are done with it.",
+      cause: "died",
+      steps: [],
+    };
+  }
   if (control === "linked") return null;
   const view = identityTraceView(agent);
   const cause = identityCause(view);
