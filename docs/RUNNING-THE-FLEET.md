@@ -41,19 +41,48 @@ one carries the argument**:
    would have accepted any value within an order of magnitude, you have not
    checked it.**
 
-6. **Identity of the instrument.** Before measuring a running system, prove it
-   is running the code you think it is. A server holds what it loaded at boot;
-   a browser holds what it was served. Both outlive the commit you are testing.
+6. **Check the instrument, not just the subject.** Checks 1–5 all point at the
+   claim. This one points at the apparatus that produced it — the fixture, the
+   helper, the server, the browser. **A defect in the instrument is invisible to
+   every check aimed at the thing under test**, so no amount of scrutinising the
+   claim will surface it.
 
 Check 5 is separate on purpose. The first four are about provenance — did you
 open the artifact. A number can be measured by you, quoted correctly, and still
 be meaningless.
 
-**Check 6 is the cheapest of the six and the one most often skipped**, because
-the instrument is invisible while it works. It nearly cost a working fix a false
-"broken" report this afternoon: the server predated the commit under test, so
-the measurement was accurate about a build nobody was shipping. It is three
-commands.
+**Why this is a check and not a footnote.** Three separate failures in one day
+were the instrument rather than the subject, and none of the other five could
+have caught any of them:
+
+- **A helper disarmed the assertions it fed** (`0c90740`). Four assertions hunted
+  `NaN`, `Infinity`, `undefined` in a rendered band; the helper building that
+  band wrote `String(value ?? "")`, turning `undefined` into `""` *before the
+  regex saw it*. The instrument was defending the product against the exact
+  fault the test existed to find.
+- **A uniform fixture made a property unverifiable** (`e3ab575`). Five identical
+  turns from `Array.from({length: 5}, () => …)`. `tokens.total` means
+  *latest-turn* — but across identical turns, "latest", "first" and "max" return
+  the same number. Mutation-proved: a first-turn parser survived, and so did a
+  max-turn parser. **A factory that repeats itself makes every property
+  depending on order or position unverifiable downstream, and each consumer
+  reads fine in isolation.**
+- **A server outlived the commit under test.** A fix was nearly reported broken
+  because the running process predated it. The measurement was accurate — about
+  a build nobody was shipping.
+
+The common shape: **the subject was fine and the apparatus was the defect.**
+Reading the claim more carefully finds none of these, because the claim was
+never the problem. That is why it earns a numbered slot rather than a reminder
+to be careful.
+
+The generalisation, which is what survives being copied into another project:
+**anything that stands between you and the thing you are measuring can lie, and
+it will do so silently, because an instrument that fails loudly is one you would
+have already fixed.** Ask what your apparatus would have to do for a false pass
+to look exactly like a true one.
+
+For a running system that question has a three-command answer.
 
 ```bash
 # 1. What branch does the worktree serve, and at what commit?
