@@ -176,9 +176,15 @@ describe("per invocation: the unit this data does not have", () => {
 
     // Sessions lasting many minutes are the norm, not the exception.
     expect(longRunning.length).toBeGreaterThan(5);
-    // And the largest row is far past any single call's context window, on a
-    // fleet nobody considers broken.
-    expect(Math.max(...rows.map((row) => row.tokens ?? 0))).toBeGreaterThan(2_000_000);
+    /* DERIVED, not transcribed: 2M is B1's absolute per-call ceiling, one
+       context window of input plus one of output, taken from
+       config/models.json. Asserting live rows EXCEED it is the evidence that a
+       row is not a call.
+
+       Currently 161x clear, so unlike the dollar floors above this is not a
+       tripwire — but it is still a claim about data. If it ever fails, the
+       finding is that sessions got short, not that the test went stale. */
+    expect(Math.max(...rows.map((row) => row.tokens ?? 0))).toBeGreaterThan(2 * 1_000_000);
   });
 });
 
@@ -225,7 +231,19 @@ describe("per million tokens: cost divided by tokens, scale-free and toothless",
     const priced = rows.filter((row) => costPerMillionTokens(row) !== null);
     const dearest = priced.reduce((worst, row) => ((row.costUsd ?? 0) > (worst.costUsd ?? 0) ? row : worst));
 
-    expect(dearest.costUsd ?? 0).toBeGreaterThan(100);
+    /* SCALE-FREE, because $100 was transcribed. It had 4.12x headroom and
+       falling — the dearest session read $651 this morning and $412 by evening,
+       for the same reason the day floor broke: the 500-row cap shortens the
+       window as the fleet burns, so any dollar figure copied from an
+       observation is a tripwire with a countdown on it.
+
+       What this test needs is that the row is genuinely the expensive end of
+       the distribution, which is a fact about shape rather than about size. */
+    const pricedCosts = priced.map((row) => row.costUsd ?? 0).sort((left, right) => left - right);
+    const medianCost = pricedCosts[Math.floor(pricedCosts.length / 2)] ?? 0;
+
+    expect(dearest.costUsd ?? 0).toBeGreaterThan(0);
+    expect(dearest.costUsd ?? 0).toBeGreaterThan(medianCost);
     expect(costPerMillionTokens(dearest)).toBeLessThanOrEqual(MAX_USD_PER_MILLION);
   });
 });

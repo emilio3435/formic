@@ -178,3 +178,57 @@ Roughly in order.
 - **Do not guess at a design decision.** Asserting that focus must be refused on an unproven target
   once contradicted a reasoned decision and would have removed the operator's only recovery path. A
   test that guesses at intent is worse than no test, for the same reason as one that cannot fail.
+
+## 7. Two rules that were learned the expensive way
+
+### A known-failing external check keeps its claim and records that it is failing
+
+`cross-source-token-agreement.test.ts` compares what this board counted against
+what OpenBurnBar independently recorded. When it fires, there are two ways to
+make the suite green and only one of them is honest.
+
+**Widen the threshold until it passes** and the disagreement becomes a permanent
+blind spot that looks identical to success forever after. Nobody will ever
+revisit it, because there is nothing left to revisit — the check reads green,
+reports corroboration, and corroborates nothing. This is the single most
+tempting mistake available with a cross-source check, and it is tempting
+precisely *because* the failure is real and inconvenient.
+
+**Mark it failing and leave the threshold alone.** The claim stays exactly as
+written, the red is carried by `test.failing`, the shared suite stays green for
+other lanes, and it hard-fails the moment the disagreement is resolved — which
+is what makes someone look at it.
+
+The tolerance IS the claim. A number chosen so the test passes is not a
+tolerance, it is a description of current behaviour wearing a tolerance's
+clothes. If you find yourself reasoning about what threshold would make it go
+green, that is the moment to stop and mark it instead.
+
+One detail that matters: the unavailable branch must THROW rather than return.
+Otherwise a stopped board makes the marker report "marked as failing but it
+passed" every time the server is down, which trains someone to delete it.
+
+### A constant transcribed from an observation is a tripwire with a countdown
+
+Three assertions in this suite have gone red without any defect, all the same
+way: a number copied from something that was true when it was written.
+
+- `clean-board` asserted the burn read `"149k"` and the momentum sublabel
+  contained `"52"`, both transcribed from a screenshot of one afternoon. The
+  `"52"` came from a field the server had since stopped emitting entirely.
+- `session-token-accounting` built five identical turns, which made `tokens.total`
+  satisfiable by "latest", "first" or "max".
+- `physical-bounds` asserted the worst day exceeded `$1,000` and the dearest
+  session exceeded `$100`. The 500-row cap shortens the window as the fleet
+  burns, so both were falling: the worst day went $3,514 → $810 and broke, and
+  the dearest session went $651 → $412 in one day with 4x left.
+
+The tell is a number in an assertion that appears nowhere else — not in the
+fixture, not imported from `src`, not computed from either. **Derive it or
+import it.** `2 * 1_000_000` traced to the context window in
+`config/models.json` is fine and will not drift. `> $100` because that was the
+biggest row this morning is not.
+
+When the assertion needs "the sample is substantive", say that in terms that
+do not move: several days, a hundred rows, a value above the median. Those hold
+whatever the fleet is doing.
