@@ -194,12 +194,16 @@ describe("the cost surface reports what it measured, over the window it names", 
     /* Verified correct and previously unprotected. A headline reading "not
        reported" above a provider row reading "$0.050" contradicts itself; the
        honest form states the subtotal and how much of the range it misses. */
+    /* Fixture moved to the server contract. This originally supplied byProvider
+       rows, because the client summed them itself while estimatedCostUsd was
+       the only cost field on the wire. The server now ships measuredCostUsd and
+       costMissingInvocations, and the client-side sum was deleted rather than
+       kept as a second opinion — two derivations of one number is the seam
+       behind every attention and token defect on this board. The intent below
+       is unchanged and is what actually matters. */
     const reading = M.usageCostReading({
       costKnown: false, estimatedCostUsd: null, invocations: 3,
-      byProvider: [
-        { provider: "Claude Code", tokens: 1_000, invocations: 2, costUsd: 0.05 },
-        { provider: "Cursor", tokens: 2_000, invocations: 1, costUsd: null },
-      ],
+      measuredCostUsd: 0.05, costMissingInvocations: 1,
     });
 
     expect(reading.value).not.toBe("not reported");
@@ -211,7 +215,7 @@ describe("the cost surface reports what it measured, over the window it names", 
     // The other side: a subtotal of nothing is not a subtotal.
     const reading = M.usageCostReading({
       costKnown: false, estimatedCostUsd: null, invocations: 1,
-      byProvider: [{ provider: "Cursor", tokens: 5, invocations: 1, costUsd: null }],
+      measuredCostUsd: null, costMissingInvocations: 1,
     });
 
     expect(reading.value).toBe("not reported");

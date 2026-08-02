@@ -1026,7 +1026,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  usageCostReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
+  usageCostReading, usageTokenReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
   systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
@@ -6746,14 +6746,38 @@ function burnbarInstant(text) {
    fallback for the payload as it stands today, and it should be DELETED the
    moment the server ships a measured total of its own — two derivations of one
    number is the seam that produced every attention and token defect here. */
+/* The same floor-and-gap treatment for tokens, which is where this codebase set
+   the precedent and then did not follow it on screen.
+
+   tokensMissing has been on the wire all along — the contract comment even gives
+   the intended sentence, "3,000 across 2 calls, 1 unmeasured" — but the card
+   rendered `processedTokens || 0` and a flat "BurnBar observed", so an
+   unmeasured invocation was indistinguishable from one that burned nothing and
+   the total was labelled observed either way. That is the same defect the cost
+   figure had, one reading to the left.
+
+   The `|| 0` was its own small lie: a null total, meaning nothing was measured,
+   printed as a measured zero. */
+function usageTokenReading(summary) {
+  if (!summary || !Number.isFinite(summary.processedTokens)) {
+    return { value: "not reported", sub: "no token measurements in this range" };
+  }
+  const missing = Number.isFinite(summary.tokensMissing) ? summary.tokensMissing : 0;
+  if (missing <= 0) return { value: fmtTok(summary.processedTokens), sub: "BurnBar observed" };
+  return {
+    value: "≥" + fmtTok(summary.processedTokens),
+    sub: `measured floor · ${missing} ${missing === 1 ? "call" : "calls"} unmeasured`,
+  };
+}
+
 function usageCostReading(summary) {
   if (!summary) return { value: "not reported", sub: "no cost data" };
-  if (summary.costKnown) {
+  /* A complete total needs no qualifier and gets none. */
+  if (summary.costKnown && Number.isFinite(summary.estimatedCostUsd)) {
     return { value: fmtUsd(summary.estimatedCostUsd), sub: "from BurnBar cost" };
   }
-  const rows = Array.isArray(summary.byProvider) ? summary.byProvider : [];
-  const priced = rows.filter((row) => Number.isFinite(row.costUsd));
-  if (!priced.length) {
+  const measured = Number.isFinite(summary.measuredCostUsd) ? summary.measuredCostUsd : null;
+  if (measured == null) {
     /* Nothing priced because nothing happened is a different sentence from
        nothing priced because nothing could be priced, and an empty window is
        the day-one case. Neither invents $0.00. */
@@ -6762,21 +6786,31 @@ function usageCostReading(summary) {
       sub: summary.invocations === 0 ? "no activity in this range" : "no priced rows in this range",
     };
   }
-  const measured = priced.reduce((total, row) => total + row.costUsd, 0);
-  const unpricedCalls = rows
-    .filter((row) => !Number.isFinite(row.costUsd))
-    .reduce((total, row) => total + (row.invocations || 0), 0);
-  const totalCalls = Number.isFinite(summary.invocations) && summary.invocations > 0
-    ? summary.invocations
-    : rows.reduce((total, row) => total + (row.invocations || 0), 0);
-  /* The coverage is stated as a share of CALLS, not tokens: an unpriced call is
-     an unpriced call whatever its size, and the token share (0.108%) flatters
-     the gap by an order of magnitude against the call share (1.5%). */
-  const pct = totalCalls > 0 ? (unpricedCalls / totalCalls) * 100 : 0;
-  const sub = unpricedCalls > 0
-    ? `measured · ${pct < 0.1 ? "<0.1" : pct.toFixed(1)}% of calls unpriced`
-    : "measured";
-  return { value: fmtUsd(measured), sub };
+  /* A measured-but-incomplete total is a FLOOR, and it is shown as one: the
+     figure and the size of its gap in a single glance, never one without the
+     other.
+
+     This is the shape `processedTokens` has always had on the wire — a measured
+     sum plus tokensMissing carrying the rest, on the rule that an understatement
+     is not a fabrication. Cost had the opposite rule: estimatedCostUsd is null
+     unless EVERY invocation is priced, which sent $11,934.61 of real money to
+     the card as "not reported" because 42 of 2,973 calls could not be priced.
+     The server now ships measuredCostUsd and costMissingInvocations beside it,
+     so the qualifier sits next to the value instead of gating it.
+
+     The `≥` is load-bearing rather than decorative. It travels with the number
+     if the sublabel is skimmed, clipped or read aloud, and it is the one mark
+     that stops a floor being banked as a total — the failure the server's own
+     comment warns about. */
+  const missing = Number.isFinite(summary.costMissingInvocations) ? summary.costMissingInvocations : 0;
+  if (missing <= 0) return { value: fmtUsd(measured), sub: "measured" };
+  const calls = Number.isFinite(summary.invocations) && summary.invocations > 0
+    ? `${missing} of ${summary.invocations} calls unpriced`
+    /* No denominator on the wire means no share is claimed. Naming the gap in
+       absolute terms is still true; inventing a percentage to sit beside it
+       would not be. */
+    : `${missing} ${missing === 1 ? "call" : "calls"} unpriced`;
+  return { value: "≥" + fmtUsd(measured), sub: "measured floor · " + calls };
 }
 
 /* The burn rate is processedTokens over the SELECTED window, not a current rate.
@@ -6795,7 +6829,18 @@ function usageRateWindowText(summary) {
 
 function fmtUsd(value) {
   if (value == null || !Number.isFinite(value)) return "not reported";
-  return "$" + value.toFixed(value >= 10 ? 2 : 3);
+  /* Grouped above four figures. This is the one number on the board Emilio
+     reads to decide spend, and "$11934.61" costs a beat to parse as eleven
+     thousand rather than one hundred and nineteen. Sub-$10 amounts keep three
+     decimals; nothing about their magnitude was ever in doubt.
+
+     Grouped on the integer part only, with a global match. The first attempt
+     used one non-global lookahead and produced "$1,234567.89" — a separator
+     that appears once and then gives up is worse than none, because it looks
+     like it worked. */
+  const fixed = value.toFixed(value >= 10 ? 2 : 3);
+  const [whole, fraction] = fixed.split(".");
+  return "$" + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + fraction;
 }
 
 function agentIdForSession(sessionId) {
@@ -6938,9 +6983,14 @@ function renderUsagePanel(ui = state) {
   }
 
   root.append(el("div", { class: "usage-kpis" },
-    reading("Processed tokens", el("span", { class: "reading-value", text: fmtTok(summary.processedTokens || 0) }),
-      el("span", { class: "reading-sub", text: "BurnBar observed" })),
-    reading("Estimated cost", el("span", { class: "reading-value", text: usageCostReading(summary).value }),
+    reading("Processed tokens", el("span", { class: "reading-value", text: usageTokenReading(summary).value }),
+      el("span", { class: "reading-sub", text: usageTokenReading(summary).sub })),
+    /* "Cost", not "Estimated cost". Every figure this card can now show is
+       MEASURED — the server's own costProvenance says so — and the only thing
+       uncertain about a partial answer is its completeness, which the value's
+       floor mark and the sublabel both state. Calling a measured floor an
+       estimate blurs the one distinction the reading exists to make. */
+    reading("Cost", el("span", { class: "reading-value", text: usageCostReading(summary).value }),
       el("span", { class: "reading-sub", text: usageCostReading(summary).sub })),
     reading("Invocations", el("span", { class: "reading-value", text: String(summary.invocations || 0) }),
       el("span", { class: "reading-sub", text: "in selected range" })),

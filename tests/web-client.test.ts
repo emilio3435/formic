@@ -581,33 +581,58 @@ describe("summary status and widgets", () => {
      2,980 calls suppressed the figure for the other four providers. The string
      "cost missing on some rows" was literally true; the belief it created was
      false. costKnown may gate a qualifier, never the value. */
-  test("a partly-priced window reports what it measured, with its coverage", () => {
-    const partly = {
-      costKnown: false, estimatedCostUsd: null, invocations: 2980,
-      byProvider: [
-        { provider: "Codex", costUsd: 4752.32, tokens: 1, invocations: 1850 },
-        { provider: "Claude Code", costUsd: 6949.58, tokens: 1, invocations: 680 },
-        { provider: "Hermes", costUsd: 237.39, tokens: 1, invocations: 393 },
-        { provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 },
-        { provider: "Factory", costUsd: 0.65, tokens: 1, invocations: 12 },
-      ],
-    };
-    const reading = M.usageCostReading(partly);
-    expect(reading.value).toBe("$11939.94");
-    expect(reading.value).not.toBe("not reported");
-    /* Coverage as a share of CALLS. The token share of the same gap is 0.108%,
-       which flatters it by more than an order of magnitude. */
-    expect(reading.sub).toBe("measured · 1.5% of calls unpriced");
+  test("a partly-priced window shows the floor and its gap in one glance", () => {
+    /* The live wire, measured: estimatedCostUsd null while measuredCostUsd
+       carries $11,934.61 and 42 of 2,973 calls cannot be priced. estimatedCostUsd
+       is deliberately strict — null unless EVERY invocation is priced — so a
+       card that reads it alone reports "not reported" over real money. The
+       qualifier belongs beside the value, never as a gate on it, which is the
+       shape processedTokens/tokensMissing has had on the wire all along. */
+    const partial = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 11_934.61, costMissingInvocations: 42, invocations: 2973,
+    });
+    expect(partial.value).toBe("≥$11,934.61");
+    expect(partial.sub).toBe("measured floor · 42 of 2973 calls unpriced");
 
-    // Fully priced keeps the server's own total and says where it came from.
-    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 28.37, byProvider: [] }))
+    /* Grouped above four figures, on the integer part only. A first attempt
+       used one non-global lookahead and rendered "$1,234567.89" — a separator
+       that fires once and gives up is worse than none, because it looks like it
+       worked. */
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 1_234_567.89 }).value)
+      .toBe("$1,234,567.89");
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 999.5 }).value).toBe("$999.50");
+    // The failure this replaces: real money rendered as an absence.
+    expect(partial.value).not.toBe("not reported");
+
+    /* The ≥ must travel WITH the number. A skimmed, clipped or read-aloud
+       sublabel is exactly how a floor gets banked as a total, which is the
+       misreading the server's own contract comment warns about. */
+    expect(partial.value.startsWith("≥")).toBe(true);
+
+    // A complete total is not a floor and carries no qualifier.
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 28.37 }))
       .toEqual({ value: "$28.37", sub: "from BurnBar cost" });
 
-    /* "not reported" survives for the only case where it is the whole truth: a
-       window with nothing priced at all. Never a fabricated $0.00. */
+    // Fully priced via measuredCostUsd with nothing missing: no floor mark.
+    const whole = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 12.5, costMissingInvocations: 0, invocations: 10,
+    });
+    expect(whole).toEqual({ value: "$12.50", sub: "measured" });
+
+    /* No denominator means no share is claimed — the gap is still named in
+       absolute terms, because that much is true. */
+    const noTotal = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null,
+      measuredCostUsd: 5, costMissingInvocations: 1, invocations: null,
+    });
+    expect(noTotal.sub).toBe("measured floor · 1 call unpriced");
+
+    /* "not reported" survives only where it is the whole truth: nothing priced
+       at all. Never a fabricated $0.00. */
     const none = M.usageCostReading({
-      costKnown: false, estimatedCostUsd: null, invocations: 45,
-      byProvider: [{ provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 }],
+      costKnown: false, estimatedCostUsd: null, measuredCostUsd: null, invocations: 45,
     });
     expect(none.value).toBe("not reported");
     expect(none.sub).toBe("no priced rows in this range");
