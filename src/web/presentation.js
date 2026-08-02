@@ -674,9 +674,27 @@ export function terminalIdentity(agent) {
    name often already IS the terminal title). Returns "" when nothing new
    survives, so the tag never echoes the name back at the operator. */
 
+/* A cmux pane title is a live terminal title, so it carries whatever animation
+   frame the agent inside it happened to be drawing when the scan ran. Measured
+   on the board: agentName() returned "⠐ Swarm audit backend investigation with
+   codex" and "⠂ Deploy backend fixes via Codex" — a single frame of Claude
+   Code's braille spinner, frozen into the session's NAME and rendered wherever
+   that name goes: the roster row, the finding title in the summary band, the
+   drawer head, the notification. The displayName underneath was clean the whole
+   time.
+
+   Only leading spinner glyphs, and only the two families that are actually
+   spinners: the Braille Patterns block and the asterisk dingbats Claude Code
+   cycles. Names legitimately contain emoji and punctuation, so this does not
+   reach for anything more general than the thing it was built to remove. */
+const SPINNER_PREFIX = /^(?:[\u2800-\u28FF\u2722\u2733\u273B\u273D\u2731\u2217*]+\s+)+/;
+export function stripSpinnerFrame(title) {
+  return typeof title === "string" ? title.replace(SPINNER_PREFIX, "") : title;
+}
+
 export function terminalSourceName(agent) {
   const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
-    ? agent.target.workspaceTitle.trim()
+    ? stripSpinnerFrame(agent.target.workspaceTitle.trim()).trim()
     : "";
   return title ? conciseText(title) : "";
 }

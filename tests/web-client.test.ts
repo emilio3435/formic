@@ -517,6 +517,49 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* Seen whole rather than one change at a time.
+
+     A cmux pane title is a LIVE terminal title, so it carries whatever frame the
+     agent inside was drawing when the scan ran. Measured on main's board:
+     agentName() returned "⠐ Swarm audit backend investigation with codex" — one
+     frame of Claude Code's braille spinner, frozen into the session's NAME and
+     rendered everywhere that name goes: roster row, the finding title in the
+     summary band, the drawer head, the notification. displayName was clean
+     throughout, which is why no single surface looked broken. */
+  test("a spinner frame in a pane title never becomes the session's name", () => {
+    for (const [raw, want] of [
+      ["⠐ Swarm audit backend investigation", "Swarm audit backend investigation"],
+      ["⠂ Deploy backend fixes via Codex", "Deploy backend fixes via Codex"],
+      ["✻ Working on it", "Working on it"],
+      ["✽ ✻ Two frames", "Two frames"],
+    ]) {
+      expect(M.stripSpinnerFrame(raw)).toBe(want);
+    }
+
+    /* Only leading spinners, and only spinner families. Names legitimately
+       carry emoji and punctuation, and a rule broad enough to eat those would
+       trade a cosmetic bug for a naming one. */
+    expect(M.stripSpinnerFrame("🚀 ship it")).toBe("🚀 ship it");
+    expect(M.stripSpinnerFrame("the-mountain ⠐ main")).toBe("the-mountain ⠐ main");
+    expect(M.stripSpinnerFrame("Claude · the-mountain-main")).toBe("Claude · the-mountain-main");
+    expect(M.stripSpinnerFrame("")).toBe("");
+  });
+
+  /* Two fixes, each correct, composing into a crossed sentence. The rate's
+     window was appended AFTER the cost clause, so with the cost restored the
+     cell read "36k/min · $4.20 last hour · 10m average" — the rate's qualifier
+     separated from the rate by a differently-windowed number, and therefore
+     reading as the cost's. It was unambiguous only while the cost was null. */
+  test("each burn figure keeps its own window beside it", () => {
+    const data = M.summaryWidgetData("burn", snapshot({
+      pulse: { burn: { tokensPerMin: 35_519, windowMs: 600_000, costLastHourUsd: 4.2 } },
+    }), "live", "percent", [], false);
+
+    expect(data.sublabel).toBe("10m average · $4.20 last hour");
+    // The window is adjacent to the rate it describes, not trailing the cost.
+    expect(data.sublabel.indexOf("10m average")).toBeLessThan(data.sublabel.indexOf("last hour"));
+  });
+
   /* Three refusals, three answers to "can I do anything about this?"
 
      They all end in the same disabled button, and archived and dead both

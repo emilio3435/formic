@@ -77,6 +77,7 @@ import {
   terminalBreadcrumb,
   terminalIdentity,
   terminalSourceName,
+  stripSpinnerFrame,
   workspaceLabelTarget,
   agentsById,
   IDENTITY_TIER_LABELS,
@@ -917,8 +918,18 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        bare "/min" invites reading it as an instantaneous rate, which is how a
        rate and an hourly cost end up divided against each other. Say the window.
        (Magnitude audit §3.) */
+    /* The window sits FIRST, next to the rate it describes. It used to be
+       appended last, after the cost clause, so the cell read
+       "36k/min · $4.20 last hour · 10m average" — three fragments in which the
+       rate's qualifier had the cost's window between it and the rate, and
+       therefore read as qualifying the cost.
+
+       That only became wrong when the cost came back. While costLastHourUsd was
+       null the clause sat directly under the rate and was unambiguous; the
+       backend restoring the figure put a differently-windowed number in
+       between. Two fixes, each correct, composing into a crossed sentence. */
     const windowNote = hasRate && Number.isFinite(burn.windowMs) && burn.windowMs > 0
-      ? " · " + fmtElapsed(burn.windowMs) + " average"
+      ? fmtElapsed(burn.windowMs) + " average"
       : "";
     /* What the rate cannot see. This is the honest half of the coverage suffix
        deleted above: `unknown` counts LIVE agents whose provider reports no
@@ -934,7 +945,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     return {
       value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
       unit: hasRate ? "/min" : "",
-      sublabel: sub + windowNote + blindNote,
+      sublabel: [windowNote, sub].filter(Boolean).join(" · ") + blindNote,
       tone: hasRate ? "ok" : "missing",
     };
   }
@@ -1045,7 +1056,7 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
-  preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
