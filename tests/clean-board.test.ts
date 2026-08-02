@@ -60,8 +60,15 @@ const cleanBoard = (overrides: Record<string, unknown> = {}) => ({
   issues: [],
   recentlyResolved: [],
   pulse: {
-    momentum: { completionsLastHour: 52, observedWindowMs: 3_600_000, stalled: 0 },
-    burn: { tokensPerMin: 149_000, costLastHourUsd: 2.4, coverage: { reporting: 1, eligible: 1 } },
+    /* completionsLastHour is NULL, because that is what the server emits. This
+       fixture carried 52 — a figure transcribed from a screenshot before the
+       counter was withdrawn — so every assertion built on it described a board
+       the product can no longer produce. `windowMs` is present because the
+       client reads it to render the burn sublabel and the fixture omitted it. */
+    momentum: { working: 1, completionsLastHour: null, completionsProvenance: "not-observable",
+      observedWindowMs: 3_600_000, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900_000 },
+    burn: { tokensPerMin: 149_000, windowMs: 600_000, costLastHourUsd: 2.4,
+      coverage: { reporting: 1, eligible: 1 } },
     activity: { buckets: [{ activeSessions: 1 }, { activeSessions: 2 }] },
   },
   ...overrides,
@@ -153,18 +160,40 @@ describe("a clean board reports clear, not empty", () => {
     }
   });
 
-  test("the collapsed line carries real numbers, not placeholders", () => {
-    /* The single line the operator now reads. Its three quantities come from
-       the board, so they must survive as concrete values — this is what
-       distinguishes a collapse from a board that simply rendered nothing. */
+  test("the collapsed line renders the board's own numbers, not transcribed ones", () => {
+    /* WAS THE PUREST FORM OF THE VACUITY PROBLEM: an assertion about a clean
+       board, written from a screenshot taken while the board was busy. It
+       pinned momentum.sublabel containing "52" and burn.value === "149k" —
+       constants copied from one afternoon, derived from nothing, depended on by
+       nothing. It could only ever have been evaluated against the state it was
+       not describing.
+
+       Worse, "52" came from `completionsLastHour: 52`, a field the server has
+       since stopped emitting entirely. The assertion was green while requiring
+       the client to render a figure the product cannot send.
+
+       Now every expectation is DERIVED from the fixture, so changing the
+       fixture changes the expectation and neither can drift from the other. */
     const snap = cleanBoard();
     const momentum = M.summaryWidgetData("momentum", snap, "live");
     const burn = M.summaryWidgetData("burn", snap, "live");
 
-    expect(momentum.value).toBe("1");
-    expect(momentum.sublabel).toContain("52");
-    expect(burn.value).toBe("149k");
+    // The working count is the board's, not a literal that happens to match.
+    expect(momentum.value).toBe(String(snap.totals.working));
+
+    /* The burn value is the rate the board carries, abbreviated. Asserted as
+       arithmetic on the fixture so a fixture edit cannot leave a stale
+       constant behind. */
+    expect(burn.value).toBe(`${Math.round(snap.pulse.burn.tokensPerMin / 1_000)}k`);
     expect(burn.tone).toBe("ok");
+
+    /* The sublabel names the window the rate was measured over, read from
+       burn.windowMs — the field this fixture used to omit, which meant the
+       sublabel path was exercised by nothing at all. */
+    expect(String(burn.sublabel)).toContain(`${snap.pulse.burn.windowMs / 60_000}m`);
+
+    // And the withheld counter renders as withheld rather than as a number.
+    expect(String(momentum.sublabel)).not.toMatch(/\d/);
   });
 
   test("a clean board raises no findings, and a broken one raises exactly its own", () => {
