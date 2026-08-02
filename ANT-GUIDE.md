@@ -7,6 +7,12 @@ that tells you which one needs you.**
 
 Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
+**Your board will be quieter than these pictures.** They are taken from a machine
+running dozens of sessions at once, because a crowded board shows more of the
+tool. On your first run you will have one row, or none — and `Needs you 0` with
+nothing under it is the tool working, not the tool failing to find anything. If
+it is completely empty, see *The board is empty* at the end.
+
 This guide is about *using* a dashboard that is already running. To install one
 on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 
@@ -380,9 +386,17 @@ bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 <details>
 <summary><b>The board is empty</b></summary>
 
-If it says **"The ant hill is still — no tracked agents,"** the server is healthy
-and genuinely sees nothing. Either nothing has run recently, or everything has
-aged out — only about the last day and a half is scanned by default.
+If it says **"Watching. No sessions running yet,"** the server is healthy and
+genuinely sees nothing. Underneath it is the proof: a count of healthy
+collectors and a ticking `checked Ns ago`. A board that had failed to load could
+not produce either, which is what tells you this is an answer rather than a
+blank screen. Either nothing has run recently, or everything has aged out — only
+about the last day and a half is scanned by default.
+
+If instead it says **"No sessions found — and not every collector can see,"**
+that is a different state and not an empty fleet: at least one collector is
+degraded, so the board is incomplete rather than empty, and sessions may be
+running that it cannot show you.
 
 Start a session (`claude` or `codex` in any project folder) and a row should
 appear within about five seconds, no refresh needed.
