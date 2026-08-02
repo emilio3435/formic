@@ -123,26 +123,50 @@ So the two are gated differently:
 
 | The row's link to a terminal | Focus | Send / Interrupt |
 |---|---|---|
-| cmux names the session on that pane | on | **on** |
+| cmux names the session on that pane, and its process is alive | on | **on** |
 | matched only by its folder | on | **off** |
+| the session's process is gone | on | **off** |
 | ambiguous, or no pane found | off | off |
 
-That middle row is new, and it is the one that will surprise you: the board
-looks healthy, Focus works, and Send is greyed out anyway. It is not a bug and
-not a degraded install. It means the Ant Hill found a pane sitting in the right
-folder but could not get cmux to confirm the session is actually the one running
-there — and a folder is not a name. Two panes in the same project, one that
-`cd`s away while another `cd`s in, and the row can point at the wrong terminal
-while still reading perfectly healthy. That happened here, to a real Send, which
-is why the gate exists.
+### The promise behind that table
+
+Every greyed-out Send in it is the cockpit declining to do something on your
+behalf that it cannot prove is safe. Read the rows as guarantees, because that
+is what they are:
+
+**It will not type into a terminal it cannot name.** Not "probably the right
+one" — cmux has to say *this session is on this pane*. A pane merely sitting in
+the right folder is a guess, and two panes in one project, one `cd`ing away as
+another `cd`s in, is enough to move that guess onto the wrong terminal while the
+row still reads perfectly healthy. That happened here, to a real Send. So a
+folder match may move your view and never your keystrokes.
+
+**It will not type into a session that has already exited.** A finished or
+crashed agent leaves its pane behind, and that pane usually belongs to your
+shell by the time you get there. An instruction addressed to a dead agent does
+not vanish — it lands in whatever is sitting on that terminal now. So once the
+board knows a process is gone, the write controls close, even though the row is
+still there to read.
+
+**It will not act on stale evidence.** Which terminal an agent is on is a fact
+with a short shelf life. If the board's picture is too old to trust, a write is
+refused rather than sent on the strength of where the agent *used to* be.
+
+None of these are degraded states. A board that says `All clear` and still greys
+out Send on one row is working exactly as designed: everything it can verify, it
+did, and the one thing it could not verify it declined to guess. **The board is
+never the reason you cannot reach an agent — it is the reason you do not reach
+the wrong one.** Focus stays on throughout precisely so you always have a way in:
+go and look, and type there yourself.
 
 **To get Send and Interrupt back:** start the agent *inside* a cmux pane and
-leave it there. Identification works by finding the session's own transcript
-file held open by a process on that pane, or the session ID in the command that
-started it. An agent started in an ordinary terminal, or in a pane that has
-since moved elsewhere, has neither, so it can be watched but not typed into. No
-setting turns this off; the controls come back on their own within a few seconds
-of cmux naming the session.
+leave it there, and keep the session running. Identification works by finding
+the session's own transcript file held open by a process on that pane, or the
+session ID in the command that started it. An agent started in an ordinary
+terminal, or in a pane that has since moved elsewhere, has neither, so it can be
+watched but not typed into. No setting turns any of this off; the controls come
+back on their own within a few seconds of the board being able to prove the
+answer again.
 
 **That is the whole loop:** `Needs you` → click the row → deal with it →
 `Escape`.
@@ -367,23 +391,33 @@ watch, ignore it forever. If you want Focus and Send, install cmux and run
 <details>
 <summary><b>Send is greyed out but Focus still works</b></summary>
 
-The row is linked to a terminal by **folder, not by name**. Hover the greyed
-button and it says so: the pane was matched by its working directory rather than
-attested by cmux, so the session on it cannot be proven.
+**Hover the greyed button — it tells you which of these it is.** All of them are
+the cockpit refusing to guess on your behalf, not a fault to repair.
 
-This is deliberate and it is the safe outcome, not a fault to repair. The board
-would rather refuse a Send than deliver it to a terminal it only *probably*
-identified — a pane that `cd`s away and another that `cd`s in is enough to move
-the match to the wrong session while the row still reads healthy.
+**"matched by its working directory, not attested by cmux."** The row is linked
+to a terminal by folder, not by name. The board would rather refuse a Send than
+deliver it to a terminal it only *probably* identified — a pane that `cd`s away
+and another that `cd`s in is enough to move the match to the wrong session while
+the row still reads healthy.
+→ *Fix:* start agents inside cmux panes and leave them there. Identification
+needs the session's transcript file open on that pane, or its ID in the command
+that launched it.
 
-**Use Focus.** It is left on for exactly this case: go and look at the pane, and
-type there directly. That is the recovery path, not a workaround.
+**The session's process is gone.** The pane outlives the agent, and by the time
+you get there it usually belongs to your shell again. An instruction to a dead
+agent is not discarded — it lands in whatever is on that terminal now. The row
+stays readable so you can see what happened; only the writes close.
+→ *Fix:* none needed. The session is over. Read it, then `Archive` it.
 
-**To make it stop happening**, start agents inside cmux panes and leave them
-there — identification needs the session's transcript file open on that pane, or
-its ID in the command that launched it. Nothing to configure and nothing to
-restart; the buttons re-enable themselves within a few seconds of cmux naming
-the session.
+**The board's picture is too old to act on.** Which terminal an agent is on goes
+stale quickly, so a write is refused rather than sent to where it *used* to be.
+→ *Fix:* `Refresh`. This one resolves itself.
+
+**Use Focus in every case.** It is left on for exactly this reason: go and look
+at the pane and type there directly. That is the recovery path, not a
+workaround. Nothing here needs configuring or restarting — each control
+re-enables itself within a few seconds of the board being able to prove the
+answer again.
 
 </details>
 

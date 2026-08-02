@@ -758,12 +758,15 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
   });
 
   test("both onboarding docs describe that asymmetry, not a blanket cmux requirement", () => {
-    for (const [name, doc] of [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const) {
+    const flatten = (d: string) => d.replace(/\s+/g, " ");
+    for (const [name, doc] of [["QUICKSTART.md", flatten(quickstart)], ["ANT-GUIDE.md", flatten(read("ANT-GUIDE.md"))]] as const) {
       expect(doc, `${name} does not say Send/Interrupt are gated harder than Focus`)
         .toMatch(/Send and Interrupt|Send \/ Interrupt/);
       expect(doc, `${name} does not name the cwd-match state an operator will hit`)
         .toMatch(/working directory|matched by (its )?folder/i);
-      expect(doc, `${name} does not say Focus survives it`).toMatch(/Focus (still |stays )/i);
+      /* Same requirement the promises block below asserts; keep the accepted
+         phrasings identical so a reword fails in one place, not two. */
+      expect(doc, `${name} does not say Focus survives it`).toMatch(/Focus (still|stays|is exempt)/i);
       expect(doc, `${name} does not tell the reader how to get the write controls back`)
         .toMatch(/inside (a |)cmux pane/i);
     }
@@ -910,5 +913,80 @@ describe("day one on a machine without cmux", () => {
       timedOut: false, exitCode: -1, stdout: "",
       stderr: "ENOENT: no such file or directory, posix_spawn '/Applications/cmux.app/Contents/Resources/bin/cmux'",
     } as never), "cmux absence is still read as a fault on a machine that never had it").toBe(true);
+  });
+});
+
+/* Three changes to what this product PROMISES landed or are landing today, and
+   the operator reads all three the same way: the cockpit will not act on your
+   behalf unless it can prove, right now, that the action goes where you think.
+   Framed as capabilities-you-lost they read as a broken install; framed as
+   guarantees they are the reason to trust it with a terminal at all. Both
+   onboarding docs must carry that framing, and it must stay true. */
+describe("the safety promises the docs make on the product's behalf", () => {
+  /* Markdown wraps these sentences across lines, so a raw .toMatch reads a
+     reflow as drift and hides the real thing behind a false alarm. Flatten
+     whitespace first, exactly as the QUICKSTART quote pins above do. */
+  const flat = (doc: string) => doc.replace(/\s+/g, " ");
+  const both = () =>
+    [["QUICKSTART.md", flat(quickstart)], ["ANT-GUIDE.md", flat(read("ANT-GUIDE.md"))]] as const;
+
+  test("both docs promise the board refuses an unnameable terminal", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} dropped the identity promise`)
+        .toMatch(/never type into a terminal it cannot name|refuses to type into a terminal it cannot|not type into a terminal it cannot name/i);
+      expect(doc, `${name} no longer lets a reader match the hover text they will see`)
+        .toMatch(/working directory/i);
+    }
+  });
+
+  test("both docs promise the board refuses a session that has exited", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} dropped the liveness promise`)
+        .toMatch(/already exited|process is gone/i);
+      expect(doc, `${name} does not explain WHY a dead agent's pane is dangerous`)
+        .toMatch(/pane outlives the agent|belongs to your shell/i);
+    }
+  });
+
+  test("both docs promise Focus stays available so there is always a way in", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} stopped promising Focus survives the write gates`)
+        .toMatch(/Focus (still|stays|is exempt)/i);
+      expect(doc, `${name} dropped the line that makes the whole framing land`)
+        .toMatch(/never the reason you cannot reach an agent/i);
+    }
+  });
+
+  test("the identity promise is the gate the code actually enforces", async () => {
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const target = (resolution: string) => ({
+      surfaceId: "s1", resolution, reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined,
+    }) as never;
+    const caps = (resolution: string) =>
+      Object.fromEntries(
+        controlsFor({ status: "running" } as never, target(resolution), false).map((c) => [c.action, c.enabled]),
+      );
+    expect(caps("unique-cwd").instruct, "a folder match authorises Send again").toBe(false);
+    expect(caps("unique-cwd").focus, "Focus was disabled; the docs promise it survives").toBe(true);
+    expect(caps("exact").instruct, "an attested pane stopped permitting Send").toBe(true);
+  });
+
+  /* The liveness promise, documented ahead of the code by explicit instruction —
+     the backend is landing one shared predicate rather than four patches
+     (docs/TRIAGE-AND-LIVENESS-SWEEP-GPT.md). Until it lands, this is the doc
+     writing a cheque the product does not yet honour, so it is pinned rather
+     than left to be noticed: controlsFor grants instruct on an agent the board
+     itself renders as dead.
+
+     test.failing: flips the moment any authorisation path reads agent liveness,
+     at which point drop .failing and keep the assertion. */
+  test.failing("no write is authorised against a process the board knows is dead", async () => {
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
+    const attested = { surfaceId: "s1", resolution: "exact", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
+    const caps = Object.fromEntries(controlsFor(dead, attested, false).map((c) => [c.action, c.enabled]));
+    expect(caps.instruct, "Send is still offered on an agent whose process is gone").toBe(false);
+    expect(caps.interrupt, "Interrupt is still offered on an agent whose process is gone").toBe(false);
+    expect(caps.focus, "Focus must stay on — it is the documented way to go and look").toBe(true);
   });
 });
