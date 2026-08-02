@@ -671,13 +671,22 @@ async function cursorChildAgents(
   trackingModels: ReadonlyMap<string, string>,
   nowMs: number,
   windowMs: number,
+  errors: string[] = [],
 ): Promise<CollectedAgent[]> {
   if (!transcriptPath) return [];
   const directory = join(dirname(transcriptPath), "subagents");
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    /* ENOENT is a parent with genuinely no subagents — the common case, and
+       legitimately an empty list. Every other failure (EACCES, ENOTDIR, EMFILE
+       under a fleet scan) is a live subagent we could not see, and returning []
+       for it removed a running agent from the roster with nothing recorded.
+       Every sibling failure path in this file pushes to errors. */
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      errors.push(`cursor subagents at ${directory}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return [];
   }
   const agents = await Promise.all(entries.map(async (entry): Promise<CollectedAgent | null> => {
@@ -706,6 +715,7 @@ async function cursorChildAgents(
 async function transcriptEvidence(
   transcriptPath: string | undefined,
 ): Promise<{
+  subagentsError?: string;
   transcriptJsonl?: string;
   transcript?: CursorTranscript;
   subagentCount?: number;
@@ -716,13 +726,25 @@ async function transcriptEvidence(
   const transcriptJsonl = file.contents;
   const transcript = file.transcript;
   const transcriptMtimeMs = file.mtimeMs;
+  const subagentsDirectory = join(transcriptPath, "../subagents");
   try {
-    const subagentCount = (await readdir(join(transcriptPath, "../subagents"), { withFileTypes: true }))
+    const subagentCount = (await readdir(subagentsDirectory, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .length;
     return { transcriptJsonl, transcript, subagentCount, transcriptMtimeMs };
-  } catch {
-    return { transcriptJsonl, transcript, subagentCount: 0, transcriptMtimeMs };
+  } catch (error) {
+    /* A parent with no subagents directory really has none, so 0 is right. A
+       directory that could not be READ must not borrow that same confident 0 —
+       leave the count unknown and name the failure. */
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { transcriptJsonl, transcript, subagentCount: 0, transcriptMtimeMs };
+    }
+    return {
+      transcriptJsonl,
+      transcript,
+      transcriptMtimeMs,
+      subagentsError: `cursor subagents at ${subagentsDirectory}: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
@@ -785,6 +807,7 @@ async function collectCursorGuiSessions(
       try {
         const transcriptPath = await findTranscript(projects, row.id, cwd);
         const evidence = await transcriptEvidence(transcriptPath);
+        if (evidence.subagentsError) errors.push(evidence.subagentsError);
         /* PRIMARY: composerData model; FALLBACK: ai-code-tracking's last model.
            The lookup is enrichment, not existence: a damaged model record must
            degrade the source without deleting the session from the board, so it
@@ -820,7 +843,7 @@ async function collectCursorGuiSessions(
         });
         if (parsed) {
           agents.push(parsed);
-          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs));
+          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs, errors));
         }
       } catch (error) {
         errors.push(`cursor GUI ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -921,7 +944,11 @@ export async function collectCursorSessions(
       let transcriptMtimeMs: number | undefined;
       if (transcriptPath) {
         try {
-          ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = await transcriptEvidence(transcriptPath));
+          const evidence = await transcriptEvidence(transcriptPath);
+        if (evidence.subagentsError) errors.push(evidence.subagentsError);
+          ({ transcriptJsonl, transcript, subagentCount, transcriptMtimeMs } = evidence);
+          // An unreadable subagents directory is a live agent we could not see.
+          if (evidence.subagentsError) errors.push(evidence.subagentsError);
         } catch (error) {
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
         }

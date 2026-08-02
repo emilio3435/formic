@@ -300,7 +300,7 @@ describe("DEFECT: cursor.ts swallows an unreadable subagents directory", () => {
     return root;
   }
 
-  test.failing("an unreadable subagents directory is reported as a collection error", async () => {
+  test("an unreadable subagents directory is reported as a collection error", async () => {
     /* src/server/cursor.ts: collectCursorChildSessions bare-catches readdir and
        returns [], and transcriptEvidence does the same and returns
        subagentCount: 0. Neither records anything.
@@ -319,7 +319,7 @@ describe("DEFECT: cursor.ts swallows an unreadable subagents directory", () => {
     expect(result.errors.join(" ")).toContain("subagents");
   });
 
-  test.failing("an unreadable directory does not report zero descendants", async () => {
+  test("an unreadable directory does not report zero descendants", async () => {
     // 0 is the right answer for a parent that genuinely has none. A directory
     // that could not be read must not borrow that same confident 0.
     const result = await collectCursorSessions(await cursorHome("unreadable"), 1784692000000);
