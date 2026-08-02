@@ -537,16 +537,29 @@ describe("summary status and widgets", () => {
           tokensPerMin: 10_546,
           windowMs: 300_000,
           costLastHourUsd: null,
-          coverage: { reporting: 8, eligible: 33 },
+          coverage: { reporting: 8, eligible: 33, unknown: 3 },
         },
       },
     });
     const data = M.summaryWidgetData("burn", snap, "live", "percent", [], false);
 
     expect(data.sublabel).toContain("5m average");
-    // The coverage ratio described a different population than the rate.
-    expect(data.sublabel).not.toContain("reporting");
+    /* The ratio described a different population than the rate: verified in
+       src/server/pulse.ts, where the delta loop walks every agent while
+       coverage.reporting/eligible count live ones only. */
     expect(data.sublabel).not.toContain("8/33");
+    expect(data.sublabel).not.toMatch(/\d+\/\d+ reporting/);
+
+    /* But an absence is safe to name where completeness was not. `unknown`
+       counts live agents whose provider reports no tokens at all, so they
+       contribute zero to the rate forever — a subtotal shown as a total. */
+    expect(data.sublabel).toContain("3 not reporting tokens");
+
+    const fullCoverage = M.summaryWidgetData("burn", snapshot({
+      pulse: { burn: { tokensPerMin: 10_546, windowMs: 300_000, costLastHourUsd: null,
+        coverage: { reporting: 33, eligible: 33, unknown: 0 } } },
+    }), "live", "percent", [], false);
+    expect(fullCoverage.sublabel).not.toContain("not reporting");
 
     // No window on the wire means no window claim — never a fabricated default.
     const noWindow = M.summaryWidgetData(

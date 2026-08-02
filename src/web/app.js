@@ -861,10 +861,21 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const windowNote = hasRate && Number.isFinite(burn.windowMs) && burn.windowMs > 0
       ? " · " + fmtElapsed(burn.windowMs) + " average"
       : "";
+    /* What the rate cannot see. This is the honest half of the coverage suffix
+       deleted above: `unknown` counts LIVE agents whose provider reports no
+       token totals at all — measured, all 3 are Cursor — so they contribute
+       exactly zero to the rate, permanently, and the figure is a subtotal shown
+       as a total. Naming an absence is safe where asserting completeness was
+       not: it does not claim the rate's denominator, it only says who is
+       invisible to it. Audit §20 — coverage speaks only when incomplete. */
+    const blindNote = hasRate && burn.coverage && Number.isFinite(burn.coverage.unknown)
+      && burn.coverage.unknown > 0
+      ? ` · ${burn.coverage.unknown} not reporting tokens`
+      : "";
     return {
       value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
       unit: hasRate ? "/min" : "",
-      sublabel: sub + windowNote,
+      sublabel: sub + windowNote + blindNote,
       tone: hasRate ? "ok" : "missing",
     };
   }
