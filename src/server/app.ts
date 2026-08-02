@@ -12,6 +12,7 @@ import {
   type AttentionStore,
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
+import { readPublishState, type PublishState } from "./publish-state";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
@@ -46,6 +47,7 @@ const SECURITY_HEADERS = {
   "x-frame-options": "DENY",
 };
 
+export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
 export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
@@ -278,6 +280,9 @@ export interface MountainAppDependencies {
   cmuxExecutable?: string;
   now?: () => number;
   webRoot: string;
+  /* Repository root for the read-only publish surface. Defaults to the web
+     root's parent, which is the checkout in every deployment we ship. */
+  repoRoot?: string;
 }
 
 export interface MountainFetch {
@@ -519,10 +524,25 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     }
   });
 
+  /* Reading the publish state costs a handful of git calls, so it is computed
+     on demand and held briefly rather than recomputed on every poll. */
+  let publishCache: { atMs: number; value: PublishState } | undefined;
+  const publishState = async (): Promise<PublishState> => {
+    const nowMs = dependencies.now?.() ?? Date.now();
+    if (publishCache && nowMs - publishCache.atMs < PUBLISH_CACHE_MS) return publishCache.value;
+    const value = await readPublishState(
+      dependencies.runner,
+      dependencies.repoRoot ?? resolve(dependencies.webRoot, ".."),
+      nowMs,
+    );
+    publishCache = { atMs: nowMs, value };
+    return value;
+  };
+
   const fetch = (async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (!isLoopback(url.hostname)) {
-      if (url.pathname === "/api/transcript" || url.pathname === "/api/actions") {
+      if (["/api/transcript", "/api/actions", "/api/publish"].includes(url.pathname)) {
         return responseError(403, "ORIGIN_REJECTED", "Read endpoints require exact same-origin loopback access.");
       }
       return new Response("Forbidden", { status: 403, headers: SECURITY_HEADERS });
@@ -537,6 +557,17 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       const limit = limitFrom(url, 200, 1_000);
       if (limit instanceof Response) return limit;
       return transcriptResponse(dependencies.state.get(), agentId, limit, SECURITY_HEADERS);
+    }
+    if (url.pathname === "/api/publish") {
+      if (request.method !== "GET") {
+        /* Read-only by construction. Publishing is the operator's decision and
+           stays manual, so this surface reports and never acts: there is no
+           POST here and no push anywhere behind it. */
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use GET. This surface reports and never publishes.");
+      }
+      return Response.json(await publishState(), {
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
     }
     if (url.pathname === "/api/actions") {
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");

@@ -36,6 +36,8 @@ Anything else is `ambiguous` (controls disabled, reason shown) or `missing` (vie
 
 **Sticky bindings.** `src/server/identity-bindings.ts` persists every lsof-confirmed session↔surface link to `data/identity-bindings.json` (same atomic write-temp-rename + serialized write queue as `src/server/archive.ts`). When a later scan yields no evidence for a known session (single-sample lsof race), the binding bridges the gap through `agent.recordedTarget` (`reason: "Recorded binding, live evidence absent this scan."`), keeping resolution exact instead of degrading to cwd fallback. Bindings only fill gaps: live evidence outranks them; a session confirmed on a different surface demotes the old binding only after 2 consecutive scans agree; a bound surface reclaimed by another session is never bridged; a conflicted surface still quarantines; entries unconfirmed for 7 days prune on load/save.
 
+**Publishing.** `GET /api/publish` (`src/server/publish-state.ts`) answers what is finished but unpublished: the trunk's own backlog against `origin/<trunk>`, then each branch's commits that are not in the trunk. Measured separately on purpose — every branch descends from an unpublished trunk, so counting each against the remote reports the same commits a dozen times. Merged branches are counted, never listed; branches untouched for a fortnight are counted as stale so they cannot nag. Read-only, loopback-served, `no-store`, cached briefly, and there is no POST: the surface reports and never publishes.
+
 **Debugging.** `GET /api/debug/identity` (`src/server/debug-identity.ts`, registered in `src/server/app.ts`) summarizes every agent's resolution/tier/conflict flags; `GET /api/debug/identity?agent=<id>` (query param because IDs like `claude:<uuid>` contain a colon) returns the full per-agent trace plus the raw evidence of every related surface. Read-only, loopback-served, `no-store`.
 
 ## Controls
@@ -53,6 +55,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `snapshot-issues.ts`, `snapshot-operator-issues.ts` | What counts as a finding, and how identity conflicts split into live faults vs debris |
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |
 | `attention-signal.ts` | Whether an agent needs a human, and the sentence saying why |
+| `publish-state.ts` | What work is committed but unpublished. Read-only by construction: only `remote`, `rev-parse`, `rev-list` and `for-each-ref` are ever run, and publishing stays the operator's manual decision |
 | `pulse.ts` | Momentum, burn rate, and the activity window behind the summary strip |
 | `human-message.ts` | Readable prose out of a raw transcript — the row preview reads a message's first 240 characters, attention detection reads its last 240 |
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |

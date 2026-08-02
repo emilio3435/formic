@@ -219,6 +219,40 @@ describe("GET /api/transcript", () => {
   });
 });
 
+describe("GET /api/publish", () => {
+  /* The cockpit's answer to "what is finished but unpublished". It reports and
+     never acts: publishing is the operator's decision and stays manual, so the
+     surface has no verb at all. */
+  test("reports read-only and refuses any method that could imply an action", async () => {
+    const runner = new StubRunner([
+      { exitCode: 1, stdout: "", stderr: "no origin", timedOut: false },
+    ]);
+    const fetch = app(snapshot(), { runner });
+    try {
+      const read = await fetch(get("/api/publish"));
+      expect(read.status).toBe(200);
+      expect(await read.json()).toMatchObject({ available: false });
+
+      // No POST, no push, no one-click anything.
+      const written = await fetch(new Request(`${ORIGIN}/api/publish`, { method: "POST" }));
+      expect(written.status).toBe(405);
+      expect(await written.json()).toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
+    } finally {
+      fetch.dispose();
+    }
+  });
+
+  test("is same-origin loopback only, like the other read endpoints", async () => {
+    const fetch = app(snapshot());
+    try {
+      const foreign = await fetch(new Request("http://evil.example:4701/api/publish"));
+      expect(foreign.status).toBe(403);
+    } finally {
+      fetch.dispose();
+    }
+  });
+});
+
 describe("operator action log", () => {
   test("allows browser-style GETs without Origin while the app-wide loopback gate rejects a foreign host", async () => {
     const fetch = app(snapshot());
