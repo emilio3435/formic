@@ -545,3 +545,69 @@ describe("the executable scripts do what DEPLOY.md says they do", () => {
     expect(deploy, "DEPLOY.md stopped warning that hygiene restarts production").toContain("restarts production and can kill processes");
   });
 });
+
+describe("package.json scripts and config/ are documented as they execute", () => {
+  /* These are run, not read. A script whose name implies one thing and does
+     another is worse than an undocumented one, because the reader does not know
+     to look it up. */
+  const scripts: Record<string, string> = JSON.parse(pkg).scripts;
+
+  test("every npm script is documented somewhere a reader will look", () => {
+    /* `dev`, `start:ops`, `start:external` and `typecheck` were all
+       undocumented — and two of them bind the production port. Derived from
+       package.json, so a new script fails here until it is written down. */
+    const docs = [readme, quickstart, deploy, read("ANT-GUIDE.md")].join("\n");
+    for (const name of Object.keys(scripts)) {
+      expect(docs, `no live doc mentions the "${name}" script`).toContain(name);
+    }
+  });
+
+  test("the port-binding scripts are named as port-binding", () => {
+    /* Anything routed through src/server/index.ts takes MOUNTAIN_PORT ?? 4701.
+       DEPLOY.md forbids launching on 4701 by hand, so a reader needs to know
+       which of these do exactly that. */
+    for (const [name, body] of Object.entries(scripts)) {
+      if (!body.includes("src/server/index.ts") && !body.includes("anthill-start.sh")) continue;
+      expect(readme, `README.md's script table omits the port-binding "${name}"`).toContain(name);
+    }
+    expect(readme).toContain("4701, **no reuse**");
+  });
+
+  test("start:external is documented as NOT binding externally", () => {
+    /* The name invites the one assumption this product cannot afford. The
+       server hostname is a constant with no env override — if that ever gains
+       one, this test should fail and the paragraph be rewritten. */
+    expect(scripts["start:external"]).toContain("--external");
+    expect(read("scripts/anthill-start.sh")).toContain("--external    Force this shell");
+    expect(readme.replace(/\s+/g, " ")).toContain("`start:external` does not bind externally");
+    const indexTs = read("src/server/index.ts");
+    expect(indexTs).toContain('const HOSTNAME = "127.0.0.1"');
+    expect(indexTs, "HOSTNAME gained an env override — the loopback promise moved").not.toMatch(/HOSTNAME\s*=\s*process\.env/);
+  });
+
+  test("the EADDRINUSE behaviour README promises is what the server does", () => {
+    // Verified by running it against the live service: it exits, it does not
+    // double-bind, and production keeps the port.
+    expect(readme).toContain("EADDRINUSE");
+    const indexTs = read("src/server/index.ts");
+    expect(indexTs).toContain("port: configuredPort");
+    expect(indexTs, "a retry/fallback would make README's 'it exits' wrong").not.toContain("EADDRINUSE");
+  });
+
+  test("every key in config/models.json is read by something", () => {
+    /* Dead config is a trap: it reads as a supported knob. */
+    const keys = Object.keys(JSON.parse(read("config/models.json")));
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(server, `config/models.json key "${key}" is read by nothing`).toContain(key);
+    }
+  });
+
+  test("the example program config matches what the loader accepts", () => {
+    const example = JSON.parse(read("config/programs.example.json"));
+    expect(example.programs, "programs.example.json lost its `programs` key").toBeDefined();
+    // An absent programs.json is the normal state, and QUICKSTART says so.
+    expect(read("src/server/state.ts")).toContain("Absent file is the normal state");
+    expect(quickstart).toContain("config/programs.example.json");
+  });
+});

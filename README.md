@@ -14,6 +14,33 @@ That one command: reuses Ant Hill if it’s already up, otherwise starts it (pre
 
 Ports: **4701** is the default for both `bun start` and `bun run start:server`, and is the launchd production port — see `DEPLOY.md`, which forbids launching anything on 4701 by hand. Previews use **4710–4719** via `scripts/anthill-preview.sh`.
 
+### Every script, and which ones bind a port
+
+| Script | Does | Port |
+|---|---|---|
+| `bun start` | The whole workflow — reuses a running instance, else starts one | 4701, reused if taken |
+| `bun run start:ops` | Same, forced into the dedicated cmux workspace | 4701 |
+| `bun run start:external` | Same, forced into **this shell** rather than cmux | 4701 |
+| `bun run start:server` | The server alone, no launcher | 4701, **no reuse** |
+| `bun run dev` | The server alone, restarting on file change | 4701, **no reuse** |
+| `bun run setup:cmux` | One-time cmux password setup | — |
+| `bun run check` | `typecheck` then `test` — the gate `anthill-deploy.sh` runs | — |
+| `bun run test` / `typecheck` | Either half of it | — |
+
+Two of these will surprise you. **`start:external` does not bind externally** — it
+means "run in this shell instead of a cmux workspace", and the server is
+hardcoded to `127.0.0.1` with no override, so nothing here can serve the network.
+And `dev` / `start:server` take 4701 without checking, so with the launchd
+service up they exit immediately:
+
+```
+error: Failed to start server. Is port 4701 in use?  code: "EADDRINUSE"
+```
+
+That is the safe outcome, not a bug — they refuse rather than fighting
+production for the port. For an instance you can actually run alongside it, use
+`bash scripts/anthill-preview.sh` or `MOUNTAIN_PORT=4710 bun run dev`.
+
 **Optional, once per machine** — only if you want Focus/Send:
 
 ```bash
