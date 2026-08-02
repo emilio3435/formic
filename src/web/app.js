@@ -6730,7 +6730,30 @@ function renderEmpty() {
 function emptyBoardVerdict(snap) {
   const sources = snap && snap.totals && snap.totals.sourceHealth;
   const total = sources && Number.isFinite(sources.total) ? sources.total : 0;
-  const degraded = Boolean(sources && Number.isFinite(sources.degraded) && sources.degraded > 0);
+  /* A provider that is not installed is not a provider that is broken.
+
+     The docs lane proved the first screen of a fresh install reads "No sessions
+     found — and not every collector can see · 1 of 4 collectors degraded". That
+     is a fault report, and it is wrong: a newcomer running Claude Code but not
+     Cursor has an absent collector, not a degraded one. Nothing is broken,
+     nothing needs fixing, and the very first thing the product says to them is
+     that something is.
+
+     byProvider carries lastHealthyAt, and it is the distinction the screen
+     needs: a source that has NEVER been healthy has nothing to read yet, while
+     one that WAS healthy and is not now has actually failed. Only the second is
+     a fault. The backend is fixing the absent/degraded split at its source; this
+     composes with that rather than competing, because a provider it marks
+     absent will simply stop appearing as unhealthy here.
+
+     Deliberately conservative: with no byProvider on the wire the old counting
+     stands, so a real degradation is never silently downgraded to calm. */
+  const byProvider = (sources && sources.byProvider) || null;
+  const broken = byProvider
+    ? Object.values(byProvider).filter((p) => p && p.healthy === false && p.lastHealthyAt).length
+    : (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
+  const degraded = broken > 0;
+  const healthy = sources && Number.isFinite(sources.healthy) ? sources.healthy : 0;
   return {
     degraded,
     message: degraded
@@ -6739,11 +6762,20 @@ function emptyBoardVerdict(snap) {
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
       : "Claude Code, Codex and Cursor sessions appear here on their own, within seconds of starting.",
-    sources: total > 0
-      ? (degraded
-        ? `${sources.degraded} of ${total} collectors degraded`
-        : `${sources.healthy} of ${total} collectors healthy`)
-      : null,
+    /* The denominator stays. I first replaced it with an absolute count, on the
+       theory that "3 of 4" reads as a shortfall to a newcomer — then read the
+       docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and
+       explains why it is right: the count is of collectors that can SEE, not of
+       tools installed, and a directory that does not exist is a COMPLETE answer
+       ("this tool never ran here") rather than a gap. The denominator is what
+       makes "all four are fine" legible; an absolute count would have hidden
+       the very reassurance the screen exists to give. Their reasoning is better
+       than mine was and the string is documented, so it stands. */
+    sources: degraded
+      ? `${broken} of ${total} collectors degraded`
+      : total > 0
+        ? `${healthy} of ${total} collectors healthy`
+        : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };
 }

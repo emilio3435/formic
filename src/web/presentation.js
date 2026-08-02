@@ -462,13 +462,27 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
      a state that previously could not exist, so this returned null and the
      caller read .title off it. */
   if (control === "unproven") {
+    const id = terminalIdentity(agent);
+    const focusTarget = id ? [id.title, id.paneCwd].filter(Boolean).join(" · ") : "";
     return {
       title: "Send is off for this row.",
       summary: controlUnavailableText(control),
       why: "It was matched by working directory alone, and a pane that changes directory into"
         + " another's folder matches just as well — which is how an instruction reaches the wrong agent.",
-      nextStep: "Focus still works, so open the pane and look. Nothing here needs repairing:"
-        + " Send returns on its own once cmux names the session.",
+      /* Focus NAMES its destination here, because on exactly these rows the
+         routing may be wrong. The adversarial verification found that a rotated
+         row keeps focus:true while its target has moved, so Focus can walk an
+         operator to a stranger's terminal. It stays enabled on purpose — it
+         types nothing, and going to look is how you recover when Send is off —
+         but "go and look" is only safe advice if the operator can tell, before
+         clicking, whether they arrived where they expected. The pane name was
+         already computed for a title attribute, which is to say it was visible
+         only on hover, which is to say it was not visible. */
+      nextStep: focusTarget
+        ? `Focus still works and will take you to ${focusTarget} — check that is the session you meant.`
+          + " Nothing here needs repairing: Send returns on its own once cmux names the session."
+        : "Focus still works, so open the pane and look. Nothing here needs repairing:"
+          + " Send returns on its own once cmux names the session.",
       cause,
       steps: view.steps,
     };
