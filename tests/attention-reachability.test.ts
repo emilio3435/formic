@@ -184,6 +184,27 @@ describe("a signal the server computes must survive to an operator", () => {
     expect(reachableRoutes(waitingAgent())).not.toEqual([]);
   });
 
+  test("reachability is caused by the signal, not merely coincident with it", () => {
+    /* The differential form, and the reason it exists: the plain reachability
+       assertion above survives both ways the wiring can be broken. Drop the
+       attentionSignal clause from wantsHuman and every live agent alerts — the
+       signal-carrying one included, so it still "reaches" a surface while the
+       field is being ignored entirely. Drop the ended-exclusion clause and it
+       reaches one too.
+
+       Both were caught by the sibling controls, but only by reading two tests
+       together. This one is self-sufficient: it holds the agent fixed and
+       varies ONLY the signal, so the routes must differ. Verified against the
+       landed implementation — dropping either clause fails this test on its
+       own. */
+    const withSignal = reachableRoutes(waitingAgent());
+    const withoutSignal = reachableRoutes(waitingAgent({ nextAction: undefined, attentionSignal: undefined }));
+
+    expect(withSignal).not.toEqual([]);
+    expect(withoutSignal).toEqual([]);
+    expect(withSignal).not.toEqual(withoutSignal);
+  });
+
   test("an identical agent WITHOUT a signal is legitimately unreachable", () => {
     /* The control that stops the contract from being satisfied by accident. If
        a future client marked every idle agent as needing attention, the test
