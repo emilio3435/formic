@@ -91,10 +91,11 @@ that measured a fixture rather than the producer.
 | — `getUsageWard` + `handleUsageRequest` | closed — `tests/usage-ward.test.ts`, **found a live defect** |
 | 2 `index.ts` | **skipped deliberately.** Loud on failure, and it cannot be imported — `Bun.serve` runs at module scope |
 | 6 `unavailableSessions()` | closed — `tests/collector-deadline.test.ts`, **found two live defects** |
+| — pulse buckets during an outage | closed — `tests/pulse-unmeasured.test.ts`, **found two live defects** |
 
 `burnbar.ts` went 93.67% → 97.53% funcs, 90.42% → 95.67% lines in the process.
 
-**Five of the seven worked entries yielded a defect rather than only coverage.**
+**Six of the eight worked entries yielded a defect rather than only coverage.**
 Entry 1's comment-stripping was covered only by accident, by a neighbouring
 guard; entry 3's chart disagreed with the headline by a third; entry 4 reported
 one unreadable directory as two faults; the ward capped its spike list at twelve
@@ -119,6 +120,15 @@ no sibling:
 - `unavailableSessions()` — the REASON four providers are unavailable. The
   presence of the fault was cross-checked and correct; the explanation beside it
   named a component that had not failed.
+- `pulse.ts` activity buckets — the only trend on the board. An outage and a
+  quiet five minutes drew the same trough, and a backfilled bucket nobody ever
+  observed drew measured calm.
+
+Worth naming the pattern the last two share, because it is narrower than "figure
+with no sibling": **a record that cannot express "unknown" will express "zero"
+instead.** `tokens` could say null and `activeSessions` could not, in the same
+bucket. The fix in both cases was to widen the type rather than to change a
+calculation.
 
 And the ward is the sharper case. A series is at least a view of a total the
 headline also states; a spike is a claim about a comparison that exists in one
@@ -129,7 +139,7 @@ confident all-clear, from a field named `coverage`.
 
 | # | Entry | Cross-checked by | Verdict |
 |---|---|---|---|
-| — | `pulse.ts` buckets during a collection outage | **nothing** | **The best remaining entry.** `PulseTracker.observe` runs on every snapshot including a timed-out one. It writes no false zero — the agent loop has nothing to iterate — but the buckets covering an outage under-report activity and carry no marker saying they were unmeasured. The pulse is a trend, nothing else on the board computes one, and "we could not measure" renders identically to "it went quiet". Found while closing entry 6; left as a decision rather than a silent change, since the fix has a rendering half the frontend lane owns |
+| — | *(none identified)* | — | Nothing currently on the list produces an uncross-checked figure. The next candidates are `cursor.ts`'s scattered guards and `burnbar.ts:571–578` `unavailableSource()`, which is a diagnosis rather than a figure |
 | — | `burnbar.ts:571–578` `unavailableSource()` | nothing | Classifies WHY the cost source is unreadable — "not installed" against a key or keychain problem. Not a figure but a diagnosis, and it is the first thing a fresh machine sees. A misclassification sends someone to install software they already have |
 | 5 | `identity.ts:577–584` | the write gate | Cross-checked by construction: an `identityConflict` empties `sourceSessionIds`, so `resolution` is not `exact`, so `canWriteToTarget` refuses. A misattribution cannot reach a write without also disabling the control |
 | 8 | `debug-identity.ts:160–184` | n/a | Produces no figure — a debug drawer transcript, read only by whoever opened it |
