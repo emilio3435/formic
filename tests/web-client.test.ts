@@ -1014,8 +1014,13 @@ describe("search", () => {
     expect(input).toBeDefined();
     const placeholder = input!.match(/placeholder="([^"]*)"/)?.[1] ?? "";
     const title = input!.match(/title="([^"]*)"/)?.[1] ?? "";
-    // Both surfaces name the same searchable fields; every advertised field is
-    // one matchesQuery actually indexes — no promise the search can't keep.
+    /* The AFFORDANCE advertises them, not the placeholder specifically. The
+       placeholder used to enumerate all seven and measured 389px inside a 333px
+       input once the drawer docked, so the list was unreadable exactly when the
+       box was smallest (audit §16). The enumeration moved to the title, which is
+       where a field list belongs; the property being guarded — every advertised
+       field is one matchesQuery actually indexes, no promise search cannot keep —
+       is unchanged and still checked below. */
     const program = { id: "p", name: "Prog" };
     const probes: Array<[string, string]> = [
       ["name", "ridge-scout"], ["model", "gpt-5.6-sol"], ["cwd", "/Users/emilio/Developer/deep-ridge"],
@@ -1025,11 +1030,14 @@ describe("search", () => {
       displayName: "ridge-scout", model: "gpt-5.6-sol", cwd: "/Users/emilio/Developer/deep-ridge",
       provider: "codex", role: "verifier", status: "running", sourceSessionId: "sess-ridge-9",
     });
+    const label = html.match(/<label class="visually-hidden" for="search">([^<]*)</)?.[1] ?? "";
+    const advertised = (title + " " + label).toLowerCase();
     for (const [field, sample] of probes) {
-      expect(placeholder.toLowerCase()).toContain(field);
-      expect(title.toLowerCase()).toContain(field);
+      expect(advertised, field).toContain(field);
       expect(M.matchesQuery(a, program, sample.toLowerCase())).toBe(true);
     }
+    // The placeholder still says what the box is for, and now what focuses it.
+    expect(placeholder.toLowerCase()).toContain("search agents");
   });
 });
 
@@ -4490,6 +4498,26 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §16 and §21: chrome that does not earn its space. The
+     placeholder measured 389px inside a 333px input once the drawer docked, so
+     the field list it enumerated was unreadable exactly when the box was
+     smallest; and the masthead spent a row of its resting state on a tagline. */
+  test("(16a) the search box states its purpose and keeps its field list reachable", () => {
+    const input = html.match(/<input id="search"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain("Search agents");
+    expect(input).not.toContain("Search name, model, cwd, provider, role, status, session id");
+    // The enumeration is not deleted, it moves to where it does not compete,
+    // and the new shortcut is discoverable from the control it acts on.
+    expect(input).toContain("session id");
+    expect(input).toContain("Press / to focus");
+  });
+
+  test("(21a) the masthead tagline stays for a screen reader and stops taking a row", () => {
+    const eyebrow = html.match(/<p class="eyebrow[^"]*">/)?.[0] ?? "";
+    expect(eyebrow).toContain("visually-hidden");
+    expect(html).toContain("Live multi-agent control room");
+  });
+
   /* Cockpit audit §19. Select rendered unconditionally, and on the resting board
      it offered multi-select over zero selectable rows. A control that cannot do
      anything is one the operator learns to skip — and it named itself rather than
