@@ -78,20 +78,49 @@ concluding nothing was collected.
 
 ## Expected on a monitoring-only install
 
-- **A `Blocked` health card.** It reads `cmux unreachable — terminal titles and
-  Focus/Send stay offline.` and offers one next step: `Start cmux, then Refresh
-  — Focus and Send come back on their own.` Correct behavior: without cmux, the
-  dashboard can't prove which terminal owns which session, so it refuses to type
-  into one. Focus and Send stay disabled by design. With cmux running and nothing
+- **An empty board** reading `Watching. No sessions running yet.`, with a line
+  beneath it counting **healthy** collectors — `4 of 4 collectors healthy` on a
+  machine that has just been set up. Nothing has run yet, and only sessions from
+  roughly the last day and a half are scanned. That count is the proof the board
+  is working: a stalled client cannot manufacture a ticking snapshot age. If a
+  collector really is degraded it says so there instead, because an empty board
+  with a blind collector is an *unknown* fleet rather than an empty one.
+- **A `Blocked` health card**, offering one next step: `Start cmux, then Refresh
+  — Focus and Send come back on their own.` Its detail line counts what it found
+  — on a machine with no cmux it typically reads `2 control-plane problems may
+  limit focus, instruction, or interrupt actions.`, one for terminal discovery
+  and one for notifications. The number is a count, so expect it to differ.
+  Correct behavior: without cmux the dashboard cannot prove which terminal owns
+  which session, so it refuses to type into one. With cmux running and nothing
   wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
-- **An empty board** reading `Watching. No sessions running yet.` with a line
-  beneath it counting healthy collectors — nothing has run yet, and only sessions
-  from roughly the last day and a half are scanned. That collector count is the
-  proof the board is working; if any collector is degraded it says so there
-  instead, because an empty board with a blind collector is an unknown one rather
-  than an empty one.
+
+### Why it still says 4 of 4 when you have none of them
+
+The count is of collectors that can **see**, not of tools you have installed.
+There are four, and they read what each tool already writes to disk:
+
+| Collector | Reads | You have it if |
+|---|---|---|
+| **Claude** | `~/.claude/projects/` | you use Claude Code |
+| **Codex** | `~/.codex/sessions/` | you use Codex CLI |
+| **Cursor** | Cursor's own session store | you use Cursor |
+| **OMP** | `~/.omp/agent/sessions/` | almost certainly not — it is a legacy source kept for old history |
+
+**Expect most of these to be absent, and expect all four to still read healthy.**
+A directory that does not exist is a complete answer — *this tool never ran
+here* — and no session can be hiding behind it. Most people will run one or two
+of these tools and never see anything but `4 of 4`. Watch for `degraded`
+instead, which means something *stopped* a collector reading — a permissions or
+I/O failure — and is the only case where sessions could exist that the board
+cannot show you.
+
+**cmux is not one of the four.** It does not collect sessions; it resolves which
+terminal a session is sitting in, which is what Focus and Send need. Not having
+it costs you those buttons and nothing else — it cannot hide a row, so it must
+never move the collector count. If you ever see a degraded collector *caused by*
+a missing cmux, that is a bug, not your setup.
 
 ## Optional: enable Focus and Send
 
