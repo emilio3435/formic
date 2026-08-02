@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /* A CONVENTION, because fixing instances only resets the clock.
@@ -114,6 +114,39 @@ describe("a number asserted against live data says where it came from", () => {
         `${file}: sets BURNBAR_DB_PATH, so it reads a fixture and does not belong in this register`,
       ).toBe(false);
     }
+  });
+
+  test("a new file reading live spend data cannot quietly escape this rule", () => {
+    /* THE REGISTER'S OWN HOLE, closed for the half that can be closed.
+
+       Every convention here is a register, and a register that does not notice
+       a new file silently stops covering it — the same "quietly excludes" fault
+       this suite guards against everywhere else. So the rule discovers its own
+       scope rather than trusting the list.
+
+       Reliable signal: a file calling the BurnBar API without setting
+       BURNBAR_DB_PATH is reading the user's real spend history, and that is
+       where drifting dollar figures come from. Unambiguous, and enforced.
+
+       NOT reliable, and therefore not enforced: whether a file talks to the
+       live board. Most of these tests shadow `fetch` with an in-process handler
+       from createMountainFetch, so `await fetch(...)` looks identical whether
+       it crosses the network or not. Twenty-three files match a naive scan and
+       three are genuinely live. Adding a board-reading file to the register is
+       a manual step, and this comment is the only thing that says so. */
+    const shouldBeRegistered = readdirSync(import.meta.dir)
+      .filter((name) => name.endsWith(".test.ts"))
+      .filter((name) => {
+        const source = readFileSync(join(import.meta.dir, name), "utf8");
+        return /getUsage(Summary|Invocations)\s*\(/.test(source) && !/BURNBAR_DB_PATH\s*=/.test(source);
+      });
+    const missing = shouldBeRegistered.filter((name) => !LIVE_DATA_FILES.includes(name as never));
+
+    expect(
+      missing,
+      "These read the real BurnBar database without a fixture override, so any number they assert "
+      + "will drift as the fleet burns. Add them to LIVE_DATA_FILES.",
+    ).toEqual([]);
   });
 
   test("the detector actually fires, so a green here is not the regex missing everything", () => {
