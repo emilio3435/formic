@@ -1599,6 +1599,20 @@ body.feed-frozen .programs { opacity: 0.62; }
 .swarm-anchor:hover { background: var(--sand); }
 .swarm-anchor-arrow { font-size: 13px !important; }
 
+/* All-clear is an ANSWER, not an absence, so it is typeset like one. A verdict
+   mark plus a headline at weight plus live vitals — the operator can tell at a
+   glance that the board is loaded and clear rather than blank and loading,
+   which is the one thing an empty cockpit must never leave ambiguous. */
+.no-match.is-all-clear { color: var(--ink); padding-top: 3.5rem; }
+.all-clear-mark { margin: 0 0 0.5rem; color: var(--moss); }
+.all-clear-mark .ico { width: 2rem; height: 2rem; }
+.all-clear-head { margin: 0; font-size: 1.15rem; font-weight: 640; letter-spacing: -0.01em; color: var(--ink); }
+.all-clear-vitals {
+  margin: 0.4rem 0 1rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
 .no-match { padding: 1.6rem 1rem; text-align: center; color: var(--faint); font-size: 13.5px; }
 .no-match .btn { margin-top: 0.7rem; }
 
