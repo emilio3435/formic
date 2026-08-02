@@ -80,7 +80,9 @@ Two different reads of the same message, deliberately. A row preview keeps the *
 
 ## Verification
 
-`bun run check` runs strict TypeScript plus the collector, identity, routing, notification, archive, snapshot/SSE, control, lifecycle, web-client, and HTTP-boundary tests.
+`bun run check` runs strict TypeScript, then the whole suite — every `tests/*.test.ts`, currently ~50 files. It is the same gate `scripts/anthill-deploy.sh` runs, and a red result there stops the deploy.
+
+The suite is deliberately not only unit tests. It also pins the shell scripts (`tests/anthill-deploy.test.ts`, `tests/anthill-scripts.test.ts`) and the reference docs against the code they describe (`tests/reference-docs.test.ts`, `tests/ant-guide.test.ts`), so a renamed label or a changed guard fails here rather than waiting for someone to re-read a paragraph. Run one file with `bun test ./tests/<name>.test.ts`.
 
 The exact 2026-07-22 commands, point-in-time results, browser checks, disposable cmux control proof, and review verdicts are preserved in [VERIFICATION-2026-07-22.md](./docs/history/VERIFICATION-2026-07-22.md). It is a
 point-in-time record, not the current verification standard — the live gate is `bun run check`.

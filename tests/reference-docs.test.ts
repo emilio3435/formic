@@ -611,3 +611,38 @@ describe("package.json scripts and config/ are documented as they execute", () =
     expect(quickstart).toContain("config/programs.example.json");
   });
 });
+
+describe("README describes the test suite as it is now", () => {
+  /* The old sentence enumerated ten areas — "collector, identity, routing,
+     notification, archive, snapshot/SSE, control, lifecycle, web-client, and
+     HTTP-boundary". The suite is past fifty files and covers the attention
+     layer, cost, triage, pulse, publish, cursor admission and the shell scripts
+     besides. An exhaustive list is the wrong shape for a growing suite: it rots
+     by construction and nothing notices. What is pinned here instead is the
+     part that must stay true. */
+
+  test("the four non-unit pins it names are real files", () => {
+    for (const named of [...readme.matchAll(/`(tests\/[\w.-]+\.test\.ts)`/g)].map((m) => m[1])) {
+      expect(() => read(named), `README.md names ${named}, which does not exist`).not.toThrow();
+    }
+    // Guard: the regex still finds them, so an empty set cannot pass silently.
+    expect(readme).toContain("tests/reference-docs.test.ts");
+  });
+
+  test("the gate it describes is the gate that runs", () => {
+    expect(JSON.parse(pkg).scripts.check).toBe("bun run typecheck && bun test");
+    const deployScript = read("scripts/anthill-deploy.sh");
+    expect(deployScript).toContain("bunx tsc --noEmit");
+    expect(deployScript).toContain("bun test");
+    expect(readme).toContain("the same gate `scripts/anthill-deploy.sh` runs");
+  });
+
+  test("the suite size it quotes is still roughly right", () => {
+    /* Deliberately an order of magnitude, not a count. A doc that pins an exact
+       number is wrong on the next commit, which teaches readers to ignore it. */
+    const count = readdirSync(join(ROOT, "tests")).filter((n) => n.endsWith(".test.ts")).length;
+    expect(count).toBeGreaterThan(30);
+    expect(count).toBeLessThan(100);
+    expect(readme, "README's ~50 no longer matches the suite's order of magnitude").toContain("~50 files");
+  });
+});
