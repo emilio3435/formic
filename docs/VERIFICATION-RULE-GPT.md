@@ -53,6 +53,9 @@ P5  Layer out     — what encloses what I read?  (the enclosing _______________
                     describe / function / the next line)
 P6  Magnitude     — what must be true for this value to be     ______________________
                     correct, and does that story hold?
+P7  Raw evidence  — paste the RAW line the claim rests on,     ______________________
+                    unformatted and undefaulted. No ??, no
+                    ||, no .slice, no rounding, no summary.
 
 A1  ABSENCE GATE — mandatory if the finding is "X is missing / null / zero / never happens":
     Over what population is X *defined*?                       ______________________
@@ -71,6 +74,31 @@ is universally absent". Absence is the easiest thing to be wrong about, because 
 thing and *the thing not existing* produce identical evidence. The third line of A1 is the one that
 would have saved the `nextAction` claim in a single lookup: `b9dc19b` deliberately stopped the
 detector emitting on ended agents, so the absence I measured was a fix working.
+
+**P7 exists because P1–P6 and A1 all share an assumption: that what I am looking at *is* the
+data.** Every other line asks whether I reasoned correctly *about* the evidence. P7 asks the prior
+question. Three of eight phantoms failed it — a `?? 0` applied to an error body, a `.slice(11,19)`
+that compared clock times across different dates, and a grep for a field name I had invented.
+
+## What this form does NOT catch — its own known blind spot
+
+*A view that cannot show everything must say what it cannot see. That standard was imposed on the
+product all day; it applies here.*
+
+**Measured, not asserted: back-tested against 8 known phantoms, the form as first written caught
+6.** The two it missed are recorded here rather than in commentary, because a tool that implies
+completeness is the same defect as a total that hides its truncation.
+
+| Blind spot | Example it let through | Mitigation |
+|---|---|---|
+| **The instrument between me and the data.** Every line can be filled correctly while the finding is false, if my *measurement* is what lied. | *"Over-long ranges silently return $0.00"* — my script defaulted an error body through `?? 0`. P2 was satisfied by naming the script; P3 was satisfied because a real non-zero cost genuinely differs from what I saw. | **P7**, added after the fact |
+| **Fitting to known data.** P7 was derived by looking at the two cases it now catches, so its 8-of-8 score is circular. | — | P7 earns credit only when it catches a phantom **not yet seen**. Until then treat the form's demonstrated rate as **6 of 8** |
+| **Concentration.** Of the 6 caught, 3 fell to P4, which predates them. Demonstrated value sits in **P3, P5, A1** — three lines, four phantoms. | — | Do not read 6/8 as evidence that every line pulls weight |
+
+**Still unknown:** whether the form catches anything on data it was not written against. Every
+number above is retrospective. **The first prospective catch is the only one that will mean
+anything**, and this section should be updated with it — or with the first phantom that gets
+through despite a completed form, which would be worth more.
 
 The six checks below remain the reasoning behind the form. The form is what gets filled in.
 
