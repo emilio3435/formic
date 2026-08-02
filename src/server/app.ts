@@ -218,6 +218,27 @@ function isLoopback(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
 }
 
+/* Retention as observed rather than as configured. `oldestDays` is the age of
+   the oldest record we still hold, which is the only number that answers "is
+   the promise being kept" — a policy of 30 days delivering 11 is a different
+   fact from one delivering 30, and until now neither was visible. */
+function deliveredRetention(
+  agents: readonly { archivedAt?: string }[],
+  nowMs: number,
+): { measured: number; unmeasurable: number; oldestDays: number | null } {
+  const ages = agents
+    .map((agent) => (agent.archivedAt ? nowMs - Date.parse(agent.archivedAt) : Number.NaN))
+    .filter((age) => Number.isFinite(age) && age >= 0);
+  return {
+    measured: ages.length,
+    // Written before archivedAt existed. Counted, not guessed at.
+    unmeasurable: agents.length - ages.length,
+    oldestDays: ages.length === 0
+      ? null
+      : Math.round((Math.max(...ages) / (24 * 60 * 60 * 1_000)) * 10) / 10,
+  };
+}
+
 function compactSnapshotFingerprint(snapshot: HubSnapshot): string {
   return createHash("sha256").update(snapshotFingerprint(snapshot)).digest("base64url");
 }
@@ -594,7 +615,21 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         {
           schemaVersion: 1,
           exportedAt,
+          /* The POLICY. It was published alone, which made it a claim nobody
+             could check: the window was measured from each agent's last
+             activity rather than from when we archived it, so a session quiet
+             for 31 days was pruned on the very next commit while the operator
+             was told ok: true. A constant printed beside data it does not
+             describe is the same defect as a figure with no coverage. */
           retentionDays: ARCHIVE_RETENTION_MS / (24 * 60 * 60 * 1_000),
+          /* What was actually DELIVERED, measured from the records themselves.
+             Absent-first: records written before archivedAt existed cannot be
+             measured, and are counted rather than guessed at, so a reader can
+             tell "we kept 30 days" from "we cannot yet say". */
+          deliveredRetention: deliveredRetention(
+            dependencies.archiveStore.archivedAgents?.() ?? [],
+            Date.parse(exportedAt),
+          ),
           maxRecords: MAX_ARCHIVE_RECORDS,
           agents: dependencies.archiveStore.archivedAgents?.() ?? [],
         },

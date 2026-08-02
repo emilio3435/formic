@@ -39,6 +39,12 @@ export interface CollectedAgent {
      front window, so a question asked after an explanation never survived it. */
   lastAgentClosing?: string | null;
   transcriptTail?: string;
+  /* When the archive took custody of this record — set by the archive store,
+     absent on a live agent. Retention runs from here, not from `updatedAt`:
+     archiving a session that went quiet a month ago is still an archive made
+     today, and measuring from the agent's last activity pruned it on the very
+     next commit while reporting success. */
+  archivedAt?: string;
   /* Time the agent was actually working: the sum of gaps between consecutive
      recorded turns, counting only gaps short enough to be one stretch. Bounded
      by construction — it can never exceed updatedAt − startedAt, and on a
