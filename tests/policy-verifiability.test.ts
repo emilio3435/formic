@@ -18,28 +18,33 @@ import type { CollectedAgent } from "../src/server/types";
      A figure the product publishes as a policy must be measured from a
      timestamp the system records for the event that policy names.
 
-   Two ways to break it, and archive retention breaks both:
+   Two ways to break it, and archive retention broke both:
 
-     UNRECORDED — the event leaves no trace, so delivered behaviour cannot be
-     measured even after the fact. 545 archive records carry no archiving
-     timestamp; `archivedAt` is not in the union of keys across any of them.
+     UNRECORDED — the event left no trace, so delivered behaviour could not be
+     measured even after the fact. 545 archive records carried no archiving
+     timestamp; `archivedAt` was not in the union of keys across any of them.
 
-     WRONG CLOCK — the window is measured from a different event, so delivered
-     behaviour silently differs from published behaviour. Archive retention is
-     measured from `agent.updatedAt`, the agent's last activity, so the 30 days
-     runs from when the agent last spoke rather than from when it was archived.
+     WRONG CLOCK — the window was measured from `agent.updatedAt`, the agent's
+     last activity, so the 30 days ran from when the agent last spoke rather
+     than from when it was archived.
 
-   The second is the consequence of the first: with no archiving timestamp
-   available, the nearest timestamp on the record was used. And the first is
-   what makes the second invisible — nobody can audit a window whose starting
-   point was never written down.
+   The second was the consequence of the first — with no archiving timestamp to
+   read, the nearest timestamp on the record was used — and the first is what
+   made the second invisible. Nobody can audit a window whose starting point was
+   never written down.
 
-   The measured cost: an agent last active 29 days ago and archived today is
+   The measured cost: an agent last active 29 days ago and archived today was
    gone within one day. Published retention 30 days, delivered retention 1.
 
-   The archive tests are marked failing. They run every commit and report
-   "marked as failing but it passed" the moment an archiving timestamp is
-   recorded and retention measures from it. */
+   Both are now closed: `archivedAt` is persisted and `isFresh` measures from
+   it. These tests were written against the broken behaviour and marked failing;
+   the fix landed mid-run and they were flipped. They are the guard now.
+
+   THE RESIDUAL, which no fix can reach: records archived before the fix have no
+   archiving moment and never will. `isFresh` falls back to `updatedAt` for
+   them, which is the right call and is pinned below, but their delivered
+   retention stays unmeasurable permanently. An unrecorded input is unauditable
+   forever, not just until someone gets round to it. */
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const T0 = Date.parse("2026-08-02T12:00:00.000Z");
@@ -54,6 +59,19 @@ function archiveFile(): ArchiveFileOperations & { contents: () => string } {
     makeDirectory: async () => {},
     writeText: async (_path: string, contents: string) => { stored = contents; },
     rename: async () => {},
+    contents: () => stored,
+  };
+}
+
+/** An archive file that already holds records, for reading back what a previous
+    version of the code wrote. */
+function legacyFile(initial: string): ArchiveFileOperations & { contents: () => string } {
+  const files = archiveFile();
+  let stored = initial;
+  return {
+    ...files,
+    readText: async () => stored,
+    writeText: async (_path: string, contents: string) => { stored = contents; },
     contents: () => stored,
   };
 }
@@ -189,6 +207,32 @@ describe("archive retention: a policy published in days, measured from the wrong
     // Custody began once. Touching the record again does not renew it.
     expect(second!.archivedAt).toBe(first!.archivedAt as string);
   });
+
+  test("records archived before the fix fall back to activity, and stay unmeasurable", async () => {
+    /* The residual, pinned so it is a known limit rather than a surprise.
+
+       545 records predate the fix and carry no archiving moment. It cannot be
+       reconstructed — nothing ever wrote it down — so isFresh falls back to
+       updatedAt for them. That is the right call: treating them as archived at
+       load time would make every legacy record immortal for another 30 days on
+       every restart, which is the opposite unverifiable claim.
+
+       What it means is that for those records delivered retention still cannot
+       be measured, and never can be. This test exists so the limit lives in the
+       suite rather than only in a commit message. */
+    const legacy = JSON.stringify([{ ...agentLastActive(29), archiveKind: "operator" }]);
+    const [legacyRecord] = JSON.parse(legacy) as Array<Record<string, unknown>>;
+
+    const atLoad = await JsonArchiveStore.open("/archive.json", archiveFile(), () => T0);
+    const stillThere = await JsonArchiveStore.open("/archive.json", legacyFile(legacy), () => T0);
+    const goneTwoDaysOn = await JsonArchiveStore.open("/archive.json", legacyFile(legacy), () => T0 + 2 * DAY_MS);
+
+    expect(legacyRecord!.archivedAt).toBeUndefined();
+    expect(atLoad.has("codex:alpha")).toBe(false);
+    // The old clock, still running: alive at 29 days of activity, gone at 31.
+    expect(stillThere.has("codex:alpha")).toBe(true);
+    expect(goneTwoDaysOn.has("codex:alpha")).toBe(false);
+  });
 });
 
 describe("the policies that do record the event they name", () => {
@@ -210,31 +254,43 @@ describe("the policies that do record the event they name", () => {
       title: "Agent needs you",
     }]));
 
-    const store = new MemoryAttentionStore(() => T0);
-    store.observe(oldNotification);
+    const other = parseCmuxNotifications(JSON.stringify([{
+      id: "n2",
+      surface_id: "SURF-B",
+      workspace_id: "W",
+      created_at: new Date(T0).toISOString(),
+      title: "Another agent needs you",
+    }]));
 
-    return store.apply("SURF-A", "acknowledge").then((record) => {
+    let nowMs = T0;
+    const store = new MemoryAttentionStore(() => nowMs);
+    store.observe([...oldNotification, ...other]);
+
+    return store.apply("SURF-A", "acknowledge").then(async (record) => {
       // The record dates itself to the act, not to what the act was about.
       expect(Date.parse(record.updatedAt)).toBe(T0);
-      expect(Date.parse(record.updatedAt)).toBeGreaterThan(T0 - ATTENTION_RETENTION_MS);
-      // And it survives its own retention window because of that.
-      expect(new MemoryAttentionStore(() => T0 + 6 * DAY_MS).filter(oldNotification)).toHaveLength(1);
+      expect(store.filter(oldNotification)).toHaveLength(0);
+
+      /* Six days on, still inside its own window. Retention is applied by
+         commit(), so a later write is what exercises the pruning — an earlier
+         version asserted against a FRESH store that had never acknowledged
+         anything, which returns the notification whatever retention does and
+         so asserted nothing at all. */
+      nowMs = T0 + 6 * DAY_MS;
+      await store.apply("SURF-B", "acknowledge");
+      expect(store.get("SURF-A")).toBeDefined();
+      expect(store.filter(oldNotification)).toHaveLength(0);
+
+      /* Eight days on, past its own window: pruned, and the notification comes
+         back. Measured from the acknowledgement at T0 — measured instead from a
+         notification created 300 days earlier, the record would have been
+         outside its window before it was ever written. */
+      nowMs = T0 + 8 * DAY_MS;
+      await store.apply("SURF-B", "acknowledge");
+      expect(store.get("SURF-A")).toBeUndefined();
+      expect(store.filter(oldNotification)).toHaveLength(1);
+      expect(ATTENTION_RETENTION_MS).toBe(7 * DAY_MS);
     });
-  });
-
-  test("a policy whose clock is the record's own act keeps its published window", () => {
-    /* Stated as the general shape rather than as a fact about attention, so
-       the next store added to this codebase has something to conform to.
-
-       An acknowledgement written today is honoured for seven days from today.
-       The same record measured from the notification's creation date would
-       have expired 293 days before it was written — which is the archive's
-       arithmetic, transplanted. */
-    const writtenAt = T0;
-    const eventItRefersTo = T0 - 300 * DAY_MS;
-
-    expect(writtenAt + ATTENTION_RETENTION_MS).toBeGreaterThan(T0);
-    expect(eventItRefersTo + ATTENTION_RETENTION_MS).toBeLessThan(T0);
   });
 });
 
