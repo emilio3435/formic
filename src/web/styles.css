@@ -65,6 +65,23 @@
 }
 
 * { box-sizing: border-box; }
+
+/* The `hidden` attribute means hidden, and no author rule gets a vote.
+
+   The UA stylesheet's `[hidden] { display: none }` loses to ANY author rule that
+   sets display, because author beats user-agent regardless of specificity. So
+   `.btn { display: inline-flex }` silently defeated `hidden` on every button —
+   measured, `#select-toggle` with the attribute set still occupied 120x38px and
+   read "Select to send", and `#empty-retry` still rendered a "Retry connection"
+   button, which invites a click that reports a fault on a board that has none.
+
+   This is why five per-element `[hidden] { display: none }` rules already exist
+   in this file: the same bug, patched five times at the call site. One rule at
+   the top prevents the sixth. `!important` is load-bearing here rather than
+   lazy — a later `.thing { display: flex }` must not be able to un-hide an
+   element the client has hidden. Those five are now redundant; they are left
+   alone because they are not this change's to remove. */
+[hidden] { display: none !important; }
 html { height: 100%; }
 
 body {

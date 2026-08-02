@@ -4493,6 +4493,45 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(first.textContent).toContain("12k");
   });
 
+  /* Routed from the docs lane: `.select-toggle[hidden]` did not hide.
+
+     The UA rule `[hidden] { display: none }` loses to any AUTHOR rule that sets
+     display — author origin beats user-agent regardless of specificity — so
+     `.btn { display: inline-flex }` defeated the attribute on every button.
+     Measured on the board before the fix: #select-toggle with hidden set still
+     occupied 120x38px reading "Select to send", and #empty-retry still offered
+     "Retry connection" on a board with no fault to retry.
+
+     This asserts the GLOBAL guard, not the one selector, because the bug is a
+     class: the stylesheet already carried five per-element `[hidden]` patches,
+     which is the same defect fixed five times at the call site. A test pinned to
+     `.select-toggle` would pass while the sixth button shipped broken. */
+  test("the hidden attribute cannot be overridden by an author display rule", () => {
+    const bare = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // The guard exists, is unqualified, and outranks author rules by origin.
+    expect(bare).toMatch(/(^|\n)\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+
+    /* The condition that made it necessary: something still sets display on
+       .btn. If that ever stops being true the guard is merely harmless, but
+       while it holds, the guard is the only thing hiding a hidden button. */
+    expect(bare).toMatch(/\.btn\s*\{[^}]*display:\s*inline-flex/);
+
+    /* And no rule may re-show a hidden element. Every display declaration in
+       every [hidden] rule has to be none — checked by reading the values rather
+       than by a negative lookahead, which silently passed everything here on the
+       first attempt because `\s*` backtracks to zero width. */
+    const hiddenRuleDisplays = [...bare.matchAll(/\[hidden[^\]]*\][^{}]*\{([^}]*)\}/g)]
+      .flatMap((m) => [...m[1].matchAll(/display:\s*([a-z-]+)/g)].map((d) => d[1]));
+    expect(hiddenRuleDisplays.length).toBeGreaterThan(0);
+    expect([...new Set(hiddenRuleDisplays)]).toEqual(["none"]);
+
+    /* `until-found` would be a legitimate exception to the !important guard;
+       the client does not use it, and if it ever does, this is where that
+       decision gets made rather than discovered. */
+    expect(html).not.toContain("until-found");
+  });
+
   /* -------- finding 8: ~40 orphaned CSS classes still shipped --------------
      There is no build step and no CSS pruning, so every dead rule shipped on
      every load — and, more expensively, poisoned grep: a developer editing
