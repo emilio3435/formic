@@ -539,23 +539,29 @@ describe("summary status and widgets", () => {
 
     /* The refusal has to carry all three, or it reads as a fault: what is off,
        why, and what turns it back on. */
-    const text = M.controlUnavailableText("unproven");
-    expect(text).toMatch(/working directory/i);              // the cause
-    expect(text).toMatch(/different agent/i);                // the risk
-    expect(text).toMatch(/as soon as cmux attests/i);        // the way back
-    expect(text).toMatch(/switched off/i);                   // off, not broken
-    expect(text).toMatch(/Focus still works/i);              // what still works
+    /* The three facts must all be present, but they are split across the brief's
+       three fields rather than repeated in each — measured at real drawer width,
+       saying all three in every field ran to three paragraphs that restated one
+       another, and a long refusal gets skipped. */
+    const b = M.quarantineBrief(guessed, "unproven");
+    expect(M.controlUnavailableText("unproven")).toMatch(/are off/i);          // off, not broken
+    expect(M.controlUnavailableText("unproven")).toMatch(/cannot confirm/i);   // the cause
+    expect(b.why).toMatch(/wrong agent/i);                                     // the risk
+    expect(b.nextStep).toMatch(/Focus still works/i);                          // what still works
+    expect(b.nextStep).toMatch(/once cmux names the session/i);                // the way back
+
+    /* And no field may repeat another's job — that is what made it long. */
+    expect(M.controlUnavailableText("unproven")).not.toMatch(/Focus/);
+    expect(b.why).not.toMatch(/Focus/);
 
     /* Without a brief the banner throws: it renders whenever a write control is
        disabled, and this is a routable pane with Send off — a combination that
        could not previously exist, so quarantineBrief returned null and the
        caller read .title off it. */
-    const brief = M.quarantineBrief(guessed, "unproven");
-    expect(brief).not.toBeNull();
-    expect(brief.title).toMatch(/off/i);
-    expect(brief.nextStep).toMatch(/Focus/);
+    expect(b).not.toBeNull();
+    expect(b.title).toMatch(/off/i);
     // Nothing to repair — saying so is what stops the retry.
-    expect(brief.nextStep).toMatch(/nothing to repair/i);
+    expect(b.nextStep).toMatch(/needs repairing/i);
 
     /* The row's accessible name must not tell a screen-reader operator the row
        is Ready when it accepts no input. */

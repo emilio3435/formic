@@ -211,9 +211,14 @@ export function controlUnavailableText(controlState) {
      fault: what is off, why, and what turns it back on. Send is OFF here, not
      broken, and saying so is what stops the retry. */
   if (controlState === "unproven") {
-    return "Send and Interrupt are switched off — this pane was matched by its working directory,"
-      + " not attested by cmux, so the session on it cannot be proven and typing here could reach a"
-      + " different agent. Focus still works, and both return as soon as cmux attests the session.";
+    /* One sentence. Rendered at real drawer width it ran three paragraphs that
+       each said the same thing — the summary named the cause, the risk and the
+       recovery, then `why` restated the cause and the risk, then `nextStep`
+       restated the recovery. Repeating information under different labels is
+       the noise this board exists to cut, and a long refusal is likelier to be
+       skipped than a short one. The summary now states the refusal, `why` owns
+       the mechanism, and `nextStep` owns the action. */
+    return "Send and Interrupt are off: cmux cannot confirm which session is on this pane.";
   }
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
@@ -460,11 +465,10 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
     return {
       title: "Send is off for this row.",
       summary: controlUnavailableText(control),
-      why: "cmux reports no session on this pane, so the board matched it by working directory alone."
-        + " A pane that changes directory into another's folder matches just as well, which is how an"
-        + " instruction reaches the wrong agent.",
-      nextStep: "Open the pane with Focus and check which session is on it."
-        + " Send returns by itself once cmux attests the session — there is nothing to repair here.",
+      why: "It was matched by working directory alone, and a pane that changes directory into"
+        + " another's folder matches just as well — which is how an instruction reaches the wrong agent.",
+      nextStep: "Focus still works, so open the pane and look. Nothing here needs repairing:"
+        + " Send returns on its own once cmux names the session.",
       cause,
       steps: view.steps,
     };
