@@ -1631,6 +1631,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .all-clear-mark { margin: 0 0 0.5rem; color: var(--moss); }
 .all-clear-mark .ico { width: 2rem; height: 2rem; }
 .all-clear-head { margin: 0; font-size: 1.15rem; font-weight: 640; letter-spacing: -0.01em; color: var(--ink); }
+.all-clear-quiet { color: var(--amber); font-weight: 650; }
 .all-clear-vitals {
   margin: 0.4rem 0 1rem;
   font-family: var(--font-mono);

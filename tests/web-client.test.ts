@@ -4490,6 +4490,18 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Resting-state critique §2.1. The resting copy asserted "every tracked
+     session is working or done" while 12 of 18 live agents were stalled — a
+     stalled session is the third state that sentence denies exists. The claim is
+     gone; the count that replaces it must actually surface. */
+  test("(2.1) the resting state names its stalled sessions instead of denying them", () => {
+    expect(M.stalledCount(snapshot({ pulse: { momentum: { stalled: 12 } } }))).toBe(12);
+    expect(M.stalledCount(snapshot())).toBe(0);
+    expect(M.stalledCount(null)).toBe(0);
+    // And the old false claim is not in the client anywhere.
+    expect(source).not.toContain("Every tracked session is working or done");
+  });
+
   /* Resting-state critique §3, and §2.3 with it. The calm/alarmed response was a
      boolean: driving pulseStripModel up an escalation ladder, a board where ALL
      live agents were stalled rendered pixel-identical to a perfectly healthy one,

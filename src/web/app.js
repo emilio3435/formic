@@ -919,7 +919,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -2576,12 +2576,17 @@ const CONTEXT_BAND_ALARM_PCT = 85;
    remedy. Stall in particular is NOT promoted to an alarm on purpose: on this
    fleet many quiet sessions are waiting by design, so the honest treatment is to
    say the number and let the operator judge it. */
+/* Sessions the tracker has watched go 15 minutes without moving. Neither working
+   nor done, and computed by pulse.ts long before anything rendered it. */
+function stalledCount(snap) {
+  const momentum = snap && snap.pulse && snap.pulse.momentum;
+  return momentum && momentum.stalled > 0 ? momentum.stalled : 0;
+}
+
 function watchClauses(snap) {
   const clauses = [];
-  const momentum = snap && snap.pulse && snap.pulse.momentum;
-  if (momentum && momentum.stalled > 0) {
-    clauses.push(`${momentum.stalled} quiet 15m+`);
-  }
+  const stalled = stalledCount(snap);
+  if (stalled) clauses.push(`${stalled} quiet 15m+`);
   /* Context peak is an EARLY warning, which means the range that matters is
      below the alarm — above 85% it is no longer early, and the stressed grid
      gives it a cell of its own, so the murmur stands down rather than saying the
@@ -3260,6 +3265,15 @@ function renderPrograms() {
         el("p", { class: "all-clear-head", text: emptyByView["needs-you"] }),
         el("p", { class: "all-clear-vitals" },
           el("span", { text: `${t.live} live · ${t.working} working · ${t.idle} idle` }),
+          /* A stalled session is neither working nor done — it is the third
+             state, and pulse.ts computes it while nothing rendered it. The
+             earlier copy here went further and asserted "every tracked session is
+             working or done", which was flatly false on two thirds of the live
+             fleet. The claim is gone; this is the number that replaces it. */
+          ...(stalledCount(state.snap) ? [
+            el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
+            el("span", { class: "all-clear-quiet", text: `${stalledCount(state.snap)} quiet 15m+` }),
+          ] : []),
           el("span", { class: "all-clear-sep", "aria-hidden": "true", text: " · " }),
           el("span", {
             dataset: { ago: state.snap.generatedAt },
