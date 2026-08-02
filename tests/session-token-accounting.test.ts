@@ -128,7 +128,17 @@ describe("every provider reports sessionTotal in the same unit", () => {
   test("omp excludes cacheRead, whose parts are disjoint from input", () => {
     const omp = parseOmpJsonl([
       JSON.stringify({ type: "session", id: "omp-1", cwd: "/tmp/omp", timestamp: "2026-08-02T10:00:00.000Z" }),
-      ...Array.from({ length: 5 }, () => JSON.stringify({
+      /* FOUR identical turns and a FIFTH that differs, deliberately.
+
+         This was five identical turns, and that made the file unable to test
+         the thing tokens.total means. `total` is LATEST-TURN, but with uniform
+         turns "latest", "first" and "max" all return the same number, so a
+         parser keeping the first turn or the running maximum passed. Verified
+         by mutation: both survived.
+
+         The last turn is smaller than the others, so latest is distinguishable
+         from max as well as from first. */
+      ...Array.from({ length: 4 }, () => JSON.stringify({
         type: "message",
         timestamp: "2026-08-02T10:05:00.000Z",
         message: {
@@ -140,11 +150,23 @@ describe("every provider reports sessionTotal in the same unit", () => {
           usage: { input: 570, output: 385, cacheRead: 74_711, cacheWrite: 487, totalTokens: 76_153 },
         },
       })),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-08-02T10:06:00.000Z",
+        message: {
+          role: "assistant",
+          model: "gpt-5",
+          content: "ack",
+          // A short final call: 100+50+900+20 = 1070, well under the others.
+          usage: { input: 100, output: 50, cacheRead: 900, cacheWrite: 20, totalTokens: 1_070 },
+        },
+      }),
     ].join("\n"));
 
-    expect(omp?.tokens.total).toBe(76_153);
-    expect(omp?.tokens.sessionTotal).toBe(5 * (570 + 385 + 487));
-    expect(omp?.tokens.sessionCachedInput).toBe(5 * 74_711);
+    // LATEST turn, not the first (76_153) and not the largest (76_153).
+    expect(omp?.tokens.total).toBe(1_070);
+    expect(omp?.tokens.sessionTotal).toBe(4 * (570 + 385 + 487) + (100 + 50 + 20));
+    expect(omp?.tokens.sessionCachedInput).toBe(4 * 74_711 + 900);
   });
 
   test("codex subtracts cached_input_tokens, which its input_tokens contains", () => {
