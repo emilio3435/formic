@@ -53,7 +53,7 @@ Every row is **one AI session**. Left to right:
 |---|---|
 | Name | Who it is, and the folder it is working in |
 | Message | The last thing it said |
-| Status | `Working`, `Idle`, `Ended` — and if something is wrong, `Alert`, `Blocked` or `Failed` beside it |
+| Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Working`, `Idle` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Idle` on a mixed tab, or `Alert`, `Blocked`, `Failed`. Hover for the full state. |
 | Model · ctx | Which model, and how full its context window is |
 | Tokens | How much it has used |
 | Elapsed | How long since it last moved |
@@ -114,7 +114,10 @@ can widen from the filter bar.
 
 On a clear board these collapse into a single line and only the shipping,
 finished-this-hour, burn and `All clear` figures survive. They expand into cards
-when something needs you:
+when something needs you — and **each cell renders only if it has something to
+report.** A band that always renders cannot signal by rendering, so a card with
+no data is absent rather than showing you an empty one. Health also stays quiet
+when `Needs you` has already told you the same thing.
 
 | Card | What it tells you |
 |---|---|
@@ -214,12 +217,20 @@ it also names the next step.** Only a clear board is allowed to say nothing.
 |---|---|---|
 | **All clear** | Nothing is wrong. | Nothing. This is the resting state. |
 | **Blocked** | The control plane is unreachable. **Focus and Send do not work.** | `Start cmux, then Refresh` — waiting will not fix it. Usually cmux is not running or not set up. |
-| **Stale** | The numbers may no longer be true — the live feed or last refresh failed. | `Refresh to re-pull the evidence`, on the card. |
+| **Stale** | The numbers may no longer be true — the live feed or last refresh failed. | `Refresh to re-pull the evidence`. The button on the card is **Retry snapshot**. |
 | **Advisory** | Something needs doing, but the board is fully usable. | Whatever the card says. Often tidying, and it will tell you which panes. |
 
 A clear board can still offer a **tidy-up**: leftover cmux panes whose sessions
 have all ended. That is an offer, not a fault — it never turns the board red,
-and `Show panes` lists exactly which ones.
+and the **Show N panes** button lists exactly which ones, by pane title and how
+long each has been quiet.
+
+**A button only appears when pressing it could change the answer.** If the
+control plane is down you get **Verify repair** (re-probe cmux after starting
+it); if the feed or last refresh failed you get **Retry snapshot**. When the
+card already names an action no re-pull can perform — closing a pane, say —
+there is no button, because the only one available would be the one that cannot
+help.
 
 **By far the most common is a cmux-related `Blocking` on a machine where cmux was
 never set up.** That is expected, not a fault — the Ant Hill deliberately refuses
