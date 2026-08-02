@@ -41,9 +41,41 @@ one carries the argument**:
    would have accepted any value within an order of magnitude, you have not
    checked it.**
 
+6. **Identity of the instrument.** Before measuring a running system, prove it
+   is running the code you think it is. A server holds what it loaded at boot;
+   a browser holds what it was served. Both outlive the commit you are testing.
+
 Check 5 is separate on purpose. The first four are about provenance — did you
 open the artifact. A number can be measured by you, quoted correctly, and still
 be meaningless.
+
+**Check 6 is the cheapest of the six and the one most often skipped**, because
+the instrument is invisible while it works. It nearly cost a working fix a false
+"broken" report this afternoon: the server predated the commit under test, so
+the measurement was accurate about a build nobody was shipping. It is three
+commands.
+
+```bash
+# 1. What branch does the worktree serve, and at what commit?
+git -C ~/Developer/the-mountain-main branch --show-current
+git -C ~/Developer/the-mountain-main rev-parse --short HEAD
+
+# 2. Did the server boot before or after the commit under test?
+ps -o lstart= -p "$(lsof -ti tcp:4701 | head -1)"
+git log -1 --format='%ad' --date=format:'%H:%M' <sha-under-test>
+
+# 3. THE ONE THAT ACTUALLY SETTLES IT — is the client the browser receives the
+#    client on disk? A stale server can still serve fresh static files, and a
+#    fresh server can serve a cached bundle, so infer neither from step 2.
+curl -s http://127.0.0.1:4701/app.js -o /tmp/served-app.js
+md5 -q /tmp/served-app.js src/web/app.js      # two identical lines, or stop
+git log --since="<server boot time>" --oneline -- src/web
+```
+
+Step 3 is the check; steps 1 and 2 are context for reading it. If the two md5s
+differ, nothing measured through that browser describes the branch — it
+describes whatever the server last read from disk. **The difference between
+measuring the product and measuring a memory of it costs one `curl`.**
 
 **Why this needs to be procedural rather than a resolution to be careful:**
 unchecked relays cluster exactly where a finding feels strongest. An agent's most
