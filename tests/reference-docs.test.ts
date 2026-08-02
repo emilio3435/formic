@@ -1555,8 +1555,19 @@ describe("the catch-up summary stays true to the code it summarises", () => {
       .toMatch(/Measured at \*{0,2}[0-9]{2}:[0-9]{2}/);
     /* The strongest evidence in the file is that the number MOVED while staying
        consistent. Losing that turns "a reading" back into "a fact". */
-    expect(t, "the summary stopped showing that the total moves")
-      .toMatch(/Half an hour of work moved it|the same total read/i);
+    /* Both halves, not an alternation — the sixth time today an OR-joined
+       pattern let one phrase cover for the other's removal. The evidence is
+       BOTH that several readings exist and that one of them moved. */
+    expect(t, "the summary stopped listing multiple readings").toMatch(/readings today/i);
+    expect(t, "the summary stopped showing that the total moved")
+      .toMatch(/moved it by \$[0-9]/i);
+    /* TODAY.md's own copy of the reading-not-a-fact label was unpinned — the
+       two pins carrying that phrase both read ANT-GUIDE, and a mutation that
+       removed it from TODAY.md passed 92/0. Two documents, one claim, one pin
+       between them: exactly the docs-and-tests entanglement named as an open
+       problem in CLAIM-OWNERSHIP-PROPOSAL.md, found in my own file. */
+    expect(t, "TODAY.md stopped labelling the total a reading rather than a fact")
+      .toMatch(/a reading, not a fact/i);
   });
 
   test("it does not claim the archive term has been observed", () => {

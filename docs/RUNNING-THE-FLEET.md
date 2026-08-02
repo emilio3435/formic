@@ -82,7 +82,13 @@ it will do so silently, because an instrument that fails loudly is one you would
 have already fixed.** Ask what your apparatus would have to do for a false pass
 to look exactly like a true one.
 
-For a running system that question has a three-command answer.
+For a running system that question has a three-command answer — and the check's
+own first outing is the best argument for it. Step 2 as originally written asked
+`lsof -ti tcp:4701 | head -1`, which returned a headless Chromium holding a
+connection to the port rather than the server listening on it. It reported a
+server that was current as being four commits stale. **The instrument-check had
+a defective instrument**, which is the point restated at its own expense:
+`-sTCP:LISTEN` is not a detail.
 
 ```bash
 # 1. What branch does the worktree serve, and at what commit?
@@ -90,7 +96,11 @@ git -C ~/Developer/the-mountain-main branch --show-current
 git -C ~/Developer/the-mountain-main rev-parse --short HEAD
 
 # 2. Did the server boot before or after the commit under test?
-ps -o lstart= -p "$(lsof -ti tcp:4701 | head -1)"
+#    -sTCP:LISTEN is load-bearing. Without it this returns whatever process
+#    happens to hold a CONNECTION to the port — a browser, a curl, your own
+#    headless Chromium — and you read a client's start time as the server's.
+#    That reported a current server as four fixes stale on its first real use.
+ps -o lstart= -p "$(lsof -ti tcp:4701 -sTCP:LISTEN | head -1)"
 git log -1 --format='%ad' --date=format:'%H:%M' <sha-under-test>
 
 # 3. THE ONE THAT ACTUALLY SETTLES IT — is the client the browser receives the

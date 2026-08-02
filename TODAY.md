@@ -28,7 +28,7 @@ removed and confirmed gone. Nothing of yours was touched, but the machine was
 not idle.
 
 **One cost total that means something.** Ask any window, add what sits before
-it, and you get the same whole. Measured at **18:18 CEST**: **$32,942.99** across
+it, and you get the same whole. Measured at **22:12 CEST**: **$33,278.90** across
 the recorded history, identical to the cent from a one-day window and a
 ninety-day one.
 
@@ -38,10 +38,11 @@ window, a row cap and a range clamp. A number that lands in the same place after
 its inputs are rebuilt underneath it has earned more than one that was never
 questioned.
 
-**It is a reading, not a fact.** The same total read **$32,471.40 at 17:21** and
-**$32,942.99 at 17:35** — half an hour of work moved it by $471. Then it sat
-perfectly still: identical to the cent at 18:03 and again at 18:18, across every
-window. Quote it with its timestamp or do not quote it.
+**It is a reading, not a fact.** Four readings today: **$32,471.40 at 17:21**,
+**$32,942.99 at 17:35**, the same figure to the cent at **18:03 and 18:18**, then
+**$33,278.90 at 22:12**. Half an hour of work moved it by $471; the next three
+hours moved it not at all, then by $336. Quote it with its timestamp or do not
+quote it.
 
 It moves in **steps**, when new usage is ingested, not gradually — so seeing the
 same figure twice is not evidence the caveat was over-cautious. And the movement
@@ -69,12 +70,12 @@ this evening — by a check written this afternoon, before anyone noticed.
 
 **Archive retention.** The clock now starts when you archive rather than when
 the session last spoke, which was the bug: a session quiet for 31 days used to
-be pruned on the next save after telling you `ok`. At 18:18, **377 of 595**
+be pruned on the next save after telling you `ok`. At 22:12, **406 of 624**
 records carried an archive time.
 
 Read the gap rather than the ratio: **218 records have no stamp and never will**,
 because they were archived before the fix existed. That number has not moved
-across four readings while the stamped count climbed, so it is a fixed backlog
+across six readings while the stamped count climbed from 377 to 406, so it is a fixed backlog
 rather than a shortfall — it shrinks only as those records age out on the old
 clock. Everything archived from now on is measured.
 
