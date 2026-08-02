@@ -28,17 +28,15 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 >
 > - **Cost figures do not yet say what falls outside your window.** The server
 >   knows; the card does not print it. See *Usage has its own windows* below.
-> - **Cost totals were double-counting, and the correction goes downward.** The
+> - **Cost totals were double-counting, and the correction went downward.** The
 >   cost source records some sessions as running *snapshots* — each one a fresh
 >   total for that session, not a fresh call — so a later snapshot already
 >   contains the earlier one and adding them counts the same tokens twice. The
 >   board now counts each session's running total **once**, which is why a
 >   figure you saw earlier may have gone **down**: the correction removes
->   double-counting, it never adds spend. One part is still catching up — the
->   "spend before this window" figure is not de-duplicated yet, so it reads
->   high, and window plus prior does not reconcile across different windows.
->   **Do not add the two together**, and treat any cost figure as *what was
->   recorded*, which is not the same as *what was spent*.
+>   double-counting, it never adds spend. Both halves are de-duplicated now, so
+>   a window and the spend before it add up to the same whole record whichever
+>   window you pick.
 > - **Archive keeps things for less time than it says.** See *Archive does not
 >   keep things as long as it claims* at the end.
 >
@@ -268,10 +266,17 @@ the record is outside the default view. A window that hides the majority of the
 record while looking whole is the same defect as a cost of `$0` that means
 *unknown*, and it gets the same treatment.
 
-No figures are quoted here on purpose. The de-duplication described in the
-caveat at the top has landed for the in-window total and not yet for the
-before-this-window one, so those two numbers are currently on different footings
-and any pair printed here would be wrong within the day.
+**What that buys you is one number that means something.** Add any window to the
+spend before it and you get the whole recorded history — and you get the *same*
+whole whichever window you started from. Measured on this machine at 17:05 on
+2026-08-02: **about $32,471 across the entire record**, identical from a 1-day
+window, a 30-day one, and a 399-day one, with invocation counts agreeing too.
+
+That is the figure to quote if you need one, **and it is a reading rather than a
+constant** — it grows as the fleet works, and it counts only what a cost source
+priced. What is durable is not the amount but the property: the total no longer
+depends on which window you happened to ask through. If you ever see two windows
+disagree about the whole, that is a bug and it has happened twice today.
 
 *Where this stands today:* the server computes and returns it — the number above
 is a live reading, not a plan. The Usage card does not print it yet, so for now

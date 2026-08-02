@@ -1179,32 +1179,26 @@ describe("the cost window's limits are documented as the code enforces them", ()
    state the shape, which does not age, and to say explicitly that any specific
    ratio is stale. This pins that no such figure creeps back. */
 describe("no one-off measurement is presented as a standing fact", () => {
-  test("the cost sections quote no dollar figure while the two halves disagree", () => {
-    /* The in-window total is de-duplicated and priorSpend is not, so any pair
-       printed together is inconsistent by construction, and single figures move
-       as the fix lands. Direction is durable; magnitude is not. The board's own
-       example line and the "$0 means unknown" illustration are exempt — neither
-       is a measurement of this fleet. */
-    /* Anchor on the SECTION, not on the caveat's cross-reference to it — the
-       first occurrence of that phrase is a link at the top of the file, and
-       slicing from it swept in the summary band's example line. */
-    const guide = read("ANT-GUIDE.md");
-    /* Guard BOTH places cost is discussed. A figure slipped into the opening
-       caveat while a pin watching only the Usage section reported green. */
-    const costArea = guide.slice(
-      guide.indexOf("**Usage has its own windows"),
-      guide.indexOf("Treat any figure here"),
-    );
-    const caveat = guide.slice(
-      guide.indexOf("Cost totals were double-counting"),
-      guide.indexOf("Archive keeps things for less time"),
-    );
-    expect(costArea.length, "the cost section anchors moved").toBeGreaterThan(200);
-    expect(caveat.length, "the caveat anchors moved").toBeGreaterThan(200);
-    expect(caveat, "a dollar measurement came back into the cost caveat")
-      .not.toMatch(/\$[0-9][0-9,.]*/);
-    expect(costArea, "a dollar measurement came back into the cost section")
-      .not.toMatch(/\$[0-9][0-9,.]*/);
+  test("any cost total is dated and labelled a reading, not left as a fact", () => {
+    /* This guard used to forbid dollar figures outright, while the halves
+       disagreed. That is retired: both are de-duplicated and a number is now
+       worth stating. But the guard nearly became a false green first — it
+       watched one slice of the file, and the figure I added sat just outside
+       it, so it reported clean for the wrong reason.
+
+       The rule that survives: a total may appear, and when it does it must
+       carry WHEN it was measured and the warning that it moves. A bare number
+       in a doc is the thing that ages into a lie. */
+    const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    const totals = [...guide.matchAll(/\$3[0-9],[0-9]{3}/g)];
+    expect(totals.length, "the whole-record total vanished from the guide").toBeGreaterThan(0);
+    for (const m of totals) {
+      const around = guide.slice(Math.max(0, m.index - 320), m.index + 320);
+      expect(around, `a cost total near "${m[0]}" carries no measurement date`)
+        .toMatch(/20[0-9]{2}-[0-9]{2}-[0-9]{2}/);
+    }
+    expect(guide, "the guide stopped warning that the total is a reading that moves")
+      .toMatch(/a reading rather than a constant/i);
   });
 
   test("the token-scale warning describes a shape, not a multiplier", () => {
@@ -1310,19 +1304,22 @@ describe("what the docs promise about incompleteness", () => {
       .toMatch(/never adds spend/i);
     expect(prose, "the guide stopped describing the de-duplication mechanism")
       .toMatch(/running total \*\*once\*\*/i);
-    /* The dedup landed for the in-window total but NOT for priorSpend, so
-       window + prior does not reconcile: measured across 30/60/90/120-day
-       windows the same record totalled four different amounts. A reader who
-       adds the two numbers gets a figure that depends on which window they
-       happened to pick, so the guide must tell them not to. */
-    expect(prose, "the guide stopped warning that the two cost figures cannot be added")
-      .toMatch(/do not add the two together/i);
-    expect(prose, "the guide stopped saying the before-window figure is not de-duplicated yet")
-      .toMatch(/not de-duplicated yet/i);
-    expect(prose, "the guide stopped saying the before-window figure reads high")
-      .toMatch(/reads\s+high/i);
-    expect(prose, "the guide stopped distinguishing what was recorded from what was spent")
-      .toMatch(/what was recorded.*not the same as.*what was spent/i);
+    /* Both halves are de-duplicated now (681411c put window and prior on one
+       scan), so the earlier "do not add these" warning is retired and the
+       durable claim replaces it: window + prior is the whole record, and the
+       same whole whichever window you ask through. Verified live across nine
+       windows from 1 day to 399 — cost and invocation counts both constant.
+       That property is what the guide promises; the amount is a reading. */
+    /* Emphasis markers sit inside this sentence (*same*), so match around them
+       rather than through them. */
+    expect(prose, "the guide stopped promising the whole-record identity")
+      .toMatch(/whole whichever window/i);
+    expect(prose, "the guide stopped saying a window plus its prior is the whole record")
+      .toMatch(/spend before it and you get the whole recorded history/i);
+    expect(prose, "the guide stopped labelling the total a reading rather than a constant")
+      .toMatch(/a reading rather than a constant/i);
+    expect(prose, "the guide stopped saying a window-to-window disagreement is a bug")
+      .toMatch(/that is a bug/i);
     const burnbar = read("src/server/burnbar.ts");
     expect(burnbar, "aggregatedRows stopped being a bare count — re-check whether the fix landed")
       .toContain("AS aggregatedRows");
