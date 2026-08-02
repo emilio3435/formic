@@ -79,6 +79,12 @@ it launched.
 > Measured here: `1.58B` on a program bar against `682k` on a row — roughly five
 > hundred times apart. If you want to know what a session has used in total,
 > open its drawer and read *used this session*; do not add up the column.
+>
+> One exception, in `History` only: a handful of sessions archived before this
+> distinction existed carry no unit at all, and their Tokens cell shows a
+> whole-session total instead — a few rows out of hundreds, each reading around
+> ten times its neighbours. If a History row looks wildly heavier than the rest,
+> that is why: check its drawer rather than the cell.
 
 ### 4. Click it, deal with it, press `Escape`
 
@@ -146,7 +152,7 @@ about this band, so it is stated for each:
 |---|---|---|
 | **Needs you** | How many findings want a human. The only number that is a to-do list. | Findings, not agents — one finding can implicate many sessions. Right now the tab beside it counts *agents* and can read `0` while this reads `1`; that disagreement is a known defect being fixed, not a puzzle for you to solve. |
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
-| **Burn** | A token rate, and spend if cost data is available. | The rate is an **average over the window it names** (`5m average`), summed across every session that reported, **including ended ones**. Spend comes from a separate tool over its own hour. Do not divide one by the other; they do not share a denominator. |
+| **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
 | **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or idle) that report a window. Ended sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
 | **Health** | One verdict for the whole system. | Not a count. See the health section below. |
 
