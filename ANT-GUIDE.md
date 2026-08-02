@@ -20,15 +20,20 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 > something, it says so instead of showing a plausible number. A blank is
 > usually honest, not broken.
 
-> **And two things that are still being fixed.** The counters that were
+> **And three things that are still open.** The counters that were
 > arithmetically correct but mislabelled — a total that counted the same tokens
 > twice, a span that called dormant time working time — are now either corrected
 > or named for what they measure, so the board's numbers are no longer
-> wholesale "rough". Two specific gaps remain, both about *completeness* rather
-> than arithmetic:
+> wholesale "rough". These remain:
 >
 > - **Cost figures do not yet say what falls outside your window.** The server
 >   knows; the card does not print it. See *Usage has its own windows* below.
+> - **One day's cost is measured but not trusted.** A single day inside the
+>   reported total sits outside what the hardware can physically do — its
+>   per-call average is roughly thirty times the fleet norm. It has been
+>   annotated, not explained, and no total has been adjusted, so it is still
+>   inside every cost figure you read. Treat a cost total as *what was recorded*,
+>   which is not the same as *what was spent*.
 > - **Archive keeps things for less time than it says.** See *Archive does not
 >   keep things as long as it claims* at the end.
 >

@@ -1254,8 +1254,20 @@ describe("what the docs promise about incompleteness", () => {
     const g = flat(guide());
     expect(g, "the blanket 'treat the aggregate counters as rough' warning came back")
       .not.toMatch(/treat the aggregate counters as rough/i);
-    expect(g, "the caveat stopped naming the two gaps that remain")
-      .toMatch(/two things that are still being fixed/i);
+    expect(g, "the caveat stopped naming the gaps that remain")
+      .toMatch(/three things that are still open/i);
+    /* The July 30 anomaly is ANNOTATED, not fixed: 71d7cb3 added an
+       aggregatedRows count and changed no total, and the classification is
+       circular — a row counts as aggregated because its tokens exceed the bound
+       that made it anomalous. It is still inside every reported cost figure, so
+       the guide must not let a reader take a cost total as what was spent. */
+    expect(g, "the guide stopped warning that one day's cost is measured but not trusted")
+      .toMatch(/measured but not trusted/i);
+    expect(g, "the guide stopped distinguishing what was recorded from what was spent")
+      .toMatch(/what was recorded.*not the same as.*what was spent/i);
+    const burnbar = read("src/server/burnbar.ts");
+    expect(burnbar, "aggregatedRows stopped being a count — re-check whether the anomaly is now fixed")
+      .toContain("AS aggregatedRows");
   });
 });
 

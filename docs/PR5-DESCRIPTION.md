@@ -9,7 +9,7 @@ of it, which is the same defect the cost work is about.*
 Three things this branch does, only one of which the original description
 mentioned.
 
-1. **Cost stops hiding money** — three defects, each invisible for a different reason.
+1. **Cost stops hiding money** — two defects fixed, one anomaly annotated and still open.
 2. **The archive keeps what you asked it to keep** — retention ran from the wrong clock and silently under-delivered.
 3. **The board never advertises a write it will refuse** — the button and the endpoint now answer from one predicate.
 
@@ -31,16 +31,30 @@ The same file already did tokens correctly ten lines away: `tokensKnown` is
 emitted as a **qualifier beside** the value, not a **gate on** it. Cost now
 follows that precedent.
 
-### An "invocation" was not always a call
+### An "invocation" was not always a call — open, not closed
 
 One day held 26% of the headline: $3,514.24 across 58 invocations — **$59.91
 each** against a fleet norm of $0.32–$1.93. A physical check settled it: each
 would have had to process 47.6M tokens against a 1M-token context window.
 
-Seven rows carry 243M–512M tokens apiece. BurnBar records some Claude Code
-sessions as **one cumulative row per session**, alongside per-call rows from
-other providers. The payload now says which is which, so a per-invocation figure
-no longer averages two different units.
+Seven rows carry 243M–512M tokens apiece, and their session IDs are this board's
+own agents. The leading explanation is that BurnBar records some Claude Code
+sessions as one cumulative row per session alongside per-call rows from other
+providers.
+
+**This is annotated, not fixed, and the distinction matters.** `71d7cb3` added
+an `aggregatedRows` count and changed no total. Worse, the classification is
+circular: a row is counted as "aggregated" because `totalTokens` exceeds the
+context-window bound — which is the same observation that made it anomalous in
+the first place. It renames the anomaly rather than establishing independently
+that BurnBar wrote those rows cumulatively.
+
+So the $3,514.24 remains inside every reported total, its per-call average is
+still ~30x the fleet norm, and it is still outside what the hardware can do.
+**No cost figure in this branch should be read as corrected.** What changed is
+that the measured total is now *reported* rather than suppressed, and its
+horizon is *disclosed* rather than implied — while one day inside it remains
+outside physical bounds and unexplained.
 
 ### A view that cannot show everything now says what it cannot see
 
