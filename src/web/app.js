@@ -881,7 +881,16 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   }
   if (id === "momentum") {
     const momentum = snap.pulse && snap.pulse.momentum;
-    let sublabel = "No completion data yet.";
+    /* "yet" promises a number that is never coming. The server withholds
+       completions permanently — success is unverifiable and completion is
+       undetectable for most providers — and says so in `completionsProvenance`,
+       which nothing read. On a busy board the stall text fills this line so the
+       promise never showed; on a quiet or brand-new one it is the first thing a
+       newcomer reads about the counter. Saying "not measured" once is honest;
+       saying "not yet" forever is the same overclaim in a patient voice. */
+    let sublabel = momentum && momentum.completionsProvenance === "not-observable"
+      ? "Completions are not measured — no source reports them reliably."
+      : "No completion data yet.";
     if (momentum) {
       // Window honesty: a freshly restarted tracker says how long it has
       // actually watched, never a fabricated "this hour". Below one full

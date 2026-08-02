@@ -238,3 +238,49 @@ describe("69d5c0d — the header does not restate its own subtitle", () => {
     expect(card.sublabel.toLowerCase()).not.toContain(card.value.toLowerCase());
   });
 });
+
+/* Fresh-machine sweep: behaviour that only looks right because THIS box has
+   577 agents, a populated burnbar and five running lanes.
+
+   Most of the board came through clean — a virgin HOME produces no NaN, no
+   Infinity, no "undefined" in any string, and every card reads absent-first.
+   This is the one place the wording assumed a busy board. */
+describe("a quiet board does not promise a number that is never coming", () => {
+  const momentumBoard = (momentum: Record<string, unknown>) => ({
+    generatedAt: new Date().toISOString(),
+    controlHealth: { cmuxReachable: true, lastCheckedAt: new Date().toISOString(), errors: [], staleSources: [] },
+    totals: { live: 0, tracked: 0, attention: 0, working: 0, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
+    programs: [],
+    pulse: { momentum, burn: { tokensPerMin: null, windowMs: 0, coverage: { reporting: 0, eligible: 0, unknown: 0 }, costLastHourUsd: null, costProvenance: "unavailable" }, activity: [] },
+  });
+
+  const WITHHELD = {
+    working: 0, completionsLastHour: null, completionsProvenance: "not-observable",
+    observedWindowMs: 0, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900_000,
+  };
+
+  test("completions read as not measured, never as not yet", () => {
+    /* "No completion data yet" promises a number that is never coming: the
+       server withholds completions permanently — success is unverifiable and
+       completion undetectable for most providers — and says so in
+       completionsProvenance, which nothing read.
+
+       On a busy board the stall text fills this line, so the promise never
+       showed. On a quiet or brand-new one it is the first thing a newcomer
+       reads about the counter, which is exactly where it is worst. */
+    const card = client.summaryWidgetData("momentum", momentumBoard(WITHHELD) as never, "live");
+
+    expect(card.sublabel).toMatch(/not measured/i);
+    expect(card.sublabel).not.toMatch(/yet/i);
+  });
+
+  test("a board that reports stalls still shows them rather than the notice", () => {
+    // The control: the notice must not crowd out live information.
+    const card = client.summaryWidgetData("momentum", momentumBoard({
+      ...WITHHELD, working: 6, stalled: 11, stalledAgentIds: ["a"], observedWindowMs: 3_600_000,
+    }) as never, "live");
+
+    expect(card.sublabel).toMatch(/quiet/i);
+    expect(card.sublabel).not.toMatch(/not measured/i);
+  });
+});
