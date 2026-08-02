@@ -790,7 +790,11 @@ describe("summary status and widgets", () => {
     });
     expect(freshMachine.degraded).toBe(false);
     expect(freshMachine.message).toBe("Watching. No sessions running yet.");
-    expect(freshMachine.sources).toBe("1 of 1 collectors healthy");
+    /* The absences are now NAMED rather than merely excluded from the
+       denominator. Excluding them alone left a machine with none of the four
+       showing no line at all — silence at the one moment a newcomer needs a
+       signal — so the count says what is watched and what simply is not there. */
+    expect(freshMachine.sources).toBe("1 of 1 collectors healthy · 3 not installed");
     expect(freshMachine.sources).not.toMatch(/degraded|of 4/);
 
     /* No byProvider on the wire means the old counting stands, so a real

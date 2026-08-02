@@ -6792,6 +6792,9 @@ function emptyBoardVerdict(snap) {
     : (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
   const degraded = broken > 0;
   const healthy = sources && Number.isFinite(sources.healthy) ? sources.healthy : 0;
+  // Collectors with nothing installed to read. Absent-first: a wire without the
+  // field reports 0 rather than inventing absences.
+  const absent = sources && Number.isFinite(sources.absent) ? sources.absent : 0;
   return {
     degraded,
     message: degraded
@@ -6809,11 +6812,25 @@ function emptyBoardVerdict(snap) {
        makes "all four are fine" legible; an absolute count would have hidden
        the very reassurance the screen exists to give. Their reasoning is better
        than mine was and the string is documented, so it stands. */
+    /* On a machine with none of the four installed the denominator went to
+       zero and this returned null, so the day-one screen lost the very line
+       QUICKSTART sends a newcomer to look for — the one it calls "the proof the
+       board is working". Silence at exactly the moment someone needs a signal.
+
+       So absence is stated rather than counted or hidden. A newcomer with no
+       tools installed is told what would appear here; a newcomer with one is
+       told their one collector is fine AND that three are simply not installed,
+       which is the distinction 42d842e drew at the source. Degradation still
+       outranks both: a blind collector is a fault and says so first. */
     sources: degraded
       ? `${broken} of ${total} collectors degraded`
       : total > 0
-        ? `${healthy} of ${total} collectors healthy`
-        : null,
+        ? (absent > 0
+          ? `${healthy} of ${total} collectors healthy · ${absent} not installed`
+          : `${healthy} of ${total} collectors healthy`)
+        : absent > 0
+          ? "No collectors installed yet — Claude Code, Codex or Cursor will appear here"
+          : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };
 }

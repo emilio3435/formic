@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildSnapshot } from "../src/server/snapshot";
 
 /* README.md and ARCHITECTURE.md drift faster than anyone re-reads them. A label
    documented one afternoon was already wrong the next morning — "Show panes"
@@ -835,6 +836,29 @@ describe("day one on a machine without cmux", () => {
   const verdict = (sourceHealth: unknown) =>
     M.emptyBoardVerdict({ generatedAt: "2026-08-02T12:44:51.004Z", totals: { sourceHealth } });
 
+  /* THE PRODUCER, not a fixture describing it.
+
+     The day-one assertions below used to hand-build `{healthy: 4, total: 4}`
+     and check only what the client rendered from it. That measures the renderer
+     and says nothing about whether the server produces that payload for the
+     machine in question — so when 42d842e changed the fresh-machine numbers
+     (absent collectors stopped counting toward the denominator), every one of
+     these stayed green while the screen a newcomer meets changed underneath
+     them. A check that measures a fixture rather than the producer is the same
+     hollow shape found a dozen times today, in the test written to prevent it.
+
+     buildSnapshot is now driven with the machine as its input. */
+  const machineVerdict = (input: Partial<Parameters<typeof buildSnapshot>[0]>) => {
+    const snapshot = buildSnapshot({
+      agents: [],
+      surfaces: [],
+      archiveStore: { has: () => false, archive: async () => {} },
+      now: new Date("2026-08-02T12:44:51.004Z"),
+      ...input,
+    });
+    return { verdict: M.emptyBoardVerdict(snapshot), sourceHealth: snapshot.totals.sourceHealth };
+  };
+
   /* Derive the roster from the Provider union rather than listing four names
      here, so a fifth collector fails this test instead of silently outdating
      the table a newcomer reads to decide whether their board is broken. */
@@ -843,14 +867,41 @@ describe("day one on a machine without cmux", () => {
     return [...line.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
   })();
 
-  test("a fresh install with nothing installed reads calm, not degraded", () => {
-    const fresh = verdict({
-      healthy: 4, degraded: 0, total: 4,
-      byProvider: { omp: ok, codex: ok, claude: ok, cursor: ok },
+  test("a machine with nothing installed reads calm, and still says something", () => {
+    /* Driven through buildSnapshot with the actual day-one machine: no provider
+       directories, no cmux binary. The screen must be calm AND must not go
+       silent — the count is what QUICKSTART calls "the proof the board is
+       working", and returning null there left a newcomer with no signal at the
+       one moment they need one. */
+    const { verdict: fresh, sourceHealth } = machineVerdict({
+      sourceAbsent: { codex: true, claude: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
     });
+
+    expect(sourceHealth, "absent collectors are counting as faults again")
+      .toMatchObject({ degraded: 0, absent: 4 });
     expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
     expect(fresh.message).toBe("Watching. No sessions running yet.");
-    expect(fresh.sources).toBe("4 of 4 collectors healthy");
+    expect(fresh.sources, "the day-one screen went silent again")
+      .toBe("No collectors installed yet — Claude Code, Codex or Cursor will appear here");
+  });
+
+  test("a machine with one tool installed names the one and the absences", () => {
+    const { verdict: partial } = machineVerdict({
+      sourceAbsent: { codex: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
+    });
+
+    expect(partial.sources).toBe("1 of 1 collectors healthy · 3 not installed");
+  });
+
+  test("a fully-equipped machine keeps the documented count", () => {
+    // This box, and the string QUICKSTART quotes.
+    const { verdict: full } = machineVerdict({ cmuxReachable: true });
+
+    expect(full.sources).toBe("4 of 4 collectors healthy");
   });
 
   test("a collector that WAS healthy and now is not still alarms", () => {
@@ -864,13 +915,19 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART quotes the empty-board strings the model renders", () => {
-    const fresh = verdict({
-      healthy: providers.length, degraded: 0, total: providers.length,
-      byProvider: Object.fromEntries(providers.map((p) => [p, ok])),
+    /* Driven from the producer too: QUICKSTART must quote what a machine
+       actually renders, not what a fixture can be made to say. */
+    const { verdict: full } = machineVerdict({ cmuxReachable: true });
+    const { verdict: fresh } = machineVerdict({
+      sourceAbsent: { codex: true, claude: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
     });
     expect(quickstart, "QUICKSTART no longer quotes the calm empty-board message")
-      .toContain(fresh.message);
+      .toContain(full.message);
     expect(quickstart, "QUICKSTART no longer quotes the healthy count as rendered")
+      .toContain(full.sources);
+    expect(quickstart, "QUICKSTART does not describe the day-one screen it renders")
       .toContain(fresh.sources);
   });
 
@@ -886,8 +943,15 @@ describe("day one on a machine without cmux", () => {
       expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
       expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
     }
-    expect(quickstart, "QUICKSTART stopped saying an absent tool still reads healthy")
-      .toMatch(/absent, and expect all four to still read healthy/i);
+    /* Was "expect all four to still read healthy" — the promise option C
+       replaced. Absent collectors no longer pad the denominator; they are named
+       separately, because a count that read 4 of 4 on a machine running none of
+       them was a number meaning one thing and reading as another. What must
+       survive is the REASSURANCE: an absent tool is not a fault. */
+    expect(quickstart, "QUICKSTART stopped saying an absent tool is not a fault")
+      .toMatch(/expect most of these to be absent, and expect that to be fine/i);
+    expect(quickstart, "QUICKSTART no longer names absence separately from health")
+      .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
       .toMatch(/cmux is not one of the four/i);
   });
