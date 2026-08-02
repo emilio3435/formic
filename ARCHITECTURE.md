@@ -54,10 +54,10 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `snapshot-agent.ts` | Per-agent view: capabilities (`controlsFor`), activity, outcome, `contextPct` |
 | `snapshot-issues.ts`, `snapshot-operator-issues.ts` | What counts as a finding, and how identity conflicts split into live faults vs debris |
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |
-| `attention-signal.ts` | Whether an agent needs a human, and the sentence saying why |
+| `attention-signal.ts` | Whether an agent needs a human, and the sentence saying why. Ships as `attentionSignal` on the agent, carrying a kind and the evidence behind it, so a row quotes the agent rather than paraphrasing. A situation the detectors do not recognise stays `unknown` with no next action rather than emitting filler. The row's own summary line is `lastHumanMessage`, which is `string \| null` — `null` is preserved as absence, never rendered as an empty string. |
 | `publish-state.ts` | What work is committed but unpublished. Read-only by construction: only `remote`, `rev-parse`, `rev-list` and `for-each-ref` are ever run, and publishing stays the operator's manual decision |
 | `pulse.ts` | Momentum, burn rate, and the activity window behind the summary strip |
-| `human-message.ts` | Readable prose out of a raw transcript — the row preview reads a message's first 240 characters, attention detection reads its last 240 |
+| `human-message.ts` | Readable prose out of a raw transcript. `readableHumanMessage` keeps a message's **first** 240 characters, because that is where it announces its subject and a row wants one line of it. `readableClosing` keeps the **last** 240, because an agent asks its question in the closing sentence — reading from the front discarded every one of them before the snapshot existed. Two reads of the same message, deliberately. |
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |
 | `burnbar.ts`, `burnbar-query.ts` | Cost, read from an external encrypted OpenBurnBar database in an isolated subprocess |
 | `model-config.ts` | Model families, context windows, and Cursor-native policy from `config/models.json` |

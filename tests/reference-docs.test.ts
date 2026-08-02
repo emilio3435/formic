@@ -111,28 +111,48 @@ describe("ARCHITECTURE.md stays true to the code it maps", () => {
 });
 
 describe("README.md stays true to the product", () => {
-  test("the UI strings it quotes are strings the client produces", () => {
-    /* This is the "Show panes" class, and the reason this file exists: a quoted
-       label is the one kind of doc claim a reader will act on verbatim. */
-    for (const quoted of ["cmux unreachable — Focus and Send cannot route.", "No readable message yet"]) {
-      expect(readme, `README.md stopped quoting "${quoted}"`).toContain(quoted);
-      expect(client, `"${quoted}" is not a string the client renders any more`).toContain(quoted);
-    }
-    // The verdict it teaches a reader to expect when cmux is missing.
-    expect(readme).toContain("**Blocked**");
-    expect(client).toContain('blocking: "Blocked"');
+  test("the honesty promise it leads with is one the client keeps", () => {
+    /* README's differentiator is that it does not invent numbers. That is a
+       promise a stranger reads in the first fifteen seconds, so the strings
+       behind it have to be strings the client actually renders. */
+    expect(readme).toContain("`unavailable`, never `$0`");
+    expect(client).toContain("cost unavailable");
+    expect(readme).toContain("no process evidence");
+    expect(client).toContain('label: "No process evidence"');
   });
 
-  test("the snapshot fields it promises are fields the snapshot carries", () => {
+  test("the ports and failure mode it sends a stranger to are real", () => {
+    expect(readme).toContain("4701");
+    expect(read("scripts/anthill-start.sh")).toContain('PORT="${MOUNTAIN_PORT:-4701}"');
+    expect(readme).toContain("4710");
+    expect(read("scripts/anthill-preview.sh")).toContain("PREVIEW_LO=4710");
+    /* Verified by running it against the live service: dev and start:server
+       exit rather than double-binding. If the server ever learns to retry, the
+       README sentence telling a reader they will exit becomes wrong. */
+    expect(readme).toContain("EADDRINUSE");
+    const indexTs = read("src/server/index.ts");
+    expect(indexTs).toContain("port: configuredPort");
+    expect(indexTs, "a retry/fallback would make README's 'they exit' wrong").not.toContain("EADDRINUSE");
+    expect(readme.toLowerCase()).toContain("no runtime dependencies");
+    expect(JSON.parse(pkg).dependencies, "the app grew a runtime dependency").toBeUndefined();
+  });
+});
+
+describe("ARCHITECTURE.md carries the contract detail README no longer does", () => {
+  /* README became a front door, so the claims a stranger does not need moved
+     here rather than being deleted. The pins moved with them — a claim with no
+     document is a claim nothing protects. */
+
+  test("the snapshot fields it names are fields the snapshot carries", () => {
     for (const field of ["contextPct", "attentionSignal", "lastHumanMessage"]) {
-      expect(readme, `README.md stopped documenting ${field}`).toContain(field);
+      expect(architecture, `ARCHITECTURE.md stopped documenting ${field}`).toContain(field);
       expect(read("src/shared/types.ts"), `${field} left the snapshot contract`).toContain(field);
     }
     /* errors-vs-debris is the distinction that stops a finished swarm holding
        the board red. If the split disappears, the paragraph explaining it is
        describing a policy the code no longer has. */
-    expect(readme).toContain("controlHealth.debris");
-    expect(readme).toContain("controlHealth.errors");
+    expect(architecture).toContain("controlHealth.debris");
+    expect(architecture).toContain("controlHealth.errors");
     expect(read("src/shared/types.ts")).toContain("debris?: ControlDebris");
   });
 
@@ -142,11 +162,11 @@ describe("README.md stays true to the product", () => {
        tied to the two helpers that make it true. */
     const humanMessage = read("src/server/human-message.ts");
     for (const helper of ["readableHumanMessage", "readableClosing"]) {
-      expect(readme, `README.md stopped naming ${helper}`).toContain(helper);
+      expect(architecture, `ARCHITECTURE.md stopped naming ${helper}`).toContain(helper);
       expect(humanMessage, `${helper} is gone from human-message.ts`).toContain(`export function ${helper}`);
     }
     expect(humanMessage).toContain("MAX_HUMAN_MESSAGE_CHARS = 240");
-    expect(readme).toContain("240");
+    expect(architecture).toContain("240");
   });
 
   test("the commands and ports it sends a reader to are real", () => {
@@ -165,14 +185,6 @@ describe("README.md stays true to the product", () => {
     expect(read("scripts/anthill-preview.sh")).toContain("4710");
   });
 
-  test("the cost source it names is the one that supplies cost", () => {
-    // "unavailable, never $0" is a truth rule, not a nicety: an empty window and
-    // a broken query must not look alike.
-    expect(readme).toContain("/api/usage/*");
-    expect(server).toContain('"/api/usage/');
-    expect(readme).toContain("`unavailable`");
-    expect(client).toContain("cost unavailable");
-  });
 
   test("every sibling document it links to exists", () => {
     for (const doc of [...readme.matchAll(/\]\(\.\/([A-Za-z0-9./-]+\.md)\)/g)].map((m) => m[1])) {
@@ -568,9 +580,9 @@ describe("package.json scripts and config/ are documented as they execute", () =
        which of these do exactly that. */
     for (const [name, body] of Object.entries(scripts)) {
       if (!body.includes("src/server/index.ts") && !body.includes("anthill-start.sh")) continue;
-      expect(readme, `README.md's script table omits the port-binding "${name}"`).toContain(name);
+      expect(deploy, `DEPLOY.md's script table omits the port-binding "${name}"`).toContain(name);
     }
-    expect(readme).toContain("4701, **no reuse**");
+    expect(deploy).toContain("4701, **no reuse**");
   });
 
   test("start:external is documented as NOT binding externally", () => {
@@ -579,7 +591,7 @@ describe("package.json scripts and config/ are documented as they execute", () =
        one, this test should fail and the paragraph be rewritten. */
     expect(scripts["start:external"]).toContain("--external");
     expect(read("scripts/anthill-start.sh")).toContain("--external    Force this shell");
-    expect(readme.replace(/\s+/g, " ")).toContain("`start:external` does not bind externally");
+    expect(deploy.replace(/\s+/g, " ")).toContain("`start:external` does not bind externally");
     const indexTs = read("src/server/index.ts");
     expect(indexTs).toContain('const HOSTNAME = "127.0.0.1"');
     expect(indexTs, "HOSTNAME gained an env override — the loopback promise moved").not.toMatch(/HOSTNAME\s*=\s*process\.env/);
@@ -588,10 +600,10 @@ describe("package.json scripts and config/ are documented as they execute", () =
   test("the EADDRINUSE behaviour README promises is what the server does", () => {
     // Verified by running it against the live service: it exits, it does not
     // double-bind, and production keeps the port.
-    expect(readme).toContain("EADDRINUSE");
+    expect(deploy).toContain("EADDRINUSE");
     const indexTs = read("src/server/index.ts");
     expect(indexTs).toContain("port: configuredPort");
-    expect(indexTs, "a retry/fallback would make README's 'it exits' wrong").not.toContain("EADDRINUSE");
+    expect(indexTs, "a retry/fallback would make the 'it exits' claim wrong").not.toContain("EADDRINUSE");
   });
 
   test("every key in config/models.json is read by something", () => {
@@ -612,37 +624,16 @@ describe("package.json scripts and config/ are documented as they execute", () =
   });
 });
 
-describe("README describes the test suite as it is now", () => {
-  /* The old sentence enumerated ten areas — "collector, identity, routing,
-     notification, archive, snapshot/SSE, control, lifecycle, web-client, and
-     HTTP-boundary". The suite is past fifty files and covers the attention
-     layer, cost, triage, pulse, publish, cursor admission and the shell scripts
-     besides. An exhaustive list is the wrong shape for a growing suite: it rots
-     by construction and nothing notices. What is pinned here instead is the
-     part that must stay true. */
-
-  test("the four non-unit pins it names are real files", () => {
-    for (const named of [...readme.matchAll(/`(tests\/[\w.-]+\.test\.ts)`/g)].map((m) => m[1])) {
-      expect(() => read(named), `README.md names ${named}, which does not exist`).not.toThrow();
-    }
-    // Guard: the regex still finds them, so an empty set cannot pass silently.
-    expect(readme).toContain("tests/reference-docs.test.ts");
-  });
-
+describe("README's closing gate line stays true", () => {
   test("the gate it describes is the gate that runs", () => {
+    /* README dropped its suite inventory when it became a front door — a
+       stranger does not need one. The gate is the part that must stay true,
+       because it is the sentence that says broken code cannot ship. */
     expect(JSON.parse(pkg).scripts.check).toBe("bun run typecheck && bun test");
     const deployScript = read("scripts/anthill-deploy.sh");
     expect(deployScript).toContain("bunx tsc --noEmit");
     expect(deployScript).toContain("bun test");
-    expect(readme).toContain("the same gate `scripts/anthill-deploy.sh` runs");
-  });
-
-  test("the suite size it quotes is still roughly right", () => {
-    /* Deliberately an order of magnitude, not a count. A doc that pins an exact
-       number is wrong on the next commit, which teaches readers to ignore it. */
-    const count = readdirSync(join(ROOT, "tests")).filter((n) => n.endsWith(".test.ts")).length;
-    expect(count).toBeGreaterThan(30);
-    expect(count).toBeLessThan(100);
-    expect(readme, "README's ~50 no longer matches the suite's order of magnitude").toContain("~50 files");
+    expect(readme).toContain("scripts/anthill-deploy.sh");
+    expect(readme).toContain("bun run check");
   });
 });
