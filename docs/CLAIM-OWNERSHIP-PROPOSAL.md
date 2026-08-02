@@ -98,6 +98,56 @@ inconsistent.
 
 Zero unresolved crossings, once the benign case is named as benign.
 
+## Does this resolve the entanglement, or rename it? — scored against today
+
+Honest answer: **today, it renames.** Scored against every collision that
+actually happened, it changes zero decisions.
+
+| Collision | Under path ownership | Under claim ownership |
+|---|---|---|
+| My pin caught the undocumented `scripts/` file | docs lane documented it | same |
+| `858a993` flipped a `test.failing` of mine | tests lane's file, tests lane's call | legal — my comment named its own retirement |
+| `1617382` rewrote 23 lines of that same pin file | tests lane's file, tests lane's call | mechanism not claim; assertions went 316 → 317 |
+
+**Zero of three.** A boundary that sounds better and changes nothing is the
+defect class we have spent the day removing from the board, and I am not going
+to exempt my own proposal from it.
+
+**Three things it genuinely does not do:**
+
+1. **It does not reduce the coupling.** `reference-docs.test.ts` still reads
+   `ANT-GUIDE.md`. A docs edit can still turn the suite red. Naming an owner
+   changes nothing a machine does.
+2. **It has no enforcement.** It is a convention. The rule that carries the
+   weight — *never loosen a pin to make prose pass* — is reviewable but not
+   automatable, because weakening an assertion (`toBe` → `toBeTruthy`) is
+   invisible to any count.
+3. **Its tiebreak assigns the wrong lane in the hardest case.** A claim that is
+   both a suite invariant and a reader promise — *window plus prior is the same
+   whole from any window* is exactly one — goes to docs under my rule. But the
+   tests lane is the half that can **detect its falsification**. Assigning a
+   claim to the lane less able to notice it is broken is a real defect and I do
+   not have a clean fix for it.
+
+**What it does do, which is narrower than "resolve":** it removes the ambiguity
+about who repairs the *next* collision. Today that ambiguity was resolved by
+whoever noticed being careful — `1617382` strengthened the file it rewrote, and
+nothing structural made it strengthen rather than weaken. It did so because the
+tests lane is careful. The rule's only real value is that it does not depend on
+that continuing to be true.
+
+So: **prospective, conditional, unenforced.** Worth adopting because it is free
+and because the failure it prevents is cheap to prevent and expensive to undo —
+but it should be adopted with that description, not as a fix for something that
+was breaking.
+
+**The one amendment that would make it bite**, if the tests lane wants it: a
+convention about the *response* rather than the ownership — **when
+`reference-docs.test.ts` or `ant-guide.test.ts` goes red, the repair changes the
+document or the code, never the assertion; if the assertion is genuinely wrong,
+it is routed to its owner first.** That is checkable by a human in review, which
+is more than the ownership rule offers on its own.
+
 ## What I am not proposing
 
 Not that the docs lane take `tests/`, nor the tests lane take `docs/`. Directory
