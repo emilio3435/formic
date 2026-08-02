@@ -429,7 +429,16 @@ export interface PulseBurn {
 
 export interface PulseActivityBucket {
   start: string;
-  activeSessions: number;
+  /* Null when the bucket was never successfully observed — every refresh inside
+     it came back with all four collectors stale, or no refresh landed in it at
+     all because the process was busy or restarting.
+
+     `tokens` has always been nullable for this reason; `activeSessions` was not,
+     so an outage published 0 and drew a trough identical to a genuinely quiet
+     five minutes. "We could not look" and "nothing was happening" are different
+     facts, and nothing else on this board computes an activity trend, so no
+     second figure would ever have contradicted the wrong one. */
+  activeSessions: number | null;
   tokens: number | null;
 }
 

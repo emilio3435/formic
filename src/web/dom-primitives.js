@@ -120,29 +120,60 @@ export function svgMeter(pct, cls, opts = {}) {
   return svg;
 }
 
-/* SVG sparkline — one <polyline> whose points are geometry attributes, never
+/* Sparkline geometry, separated from the drawing so the part that decides WHERE
+   the line breaks can be tested without a DOM. Returns one array of point
+   strings per unbroken run, empty when there is nothing worth drawing. */
+/* SVG sparkline — <polyline> runs whose points are geometry attributes, never
    inline style, so the strict CSP (style-src 'self') permits it. Returns null
-   below two points — a single dot is not a trend and would only fake one. */
-export function svgSparkline(values, opts = {}) {
-  const points = (Array.isArray(values) ? values : []).filter((v) => Number.isFinite(v));
-  if (points.length < 2) return null;
+   below two points — a single dot is not a trend and would only fake one.
+
+   A non-finite value is a HOLE, not an absent element. It used to be filtered
+   out before the geometry was computed, which did two things: the line closed
+   over the gap so an unmeasured stretch looked continuous, and because x is the
+   array index, dropping a value silently restretched every point after it — the
+   chart rescaled its own time axis. Positions now come from the full array and
+   the stroke breaks at each hole, so a gap reads as a gap. */
+export function sparklineSegments(values) {
+  const all = Array.isArray(values) ? values : [];
+  const finite = all.filter((v) => Number.isFinite(v));
+  if (finite.length < 2) return [];
   const width = 100;
   const height = 24;
-  const max = Math.max(...points, 1);
-  const step = width / (points.length - 1);
-  const coords = points.map((v, i) =>
-    (i * step).toFixed(1) + "," + (height - 2 - (Math.max(0, v) / max) * (height - 4)).toFixed(1),
-  ).join(" ");
+  const max = Math.max(...finite, 1);
+  // Spacing over the whole series, so a hole keeps its place on the axis.
+  const step = all.length > 1 ? width / (all.length - 1) : width;
+  const at = (v, i) =>
+    (i * step).toFixed(1) + "," + (height - 2 - (Math.max(0, v) / max) * (height - 4)).toFixed(1);
+  const runs = [];
+  let run = [];
+  all.forEach((v, i) => {
+    if (Number.isFinite(v)) { run.push(at(v, i)); return; }
+    if (run.length) runs.push(run);
+    run = [];
+  });
+  if (run.length) runs.push(run);
+  /* A lone measurement between two holes is still a measurement: duplicating its
+     coordinate under a round cap draws it as a dot rather than dropping it. */
+  return runs.map((segment) => (segment.length === 1 ? [segment[0], segment[0]] : segment));
+}
+
+export function svgSparkline(values, opts = {}) {
+  const runs = sparklineSegments(values);
+  if (runs.length === 0) return null;
+  const width = 100;
+  const height = 24;
   const svg = document.createElementNS(SVGNS, "svg");
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("class", opts.class || "pulse-spark");
   if (opts.label) { svg.setAttribute("role", "img"); svg.setAttribute("aria-label", opts.label); }
   else svg.setAttribute("aria-hidden", "true");
-  svg.append(svgChild(["polyline", {
-    points: coords, fill: "none", stroke: "currentColor",
-    "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round",
-  }]));
+  for (const segment of runs) {
+    svg.append(svgChild(["polyline", {
+      points: segment.join(" "), fill: "none", stroke: "currentColor",
+      "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round",
+    }]));
+  }
   return svg;
 }
 
