@@ -15,9 +15,9 @@
    why client-state.js had to come out first. Builds no DOM and issues no
    requests: it decides WHAT to say, never where it lands on screen.  */
 
-import { fmtElapsed, fmtTok, modelShort, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
+import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome, livenessState } from "./agent-model.js";
+import { deriveActivity, deriveControlState, deriveOutcome } from "./agent-model.js";
 import { state } from "./client-state.js";
 
 /* Plain words for provider-native enums that used to render raw. */

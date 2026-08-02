@@ -5,24 +5,43 @@
    file directly; DOM wiring only runs when a document exists. */
 
 import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
-import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
+import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
 import { state } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
 import {
-  clocksFrozen, feedAlarm, feedFrozen, snapshotFreshness,
-  SNAPSHOT_FRESH_MS, SNAPSHOT_STALE_MS,
+  clocksFrozen,
+  feedAlarm,
+  feedFrozen,
+  snapshotFreshness,
+  SNAPSHOT_FRESH_MS,
+  SNAPSHOT_STALE_MS,
 } from "./feed-freshness.js";
 import {
-  ACTION_KIND_LABELS, actionRecipients, loadActions, normalizeActions, refreshActions,
-  renderActionLog, renderActionsPanel,
+  ACTION_KIND_LABELS,
+  actionRecipients,
+  loadActions,
+  normalizeActions,
+  refreshActions,
+  renderActionLog,
+  renderActionsPanel,
 } from "./action-log.js";
 import {
-  loadTranscript, normalizeTranscript, renderTranscriptPanel, transcriptWindow,
+  loadTranscript,
+  normalizeTranscript,
+  renderTranscriptPanel,
+  transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
 } from "./transcript.js";
 import {
-  applyNotifications, deliverNotification, loadNotifyPreference, needsHumanIds,
-  notificationPlan, notifyToggleView, renderNotifyToggle, titleWithAlerts, toggleNotifications,
+  applyNotifications,
+  deliverNotification,
+  loadNotifyPreference,
+  needsHumanIds,
+  notificationPlan,
+  notifyToggleView,
+  renderNotifyToggle,
+  titleWithAlerts,
+  toggleNotifications,
 } from "./notifications.js";
 
 import {
@@ -30,14 +49,11 @@ import {
   agentLabelEligible,
   agentLabelTarget,
   agentName,
-  collisionClaimText,
   collisionLine,
   conciseText,
   controlUnavailableText,
-  cwdIdentityName,
   elapsedDataset,
   focusDestinationHint,
-  identityCause,
   identityTraceView,
   investigationView,
   issueLifecycle,
@@ -54,7 +70,6 @@ import {
   recentlyResolvedOf,
   roleView,
   roomLabelTarget,
-  shortSessionId,
   snapshotAgents,
   sourceAgentName,
   staleControlNote,
@@ -70,21 +85,59 @@ import {
 } from "./presentation.js";
 
 import {
-  actionsFailureText, actionsUrl, ACTIONS_DEFAULT_LIMIT, ACTIONS_MAX_LIMIT, apiFetch,
-  API_READ_TIMEOUT_MS, API_TRANSCRIPT_TIMEOUT_MS, API_WRITE_TIMEOUT_MS, clampActionsLimit,
-  clampTranscriptLimit, nextTranscriptLimit, readEndpointOriginNote, serverUnreachableHint,
-  transcriptFailureText, transcriptUrl, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_LIMIT_STEPS,
+  actionsFailureText,
+  actionsUrl,
+  ACTIONS_DEFAULT_LIMIT,
+  ACTIONS_MAX_LIMIT,
+  apiFetch,
+  API_READ_TIMEOUT_MS,
+  API_TRANSCRIPT_TIMEOUT_MS,
+  API_WRITE_TIMEOUT_MS,
+  clampActionsLimit,
+  clampTranscriptLimit,
+  nextTranscriptLimit,
+  readEndpointOriginNote,
+  serverUnreachableHint,
+  transcriptFailureText,
+  transcriptUrl,
+  TRANSCRIPT_DEFAULT_LIMIT,
+  TRANSCRIPT_LIMIT_STEPS,
   TRANSCRIPT_MAX_LIMIT,
 } from "./api-client.js";
 import {
-  alerting, buildClusters, contextUsage, deriveActivity, deriveControlState, deriveOutcome,
-  deriveRollup, LIVENESS_ENDED_UNKNOWN, LIVENESS_VIEW, LIVENESS_WORDS, livenessState, livenessView,
-  lookbackApplies, parseLookbackHours, programRollup, tokenSummary, viewMatches, withinLookback,
+  alerting,
+  buildClusters,
+  contextUsage,
+  deriveActivity,
+  deriveControlState,
+  deriveOutcome,
+  deriveRollup,
+  LIVENESS_ENDED_UNKNOWN,
+  LIVENESS_VIEW,
+  LIVENESS_WORDS,
+  livenessState,
+  livenessView,
+  lookbackApplies,
+  parseLookbackHours,
+  programRollup,
+  tokenSummary,
+  viewMatches,
+  withinLookback,
 } from "./agent-model.js";
 import {
-  ACTIVITY_LABELS, CONTROL_LABELS, DEFAULT_LOOKBACK_HOURS, DEFAULT_WIDGET_IDS,
-  LOOKBACK_PRESETS, LOOKBACK_STORAGE_KEY, MODEL_POLICY_LABELS, OPS_VIEWS,
-  OUTCOME_LABELS, USAGE_RANGE_PRESETS, VIEWS, WIDGET_CATALOG, WIDGET_IDS,
+  ACTIVITY_LABELS,
+  CONTROL_LABELS,
+  DEFAULT_LOOKBACK_HOURS,
+  DEFAULT_WIDGET_IDS,
+  LOOKBACK_PRESETS,
+  LOOKBACK_STORAGE_KEY,
+  MODEL_POLICY_LABELS,
+  OPS_VIEWS,
+  OUTCOME_LABELS,
+  USAGE_RANGE_PRESETS,
+  VIEWS,
+  WIDGET_CATALOG,
+  WIDGET_IDS,
   WIDGET_STORAGE_KEY,
 } from "./client-catalogs.js";
 

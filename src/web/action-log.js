@@ -11,10 +11,10 @@
    Paints through repaint() rather than render(), so it carries no knowledge of
    the board it sits on. */
 
-import { $, el, icon } from "./dom-primitives.js";
+import { $, el } from "./dom-primitives.js";
 import { state } from "./client-state.js";
 import { repaint } from "./repaint.js";
-import { actionsFailureText, actionsUrl, apiFetch, API_READ_TIMEOUT_MS, clampActionsLimit, ACTIONS_DEFAULT_LIMIT } from "./api-client.js";
+import { actionsFailureText, actionsUrl, apiFetch, API_READ_TIMEOUT_MS, ACTIONS_DEFAULT_LIMIT } from "./api-client.js";
 import { agoText } from "./text-formatters.js";
 import { agentName, agentsById, actionOutcomeView } from "./presentation.js";
 

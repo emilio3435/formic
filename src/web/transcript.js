@@ -10,12 +10,18 @@
    inversion is what let this come out — with a direct render() call it dragged
    in ~3,800 lines of dependency closure instead of 133. */
 
-import { el, icon } from "./dom-primitives.js";
+import { el } from "./dom-primitives.js";
 import { state } from "./client-state.js";
 import { repaint } from "./repaint.js";
 import {
-  apiFetch, API_TRANSCRIPT_TIMEOUT_MS, clampTranscriptLimit, nextTranscriptLimit,
-  transcriptFailureText, transcriptUrl, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_LIMIT_STEPS,
+  apiFetch,
+  API_TRANSCRIPT_TIMEOUT_MS,
+  clampTranscriptLimit,
+  nextTranscriptLimit,
+  transcriptFailureText,
+  transcriptUrl,
+  TRANSCRIPT_DEFAULT_LIMIT,
+  TRANSCRIPT_LIMIT_STEPS,
 } from "./api-client.js";
 import { agoText } from "./text-formatters.js";
 
