@@ -698,6 +698,11 @@ function noDataWidget(sublabel) {
 function completionWindowText(momentum) {
   if (!momentum) return "";
   const done = momentum.completionsLastHour;
+  /* Null is the server declining to guess, not a zero. It counted `working ->
+     idle` edges, which is "stopped writing for three minutes" — the audit's
+     worst number, whose true value could be 0 while it rendered 17. Say nothing
+     rather than print "↑null done". */
+  if (done == null) return "";
   if (!(momentum.observedWindowMs > 0)) {
     /* A restarted tracker knows a COUNT before it has a window to rate it over.
        Saying "No completion data yet" while completionsLastHour is 2 states
