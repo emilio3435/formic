@@ -13,6 +13,7 @@ import {
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { readPublishState, type PublishState } from "./publish-state";
+import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
@@ -757,6 +758,10 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
          board is showing, not of the fleet: acknowledged notifications come
          back unread, so the board asks for attention it was already given. */
       const operatorStateError = (await attentionStore).loadError?.();
+      /* Built-in model defaults standing in for a config that failed to load
+         change context percentages and compliance verdicts without looking
+         wrong, so the health surface names it rather than leaving it in stderr. */
+      const configError = modelConfigLoadError();
       return Response.json(
         {
           ok: healthy,
@@ -767,11 +772,13 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
           },
           data: {
-            complete: staleSources.length === 0 && cmuxReachable !== false && !operatorStateError,
+            complete: staleSources.length === 0 && cmuxReachable !== false
+              && !operatorStateError && !configError,
             staleSources: [...staleSources],
             cmuxReachable,
             controlErrors,
             ...(operatorStateError ? { operatorStateError } : {}),
+            ...(configError ? { configError } : {}),
           },
         },
         {
