@@ -93,6 +93,20 @@ still *looks* complete. The number is available; the pixel is not.
 
 ## Still open
 
+- **Money the cockpit cannot see at all.** Your cost source reports five
+  providers. The board collects four. **Hermes and Factory have no collector**,
+  so their spend appears in the Usage totals and nowhere else — no row, no
+  agent, no session. In the last 24 hours that is a recurring cron job,
+  `cron_daily-watcher-001`, spending **$23.99 across 7,516,850 tokens in 20
+  calls**, and it is the whole of Hermes' activity. Over thirty days Hermes is
+  **$243.73**.
+
+  This is not a wrong number, which is the kind this project spent the day
+  fixing. It is an **absent** one, with nothing anywhere indicating absence —
+  the health line reads `4 of 4 collectors healthy` and is telling the truth
+  about the four it has, while saying nothing about the two it does not. The
+  only surface that knows is the Usage tab's provider breakdown, and you have to
+  already suspect it to look.
 - **A row can give the wrong reason.** A dead agent's Send is correctly refused,
   but the explanation attached to it can be the wrong one — "cannot identify the
   pane" instead of "the process is gone". Nothing unsafe happens; you are simply

@@ -808,8 +808,12 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
   test("both onboarding docs describe that asymmetry, not a blanket cmux requirement", () => {
     const flatten = (d: string) => d.replace(/\s+/g, " ");
     for (const [name, doc] of [["QUICKSTART.md", flatten(quickstart)], ["ANT-GUIDE.md", flatten(read("ANT-GUIDE.md"))]] as const) {
+      /* Not an alternation: both spellings live in ANT-GUIDE — prose says "Send
+         and Interrupt", the gate table heads a column "Send / Interrupt" — so an
+         OR let either be deleted while the other carried the match. Require the
+         prose form, which is the one a reader meets first. */
       expect(doc, `${name} does not say Send/Interrupt are gated harder than Focus`)
-        .toMatch(/Send and Interrupt|Send \/ Interrupt/);
+        .toMatch(/Send and Interrupt/);
       expect(doc, `${name} does not name the cwd-match state an operator will hit`)
         .toMatch(/working directory|matched by (its )?folder/i);
       /* Same requirement the promises block below asserts; keep the accepted
@@ -1052,10 +1056,18 @@ describe("the safety promises the docs make on the product's behalf", () => {
 
   test("both docs promise the board refuses a session that has exited", () => {
     for (const [name, doc] of both()) {
-      expect(doc, `${name} dropped the liveness promise`)
-        .toMatch(/already exited|process is gone/i);
+      /* Each of these had two phrasings alive in the same document, so removing
+         one passed. Both are now required: the promise AND the reason it
+         exists, which is the half a reader needs to believe it. */
+      expect(doc, `${name} dropped the liveness promise`).toMatch(/already exited/i);
+      /* "process is gone" in ANT-GUIDE, "found the process gone" in QUICKSTART —
+         the same claim, different grammar. Match the claim, not one sentence. */
+      expect(doc, `${name} stopped saying the process is gone, not merely quiet`)
+        .toMatch(/process (is )?gone/i);
       expect(doc, `${name} does not explain WHY a dead agent's pane is dangerous`)
-        .toMatch(/pane outlives the agent|belongs to your shell/i);
+        .toMatch(/pane outlives the agent/i);
+      expect(doc, `${name} stopped saying whose the pane becomes`)
+        .toMatch(/belongs to your shell/i);
     }
   });
 
@@ -1125,7 +1137,7 @@ describe("the guide describes the dead-row controls as they actually behave", ()
     expect(guide, "the guide still says a dead row's Send looks live")
       .not.toMatch(/refused when pressed|still shows a lit/i);
     expect(guide, "the guide stopped saying a dead row's Send is greyed out")
-      .toMatch(/greyed out to match|Send is greyed/i);
+      .toMatch(/greyed out to match/i);
   });
 });
 
@@ -1268,8 +1280,10 @@ describe("the cost window's limits are documented as the code enforces them", ()
        window a reader can ask for. Without this sentence the table reads as a
        complete account of the limits, which is the surprise it exists to
        prevent. */
+    /* The second alternative was a substring of the first and could never fire
+       independently — an alternation that only ever tested one thing. */
     expect(flat, "ANT-GUIDE stopped saying the record outlasts the widest window")
-      .toMatch(/database keeps going after that|keeps going after/i);
+      .toMatch(/database keeps going after that/i);
     expect(flat, "ANT-GUIDE stopped distinguishing the widest button from the widest question")
       .toMatch(/widest \*button\*[\s\S]{0,80}widest\s+\*question\*/i);
     /* No percentage is pinned on purpose: the audit measured 32.6% on one
@@ -1318,8 +1332,14 @@ describe("no one-off measurement is presented as a standing fact", () => {
     expect(warning, "the token warning went missing").toContain("not the sum of its rows");
     expect(warning, "a specific multiplier came back into the token warning")
       .not.toMatch(/\b(five hundred|\d{2,4})\s*(times|x)\b/i);
-    expect(warning, "the warning stopped telling the reader that quoted ratios are stale")
-      .toMatch(/moves daily|out of date/i);
+    /* The guide wraps this inside a blockquote, so "moves daily" arrives as
+       "moves > daily" once whitespace is flattened. Strip the markers rather
+       than loosening the claim. */
+    const prose = warning.replace(/>\s*/g, "");
+    expect(prose, "the warning stopped saying the multiplier moves")
+      .toMatch(/moves daily/i);
+    expect(prose, "the warning stopped telling a reader that quoted ratios are stale")
+      .toMatch(/out of date/i);
   });
 });
 
@@ -1670,5 +1690,36 @@ describe("the archive backlog is described as fixed, not as a shortfall", () => 
     const archive = read("src/server/archive.ts");
     expect(archive, "retention no longer falls back to updatedAt — the backlog claim changes")
       .toMatch(/archivedAt \?\? agent\.updatedAt/);
+  });
+});
+
+/* The only finding of the evening that costs money nobody can observe. Pinned
+   against the code that would make it stale: the collector roster. If a Hermes
+   or Factory collector is ever added, this paragraph is wrong and should fail
+   here rather than sit in a handover telling someone to go look. */
+describe("TODAY.md names the providers the board cannot see", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("the roster the board collects still excludes the providers named", () => {
+    const providers = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    expect(providers, "the Provider union could not be read").toBeTruthy();
+    for (const absent of ["hermes", "factory"]) {
+      expect(providers.toLowerCase(), `${absent} gained a collector — TODAY.md's blind-spot paragraph is now wrong`)
+        .not.toContain(absent);
+    }
+    expect(today(), "TODAY.md stopped naming the uncollected providers")
+      .toMatch(/Hermes and Factory have no collector/i);
+  });
+
+  test("it says this is an absent number, not a wrong one", () => {
+    /* The distinction is the whole point: a wrong number announces itself by
+       disagreeing with something, and an absent one agrees with everything. */
+    const t = today();
+    expect(t, "the summary stopped distinguishing an absent number from a wrong one")
+      .toMatch(/It is an \*\*absent\*\* one/i);
+    expect(t, "the summary stopped saying nothing indicates the absence")
+      .toMatch(/nothing anywhere indicating absence/i);
+    expect(t, "the summary stopped explaining why 4 of 4 healthy is not a contradiction")
+      .toMatch(/telling the truth about the four it has/i);
   });
 });
