@@ -517,6 +517,77 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* Usage audit §1. The cost headline read "not reported" while the same payload
+     carried $11,939.92 of measured, provenance-tagged spend. burnbar.ts:33 sets
+     costKnown false as soon as ANY invocation lacks a price, so Cursor at 45 of
+     2,980 calls suppressed the figure for the other four providers. The string
+     "cost missing on some rows" was literally true; the belief it created was
+     false. costKnown may gate a qualifier, never the value. */
+  test("a partly-priced window reports what it measured, with its coverage", () => {
+    const partly = {
+      costKnown: false, estimatedCostUsd: null, invocations: 2980,
+      byProvider: [
+        { provider: "Codex", costUsd: 4752.32, tokens: 1, invocations: 1850 },
+        { provider: "Claude Code", costUsd: 6949.58, tokens: 1, invocations: 680 },
+        { provider: "Hermes", costUsd: 237.39, tokens: 1, invocations: 393 },
+        { provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 },
+        { provider: "Factory", costUsd: 0.65, tokens: 1, invocations: 12 },
+      ],
+    };
+    const reading = M.usageCostReading(partly);
+    expect(reading.value).toBe("$11939.94");
+    expect(reading.value).not.toBe("not reported");
+    /* Coverage as a share of CALLS. The token share of the same gap is 0.108%,
+       which flatters it by more than an order of magnitude. */
+    expect(reading.sub).toBe("measured · 1.5% of calls unpriced");
+
+    // Fully priced keeps the server's own total and says where it came from.
+    expect(M.usageCostReading({ costKnown: true, estimatedCostUsd: 28.37, byProvider: [] }))
+      .toEqual({ value: "$28.37", sub: "from BurnBar cost" });
+
+    /* "not reported" survives for the only case where it is the whole truth: a
+       window with nothing priced at all. Never a fabricated $0.00. */
+    const none = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, invocations: 45,
+      byProvider: [{ provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 }],
+    });
+    expect(none.value).toBe("not reported");
+    expect(none.sub).toBe("no priced rows in this range");
+  });
+
+  /* Usage audit §3. Same label, four answers: 45.1M/h at 1h, 5.7M/h at 24h,
+     16.0M/h at 7d, 36.4M/h at 30d on one unchanged fleet. An 8x swing between
+     adjacent selector positions reads as burn exploding. */
+  test("the burn rate names the window it averaged", () => {
+    expect(M.usageRateWindowText({ from: "2026-08-02T00:00:00Z", to: "2026-08-03T00:00:00Z" }))
+      .toBe("24.0h average, not a current rate");
+    expect(M.usageRateWindowText({ from: "2026-07-03T00:00:00Z", to: "2026-08-02T00:00:00Z" }))
+      .toContain("30d average");
+    // No window on the wire means no window claim, not an invented one.
+    expect(M.usageRateWindowText({})).toBe("tokens per hour");
+    expect(M.usageRateWindowText({ from: "x", to: "y" })).toBe("tokens per hour");
+  });
+
+  /* Usage audit §2. OpenBurnBar emits UTC text with no zone marker, Date.parse
+     reads it as local, and every row aged by exactly the offset — a 24-minute-old
+     row rendering "2.2h ago" makes the freshest data look stale. */
+  test("zone-less BurnBar timestamps are read as UTC, and ISO is left alone", () => {
+    expect(M.burnbarInstant("2026-08-02 11:15:48.670")).toBe("2026-08-02T11:15:48.670Z");
+    expect(M.burnbarInstant("2026-08-02 11:15:48")).toBe("2026-08-02T11:15:48Z");
+
+    /* Idempotent with the server-side fix the audit routes: anything already
+       carrying a zone is untouched, so this cannot double-correct once the
+       boundary emits proper ISO. */
+    for (const iso of ["2026-08-02T11:15:48.670Z", "2026-08-02T11:15:48+02:00", "2026-08-02T11:15:48Z"]) {
+      expect(M.burnbarInstant(iso)).toBe(iso);
+    }
+
+    // The bug it fixes, stated as arithmetic rather than as a string.
+    const at = Date.parse("2026-08-02T11:39:32Z");
+    const ageMs = at - Date.parse(M.burnbarInstant("2026-08-02 11:15:48.670"));
+    expect(Math.round(ageMs / 60_000)).toBe(24);
+  });
+
   /* Render-first audit §1, the composition itself. The three surfaces were each
      individually correct and each individually tested, which is exactly why this
      shipped: no test asked what they say TOGETHER. Reproduced on the board in

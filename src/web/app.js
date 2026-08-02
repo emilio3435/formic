@@ -998,6 +998,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
+  usageCostReading, usageRateWindowText, burnbarInstant,
   systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
@@ -6579,6 +6580,85 @@ function usageRangeBounds() {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
+/* OpenBurnBar stores "yyyy-MM-dd HH:mm:ss.SSS" as UTC text with NO zone marker
+   (burnbar.ts:421-429) and the endpoint passes it through unchanged. Date.parse
+   reads a zone-less string as LOCAL time, so on this UTC+2 machine every row
+   aged by exactly the offset. Verified on the wire: startTime
+   "2026-08-02 11:15:48.670" read at 11:39:32Z is 24 minutes old and rendered
+   "2.2h ago" — the freshest data in the table looking stale, which is the one
+   thing that stops an operator trusting the tab at all.
+
+   The real fix is at the API boundary and the audit routes it there. This is the
+   render half and it is deliberately IDEMPOTENT with that fix: a string already
+   carrying Z or a numeric offset is returned untouched, so when the boundary
+   starts emitting proper ISO nothing here double-corrects. (Usage audit §2.) */
+const ZONELESS_SQL_INSTANT = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+function burnbarInstant(text) {
+  if (typeof text !== "string") return text;
+  const match = ZONELESS_SQL_INSTANT.exec(text.trim());
+  return match ? `${match[1]}T${match[2]}Z` : text;
+}
+
+/* What the cost reading should say, given a summary that may be only partly
+   priced.
+
+   The rule this replaces: `costKnown ? value : "not reported"`. burnbar.ts:33
+   sets costKnown false as soon as ANY invocation in the window lacks a price, so
+   one unpriced provider suppressed the whole figure. Measured at 30 days: the
+   headline read "not reported" while the same payload carried $11,939.92 of
+   measured, provenance-tagged spend — Codex $4,752.32, Claude Code $6,949.58,
+   Hermes $237.39, Factory $0.65 — with Cursor the only unpriced source at 45 of
+   2,980 calls. The string "cost missing on some rows" was literally true and the
+   belief it created, "we do not know what this cost", was false.
+
+   costKnown now gates a QUALIFIER, never the value. "not reported" is reserved
+   for a window with no priced rows at all, which is the only case where it is
+   the whole truth. (Usage audit §1.)
+
+   Server first, as everywhere else on this board: when the summary carries an
+   authoritative total it is rendered untouched. The byProvider sum is a stated
+   fallback for the payload as it stands today, and it should be DELETED the
+   moment the server ships a measured total of its own — two derivations of one
+   number is the seam that produced every attention and token defect here. */
+function usageCostReading(summary) {
+  if (!summary) return { value: "not reported", sub: "no cost data" };
+  if (summary.costKnown) {
+    return { value: fmtUsd(summary.estimatedCostUsd), sub: "from BurnBar cost" };
+  }
+  const rows = Array.isArray(summary.byProvider) ? summary.byProvider : [];
+  const priced = rows.filter((row) => Number.isFinite(row.costUsd));
+  if (!priced.length) return { value: "not reported", sub: "no priced rows in this range" };
+  const measured = priced.reduce((total, row) => total + row.costUsd, 0);
+  const unpricedCalls = rows
+    .filter((row) => !Number.isFinite(row.costUsd))
+    .reduce((total, row) => total + (row.invocations || 0), 0);
+  const totalCalls = Number.isFinite(summary.invocations) && summary.invocations > 0
+    ? summary.invocations
+    : rows.reduce((total, row) => total + (row.invocations || 0), 0);
+  /* The coverage is stated as a share of CALLS, not tokens: an unpriced call is
+     an unpriced call whatever its size, and the token share (0.108%) flatters
+     the gap by an order of magnitude against the call share (1.5%). */
+  const pct = totalCalls > 0 ? (unpricedCalls / totalCalls) * 100 : 0;
+  const sub = unpricedCalls > 0
+    ? `measured · ${pct < 0.1 ? "<0.1" : pct.toFixed(1)}% of calls unpriced`
+    : "measured";
+  return { value: fmtUsd(measured), sub };
+}
+
+/* The burn rate is processedTokens over the SELECTED window, not a current rate.
+   Measured across the selector on one unchanged fleet: 45.1M/h at 1h, 5.7M/h at
+   24h, 16.0M/h at 7d, 36.4M/h at 30d — same label, four answers, an 8x swing
+   between adjacent positions. An operator clicking 1h after 24h sees the rate
+   jump eightfold and concludes burn exploded. Nothing did. The window is the
+   missing half of the sentence. (Usage audit §3.) */
+function usageRateWindowText(summary) {
+  if (!summary) return "tokens per hour";
+  const from = Date.parse(summary.from);
+  const to = Date.parse(summary.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return "tokens per hour";
+  return fmtElapsed(to - from) + " average, not a current rate";
+}
+
 function fmtUsd(value) {
   if (value == null || !Number.isFinite(value)) return "not reported";
   return "$" + value.toFixed(value >= 10 ? 2 : 3);
@@ -6715,8 +6795,8 @@ function renderUsagePanel(ui = state) {
   root.append(el("div", { class: "usage-kpis" },
     reading("Processed tokens", el("span", { class: "reading-value", text: fmtTok(summary.processedTokens || 0) }),
       el("span", { class: "reading-sub", text: "BurnBar observed" })),
-    reading("Estimated cost", el("span", { class: "reading-value", text: summary.costKnown ? fmtUsd(summary.estimatedCostUsd) : "not reported" }),
-      el("span", { class: "reading-sub", text: summary.costKnown ? "from BurnBar cost" : "cost missing on some rows" })),
+    reading("Estimated cost", el("span", { class: "reading-value", text: usageCostReading(summary).value }),
+      el("span", { class: "reading-sub", text: usageCostReading(summary).sub })),
     reading("Invocations", el("span", { class: "reading-value", text: String(summary.invocations || 0) }),
       el("span", { class: "reading-sub", text: "in selected range" })),
     reading("Burn rate",
@@ -6724,7 +6804,7 @@ function renderUsagePanel(ui = state) {
         class: "reading-value",
         text: summary.burnRateTokensPerHour == null ? "—" : fmtTok(Math.round(summary.burnRateTokensPerHour)) + "/h",
       }),
-      el("span", { class: "reading-sub", text: "tokens per hour" }))));
+      el("span", { class: "reading-sub", text: usageRateWindowText(summary) }))));
 
   if (summary.byProvider && summary.byProvider.length) {
     const list = el("ul", { class: "usage-providers" });
@@ -6777,7 +6857,7 @@ function renderUsagePanel(ui = state) {
         }, row.sessionId.slice(0, 8))
         : el("span", { text: (row.sessionId || "—").slice(0, 8) });
       body.append(el("tr", {},
-        el("td", { text: row.startTime ? agoText(row.startTime) : "—" }),
+        el("td", { text: row.startTime ? agoText(burnbarInstant(row.startTime)) : "—" }),
         el("td", { text: row.provider || "—" }),
         el("td", { text: modelShort(row.model) || "—" }),
         el("td", { class: "usage-val", text: row.tokens == null ? "—" : fmtTok(row.tokens) }),
@@ -6799,7 +6879,22 @@ function renderUsageWard(ward, quotasOnly) {
     return section;
   }
   if (!quotasOnly) {
-    const spikes = ward.spikes || [];
+    /* A series with a zero baseline is not a spike, it is a first sighting.
+       burnbar.ts fires any zero-baseline series over 1,000 tok/h and encodes the
+       infinite ratio as sentinel 999, which rendered as "(new)" inside a ward
+       headed "Spike". Measured: "Cursor / grok-4.5 · 3k/h vs baseline 0/h (new)"
+       — a 24-hour average against a preceding 24-hour average in which that
+       series simply did not appear. No acceleration happened.
+
+       In a cockpit whose premise is silence unless a human is needed, an alert
+       that fires on "something started" is a wolf-cry. Both populations still
+       render — nothing is hidden — but under their own headings and their own
+       words, because a first sighting and a rate jump are different events.
+       Whether a first sighting should alert at all is the server's threshold
+       question and the audit routes it there. (Usage audit §4.) */
+    const all = ward.spikes || [];
+    const spikes = all.filter((spike) => spike.ratio !== 999);
+    const firstSeen = all.filter((spike) => spike.ratio === 999);
     if (!spikes.length) {
       section.append(el("p", { class: "usage-empty", text: "No abrupt rate jumps vs the trailing baseline." }));
     } else {
@@ -6807,9 +6902,20 @@ function renderUsageWard(ward, quotasOnly) {
       for (const spike of spikes.slice(0, 8)) {
         list.append(el("li", {},
           el("strong", { text: spike.provider + " / " + spike.model }),
-          ` · ${fmtTok(Math.round(spike.currentTokensPerHour))}/h vs baseline ${fmtTok(Math.round(spike.baselineTokensPerHour))}/h (${spike.ratio === 999 ? "new" : spike.ratio.toFixed(1) + "×"})`));
+          ` · ${fmtTok(Math.round(spike.currentTokensPerHour))}/h vs baseline ${fmtTok(Math.round(spike.baselineTokensPerHour))}/h (${spike.ratio.toFixed(1)}×)`));
       }
       section.append(list);
+    }
+    if (firstSeen.length) {
+      const list = el("ul", { class: "usage-ward-list" });
+      for (const item of firstSeen.slice(0, 8)) {
+        list.append(el("li", {},
+          el("strong", { text: item.provider + " / " + item.model }),
+          ` · ${fmtTok(Math.round(item.currentTokensPerHour))}/h · absent from the previous window`));
+      }
+      section.append(
+        el("h3", { class: "usage-subtitle", text: "First seen this window" }),
+        list);
     }
   }
   const pressure = ward.quotaPressure || [];
