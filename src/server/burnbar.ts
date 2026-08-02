@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { MODEL_CONFIG } from "./model-config";
 
 const KEYCHAIN_SERVICE = "com.openburnbar.database-encryption";
 const KEYCHAIN_ACCOUNT = "database-encryption-key-v1";
@@ -36,6 +37,25 @@ export interface UsageSummary {
   /* How many invocations went unmeasured — the size of the gap, not just its
      existence, so the card can say "3,000 across 2 calls, 1 unmeasured". */
   tokensMissing: number;
+  /* Rows whose token count exceeds any context window this fleet runs, which
+     makes them provably NOT single calls.
+
+     BurnBar records some Claude Code sessions as one cumulative row per session
+     alongside per-call rows from other providers. On 2026-07-30 seven such rows
+     carried 243M-512M tokens each against a 1M window, and their session ids
+     are this board's own agents. So `invocations` counts two different units,
+     and every ratio over it - cost per invocation, or comparing a 24h count of
+     175 with a 30d count of 3006 - divides by a mixed denominator.
+
+     The COST is not affected and is deliberately not adjusted: all 58 of those
+     rows are provenance "measured", provider-reported, and price at $1.27/M
+     against a normal-row median of $1.63/M. Cache reads are billed on every
+     turn, so a long session genuinely accrues that spend. The token counts are
+     cumulative with cache reads re-counted per turn - the same shape as the
+     sessionTotal defect fixed in collectors.ts, here inside a database we do
+     not own. Reported rather than repaired: the money is real, the unit is what
+     is wrong. */
+  aggregatedInvocations: number;
   /* The COMPLETE cost of the window, or null when any invocation in it is
      unpriced. Kept strict: a consumer reading this alone must never mistake a
      floor for a total. */
@@ -159,6 +179,15 @@ export interface CostResult {
   costProvenance: CostProvenance;
   pricingVersion?: string;
 }
+
+/* The largest context window this fleet runs. A grouped row carrying more
+   tokens than this per invocation cannot be describing single calls. Read from
+   config rather than hardcoded so a fleet on bigger models raises the bound
+   instead of quietly reclassifying its ordinary rows as aggregates. */
+const MAX_CONTEXT_WINDOW = Math.max(
+  ...Object.values(MODEL_CONFIG.claudeContextWindows ?? {}),
+  1_000_000,
+);
 
 const EMPTY_PRICING_CONFIG: PricingConfig = {
   pricingVersion: "unavailable",
@@ -510,6 +539,8 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     from,
     to,
     processedTokens: null,
+    // Nothing was read, so nothing can be classified as an aggregate either.
+    aggregatedInvocations: 0,
     estimatedCostUsd: null,
     // Nothing was read, so there is no measured floor either.
     measuredCostUsd: null,
@@ -540,12 +571,19 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheCreationTokens, 0) END) AS unpricedCacheCreationTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
-         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing,
+         -- Check 5 as SQL: a single call cannot carry more tokens than the
+         -- context window it ran in, so a ROW above that bound is not a call.
+         -- Counted per row, not per group: a group average above the bound
+         -- proves only that SOME row exceeds it, and blaming all of them would
+         -- overstate the very count that exists to be trustworthy.
+         SUM(CASE WHEN totalTokens > ? THEN 1 ELSE 0 END) AS aggregatedRows
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
        GROUP BY provider, model
        ORDER BY tokens DESC`,
-      [dbFrom, dbTo],
+      // Bound order follows the SQL text: the SELECT placeholder precedes WHERE's.
+      [MAX_CONTEXT_WINDOW, dbFrom, dbTo],
     );
     const byModel = rows.map((row) => {
       const costMissing = num(row.costMissing) ?? 0;
@@ -613,6 +651,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
         invocations: group.reduce((sum, row) => sum + row.invocations, 0),
       };
     });
+    const aggregatedInvocations = rows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
     const tokensMissing = byProvider.reduce((sum, row) => sum + row.tokensMissing, 0);
     const tokensKnown = tokensMissing === 0;
@@ -666,6 +705,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       processedTokens,
       tokensKnown,
       tokensMissing,
+      aggregatedInvocations,
       estimatedCostUsd,
       measuredCostUsd,
       costMissingInvocations,

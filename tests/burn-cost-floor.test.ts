@@ -31,6 +31,7 @@ function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
     processedTokens: 100,
     tokensKnown: true,
     tokensMissing: 0,
+    aggregatedInvocations: 0,
     estimatedCostUsd: null,
     measuredCostUsd: null,
     costMissingInvocations: 0,
