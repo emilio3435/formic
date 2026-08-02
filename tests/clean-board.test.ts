@@ -54,7 +54,7 @@ const cleanBoard = (overrides: Record<string, unknown> = {}) => ({
     needsYou: 0,
     tokenReporting: 1,
     tokenEligible: 1,
-    sourceHealth: { healthy: 4, degraded: 0, total: 4 },
+    sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 },
   },
   controlHealth: { cmuxReachable: true, lastCheckedAt: "2026-08-01T09:00:00.000Z", errors: [], staleSources: [] },
   issues: [],
@@ -81,7 +81,7 @@ const brokenBoard = () => cleanBoard({
   }],
   totals: {
     working: 1, idle: 0, tracked: 1, needsYou: 1, tokenReporting: 1, tokenEligible: 1,
-    sourceHealth: { healthy: 3, degraded: 1, total: 4 },
+    sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 },
   },
 });
 

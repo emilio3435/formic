@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { cmuxCommand } from "./cmux-auth";
-import type { CmuxNotification, CollectionResult, CmuxSurface, CommandRunner } from "./types";
+import type { CmuxNotification, CollectionResult, CmuxSurface, CommandResult, CommandRunner } from "./types";
 
 export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
@@ -276,11 +276,27 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
   });
 }
 
+/* A binary that is not installed is ABSENT, not degraded.
+
+   BunCommandRunner catches the spawn failure and reports exitCode -1 with
+   `Executable not found in $PATH: "cmux"`. Matching on that string is admittedly
+   brittle, so tests/collector-absence.test.ts drives the REAL runner against a
+   genuinely missing binary: if Bun ever changes the wording, that test fails
+   loudly rather than this quietly reverting to calling every cmux-less machine
+   degraded — which is the whole defect. Nothing here treats a timeout or a
+   non-zero exit as absence: those mean cmux IS here and did not answer. */
+export function executableMissing(result: CommandResult): boolean {
+  return !result.timedOut
+    && result.exitCode === -1
+    && /executable not found/i.test(result.stderr);
+}
+
 export async function collectCmux(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxSurface[]>> {
   const result = await runner.run(cmuxCommand(executable, ["rpc", "debug.terminals", "{}"]), 10_000);
+  if (executableMissing(result)) return { value: [], errors: [], absent: true };
   if (result.timedOut) return { value: [], errors: ["cmux terminal discovery timed out"] };
   if (result.exitCode !== 0) {
     return {
@@ -335,6 +351,7 @@ export async function collectCmuxNotifications(
   attentionStore?: AttentionStore,
 ): Promise<CollectionResult<CmuxNotification[]>> {
   const result = await runner.run(cmuxCommand(executable, ["list-notifications", "--json"]), 10_000);
+  if (executableMissing(result)) return { value: [], errors: [], absent: true };
   if (result.timedOut) return { value: [], errors: ["cmux notification discovery timed out"] };
   if (result.exitCode !== 0) {
     return {

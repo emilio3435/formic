@@ -13,6 +13,7 @@ import {
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { readPublishState, type PublishState } from "./publish-state";
+import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
@@ -658,11 +659,23 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         .flatMap((program) => program.agents)
         .find((candidate) => candidate.id === agentId);
       if (!agent) return responseError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
-      if (
-        !agent.target.surfaceId ||
-        !["exact", "unique-cwd"].includes(agent.target.resolution)
-      ) {
-        return responseError(409, "UNSAFE_TARGET", "The agent has no safely resolved cmux surface.");
+      /* Acknowledging writes attention state keyed by SURFACE, so on a row
+         resolved by directory match it clears the notification belonging to
+         whatever pane that row currently points at. 547679e closed this hole in
+         control.ts and missed it here, which is how the same defect survived on
+         two paths. Clearing another agent's request for a human is quieter than
+         a misrouted instruction and worse in one respect: the signal that
+         someone needed help is gone and nothing reports that it was. */
+      if (!canWriteToTarget(agent.target)) {
+        return responseError(
+          409,
+          "UNSAFE_TARGET",
+          agent.target.surfaceId
+            ? "This pane was matched by its working directory, not attested by cmux, so the session on it cannot be proven."
+              + " Acknowledging here could clear a different agent's request for a human."
+              + " This returns as soon as cmux attests the session."
+            : "The agent has no safely resolved cmux surface.",
+        );
       }
       try {
         const state = await (await attentionStore).apply(
@@ -974,7 +987,10 @@ export function emptySnapshot(): HubSnapshot {
       tokenEligible: 0,
       sourceHealth: {
         healthy: 0,
+        // A snapshot that could not be built has read nothing, which is a real
+        // fault in all four — not four absent providers.
         degraded: 4,
+        absent: 0,
         total: 4,
         byProvider: {
           omp: { healthy: false, lastHealthyAt: null },

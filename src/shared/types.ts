@@ -68,6 +68,16 @@ export interface CmuxTarget {
    * display must not pretend the agent "lives" in the pane folder.
    */
   cwdMismatch?: boolean;
+  /* HOW the surface was attested, which `resolution` alone cannot say.
+
+     "live"       — cmux currently lists this session on this surface, either by
+                    sourceSessionIds or by recorded IDs the collector just read.
+     "remembered" — a persisted identity binding minted the match. It was true
+                    once; nothing in this scan confirms it still is.
+
+     Both produce `resolution: "exact"`, so the write gate could not tell "cmux
+     says the session is there" from "we wrote that down some time ago". */
+  attestation?: "live" | "remembered";
   resolution: TargetResolution;
   reason?: string;
 }
@@ -388,6 +398,12 @@ export interface PulseBurn {
   windowMs: number;
   coverage: { reporting: number; eligible: number; unknown: number };
   costLastHourUsd: number | null;
+  /* True when costLastHourUsd is a measured FLOOR rather than a complete total,
+     because some invocation in the window carried no price. The card must mark
+     it — an unmarked floor read as a total is the failure the usage card's "≥"
+     exists to prevent, and it would be worse here because this figure is the
+     one an operator watches to decide whether to keep a swarm running. */
+  costIsFloor?: boolean;
   costProvenance: "burnbar" | "unavailable";
   costAsOf?: string;
   costNote?: string;
@@ -418,6 +434,10 @@ export interface SourceHealth {
 export interface SourceHealthSummary {
   healthy: number;
   degraded: number;
+  /* Collectors with nothing installed to read. Not degraded: a machine without
+     Cursor is not a broken machine, and counting it as a fault told every
+     first-time user their install was incomplete. */
+  absent: number;
   total: number;
   byProvider?: Record<Provider, SourceHealth>;
 }

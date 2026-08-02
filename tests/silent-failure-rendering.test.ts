@@ -111,7 +111,7 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
        health summary is the only thing standing between the operator and
        "nothing is running" — it has to be unambiguous. */
     expect(snapshot.totals.tracked).toBe(0);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 0, degraded: 4, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 0, degraded: 4, absent: 0, total: 4 });
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
     expect(snapshot.controlHealth?.staleSources).toEqual(["codex", "claude", "cursor"]);
   });
@@ -140,7 +140,7 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
     const quiet = buildSnapshot({ agents: [], surfaces: [], archiveStore, now: NOW });
 
     expect(quiet.totals.tracked).toBe(0);
-    expect(quiet.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+    expect(quiet.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
     expect(quiet.issues ?? []).toEqual([]);
   });
 });
@@ -177,7 +177,7 @@ describe("a partly-failed collection never silently shrinks the fleet", () => {
     });
 
     expect(snapshot.totals.tracked).toBe(1);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
     const claude = snapshot.issues?.find(({ id }) => id === "system:claude-collector");
     expect(claude?.severity).toBe("warning");
     expect(claude?.technicalDetails).toContain("EACCES scanning ~/.claude");
@@ -198,7 +198,7 @@ describe("the dashboard's burn widget separates no spend from no reading", () =>
     schemaVersion: 1,
     generatedAt: "2026-07-22T03:00:00.000Z",
     programs: [],
-    totals: { working: 0, idle: 0, tracked: 0, sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+    totals: { working: 0, idle: 0, tracked: 0, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
     controlHealth: { cmuxReachable: true, errors: [], staleSources: [] },
     issues: [],
     pulse: { burn },

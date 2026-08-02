@@ -55,6 +55,10 @@ export interface SnapshotInput {
   notifications?: readonly CmuxNotification[];
   programHints?: readonly ProgramHint[];
   sourceErrors?: Partial<Record<Provider, readonly string[]>>;
+  /* Providers with nothing installed to read. Absent is not a fault: it is the
+     ordinary state of a machine whose owner does not use that tool. */
+  sourceAbsent?: Partial<Record<Provider, boolean>>;
+  cmuxAbsent?: boolean;
   cmuxErrors?: readonly string[];
   cmuxReachable?: boolean;
   cmuxLastCheckedAt?: string;
@@ -268,11 +272,41 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      dismissed is back on the board as work in flight, and the count of what is
      running is wrong until it is fixed. */
   const archiveLoadError = input.archiveStore.loadError?.();
+  /* DEGRADED means "this is here and I cannot read it" — a fault worth
+     alarming about. ABSENT means "there is nothing here to read, because this
+     person does not use Cursor" — not a fault at all. Collapsing them told a
+     first-time user with a working install that their board was incomplete,
+     because a fresh machine has no cmux binary and no ~/.cursor.
+
+     Measured on a virgin clone with an empty HOME: all four collectors report
+     zero errors, yet the first screen read "No sessions found — and not every
+     collector can see · 1 of 4 collectors degraded". The one was cmux, missing
+     because it had never been installed. This is the same honesty rule the rest
+     of the board follows, pointed at the newcomer instead of at us: we spent
+     the day deleting numbers that overclaimed, and this one underclaimed. */
+  const collectorProviders: Provider[] = ["codex", "claude", "cursor"];
+  const absentSources =
+    collectorProviders.filter((provider) =>
+      input.sourceAbsent?.[provider] === true
+      && (input.sourceErrors?.[provider]?.length ?? 0) === 0,
+    ).length + (input.cmuxAbsent === true ? 1 : 0);
   const degradedSources =
-    ["codex", "claude", "cursor"].filter((provider) =>
-      (input.sourceErrors?.[provider as Provider]?.length ?? 0) > 0,
-    ).length + (operationalCmuxErrors.length > 0 || input.cmuxReachable === false ? 1 : 0);
-  const sourceTotal = 4;
+    collectorProviders.filter((provider) =>
+      (input.sourceErrors?.[provider]?.length ?? 0) > 0,
+    ).length + (
+      input.cmuxAbsent !== true
+        && (operationalCmuxErrors.length > 0 || input.cmuxReachable === false)
+        ? 1
+        : 0
+    );
+  /* The ratio counts collectors that EXIST on this machine. Reporting "3 of 4
+     healthy" for a missing cmux still reads as a fault to the person it is
+     shown to, and reporting "4 of 4 healthy" would claim we are watching four
+     things when two are not installed. Neither is the sentence a newcomer needs;
+     "2 of 2 collectors healthy" is both calm and true. `absent` ships beside it
+     so a card can name what is simply not here. */
+  const knownCollectors = 4;
+  const sourceTotal = Math.max(0, knownCollectors - absentSources);
   const activeCursorAgents = liveAgents.filter((agent) => agent.provider === "cursor");
   const cursorModelHealth = {
     compliant: activeCursorAgents.filter((agent) => agent.modelPolicy?.state === "compliant").length,
@@ -331,6 +365,10 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       sourceHealth: {
         healthy: Math.max(0, sourceTotal - degradedSources),
         degraded: Math.min(sourceTotal, degradedSources),
+        /* Reported so a card can say "Cursor is not installed" rather than
+           implying we are watching something that is not there. healthy +
+           degraded === total, and total + absent === the four known kinds. */
+        absent: Math.min(knownCollectors, absentSources),
         total: sourceTotal,
       },
     },

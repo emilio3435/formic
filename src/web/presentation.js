@@ -17,7 +17,7 @@
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome, livenessState } from "./agent-model.js";
 import { state } from "./client-state.js";
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -206,14 +206,31 @@ export function conciseText(value, limit = 88) {
 /* Plain-language control explanation for the Operate chrome. Never echoes
    capability reasons here — live reasons carry raw cmux/session IDs, which
    belong only in Evidence. */
-export function controlUnavailableText(controlState) {
+export function controlUnavailableText(controlState, agent = null) {
+  /* Archived and dead both arrive here as "observed-only". They are different
+     facts and the summary line must not flatten them into a routing complaint.
+     (quarantineBrief owns the long form; this is the short one the dock's
+     accessible text uses.) */
+  if (agent && deriveActivity(agent) === "ended") {
+    if (agent.status === "archived" || agent.activity === "archived") {
+      return "Controls are off because this session is archived.";
+    }
+    if (livenessState(agent) === "died") {
+      return "Controls are off because this session's process is gone — there is nothing left to receive them.";
+    }
+  }
   /* Three sentences, because a refusal an operator cannot act on reads as a
      fault: what is off, why, and what turns it back on. Send is OFF here, not
      broken, and saying so is what stops the retry. */
   if (controlState === "unproven") {
-    return "Send and Interrupt are switched off — this pane was matched by its working directory,"
-      + " not attested by cmux, so the session on it cannot be proven and typing here could reach a"
-      + " different agent. Focus still works, and both return as soon as cmux attests the session.";
+    /* One sentence. Rendered at real drawer width it ran three paragraphs that
+       each said the same thing — the summary named the cause, the risk and the
+       recovery, then `why` restated the cause and the risk, then `nextStep`
+       restated the recovery. Repeating information under different labels is
+       the noise this board exists to cut, and a long refusal is likelier to be
+       skipped than a short one. The summary now states the refusal, `why` owns
+       the mechanism, and `nextStep` owns the action. */
+    return "Send and Interrupt are off: cmux cannot confirm which session is on this pane.";
   }
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
@@ -449,6 +466,47 @@ export function presentationLabelKey(target) {
 export const provenanceLabel = (p) => PROVENANCE_LABELS[p] || p || "unknown";
 
 export function quarantineBrief(agent, control = deriveControlState(agent)) {
+  /* Three refusals now end in the same disabled button, and they are not the
+     same message. The pane one is recoverable by looking; the dead one is not
+     recoverable at all; the archived one is a choice the operator made. Both
+     `archived` and `died` collapse to the control state "observed-only", so
+     before this they shared one sentence about cmux routing — which is wrong
+     for both of them, and most wrong for archive, where nothing is broken.
+
+     Checked before the routing branches on purpose: an archived session's
+     controls are off because it is archived, whatever its pane says, and a dead
+     process cannot be typed into however cleanly it resolves. Naming the
+     routing problem of a session that has ENDED sends the operator to fix a
+     terminal binding that no longer matters. */
+  const ended = deriveActivity(agent) === "ended";
+  if (ended && (agent.status === "archived" || agent.activity === "archived")) {
+    return {
+      title: "You archived this session.",
+      summary: "Controls are off because it is archived, not because anything failed.",
+      why: "Archiving files a session as finished and takes it off the working board. It stays readable in History.",
+      /* No repair step, because nothing is broken. Offering one would invent a
+         problem out of a deliberate choice. */
+      nextStep: "Nothing to do. Un-archive it from History if you filed it early.",
+      cause: "archived",
+      steps: [],
+    };
+  }
+  if (ended && livenessState(agent) === "died") {
+    return {
+      title: "This session's process is gone.",
+      summary: "Controls are off because there is nothing left running to receive them.",
+      why: "The process was checked and is no longer there, so its terminal pane may since have been taken by something else."
+        + " Typing into it would reach whatever is there now.",
+      /* Deliberately offers no recovery, because there is none. Every other
+         refusal on this board ends with the thing that would fix it, and
+         inventing one here would send an operator to retry something that
+         cannot work — the exact failure the whole refusal vocabulary exists to
+         prevent. */
+      nextStep: "Nothing will bring it back. Read the transcript below, then archive it when you are done with it.",
+      cause: "died",
+      steps: [],
+    };
+  }
   if (control === "linked") return null;
   const view = identityTraceView(agent);
   const cause = identityCause(view);
@@ -457,14 +515,27 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
      a state that previously could not exist, so this returned null and the
      caller read .title off it. */
   if (control === "unproven") {
+    const id = terminalIdentity(agent);
+    const focusTarget = id ? [id.title, id.paneCwd].filter(Boolean).join(" · ") : "";
     return {
       title: "Send is off for this row.",
       summary: controlUnavailableText(control),
-      why: "cmux reports no session on this pane, so the board matched it by working directory alone."
-        + " A pane that changes directory into another's folder matches just as well, which is how an"
-        + " instruction reaches the wrong agent.",
-      nextStep: "Open the pane with Focus and check which session is on it."
-        + " Send returns by itself once cmux attests the session — there is nothing to repair here.",
+      why: "It was matched by working directory alone, and a pane that changes directory into"
+        + " another's folder matches just as well — which is how an instruction reaches the wrong agent.",
+      /* Focus NAMES its destination here, because on exactly these rows the
+         routing may be wrong. The adversarial verification found that a rotated
+         row keeps focus:true while its target has moved, so Focus can walk an
+         operator to a stranger's terminal. It stays enabled on purpose — it
+         types nothing, and going to look is how you recover when Send is off —
+         but "go and look" is only safe advice if the operator can tell, before
+         clicking, whether they arrived where they expected. The pane name was
+         already computed for a title attribute, which is to say it was visible
+         only on hover, which is to say it was not visible. */
+      nextStep: focusTarget
+        ? `Focus still works and will take you to ${focusTarget} — check that is the session you meant.`
+          + " Nothing here needs repairing: Send returns on its own once cmux names the session."
+        : "Focus still works, so open the pane and look. Nothing here needs repairing:"
+          + " Send returns on its own once cmux names the session.",
       cause,
       steps: view.steps,
     };

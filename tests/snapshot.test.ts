@@ -752,7 +752,7 @@ describe("snapshot control safety and SSE deduplication", () => {
        number is what made "needs you" unreadable. */
     expect(snapshot.totals.systemFindings).toBe(1);
     expect(snapshot.totals.needsYou).toBe(0);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
   });
 
   /* An identity conflict costs one thing: controls stay quarantined for the
@@ -786,7 +786,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect((snapshot.issues ?? []).filter(({ id }) => id === "system:cmux-identity-conflicts")).toEqual([]);
     // ...and nothing drives the board red: this is what makes Operational reachable.
     expect(snapshot.controlHealth.errors).toEqual([]);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
 
     // But the debris is still named, counted, and carries what to do about it.
     expect(snapshot.controlHealth.debris).toMatchObject({
@@ -1214,7 +1214,7 @@ describe("snapshot control safety and SSE deduplication", () => {
         controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
         totals: {
           live: 0, tracked: 0, attention: 0, working: 0, idle: 0, history: 0,
-          sourceHealth: { healthy: 0, degraded: 0, total: 0 },
+          sourceHealth: { healthy: 0, degraded: 0, absent: 0, total: 0 },
         },
         programs: [],
         issues: [],
@@ -1254,7 +1254,7 @@ describe("snapshot control safety and SSE deduplication", () => {
         controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
         totals: {
           live: 0, tracked: 0, attention: 0, working: 0, idle: 0, history: 0,
-          sourceHealth: { healthy: 0, degraded: 0, total: 0 },
+          sourceHealth: { healthy: 0, degraded: 0, absent: 0, total: 0 },
         },
         programs: [],
         issues: [liveBlocked],

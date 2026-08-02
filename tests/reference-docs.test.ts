@@ -65,7 +65,7 @@ const agentFixture = (o: Record<string, unknown> = {}) => ({
 const snapFixture = (o: Record<string, unknown> = {}) => ({
   generatedAt: "2026-08-02T12:00:00.000Z",
   controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
-  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
   issues: [], programs: [{ id: "p1", name: "p1", agents: [agentFixture()] }], ...o,
 });
 
@@ -275,8 +275,18 @@ describe("QUICKSTART.md stays true to a first run", () => {
        whitespace flattened — otherwise a markdown reflow reads as drift and the
        real thing hides behind a false alarm. */
     const flowed = quickstart.replace(/\s+/g, " ");
+    /* "cmux unreachable — terminal titles and Focus/Send stay offline." used to
+       be quoted here as the detail a monitoring-only install reads. It was a
+       hollow pin: summaryWidgetData returns it for a fixture with NO issues,
+       but a machine without cmux always raises control-plane issues (terminal
+       discovery and notification discovery both ENOENT), and the card then
+       shows the top issue summary from snapshot-operator-issues.ts:168 —
+       "2 control-plane problems may limit focus, instruction, or interrupt
+       actions." Confirmed against a real board on a virgin clone. The fixture
+       agreed with the doc while the product disagreed with both, which is the
+       failure this file exists to catch, so the doc now quotes only the two
+       strings that survive the real path and describes the varying one. */
     for (const quoted of [
-      "cmux unreachable — terminal titles and Focus/Send stay offline.",
       "Start cmux, then Refresh — Focus and Send come back on their own.",
       // Day one: the empty board now asserts health and proves it. See ant-guide.test.ts.
       "Watching. No sessions running yet.",
@@ -291,7 +301,14 @@ describe("QUICKSTART.md stays true to a first run", () => {
     const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
     expect(quickstart).toContain("`Blocked`");
     expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
-    expect(blocked.sublabel).toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
+    expect(blocked.sublabel, "the no-issues detail vanished; QUICKSTART describes a two-branch card")
+      .toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
+    /* The branch a real no-cmux machine lands on. QUICKSTART must describe the
+       count rather than quote a sentence whose number moves with the errors. */
+    expect(read("src/server/snapshot-operator-issues.ts"), "the control-plane issue summary was reworded")
+      .toContain("control-plane ${otherCmuxErrors.length === 1 ? \"problem may\" : \"problems may\"} limit focus, instruction, or interrupt actions.");
+    expect(quickstart, "QUICKSTART stopped telling the reader the detail line names a count")
+      .toMatch(/control-plane problems/i);
     expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
     // And the clear case QUICKSTART promises once cmux is running.
     expect(M.summaryWidgetData("health", snapFixture(), "live", "percent", [], false).value).toBe("All clear");
@@ -741,12 +758,15 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
   });
 
   test("both onboarding docs describe that asymmetry, not a blanket cmux requirement", () => {
-    for (const [name, doc] of [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const) {
+    const flatten = (d: string) => d.replace(/\s+/g, " ");
+    for (const [name, doc] of [["QUICKSTART.md", flatten(quickstart)], ["ANT-GUIDE.md", flatten(read("ANT-GUIDE.md"))]] as const) {
       expect(doc, `${name} does not say Send/Interrupt are gated harder than Focus`)
         .toMatch(/Send and Interrupt|Send \/ Interrupt/);
       expect(doc, `${name} does not name the cwd-match state an operator will hit`)
         .toMatch(/working directory|matched by (its )?folder/i);
-      expect(doc, `${name} does not say Focus survives it`).toMatch(/Focus (still |stays )/i);
+      /* Same requirement the promises block below asserts; keep the accepted
+         phrasings identical so a reword fails in one place, not two. */
+      expect(doc, `${name} does not say Focus survives it`).toMatch(/Focus (still|stays|is exempt)/i);
       expect(doc, `${name} does not tell the reader how to get the write controls back`)
         .toMatch(/inside (a |)cmux pane/i);
     }
@@ -759,5 +779,214 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
     for (const doc of [quickstart, read("ANT-GUIDE.md")]) {
       expect(doc, "a doc describes evidence the code no longer collects").toMatch(/transcript file/i);
     }
+  });
+});
+
+/* The fresh-clone walk's first blocker, and it is not a doc bug.
+
+   A newcomer with no cmux — the configuration QUICKSTART explicitly blesses
+   ("Skip it if you only want to watch") — is promised a calm empty board:
+   "Watching. No sessions running yet." with a line counting HEALTHY collectors.
+   What the running product shows them instead is
+
+     No sessions found — and not every collector can see.
+     A degraded collector reports no sessions whether or not any are running,
+     so this board is incomplete rather than empty.
+     1 of 4 collectors degraded
+
+   on the first screen they ever see, with no way to tell it from a broken
+   install. The doc is right and the product is wrong, so this pins the doc's
+   promise rather than rewriting it to match the defect.
+
+   Root cause, snapshot.ts:271-275: `degradedSources` counts codex/claude/cursor
+   plus cmux, while the byProvider map beside it reports omp/codex/claude/cursor.
+   Two different populations share the word "collectors", so cmux being absent
+   spends a quarter of a denominator it is not in — and omp, which IS in the map,
+   can never be counted degraded at all. app.ts:751 already knows ("those count a
+   different population than their own byProvider map, which is a separate
+   unresolved defect this must not inherit") and routes /api/health around the
+   scalars; that is why /api/health says healthy while the board says degraded.
+   The quarantine covered the monitoring endpoint and left the day-one board,
+   which is the one surface where the reader has no prior to correct against.
+
+   Worst of all the sentence is not true here. cmux contributes no sessions —
+   it resolves terminals — so its absence cannot hide a single row. The board
+   tells a new operator their view may be incomplete when it is complete.
+
+   test.failing: passes while the defect stands, FAILS the day it is fixed, at
+   which point delete the .failing and keep the assertion. */
+describe("day one on a machine without cmux", () => {
+  /* The fresh-clone walk's blocker, and its fix. A newcomer with no cmux — the
+     configuration QUICKSTART blesses ("Skip it if you only want to watch") —
+     used to be told on the first screen they ever saw:
+
+       No sessions found — and not every collector can see.
+       1 of 4 collectors degraded
+
+     with no way to tell it from a broken install. cmux collects no sessions, so
+     its absence could not hide a row; the board reported a fault where there was
+     none. Fixed in the client (byProvider distinguishes never-healthy from
+     newly-broken) and in the server (absent is not degraded). These hold the
+     line in both directions: calm when nothing is wrong, and STILL alarming
+     when something genuinely is, because a fix that just mutes the warning
+     would be the false all-clear again. */
+  const ok = { healthy: true, lastHealthyAt: "2026-08-02T12:00:00Z" };
+  const broke = { healthy: false, lastHealthyAt: "2026-08-02T11:00:00Z" };
+  const verdict = (sourceHealth: unknown) =>
+    M.emptyBoardVerdict({ generatedAt: "2026-08-02T12:44:51.004Z", totals: { sourceHealth } });
+
+  /* Derive the roster from the Provider union rather than listing four names
+     here, so a fifth collector fails this test instead of silently outdating
+     the table a newcomer reads to decide whether their board is broken. */
+  const providers = (() => {
+    const line = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    return [...line.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+  })();
+
+  test("a fresh install with nothing installed reads calm, not degraded", () => {
+    const fresh = verdict({
+      healthy: 4, degraded: 0, total: 4,
+      byProvider: { omp: ok, codex: ok, claude: ok, cursor: ok },
+    });
+    expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
+    expect(fresh.message).toBe("Watching. No sessions running yet.");
+    expect(fresh.sources).toBe("4 of 4 collectors healthy");
+  });
+
+  test("a collector that WAS healthy and now is not still alarms", () => {
+    const failed = verdict({
+      healthy: 3, degraded: 1, total: 4,
+      byProvider: { omp: ok, codex: ok, claude: ok, cursor: broke },
+    });
+    expect(failed.degraded, "a real degradation was muted along with the false one").toBe(true);
+    expect(failed.message).toBe("No sessions found — and not every collector can see.");
+    expect(failed.sources).toBe("1 of 4 collectors degraded");
+  });
+
+  test("QUICKSTART quotes the empty-board strings the model renders", () => {
+    const fresh = verdict({
+      healthy: providers.length, degraded: 0, total: providers.length,
+      byProvider: Object.fromEntries(providers.map((p) => [p, ok])),
+    });
+    expect(quickstart, "QUICKSTART no longer quotes the calm empty-board message")
+      .toContain(fresh.message);
+    expect(quickstart, "QUICKSTART no longer quotes the healthy count as rendered")
+      .toContain(fresh.sources);
+  });
+
+  test("QUICKSTART names every collector the code has, with the path it reads", () => {
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(4);
+    const table = quickstart.slice(quickstart.indexOf("| Collector |"));
+    for (const provider of providers) {
+      expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
+        .toContain(provider === "claude" ? "~/.claude/projects" : provider);
+    }
+    const collectors = read("src/server/collectors.ts");
+    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects"]) {
+      expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
+      expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
+    }
+    expect(quickstart, "QUICKSTART stopped saying an absent tool still reads healthy")
+      .toMatch(/absent, and expect all four to still read healthy/i);
+    expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
+      .toMatch(/cmux is not one of the four/i);
+  });
+
+  /* The last wire, still open. state.ts sets #cmuxAbsent from cmux.absent, which
+     cmux.ts sets only when executableMissing() matches — and that requires the
+     stderr to read "executable not found". A real first run produces Bun's
+     spawn error instead: "ENOENT: no such file or directory, posix_spawn
+     '/Applications/cmux.app/Contents/Resources/bin/cmux'". So cmuxAbsent stays
+     false on the exact path it was written for, the server scalar still spends
+     a healthy slot on cmux, and the board reads "3 of 4 collectors healthy"
+     where QUICKSTART documents "4 of 4".
+
+     Not a blocker: the client's byProvider check already keeps the verdict calm,
+     so nobody is told their install is broken. It is an off-by-one in the
+     reassurance itself, which a newcomer cannot resolve — they will look for the
+     fourth collector and there isn't one missing.
+
+     test.failing: flips the day the detector recognises the real stderr. */
+  test.failing("a missing cmux binary is detected as absent on the real first-run path", async () => {
+    const { executableMissing } = await import("../src/server/cmux");
+    expect(executableMissing({
+      timedOut: false, exitCode: -1, stdout: "",
+      stderr: "ENOENT: no such file or directory, posix_spawn '/Applications/cmux.app/Contents/Resources/bin/cmux'",
+    } as never), "cmux absence is still read as a fault on a machine that never had it").toBe(true);
+  });
+});
+
+/* Three changes to what this product PROMISES landed or are landing today, and
+   the operator reads all three the same way: the cockpit will not act on your
+   behalf unless it can prove, right now, that the action goes where you think.
+   Framed as capabilities-you-lost they read as a broken install; framed as
+   guarantees they are the reason to trust it with a terminal at all. Both
+   onboarding docs must carry that framing, and it must stay true. */
+describe("the safety promises the docs make on the product's behalf", () => {
+  /* Markdown wraps these sentences across lines, so a raw .toMatch reads a
+     reflow as drift and hides the real thing behind a false alarm. Flatten
+     whitespace first, exactly as the QUICKSTART quote pins above do. */
+  const flat = (doc: string) => doc.replace(/\s+/g, " ");
+  const both = () =>
+    [["QUICKSTART.md", flat(quickstart)], ["ANT-GUIDE.md", flat(read("ANT-GUIDE.md"))]] as const;
+
+  test("both docs promise the board refuses an unnameable terminal", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} dropped the identity promise`)
+        .toMatch(/never type into a terminal it cannot name|refuses to type into a terminal it cannot|not type into a terminal it cannot name/i);
+      expect(doc, `${name} no longer lets a reader match the hover text they will see`)
+        .toMatch(/working directory/i);
+    }
+  });
+
+  test("both docs promise the board refuses a session that has exited", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} dropped the liveness promise`)
+        .toMatch(/already exited|process is gone/i);
+      expect(doc, `${name} does not explain WHY a dead agent's pane is dangerous`)
+        .toMatch(/pane outlives the agent|belongs to your shell/i);
+    }
+  });
+
+  test("both docs promise Focus stays available so there is always a way in", () => {
+    for (const [name, doc] of both()) {
+      expect(doc, `${name} stopped promising Focus survives the write gates`)
+        .toMatch(/Focus (still|stays|is exempt)/i);
+      expect(doc, `${name} dropped the line that makes the whole framing land`)
+        .toMatch(/never the reason you cannot reach an agent/i);
+    }
+  });
+
+  test("the identity promise is the gate the code actually enforces", async () => {
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const target = (resolution: string) => ({
+      surfaceId: "s1", resolution, reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined,
+    }) as never;
+    const caps = (resolution: string) =>
+      Object.fromEntries(
+        controlsFor({ status: "running" } as never, target(resolution), false).map((c) => [c.action, c.enabled]),
+      );
+    expect(caps("unique-cwd").instruct, "a folder match authorises Send again").toBe(false);
+    expect(caps("unique-cwd").focus, "Focus was disabled; the docs promise it survives").toBe(true);
+    expect(caps("exact").instruct, "an attested pane stopped permitting Send").toBe(true);
+  });
+
+  /* The liveness promise, documented ahead of the code by explicit instruction —
+     the backend is landing one shared predicate rather than four patches
+     (docs/TRIAGE-AND-LIVENESS-SWEEP-GPT.md). Until it lands, this is the doc
+     writing a cheque the product does not yet honour, so it is pinned rather
+     than left to be noticed: controlsFor grants instruct on an agent the board
+     itself renders as dead.
+
+     test.failing: flips the moment any authorisation path reads agent liveness,
+     at which point drop .failing and keep the assertion. */
+  test.failing("no write is authorised against a process the board knows is dead", async () => {
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
+    const attested = { surfaceId: "s1", resolution: "exact", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
+    const caps = Object.fromEntries(controlsFor(dead, attested, false).map((c) => [c.action, c.enabled]));
+    expect(caps.instruct, "Send is still offered on an agent whose process is gone").toBe(false);
+    expect(caps.interrupt, "Interrupt is still offered on an agent whose process is gone").toBe(false);
+    expect(caps.focus, "Focus must stay on — it is the documented way to go and look").toBe(true);
   });
 });

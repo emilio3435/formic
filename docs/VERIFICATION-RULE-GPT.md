@@ -29,7 +29,7 @@ myself before it ships.
 An unchecked relay may still go in a document — as an open question, explicitly marked, never
 as support for a conclusion.
 
-## Four checks before any count becomes a finding
+## Six checks before any claim becomes a finding
 
 1. **Population.** When a number on the wire disagrees with a number on screen, prove the two
    count the same set before calling it a bug. `totals.attention`, `issues.length`, and "agents
@@ -45,9 +45,33 @@ as support for a conclusion.
    neighbour it must agree with — state what would have to be true for the value to be
    *correct*, and check that story holds. **If I would have accepted any value within an order
    of magnitude, I have not checked it.**
+6. **Follow the value to where it is used.** Before reporting that a guard, gate, or field is
+   absent, name the layer I read and then read the next one down — the handler under the route,
+   the store under the handler, the key the store is written by. **Say out loud which layer the
+   claim rests on.** A claim of absence is a claim about *every* layer, so it is only earned by
+   having looked at more than one.
 
 Check 5 is not provenance and the first four do not catch it. A number can be measured by me,
 quoted correctly, and still be meaningless — see "the magnitude blind spot" below.
+
+Check 6 is not about numbers at all, which is why it needed its own line. It is stated as a
+procedure rather than a warning because "be careful about layers" is not actionable and this is:
+**read one layer further than the one that produced the claim, and name it.** Three separate
+findings this week were wrong or nearly wrong in exactly this way, and the shape was identical
+each time — a conclusion drawn from the layer I happened to be looking at:
+
+- *"The range selector does nothing"* — read the client, did not read which parameter the server
+  reads. Caught by check 4.
+- *"Attention is structurally immune, it is id-keyed"* — read the request contract, did not read
+  that the handler resolves `agentId → target.surfaceId` and writes keyed by the **surface**.
+  **Published, then retracted.**
+- *"Triage has no origin gate"* — read the route dispatch and the top of the handler, stopped
+  above `triage.ts:485`. Caught before publication by testing it.
+
+Note what the misses have in common: each layer I read was *correctly* read. The error was never
+misreading — it was stopping at a layer that could not settle the question, while the question
+felt settled. That is why the procedure is "read one further and name it" rather than "read
+carefully."
 
 ---
 

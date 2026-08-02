@@ -51,7 +51,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
     totals: {
       live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
-      sourceHealth: { healthy: 2, degraded: 0, total: 2 },
+      sourceHealth: { healthy: 2, degraded: 0, absent: 0, total: 2 },
     },
     programs: [{ id: "p", name: "P", agents: [agent()] }],
     ...overrides,
@@ -434,7 +434,7 @@ describe("summary status and widgets", () => {
   test("maps live connection, source, and control evidence to one system verdict", () => {
     const healthy = snapshot();
     expect(M.systemStatus(healthy, "live").label).toBe("Operational");
-    expect(M.systemStatus(snapshot({ totals: { ...healthy.totals, sourceHealth: { healthy: 1, degraded: 1, total: 2 } } }), "live").label).toBe("Degraded");
+    expect(M.systemStatus(snapshot({ totals: { ...healthy.totals, sourceHealth: { healthy: 1, degraded: 1, absent: 0, total: 2 } } }), "live").label).toBe("Degraded");
     expect(M.systemStatus(snapshot({ controlHealth: { ...healthy.controlHealth, cmuxReachable: false } }), "live").label).toBe("Degraded");
     expect(M.systemStatus(healthy, "stale").label).toBe("Degraded");
     expect(M.systemStatus(null, "offline").label).toBe("Offline");
@@ -517,6 +517,69 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* Three refusals, three answers to "can I do anything about this?"
+
+     They all end in the same disabled button, and archived and dead both
+     collapse to the control state "observed-only", so before this they shared
+     one sentence about cmux routing. That sentence is wrong for both — most
+     wrong for archive, where nothing failed and the operator chose it. */
+  test("the three refusals are distinct, and each says whether it is recoverable", () => {
+    const routed = { surfaceId: "s1", resolution: "exact", workspaceTitle: "cmux: alpha" };
+    const brief = (a: Record<string, unknown>) => M.quarantineBrief(a, M.deriveControlState(a));
+
+    const pane = brief(agent({
+      activity: "working", status: "running",
+      target: { surfaceId: "s1", resolution: "unique-cwd", workspaceTitle: "cmux: alpha" },
+    }));
+    const dead = brief(agent({
+      activity: "ended", status: "stale", processState: "died", processAlive: false,
+      processIds: [123], target: routed,
+    }));
+    const archived = brief(agent({ activity: "ended", status: "archived", target: routed }));
+
+    // Three different sentences, not one message wearing three hats.
+    const titles = [pane.title, dead.title, archived.title];
+    expect(new Set(titles).size).toBe(3);
+    expect(archived.cause).toBe("archived");
+    expect(dead.cause).toBe("died");
+
+    /* The recoverable one offers the recovery. */
+    expect(pane.nextStep).toMatch(/Focus still works/);
+
+    /* The unrecoverable one refuses to invent one. Every other refusal on this
+       board ends with the thing that would fix it, and inventing a step here
+       would send an operator to retry what cannot work. */
+    expect(dead.nextStep).toMatch(/Nothing will bring it back/);
+    expect(dead.why).toMatch(/may since have been taken/);
+    expect(dead.nextStep).not.toMatch(/cmux|Focus|attest/i);
+
+    /* The chosen one must not read as a fault, and must not offer a repair for
+       a decision. */
+    expect(archived.summary).toMatch(/not because anything failed/);
+    expect(archived.nextStep).toMatch(/Nothing to do/);
+    expect(archived.nextStep).not.toMatch(/cmux|pane|repair/i);
+    expect(archived.why).not.toMatch(/cmux/i);
+
+    /* Archived beats dead beats routing: an archived session's controls are off
+       because it is archived, whatever its pane says. Naming a terminal-binding
+       problem for a session that has ENDED sends the operator to fix something
+       that no longer matters. */
+    const both = brief(agent({
+      activity: "ended", status: "archived", processState: "died",
+      processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
+    }));
+    expect(both.cause).toBe("archived");
+
+    // And the short form the dock's accessible text uses splits the same way.
+    expect(M.controlUnavailableText("observed-only", agent({ activity: "ended", status: "archived" })))
+      .toMatch(/archived/);
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", status: "stale", processState: "died", processAlive: false, processIds: [1],
+    }))).toMatch(/process is gone/);
+    // With no agent it still answers, rather than throwing on the old signature.
+    expect(M.controlUnavailableText("quarantined")).toMatch(/ambiguous/);
+  });
+
   /* A cwd string is not an identity, and the UI must not call it one.
 
      Proven against probe agents: a Send addressed to ALPHA executed on BRAVO's
@@ -539,23 +602,43 @@ describe("summary status and widgets", () => {
 
     /* The refusal has to carry all three, or it reads as a fault: what is off,
        why, and what turns it back on. */
-    const text = M.controlUnavailableText("unproven");
-    expect(text).toMatch(/working directory/i);              // the cause
-    expect(text).toMatch(/different agent/i);                // the risk
-    expect(text).toMatch(/as soon as cmux attests/i);        // the way back
-    expect(text).toMatch(/switched off/i);                   // off, not broken
-    expect(text).toMatch(/Focus still works/i);              // what still works
+    /* The three facts must all be present, but they are split across the brief's
+       three fields rather than repeated in each — measured at real drawer width,
+       saying all three in every field ran to three paragraphs that restated one
+       another, and a long refusal gets skipped. */
+    const b = M.quarantineBrief(guessed, "unproven");
+    expect(M.controlUnavailableText("unproven")).toMatch(/are off/i);          // off, not broken
+    expect(M.controlUnavailableText("unproven")).toMatch(/cannot confirm/i);   // the cause
+    expect(b.why).toMatch(/wrong agent/i);                                     // the risk
+    expect(b.nextStep).toMatch(/Focus still works/i);                          // what still works
+
+    /* Focus names its destination on exactly these rows. Adversarial
+       verification found a rotated row keeps focus:true while its target has
+       moved, so Focus can walk an operator to a stranger's terminal. "Go and
+       look" is only safe advice if they can tell, before clicking, whether they
+       arrived where they expected. */
+    const named = M.quarantineBrief(
+      agent({ target: { surfaceId: "s1", resolution: "unique-cwd", workspaceTitle: "cmux: alpha" } }),
+      "unproven",
+    );
+    expect(named.nextStep).toContain("cmux: alpha");
+    expect(named.nextStep).toMatch(/check that is the session you meant/i);
+    // No pane name is no claim about one, rather than an empty "take you to ".
+    expect(b.nextStep).not.toMatch(/take you to\s*[—.]/);
+    expect(b.nextStep).toMatch(/once cmux names the session/i);                // the way back
+
+    /* And no field may repeat another's job — that is what made it long. */
+    expect(M.controlUnavailableText("unproven")).not.toMatch(/Focus/);
+    expect(b.why).not.toMatch(/Focus/);
 
     /* Without a brief the banner throws: it renders whenever a write control is
        disabled, and this is a routable pane with Send off — a combination that
        could not previously exist, so quarantineBrief returned null and the
        caller read .title off it. */
-    const brief = M.quarantineBrief(guessed, "unproven");
-    expect(brief).not.toBeNull();
-    expect(brief.title).toMatch(/off/i);
-    expect(brief.nextStep).toMatch(/Focus/);
+    expect(b).not.toBeNull();
+    expect(b.title).toMatch(/off/i);
     // Nothing to repair — saying so is what stops the retry.
-    expect(brief.nextStep).toMatch(/nothing to repair/i);
+    expect(b.nextStep).toMatch(/needs repairing/i);
 
     /* The row's accessible name must not tell a screen-reader operator the row
        is Ready when it accepts no input. */
@@ -592,13 +675,16 @@ describe("summary status and widgets", () => {
   test("an empty board asserts health and proves it, or admits it cannot see", () => {
     const at = "2026-08-02T11:45:51.447Z";
     const healthy = M.emptyBoardVerdict({
-      generatedAt: at, totals: { sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+      generatedAt: at, totals: { sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
     });
     expect(healthy.degraded).toBe(false);
     expect(healthy.message).toBe("Watching. No sessions running yet.");
     /* The proof is the point: a count of collectors and a timestamp are evidence
        a stalled client cannot manufacture, which is what distinguishes this from
        a board that simply never loaded. */
+    /* The denominator is load-bearing, per QUICKSTART: the count is of
+       collectors that can SEE, not tools installed, and an absent directory is
+       a complete answer rather than a gap. "4 of 4" is the reassurance. */
     expect(healthy.sources).toBe("4 of 4 collectors healthy");
     expect(healthy.checkedAt).toBe(at);
     // No passive "still", which described absence and asserted nothing.
@@ -608,10 +694,68 @@ describe("summary status and widgets", () => {
        Claiming health here would be the false all-clear again, on the day it
        matters most. */
     const blind = M.emptyBoardVerdict({
-      generatedAt: at, totals: { sourceHealth: { healthy: 2, degraded: 2, total: 4 } },
+      generatedAt: at, totals: { sourceHealth: { healthy: 2, degraded: 2, absent: 0, total: 4 } },
     });
     expect(blind.degraded).toBe(true);
     expect(blind.sources).toBe("2 of 4 collectors degraded");
+
+    /* The docs lane's finding: a fresh install with no Cursor showed "not every
+       collector can see · 1 of 4 collectors degraded" as the FIRST screen a
+       newcomer meets. A provider that has never been healthy has nothing to
+       read yet; only one that WAS healthy and is not now has actually failed. */
+    const fresh = M.emptyBoardVerdict({
+      generatedAt: at,
+      totals: { sourceHealth: { healthy: 3, degraded: 1, total: 4, byProvider: {
+        claude: { healthy: true, lastHealthyAt: at },
+        codex: { healthy: true, lastHealthyAt: at },
+        omp: { healthy: true, lastHealthyAt: at },
+        cursor: { healthy: false },
+      } } },
+    });
+    expect(fresh.degraded).toBe(false);
+    expect(fresh.message).toBe("Watching. No sessions running yet.");
+    expect(fresh.sources).toBe("3 of 4 collectors healthy");
+    expect(fresh.sources).not.toMatch(/degraded/);
+
+    /* A source that worked and then stopped IS a fault, and must not be
+       downgraded to calm by the same rule. */
+    const failed = M.emptyBoardVerdict({
+      generatedAt: at,
+      totals: { sourceHealth: { healthy: 3, degraded: 1, total: 4, byProvider: {
+        claude: { healthy: true, lastHealthyAt: at },
+        codex: { healthy: true, lastHealthyAt: at },
+        omp: { healthy: true, lastHealthyAt: at },
+        cursor: { healthy: false, lastHealthyAt: at },
+      } } },
+    });
+    expect(failed.degraded).toBe(true);
+    expect(failed.sources).toBe("1 of 4 collectors degraded");
+
+    /* The real fresh-machine payload, taken from the server's own buildSnapshot
+       with codex, cursor and cmux absent and no sessions: healthy 1, degraded 0,
+       absent 3, total 1. The backend's 42d842e makes `total` count collectors
+       that EXIST, so the honest sentence is "1 of 1 collectors healthy" — calm
+       and true — rather than "1 of 4", which reads as three failures to someone
+       who simply has not installed those tools.
+
+       This is the shape that matters and the one that cannot be seen on a
+       machine where everything is installed, which is why it is pinned rather
+       than left to a live read: on this developer's box absent is always 0. */
+    const freshMachine = M.emptyBoardVerdict({
+      generatedAt: at,
+      totals: { tracked: 0, sourceHealth: { healthy: 1, degraded: 0, absent: 3, total: 1 } },
+    });
+    expect(freshMachine.degraded).toBe(false);
+    expect(freshMachine.message).toBe("Watching. No sessions running yet.");
+    expect(freshMachine.sources).toBe("1 of 1 collectors healthy");
+    expect(freshMachine.sources).not.toMatch(/degraded|of 4/);
+
+    /* No byProvider on the wire means the old counting stands, so a real
+       degradation is never silently downgraded to calm by a missing field. */
+    const noDetail = M.emptyBoardVerdict({
+      generatedAt: at, totals: { sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 } },
+    });
+    expect(noDetail.degraded).toBe(true);
     expect(blind.message).not.toContain("Watching");
     expect(blind.hint).toContain("incomplete rather than empty");
 
@@ -4376,7 +4520,7 @@ describe("FE-A: a failed snapshot refresh is visible instead of swallowed", () =
 describe("the health card's headline agrees with its own severity", () => {
   const advisory = () => snapshot({
     totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
-      sourceHealth: { healthy: 1, degraded: 1, total: 2 } },
+      sourceHealth: { healthy: 1, degraded: 1, absent: 0, total: 2 } },
   });
 
   test("an advisory says Advisory, not Degraded", () => {
@@ -5315,7 +5459,7 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(6a) one system fault is narrated by one cell, not two", () => {
     const overlap = snapshot({
       issues: [{ id: "system:pane", kind: "system", severity: "warning", title: "Two live sessions share one cmux pane", summary: "s", affectedAgentIds: [] }],
-      totals: { live: 1, tracked: 1, attention: 1, working: 1, idle: 0, history: 0, sourceHealth: { healthy: 3, degraded: 1, total: 4 } },
+      totals: { live: 1, tracked: 1, attention: 1, working: 1, idle: 0, history: 0, sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 } },
     });
     const ids = M.pulseStripModel(overlap, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
     expect(ids).toContain("needs-you");

@@ -773,6 +773,10 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        verdict — but it must still be discoverable, or the cleanup becomes
        invisible the moment it stops being an alarm. */
     const derived = healthRemedy(snap);
+    /* Live rows the board can watch but not type into. Counted from the same
+       control state the row chip and the drawer banner read, so the card, the
+       chip and the banner cannot disagree about which sessions those are. */
+    const unaddressable = unaddressableCount(snap);
     /* A blocking fault outranks any tidy-up: telling an operator to close panes
        while Focus and Send cannot route at all points them at the wrong problem.
        But suppressing the wrong instruction must not leave none — a card that
@@ -806,10 +810,26 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
           /* "Nothing needs you" is the whole point of the clear state, so it is
              only claimed when it is true. Pending tidy-up says so plainly and
              stays optional — offered, not demanded. */
+          /* "controls reachable" is the exact sentence the docs lane had to write
+             around. Documenting the fail-closed gate, their guide tells the
+             reader twice that the board "looks healthy" and "reads perfectly
+             healthy" while Send is greyed out — a document apologising for an
+             interface is the interface failing to say something.
+
+             cmux being reachable and a session being addressable are different
+             claims. A row matched by folder alone has a reachable control plane
+             and still cannot be typed into, so the clear state was asserting a
+             capability the operator does not have. It now names the shortfall
+             instead, and only when there is one. */
           ? (source && source.total > 0
-            ? `${source.healthy}/${source.total} sources healthy · controls reachable`
+            ? `${source.healthy}/${source.total} sources healthy · `
+              + (unaddressable
+                ? `${unaddressable} ${unaddressable === 1 ? "session cannot" : "sessions cannot"} take commands`
+                : "controls reachable")
               + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you.")
-            : "Sources and controls healthy"
+            : (unaddressable
+                ? `${unaddressable} ${unaddressable === 1 ? "session cannot" : "sessions cannot"} take commands`
+                : "Sources and controls healthy")
               + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you."))
           : conn !== "live" ? "Live snapshot feed is not healthy."
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
@@ -867,8 +887,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const burn = snap.pulse && snap.pulse.burn;
     if (!burn) return noDataWidget("No burn data yet.");
     // Null cost stays "cost unavailable" — never rendered as $0.
+    /* The "≥" is load-bearing, same as on the usage card: it travels with the
+       number when the sublabel is skimmed or read aloud, and it is what stops a
+       measured floor being banked as the hour's total spend. */
     const cost = burn.costLastHourUsd != null
-      ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
+      ? (burn.costIsFloor ? "≥$" : "$") + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
     /* No coverage suffix. It counted ELIGIBLE LIVE agents while the rate sums
        deltas from every tracked reporter including ended ones — the same
@@ -1036,7 +1059,7 @@ globalThis.TheAntHill = {
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
   usageCostReading, usageTokenReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, unaddressableCount, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -2774,7 +2797,34 @@ function watchClauses(snap) {
   if (peak != null && peak >= CONTEXT_WATCH_PCT && peak < CONTEXT_BAND_ALARM_PCT) {
     clauses.push(`peak ctx ${peak}%`);
   }
+  /* Sessions the board can watch but not type into.
+
+     Routed by the docs lane, and their guide is the evidence: writing up the
+     fail-closed gate, they had to tell the reader twice that the board "looks
+     healthy" and "reads perfectly healthy" while Send is greyed out. A document
+     apologising for an interface is the interface failing to say something.
+
+     It is a real capability loss — the operator believes they can send to these
+     rows and cannot — and it is invisible, because nothing else on a calm board
+     counts it: controlHealth reports cmux reachability and collector faults, not
+     rows whose identity is merely unproven.
+
+     The WATCH tier, not an alert. Nothing is broken, Focus still works, and it
+     clears itself the moment cmux attests the session, so it belongs in the
+     murmur beside stall and context — worth mentioning, not worth rearranging
+     the board around. */
+  const unproven = unaddressableCount(snap);
+  if (unproven) clauses.push(`${unproven} can't take commands`);
   return clauses;
+}
+
+/* Live sessions whose identity cannot be proven, so the board may watch them but
+   not type into them. One derivation, read by the health card and the calm
+   murmur alike, so the two can never disagree about how many there are. */
+function unaddressableCount(snap) {
+  return snapshotAgents(snap)
+    .filter(({ agent }) => deriveActivity(agent) !== "ended" && deriveControlState(agent) === "unproven")
+    .length;
 }
 
 /* "All clear" was a claim about the whole board computed from a four-input
@@ -5352,7 +5402,7 @@ function renderControlBanner(agent, control) {
   const copy = el("div", { class: "control-banner-copy" },
     el("strong", { text: brief.title }),
     " ",
-    controlUnavailableText(control));
+    controlUnavailableText(control, agent));
   if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
   copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
   copy.append(el("button", {
@@ -5510,7 +5560,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   // Tests assert controlUnavailableText is used for unavailable safe controls.
   if (safeLocked) {
     dock.append(el("p", { class: "visually-hidden",
-      text: controlUnavailableText(deriveControlState(agent)) }));
+      text: controlUnavailableText(deriveControlState(agent), agent) }));
   }
 
   return dock;
@@ -6680,7 +6730,30 @@ function renderEmpty() {
 function emptyBoardVerdict(snap) {
   const sources = snap && snap.totals && snap.totals.sourceHealth;
   const total = sources && Number.isFinite(sources.total) ? sources.total : 0;
-  const degraded = Boolean(sources && Number.isFinite(sources.degraded) && sources.degraded > 0);
+  /* A provider that is not installed is not a provider that is broken.
+
+     The docs lane proved the first screen of a fresh install reads "No sessions
+     found — and not every collector can see · 1 of 4 collectors degraded". That
+     is a fault report, and it is wrong: a newcomer running Claude Code but not
+     Cursor has an absent collector, not a degraded one. Nothing is broken,
+     nothing needs fixing, and the very first thing the product says to them is
+     that something is.
+
+     byProvider carries lastHealthyAt, and it is the distinction the screen
+     needs: a source that has NEVER been healthy has nothing to read yet, while
+     one that WAS healthy and is not now has actually failed. Only the second is
+     a fault. The backend is fixing the absent/degraded split at its source; this
+     composes with that rather than competing, because a provider it marks
+     absent will simply stop appearing as unhealthy here.
+
+     Deliberately conservative: with no byProvider on the wire the old counting
+     stands, so a real degradation is never silently downgraded to calm. */
+  const byProvider = (sources && sources.byProvider) || null;
+  const broken = byProvider
+    ? Object.values(byProvider).filter((p) => p && p.healthy === false && p.lastHealthyAt).length
+    : (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
+  const degraded = broken > 0;
+  const healthy = sources && Number.isFinite(sources.healthy) ? sources.healthy : 0;
   return {
     degraded,
     message: degraded
@@ -6689,11 +6762,20 @@ function emptyBoardVerdict(snap) {
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
       : "Claude Code, Codex and Cursor sessions appear here on their own, within seconds of starting.",
-    sources: total > 0
-      ? (degraded
-        ? `${sources.degraded} of ${total} collectors degraded`
-        : `${sources.healthy} of ${total} collectors healthy`)
-      : null,
+    /* The denominator stays. I first replaced it with an absolute count, on the
+       theory that "3 of 4" reads as a shortfall to a newcomer — then read the
+       docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and
+       explains why it is right: the count is of collectors that can SEE, not of
+       tools installed, and a directory that does not exist is a COMPLETE answer
+       ("this tool never ran here") rather than a gap. The denominator is what
+       makes "all four are fine" legible; an absolute count would have hidden
+       the very reassurance the screen exists to give. Their reasoning is better
+       than mine was and the string is documented, so it stands. */
+    sources: degraded
+      ? `${broken} of ${total} collectors degraded`
+      : total > 0
+        ? `${healthy} of ${total} collectors healthy`
+        : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };
 }

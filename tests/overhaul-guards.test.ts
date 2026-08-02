@@ -78,7 +78,7 @@ describe("health severity: the quiet half must not be bought with the loud half"
     const snapshot = snapshotWith({ cmuxReachable: true });
 
     expect(snapshot.issues ?? []).toEqual([]);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
   });
 
   test("an unreachable control plane still reports loudly", () => {
@@ -173,7 +173,7 @@ describe("health severity: the quiet half must not be bought with the loud half"
     });
 
     expect(snapshot.issues ?? []).toEqual([]);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
     // Debris must not leak back into the list that drives the Degraded verdict.
     expect(snapshot.controlHealth?.errors).toEqual([]);
   });

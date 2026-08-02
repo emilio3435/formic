@@ -895,6 +895,12 @@ export async function collectCursorSessions(
     directories(join(home, ".cursor/chats")),
     directories(join(home, ".cursor/projects")),
   ]);
+  /* No ~/.cursor at all means Cursor was never installed here, which is not a
+     fault to report — it is the ordinary state of a machine whose owner uses
+     something else. `directories()` already swallows ENOENT, so absence has to
+     be asked about directly rather than inferred from an empty list, which a
+     freshly-installed Cursor would also produce. */
+  const cursorAbsent = !(await pathExists(join(home, ".cursor")));
   const sessionDirectories = (await Promise.all(workspaceDirectories.map(directories))).flat();
 
   await Promise.all(
@@ -976,5 +982,15 @@ export async function collectCursorSessions(
     if (!knownIds.has(agent.id)) agents.push(agent);
   }
   await fillMissingCursorModels(state, agents, errors);
-  return { value: agents, errors };
+  return { value: agents, errors, ...(cursorAbsent ? { absent: true } : {}) };
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await readdir(path);
+    return true;
+  } catch (error) {
+    // Only ENOENT is absence. An unreadable directory IS here and is a fault.
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
 }

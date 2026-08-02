@@ -753,8 +753,17 @@ async function recentJsonlFiles(
       }),
     );
   }
+  /* Whether the ROOT is missing, not merely some directory inside it. A
+     provider whose home has never existed was never installed; one whose root
+     exists but whose subdirectory vanished mid-scan is a different story. */
+  let rootAbsent = false;
+  try {
+    await readdir(root);
+  } catch (error) {
+    rootAbsent = absent(error);
+  }
   await walk(root, maxDepth);
-  return { value: files, errors };
+  return { value: files, errors, ...(rootAbsent ? { absent: true } : {}) };
 }
 
 function completeJsonRecords(buffer: Buffer): { rows: JsonRecord[]; remainder: Buffer } {
@@ -806,6 +815,7 @@ async function collectProvider(
   const agents: CollectedAgent[] = [];
   const scan = await recentJsonlFiles(root, depth, windowMs);
   const files = scan.value;
+  const absent = scan.absent === true;
   for (const error of scan.errors) errors.push(`${provider} ${error}`);
   const currentPaths = new Set(files);
   for (const [path, cached] of fileCache) {
@@ -882,7 +892,7 @@ async function collectProvider(
       }
     }),
   );
-  return { value: agents, errors };
+  return { value: agents, errors, ...(absent ? { absent: true } : {}) };
 }
 
 export async function collectSessions(

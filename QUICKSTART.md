@@ -78,20 +78,49 @@ concluding nothing was collected.
 
 ## Expected on a monitoring-only install
 
-- **A `Blocked` health card.** It reads `cmux unreachable — terminal titles and
-  Focus/Send stay offline.` and offers one next step: `Start cmux, then Refresh
-  — Focus and Send come back on their own.` Correct behavior: without cmux, the
-  dashboard can't prove which terminal owns which session, so it refuses to type
-  into one. Focus and Send stay disabled by design. With cmux running and nothing
+- **An empty board** reading `Watching. No sessions running yet.`, with a line
+  beneath it counting **healthy** collectors — `4 of 4 collectors healthy` on a
+  machine that has just been set up. Nothing has run yet, and only sessions from
+  roughly the last day and a half are scanned. That count is the proof the board
+  is working: a stalled client cannot manufacture a ticking snapshot age. If a
+  collector really is degraded it says so there instead, because an empty board
+  with a blind collector is an *unknown* fleet rather than an empty one.
+- **A `Blocked` health card**, offering one next step: `Start cmux, then Refresh
+  — Focus and Send come back on their own.` Its detail line counts what it found
+  — on a machine with no cmux it typically reads `2 control-plane problems may
+  limit focus, instruction, or interrupt actions.`, one for terminal discovery
+  and one for notifications. The number is a count, so expect it to differ.
+  Correct behavior: without cmux the dashboard cannot prove which terminal owns
+  which session, so it refuses to type into one. With cmux running and nothing
   wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
-- **An empty board** reading `Watching. No sessions running yet.` with a line
-  beneath it counting healthy collectors — nothing has run yet, and only sessions
-  from roughly the last day and a half are scanned. That collector count is the
-  proof the board is working; if any collector is degraded it says so there
-  instead, because an empty board with a blind collector is an unknown one rather
-  than an empty one.
+
+### Why it still says 4 of 4 when you have none of them
+
+The count is of collectors that can **see**, not of tools you have installed.
+There are four, and they read what each tool already writes to disk:
+
+| Collector | Reads | You have it if |
+|---|---|---|
+| **Claude** | `~/.claude/projects/` | you use Claude Code |
+| **Codex** | `~/.codex/sessions/` | you use Codex CLI |
+| **Cursor** | Cursor's own session store | you use Cursor |
+| **OMP** | `~/.omp/agent/sessions/` | almost certainly not — it is a legacy source kept for old history |
+
+**Expect most of these to be absent, and expect all four to still read healthy.**
+A directory that does not exist is a complete answer — *this tool never ran
+here* — and no session can be hiding behind it. Most people will run one or two
+of these tools and never see anything but `4 of 4`. Watch for `degraded`
+instead, which means something *stopped* a collector reading — a permissions or
+I/O failure — and is the only case where sessions could exist that the board
+cannot show you.
+
+**cmux is not one of the four.** It does not collect sessions; it resolves which
+terminal a session is sitting in, which is what Focus and Send need. Not having
+it costs you those buttons and nothing else — it cannot hide a row, so it must
+never move the collector count. If you ever see a degraded collector *caused by*
+a missing cmux, that is a bug, not your setup.
 
 ## Optional: enable Focus and Send
 
@@ -107,22 +136,41 @@ config file on first launch, and there is nothing to edit until it has.
 
 **cmux installed is not the same as cmux naming your session.** With cmux
 running you may still find **Send and Interrupt greyed out on a row where Focus
-works**, with a reason that says the pane was matched by its working directory
-rather than attested by cmux. That is deliberate, and it is worth knowing before
-you meet it, because the row otherwise looks completely healthy.
+works**. That is deliberate, and it is worth knowing before you meet it, because
+the row otherwise looks completely healthy.
 
-The Ant Hill will type into a terminal only when cmux names the session on that
-pane — evidenced by the session's transcript file being held open there, or the
-session ID appearing in the command that started it. Matching a pane by the
-folder it happens to be sitting in is a guess, and a guess is enough to move the
-board's view but not enough to authorise input: two panes in the same project,
-one `cd`ing away as another `cd`s in, will silently re-point the row at the wrong
-terminal. Focus stays on in that state on purpose — looking costs nothing, and
-going to the pane is how you recover.
+### What the Ant Hill promises never to do
 
-So: **start agents inside cmux panes and leave them there**, and the write
-controls stay on. There is no setting for this and nothing to restart; the
-buttons re-enable within a few seconds of cmux naming the session.
+This is the part to read before you let anything type into your terminals. Each
+of these is a guarantee, not a missing feature:
+
+- **It will never type into a terminal it cannot name.** cmux has to attest that
+  *this session is on this pane* — evidenced by the session's transcript file
+  being held open there, or the session ID in the command that started it. A pane
+  merely sitting in the right folder is a guess, and a guess may move your view
+  but never your keystrokes. Two panes in one project, one `cd`ing away as
+  another `cd`s in, is enough to re-point a row at the wrong terminal while it
+  still reads healthy. Hovering such a button says so: *matched by its working
+  directory, not attested by cmux, so the session on it cannot be proven.*
+- **It will never type into a session that has already exited.** The pane
+  outlives the agent and usually belongs to your shell by then, so an
+  instruction to a dead agent would land in whatever is sitting there now. Once
+  the board knows the process is gone, the write controls close.
+- **It will never act on a stale picture.** Which terminal an agent is on has a
+  short shelf life. If the board's evidence is too old to trust, the write is
+  refused rather than sent to where the agent used to be.
+- **It never invents a number.** A cost with no source reads `unavailable`, not
+  `$0`. A collector that was never installed reads *absent*, not *broken*.
+
+**Focus is exempt from all of it, on purpose.** Looking costs nothing and going
+to the pane is how you recover, so there is always a way in. The board is never
+the reason you cannot reach an agent — it is the reason you do not reach the
+wrong one.
+
+So: **start agents inside cmux panes, leave them there, and keep them running**,
+and the write controls stay on. There is no setting for any of this and nothing
+to restart; the buttons re-enable within a few seconds of the board being able to
+prove the answer again.
 
 ## Group sessions by project (optional)
 

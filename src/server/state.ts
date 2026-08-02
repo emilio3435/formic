@@ -35,6 +35,8 @@ export class HubState {
   #notifications: CmuxNotification[] = [];
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
   #cmuxReachable = false;
+  #cmuxAbsent = false;
+  #sourceAbsent: Partial<Record<Provider, boolean>> = {};
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #liveAgentProcessIds?: number[];
   #refreshing?: Promise<HubSnapshot>;
@@ -283,6 +285,10 @@ export class HubState {
       console.error(`[HubState] ${historyError}`);
     }
     if (cmux) {
+      /* Not installed is not unreachable. `cmuxReachable === false` drives a
+         degraded collector and the "controls are off" banner, both of which are
+         faults; a machine without cmux has no fault, it just has no cmux. */
+      this.#cmuxAbsent = cmux.absent === true;
       this.#cmuxReachable = cmux.errors.length === 0;
       let identityErrors: string[] = [];
       let bindingErrors: string[] = [];
@@ -326,6 +332,9 @@ export class HubState {
         ])],
       ]),
     ) as Record<Provider, string[]>;
+    this.#sourceAbsent = Object.fromEntries(
+      providers.map((provider) => [provider, sessions[provider].absent === true]),
+    ) as Record<Provider, boolean>;
     const built = this.#withSourceHealth(buildSnapshot({
       agents: this.bindingStore
         ? bridgeAgentsWithBindings(
@@ -339,6 +348,8 @@ export class HubState {
       notifications: this.#notifications,
       programHints: this.programHints,
       sourceErrors,
+      sourceAbsent: this.#sourceAbsent,
+      cmuxAbsent: this.#cmuxAbsent,
       cmuxErrors: this.#cmuxErrors,
       cmuxReachable: this.#cmuxReachable,
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
