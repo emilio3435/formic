@@ -147,7 +147,28 @@ export function livenessView(agent) {
    alerts only on POSITIVE evidence its process is still there; absent or
    unknown liveness stays in History, which is the absent-first rule the
    liveness block above already commits to. */
+/* The agent's own claim on a human, as computed by the server.
+
+   attentionSignal carries WHY a session wants someone — the kind, the quoted
+   evidence, and the next action — and the client read none of it: a grep for the
+   field across src/web returned nothing. An agent that merely ASKS a question is
+   structurally healthy, so it failed the outcome test below and was excluded from
+   every attention surface at once: the tab, the title badge, the notifier and the
+   program rollup. The reason was computed correctly, serialised correctly, and
+   discarded at the last step.
+
+   Live sessions only, and that is not a detail. Every agent on the board carrying
+   a signal today is archived, because a handed-back decision is exactly the note
+   a session leaves as it finishes. An archived agent wants nothing from anyone —
+   its record is a fact the board already shows in History and nobody acts on one —
+   so wiring those in would have swapped a false negative for six false
+   positives. */
+export function wantsHuman(agent) {
+  return Boolean(agent && agent.attentionSignal) && deriveActivity(agent) !== "ended";
+}
+
 export function alerting(agent) {
+  if (wantsHuman(agent)) return true;
   if (deriveOutcome(agent) === "healthy") return false;
   if (deriveActivity(agent) !== "ended") return true;
   return livenessState(agent) === "running";
@@ -162,7 +183,12 @@ export function deriveRollup(agents) {
     working: agents.filter((a) => act(a) === "working").length,
     idle: agents.filter((a) => act(a) === "idle").length,
     ended: agents.filter((a) => act(a) === "ended").length,
-    needsYou: agents.filter((a) => out(a) !== "healthy" && act(a) !== "ended").length,
+    /* The one verdict, not a second opinion about it. This re-derived "wants a
+       human" from outcome and activity, so the program rollup counted a
+       different population than the tab beside it — it missed every attention
+       signal, and it missed an ended-but-still-running session that alerting()
+       has rescued since. Two populations, one word. */
+    needsYou: agents.filter((a) => alerting(a)).length,
     blocked: agents.filter((a) => out(a) === "blocked").length,
     failed: agents.filter((a) => out(a) === "failed").length,
     linked: agents.filter((a) => deriveControlState(a) === "linked").length,

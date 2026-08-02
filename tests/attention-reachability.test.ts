@@ -3,28 +3,40 @@ import { attentionFieldsFor } from "../src/server/attention-signal";
 
 /* The wiring contract between the two halves of the day's flagship capability.
 
-   The server decides which agents are waiting on a human and why, ships it on
-   AgentSnapshot.attentionSignal, and the client never reads it:
-   `grep -rn attentionSignal src/web` returns nothing. The reason is computed
-   correctly, serialised correctly, and discarded at the last step.
+   The server decides which agents are waiting on a human and why and ships it
+   on AgentSnapshot.attentionSignal. For one day the client read none of it —
+   `grep -rn attentionSignal src/web` returned nothing — so the reason was
+   computed correctly, serialised correctly, and discarded at the last step.
+   This file was written against that gap, as `test.failing`, and the marker
+   came off when agent-model's wantsHuman() landed and fed alerting().
 
-   The property pinned here is not a string or a layout. It is that an agent the
+   The property pinned is not a string or a layout. It is that an agent the
    server marked as wanting a human is REACHABLE — that some operator-facing
-   client surface can lead them to it. Which surface is the frontend lane's
-   choice: the Alerts view, the outcome, the row summary, or the drawer all
-   satisfy it. The contract is only that at least one does.
+   surface leads to it. Which surface stays the frontend lane's choice: the
+   Alerts view, the outcome, the row summary and the drawer each satisfy it,
+   and the contract is only that at least one does.
 
-   The reachability test is `test.failing` on purpose. It fails today, which is
-   the finding; marking it keeps the shared suite green for the other lanes
-   while the gap is real, and bun flips it to a hard failure the moment the
-   client starts consuming the field — "this test is marked as failing but it
-   passed" — which is the prompt to delete `.failing` and leave a permanent
-   regression guard behind. It is not a skip: it runs on every commit.
+   Confirmed to pass for the right reason rather than because the assertion was
+   loosened — the reachability assertion and its route list are byte-identical
+   to the version that failed. Four mutations of the landed implementation, each
+   caught:
 
-   Fixture note: on the live board all seven agents currently carrying a signal
-   are archived, and an archived agent is legitimately absent from the live
-   surfaces. Asserting against whatever the board happens to hold would
-   therefore prove nothing. Every agent below is deliberately LIVE. */
+     wantsHuman() forced false ................ contract test
+     alerting() stops calling wantsHuman ...... contract test
+     signal ignored, every live agent alerts .. no-signal control
+     the !== "ended" guard dropped ............ archived control
+
+   The last two matter as much as the first. Refilling Alerts with every idle
+   agent would satisfy a naive reachability check while rebuilding the noise the
+   attention work exists to end, and admitting archived agents would trade one
+   false negative for the six false positives the board is carrying today.
+
+   Fixture note: every agent on the live board carrying a signal is archived —
+   a handed-back decision is the note a session leaves as it finishes — and the
+   backend lane is now stopping the detector firing on dead sessions. Both facts
+   are reasons this file builds its own LIVE agents rather than asserting on
+   whatever the board holds: it must not start passing because archived signals
+   went away, and it must not have passed because they were there. */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let M: any;
@@ -163,17 +175,12 @@ describe("a signal the server computes must survive to an operator", () => {
     expect(fields.nextAction).toBeTruthy();
   });
 
-  test.failing("a live agent carrying an attention signal is reachable somewhere", () => {
-    /* FAILS TODAY. `grep -rn attentionSignal src/web` returns nothing: the
-       client never reads the field, so an agent whose only claim on a human is
-       its attention signal is filed as an ordinary idle row reading "No source
-       activity in the last 3 minutes." Nothing leads the operator to it and
-       nothing tells them it asked a question.
-
-       Marked failing so the shared suite stays green while the gap is real.
-       When the client starts consuming the field this test will report "marked
-       as failing but it passed" — remove `.failing` at that point and it
-       becomes a permanent guard against the wiring being dropped again. */
+  test("a live agent carrying an attention signal is reachable somewhere", () => {
+    /* WIRED. `.failing` removed once the client began consuming the field:
+       wantsHuman() feeds alerting(), which the Needs-you view, the title badge,
+       the notifier, the program rollup and the findings list all read. This is
+       now a permanent guard against the wiring being dropped again — if a future
+       change re-derives "needs a human" from outcome alone, this goes red. */
     expect(reachableRoutes(waitingAgent())).not.toEqual([]);
   });
 

@@ -17,7 +17,7 @@
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
-import { deriveActivity, deriveControlState, deriveOutcome } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome } from "./agent-model.js";
 import { state } from "./client-state.js";
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -334,13 +334,21 @@ export function issuesOf(snap) {
   for (const { agent } of snapshotAgents(snap)) {
     const live = deriveActivity(agent) !== "ended";
     const outcome = deriveOutcome(agent);
-    if (live && outcome !== "healthy") {
+    /* Bound to alerting(), the same verdict the tab, the notifier and the rollup
+       read, rather than re-deriving "needs a human" from outcome alone. That
+       third derivation is why an agent whose only claim was its attentionSignal
+       reached no surface at all. */
+    if (alerting(agent)) {
+      /* When the server said WHY, say that. Its evidence is the agent's own
+         words and its nextAction is the decision waiting — strictly better than
+         "needs review", which is the finding naming itself. */
+      const signal = agent.attentionSignal;
       issues.push({
         id: "agent:" + agent.id,
         kind: "agent",
         severity: outcome === "failed" ? "error" : "warning",
         title: outcome === "failed" ? `${agentName(agent)} failed` : `${agentName(agent)} needs review`,
-        summary: agent.statusReason,
+        summary: (signal && signal.evidence) || agent.statusReason,
         affectedAgentIds: [agent.id],
       });
     }
