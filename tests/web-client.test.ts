@@ -4490,6 +4490,22 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §19. Select rendered unconditionally, and on the resting board
+     it offered multi-select over zero selectable rows. A control that cannot do
+     anything is one the operator learns to skip — and it named itself rather than
+     the operation it enables. */
+  test("(19a) Select appears only when something can actually receive a broadcast", () => {
+    const reachable = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
+    const unreachable = agent({ id: "codex:no", status: "running", activity: "working", outcome: "healthy", controlState: "quarantined", controls: [] });
+    expect(M.broadcastEligible(reachable)).toBe(true);
+    expect(M.broadcastEligible(unreachable)).toBe(false);
+    // The gate the toolbar reads, expressed against the same predicate the
+    // broadcast bar itself uses — so the button cannot promise what Send refuses.
+    expect(source).toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
+    // And it names the operation rather than itself.
+    expect(source).toContain('"Select to send"');
+  });
+
   /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with
      the six view tabs each taking one of the stops ahead of it — reaching the
      board's primary filter meant tabbing past every view. A cockpit is a keyboard

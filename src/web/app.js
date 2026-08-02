@@ -2905,9 +2905,17 @@ function renderTabs() {
   }
   const toggle = $("select-toggle");
   if (toggle) {
-    toggle.hidden = state.view === "usage";
+    /* Audit §19: Select rendered unconditionally and named itself rather than the
+       operation it enables. Measured on the resting board it sat there offering
+       multi-select over zero selectable rows — a control that cannot do anything
+       is a control the operator learns to skip. It speaks only when at least one
+       visible agent can actually receive a broadcast, and it says what it is for. */
+    const selectable = state.view !== "usage"
+      && snapshotAgents(state.snap).some(({ agent }) =>
+        broadcastEligible(agent) && viewMatches(state.view, agent));
+    toggle.hidden = !selectable && !state.selecting;
     toggle.setAttribute("aria-pressed", String(state.selecting));
-    toggle.textContent = state.selecting ? "Done selecting" : "Select";
+    toggle.textContent = state.selecting ? "Done selecting" : "Select to send";
   }
   const search = $("search");
   const opsRow = $("ops-toolbar-row");
