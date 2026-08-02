@@ -990,3 +990,74 @@ describe("the safety promises the docs make on the product's behalf", () => {
     expect(caps.focus, "Focus must stay on — it is the documented way to go and look").toBe(true);
   });
 });
+
+/* PR 4 is open; PR 3 merged. A doc that describes unmerged behaviour is the same
+   defect as one describing a fix that never landed, so every statement in these
+   docs that depends on code still in flight carries an HTML marker naming the
+   symbol it waits on: <!-- pr4:SYMBOL ... -->.
+
+   This test is what makes the marker worth writing. It fails if a marked claim
+   names a symbol that exists nowhere in src/ — which catches both halves of the
+   risk: a doc shipped ahead of its code, and a marker left behind after the code
+   was renamed. On merge, grep for "pr4:" and delete the markers; the claims
+   underneath are already true by then. */
+describe("claims that depend on unmerged code are marked and traceable", () => {
+  const MARKER = /<!--\s*pr4:([A-Za-z_][A-Za-z0-9_]*)/g;
+  const srcTree = (() => {
+    const walk = (dir: string): string[] =>
+      readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name))
+          : /\.(ts|js)$/.test(e.name) ? [readFileSync(join(ROOT, dir, e.name), "utf8")] : [],
+      );
+    return walk("src").join("\n");
+  })();
+
+  test("every pr4 marker names a symbol that exists in src/", () => {
+    const marked = [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const;
+    let total = 0;
+    for (const [name, doc] of marked) {
+      for (const [, symbol] of doc.matchAll(MARKER)) {
+        total += 1;
+        expect(srcTree, `${name} marks a claim as waiting on "${symbol}", which is in no source file`)
+          .toContain(symbol);
+      }
+    }
+    expect(total, "the pr4 markers vanished; either PR 4 merged (delete this test) or they were lost")
+      .toBeGreaterThan(0);
+  });
+
+  /* A count alone was too weak: stripping one doc's markers still passed,
+     because the other doc's kept the total above zero. Tie each marker to the
+     CLAIM it guards, so a marker cannot be removed while the claim it covers
+     stays behind. */
+  test("each unmerged claim carries its own marker in the doc that makes it", () => {
+    const guards = [
+      { symbol: "processKnownDead", claim: /already exited|process is gone|process has died/i },
+      { symbol: "sourceAbsent", claim: /never installed reads \*absent\*|4 of 4 when you have none/i },
+    ];
+    for (const [name, doc] of [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const) {
+      for (const { symbol, claim } of guards) {
+        if (!claim.test(doc.replace(/\s+/g, " "))) continue;
+        expect(doc, `${name} makes a claim that waits on ${symbol} but carries no pr4 marker for it`)
+          .toContain(`pr4:${symbol}`);
+      }
+    }
+  });
+
+  test("the dead-process claim matches what the code does, not what it will do", async () => {
+    /* The guide says a dead row shows a LIT Send that refuses on press, rather
+       than a greyed one. That is not a softening — controlsFor grants the
+       capability and control.ts refuses the write, so the button and the gate
+       genuinely disagree. If controlsFor ever learns liveness, this flips and
+       the guide's "read the chip rather than the button" paragraph must go. */
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const attested = { surfaceId: "s1", resolution: "exact", attestation: "attested", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
+    const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
+    const instruct = controlsFor(dead, attested, false).find((c) => c.action === "instruct");
+    expect(instruct?.enabled, "controlsFor now greys a dead row — update the guide's button paragraph")
+      .toBe(true);
+    const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    expect(guide, "the guide stopped warning that a dead row's Send still looks live")
+      .toMatch(/refused when pressed|still shows a lit/i);
+  });
+});

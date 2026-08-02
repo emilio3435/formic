@@ -123,16 +123,25 @@ So the two are gated differently:
 
 | The row's link to a terminal | Focus | Send / Interrupt |
 |---|---|---|
-| cmux names the session on that pane, and its process is alive | on | **on** |
-| matched only by its folder | on | **off** |
-| the session's process is gone | on | **off** |
-| ambiguous, or no pane found | off | off |
+| cmux names the session on that pane, and its process is alive | on | **accepted** |
+| matched only by its folder | on | **greyed out** |
+| the session's process is gone | on | **refused when pressed** |
+| ambiguous, or no pane found | off | greyed out |
+
+<!-- pr4:processKnownDead — the dead-process row depends on the liveness gate in
+     src/server/control.ts. Until that ships, a dead row accepts a Send. -->
+
+Two of those look different in the window. A row the board cannot name greys the
+button out before you touch it. A row whose **process has died still shows a lit
+Send**, and refuses only once you press it, telling you why. Same guarantee
+either way — nothing reaches the wrong terminal — but the second costs you a
+click to discover, so read the `died` chip rather than the button.
 
 ### The promise behind that table
 
-Every greyed-out Send in it is the cockpit declining to do something on your
-behalf that it cannot prove is safe. Read the rows as guarantees, because that
-is what they are:
+Every Send that table withholds — greyed out or refused on press — is the
+cockpit declining to do something on your behalf that it cannot prove is safe.
+Read the rows as guarantees, because that is what they are:
 
 **It will not type into a terminal it cannot name.** Not "probably the right
 one" — cmux has to say *this session is on this pane*. A pane merely sitting in
@@ -145,8 +154,9 @@ folder match may move your view and never your keystrokes.
 crashed agent leaves its pane behind, and that pane usually belongs to your
 shell by the time you get there. An instruction addressed to a dead agent does
 not vanish — it lands in whatever is sitting on that terminal now. So once the
-board knows a process is gone, the write controls close, even though the row is
-still there to read.
+board has checked and found the process gone, a Send is refused rather than
+delivered, and says the pane may now belong to someone else. The row stays
+readable; only the writing stops.
 
 **It will not act on stale evidence.** Which terminal an agent is on is a fact
 with a short shelf life. If the board's picture is too old to trust, a write is
@@ -391,8 +401,9 @@ watch, ignore it forever. If you want Focus and Send, install cmux and run
 <details>
 <summary><b>Send is greyed out but Focus still works</b></summary>
 
-**Hover the greyed button — it tells you which of these it is.** All of them are
-the cockpit refusing to guess on your behalf, not a fault to repair.
+**The reason is always on the control — hover a greyed button, or read the
+message a refused Send returns.** All of them are the cockpit declining to guess
+on your behalf, not a fault to repair.
 
 **"matched by its working directory, not attested by cmux."** The row is linked
 to a terminal by folder, not by name. The board would rather refuse a Send than
@@ -405,9 +416,12 @@ that launched it.
 
 **The session's process is gone.** The pane outlives the agent, and by the time
 you get there it usually belongs to your shell again. An instruction to a dead
-agent is not discarded — it lands in whatever is on that terminal now. The row
-stays readable so you can see what happened; only the writes close.
+agent is not discarded — it lands in whatever is on that terminal now. Note this
+one does **not** grey the button out: the row shows a `died` chip and a lit Send,
+and the refusal arrives when you press it. Trust the chip over the button.
 → *Fix:* none needed. The session is over. Read it, then `Archive` it.
+
+<!-- pr4:processKnownDead — refusal lives in src/server/control.ts. -->
 
 **The board's picture is too old to act on.** Which terminal an agent is on goes
 stale quickly, so a write is refused rather than sent to where it *used* to be.

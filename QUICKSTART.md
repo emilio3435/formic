@@ -96,6 +96,10 @@ concluding nothing was collected.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 
+<!-- pr4:sourceAbsent — the calm day-one board and the healthy count depend on
+     the absent-vs-degraded split. On main today a no-cmux first run still reads
+     "1 of 4 collectors degraded"; this section describes the fixed behaviour. -->
+
 ### Why it still says 4 of 4 when you have none of them
 
 The count is of collectors that can **see**, not of tools you have installed.
@@ -155,12 +159,16 @@ of these is a guarantee, not a missing feature:
 - **It will never type into a session that has already exited.** The pane
   outlives the agent and usually belongs to your shell by then, so an
   instruction to a dead agent would land in whatever is sitting there now. Once
-  the board knows the process is gone, the write controls close.
+  the board has checked and found the process gone, the Send is refused and says
+  the pane may now belong to someone else. <!-- pr4:processKnownDead -->
 - **It will never act on a stale picture.** Which terminal an agent is on has a
   short shelf life. If the board's evidence is too old to trust, the write is
   refused rather than sent to where the agent used to be.
+  <!-- pr4:MAX_CONTROL_SNAPSHOT_AGE_MS — merged for Send/Interrupt; the
+       attention path gets the same gate in PR 4. -->
 - **It never invents a number.** A cost with no source reads `unavailable`, not
   `$0`. A collector that was never installed reads *absent*, not *broken*.
+  <!-- pr4:sourceAbsent — absent-vs-degraded ships in PR 4. -->
 
 **Focus is exempt from all of it, on purpose.** Looking costs nothing and going
 to the pane is how you recover, so there is always a way in. The board is never
