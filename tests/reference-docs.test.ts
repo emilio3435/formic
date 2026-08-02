@@ -1502,8 +1502,10 @@ describe("the catch-up summary stays true to the code it summarises", () => {
     const t = today();
     const totals = [...t.matchAll(/\$3[0-9],[0-9]{3}/g)];
     expect(totals.length, "the cost total vanished from the summary").toBeGreaterThan(0);
+    /* Emphasis markers sit between the words and the clock, so match around
+       them rather than through them. */
     expect(t, "the summary states a total without saying when it was measured")
-      .toMatch(/Measured at [0-9]{2}:[0-9]{2}/);
+      .toMatch(/Measured at \*{0,2}[0-9]{2}:[0-9]{2}/);
     /* The strongest evidence in the file is that the number MOVED while staying
        consistent. Losing that turns "a reading" back into "a fact". */
     expect(t, "the summary stopped showing that the total moves")
@@ -1547,6 +1549,46 @@ describe("the catch-up summary stays true to the code it summarises", () => {
     expect(read("src/server/burnbar.ts"), "priorSpend left the payload; TODAY.md's total assumes it")
       .toContain("priorSpend");
     expect(today(), "the summary stopped saying the total is the same from any window")
-      .toMatch(/identical from a one-day window and a ninety-day one/i);
+      .toMatch(/identical to the cent from a one-day window and a ninety-day one/i);
+    /* The GPT lane's finding, and the one most likely to be lost in an edit:
+       the figure moves in STEPS when usage is ingested, not continuously. A
+       reader who checks twice, sees the same number and concludes the caveat
+       was over-cautious has been misled by the caveat's own wording. */
+    expect(today(), "the summary stopped saying the total moves in steps rather than drifting")
+      .toMatch(/moves in \*{0,2}steps\*{0,2}/i);
+    expect(today(), "the summary stopped distinguishing a live figure from a wrong one")
+      .toMatch(/no longer unstable; reality is/i);
+  });
+});
+
+/* Two claims the GPT lane's adversarial pass corrected, pinned so they cannot
+   quietly revert to the confident version. Both were wrong in the same way:
+   true of what I tested, stated as though true in general. */
+describe("the summary's scope survives an adversarial read", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it does not claim no cmux workspace was touched", () => {
+    /* I wrote "No cmux workspace was created or removed" meaning my own probes.
+       A returning reader takes it as "nothing disturbed my cmux today", and the
+       GPT lane created and closed eleven. The replacement says who did what and
+       that someone checked — more useful than the absolute claim was. */
+    expect(today(), "the blanket no-workspaces-touched claim came back")
+      .not.toMatch(/No cmux workspace was created or removed/i);
+    expect(today(), "the summary stopped saying the machine was not idle")
+      .toMatch(/every one was removed and confirmed gone/i);
+  });
+
+  test("the day-one claim is scoped to what this machine can actually show", () => {
+    /* Every provider is installed here, so the absent-collector path cannot be
+       produced on this box: a healthy reading is what you would see whether or
+       not the fix landed. Fixture-verified is the honest word. */
+    expect(today(), "the summary stopped admitting the day-one path is fixture-verified")
+      .toMatch(/verified against fixtures, not observed on a bare install/i);
+    /* And it must quote what a PARTIAL install shows, since that is the real
+       first-run case — option C changed this string at 18:18. */
+    const app = read("src/web/app.js");
+    expect(app, "the not-installed suffix left emptyBoardVerdict").toMatch(/not installed/);
+    expect(today(), "the summary stopped quoting what a partial install reads")
+      .toMatch(/1 of 1 collectors healthy · 3 not installed/);
   });
 });

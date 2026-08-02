@@ -22,11 +22,15 @@ remembering to edit both places. Focus stays available throughout, on purpose:
 looking costs nothing, and going to the pane is how you recover.
 
 Both of the rare states behind that were produced deliberately and watched, on
-probe agents in an isolated instance. No cmux workspace was created or removed.
+probe agents in an isolated instance. Separately, the GPT lane created and closed
+**eleven** cmux workspaces running probes against the live board; every one was
+removed and confirmed gone. Nothing of yours was touched, but the machine was
+not idle.
 
 **One cost total that means something.** Ask any window, add what sits before
-it, and you get the same whole. Measured at 17:55: **about $32,943** across the
-recorded history, identical from a one-day window and a ninety-day one.
+it, and you get the same whole. Measured at **18:18 CEST**: **$32,942.99** across
+the recorded history, identical to the cent from a one-day window and a
+ninety-day one.
 
 That figure survived having its own foundations replaced four times today —
 de-duplicating cumulative session snapshots, disclosing what falls outside the
@@ -34,13 +38,26 @@ window, a row cap and a range clamp. A number that lands in the same place after
 its inputs are rebuilt underneath it has earned more than one that was never
 questioned.
 
-**It is a reading, not a fact.** At 17:21 the same total read $32,471. Half an
-hour of work moved it. Quote it with its timestamp or do not quote it.
+**It is a reading, not a fact.** The same total read **$32,471.40 at 17:21** and
+**$32,942.99 at 17:35** — half an hour of work moved it by $471. Then it sat
+perfectly still: identical to the cent at 18:03 and again at 18:18, across every
+window. Quote it with its timestamp or do not quote it.
 
-**A tool you never installed is absent, not broken.** A first run on a machine
-with no cmux used to open on a board announcing itself degraded. It now reads
-`4 of 4 collectors healthy`, because the count is of collectors that can *see*,
-not of tools you own.
+It moves in **steps**, when new usage is ingested, not gradually — so seeing the
+same figure twice is not evidence the caveat was over-cautious. And the movement
+is now the fleet, not the arithmetic: the corrections landed today. **The number
+is no longer unstable; reality is.**
+
+**A tool you never installed is absent, not broken.** A first run used to open on
+a board announcing itself degraded, because a collector you had never installed
+was counted against you. It now names the gap instead: with one tool installed
+it reads `1 of 1 collectors healthy · 3 not installed`, and with none,
+`No collectors installed yet`.
+
+*Scope, because it matters here:* every provider is installed on this machine, so
+that path cannot be produced on it. It is verified against fixtures, not observed
+on a bare install — and the last change to it landed at 18:18, minutes before you
+read this.
 
 **The docs are pinned to the code.** Rename a symbol and the doc describing it
 fails the suite. That is how the undocumented script in `scripts/` was caught
@@ -52,8 +69,8 @@ this evening — by a check written this afternoon, before anyone noticed.
 
 **Archive retention.** The clock now starts when you archive rather than when
 the session last spoke, which was the bug: a session quiet for 31 days used to
-be pruned on the next save after telling you `ok`. 368 of 586 records now carry
-an archive time.
+be pruned on the next save after telling you `ok`. At 18:18, **377 of 595**
+records carry an archive time.
 
 But the oldest stamped record is **0.1 days old**, because stamping began when
 the fix shipped. Nothing has been held thirty days and observed to still be
