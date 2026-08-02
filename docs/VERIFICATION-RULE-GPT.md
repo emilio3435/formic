@@ -29,6 +29,53 @@ myself before it ships.
 An unchecked relay may still go in a document — as an open question, explicitly marked, never
 as support for a conclusion.
 
+## The publication form — answer with VALUES, not with yes
+
+Written after a day in which I derived "divide before you compare" from the cost bounds and then,
+four hours later, measured a rate over the wrong denominator in my own work. **Writing a rule down
+does not install it.** Four of the day's five phantoms lived in the gap between deriving a
+principle and applying it to myself.
+
+So the checks below are **questions with blanks**, not maxims. A maxim is skippable because
+nothing is visibly missing when you skip it. A blank is not. **No finding ships until every
+applicable line has a value written next to it.**
+
+```
+FINDING: ______________________________________________
+
+P1  Population    — measured over what set, and what is N?     ____ of ____ (set: ______)
+P2  Provenance    — what command produced this, and when?      ______________ @ ______
+P3  Falsification — what would that command return if the      ______________________
+                    claim were FALSE?  (if "the same": STOP)
+P4  Layer down    — which layer did I read, and what does      read: ______ → under: ______
+                    the one under it say?
+P5  Layer out     — what encloses what I read?  (the enclosing ______________________
+                    describe / function / the next line)
+P6  Magnitude     — what must be true for this value to be     ______________________
+                    correct, and does that story hold?
+
+A1  ABSENCE GATE — mandatory if the finding is "X is missing / null / zero / never happens":
+    Over what population is X *defined*?                       ______________________
+    What is the count over THAT population?                    ____ of ____
+    Who deliberately made X absent, and where?                 ______________________
+```
+
+**P5 is new**, and it is what the last two phantoms needed: `nextAction` was pinned exactly by the
+assertion on the *next line*, and `completions-counter.test.ts` was proven non-vacuous by the
+`describe` block *enclosing* the line I grepped. Both were within twenty lines of my match. P4 says
+read *down*; P5 says read *out*; a symbol match tells you neither.
+
+**A1 is mandatory by default for absence claims**, because **three of my five phantoms were
+absence claims** — "the range selector does nothing", "triage has no origin gate", "`nextAction`
+is universally absent". Absence is the easiest thing to be wrong about, because *not finding* a
+thing and *the thing not existing* produce identical evidence. The third line of A1 is the one that
+would have saved the `nextAction` claim in a single lookup: `b9dc19b` deliberately stopped the
+detector emitting on ended agents, so the absence I measured was a fix working.
+
+The six checks below remain the reasoning behind the form. The form is what gets filled in.
+
+---
+
 ## Six checks before any claim becomes a finding
 
 1. **Population.** When a number on the wire disagrees with a number on screen, prove the two
@@ -207,3 +254,37 @@ dispatch and triage time, not when I remember to be careful.
 The tell, in both cases: **I could quote the finding but could not have quoted its
 surroundings.** If I cannot say what is immediately above and below the line I am citing, I have
 not read it.
+
+---
+
+## Check 7 — read one layer OUT
+
+Added after two phantoms that check 6 could not have caught, because both were context *around*
+the match rather than *beneath* it.
+
+**Before judging a line, quote what encloses it.** The enclosing `describe`, the function
+signature, the fixture that built the value, and the assertion immediately following.
+
+- `snapshot.test.ts:1519` looked like a hollow `?? ""` guard. The **next line** was
+  `expect(live.nextAction).toBeUndefined()` — the exact assertion, making the guard redundant
+  rather than empty.
+- `completions-counter.test.ts` looked like a file of null-assertions. The **enclosing describe**
+  was *"the withheld number, asserted where a number would exist"*, and its tests construct the
+  precise scenarios that made the old counter return a wrong number.
+
+**A grep result is a coordinate, not a claim.** It cannot distinguish "this file does not test that
+behaviour" from "this file tests it in a block I did not open." Check 6 sends you down through the
+layers; check 7 sends you out to the twenty lines around the hit. Today's last two errors were both
+inside that radius.
+
+## Why the form exists rather than more prose
+
+Every check in this document was already written down before the phantom it would have caught.
+Check 1 (population) predates the `nextAction` error by weeks. **I did not fail to know the rule; I
+failed to run it.**
+
+A maxim is checked by remembering to check it, which is exactly the step that fails under
+momentum — and momentum is highest right after a finding feels strong, which is where unchecked
+claims already cluster. **A blank next to a question is checked by looking at the page.** That is
+the whole of the change: it moves verification from something I must remember into something I can
+see is missing.
