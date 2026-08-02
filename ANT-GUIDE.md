@@ -28,12 +28,14 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 >
 > - **Cost figures do not yet say what falls outside your window.** The server
 >   knows; the card does not print it. See *Usage has its own windows* below.
-> - **One day's cost is measured but not trusted.** A single day inside the
->   reported total sits outside what the hardware can physically do — its
->   per-call average is roughly thirty times the fleet norm. It has been
->   annotated, not explained, and no total has been adjusted, so it is still
->   inside every cost figure you read. Treat a cost total as *what was recorded*,
->   which is not the same as *what was spent*.
+> - **Cost totals contain a known double-count, now being corrected.** Some
+>   rows in the cost source are cumulative *snapshots* of a session rather than
+>   records of single calls, so a later snapshot already contains the earlier
+>   one and adding them counts the same tokens twice. That is what made one day
+>   read as physically impossible. The cause is understood and a per-session
+>   de-duplication is being implemented; **the totals are expected to go down,
+>   not up.** Until it lands, treat a cost figure as *what was recorded*, which
+>   is not the same as *what was spent*.
 > - **Archive keeps things for less time than it says.** See *Archive does not
 >   keep things as long as it claims* at the end.
 >

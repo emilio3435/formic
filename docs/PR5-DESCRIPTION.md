@@ -42,19 +42,25 @@ own agents. The leading explanation is that BurnBar records some Claude Code
 sessions as one cumulative row per session alongside per-call rows from other
 providers.
 
-**This is annotated, not fixed, and the distinction matters.** `71d7cb3` added
-an `aggregatedRows` count and changed no total. Worse, the classification is
-circular: a row is counted as "aggregated" because `totalTokens` exceeds the
-context-window bound — which is the same observation that made it anomalous in
-the first place. It renames the anomaly rather than establishing independently
-that BurnBar wrote those rows cumulatively.
+**Explained, not yet fixed.** The cause is now known: OpenBurnBar — a separate
+application — writes some rows as **cumulative snapshots of a session** rather
+than as records of a single call. A later snapshot already contains the earlier
+one, so summing them counts the same tokens twice. Observable directly in the
+invocations feed: one session appears at 164,393,131 tokens and again at
+161,067,393, the second contained in the first.
 
-So the $3,514.24 remains inside every reported total, its per-call average is
-still ~30x the fleet norm, and it is still outside what the hardware can do.
-**No cost figure in this branch should be read as corrected.** What changed is
-that the measured total is now *reported* rather than suppressed, and its
-horizon is *disclosed* rather than implied — while one day inside it remains
-outside physical bounds and unexplained.
+`71d7cb3` annotated this and changed no total, and its `aggregatedRows`
+classification is circular — a row counts as aggregated because `totalTokens`
+exceeds the context-window bound, which is the same observation that made it
+anomalous. Useful as a flag; not a correction.
+
+The backend is implementing **per-session de-duplication**. Because the defect
+is double-counting, **the corrected totals are expected to fall, not grow.**
+
+**No cost figure in this branch should be read as final**, and none is quoted
+here as a corrected one. What this branch changed is that the measured total is
+*reported* rather than suppressed, and its horizon is *disclosed* rather than
+implied. The arithmetic inside that total is a separate fix, in progress.
 
 ### A view that cannot show everything now says what it cannot see
 
@@ -62,7 +68,10 @@ The UI's widest preset is 30 days; **Custom** reaches 90; the store holds more
 than either. `priorSpend { earliestAt, invocations, measuredCostUsd }` now rides
 on every summary, so a window can state what sits before its own horizon.
 
-Measured live against `/api/usage/summary`, 2026-08-02:
+Measured live against `/api/usage/summary`, 2026-08-02. **These are recorded
+figures taken before per-session de-duplication lands, so every one of them is
+expected to fall** — they are quoted to show the horizon gap, which is
+structural and does not depend on their magnitude:
 
 | window | inside | before it | earliest record |
 |---|---:|---:|---|
@@ -73,7 +82,9 @@ Measured live against `/api/usage/summary`, 2026-08-02:
 **Correction to the original description.** It reported "roughly $24,000 of
 queryable spend sits outside the widest view", derived as 90d − 30d. That treats
 the 90-day *query cap* as if it were the record. The record reaches back 127
-days, so the figure outside a 30-day view is **$33,571.63**, about $9,200 more.
+days, so the spend outside a 30-day view is materially larger than the body
+claimed — measured at the time of writing, roughly $9,000 more, though every
+figure here moves once de-duplication lands.
 The old description made, about itself, precisely the error the PR was opened to
 fix: it mistook the widest window it could ask for as everything there was.
 

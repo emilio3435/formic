@@ -1261,12 +1261,24 @@ describe("what the docs promise about incompleteness", () => {
        circular — a row counts as aggregated because its tokens exceed the bound
        that made it anomalous. It is still inside every reported cost figure, so
        the guide must not let a reader take a cost total as what was spent. */
-    expect(g, "the guide stopped warning that one day's cost is measured but not trusted")
-      .toMatch(/measured but not trusted/i);
+    /* The anomaly is now EXPLAINED — OpenBurnBar writes some rows as cumulative
+       session snapshots, so a later snapshot contains the earlier one and
+       summing double-counts — but not yet FIXED. Two things the guide must keep
+       saying until per-session de-duplication lands: that a total is what was
+       recorded rather than what was spent, and which DIRECTION the correction
+       goes, because a reader told only "the numbers are wrong" will assume the
+       bill is higher than shown when it is lower. */
+    expect(g, "the guide stopped naming the double-count in cost totals")
+      .toMatch(/double-count/i);
+    /* Blockquote markers survive whitespace-flattening, so "> " lands mid
+       sentence; strip them before matching prose inside a quote block. */
+    const prose = g.replace(/>\s*/g, "");
+    expect(prose, "the guide stopped saying which way the correction goes")
+      .toMatch(/expected to go down, not up/i);
     expect(g, "the guide stopped distinguishing what was recorded from what was spent")
       .toMatch(/what was recorded.*not the same as.*what was spent/i);
     const burnbar = read("src/server/burnbar.ts");
-    expect(burnbar, "aggregatedRows stopped being a count — re-check whether the anomaly is now fixed")
+    expect(burnbar, "aggregatedRows stopped being a bare count — re-check whether the fix landed")
       .toContain("AS aggregatedRows");
   });
 });
