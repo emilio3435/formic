@@ -3313,7 +3313,10 @@ describe("program-header at-a-glance rollups (C2)", () => {
     expect(label).toContain("3 agents");        // …and carries the data itself
     expect(label).toContain("2 working");
     expect(label).toContain("1 alert");
-    expect(label).toContain("30k tokens");
+    /* "session tokens", because this cell sums sessionTotal across the whole
+       program while a ROW's token cell is that agent's latest turn — two
+       quantities that must not share one word. */
+    expect(label).toContain("30k session tokens");
   });
 });
 
@@ -3783,7 +3786,7 @@ describe("scroll shell: review fixes", () => {
     const cell = styles.match(/\.program-rollup-cell\s*\{[^}]*\}/)?.[0] ?? "";
     expect(cell).not.toContain("overflow: hidden");
     // The tokens cell (tagged by JS with a key) is dropped on narrow screens.
-    expect(source).toContain('label: "tokens", key: "tokens"');
+    expect(source).toContain('label: "session tokens", key: "tokens"');
     expect(source).toContain('" program-rollup-cell--" + c.key');
     const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
     expect(mobile).toContain(".program-rollup-cell--tokens { display: none; }");

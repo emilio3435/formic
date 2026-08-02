@@ -225,7 +225,15 @@ function programRollupCells(agents) {
     const total = withTokens.reduce((sum, a) => sum + a.tokens.sessionTotal, 0);
     // key "tokens" lets the header rollup drop this cell first on narrow screens
     // (it is the least critical; the alerts cell is never dropped).
-    cells.push({ value: fmtTok(total), label: "tokens", key: "tokens" });
+    /* "session tokens", not "tokens". This sums sessionTotal across every agent
+       in the program — 35% of it from ended sessions on the live board — while a
+       ROW's token cell shows that agent's latest-turn total. Two different
+       quantities under one word invite the operator to read the program as the
+       sum of its rows, which it is not: measured, 1.58B here against 682k on a
+       row. Same vocabulary as the drawer's "used this session".
+       (GPT lane day-review 4.5, downgraded to relayed-unverified — verified
+       here, and it holds.) */
+    cells.push({ value: fmtTok(total), label: "session tokens", key: "tokens" });
   }
   return cells;
 }
@@ -820,15 +828,20 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const median = Number.isFinite(snap.contextMedian) ? snap.contextMedian : null;
     if (!peak && reported == null) return noDataWidget("No live context reports.");
     const pct = reported != null ? reported : peak.pct;
-    /* Coverage only when it is INCOMPLETE. "11/11 reporting" spends a clause to
-       say nothing is missing; the number an operator needs is the one that tells
-       them the reading is partial. (Audit §20 — the same suffix appears on BURN
-       under a different population, and rendering both identically at N/N
-       invited comparing two counts that do not measure the same thing.) */
-    const partial = totals.tokenReporting != null && totals.tokenEligible != null
-      && totals.tokenReporting < totals.tokenEligible;
-    const coverage = partial
-      ? ` · ${totals.tokenReporting}/${totals.tokenEligible} reporting` : "";
+    /* No coverage suffix. It used to read `${tokenReporting}/${tokenEligible}
+       reporting`, which counts TOKEN reporters — measured live at 8/9 while 32
+       live agents were reporting contextPct. A coverage figure for the context
+       reading that counts a different population is worse than none: it looks
+       like a completeness guarantee and is measuring something else.
+
+       Deriving one client-side would be a THIRD population, since the headline
+       comes from the server's own contextPeak over its liveAgents filter. The
+       honest fix is to stop asserting it here; if context coverage matters, the
+       server should ship contextReporting/contextEligible beside contextPeak so
+       the number and its coverage come from one derivation.
+       (GPT lane day-review 4.4, downgraded to relayed-unverified — verified
+       here, and it holds.) */
+    const coverage = "";
     /* The headline already IS the peak percentage, so repeating "Peak 62%"
        underneath printed one number twice about 40px apart — the same defect the
        drawer's context tile had, whose fix never reached the band. Peak alone
