@@ -964,8 +964,25 @@ export async function getUsageSeries(
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing,
          COUNT(*) AS invocations
-       FROM token_usage
-       WHERE startTime >= ? AND startTime < ?
+       FROM (
+         /* One row per SESSION, exactly as the summary does since 20cc4e3.
+
+            OpenBurnBar re-records a session's RUNNING TOTAL as it progresses,
+            so summing the rows counts the same work once per snapshot. The
+            summary stopped doing that; this query kept doing it, because
+            nothing tested the chart. Measured before the fix: the series
+            over-counted the headline by 4.65 BILLION tokens and $3,489.57 over
+            thirty days — from 28 extra rows, exactly the supersededSnapshots
+            figure the summary already reports.
+
+            Two figures on one page disagreeing by a third is worse than either
+            being wrong alone: it makes both unbelievable, and the chart is the
+            one nothing else contradicts. */
+         SELECT *, MAX(endTime) AS latestEndTime
+         FROM token_usage
+         WHERE startTime >= ? AND startTime < ?
+         GROUP BY provider, COALESCE(NULLIF(sessionId, ''), id)
+       )
        GROUP BY bucketStart, provider, model
        ORDER BY bucketStart ASC, provider ASC, model ASC`,
       [dbFrom, dbTo],
