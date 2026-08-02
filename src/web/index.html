@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=usage-2">
+  <link rel="stylesheet" href="styles.css?v=dayone-4">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -125,6 +125,12 @@
           </svg>
           <p id="empty-message">The colony is still.</p>
           <p id="empty-hint" class="empty-hint"></p>
+          <!-- Proof of life for the day-one board. An operator on first run
+               cannot tell "watching, found nothing" from "not watching", and
+               those are the two states an empty cockpit is ambiguous between.
+               The collector count and a ticking snapshot age are evidence a
+               stalled client cannot produce. -->
+          <p id="empty-proof" class="empty-proof" hidden></p>
           <button type="button" class="btn" id="empty-retry" hidden>Retry connection</button>
         </div>
       </main>
@@ -137,6 +143,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=usage-2"></script>
+  <script type="module" src="app.js?v=dayone-4"></script>
 </body>
 </html>

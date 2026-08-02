@@ -79,8 +79,12 @@ concluding nothing was collected.
   wrong, the same card reads `All clear`.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
-- **An empty list** reading `The ant hill is still — no tracked agents.` — nothing
-  has run yet, and only sessions from roughly the last day and a half are scanned.
+- **An empty board** reading `Watching. No sessions running yet.` with a line
+  beneath it counting healthy collectors — nothing has run yet, and only sessions
+  from roughly the last day and a half are scanned. That collector count is the
+  proof the board is working; if any collector is degraded it says so there
+  instead, because an empty board with a blind collector is an unknown one rather
+  than an empty one.
 
 ## Optional: enable Focus and Send
 

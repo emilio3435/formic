@@ -115,9 +115,18 @@ describe("ANT-GUIDE.md stays true to the product", () => {
   });
 
   test("the empty-board message it quotes is the one the client shows", () => {
-    const empty = "The ant hill is still — no tracked agents.";
+    /* Day one. The old copy — "The ant hill is still — no tracked agents" —
+       described absence and asserted nothing about whether the collectors had
+       run, leaving an empty cockpit ambiguous between WATCHING AND FOUND NOTHING
+       and NOT WATCHING. Both states are now named, and the guide has to teach
+       both, because telling a new operator only the healthy sentence would make
+       the degraded one read as the same thing. */
+    const empty = "Watching. No sessions running yet.";
     expect(app).toContain(empty);
     expect(guide).toContain(empty.replace(/\.$/, ""));
+    const blind = "No sessions found — and not every collector can see.";
+    expect(app).toContain(blind);
+    expect(guide).toContain(blind.replace(/\.$/, ""));
   });
 
   test("the keyboard map matches the keys the client actually handles", () => {

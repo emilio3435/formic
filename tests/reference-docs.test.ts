@@ -221,7 +221,8 @@ describe("QUICKSTART.md stays true to a first run", () => {
     for (const quoted of [
       "cmux unreachable — terminal titles and Focus/Send stay offline.",
       "Start cmux, then Refresh — Focus and Send come back on their own.",
-      "The ant hill is still — no tracked agents.",
+      // Day one: the empty board now asserts health and proves it. See ant-guide.test.ts.
+      "Watching. No sessions running yet.",
       "All clear",
     ]) {
       expect(flowed, `QUICKSTART.md stopped quoting "${quoted}"`).toContain(quoted);

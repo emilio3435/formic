@@ -1652,6 +1652,12 @@ body.feed-frozen .programs { opacity: 0.62; }
    all-clear's calm ink: this state is NOT the check mark, and it must not read
    like one. It is the sentence that used to be "Nothing needs you" while the
    rail beside it counted an open finding. */
+/* Day-one proof of life. Quiet by default — this is a healthy board, not a
+   finding — and amber only when a collector is degraded, which is the case where
+   "empty" means "unknown" rather than "nothing". */
+.empty-proof { margin: 0.5rem 0 0; font-size: 12.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.empty-proof.is-degraded { color: var(--amber); }
+
 .empty-findings { margin: 0.35rem 0 0; font-size: 13.5px; color: var(--muted); }
 .empty-findings strong { color: var(--amber); font-weight: 620; }
 .all-clear-quiet { color: var(--amber); font-weight: 650; }

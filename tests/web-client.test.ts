@@ -517,6 +517,64 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* Day one. Every measurement this project ever took was at 380-441 agents, so
+     the board had never been seen with nothing on it — which is exactly the
+     state a new operator meets on first run. It read "The ant hill is still — no
+     tracked agents" beside a mound, with no evidence a collector had ever run.
+
+     An empty cockpit is ambiguous between WATCHING AND FOUND NOTHING and NOT
+     WATCHING. Those could not be more different, and passive prose picks
+     neither. */
+  test("an empty board asserts health and proves it, or admits it cannot see", () => {
+    const at = "2026-08-02T11:45:51.447Z";
+    const healthy = M.emptyBoardVerdict({
+      generatedAt: at, totals: { sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+    });
+    expect(healthy.degraded).toBe(false);
+    expect(healthy.message).toBe("Watching. No sessions running yet.");
+    /* The proof is the point: a count of collectors and a timestamp are evidence
+       a stalled client cannot manufacture, which is what distinguishes this from
+       a board that simply never loaded. */
+    expect(healthy.sources).toBe("4 of 4 collectors healthy");
+    expect(healthy.checkedAt).toBe(at);
+    // No passive "still", which described absence and asserted nothing.
+    expect(healthy.message).not.toContain("still");
+
+    /* A blind collector makes an empty board an UNKNOWN one, not an empty one.
+       Claiming health here would be the false all-clear again, on the day it
+       matters most. */
+    const blind = M.emptyBoardVerdict({
+      generatedAt: at, totals: { sourceHealth: { healthy: 2, degraded: 2, total: 4 } },
+    });
+    expect(blind.degraded).toBe(true);
+    expect(blind.sources).toBe("2 of 4 collectors degraded");
+    expect(blind.message).not.toContain("Watching");
+    expect(blind.hint).toContain("incomplete rather than empty");
+
+    // No source data is no claim about sources — never an invented "0 of 0".
+    const bare = M.emptyBoardVerdict({ generatedAt: at, totals: {} });
+    expect(bare.sources).toBeNull();
+    expect(bare.checkedAt).toBe(at);
+    expect(M.emptyBoardVerdict(null).checkedAt).toBeNull();
+  });
+
+  /* Usage tab, day one: BurnBar is optional and a new operator will not have it.
+     "not reported" for a window with no activity said the wrong thing about why. */
+  test("an empty usage window says nothing happened, not that pricing failed", () => {
+    const quiet = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, invocations: 0, byProvider: [],
+    });
+    expect(quiet.value).toBe("not reported");
+    expect(quiet.sub).toBe("no activity in this range");
+
+    // Activity that could not be priced is still a different sentence.
+    const unpriceable = M.usageCostReading({
+      costKnown: false, estimatedCostUsd: null, invocations: 45,
+      byProvider: [{ provider: "Cursor", costUsd: null, tokens: 1, invocations: 45 }],
+    });
+    expect(unpriceable.sub).toBe("no priced rows in this range");
+  });
+
   /* Usage audit §1. The cost headline read "not reported" while the same payload
      carried $11,939.92 of measured, provenance-tagged spend. burnbar.ts:33 sets
      costKnown false as soon as ANY invocation lacks a price, so Cursor at 45 of

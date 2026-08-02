@@ -998,7 +998,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  usageCostReading, usageRateWindowText, burnbarInstant,
+  usageCostReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
   systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
@@ -1924,8 +1924,14 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   /* The health micro-chip at the end of this line already says "All clear", so
      leading with it printed the same verdict twice in one sentence — the purest
      form of the noise this band exists to remove. */
-  const parts = [totals.working + " shipping"];
-  if (pulse) {
+  /* Nothing tracked means no fleet to describe. "0 shipping" over an empty board
+     is a fleet aggregate about a fleet that does not exist, and it restates the
+     emptiness the board below already states — the exact defect this band exists
+     to remove, in the one state nobody had ever looked at. The trailing health
+     chip still speaks, so the line stays an affirmative verdict rather than
+     vanishing. (Day-one review.) */
+  const parts = totals.tracked > 0 ? [totals.working + " shipping"] : [];
+  if (pulse && totals.tracked > 0) {
     const windowText = completionWindowText(pulse.momentum);
     if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
@@ -6538,10 +6544,82 @@ function renderEmpty() {
     $("empty-hint").textContent = serverUnreachableHint(typeof location === "undefined" ? "" : location.host);
     retry.hidden = false;
   } else {
-    $("empty-message").textContent = "The ant hill is still — no tracked agents.";
-    $("empty-hint").textContent = "Agents appear here as soon as a collector reports a session.";
+    /* Day one, and the least-exercised state in the product: every measurement
+       this project has taken was at 380-441 agents, so the board had never been
+       seen with nothing on it — which is exactly what a new operator meets.
+
+       Rendered before this change it read "The ant hill is still — no tracked
+       agents" beside a mound illustration, with no evidence anywhere that the
+       collectors had run. An empty cockpit is ambiguous between two states that
+       could not be more different — WATCHING AND FOUND NOTHING, and NOT
+       WATCHING — and passive prose picks neither. A new operator reasonably
+       reads it as broken.
+
+       So it asserts the healthy case and proves it, the same way the Alerts
+       all-clear does: a source count and a ticking snapshot age are evidence a
+       stalled client cannot manufacture. And when a source really is degraded it
+       says THAT instead, because an empty board with a blind collector is not an
+       empty fleet — it is an unknown one, and claiming health there would be the
+       false all-clear again on the day it matters most. */
+    const verdict = emptyBoardVerdict(state.snap);
+    $("empty-message").textContent = verdict.message;
+    $("empty-hint").textContent = verdict.hint;
+    const proof = $("empty-proof");
+    if (proof) {
+      proof.textContent = "";
+      proof.hidden = !verdict.sources && !verdict.checkedAt;
+      if (verdict.sources) proof.append(el("span", { text: verdict.sources }));
+      if (verdict.checkedAt) {
+        if (verdict.sources) proof.append(el("span", { "aria-hidden": "true", text: " · " }));
+        proof.append(el("span", {
+          dataset: { ago: verdict.checkedAt },
+          text: "checked " + agoText(verdict.checkedAt),
+        }));
+      }
+      proof.classList.toggle("is-degraded", verdict.degraded);
+    }
+    empty.classList.toggle("is-watching", !verdict.degraded);
     retry.hidden = true;
   }
+}
+
+/* What an empty board should say, decided separately from painting it — the
+   pulseStripModel split, so the sentence can be tested without a DOM.
+
+   Day one is the least-exercised state in this product: every measurement it has
+   ever taken was at 380-441 agents, so the board had never been seen with
+   nothing on it, which is precisely what a new operator meets. It read "The ant
+   hill is still — no tracked agents" beside a mound illustration, with no
+   evidence anywhere that a collector had ever run.
+
+   An empty cockpit is ambiguous between two states that could not be more
+   different — WATCHING AND FOUND NOTHING, and NOT WATCHING — and passive prose
+   picks neither, so a new operator reasonably reads it as broken. This asserts
+   the healthy case and proves it with a source count and a ticking snapshot
+   age, which a stalled client cannot manufacture.
+
+   When a collector IS degraded it says that instead. An empty board with a blind
+   collector is not an empty fleet, it is an unknown one, and claiming health
+   there would be the false all-clear again on the day it matters most. */
+function emptyBoardVerdict(snap) {
+  const sources = snap && snap.totals && snap.totals.sourceHealth;
+  const total = sources && Number.isFinite(sources.total) ? sources.total : 0;
+  const degraded = Boolean(sources && Number.isFinite(sources.degraded) && sources.degraded > 0);
+  return {
+    degraded,
+    message: degraded
+      ? "No sessions found — and not every collector can see."
+      : "Watching. No sessions running yet.",
+    hint: degraded
+      ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
+      : "Claude Code, Codex and Cursor sessions appear here on their own, within seconds of starting.",
+    sources: total > 0
+      ? (degraded
+        ? `${sources.degraded} of ${total} collectors degraded`
+        : `${sources.healthy} of ${total} collectors healthy`)
+      : null,
+    checkedAt: (snap && snap.generatedAt) || null,
+  };
 }
 
 function tickClocks(frozen = feedFrozen(), now = Date.now()) {
@@ -6627,7 +6705,15 @@ function usageCostReading(summary) {
   }
   const rows = Array.isArray(summary.byProvider) ? summary.byProvider : [];
   const priced = rows.filter((row) => Number.isFinite(row.costUsd));
-  if (!priced.length) return { value: "not reported", sub: "no priced rows in this range" };
+  if (!priced.length) {
+    /* Nothing priced because nothing happened is a different sentence from
+       nothing priced because nothing could be priced, and an empty window is
+       the day-one case. Neither invents $0.00. */
+    return {
+      value: "not reported",
+      sub: summary.invocations === 0 ? "no activity in this range" : "no priced rows in this range",
+    };
+  }
   const measured = priced.reduce((total, row) => total + row.costUsd, 0);
   const unpricedCalls = rows
     .filter((row) => !Number.isFinite(row.costUsd))
@@ -6774,17 +6860,28 @@ function renderUsagePanel(ui = state) {
   }
   const summary = ui.usageSummary;
   if (!summary || summary.available === false) {
+    /* "BurnBar database could not be unlocked" was printed for BOTH a real read
+       failure and a BurnBar that was simply never installed. On day one the
+       second is the normal case, and a new operator reads a diagnosis about
+       unlocking a database as a fault they have to go and fix. A reported error
+       is a fault; its absence is an absence. (Day-one review.) */
+    const fault = (summary && summary.error) || ui.usageError || null;
     root.append(el("div", { class: "usage-unavailable" },
-      el("h2", { class: "usage-title", text: "Usage unavailable" }),
+      el("h2", { class: "usage-title", text: fault ? "Usage unavailable" : "No cost source connected" }),
       el("p", {
-        text: (summary && summary.error) || ui.usageError ||
-          "BurnBar database could not be unlocked. Quotas sidecar may still be readable separately.",
+        text: fault
+          || "Cost and usage come from OpenBurnBar, which is optional and is not connected. Everything else on the board works without it.",
       }),
-      el("button", {
-        type: "button", class: "btn",
-        dataset: { fkey: "usage-retry" },
-        onclick: () => void loadUsageData(true),
-      }, "Retry")));
+      /* Retry only where retrying can change the answer. A fault may clear on a
+         second read; an absent optional tool will not, and offering the button
+         invites a new operator to click at a problem they do not have. */
+      ...(fault
+        ? [el("button", {
+          type: "button", class: "btn",
+          dataset: { fkey: "usage-retry" },
+          onclick: () => void loadUsageData(true),
+        }, "Retry")]
+        : [])));
     // Still show quotas/ward soft data if present without inventing spend zeros.
     if (ui.usageWard && ui.usageWard.quotaPressure && ui.usageWard.quotaPressure.length) {
       root.append(renderUsageWard(ui.usageWard, true));
