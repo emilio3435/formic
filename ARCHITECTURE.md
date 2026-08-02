@@ -69,6 +69,11 @@ there is a permanently red board and an operator trained to ignore it. A cmux
 pane whose sessions have all ended holds its transcript handles open forever;
 that is debris, and it carries its own `remedy` string rather than an alarm.
 
+`classifyIdentityConflicts` (`snapshot-operator-issues.ts`) draws that line on
+live impact, not age: a conflicted surface with a live session on it is a fault,
+one where every session has ended is debris. No threshold to tune, and it
+self-heals — reopen work in that pane and the next scan calls it a fault again.
+
 **Health endpoint.** `GET /api/health` reports the server's own verdict on
 itself — snapshot age, collector state — on a slower clock than the board's.
 `scripts/anthill-deploy.sh` gates every deploy on it.
