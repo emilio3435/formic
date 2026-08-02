@@ -132,6 +132,42 @@ Hide, show, and reorder these with **Customize summary**.
 </details>
 
 <details>
+<summary><b>What is finished but not pushed</b></summary>
+
+Agents commit far faster than anyone pushes, so finished work piles up locally
+and the only way to see it was to run `git` by hand. This answers it:
+
+```bash
+curl -s http://127.0.0.1:4701/api/publish
+```
+
+**It is an endpoint today, not a card on the board.** Nothing in the dashboard
+shows it yet, so you have to ask for it.
+
+It reports two different things, deliberately kept apart. The **trunk** says how
+far `main` has run ahead of `origin/main` — one number, stated once. Each
+**branch** then reports only the commits that are *not* already in the trunk.
+Counting every branch against the remote instead would report the same backlog a
+dozen times over, once per branch that happens to descend from it.
+
+A branch is judged finished by its **patch**, not its ancestry: if its changes
+are already in `main` — squash-merged, rebased, cherry-picked — it goes quiet
+even though the graph still calls it unmerged. Branches nobody has touched for a
+fortnight are counted but not listed, so old work cannot nag.
+
+> **It never pushes.** The only git it runs is `remote`, `rev-parse`,
+> `rev-list`, `for-each-ref` and `cherry` — all read-only. There is no POST, no
+> push, and no one-click anything, by design: publishing is a decision you make,
+> not one the dashboard makes for you. A test pins that list, so it cannot widen
+> later without someone noticing.
+
+When it cannot tell — no remote, no trunk, or a trunk that tracks nothing — it
+says so instead of reporting a comfortable zero. Remote URLs are redacted before
+display, because an `https` remote can carry a token.
+
+</details>
+
+<details>
 <summary><b>Keyboard</b></summary>
 
 | Key | Does |

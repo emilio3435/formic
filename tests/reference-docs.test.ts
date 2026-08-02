@@ -428,3 +428,51 @@ describe("SECURITY.md describes the boundary the code implements", () => {
     expect(security).toContain("AUTH-OS-SEPARATION-DESIGN.md");
   });
 });
+
+describe("the publish surface is documented as what it actually is", () => {
+  /* A surface that reports unpushed work sits one design decision away from
+     being a surface that pushes. The guide says it never does; that promise is
+     only worth printing if something checks it. */
+  const guide = read("ANT-GUIDE.md");
+  const publishSrc = read("src/server/publish-state.ts");
+
+  test("the endpoint the guide tells you to curl is the one that is registered", () => {
+    expect(guide, "ANT-GUIDE.md stopped documenting the publish surface").toContain("/api/publish");
+    expect(read("src/server/app.ts"), "/api/publish is no longer registered").toContain('"/api/publish"');
+  });
+
+  test("the read-only git verbs it promises are the only ones it runs", () => {
+    /* The guide prints this list as the reason to trust it. If a write verb
+       ever joins it, the sentence becomes a false assurance about something
+       that can rewrite the operator's repository. */
+    const promised = ["remote", "rev-parse", "rev-list", "for-each-ref", "cherry"];
+    const flowed = guide.replace(/\s+/g, " ");
+    for (const verb of promised) {
+      expect(flowed, `the guide stopped promising the ${verb} verb`).toContain(`\`${verb}\``);
+    }
+    for (const forbidden of ["push", "commit", "merge", "reset"]) {
+      expect(publishSrc, `publish-state.ts gained a write verb: ${forbidden}`).not.toContain(`"${forbidden}"`);
+    }
+  });
+
+  test("there is no POST, so the guide's no-one-click claim holds", () => {
+    const flowed = guide.replace(/\s+/g, " ");
+    expect(flowed).toContain("It never pushes.");
+    expect(flowed).toContain("no one-click");
+    /* The route is read-only at the server too, not just by convention inside
+       the module: a POST handler here would make the guide wrong even if every
+       git verb stayed read-only. */
+    expect(publishSrc).not.toContain('method === "POST"');
+  });
+
+  test("the guide describes it as an endpoint while no board UI consumes it", () => {
+    /* Written down because it will change: the moment a card appears, this test
+       fails and the guide gets rewritten instead of quietly describing a screen
+       that does not exist — or, worse, staying silent about one that does. */
+    const clientUsesPublish = clientModules.some((name) => read(join("src/web", name)).includes("/api/publish"));
+    if (clientUsesPublish) {
+      throw new Error("A client module now calls /api/publish — ANT-GUIDE.md still says it is an endpoint, not a card. Update the guide.");
+    }
+    expect(guide).toContain("It is an endpoint today, not a card on the board.");
+  });
+});
