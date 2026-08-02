@@ -273,8 +273,20 @@ export function tokenSummary(tokens) {
   if (tokens.cachedInput != null) parts.push("cache " + fmtTok(tokens.cachedInput));
   const scopeNote = tokens.scope === "latest-turn" ? "latest model call · " : "";
   const title = scopeNote + (parts.length ? parts.join(" · ") + " · " : "") + "provenance: " + tokens.provenance;
+  /* The scope is part of the number, not a tooltip. A row read "128k tokens"
+     beside a program rollup reading "65.7M session tokens" — the row is the
+     LATEST model call, the rollup is cumulative sessionTotal across every agent
+     including ended ones, roughly 500x apart and not summable. The qualifier
+     existed, in a title attribute, and a qualification visible only on hover is
+     a qualification that does not exist: nobody hovers a number that looks
+     self-explanatory.
+
+     " tokens" was also the weakest possible word here, since the column header
+     already says Tokens. Spending it on the scope costs nothing and makes the
+     impossible addition visibly impossible. (Render-first audit §2.) */
+  const scopeWord = tokens.scope === "latest-turn" ? " latest call" : " tokens";
   const text = tokens.total != null
-    ? marks[tokens.provenance] + fmtTok(tokens.total) + " tokens"
+    ? marks[tokens.provenance] + fmtTok(tokens.total) + scopeWord
     : marks[tokens.provenance] + parts.join(" · ");
   return { label, text, known: true, title };
 }

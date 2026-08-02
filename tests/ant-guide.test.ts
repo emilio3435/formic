@@ -46,7 +46,13 @@ describe("ANT-GUIDE.md stays true to the product", () => {
 
   test("every summary card it describes is in the widget catalog", () => {
     const cardLabels = [...catalogs.matchAll(/\{ id: "[a-z-]+", label: "([^"]+)"/g)].map((m) => m[1]);
-    expect(cardLabels).toContain("Needs you"); // guard: the regex still matches
+    /* Guard that the regex still matches something, keyed on a label this
+       rename does not touch. It used to be "Needs you", which made the canary
+       fail for the same reason the real assertion did when that card became
+       "Findings" — a canary that dies with the thing it guards tells you
+       nothing extra. */
+    expect(cardLabels).toContain("Momentum");
+    expect(cardLabels.length).toBe(5);
     for (const label of cardLabels) {
       expect(guide, `guide never describes the ${label} card`).toContain(`**${label}**`);
     }

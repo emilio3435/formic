@@ -316,10 +316,27 @@ export function issueTimestamp(iso) {
 
 export function issuesOf(snap) {
   if (!snap) return [];
-  if (Array.isArray(snap.issues)) return snap.issues;
-  // Narrow fallback for snapshots that predate normalized issues.
   const issues = [];
-  const errors = (snap.controlHealth && snap.controlHealth.errors) || [];
+  const server = Array.isArray(snap.issues) ? snap.issues : null;
+  if (server) {
+    /* The server owns the findings the client cannot see — collector faults,
+       source degradation, ended-session policy drift. It ALSO ships kind:"agent"
+       findings derived from outcome alone, and those are dropped here.
+
+       Dropping them is the whole fix for the false all-clear. Returning
+       snap.issues verbatim short-circuited the derivation below, so the rail
+       counted the server's agent rule while the tab counted alerting() — and the
+       board rendered "NEEDS YOU 1 finding", "Needs you 0" and "Nothing needs
+       you" at the same instant, each correct for its own hidden population.
+       Nothing is lost by dropping them: alerting() is a strict superset of the
+       server's rule (outcome not healthy AND not ended), and it additionally
+       catches the attentionSignal agents the server's rule misses entirely.
+
+       One collection, and its agent half is the tab's population by
+       construction rather than by coincidence. */
+    for (const issue of server) if (issue.kind !== "agent") issues.push(issue);
+  }
+  const errors = (!server && snap.controlHealth && snap.controlHealth.errors) || [];
   if (errors.length) {
     issues.push({
       id: "system:collector-errors",

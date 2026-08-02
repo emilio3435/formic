@@ -1648,6 +1648,12 @@ body.feed-frozen .programs { opacity: 0.62; }
 .all-clear-mark { margin: 0 0 0.5rem; color: var(--moss); }
 .all-clear-mark .ico { width: 2rem; height: 2rem; }
 .all-clear-head { margin: 0; font-size: 1.15rem; font-weight: 640; letter-spacing: -0.01em; color: var(--ink); }
+/* "No agents are waiting on you" over a non-empty findings list. Amber, not the
+   all-clear's calm ink: this state is NOT the check mark, and it must not read
+   like one. It is the sentence that used to be "Nothing needs you" while the
+   rail beside it counted an open finding. */
+.empty-findings { margin: 0.35rem 0 0; font-size: 13.5px; color: var(--muted); }
+.empty-findings strong { color: var(--amber); font-weight: 620; }
 .all-clear-quiet { color: var(--amber); font-weight: 650; }
 .all-clear-vitals {
   margin: 0.4rem 0 1rem;

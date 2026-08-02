@@ -474,6 +474,91 @@ describe("summary status and widgets", () => {
     expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
   });
 
+  /* The empty state froze at first paint. programsPaintSig is built from the
+     VISIBLE ROWS, so when a view has none the signature is constant and the
+     whole block below it — the all-clear verdict, its vitals, the open-findings
+     line — was skipped forever after the first render. Measured in the browser:
+     the client's collection said BETA while the DOM still named a finding from
+     minutes earlier, and the resting board's "37 live · 7 working" vitals were
+     frozen with it. Those numbers exist so an operator can tell "nothing is
+     wrong" from "nothing is loading", which a stale number cannot do.
+
+     Pre-existing, and invisible while the block held only static prose. */
+  test("the empty state repaints when what it renders changes", () => {
+    const calm = agent({ id: "a", outcome: "healthy", activity: "working" });
+    const sig = (issues: unknown[], live: number) => M.programsPaintSig([], {
+      ...M.state,
+      view: "needs-you",
+      snap: snapshot({
+        programs: [{ id: "p", name: "P", agents: [calm] }],
+        issues,
+        totals: { live, tracked: live, working: live, idle: 0, history: 0, attention: 0 },
+      }),
+    });
+    const fault = (title: string) => [{
+      id: "system:z", kind: "system", severity: "warning", title,
+      summary: "s", affectedAgentIds: [],
+    }];
+
+    // Nothing open vs something open must differ, or the all-clear can survive
+    // a finding arriving.
+    expect(sig([], 3)).not.toBe(sig(fault("ALPHA"), 3));
+
+    /* Same id, different wording. Keying the signature on finding ids alone
+       repainted once and then froze again — this is the assertion that caught
+       it, after the browser did. */
+    expect(sig(fault("ALPHA"), 3)).not.toBe(sig(fault("BETA"), 3));
+
+    // The vitals are rendered too, so a changed fleet must repaint them.
+    expect(sig([], 3)).not.toBe(sig([], 4));
+
+    // And an unchanged empty state must still be stable, or every snapshot
+    // repaints the board for nothing.
+    expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
+  });
+
+  /* Render-first audit §1, the composition itself. The three surfaces were each
+     individually correct and each individually tested, which is exactly why this
+     shipped: no test asked what they say TOGETHER. Reproduced on the board in
+     one capture — rail "Needs you 1 finding", tab "Needs you 0", headline
+     "Nothing needs you" — a false all-clear on the one question this cockpit
+     exists to answer.
+
+     This asserts the invariant that composition must hold, not the three strings
+     separately: the all-clear may only be claimed over an empty collection, and
+     the word "needs you" may only be spent on the agent population. */
+  test("no all-clear may render while any finding is open", () => {
+    const fault = {
+      id: "system:collector-errors", kind: "system", severity: "warning",
+      title: "Collection problems", summary: "1 collector problem", affectedAgentIds: [],
+    };
+    // The exact board state that composed the false all-clear: a system finding,
+    // and not one agent waiting on a human.
+    const calm = agent({ id: "a", outcome: "healthy", activity: "working" });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [calm] }], issues: [fault] });
+
+    const findings = M.issuesOf(snap);
+    const waiting = [calm].filter((a) => M.alerting(a));
+    expect(findings.length).toBe(1);
+    expect(waiting.length).toBe(0);
+
+    /* The rail counts findings and must not spend the tab's phrase on them. */
+    const card = M.summaryWidgetData("needs-you", snap);
+    expect(card.value).toBe("1");
+    expect(card.unit).toBe("finding");
+    const railLabel = M.WIDGET_CATALOG.find((w: { id: string }) => w.id === "needs-you")?.label;
+    expect(railLabel).toBe("Findings");
+    expect(railLabel?.toLowerCase()).not.toContain("needs you");
+
+    /* And the all-clear is gated on the COLLECTION, not on the row list. With a
+       finding open it must not render, however empty the Alerts view is. */
+    expect(findings.length === 0 && waiting.length === 0).toBe(false);
+
+    // With nothing open at all, the all-clear is true and may render.
+    const quiet = snapshot({ programs: [{ id: "p", name: "P", agents: [calm] }], issues: [] });
+    expect(M.issuesOf(quiet).length).toBe(0);
+  });
+
   /* Magnitude audit §5. The activity sparkline's accessible name claimed "last
      hour" while the tracker held 12.7 minutes of buckets — a 4.7x window
      overstatement, invisible to sighted readers, which is why it survived every
@@ -899,11 +984,25 @@ describe("token honesty", () => {
 });
 
 describe("latest-turn token semantics", () => {
-  test("latest-turn usage is labeled as the latest call, not session usage", () => {
+  /* This test's own name claimed the value was "labeled as the latest call"
+     while asserting the VISIBLE text read "42k tokens" — the scope lived in
+     .label and .title, neither of which the row renders. That is how a row came
+     to show "128k tokens" beside a program's "65.7M session tokens": ~500x
+     apart, not summable, and qualified only on hover. (Render-first audit §2.) */
+  test("latest-turn usage says so in the text a reader can actually see", () => {
     const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 42_000, input: 40_000, output: 2000 });
     expect(s.label).toBe("latest call");
-    expect(s.text).toBe("42k tokens");
+    expect(s.text).toBe("42k latest call");
     expect(s.title).toContain("latest model call");
+
+    /* The word must not appear where it would be a lie. A scope the source did
+       not report gets the neutral noun, not an invented precision. */
+    expect(M.tokenSummary({ provenance: "observed", total: 1200 }).text).toBe("1k tokens");
+    expect(M.tokenSummary({ provenance: "observed", scope: "session", total: 1200 }).text).toBe("1k tokens");
+
+    // The estimate mark survives in front of the scope, not instead of it.
+    expect(M.tokenSummary({ provenance: "estimated", scope: "latest-turn", total: 42_000 }).text)
+      .toBe("≈42k latest call");
   });
 
   test("legacy tokens without a scope keep the neutral label", () => {
@@ -1056,9 +1155,46 @@ describe("modelShort — Cursor-native short forms within the 18-char bound", ()
 });
 
 describe("issues", () => {
-  test("normalized server issues pass through untouched", () => {
-    const issues = [{ id: "system:x", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }];
-    expect(M.issuesOf({ programs: [], issues })).toBe(issues);
+  /* Render-first audit §1, the false all-clear. issuesOf used to return
+     snap.issues by identity, which short-circuited the client derivation below
+     it — so the rail counted the SERVER's agent rule (outcome not healthy and
+     not ended) while the tab counted alerting(). Reproduced on the board: rail
+     "Needs you 1 finding", tab "Needs you 0", headline "Nothing needs you", all
+     in one capture, each correct for its own hidden population.
+
+     The rule now: the server owns findings the client cannot see; the client
+     owns the agent half, so it is the tab's population by construction. */
+  test("server system findings survive verbatim; the agent half is re-derived", () => {
+    const sys = { id: "system:x", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] };
+    const passed = M.issuesOf({ programs: [], issues: [sys] });
+    expect(passed).toEqual([sys]);
+    expect(passed[0]).toBe(sys); // not rebuilt, not reworded
+
+    /* A server agent finding for an agent the client does NOT consider alerting
+       must not survive — that is the exact row that made the rail disagree with
+       the tab. */
+    const healthy = agent({ id: "calm", outcome: "healthy", activity: "working" });
+    const stale = {
+      id: "agent:calm", kind: "agent", severity: "warning",
+      title: "calm needs review", summary: "", affectedAgentIds: ["calm"],
+    };
+    const merged = M.issuesOf({ programs: [{ id: "p", name: "P", agents: [healthy] }], issues: [sys, stale] });
+    expect(merged.map((i: { id: string }) => i.id)).toEqual(["system:x"]);
+
+    /* And an agent the client DOES consider alerting gets a finding even when
+       the server shipped none for it — the attentionSignal case the server's
+       outcome-only rule misses. */
+    const waiting = agent({
+      id: "waiting", outcome: "healthy", activity: "working",
+      attentionSignal: { evidence: "asked a question" },
+    });
+    const derived = M.issuesOf({ programs: [{ id: "p", name: "P", agents: [waiting] }], issues: [sys] });
+    expect(derived.map((i: { id: string }) => i.id)).toEqual(["system:x", "agent:waiting"]);
+
+    /* The invariant the whole fix exists to hold: the collection's agent half
+       and the Alerts tab's population are the same set, always. */
+    const agentFindings = derived.filter((i: { kind: string }) => i.kind === "agent").length;
+    expect(agentFindings).toBe([waiting].filter((a) => M.alerting(a)).length);
   });
 
   test("fallback surfaces collector errors as a system issue even with zero attention agents", () => {
@@ -4974,11 +5110,26 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(blockedIds).toContain("health");
     expect(blockedIds).not.toContain("needs-you");
 
-    // An agent-level finding leaves HEALTH silent anyway — sources are fine.
-    const agentOnly = snapshot({ issues: [{ id: "agent:x", kind: "agent", severity: "warning", title: "t", summary: "s", affectedAgentIds: [] }] });
+    /* An agent-level finding leaves HEALTH silent anyway — sources are fine.
+       The finding is carried by an agent the client considers alerting, not by a
+       server issues[] entry: since the false-all-clear fix, kind:"agent" entries
+       on the wire are dropped and the agent half is re-derived, so a server
+       finding with no alerting agent behind it renders nothing at all. That is
+       the point of the fix, and asserting it here keeps this test honest about
+       where an agent finding now comes from. */
+    const agentOnly = snapshot({
+      issues: [],
+      programs: [{ id: "p", name: "P", agents: [agent({ id: "x", outcome: "failed", activity: "working" })] }],
+    });
     const agentIds = M.pulseStripModel(agentOnly, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
     expect(agentIds).toContain("needs-you");
     expect(agentIds).not.toContain("health");
+
+    // A wire finding with no alerting agent behind it is exactly what used to
+    // make the rail disagree with the tab. It now renders no cell.
+    const orphan = snapshot({ issues: [{ id: "agent:ghost", kind: "agent", severity: "warning", title: "t", summary: "s", affectedAgentIds: ["ghost"] }] });
+    expect(M.pulseStripModel(orphan, "live", [], "percent", "").cells.map((c: { id: string }) => c.id))
+      .not.toContain("needs-you");
   });
 
   /* Regression caught in a browser screenshot: the drawer rendered the task as

@@ -356,7 +356,6 @@ function totalsOf(snap) {
     history: t.history ?? count((a) => deriveActivity(a) === "ended"),
     live: t.live ?? count((a) => deriveActivity(a) === "working" || deriveActivity(a) === "idle"),
     tracked: t.tracked ?? agents.length,
-    needsYouAgents: count((a) => deriveActivity(a) !== "ended" && deriveOutcome(a) !== "healthy"),
     tokens: t.tokens,
     tokenMedian: t.tokenMedian,
     tokenReporting: t.tokenReporting,
@@ -3355,7 +3354,35 @@ function programsPaintSig(visible, ui) {
         ui.labels.get(presentationLabelKey(agentLabelTarget(a))) || "",
       ].join(":")).join(","),
     ).join("|"),
+    emptyStateSig(visible, ui),
   ].join("\u001f");
+}
+
+/* Everything the empty state renders, and nothing when there is no empty state.
+
+   When no rows are visible the row signature above is CONSTANT, so this whole
+   paint was skipped and the block froze at its first render — permanently.
+   Measured on the board: the client's findings collection said BETA while the
+   DOM still named a finding from a snapshot minutes earlier, and the all-clear
+   vitals ("37 live · 7 working · 30 idle") were frozen alongside it. Those
+   numbers exist precisely so an operator can tell "nothing is wrong" from
+   "nothing is loading", which a stale number cannot do.
+
+   This predates the false-all-clear fix and was invisible while the block held
+   only static prose. The open-findings line made it consequential. */
+function emptyStateSig(visible, ui) {
+  if (visible.length || !ui.snap) return "";
+  const t = totalsOf(ui.snap);
+  return [
+    t.live, t.working, t.idle, t.tracked,
+    stalledCount(ui.snap),
+    /* id AND title: the line renders titles, and a finding can keep its id while
+       its wording changes ("2 collector problems" becoming "3"). Keying on the
+       id alone repainted once and then froze again — caught by driving two
+       findings through the same id in the browser. A paint signature has to
+       contain what is painted. */
+    issuesOf(ui.snap).map((finding) => finding.id + "~" + finding.title).join("+"),
+  ].join(":");
 }
 
 /* Two levels of keyed reconciliation instead of one wholesale rebuild: program
@@ -3464,7 +3491,16 @@ function renderPrograms() {
        loading cannot say "18 live · 6 working" or count seconds since its last
        snapshot. Every other empty view stays muted prose, because absence there
        is a filter result rather than an answer. */
-    const allClear = state.view === "needs-you";
+    /* The all-clear may only render over an EMPTY findings collection, not over
+       an empty row list. This view filters by alerting(), so a board carrying a
+       collector fault and no waiting agent rendered a check mark and the words
+       "Nothing needs you" while the rail beside it counted the fault. Each
+       surface was correct; the composition told the operator to go home.
+
+       Zero waiting agents is now said in those words, and the findings that do
+       exist are named and pointed at rather than papered over. */
+    const openFindings = state.view === "needs-you" ? issuesOf(state.snap) : [];
+    const allClear = state.view === "needs-you" && openFindings.length === 0;
     const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
     if (allClear) {
       const t = totalsOf(state.snap);
@@ -3487,6 +3523,19 @@ function renderPrograms() {
             dataset: { ago: state.snap.generatedAt },
             text: "checked " + agoText(state.snap.generatedAt),
           })));
+    } else if (state.view === "needs-you") {
+      /* Not an all-clear and not a blank: no agent is waiting, AND something is
+         open. Both sentences, in that order, because the operator's next move is
+         the Summary rail rather than this list. */
+      wrap.append(
+        el("p", { class: "all-clear-head", text: "No agents are waiting on you" }),
+        el("p", { class: "empty-findings" },
+          el("strong", {
+            text: openFindings.length === 1
+              ? "1 open finding"
+              : `${openFindings.length} open findings`,
+          }),
+          el("span", { text: " in Summary — " + openFindings.slice(0, 2).map((f) => f.title).join(" · ") })));
     } else {
       wrap.append(el("p", { text: emptyByView[state.view] || "Nothing here." }));
     }
@@ -4023,7 +4072,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Elapsed: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form")) return;

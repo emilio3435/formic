@@ -36,7 +36,7 @@ Four steps. Do these in order and you have used the tool correctly.
 has finished this hour, what it is burning, and `All clear`. No cards, no numbers
 to read past. That line is the answer, and you can close the tab.
 
-When something does need you it expands into cards, and **only `Needs you` is a
+When something does need you it expands into cards, and **only `Findings` is a
 to-do list** — it names both what is wrong and what to do about it. The rest are
 context, not tasks: how much is shipping, what it is costing, how full the
 fullest context window is, and whether the system itself is healthy.
@@ -150,7 +150,7 @@ about this band, so it is stated for each:
 
 | Card | What it tells you | Counts what, over what |
 |---|---|---|
-| **Needs you** | How many findings want a human. The only number that is a to-do list. | Findings, not agents — one finding can implicate many sessions. Right now the tab beside it counts *agents* and can read `0` while this reads `1`; that disagreement is a known defect being fixed, not a puzzle for you to solve. |
+| **Findings** | Everything open that a human should know about — collector faults, policy drift, and sessions waiting on you. | Findings, not agents: one finding can implicate many sessions. This card and the `Needs you` tab beside it are **deliberately different numbers now**, and they say so in different words. The card counts all findings; the tab counts only sessions waiting on a person. The card reading `1` while the tab reads `0` means *something is open, but no session is waiting on you* — which is why the board says exactly that instead of "Nothing needs you". |
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
 | **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
 | **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or idle) that report a window. Ended sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |

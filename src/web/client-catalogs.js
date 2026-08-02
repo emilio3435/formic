@@ -33,7 +33,13 @@ export const DEFAULT_WIDGET_IDS = Object.freeze([
   "needs-you", "momentum", "burn", "context-peak", "health",
 ]);
 export const WIDGET_CATALOG = Object.freeze([
-  { id: "needs-you", label: "Needs you", required: true },
+  /* "Findings", not "Needs you". This card counts the whole findings collection
+     — collector faults, policy drift, and agents waiting — while the tab counts
+     agents waiting alone. Sharing one phrase across two populations is what let
+     the rail read "NEEDS YOU 1 finding" beside a tab reading "Needs you 0" and
+     a headline reading "Nothing needs you". Two populations, two words; the id
+     stays so saved layouts survive. (Render-first audit §1.) */
+  { id: "needs-you", label: "Findings", required: true },
   { id: "momentum", label: "Momentum" },
   { id: "burn", label: "Burn" },
   { id: "context-peak", label: "Context peak" },
