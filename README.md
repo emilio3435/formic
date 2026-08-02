@@ -47,7 +47,9 @@ That saves a local cmux password so Ant Hill can see terminal names and use Focu
 
 ## Summary message contract
 
-`AgentSnapshot.lastHumanMessage` is `string | null`. Collectors choose the latest provider-shaped assistant or user prose after removing tool calls, diffs, structured envelopes, citations, commands, paths, and injected instructions; they then fall back to task text and a concise status reason. `null` is preserved as absence. The row helper `formatLastHumanMessage` bounds the display text and renders `No readable message yet` for null; `transcriptTail` remains technical inspector evidence and is never used as row summary text.
+`AgentSnapshot.lastHumanMessage` is `string | null`. Collectors choose the latest provider-shaped assistant or user prose after removing tool calls, diffs, structured envelopes, citations, commands, paths, and injected instructions; they then fall back to task text and a concise status reason. `null` is preserved as absence. The row helper `formatLastHumanMessage` bounds the display text and renders `No readable message yet` for null; `transcriptTail` is never row summary text, but it is no longer inspector-only: it is the primary input to the attention detectors.
+
+Two different reads of the same message, deliberately. A row preview keeps the **first** 240 characters (`readableHumanMessage`) because that is where a message announces its subject. Attention detection keeps the **last** 240 (`readableClosing`) because an agent asks its question in the closing sentence, after the explanation — reading from the front discarded every one of them before the snapshot existed.
 
 ## Verification
 

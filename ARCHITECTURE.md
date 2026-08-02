@@ -54,7 +54,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |
 | `attention-signal.ts` | Whether an agent needs a human, and the sentence saying why |
 | `pulse.ts` | Momentum, burn rate, and the activity window behind the summary strip |
-| `human-message.ts` | Choosing the readable prose for a row out of a raw transcript |
+| `human-message.ts` | Readable prose out of a raw transcript — the row preview reads a message's first 240 characters, attention detection reads its last 240 |
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |
 | `burnbar.ts`, `burnbar-query.ts` | Cost, read from an external encrypted OpenBurnBar database in an isolated subprocess |
 | `model-config.ts` | Model families, context windows, and Cursor-native policy from `config/models.json` |
