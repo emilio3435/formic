@@ -245,6 +245,35 @@ function resolveAgentTargetInternal(
   return finish({ resolution: "missing", reason: "No cmux surface matches this source session or cwd." });
 }
 
+/* The single write gate. It exists as one exported function because it did NOT:
+   547679e closed the instruct/interrupt path in control.ts and left an
+   identical predicate in app.ts's attention handler, so acknowledging agent A
+   still cleared the notification on whatever pane A currently resolved to. One
+   copy of a safety invariant is a rule; two copies are a rule and a bug waiting
+   to be found separately.
+
+   `exact` means cmux attests the session is on that surface. `unique-cwd`
+   matches a pane on its working directory among panes carrying NO identity
+   evidence, so the session on it is inferred. A directory match may inform
+   display; it may not authorise anything that acts on the pane. */
+/* May we point the operator at this pane at all? Both tiers qualify: a
+   directory match is good enough to show a row and to focus it, because focus
+   types nothing and going to look is how an operator resolves the ambiguity.
+   Named rather than written inline so the two questions - may we ADDRESS this
+   pane, may we ACT on it - stop sharing one unlabelled array literal. */
+export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution">>(
+  target: T,
+): target is T & { surfaceId: string } {
+  return Boolean(target.surfaceId)
+    && (target.resolution === "exact" || target.resolution === "unique-cwd");
+}
+
+export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution">>(
+  target: T,
+): target is T & { surfaceId: string } {
+  return Boolean(target.surfaceId) && target.resolution === "exact";
+}
+
 export function resolveAgentTargetWithTrace(
   agent: CollectedAgent,
   surfaces: readonly CmuxSurface[],

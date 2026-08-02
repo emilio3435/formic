@@ -1,3 +1,4 @@
+import { canAddressTarget, canWriteToTarget } from "./targets";
 import type {
   AgentSnapshot,
   ControlAction,
@@ -96,10 +97,10 @@ export async function executeControl(
     return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
   }
 
-  const surfaceId = agent.target.surfaceId;
-  if (!surfaceId || !["exact", "unique-cwd"].includes(agent.target.resolution)) {
+  if (!canAddressTarget(agent.target)) {
     return failure(request, 409, "UNSAFE_TARGET", agent.target.reason ?? "No safe cmux surface target is available.");
   }
+  const surfaceId = agent.target.surfaceId;
   /* `exact` and `unique-cwd` are not the same claim, and this gate used to
      accept them as if they were.
 
@@ -120,7 +121,7 @@ export async function executeControl(
      is still permitted: it types nothing, and going to look at the pane is how
      an operator recovers when the write controls are off. */
   const writesInput = request.action === "instruct" || request.action === "interrupt";
-  if (writesInput && agent.target.resolution !== "exact") {
+  if (writesInput && !canWriteToTarget(agent.target)) {
     return failure(
       request,
       409,
