@@ -70,7 +70,13 @@ this evening — by a check written this afternoon, before anyone noticed.
 **Archive retention.** The clock now starts when you archive rather than when
 the session last spoke, which was the bug: a session quiet for 31 days used to
 be pruned on the next save after telling you `ok`. At 18:18, **377 of 595**
-records carry an archive time.
+records carried an archive time.
+
+Read the gap rather than the ratio: **218 records have no stamp and never will**,
+because they were archived before the fix existed. That number has not moved
+across four readings while the stamped count climbed, so it is a fixed backlog
+rather than a shortfall — it shrinks only as those records age out on the old
+clock. Everything archived from now on is measured.
 
 But the oldest stamped record is **0.1 days old**, because stamping began when
 the fix shipped. Nothing has been held thirty days and observed to still be

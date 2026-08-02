@@ -1639,3 +1639,25 @@ describe("the summary's scope survives an adversarial read", () => {
       .toMatch(/1 of 1 collectors healthy · 3 not installed/);
   });
 });
+
+/* The most durable fact in the archive paragraph, and the last thing added:
+   the unmeasurable count is a FIXED backlog, not a growing shortfall. Measured
+   218 across four readings while the stamped count climbed 377 -> 383. A reader
+   given only the ratio cannot tell those apart, and would reasonably assume the
+   fix is failing to keep up. */
+describe("the archive backlog is described as fixed, not as a shortfall", () => {
+  test("the summary separates the stuck records from the growing ones", () => {
+    const today = read("TODAY.md").replace(/\s+/g, " ");
+    expect(today, "the summary stopped naming the unmeasurable backlog")
+      .toMatch(/218 records have no stamp/i);
+    expect(today, "the summary stopped saying the backlog is fixed rather than a shortfall")
+      .toMatch(/fixed backlog rather than a shortfall/i);
+    /* And it must not promise the number is permanent: unstamped records still
+       prune on the old clock, so the backlog shrinks as they age out. */
+    expect(today, "the summary implies the backlog is permanent")
+      .toMatch(/shrinks only as those records age out/i);
+    const archive = read("src/server/archive.ts");
+    expect(archive, "retention no longer falls back to updatedAt — the backlog claim changes")
+      .toMatch(/archivedAt \?\? agent\.updatedAt/);
+  });
+});
