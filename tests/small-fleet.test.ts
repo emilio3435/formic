@@ -128,7 +128,7 @@ describe("a board with almost nothing on it still computes", () => {
        4/4 healthy rather than 0/0 — which would render as a division by zero
        or an empty meter on first run. */
     for (const size of [0, 1, 3]) {
-      expect(fleetOf(size).totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+      expect(fleetOf(size).totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
     }
   });
 });

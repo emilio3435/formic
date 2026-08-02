@@ -1,0 +1,224 @@
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BunCommandRunner } from "../src/server/command";
+import { collectCmux, executableMissing } from "../src/server/cmux";
+import { collectSessions } from "../src/server/collectors";
+import { buildSnapshot } from "../src/server/snapshot";
+import type { ArchiveStore, CommandResult, CommandRunner } from "../src/server/types";
+
+/* ABSENT is not DEGRADED, and the first screen a newcomer sees depended on it.
+
+   The docs lane walked a virgin clone with an empty HOME, no cmux binary and an
+   empty burnbar database. Everything passed until the board itself, which read:
+
+     "No sessions found — and not every collector can see."
+     "A degraded collector reports no sessions whether or not any are running,
+      so this board is incomplete rather than empty."
+     "1 of 4 collectors degraded"
+
+   Nothing was wrong. The one was cmux, missing because it had never been
+   installed. Degraded means "this is here and I cannot read it" — a fault worth
+   alarming about. Absent means "there is nothing here to read, because this
+   person does not use Cursor" — not a fault at all. We collapsed them and told
+   a first-time user their working install was broken.
+
+   The same honesty rule as the rest of the board, pointed outward instead of at
+   ourselves: every other fix today removed a number that overclaimed. This one
+   underclaimed, on the only first impression the project gets. */
+
+const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+
+const emptyHome = (): string => mkdtempSync(join(tmpdir(), "anthill-virgin-home-"));
+
+const health = (input: Parameters<typeof buildSnapshot>[0]) =>
+  buildSnapshot(input).totals.sourceHealth!;
+
+describe("a provider that was never installed is absent, not degraded", () => {
+  test("an empty HOME produces no collector errors at all", async () => {
+    /* The premise the rest of this rests on, measured rather than assumed. If a
+       missing directory DID raise an error, the fix would have to be in the
+       collectors instead, and this test says which. */
+    const result = await collectSessions(emptyHome());
+
+    for (const [provider, collection] of Object.entries(result)) {
+      expect(collection.errors, `${provider} treats a missing directory as a fault`).toEqual([]);
+      expect(collection.value).toEqual([]);
+    }
+  });
+
+  test("an empty HOME reports every provider absent", async () => {
+    const result = await collectSessions(emptyHome());
+
+    for (const [provider, collection] of Object.entries(result)) {
+      expect(collection.absent, `${provider} does not report itself absent`).toBe(true);
+    }
+  });
+
+  test("a provider whose directory EXISTS is present, even with nothing in it", async () => {
+    /* The distinction that makes `absent` mean something. A freshly installed
+       Claude Code with no sessions yet is present and healthy — it would report
+       an empty list either way, so absence cannot be inferred from emptiness. */
+    const home = emptyHome();
+    mkdirSync(join(home, ".claude/projects"), { recursive: true });
+
+    const result = await collectSessions(home);
+
+    expect(result.claude.absent).toBeUndefined();
+    expect(result.claude.errors).toEqual([]);
+    expect(result.codex.absent).toBe(true);
+  });
+
+  test("an absent provider leaves the health ratio instead of failing it", () => {
+    const absent = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceAbsent: { codex: true, claude: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: false,
+    });
+
+    // Nothing is wrong, so nothing reads as wrong.
+    expect(absent.degraded).toBe(0);
+    expect(absent.absent).toBe(4);
+    /* And the ratio does not claim to watch what is not there: "0 of 0" rather
+       than "4 of 4 healthy", which would be the same overclaim inverted. */
+    expect(absent.total).toBe(0);
+    expect(absent.healthy).toBe(0);
+  });
+
+  test("the fresh-clone board: two providers installed, cmux and Cursor absent", () => {
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceAbsent: { cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: false,
+    });
+
+    // "2 of 2 collectors healthy" — calm, and true.
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 2, total: 2 });
+  });
+});
+
+describe("a provider that IS present and unreadable still says so, loudly", () => {
+  test("an unreadable provider is degraded even though it returned no sessions", () => {
+    /* The failure mode the fix must not create. An empty list from a blind
+       collector is not an empty fleet, and a board that called that healthy
+       would be the false all-clear this project keeps removing. */
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceErrors: { claude: ["/Users/me/.claude/projects: EACCES: permission denied"] },
+      cmuxReachable: true,
+    });
+
+    expect(summary.degraded).toBe(1);
+    expect(summary.absent).toBe(0);
+  });
+
+  test("a provider that is both absent AND erroring counts as degraded, not absent", () => {
+    /* Errors win. If a directory vanished mid-scan while something else about
+       it failed, the fault is the fact worth reporting — absence must never be
+       a way for a real error to become invisible. */
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceAbsent: { cursor: true },
+      sourceErrors: { cursor: ["cursor state db: SQLITE_CORRUPT"] },
+      cmuxReachable: true,
+    });
+
+    expect(summary.degraded).toBe(1);
+    expect(summary.absent).toBe(0);
+  });
+
+  test("cmux installed but failing is degraded; cmux missing is not", () => {
+    const failing = health({
+      agents: [], surfaces: [], archiveStore,
+      cmuxReachable: false,
+      cmuxErrors: ["cmux terminal discovery exited 1: connection refused"],
+    });
+    const missing = health({ agents: [], surfaces: [], archiveStore, cmuxAbsent: true, cmuxReachable: false });
+
+    expect(failing.degraded).toBe(1);
+    expect(missing.degraded).toBe(0);
+    expect(missing.absent).toBe(1);
+  });
+});
+
+describe("telling a missing binary from a broken one", () => {
+  test("the real runner's missing-executable signal is what we match on", async () => {
+    /* executableMissing() matches a Bun error string, which is brittle on
+       purpose-of-record: this drives the REAL runner against a genuinely
+       missing binary, so if Bun ever rewords it this fails loudly rather than
+       the board quietly going back to calling every cmux-less machine degraded. */
+    const result = await new BunCommandRunner().run(["anthill-definitely-not-installed", "rpc"]);
+
+    expect(executableMissing(result)).toBe(true);
+  });
+
+  test("a binary that exists and fails is not absence", async () => {
+    // `false` exits 1. It is installed; it just said no.
+    const result = await new BunCommandRunner().run(["false"]);
+
+    expect(executableMissing(result)).toBe(false);
+  });
+
+  test("a timeout is never absence, because a timeout means something answered slowly", () => {
+    const timedOut: CommandResult = { exitCode: -1, stdout: "", stderr: "command timed out after 10ms", timedOut: true };
+
+    expect(executableMissing(timedOut)).toBe(false);
+  });
+
+  test("collectCmux reports absent with no errors when the binary is missing", async () => {
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: -1, stdout: "", stderr: 'Executable not found in $PATH: "cmux"', timedOut: false }),
+    };
+
+    const result = await collectCmux(runner, "cmux");
+
+    expect(result.absent).toBe(true);
+    // Absent must not also raise an error, or it would be degraded as well.
+    expect(result.errors).toEqual([]);
+  });
+
+  test("collectCmux still reports an error when cmux is present and fails", async () => {
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 1, stdout: "", stderr: "connection refused", timedOut: false }),
+    };
+
+    const result = await collectCmux(runner, "cmux");
+
+    expect(result.absent).toBeUndefined();
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("connection refused");
+  });
+});
+
+describe("end to end, the way the docs lane walked it", () => {
+  test("a virgin clone with an empty HOME reports a calm board, not a broken one", async () => {
+    /* The whole defect in one test, from an actually-empty HOME through the
+       collectors to the numbers the first screen reads. */
+    const home = emptyHome();
+    writeFileSync(join(home, "not-a-provider.txt"), "");
+    const sessions = await collectSessions(home);
+
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceAbsent: {
+        codex: sessions.codex.absent === true,
+        claude: sessions.claude.absent === true,
+        cursor: sessions.cursor.absent === true,
+      },
+      sourceErrors: {
+        codex: sessions.codex.errors,
+        claude: sessions.claude.errors,
+        cursor: sessions.cursor.errors,
+      },
+      cmuxAbsent: true,
+      cmuxReachable: false,
+    });
+
+    // Not one degraded collector anywhere, which is what "1 of 4 degraded" claimed.
+    expect(summary.degraded).toBe(0);
+    expect(summary.absent).toBe(4);
+  });
+});

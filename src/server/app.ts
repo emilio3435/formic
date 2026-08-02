@@ -974,7 +974,10 @@ export function emptySnapshot(): HubSnapshot {
       tokenEligible: 0,
       sourceHealth: {
         healthy: 0,
+        // A snapshot that could not be built has read nothing, which is a real
+        // fault in all four — not four absent providers.
         degraded: 4,
+        absent: 0,
         total: 4,
         byProvider: {
           omp: { healthy: false, lastHealthyAt: null },

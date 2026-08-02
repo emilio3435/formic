@@ -424,6 +424,10 @@ export interface SourceHealth {
 export interface SourceHealthSummary {
   healthy: number;
   degraded: number;
+  /* Collectors with nothing installed to read. Not degraded: a machine without
+     Cursor is not a broken machine, and counting it as a fault told every
+     first-time user their install was incomplete. */
+  absent: number;
   total: number;
   byProvider?: Record<Provider, SourceHealth>;
 }

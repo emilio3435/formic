@@ -65,7 +65,7 @@ const agentFixture = (o: Record<string, unknown> = {}) => ({
 const snapFixture = (o: Record<string, unknown> = {}) => ({
   generatedAt: "2026-08-02T12:00:00.000Z",
   controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
-  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
   issues: [], programs: [{ id: "p1", name: "p1", agents: [agentFixture()] }], ...o,
 });
 
@@ -275,8 +275,18 @@ describe("QUICKSTART.md stays true to a first run", () => {
        whitespace flattened — otherwise a markdown reflow reads as drift and the
        real thing hides behind a false alarm. */
     const flowed = quickstart.replace(/\s+/g, " ");
+    /* "cmux unreachable — terminal titles and Focus/Send stay offline." used to
+       be quoted here as the detail a monitoring-only install reads. It was a
+       hollow pin: summaryWidgetData returns it for a fixture with NO issues,
+       but a machine without cmux always raises control-plane issues (terminal
+       discovery and notification discovery both ENOENT), and the card then
+       shows the top issue summary from snapshot-operator-issues.ts:168 —
+       "2 control-plane problems may limit focus, instruction, or interrupt
+       actions." Confirmed against a real board on a virgin clone. The fixture
+       agreed with the doc while the product disagreed with both, which is the
+       failure this file exists to catch, so the doc now quotes only the two
+       strings that survive the real path and describes the varying one. */
     for (const quoted of [
-      "cmux unreachable — terminal titles and Focus/Send stay offline.",
       "Start cmux, then Refresh — Focus and Send come back on their own.",
       // Day one: the empty board now asserts health and proves it. See ant-guide.test.ts.
       "Watching. No sessions running yet.",
@@ -291,7 +301,14 @@ describe("QUICKSTART.md stays true to a first run", () => {
     const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
     expect(quickstart).toContain("`Blocked`");
     expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
-    expect(blocked.sublabel).toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
+    expect(blocked.sublabel, "the no-issues detail vanished; QUICKSTART describes a two-branch card")
+      .toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
+    /* The branch a real no-cmux machine lands on. QUICKSTART must describe the
+       count rather than quote a sentence whose number moves with the errors. */
+    expect(read("src/server/snapshot-operator-issues.ts"), "the control-plane issue summary was reworded")
+      .toContain("control-plane ${otherCmuxErrors.length === 1 ? \"problem may\" : \"problems may\"} limit focus, instruction, or interrupt actions.");
+    expect(quickstart, "QUICKSTART stopped telling the reader the detail line names a count")
+      .toMatch(/control-plane problems/i);
     expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
     // And the clear case QUICKSTART promises once cmux is running.
     expect(M.summaryWidgetData("health", snapFixture(), "live", "percent", [], false).value).toBe("All clear");
@@ -796,32 +813,102 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
    test.failing: passes while the defect stands, FAILS the day it is fixed, at
    which point delete the .failing and keep the assertion. */
 describe("day one on a machine without cmux", () => {
-  const noCmuxSnapshot = {
-    generatedAt: "2026-08-02T12:44:51.004Z",
-    totals: { sourceHealth: { healthy: 3, degraded: 1, total: 4 } },
-  };
+  /* The fresh-clone walk's blocker, and its fix. A newcomer with no cmux — the
+     configuration QUICKSTART blesses ("Skip it if you only want to watch") —
+     used to be told on the first screen they ever saw:
 
-  test("QUICKSTART promises the calm empty board, and pins it as rendered", () => {
-    expect(quickstart).toContain("Watching. No sessions running yet.");
-    expect(quickstart, "QUICKSTART stopped saying the count is of HEALTHY collectors")
-      .toMatch(/counting healthy collectors/i);
+       No sessions found — and not every collector can see.
+       1 of 4 collectors degraded
+
+     with no way to tell it from a broken install. cmux collects no sessions, so
+     its absence could not hide a row; the board reported a fault where there was
+     none. Fixed in the client (byProvider distinguishes never-healthy from
+     newly-broken) and in the server (absent is not degraded). These hold the
+     line in both directions: calm when nothing is wrong, and STILL alarming
+     when something genuinely is, because a fix that just mutes the warning
+     would be the false all-clear again. */
+  const ok = { healthy: true, lastHealthyAt: "2026-08-02T12:00:00Z" };
+  const broke = { healthy: false, lastHealthyAt: "2026-08-02T11:00:00Z" };
+  const verdict = (sourceHealth: unknown) =>
+    M.emptyBoardVerdict({ generatedAt: "2026-08-02T12:44:51.004Z", totals: { sourceHealth } });
+
+  /* Derive the roster from the Provider union rather than listing four names
+     here, so a fifth collector fails this test instead of silently outdating
+     the table a newcomer reads to decide whether their board is broken. */
+  const providers = (() => {
+    const line = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    return [...line.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+  })();
+
+  test("a fresh install with nothing installed reads calm, not degraded", () => {
+    const fresh = verdict({
+      healthy: 4, degraded: 0, total: 4,
+      byProvider: { omp: ok, codex: ok, claude: ok, cursor: ok },
+    });
+    expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
+    expect(fresh.message).toBe("Watching. No sessions running yet.");
+    expect(fresh.sources).toBe("4 of 4 collectors healthy");
   });
 
-  test.failing("a missing cmux must not make the board call itself incomplete", () => {
-    const verdict = M.emptyBoardVerdict(noCmuxSnapshot);
-    expect(verdict.message, "cmux absence is being reported as a blind session collector")
-      .toBe("Watching. No sessions running yet.");
-    expect(verdict.sources, "the count reads degraded on a healthy fleet")
-      .toBe("4 of 4 collectors healthy");
+  test("a collector that WAS healthy and now is not still alarms", () => {
+    const failed = verdict({
+      healthy: 3, degraded: 1, total: 4,
+      byProvider: { omp: ok, codex: ok, claude: ok, cursor: broke },
+    });
+    expect(failed.degraded, "a real degradation was muted along with the false one").toBe(true);
+    expect(failed.message).toBe("No sessions found — and not every collector can see.");
+    expect(failed.sources).toBe("1 of 4 collectors degraded");
   });
 
-  test("the two populations that share the word 'collectors' still disagree", () => {
-    const snap = read("src/server/snapshot.ts");
-    expect(snap, "degradedSources stopped counting cmux inside the provider total")
-      .toMatch(/\["codex", "claude", "cursor"\][\s\S]{0,320}cmuxReachable === false \? 1 : 0/);
-    expect(read("src/server/state.ts"), "byProvider no longer rides alongside the scalars")
-      .toContain("byProvider");
-    expect(read("src/server/app.ts"), "app.ts dropped the note that the scalars are defective")
-      .toContain("count a different population than their own byProvider");
+  test("QUICKSTART quotes the empty-board strings the model renders", () => {
+    const fresh = verdict({
+      healthy: providers.length, degraded: 0, total: providers.length,
+      byProvider: Object.fromEntries(providers.map((p) => [p, ok])),
+    });
+    expect(quickstart, "QUICKSTART no longer quotes the calm empty-board message")
+      .toContain(fresh.message);
+    expect(quickstart, "QUICKSTART no longer quotes the healthy count as rendered")
+      .toContain(fresh.sources);
+  });
+
+  test("QUICKSTART names every collector the code has, with the path it reads", () => {
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(4);
+    const table = quickstart.slice(quickstart.indexOf("| Collector |"));
+    for (const provider of providers) {
+      expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
+        .toContain(provider === "claude" ? "~/.claude/projects" : provider);
+    }
+    const collectors = read("src/server/collectors.ts");
+    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects"]) {
+      expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
+      expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
+    }
+    expect(quickstart, "QUICKSTART stopped saying an absent tool still reads healthy")
+      .toMatch(/absent, and expect all four to still read healthy/i);
+    expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
+      .toMatch(/cmux is not one of the four/i);
+  });
+
+  /* The last wire, still open. state.ts sets #cmuxAbsent from cmux.absent, which
+     cmux.ts sets only when executableMissing() matches — and that requires the
+     stderr to read "executable not found". A real first run produces Bun's
+     spawn error instead: "ENOENT: no such file or directory, posix_spawn
+     '/Applications/cmux.app/Contents/Resources/bin/cmux'". So cmuxAbsent stays
+     false on the exact path it was written for, the server scalar still spends
+     a healthy slot on cmux, and the board reads "3 of 4 collectors healthy"
+     where QUICKSTART documents "4 of 4".
+
+     Not a blocker: the client's byProvider check already keeps the verdict calm,
+     so nobody is told their install is broken. It is an off-by-one in the
+     reassurance itself, which a newcomer cannot resolve — they will look for the
+     fourth collector and there isn't one missing.
+
+     test.failing: flips the day the detector recognises the real stderr. */
+  test.failing("a missing cmux binary is detected as absent on the real first-run path", async () => {
+    const { executableMissing } = await import("../src/server/cmux");
+    expect(executableMissing({
+      timedOut: false, exitCode: -1, stdout: "",
+      stderr: "ENOENT: no such file or directory, posix_spawn '/Applications/cmux.app/Contents/Resources/bin/cmux'",
+    } as never), "cmux absence is still read as a fault on a machine that never had it").toBe(true);
   });
 });

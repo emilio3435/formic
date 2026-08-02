@@ -40,7 +40,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
   return {
     generatedAt: "2026-07-22T03:00:00.000Z",
     controlHealth: { cmuxReachable: true, lastCheckedAt: "2026-07-22T03:00:00.000Z", errors: [], staleSources: [] },
-    totals: { live: 1, tracked: 1, attention: 0, sourceHealth: { healthy: 4, degraded: 0, total: 4 } },
+    totals: { live: 1, tracked: 1, attention: 0, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
     issues: [],
     programs: [{ id: "p1", name: "p1", agents: [agent()] }],
     ...overrides,

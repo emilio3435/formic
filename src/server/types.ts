@@ -108,6 +108,12 @@ export const AGENT_IDLE_GAP_MS = 15 * 60_000;
 export interface CollectionResult<T> {
   value: T;
   errors: string[];
+  /* The source is not installed on this machine — its directory or binary does
+     not exist. Distinct from `errors`, which mean "this IS here and I could not
+     read it". Collapsing the two told a first-time user their install was
+     broken because they do not happen to use Cursor. Absent is not a fault and
+     must not count against collector health; unreadable still is, loudly. */
+  absent?: boolean;
 }
 
 export interface CommandResult {

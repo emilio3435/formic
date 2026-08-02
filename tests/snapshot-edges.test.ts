@@ -69,7 +69,7 @@ describe("snapshot edge cases", () => {
     const snapshot = buildSnapshot({ agents: [], surfaces: [], archiveStore, now: NOW });
 
     // No agents is not evidence of a broken collector.
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
     expect(snapshot.controlHealth?.cmuxReachable).toBe(true);
   });
 
@@ -129,7 +129,7 @@ describe("snapshot edge cases", () => {
     });
 
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
   });
 
   test("an unreachable control plane carries the errors that explain it", () => {
