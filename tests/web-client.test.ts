@@ -4490,6 +4490,32 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with
+     the six view tabs each taking one of the stops ahead of it — reaching the
+     board's primary filter meant tabbing past every view. A cockpit is a keyboard
+     surface. */
+  test("(15a) the tab strip is one stop and search has a shortcut", () => {
+    // Left/Right wrap; a six-item strip is small enough that wrapping beats
+    // reversing, and it is what the tablist pattern specifies.
+    expect(M.nextViewIndex(0, "ArrowRight", 6)).toBe(1);
+    expect(M.nextViewIndex(5, "ArrowRight", 6)).toBe(0);
+    expect(M.nextViewIndex(0, "ArrowLeft", 6)).toBe(5);
+    expect(M.nextViewIndex(2, "Home", 6)).toBe(0);
+    expect(M.nextViewIndex(2, "End", 6)).toBe(5);
+    expect(M.nextViewIndex(2, "Enter", 6)).toBe(-1);  // not a key it owns
+    expect(M.nextViewIndex(0, "ArrowRight", 0)).toBe(-1);
+
+    // A shortcut that steals a keystroke from a text field is worse than none.
+    expect(M.isTypingTarget({ tagName: "INPUT" })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "TEXTAREA" })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+    expect(M.isTypingTarget({ tagName: "BUTTON" })).toBe(false);
+    expect(M.isTypingTarget(null)).toBe(false);
+
+    // Only the current tab is reachable by Tab; the rest are arrow-reachable.
+    expect(source).toContain("btn.tabIndex = isCurrent ? 0 : -1;");
+  });
+
   /* Found while verifying §4 in the browser: the calm predicate walked per-agent
      tokens while the CONTEXT PEAK card and the watch clause read the server's
      snap.contextPeak. Two derivations of one quantity at the two ends of the calm

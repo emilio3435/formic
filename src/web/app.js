@@ -943,7 +943,7 @@ globalThis.TheAntHill = {
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
   // block, exactly the TDZ hazard the comment above describes. The behavior it
   // gates is asserted through handleRowNavigation instead.
-  nextRowIndex, handleRowNavigation, firstLoadPending, renderSkeleton, renderEmpty,
+  nextRowIndex, handleRowNavigation, nextViewIndex, handleCockpitKeys, isTypingTarget, firstLoadPending, renderSkeleton, renderEmpty,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
@@ -2831,6 +2831,52 @@ function currentFilter() {
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
 
+/* Where an arrow key inside the tab strip lands. Pure so the wrap rules are
+   testable without a browser: Left/Right WRAP (a six-item strip is small enough
+   that wrapping is faster than reversing, and it is what the tablist pattern
+   specifies), Home/End jump to the ends. */
+function nextViewIndex(current, key, count) {
+  if (count <= 0) return -1;
+  switch (key) {
+    case "ArrowRight": return (current + 1 + count) % count;
+    case "ArrowLeft": return (current - 1 + count) % count;
+    case "Home": return 0;
+    case "End": return count - 1;
+    default: return -1;
+  }
+}
+
+/* Is the operator typing? A shortcut that steals a keystroke from a text field
+   is worse than no shortcut. */
+function isTypingTarget(target) {
+  if (!target || !target.tagName) return false;
+  const tag = String(target.tagName).toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable === true;
+}
+
+/* Board-level keys. `/` is the search shortcut every list-shaped tool has had
+   for thirty years, and its absence is why search was eleven stops away. */
+function handleCockpitKeys(e, ui = state) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (e.key === "/" && !isTypingTarget(e.target)) {
+    const box = $("search");
+    if (!box) return false;
+    e.preventDefault();
+    box.focus();
+    if (typeof box.select === "function") box.select();
+    return true;
+  }
+  const inStrip = e.target && e.target.closest && e.target.closest("#views");
+  if (!inStrip) return false;
+  const next = nextViewIndex(VIEWS.indexOf(ui.view), e.key, VIEWS.length);
+  if (next < 0) return false;
+  e.preventDefault();
+  setView(VIEWS[next]);
+  const btn = document.querySelector(`#views .view-tab[data-view="${VIEWS[next]}"]`);
+  if (btn) btn.focus();
+  return true;
+}
+
 function renderTabs() {
   const agents = snapshotAgents(state.snap).map((x) => x.agent);
   for (const view of OPS_VIEWS) {
@@ -2850,6 +2896,12 @@ function renderTabs() {
     const isCurrent = btn.dataset.view === state.view;
     btn.setAttribute("aria-pressed", String(isCurrent));
     btn.classList.toggle("is-current", isCurrent);
+    /* Roving tabindex: the tab strip is ONE stop, not six. Measured before this
+       change, search sat at the 11th tab stop with the six tabs occupying six of
+       the ten ahead of it — reaching the board's primary filter meant tabbing
+       through every view first. Arrows move within the strip, which is the
+       standard tablist contract and what a screen-reader user already expects. */
+    btn.tabIndex = isCurrent ? 0 : -1;
   }
   const toggle = $("select-toggle");
   if (toggle) {
@@ -6636,6 +6688,7 @@ function boot() {
   });
 
   document.addEventListener("keydown", (e) => { handleRowNavigation(e); });
+  document.addEventListener("keydown", (e) => { handleCockpitKeys(e); });
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
