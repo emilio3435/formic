@@ -1880,3 +1880,41 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
       .toMatch(/not_installed/);
   });
 });
+
+/* Screenshots are the one part of a guide that cannot be pinned to the code, so
+   they are pinned to each other: every image the guide embeds must exist, and
+   the captions that describe them must be dated the way every other measured
+   claim in this project is. A caption is a measurement of a picture. */
+describe("the guide's screenshots and their captions stay honest", () => {
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("every embedded shot exists on disk", () => {
+    const refs = [...guide().matchAll(/!\[[^\]]*\]\((docs\/guide-shots\/[^)]+)\)/g)].map((m) => m[1]);
+    expect(refs.length, "the guide stopped embedding screenshots").toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(existsSync(join(ROOT, ref)), `ANT-GUIDE embeds ${ref}, which does not exist`).toBe(true);
+    }
+  });
+
+  test("the hero caption describes the picture rather than apologising for it", () => {
+    /* It used to promise "dozens of sessions at once" above a shot that now
+       reads Needs you 0. A caption that contradicts its image teaches a reader
+       to distrust both. It is now dated and states what the shot shows. */
+    const g = guide().replace(/\s+/g, " ");
+    expect(g, "the hero caption lost its date, so nobody can tell when it stopped being true")
+      .toMatch(/Taken at [0-9]{2}:[0-9]{2} on [0-9]+ [A-Z][a-z]+/);
+    expect(g, "the caption went back to promising a crowded board")
+      .not.toMatch(/running dozens of sessions at once/i);
+    expect(g, "the caption stopped explaining why a busy fleet can still need nobody")
+      .toMatch(/busy fleet and an empty to-do list are not a contradiction/i);
+  });
+
+  test("the provider shot is embedded where the check that needs it lives", () => {
+    const g = guide();
+    const idx = g.indexOf("shot-6-providers.png");
+    expect(idx, "the provider breakdown shot is not embedded").toBeGreaterThan(-1);
+    const around = g.slice(Math.max(0, idx - 1400), idx + 400);
+    expect(around, "the provider shot drifted away from the check it illustrates")
+      .toMatch(/read the provider list|by provider/i);
+  });
+});

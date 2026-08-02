@@ -7,11 +7,16 @@ that tells you which one needs you.**
 
 Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
-**Your board will be quieter than these pictures.** They are taken from a machine
-running dozens of sessions at once, because a crowded board shows more of the
-tool. On your first run you will have one row, or none — and `Needs you 0` with
-nothing under it is the tool working, not the tool failing to find anything. If
-it is completely empty, see *The board is empty* at the end.
+**What you are looking at above is the ordinary case, not a demo.** Taken at
+23:11 on 2 August from a machine with 28 live sessions, 4 of them working — and
+`Needs you` still reads **0**, because none of them was waiting on a person.
+That is the product's whole claim in one picture: a busy fleet and an empty
+to-do list are not a contradiction, and the board says so rather than listing
+everything it can find.
+
+Your first run will have fewer rows than this, possibly one or none. `Needs you
+0` with nothing under it is the tool working, not the tool failing to find
+anything. If it is completely empty, see *The board is empty* at the end.
 
 This guide is about *using* a dashboard that is already running. To install one
 on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
@@ -274,6 +279,12 @@ the board's collectors, so it names everything you are billed for whether or not
 the board can see it. **Any name there you cannot find as a row is a tool the
 board is not watching.** It takes five seconds and it is the only check that
 finds this.
+
+![The by-provider breakdown](docs/guide-shots/shot-6-providers.png)
+
+That is the list on the machine these screenshots came from, at `30d`. Four of
+the five names are collectors; **Hermes** and **Factory** are not, and their
+spend appears there and nowhere else on the board.
 
 Health will not find it for you, and this is the part to understand rather than
 worry about. `4 of 4 collectors healthy` is counting the collectors the board
