@@ -1286,7 +1286,8 @@ describe("snapshot control safety and SSE deduplication", () => {
     const pulse: HubPulse = {
       momentum: {
         working: 1,
-        completionsLastHour: 0,
+        completionsLastHour: null,
+        completionsProvenance: "not-observable",
         observedWindowMs: 0,
         stalled: 0,
         stalledAgentIds: [],

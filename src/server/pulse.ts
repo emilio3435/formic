@@ -28,7 +28,6 @@ interface AgentMemory {
 interface ActivityBucket {
   startMs: number;
   activeSessions: number;
-  completions: number;
   tokens: number | null;
   activeAgentIds: Set<string>;
 }
@@ -39,7 +38,6 @@ export class PulseTracker {
   #burnReader: BurnReader;
   #agents = new Map<string, AgentMemory>();
   #buckets = new Map<number, ActivityBucket>();
-  #completions: number[] = [];
   #latestSnapshot?: HubSnapshot;
   #lastBurnRefreshMs?: number;
   #burnRefreshInFlight?: Promise<void>;
@@ -80,17 +78,12 @@ export class PulseTracker {
       const updatedAtAdvanced = previous === undefined
         || (Number.isFinite(lastUpdatedAtMs)
           && (!Number.isFinite(previous.lastUpdatedAtMs) || lastUpdatedAtMs > previous.lastUpdatedAtMs));
-      const completed = previous?.lastActivity === "working"
-        && (agent.activity === "idle" || agent.activity === "ended");
-      if (completed) {
-        const completionAtMs = Number.isFinite(lastUpdatedAtMs)
-          ? Math.min(lastUpdatedAtMs, nowMs)
-          : nowMs;
-        if (completionAtMs >= nowMs - HOUR_MS) {
-          this.#completions.push(completionAtMs);
-          this.#ensureBucket(Math.floor(completionAtMs / BUCKET_MS) * BUCKET_MS).completions += 1;
-        }
-      }
+      /* The `working -> idle|ended` edge used to be counted here as a
+         completion. It is not one: `activity` comes from `statusFrom()`, which
+         reads transcript recency alone, so this fired for an agent that thought
+         for three minutes. It also fired again on every subsequent pause, and
+         never once looked at whether the work succeeded. Nothing replaces it,
+         because nothing in the data supports the claim — see PulseMomentum. */
 
       if (
         updatedAtAdvanced
@@ -123,7 +116,6 @@ export class PulseTracker {
     for (const agentId of this.#agents.keys()) {
       if (!seen.has(agentId)) this.#agents.delete(agentId);
     }
-    this.#pruneCompletions(nowMs);
   }
 
   maybeRefreshBurnCost(nowMs = Date.now()): void {
@@ -152,7 +144,6 @@ export class PulseTracker {
   report(nowMs: number): HubPulse {
     const currentStartMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS;
     this.#ensureBucket(currentStartMs);
-    this.#pruneCompletions(nowMs);
 
     const completedBuckets = [...this.#buckets.values()]
       .filter((bucket) => bucket.startMs < currentStartMs)
@@ -200,7 +191,8 @@ export class PulseTracker {
     return {
       momentum: {
         working: this.#latestSnapshot?.totals.working ?? 0,
-        completionsLastHour: this.#completions.length,
+        completionsLastHour: null,
+        completionsProvenance: "not-observable",
         observedWindowMs,
         stalled: stalledAgentIds.length,
         stalledAgentIds,
@@ -214,7 +206,6 @@ export class PulseTracker {
         buckets: completedBuckets.map((bucket): PulseActivityBucket => ({
           start: new Date(bucket.startMs).toISOString(),
           activeSessions: bucket.activeSessions,
-          completions: bucket.completions,
           tokens: bucket.tokens,
         })),
       },
@@ -230,7 +221,6 @@ export class PulseTracker {
         this.#buckets.set(startMs, {
           startMs,
           activeSessions: 0,
-          completions: 0,
           tokens: null,
           activeAgentIds: new Set(),
         });
@@ -239,7 +229,6 @@ export class PulseTracker {
       this.#buckets.set(currentStartMs, {
         startMs: currentStartMs,
         activeSessions: 0,
-        completions: 0,
         tokens: null,
         activeAgentIds: new Set(),
       });
@@ -252,10 +241,6 @@ export class PulseTracker {
     return this.#buckets.get(currentStartMs)!;
   }
 
-  #pruneCompletions(nowMs: number): void {
-    const cutoff = nowMs - HOUR_MS;
-    this.#completions = this.#completions.filter((completedAtMs) => completedAtMs >= cutoff);
-  }
 
   #applyBurnSummary(summary: UsageSummary | undefined): void {
     const roundedCost = summary?.available

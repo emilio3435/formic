@@ -347,7 +347,36 @@ export interface TriageQueueSummary {
 
 export interface PulseMomentum {
   working: number;
-  completionsLastHour: number;
+  /* Null, always, and deliberately.
+
+     This used to count `working -> idle|ended` edges. `activity` derives from
+     `statusFrom()`, which reads transcript recency alone, so the "completion"
+     it counted was "stopped writing for three minutes" — thinking, waiting on a
+     tool, blocked on a build, rate-limited, crashed or killed all scored the
+     same as shipping. It recounted the same agent on every pause, and it never
+     looked at success. The magnitude audit ranked it worst on the board because
+     its true value could be 0 while it rendered 17.
+
+     A correct counter has to verify terminality, success, idempotence and
+     attribution. Measured on this fleet, two of those are not available:
+
+       - SUCCESS is unverifiable. `outcome` is "healthy" for 479 of 479 agents
+         and `gates` is empty for all 479, so filtering on them excludes
+         nothing. That check would look like verification and do none.
+       - COMPLETION is undetectable for 96% of live agents. Only Codex emits a
+         real per-task event (`task_complete`; 741 recorded, 11 in the last
+         hour) and Codex is 1 of 24 live sessions. Claude's `stop_reason:
+         "end_turn"` fires on every assistant reply — a turn, not a task — and
+         Cursor has nothing.
+
+     So the acceptance criteria's own escape applies: a number that cannot be
+     defined cannot be corrected. "done" is the strongest success word on the
+     board and it was the least verified; it is now withheld rather than
+     guessed, the same rule cost already follows by reading `unavailable`
+     instead of `$0`. `completionsProvenance` says why, so the card can explain
+     itself instead of going quietly blank. */
+  completionsLastHour: number | null;
+  completionsProvenance: "not-observable";
   observedWindowMs: number;
   stalled: number;
   stalledAgentIds: string[];
@@ -367,7 +396,6 @@ export interface PulseBurn {
 export interface PulseActivityBucket {
   start: string;
   activeSessions: number;
-  completions: number;
   tokens: number | null;
 }
 

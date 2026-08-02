@@ -78,38 +78,13 @@ async function flushBurnReader(): Promise<void> {
 }
 
 describe("PulseTracker", () => {
-  test("counts working-to-idle/ended transitions, ages them out, and ignores disappearance", () => {
-    const tracker = new PulseTracker(undefined, base);
-    tracker.observe(snapshot([agent({ updatedAt: iso(base + 1_000) })]), base + 1_000);
-    tracker.observe(
-      snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + 2_000) })]),
-      base + 2_000,
-    );
-    expect(tracker.report(base + 2_000).momentum.completionsLastHour).toBe(1);
-
-    tracker.observe(snapshot([]), base + 3_000);
-    expect(tracker.report(base + 3_000).momentum.completionsLastHour).toBe(1);
-
-    const disappeared = new PulseTracker(undefined, base);
-    disappeared.observe(snapshot([agent({ updatedAt: iso(base + 1_000) })]), base + 1_000);
-    disappeared.observe(snapshot([]), base + 2_000);
-    expect(disappeared.report(base + 2_000).momentum.completionsLastHour).toBe(0);
-
-    tracker.observe(snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + HOUR_MS + 1_000) })]), base + HOUR_MS + 1_000);
-    expect(tracker.report(base + HOUR_MS + 3_000).momentum.completionsLastHour).toBe(0);
-  });
-
-  test("uses the agent completion time rather than the later observation time", () => {
-    const tracker = new PulseTracker(undefined, base);
-    tracker.observe(snapshot([agent({ updatedAt: iso(base) })]), base);
-    tracker.observe(
-      snapshot([agent({ activity: "idle", status: "waiting", updatedAt: iso(base + 60_000) })]),
-      base + 50 * 60_000,
-    );
-
-    expect(tracker.report(base + 50 * 60_000).momentum.completionsLastHour).toBe(1);
-    expect(tracker.report(base + HOUR_MS + 60_001).momentum.completionsLastHour).toBe(0);
-  });
+  /* Two tests stood here: "counts working-to-idle/ended transitions, ages them
+     out, and ignores disappearance" and "uses the agent completion time rather
+     than the later observation time". Both pinned the mechanics of a counter
+     that has been removed, because the edge it counted was never a completion —
+     see tests/completions-counter.test.ts, which pins that those same scenarios
+     now score nothing. Deleted rather than adapted: there is no quantity left
+     for them to be about. */
 
   test("includes only healthy live sessions quiet for at least fifteen minutes", () => {
     const now = base + HOUR_MS;
