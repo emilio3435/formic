@@ -141,9 +141,21 @@ describe("identities that must hold whatever window you ask for", () => {
     if (!available) return;
     const gaps = WINDOWS.map(({ label }) => `${label}=${round(providerCost(label) - (at(label).measuredCostUsd ?? 0))}`);
 
+    /* Counted, because an identity that never meets a non-zero case passes
+       forever and proves nothing. The 1h window is routinely EMPTY on this
+       fleet — measured 0 invocations, $0.00, and an empty byProvider — so its
+       evaluation here is 0 === 0 and carries no information.
+
+       The file-level non-vacuity test below cannot see that: it asserts the
+       four windows collectively differ, which they do, while one of them
+       contributes a vacuous comparison. Per case, not globally. */
+    let compared = 0;
     for (const { label } of WINDOWS) {
       expect(providerCost(label), gaps.join(" ")).toBeCloseTo(at(label).measuredCostUsd ?? 0, 2);
+      if (at(label).byProvider.length > 0 && providerCost(label) > 0) compared += 1;
     }
+
+    expect(compared, "every window compared an empty breakdown").toBeGreaterThan(0);
   });
 
   test("I3 holds across every window inside a week", () => {
@@ -162,10 +174,15 @@ describe("identities that must hold whatever window you ask for", () => {
        dropped from a cost sum and not from a row set. An identity that fails
        alongside its own control tells you much less. */
     if (!available) return;
+    let compared = 0;
     for (const { label } of WINDOWS) {
       const counted = at(label).byProvider.reduce((total, provider) => total + provider.invocations, 0);
       expect(counted, `${label} provider invocations do not sum`).toBe(at(label).invocations ?? 0);
+      if (counted > 0) compared += 1;
     }
+
+    // Same reason as I3: the empty window's 0 === 0 is not evidence of anything.
+    expect(compared, "every window compared an empty breakdown").toBeGreaterThan(0);
   });
 
   test("I7: widening the window never reduces the cost inside it", () => {
