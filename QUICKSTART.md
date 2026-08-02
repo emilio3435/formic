@@ -105,6 +105,25 @@ Skip it if you only want to watch. Running it before cmux has ever started exits
 with `Open cmux once so it creates the template, then re-run.` — cmux writes its
 config file on first launch, and there is nothing to edit until it has.
 
+**cmux installed is not the same as cmux naming your session.** With cmux
+running you may still find **Send and Interrupt greyed out on a row where Focus
+works**, with a reason that says the pane was matched by its working directory
+rather than attested by cmux. That is deliberate, and it is worth knowing before
+you meet it, because the row otherwise looks completely healthy.
+
+The Ant Hill will type into a terminal only when cmux names the session on that
+pane — evidenced by the session's transcript file being held open there, or the
+session ID appearing in the command that started it. Matching a pane by the
+folder it happens to be sitting in is a guess, and a guess is enough to move the
+board's view but not enough to authorise input: two panes in the same project,
+one `cd`ing away as another `cd`s in, will silently re-point the row at the wrong
+terminal. Focus stays on in that state on purpose — looking costs nothing, and
+going to the pane is how you recover.
+
+So: **start agents inside cmux panes and leave them there**, and the write
+controls stay on. There is no setting for this and nothing to restart; the
+buttons re-enable within a few seconds of cmux naming the session.
+
 ## Group sessions by project (optional)
 
 ```bash

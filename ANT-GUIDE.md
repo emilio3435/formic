@@ -113,6 +113,37 @@ its process is still alive, and the four buttons that act on it.
 The first three need cmux (see the glossary). Without it they grey out with a
 reason, and the board still watches everything perfectly well.
 
+**Send and Interrupt need more than Focus does**, and this is the one place the
+buttons deliberately disagree. Focus only moves your eyes — worst case you look
+at the wrong terminal and immediately see that you have. Send and Interrupt put
+characters into a live tty, and typing into the wrong one is not recoverable by
+noticing.
+
+So the two are gated differently:
+
+| The row's link to a terminal | Focus | Send / Interrupt |
+|---|---|---|
+| cmux names the session on that pane | on | **on** |
+| matched only by its folder | on | **off** |
+| ambiguous, or no pane found | off | off |
+
+That middle row is new, and it is the one that will surprise you: the board
+looks healthy, Focus works, and Send is greyed out anyway. It is not a bug and
+not a degraded install. It means the Ant Hill found a pane sitting in the right
+folder but could not get cmux to confirm the session is actually the one running
+there — and a folder is not a name. Two panes in the same project, one that
+`cd`s away while another `cd`s in, and the row can point at the wrong terminal
+while still reading perfectly healthy. That happened here, to a real Send, which
+is why the gate exists.
+
+**To get Send and Interrupt back:** start the agent *inside* a cmux pane and
+leave it there. Identification works by finding the session's own transcript
+file held open by a process on that pane, or the session ID in the command that
+started it. An agent started in an ordinary terminal, or in a pane that has
+since moved elsewhere, has neither, so it can be watched but not typed into. No
+setting turns this off; the controls come back on their own within a few seconds
+of cmux naming the session.
+
 **That is the whole loop:** `Needs you` → click the row → deal with it →
 `Escape`.
 
@@ -276,6 +307,13 @@ each session lives in, which is what makes **Focus** and **Send** possible.
 Without it the dashboard still watches everything; it just refuses to type into a
 terminal it cannot positively identify.
 
+**Positively identify** *(what that phrase costs you)*
+: Not "found a likely pane" — *cmux names this session on this pane*, evidenced
+by the session's transcript file being held open there or its ID appearing in the
+command that started it. A pane merely sitting in the right folder is a guess,
+and guesses are allowed to move the view but never to type. The button table in
+step 4 above says which controls survive which case.
+
 **Lane** *(conversation only)*
 : One workstream, worked by one agent, on its own git branch. Several run at once
 and each lands into `main`. See [DEPLOY.md](./DEPLOY.md).
@@ -323,6 +361,29 @@ watch, ignore it forever. If you want Focus and Send, install cmux and run
 
 `Health: Offline` is different: your browser has lost the server entirely. See
 "Nothing loads."
+
+</details>
+
+<details>
+<summary><b>Send is greyed out but Focus still works</b></summary>
+
+The row is linked to a terminal by **folder, not by name**. Hover the greyed
+button and it says so: the pane was matched by its working directory rather than
+attested by cmux, so the session on it cannot be proven.
+
+This is deliberate and it is the safe outcome, not a fault to repair. The board
+would rather refuse a Send than deliver it to a terminal it only *probably*
+identified — a pane that `cd`s away and another that `cd`s in is enough to move
+the match to the wrong session while the row still reads healthy.
+
+**Use Focus.** It is left on for exactly this case: go and look at the pane, and
+type there directly. That is the recovery path, not a workaround.
+
+**To make it stop happening**, start agents inside cmux panes and leave them
+there — identification needs the session's transcript file open on that pane, or
+its ID in the command that launched it. Nothing to configure and nothing to
+restart; the buttons re-enable themselves within a few seconds of cmux naming
+the session.
 
 </details>
 

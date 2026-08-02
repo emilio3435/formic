@@ -702,3 +702,62 @@ describe("README's closing gate line stays true", () => {
     expect(readme).toContain("bun run check");
   });
 });
+
+/* The write gate became fail-closed in 547679e: a pane matched only by its
+   working directory can no longer authorise input, because a directory string
+   is not an identity. That is a capability REMOVAL for anyone whose rows resolve
+   that way — buttons that worked yesterday are off today — so both onboarding
+   docs have to say it is deliberate and say what turns it back on.
+
+   The asymmetry is the part that drifts. Focus survives `unique-cwd` on purpose
+   (it types nothing, and going to look is the recovery path) while Send and
+   Interrupt do not. A doc that flattens that into "the controls need cmux" is
+   wrong in the direction that matters: it tells an operator their install is
+   broken when it is working exactly as designed. So drive controlsFor() and
+   require the docs to describe what it actually returns. */
+describe("the fail-closed write gate is documented as a deliberate capability change", () => {
+  const target = (resolution: string) => ({
+    surfaceId: "surface-1", resolution, reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined,
+  }) as never;
+  const agent = { status: "running" } as never;
+  const capabilities = async (resolution: string) => {
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const controls = controlsFor(agent, target(resolution), false);
+    return Object.fromEntries(controls.map((c) => [c.action, c.enabled]));
+  };
+
+  test("cmux attesting the session enables every control", async () => {
+    const caps = await capabilities("exact");
+    expect(caps, "an attested pane stopped permitting writes").toMatchObject({
+      focus: true, instruct: true, interrupt: true,
+    });
+  });
+
+  test("a folder match permits Focus and refuses Send and Interrupt", async () => {
+    const caps = await capabilities("unique-cwd");
+    expect(caps.instruct, "a cwd-matched pane is authorising Send again").toBe(false);
+    expect(caps.interrupt, "a cwd-matched pane is authorising Interrupt again").toBe(false);
+    expect(caps.focus, "Focus was disabled too — it is the documented recovery path").toBe(true);
+  });
+
+  test("both onboarding docs describe that asymmetry, not a blanket cmux requirement", () => {
+    for (const [name, doc] of [["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", read("ANT-GUIDE.md")]] as const) {
+      expect(doc, `${name} does not say Send/Interrupt are gated harder than Focus`)
+        .toMatch(/Send and Interrupt|Send \/ Interrupt/);
+      expect(doc, `${name} does not name the cwd-match state an operator will hit`)
+        .toMatch(/working directory|matched by (its )?folder/i);
+      expect(doc, `${name} does not say Focus survives it`).toMatch(/Focus (still |stays )/i);
+      expect(doc, `${name} does not tell the reader how to get the write controls back`)
+        .toMatch(/inside (a |)cmux pane/i);
+    }
+  });
+
+  test("the docs' recovery advice matches the evidence the code actually keys on", () => {
+    const identity = read("src/server/identity.ts");
+    expect(identity, "open-transcript evidence is gone; the docs promise it").toContain("open-file-match");
+    expect(identity, "command-line identity is gone; the docs promise it").toContain("command-hint-match");
+    for (const doc of [quickstart, read("ANT-GUIDE.md")]) {
+      expect(doc, "a doc describes evidence the code no longer collects").toMatch(/transcript file/i);
+    }
+  });
+});
