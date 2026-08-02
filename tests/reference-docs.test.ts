@@ -1834,3 +1834,49 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
       .toMatch(/one per provider \*\*the board was taught about\*\*/i);
   });
 });
+
+/* The procedure a reader runs on their OWN board. The four collectors are
+   universal; the billed set is not, so a list we wrote is ours and useless to
+   them. Pinned to the code that makes each step true, and to the two boundaries
+   that stop it being oversold: the window must be widened first, and the check
+   inherits the cost source's own blind spot. */
+describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("the four collectors it tells them to compare against are the real four", () => {
+    const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(names.length, "the Provider union changed shape").toBe(4);
+    const g = guide();
+    /* The guide names them in reader-facing form, so check the mapping rather
+       than the identifiers. */
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP"]) {
+      expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
+        .toContain(shown);
+    }
+  });
+
+  test("it tells them to widen the window BEFORE reading the list", () => {
+    /* Measured: the breakdown lists only providers with spend inside the
+       window, and one provider on this machine appears at 30d and not at 24h.
+       A reader who skips this step runs the check and concludes wrongly. */
+    const g = guide();
+    expect(g, "the guide stopped telling the reader to widen the range first")
+      .toMatch(/Do this first/i);
+    expect(g, "the guide stopped explaining why a short window hides a periodic job")
+      .toMatch(/invisible at `24h`/i);
+  });
+
+  test("it states the check's own boundary rather than overselling it", () => {
+    const g = guide();
+    expect(g, "the guide stopped admitting the check inherits the cost source's blind spot")
+      .toMatch(/invisible to both/i);
+    expect(g, "the guide stopped saying the check cannot run without a cost source")
+      .toMatch(/no list and this check cannot run/i);
+    expect(g, "the guide stopped naming the real backstop")
+      .toMatch(/it is your actual bill/i);
+    /* The cost source can genuinely be absent — that is not hypothetical. */
+    expect(read("src/server/burnbar.ts"), "the not_installed state disappeared")
+      .toMatch(/not_installed/);
+  });
+});

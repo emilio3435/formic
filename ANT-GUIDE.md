@@ -287,6 +287,35 @@ That is not a fault to report; it is the shape of the instrument. **The board
 tells you about what it watches. The provider list tells you what you pay for.
 Comparing them is your job, and it is a five-second one.**
 
+### Finding out what *your* board cannot see
+
+The four collectors are the same everywhere. What differs from machine to
+machine is what else you are billed for, so this is a check you run on your own
+board rather than a list anyone can hand you.
+
+1. Open **Usage** and set the range to **`30d`**, or Custom with `2160` for
+   ninety days. **Do this first.** The breakdown only lists providers with spend
+   *inside the window*, so a job that runs weekly is invisible at `24h` — on the
+   machine these screenshots came from, one provider appears at `30d` and not at
+   `24h`.
+2. Read the **by provider** list under the cost.
+3. Compare it against the four the board collects: **Claude Code, Codex, Cursor,
+   OMP**.
+4. Anything in the list that is not one of those four is **billed and
+   unwatched** — real money, no row, no session, and nothing on the board
+   indicating it exists.
+
+**And this check has its own boundary, which is the same habit applied once
+more.** The list comes from your cost source, so it finds tools your cost source
+prices and the board does not collect. A tool that *neither* knows about is
+invisible to both — and if you have no cost source installed, there is no list
+and this check cannot run at all.
+
+So the last backstop is not on this board and never was: **it is your actual
+bill.** Compare that against the Usage total once, when you first set this up.
+If they agree, these two lists are the whole picture and you can stop checking.
+If they do not, the gap is the size of what nobody here can see.
+
 **The guarantee being built here: this product will tell you when a view cannot
 show you everything.** Not "show you less and look complete" — say so, and say
 how much is outside. The measurement already exists: ask the server for a window
