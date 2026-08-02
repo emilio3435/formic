@@ -57,6 +57,7 @@ describe("collector identity and usage truth", () => {
       total: 76_153,
       sessionTotal: 1_442,
       sessionCachedInput: 74_711,
+      sessionProcessed: 76_153,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -200,6 +201,7 @@ describe("collector identity and usage truth", () => {
       // Two calls of new work; the 74,716 of re-reads is carried separately.
       sessionTotal: 1_450,
       sessionCachedInput: 74_716,
+      sessionProcessed: 76_166,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -249,6 +251,7 @@ describe("collector identity and usage truth", () => {
          Cumulative input minus cached, plus output. */
       sessionTotal: 27_909,
       sessionCachedInput: 33_792,
+      sessionProcessed: 61_701,
       contextWindow: 258_400,
       scope: "latest-turn",
       provenance: "observed",
@@ -463,6 +466,7 @@ describe("collector identity and usage truth", () => {
       // No cache reads in this fixture, so consumption and size agree.
       sessionTotal: 50_790,
       sessionCachedInput: 0,
+      sessionProcessed: 50_790,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -545,6 +549,13 @@ describe("collector identity and usage truth", () => {
       sessionTotal: 89,
       // The re-reads those two calls made, under their own name: 30 + 7.
       sessionCachedInput: 37,
+      /* PROCESSED, the unit OpenBurnBar records: the same two calls at full
+         size, 100 + 26. Note it is the 126 the comment above calls "the old
+         value" — that number was never wrong, it was the wrong ANSWER to
+         "what did this consume". It is the right answer to "what did the
+         provider process", and it is now published under that name instead of
+         being mistaken for the other. */
+      sessionProcessed: 126,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
