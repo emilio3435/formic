@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildSnapshot } from "../src/server/snapshot";
+import { buildSnapshot, withPulse } from "../src/server/snapshot";
+import { PulseTracker } from "../src/server/pulse";
+import type { CollectedAgent } from "../src/server/types";
 
 /* README.md and ARCHITECTURE.md drift faster than anyone re-reads them. A label
    documented one afternoon was already wrong the next morning — "Show panes"
@@ -57,18 +59,48 @@ beforeAll(async () => {
   agentModel = await import("../src/web/agent-model.js");
 });
 
-const agentFixture = (o: Record<string, unknown> = {}) => ({
+
+/* A board built by the PRODUCT, from a described machine.
+
+   A hand-written payload is a shape nobody can check against reality: if the
+   server stops producing it, the assertion goes on passing about a board that
+   no longer exists. That is not theoretical — it is how the day-one screen
+   changed underneath four green assertions this afternoon.
+
+   So the doc-facing claims are driven end to end: buildSnapshot for the
+   snapshot, PulseTracker for the pulse, and only the MACHINE is described. */
+const producedBoard = (input: {
+  agents?: readonly CollectedAgent[];
+  cmuxReachable?: boolean;
+  cmuxErrors?: readonly string[];
+  cmuxAbsent?: boolean;
+  sourceAbsent?: Record<string, boolean>;
+  burn?: () => Promise<never>;
+}) => {
+  const now = new Date("2026-08-02T12:00:00.000Z");
+  const snapshot = buildSnapshot({
+    agents: input.agents ?? [],
+    surfaces: [],
+    archiveStore: { has: () => false, archive: async () => {} },
+    now,
+    ...(input.cmuxReachable === undefined ? {} : { cmuxReachable: input.cmuxReachable }),
+    ...(input.cmuxErrors ? { cmuxErrors: input.cmuxErrors } : {}),
+    ...(input.cmuxAbsent === undefined ? {} : { cmuxAbsent: input.cmuxAbsent }),
+    ...(input.sourceAbsent ? { sourceAbsent: input.sourceAbsent } : {}),
+  });
+  /* The burn reader throws, which is what a machine with no OpenBurnBar does —
+     the exact condition README's "unavailable, never $0" promise is about. */
+  const tracker = new PulseTracker(async () => { throw new Error("no cost source"); }, now.getTime());
+  tracker.observe(snapshot, now.getTime());
+  return withPulse(snapshot, tracker.report(now.getTime()));
+};
+
+const workingAgent: CollectedAgent = {
   id: "codex:pin", provider: "codex", sourceSessionId: "pin", displayName: "Pin",
-  programId: "p1", status: "running", activity: "working", controlState: "linked",
-  updatedAt: "2026-08-02T12:00:00.000Z", tokens: { provenance: "observed", total: 10 },
-  artifacts: [], gates: [], ...o,
-});
-const snapFixture = (o: Record<string, unknown> = {}) => ({
-  generatedAt: "2026-08-02T12:00:00.000Z",
-  controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
-  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
-  issues: [], programs: [{ id: "p1", name: "p1", agents: [agentFixture()] }], ...o,
-});
+  cwd: "/Users/me/project", status: "running", statusReason: "Fixture activity.",
+  startedAt: "2026-08-02T11:00:00.000Z", updatedAt: "2026-08-02T12:00:00.000Z",
+  tokens: { provenance: "unknown" }, artifacts: [], gates: [],
+} as CollectedAgent;
 
 describe("ARCHITECTURE.md stays true to the code it maps", () => {
   test("it names every module that exists, and every module it names exists", () => {
@@ -151,19 +183,29 @@ describe("README.md stays true to the product", () => {
        promise a stranger reads in the first fifteen seconds, so the strings
        behind it have to be strings the client actually renders. */
     expect(readme).toContain("`unavailable`, never `$0`");
-    /* Driven, not grepped: a burn payload carrying a null cost must RENDER the
-       word, and must never render a zero. */
-    const noCost = snapFixture({ pulse: { burn: { tokensPerMin: 10, windowMs: 300000, costLastHourUsd: null, costProvenance: "unavailable", coverage: { reporting: 1, eligible: 1, unknown: 0 } }, momentum: { working: 1, completionsLastHour: 0, observedWindowMs: 0, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900000 }, activity: { bucketMinutes: 5, windowMinutes: 60, observedSince: "x", buckets: [] } } });
+    /* Driven from the PRODUCER, not a hand-written pulse. The machine is
+       described — one working agent, no cost source — and PulseTracker decides
+       what a null cost looks like. A literal `costLastHourUsd: null` would
+       assert only that the client renders a shape someone typed; this asserts
+       that the shape a cost-less machine actually produces renders that way. */
+    const noCost = producedBoard({ agents: [workingAgent] });
     const burn = M.summaryWidgetData("burn", noCost, "live", "percent", [], false);
     expect(burn.sublabel, "a null cost stopped rendering as unavailable").toContain("cost unavailable");
     expect(burn.sublabel, "a null cost is being rendered as a zero").not.toContain("$0");
     expect(readme).toContain("no process evidence");
-    /* Driven: an ended agent with no process evidence must PRODUCE that chip.
-       This is the case README points a stranger at — a session that stopped
-       without proof either way is not reported as dead. */
-    const noEvidence = agentModel.livenessView(agentFixture({
-      activity: "ended", processState: "unknown", processAlive: undefined, processIds: [],
-    }));
+    /* Driven through the PRODUCER: a collected agent that never yielded process
+       evidence — no processAlive, no pids — must come out of buildSnapshot as
+       the row README points a stranger at. Describing the agent and asserting
+       the chip is a claim about the product; hand-writing `processState:
+       "unknown"` would only assert that the client renders a word someone
+       typed, and whether the server still produces that state would go
+       unchecked. */
+    const quiet = producedBoard({
+      agents: [{ ...workingAgent, status: "stale", statusReason: "Quiet for 45 minutes." } as CollectedAgent],
+    });
+    const quietRow = quiet.programs.flatMap((program) => program.agents)[0];
+    expect(quietRow?.processState, "a session with no process evidence stopped reading unknown").toBe("unknown");
+    const noEvidence = agentModel.livenessView(quietRow);
     expect(noEvidence?.label, "an ended agent with no evidence stopped reading as 'No process evidence'")
       .toBe("No process evidence");
   });
@@ -298,7 +340,11 @@ describe("QUICKSTART.md stays true to a first run", () => {
     /* The two cmux sentences and the Blocked verdict are what a monitoring-only
        install actually lands on, so drive that exact payload rather than
        grepping: cmux unreachable, everything else fine. */
-    const noCmux = snapFixture({ controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: ["gone"], staleSources: [] } });
+    const noCmux = producedBoard({
+      agents: [workingAgent],
+      cmuxReachable: false,
+      cmuxErrors: ["cmux terminal discovery exited 1: connection refused"],
+    });
     const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
     expect(quickstart).toContain("`Blocked`");
     expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
@@ -312,7 +358,8 @@ describe("QUICKSTART.md stays true to a first run", () => {
       .toMatch(/control-plane problems/i);
     expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
     // And the clear case QUICKSTART promises once cmux is running.
-    expect(M.summaryWidgetData("health", snapFixture(), "live", "percent", [], false).value).toBe("All clear");
+    expect(M.summaryWidgetData("health", producedBoard({ agents: [workingAgent], cmuxReachable: true }), "live", "percent", [], false).value)
+      .toBe("All clear");
     expect(quickstart).toContain("**Live**");
     expect(client).toContain('live: "Live"');
   });
