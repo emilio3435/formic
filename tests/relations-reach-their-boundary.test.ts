@@ -64,7 +64,14 @@ function board(agents: readonly CollectedAgent[], extra: Record<string, unknown>
   for (const [at, sessionTotal] of [[T0 - 2 * BUCKET_MS, 0], [T0 - BUCKET_MS + 60_000, 90_000]] as const) {
     tracker.observe(
       buildSnapshot({
-        agents: agents.map((a) => ({ ...a, tokens: { ...a.tokens, sessionTotal } })),
+        /* An agent that OMITS sessionTotal keeps omitting it. Forcing one onto
+           every agent made `reporting` and `eligible` move together in every
+           state, which is what left this relation unreachable and registered.
+           Omission is the only way an agent is eligible and not reporting. */
+        agents: agents.map((a) => ({
+          ...a,
+          tokens: a.tokens.sessionTotal === undefined ? a.tokens : { ...a.tokens, sessionTotal },
+        })),
         surfaces: [], archiveStore, now: new Date(at),
       }),
       at,
@@ -86,6 +93,16 @@ const POPULATION: readonly { label: string; snapshot: unknown }[] = [
     agent({ id: "codex:r1", sourceSessionId: "r1" }),
     agent({ id: "codex:r2", sourceSessionId: "r2", tokens: { provenance: "unknown" } } as Partial<CollectedAgent>),
     agent({ id: "codex:r3", sourceSessionId: "r3", tokens: { provenance: "unknown" } } as Partial<CollectedAgent>),
+  ]) },
+  /* Eligible but NOT reporting: provenance is observed, so the agent counts
+     toward eligible, and sessionTotal is absent, so it cannot count toward
+     reporting. The only shape that separates the two. */
+  { label: "an eligible agent reporting no session total", snapshot: board([
+    agent({ id: "codex:e1", sourceSessionId: "e1" }),
+    agent({ id: "codex:e2", sourceSessionId: "e2",
+      tokens: { provenance: "observed", total: 400_000, contextWindow: 1_000_000 } } as Partial<CollectedAgent>),
+    agent({ id: "codex:e3", sourceSessionId: "e3",
+      tokens: { provenance: "observed", total: 400_000, contextWindow: 1_000_000 } } as Partial<CollectedAgent>),
   ]) },
   { label: "one asking for a human", snapshot: board([agent({
     status: "attention",
@@ -141,13 +158,7 @@ const RELATIONS: readonly Relation[] = [
 /* Relations that genuinely cannot reach a case in this population, with the
    reason and what covers them instead. Same friction as the field register:
    adding an entry is meant to make somebody think. */
-const UNREACHABLE: Record<string, string> = {
-  "burn.coverage.reporting <= burn.coverage.eligible":
-    "This population cannot separate them: board() assigns the same sessionTotal to every agent on "
-    + "each observe, so an agent is eligible and reporting together or neither. Separating them needs "
-    + "an agent with provenance 'observed' and no sessionTotal, which this harness cannot express. "
-    + "Covered by tests/burn-rate-denominator.test.ts, which drives coverage through the tracker directly.",
-};
+const UNREACHABLE: Record<string, string> = {};
 
 interface Coverage { readonly tight: number; readonly strict: number; readonly distinctValues: number }
 
@@ -227,7 +238,7 @@ describe("a relation is only tested where it could have failed", () => {
 
        Asserted here so a future edit that simplifies the population fails
        loudly rather than quietly reducing every relation to a tautology. */
-    expect(POPULATION.length).toBeGreaterThanOrEqual(8);
+    expect(POPULATION.length).toBeGreaterThanOrEqual(9);
     expect(RELATIONS.length).toBeGreaterThanOrEqual(6);
 
     const shapes = new Set(POPULATION.map(({ snapshot }) => JSON.stringify(
