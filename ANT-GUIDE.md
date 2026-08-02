@@ -261,6 +261,32 @@ Treat any figure here as *spend inside the window you chose*, never as total
 spend. "Our 30-day cost" and "what this has cost us" are different questions,
 and only one of them has a button.
 
+**The same figure has a second boundary, and it is the one worth building a
+habit around.** The window narrows it in *time*; this narrows it in *which
+tools*. The board reads Claude Code, Codex, Cursor and OMP. Anything else you
+run that costs money — a scheduled job, a CLI added since, a provider someone
+set up on a Friday — spends real money and appears on the board nowhere: no row,
+no session, and **no gap where one should be**.
+
+**So read the provider list.** On the **Usage** tab, under the cost, is a
+breakdown by provider. That list comes from your billing source rather than from
+the board's collectors, so it names everything you are billed for whether or not
+the board can see it. **Any name there you cannot find as a row is a tool the
+board is not watching.** It takes five seconds and it is the only check that
+finds this.
+
+Health will not find it for you, and this is the part to understand rather than
+worry about. `4 of 4 collectors healthy` is counting the collectors the board
+*has*, and they are genuinely fine. A tool it was never taught to watch has no
+collector, so there is nothing to report as unhealthy — the green line is
+accurate and simply does not cover the question. On the machine these
+screenshots came from, two billed providers sit outside it, one of them a daily
+cron job.
+
+That is not a fault to report; it is the shape of the instrument. **The board
+tells you about what it watches. The provider list tells you what you pay for.
+Comparing them is your job, and it is a five-second one.**
+
 **The guarantee being built here: this product will tell you when a view cannot
 show you everything.** Not "show you less and look complete" — say so, and say
 how much is outside. The measurement already exists: ask the server for a window
@@ -415,8 +441,11 @@ want, and a bar appears letting you send one instruction to all of them (a
 purpose, so on a quiet board you may find nothing to tick.
 
 **Collector**
-: The part that reads each tool's log files — one per provider. When a collector
-cannot read its files, that provider's data goes stale and Health reports it.
+: The part that reads each tool's log files — one per provider **the board was
+taught about**. When a collector cannot read its files, that provider's data goes
+stale and Health reports it. A tool the board was never taught about has no
+collector at all, so it cannot go stale and cannot be reported — see *read the
+provider list*, above.
 
 **Snapshot**
 : One complete picture of every agent, rebuilt every few seconds and pushed to

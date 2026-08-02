@@ -1791,3 +1791,46 @@ describe("TODAY.md is honest about how young the verification is", () => {
     expect(arb, "the prefix rule lost its negative case").toMatch(/NOT a prefix does not match/i);
   });
 });
+
+/* The guide's job is to make someone competent, not worried, so the blind spot
+   is taught as a habit rather than filed as a defect: the cost figure has two
+   boundaries, the window and the provider set, and the reader is given the
+   five-second check that finds the second one. These pin the habit and the
+   honesty that makes it necessary — a guide that kept one without the other
+   would either alarm without helping or reassure without warrant. */
+describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("it names the second boundary on the cost figure", () => {
+    const g = guide();
+    expect(g, "the guide stopped saying the cost figure is bounded by which tools it watches")
+      .toMatch(/second boundary/i);
+    expect(g, "the guide stopped warning that unwatched spend leaves no gap behind")
+      .toMatch(/no gap where one should be/i);
+  });
+
+  test("it gives the reader the check rather than the grievance", () => {
+    const g = guide();
+    expect(g, "the guide stopped telling the reader to read the provider list")
+      .toMatch(/read the provider list/i);
+    expect(g, "the guide stopped saying the list comes from billing, not from collectors")
+      .toMatch(/from your billing source rather than from the board's collectors/i);
+    expect(g, "the guide stopped naming what an unmatched provider means")
+      .toMatch(/cannot find as a row is a tool the board is not watching/i);
+  });
+
+  test("it explains why a green health line does not cover this", () => {
+    /* Without this the reader concludes the health card is lying. It is not —
+       it is answering a narrower question accurately, which is the distinction
+       that keeps the guide from reading as a defect list. */
+    const g = guide();
+    expect(g, "the guide stopped explaining that the green line is accurate but narrower")
+      .toMatch(/accurate and simply does not cover the question/i);
+    expect(g, "the guide stopped saying an unwatched tool has no collector to fail")
+      .toMatch(/no collector, so there is nothing to report as unhealthy/i);
+    /* And the glossary must carry the same qualifier, since that is where a
+       reader looks up what a collector is. */
+    expect(g, "the Collector glossary entry lost the taught-about qualifier")
+      .toMatch(/one per provider \*\*the board was taught about\*\*/i);
+  });
+});
