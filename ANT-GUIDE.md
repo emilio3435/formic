@@ -338,8 +338,8 @@ record while looking whole is the same defect as a cost of `$0` that means
 
 **What that buys you is one number that means something.** Add a window to the
 spend before it and you get the whole recorded history — and the same whole
-whichever window you ask through. Measured on this machine at 17:21 on
-2026-08-02: **about $32,471 of total measured spend across the entire record**,
+whichever window you ask through. Measured on this machine at 23:21 on
+2026-08-02: **about $33,677 of total measured spend across the entire record**,
 identical to the cent from seven different windows between one day and 399, on
 both of the figures the payload reports.
 
