@@ -99,12 +99,30 @@ BurnBar is behind and we are not wrong. If it does not — if it falls between c
 boundaries, or exceeds our total — that is a real accounting disagreement and
 belongs in `collectors.ts`.
 
-That check needs per-call totals, which the snapshot does not publish today; it
-publishes only the session sum. **If the tests lane wants that check, exposing a
-per-call series alongside `sessionProcessed` is my lane's work and I will take
-it.** Until then the cheap correct change is the message: name incomplete
-external records as the first hypothesis when the board is high, and stop
-pointing at `collectors.ts` on a direction where it is the less likely cause.
+### This is now mechanical — the series is published
+
+`GET /api/debug/session-calls?agent=<id>` returns the board's per-call sizes and
+their cumulative sums. Verified live against the session in question:
+
+```
+calls      [35836, 38045, 38377, 44282, 44693, 45041, 46961]
+prefixSums [35836, 73881, 112258, 156540, 201233, 246274, 293235]
+                          ^ OpenBurnBar's 112,258 — call 3 of 7
+```
+
+`sessionProcessed` is now reduced FROM that series rather than off the rows
+separately, so a prefix check sums exactly the numbers the board totalled — one
+derivation, not two that agree today. Codex reports the series as **absent**
+rather than empty, because it publishes session-cumulative totals and has no
+call boundaries; `[]` would assert it made no calls.
+
+The series is deliberately not in the snapshot. A live snapshot is 2.25MB
+against a 2MB SSE backlog budget and the largest session here has 1,575 calls,
+so it is stripped where a CollectedAgent becomes an AgentSnapshot and served on
+demand instead.
+
+The failure message no longer names a culprit. It reports both figures, where
+each came from, the direction, and points here.
 
 ## The part that should not be lost
 
