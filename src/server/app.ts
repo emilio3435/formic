@@ -12,6 +12,7 @@ import {
   type AttentionStore,
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
+import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
 import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
@@ -784,6 +785,13 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           { status: 500, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
         );
       }
+    }
+    if (request.method === "GET" && url.pathname === "/api/debug/session-calls") {
+      const agentId = url.searchParams.get("agent");
+      if (!agentId) {
+        return responseError(400, "AGENT_REQUIRED", "Pass ?agent=<agent id> to read a session's per-call series.");
+      }
+      return sessionCallsResponse(dependencies.state.get(), agentId, SECURITY_HEADERS);
     }
     if (request.method === "GET" && url.pathname === "/api/debug/identity") {
       return identityDebugResponse(url, dependencies.state.get(), dependencies.state.surfaces?.() ?? [], SECURITY_HEADERS);

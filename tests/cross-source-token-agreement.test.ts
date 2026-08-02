@@ -104,12 +104,33 @@ beforeAll(async () => {
   available = joined.length > 0;
 });
 
-/** Names WHICH SIDE moved. A cross-source failure that reports only "these
-    differ" sends someone into the wrong codebase. */
+/* Says what a cross-source disagreement ESTABLISHES, which is less than it is
+   tempting to write. This message used to end
+   "OUR collector is high, look in src/server/collectors.ts", and the first time
+   it ever fired that attribution was wrong: the board's 293,235 was exact —
+   recomputed by hand from the raw transcript, without the collector — and
+   OpenBurnBar's 112,258 was the sum of that session's first three calls of
+   seven, its cumulative row having stopped advancing. See
+   docs/CROSS-SOURCE-DRIFT-FINDING.md.
+
+   A check that joins two independent records can establish THAT they differ and
+   by how much. It cannot establish which one is right; neither source is
+   privileged, and this one has no third record to break the tie. Naming a
+   culprit is therefore a claim the test has no evidence for, and a confident
+   wrong one costs more than silence — it sends whoever reads it into the wrong
+   codebase, which is the exact harm the message was written to prevent.
+
+   So it reports both figures, where each came from, and the direction, and it
+   stops there. */
 const describeDrift = ({ sessionId, board, burnbar, driftPct }: Joined): string =>
-  `${sessionId.slice(0, 12)}: this board counted ${board.toLocaleString()} and OpenBurnBar recorded `
-  + `${burnbar.toLocaleString()} (${driftPct.toFixed(1)}% ${board > burnbar ? "OVER" : "UNDER"} — `
-  + `${board > burnbar ? "OUR collector is high, look in src/server/collectors.ts" : "OUR collector is low, or burnbar saw calls we never attributed"})`;
+  `${sessionId.slice(0, 12)}: this board counted ${board.toLocaleString()} `
+  + `(per-call sizes summed from the session transcript) and OpenBurnBar recorded `
+  + `${burnbar.toLocaleString()} (its cumulative row for the same session id) — `
+  + `${driftPct.toFixed(1)}% apart, board ${board > burnbar ? "higher" : "lower"}. `
+  + `WHICH IS CORRECT IS NOT ESTABLISHED BY THIS TEST. Both are worth checking: `
+  + `GET /api/debug/session-calls?agent=<id> returns this board's per-call series, `
+  + `and a burnbar total equal to a PREFIX of it means burnbar stopped recording `
+  + `rather than that we overcounted. See docs/CROSS-SOURCE-DRIFT-FINDING.md`;
 
 describe("what this board counted is what a separate application recorded", () => {
   test("the comparison actually ran against both sources", () => {
@@ -147,11 +168,7 @@ describe("what this board counted is what a separate application recorded", () =
        keeps this marker satisfied instead of reporting "marked as failing but
        it passed" every time the server is down. */
     /* THE ASSERTION. It can fail because a program that has never heard of this
-       repository counted differently, which is true of nothing else here.
-
-       Reported per session with both numbers and the direction, so whoever
-       reads the failure knows whether to open our collector or ask what
-       burnbar saw. */
+       repository counted differently, which is true of nothing else here. */
     if (!available) throw new Error(`cross-source check did not run: ${unavailableReason}`);
     const disagreeing = joined
       .filter(({ driftPct }) => driftPct > PER_SESSION_TOLERANCE_PCT)

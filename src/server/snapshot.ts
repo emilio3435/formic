@@ -148,8 +148,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       : notificationSummary
         ? `Unread cmux notification: ${notificationSummary}`
         : source.statusReason;
+    /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
+       the one point a CollectedAgent becomes an AgentSnapshot, so there is a
+       single boundary to test rather than a rule to remember: the snapshot is
+       already 2.23MB against a 2MB SSE backlog budget, and the largest session
+       on this machine has 1,575 calls. It is served on demand from
+       /api/debug/session-calls, where the cost is paid by whoever asks. */
+    const { callSizes: _callSizes, ...publishable } = source;
     const agent: AgentSnapshot = {
-      ...source,
+      ...publishable,
       programId: program.id,
       status: archived ? "archived" : notification ? "attention" : source.status,
       statusReason: snapshotStatusReason,

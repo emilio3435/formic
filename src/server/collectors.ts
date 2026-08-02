@@ -237,6 +237,8 @@ function fallbackUpdatedAt(meta: ParseMetadata): string {
 }
 
 function makeAgent(input: {
+  /** Per-call processed sizes; see CollectedAgent.callSizes. */
+  callSizes?: readonly number[];
   provider: Provider;
   sourceSessionId: string;
   displayName?: string;
@@ -280,6 +282,7 @@ function makeAgent(input: {
     : undefined;
   return {
     id: `${input.provider}:${input.sourceSessionId}`,
+    callSizes: input.callSizes,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
     runtimeSessionId: input.runtimeSessionId,
@@ -339,6 +342,7 @@ function createOmpParser(): IncrementalParser {
   let sessionTotal = 0;
   let sessionCachedInput = 0;
   let sessionProcessed = 0;
+  const callSizes: number[] = [];
   /* Set when a usage record could not be read. The guard below `continue`s past
      such a record, which silently turns corruption into a believable SMALLER
      number: a session that burned more than a clean one reported exactly the
@@ -393,12 +397,15 @@ function createOmpParser(): IncrementalParser {
         sessionTotal += input + output + cacheWrite;
         sessionCachedInput += cachedInput;
         // The same rows summed cache-INCLUSIVE: BurnBar's unit, not ours.
-        sessionProcessed += input + output + cacheWrite + cachedInput;
+        const callSize = input + output + cacheWrite + cachedInput;
+        callSizes.push(callSize);
+        sessionProcessed += callSize;
       }
     },
     result(meta) {
       if (!session) return null;
       const agent = makeAgent({
+        callSizes: latestUsage ? callSizes : undefined,
         provider: "omp",
         sourceSessionId: session.id,
         displayName: title,
@@ -685,8 +692,15 @@ function createClaudeParser(): IncrementalParser {
          The identity holds today, and deriving it would make this field follow
          whatever those two mean later — which is exactly how a bridge to an
          outside source stops measuring what the outside source measures. */
-      const sessionProcessed = uniqueUsage.reduce((total, usage) => total + usageTotal(usage), 0);
+      /* The series, and the total derived from it. Previously the total was
+         reduced straight off the rows; computing it from the published series
+         instead means an external check that sums a PREFIX of these calls is
+         summing exactly the same numbers this board added up, rather than a
+         second derivation that happens to agree today. */
+      const callSizes = uniqueUsage.map(usageTotal);
+      const sessionProcessed = callSizes.reduce((total, size) => total + size, 0);
       return makeAgent({
+        callSizes: latestUsage ? callSizes : undefined,
         provider: "claude",
         sourceSessionId: identity.sessionId,
         runtimeSessionId,
