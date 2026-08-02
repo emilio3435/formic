@@ -290,6 +290,7 @@ describe("per day: cost divided by nothing at all, which cannot fire", () => {
     const medianDay = daily[Math.floor(daily.length / 2)] ?? 0;
 
     expect(byDay.size).toBeGreaterThan(1);
+    // provenance: shape — a sample-size floor against the 500-row cap, not a measurement.
     expect(rows.length).toBeGreaterThan(100);
     expect(worstDay).toBeGreaterThan(0);
     expect(worstDay).toBeGreaterThanOrEqual(medianDay);
