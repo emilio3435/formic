@@ -1556,3 +1556,77 @@ describe("a stale transcript is silence, not an ending", () => {
     expect(snapshot.totals).toMatchObject({ idle: 2, ended: 1, history: 1 });
   });
 });
+
+describe("a dead session is never given an instruction", () => {
+  /* Measured on the live board: six agents carried an attentionSignal and every
+     one had status "archived". Rows read "Answer the question it stopped on"
+     and "Answer it: cmux reports it is waiting on you" while the SAME row's
+     controls[] had focus, instruct and interrupt all disabled. Across 364 ended
+     agents not one could be focused, instructed or interrupted; the only control
+     ever enabled on them is `archive`, which dismisses the row rather than
+     answering it.
+
+     So the payload contradicted itself, and the frontend was about to wire
+     attentionSignal onto the attention surfaces — which would have turned a
+     quiet inconsistency into a loud instruction nobody can carry out. */
+  test("an archived agent that ended mid-question carries no signal and no next action", () => {
+    const asking = collected({
+      id: "codex:asked-then-died",
+      sourceSessionId: "asked-then-died",
+      status: "archived",
+      lastAgentClosing: "Publishing is your call. Should I roll the migration back?",
+      updatedAt: "2026-07-14T09:00:00.000Z",
+    });
+    const snapshot = buildSnapshot({
+      agents: [asking],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.activity).toBe("ended");
+    expect(agent?.attentionSignal).toBeUndefined();
+    expect(agent?.nextAction).toBeUndefined();
+    // The invariant behind the rule: nothing on this row can be answered.
+    expect(agent?.controls.filter(({ action }) => action !== "archive")
+      .every(({ enabled }) => !enabled)).toBe(true);
+  });
+
+  test("the same closing words on a live session still speak", () => {
+    // The control: silencing the dead must not silence the living.
+    const live = collected({
+      id: "codex:still-asking",
+      sourceSessionId: "still-asking",
+      lastAgentClosing: "Publishing is your call. Should I roll the migration back?",
+    });
+    const snapshot = buildSnapshot({
+      agents: [live],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.activity).not.toBe("ended");
+    expect(agent?.attentionSignal?.kind).toBe("question-pending");
+    expect(agent?.nextAction).toBeTruthy();
+  });
+
+  test("ended rows are counted as out of scope, not as coverage the layer earned", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:done", sourceSessionId: "done", status: "archived",
+          lastAgentClosing: "All landed.", updatedAt: "2026-07-14T09:00:00.000Z" }),
+        collected({ id: "codex:alive", sourceSessionId: "alive", lastAgentClosing: "All landed." }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    // Crediting skipped rows as "readable" would inflate the layer's apparent
+    // reach with sessions it deliberately never looks at.
+    expect(snapshot.attentionCoverage).toMatchObject({ agents: 2, ended: 1, readable: 1 });
+  });
+});

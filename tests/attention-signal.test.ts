@@ -116,43 +116,10 @@ describe("attention signal detectors", () => {
     expect(signal.kind).toBe("nothing-wanted");
   });
 
-  test("a died process whose work does not read as finished is flagged for a resume decision", () => {
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "died",
-      lastAgentMessage: "Rewriting the migration now; the first two tables are converted and the third",
-    }));
-
-    expect(signal.kind).toBe("stopped-mid-work");
-    expect(signal.nextAction).toContain("resume");
-  });
-
-  test("a died process that had already finished is left alone", () => {
-    // Exiting after the work landed is not an incident, and the board must not
-    // ask for a decision that has already been made.
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "died",
-      lastAgentMessage: "All 18 guards pass and the branch is committed. Done.",
-    }));
-
-    expect(signal.kind).toBe("nothing-wanted");
-  });
-
-  test("a clean exit is never stopped-mid-work, whatever the transcript says", () => {
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "exited",
-      lastAgentMessage: "Converting the third table and then",
-      transcriptEndedCleanly: true,
-    }));
-
-    expect(signal.kind).toBe("nothing-wanted");
-  });
-
   test("an ordinary finished session says nothing at all", () => {
     /* This is the 90% case. Under the old layer every one of these rows read
-       "Review this session in history." */
+       "Review this session in history." It is now skipped before any detector
+       runs: an ended session cannot be answered, so it is never asked. */
     const signal = detectAttentionSignal(input({
       activity: "ended",
       processState: "exited",
@@ -160,7 +127,7 @@ describe("attention signal detectors", () => {
       transcriptTail: "No source→sink path with a plausible attacker-controllable impact.",
     }));
 
-    expect(signal).toEqual({ kind: "nothing-wanted" });
+    expect(signal).toEqual({ kind: "out-of-scope" });
   });
 
   test("an agent with no text at all reports that it could not read, not that all is well", () => {
@@ -219,51 +186,6 @@ describe("fork detection", () => {
        choice on the board that the operator never has to make. */
     const signal = detectAttentionSignal(input({
       lastAgentClosing: "I checked whether the cache or the index was stale, and it was the index.",
-    }));
-
-    expect(signal.kind).toBe("nothing-wanted");
-  });
-});
-
-describe("unlanded work detection", () => {
-  test("an ended session that names leftover work asks for a decision", () => {
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "exited",
-      lastAgentClosing: "Three of the five migrations are converted. Still need to do the audit tables and the backfill.",
-    }));
-
-    expect(signal.kind).toBe("exited-unlanded");
-    expect(signal.nextAction).toContain("unfinished");
-  });
-
-  test("an ended session that says it finished is left alone", () => {
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "exited",
-      lastAgentClosing: "All five migrations converted and committed. Done.",
-    }));
-
-    expect(signal.kind).toBe("nothing-wanted");
-  });
-
-  test("leftover work is inferred from words, never from a missing completion phrase", () => {
-    /* An ended session whose closing line simply does not contain "done" is not
-       evidence of unfinished work. Inferring from absence is how the old layer
-       ended up speaking on nine rows out of ten. */
-    const signal = detectAttentionSignal(input({
-      activity: "ended",
-      processState: "exited",
-      lastAgentClosing: "The parser now handles the nested case and the fixtures were regenerated.",
-    }));
-
-    expect(signal.kind).toBe("nothing-wanted");
-  });
-
-  test("a live session naming leftover work is not flagged: it is still working on it", () => {
-    const signal = detectAttentionSignal(input({
-      activity: "working",
-      lastAgentClosing: "Still need to do the audit tables.",
     }));
 
     expect(signal.kind).toBe("nothing-wanted");
@@ -351,13 +273,28 @@ describe("attentionFieldsFor", () => {
       .toBe("Review the failure and choose a repair.");
     expect(attentionFieldsFor(input(), "blocked", "linked").nextAction)
       .toBe("Resolve the reported blocker.");
-    expect(attentionFieldsFor(input(), "healthy", "quarantined").nextAction)
-      .toContain("identity conflict");
+  });
+
+  test("a quarantined agent is not told to resolve a conflict that may not exist", () => {
+    /* Measured live: this fallback read on 22 of 26 live rows — one identical
+       sentence on almost every agent — and it was false. All 22 were
+       quarantined by cwd ambiguity ("26 active sources share this cwd") while
+       controlHealth.errors held ZERO identity conflicts. A real conflict is
+       reported once, as the system:cmux-identity-conflicts issue with the
+       sessions it actually blocks; repeating it per row added no information
+       and cost the column its credibility. */
+    expect(attentionFieldsFor(input(), "healthy", "quarantined")).toEqual({});
   });
 
   test("an ended quarantined session is not told to fix controls it will never use", () => {
     const fields = attentionFieldsFor(input({ activity: "ended" }), "healthy", "quarantined");
     expect(fields).toEqual({});
+  });
+
+  test("an ended failed session is not told to choose a repair either", () => {
+    // The board already shows outcome: failed. A dead row cannot be repaired,
+    // and every control on it is disabled.
+    expect(attentionFieldsFor(input({ activity: "ended" }), "failed", "linked")).toEqual({});
   });
 
   test("a healthy working session gets no directive and no signal", () => {
@@ -473,5 +410,36 @@ describe("self-reference", () => {
     }));
 
     expect(signal.kind).toBe("handoff-stated");
+  });
+});
+
+describe("coverage preconditions are bounded by scope", () => {
+  test("an ended agent's notification is not counted as a detector that could have fired", () => {
+    /* Measured live: withNotification read 2 against signals {}, which looks
+       like two broken detectors. Both were archived rows, skipped before the
+       notification was ever read — a capability scope had already removed. */
+    const coverage = emptyAttentionCoverage();
+    recordAttention(
+      coverage,
+      input({ activity: "ended", attentionNotification: "Claude needs your permission" }),
+      "healthy",
+      "linked",
+    );
+
+    expect(coverage.ended).toBe(1);
+    expect(coverage.preconditions.withNotification).toBe(0);
+  });
+
+  test("a live agent's notification still counts, and still fires", () => {
+    const coverage = emptyAttentionCoverage();
+    const fields = recordAttention(
+      coverage,
+      input({ activity: "idle", attentionNotification: "Claude needs your permission" }),
+      "healthy",
+      "linked",
+    );
+
+    expect(coverage.preconditions.withNotification).toBe(1);
+    expect(fields.attentionSignal?.kind).toBe("permission-requested");
   });
 });

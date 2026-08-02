@@ -210,34 +210,37 @@ describe("when a detector does speak, it quotes the agent", () => {
     expect(quoted.length).toBeGreaterThan(0);
   });
 
-  test("a clean exit is never read as stopping mid-work", () => {
-    /* transcriptEndedCleanly is authoritative: the source recorded that the
-       session finished. Reading a finished session as interrupted would put
-       "decide whether to resume it" on rows that need nothing — filler again,
-       just with a narrower trigger. */
+  test("an ended session carries nothing at all, whatever its transcript says", () => {
+    /* Measured live: six agents carried a signal and every one was archived,
+       reading "Answer the question it stopped on" while their own controls[]
+       had focus, instruct and interrupt ALL disabled. Across 364 ended agents
+       not one could be focused, instructed or interrupted — the only control
+       ever enabled on them is `archive`, which dismisses the row rather than
+       answering it. An instruction nobody can carry out is worse than silence,
+       so a dead session is skipped before any detector runs. */
     const signal = detectAttentionSignal({
-      transcriptTail: SAYS_NOTHING,
-      lastAgentMessage: SAYS_NOTHING,
+      transcriptTail: "Should I roll this back?",
+      lastAgentClosing: "Publishing is your call. Should I roll this back?",
       activity: "ended",
       processState: "died",
-      transcriptEndedCleanly: true,
     });
 
-    expect(signal.kind).not.toBe("stopped-mid-work");
-    expect(signal.kind).toBe("nothing-wanted");
+    expect(signal.kind).toBe("out-of-scope");
+    expect(signal.nextAction).toBeUndefined();
+    expect(Object.keys(signal)).toEqual(["kind"]);
   });
 
-  test("a died process with unfinished work does speak, so the silence above is a choice", () => {
+  test("the same words on a LIVE session do speak, so the silence above is a choice", () => {
     // The control. Without it, every silence assertion here would also pass on
     // a build where no detector fired at all.
     const signal = detectAttentionSignal({
-      transcriptTail: SAYS_NOTHING,
-      lastAgentMessage: SAYS_NOTHING,
-      activity: "ended",
-      processState: "died",
+      transcriptTail: "Should I roll this back?",
+      lastAgentClosing: "Publishing is your call. Should I roll this back?",
+      activity: "idle",
+      processState: "running",
     });
 
-    expect(signal.kind).toBe("stopped-mid-work");
+    expect(signal.kind).toBe("question-pending");
     expect(signal.nextAction).toBeTruthy();
   });
 });

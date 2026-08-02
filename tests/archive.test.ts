@@ -168,7 +168,13 @@ describe("durable archive state", () => {
        the attention layer — reported honestly as "could not read", but
        avoidably so. The round trip has to carry it. */
     expect(archived.lastAgentClosing).toBe(source.lastAgentClosing);
-    expect(archived.attentionSignal?.kind).toBe("handoff-stated");
+    /* The closing line survives as EVIDENCE a human can read in the drawer, not
+       as a signal. An archived row carries no attentionSignal at all now: its
+       controls are disabled, so any instruction on it would be one nobody could
+       carry out. Round-tripping the words is still worth doing; asking the
+       operator to answer them is not. */
+    expect(archived.attentionSignal).toBeUndefined();
+    expect(archived.nextAction).toBeUndefined();
     expect(reopened.archivedAgents()[0]?.allowCwdFallback).toBeFalse();
     expect(archived.controls.every((control) => !control.enabled)).toBeTrue();
   });

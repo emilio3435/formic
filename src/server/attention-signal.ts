@@ -45,13 +45,14 @@ export type AttentionSignalKind =
   | "question-pending"
   /** The agent proceeded on a stated assumption and invited correction. */
   | "assumption-stated"
-  /** The process is gone and the transcript does not read as finished. */
-  | "stopped-mid-work"
-  /** It ended while saying, in its own words, that work was left over. */
-  | "exited-unlanded"
   /* The agent's closing words were readable and say nothing that wants a human.
      Silence here is a finding: we looked. */
   | "nothing-wanted"
+  /* The session has ended. Nothing is asked of anyone, because nothing can be:
+     every control on an ended row is disabled. Counted separately from the two
+     silences below so a quiet board can distinguish "we looked" from "there was
+     nothing to look at" from "this one is finished". */
+  | "out-of-scope"
   /* There was nothing to read — no attributed closing text, or only machine
      output. The layer has NO OPINION, which is not the same as "all clear", and
      must never be counted as a correct negative. Measured by the GPT lane
@@ -182,26 +183,6 @@ const HANDOFF_PATTERNS: readonly RegExp[] = [
   /\b(?:one|two|three|four|a few|\d+) (?:things?|items?|decisions?|calls?) for you\b/i,
 ];
 
-/* Positive evidence that work was left over. Deliberately NOT "no completion
-   marker found": absence of a phrase is not evidence of unfinished work, and
-   inferring from absence is how a detector starts firing on nine rows out of
-   ten again. The agent has to say it. */
-const UNLANDED_PATTERNS: readonly RegExp[] = [
-  /\bstill (?:need|needs|needed|to do|outstanding|pending)\b/i,
-  /\bnot (?:yet )?(?:done|finished|landed|committed|merged|complete)\b/i,
-  /\b(?:have|has) not yet\b|\bhaven'?t yet\b/i,
-  /\bnext steps?\b\s*[:—-]/i,
-  /\b(?:remaining|outstanding) (?:work|tasks?|items?|findings?)\b/i,
-  /\bstill in progress\b/i,
-  /\bwill (?:continue|resume|pick (?:this|it) up)\b/i,
-  /\bran out of (?:time|context|budget)\b/i,
-];
-
-/* Closing lines that mean the agent finished rather than stalled. Used only to
-   keep "stopped-mid-work" from firing on a session that ended on purpose. */
-const COMPLETION_PATTERN =
-  /\b(?:done|complete[d]?|finished|landed|shipped|committed|all (?:tests? )?pass(?:ing|ed)?|no (?:issues|vulnerabilities|findings)|nothing (?:further|else))\b/i;
-
 function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\r/g, "").trim();
 }
@@ -299,13 +280,29 @@ export function readableClosingText(input: AttentionSignalInput): string | undef
   return spoken;
 }
 
-type ActionableKind = Exclude<AttentionSignalKind, "nothing-wanted" | "not-readable">;
+type ActionableKind = Exclude<AttentionSignalKind, "nothing-wanted" | "not-readable" | "out-of-scope">;
 
 function isActionable(kind: AttentionSignalKind): kind is ActionableKind {
-  return kind !== "nothing-wanted" && kind !== "not-readable";
+  return kind !== "nothing-wanted" && kind !== "not-readable" && kind !== "out-of-scope";
 }
 
 export function detectAttentionSignal(input: AttentionSignalInput): AttentionSignal {
+  /* A dead session cannot be answered, so it is never asked anything.
+
+     Measured on the live board: six agents carried a signal and every one was
+     archived — rows reading "Answer the question it stopped on" whose own
+     controls[] had focus, instruct and interrupt ALL disabled. The payload
+     contradicted itself on the same row. Across 364 ended agents, not one could
+     be focused, instructed or interrupted; the only control ever enabled on them
+     is `archive`, which dismisses the row rather than answering it.
+
+     So this is not a scope preference, it is what the rest of the server already
+     says: an ended agent is a fact the board shows, not a request a human can
+     act on. Work stranded by a session that died is real, but the actionable
+     object there is the branch, and /api/publish reports it on a surface where
+     the operator can actually do something. */
+  if (input.activity === "ended") return { kind: "out-of-scope" };
+
   const marker = clean(input.attentionNotification) || undefined;
   if (marker) {
     return PERMISSION_PATTERN.test(marker)
@@ -368,36 +365,6 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
     };
   }
 
-  /* Only "died" counts. A clean exit is an agent that finished, and an unknown
-     process state is exactly the case this file refuses to guess about. */
-  if (input.activity === "ended" && input.processState === "died" && !input.transcriptEndedCleanly) {
-    const finished = COMPLETION_PATTERN.test(closing);
-    if (!finished) {
-      return {
-        kind: "stopped-mid-work",
-        nextAction: "Decide whether to resume it: the process died before the work read as finished.",
-        ...(closing ? { evidence: truncate(closing) } : {}),
-      };
-    }
-  }
-
-  /* Ended while saying work was left over. Weaker than a dead process — the
-     session may have exited perfectly cleanly — so it needs the agent to have
-     SAID so, and it is checked after the crash case which has harder evidence. */
-  if (input.activity === "ended") {
-    const spokenAll = clean(input.lastAgentClosing) || clean(input.lastAgentMessage);
-    const unlanded = spokenAll && !isMachineText(spokenAll)
-      ? UNLANDED_PATTERNS.find((pattern) => pattern.test(spokenAll))
-      : undefined;
-    if (unlanded && !COMPLETION_PATTERN.test(closing)) {
-      return {
-        kind: "exited-unlanded",
-        nextAction: "Pick up the work it named as unfinished, or close it out.",
-        evidence: truncate(spokenAll),
-      };
-    }
-  }
-
   /* Nothing wanted, or nothing to read? The board stays silent either way, but
      they are different facts and only one of them is a finding. Conflating them
      let 96.6% of the fleet's silence look like "we looked and it is fine" when
@@ -433,6 +400,8 @@ export interface AttentionCoverage {
   readable: number;
   /** Agents where the layer had nothing to read and therefore has no opinion. */
   notReadable: number;
+  /** Ended sessions, skipped by design: nothing on them can be acted on. */
+  ended: number;
   /** Fire count per actionable detector; absent kinds fired zero times. */
   signals: Record<string, number>;
   preconditions: {
@@ -448,6 +417,7 @@ export function emptyAttentionCoverage(): AttentionCoverage {
     agents: 0,
     readable: 0,
     notReadable: 0,
+    ended: 0,
     signals: {},
     preconditions: { withNotification: 0, withProvenDeath: 0 },
   };
@@ -463,13 +433,25 @@ export function recordAttention(
 ): Pick<AgentSnapshot, "nextAction" | "attentionSignal"> {
   const signal = detectAttentionSignal(input);
   coverage.agents += 1;
-  if (signal.kind === "not-readable") coverage.notReadable += 1;
+  /* Ended rows are not evaluated at all, so crediting them as "readable" would
+     inflate the layer's apparent coverage with sessions it deliberately skips.
+     They get their own count. */
+  if (signal.kind === "out-of-scope") coverage.ended += 1;
+  else if (signal.kind === "not-readable") coverage.notReadable += 1;
   else coverage.readable += 1;
   if (isActionable(signal.kind)) {
     coverage.signals[signal.kind] = (coverage.signals[signal.kind] ?? 0) + 1;
   }
-  if (clean(input.attentionNotification)) coverage.preconditions.withNotification += 1;
-  if (input.processState === "died") coverage.preconditions.withProvenDeath += 1;
+  /* Preconditions bound what the detectors COULD have found, so they count only
+     rows that were actually evaluated. An ended agent is skipped before the
+     notification is ever read, so counting its notification here would advertise
+     a capability that scope had already removed — measured live as
+     withNotification: 2 against signals: {}, which reads like a broken detector
+     rather than a row that was correctly out of scope. */
+  if (signal.kind !== "out-of-scope") {
+    if (clean(input.attentionNotification)) coverage.preconditions.withNotification += 1;
+    if (input.processState === "died") coverage.preconditions.withProvenDeath += 1;
+  }
   return fieldsFrom(signal, input, outcome, controlState);
 }
 
@@ -500,11 +482,29 @@ function fieldsFrom(
     };
   }
 
+  /* The structural fallbacks are silenced for ended sessions too. "Review the
+     failure and choose a repair" reads as a directive, but there is nothing on
+     a dead row to repair — the board already shows outcome: failed, and the
+     repair happens somewhere else entirely. */
+  if (input.activity === "ended") return {};
+
   // Structural states that name a repair even when the text does not.
   if (outcome === "failed") return { nextAction: "Review the failure and choose a repair." };
   if (outcome === "blocked") return { nextAction: "Resolve the reported blocker." };
-  if (controlState === "quarantined" && input.activity !== "ended") {
-    return { nextAction: "Resolve the cmux identity conflict to enable controls." };
-  }
+  /* "Resolve the cmux identity conflict to enable controls." used to live here
+     and was measured on the live board reading on 22 of 26 live rows — one
+     identical sentence on almost every agent, which is the filler pattern this
+     layer exists to remove, relocated into the structural fallback.
+
+     It was also false. Every one of those 22 was quarantined by cwd ambiguity
+     ("26 active sources share this cwd"), while controlHealth.errors held ZERO
+     identity conflicts. The directive named the wrong cause, and its real cause
+     — many agents deliberately sharing one checkout — is not something an
+     operator resolves; it is how the swarm is run.
+
+     A genuine identity conflict is still reported, once, as the
+     system:cmux-identity-conflicts issue with the sessions it actually blocks.
+     Saying it again on every row adds no information and costs the column its
+     credibility. */
   return {};
 }

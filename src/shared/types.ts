@@ -186,9 +186,7 @@ export interface AgentSnapshot {
       | "fork-unresolved"
       | "handoff-stated"
       | "question-pending"
-      | "assumption-stated"
-      | "stopped-mid-work"
-      | "exited-unlanded";
+      | "assumption-stated";
     evidence?: string;
   };
   modelPolicy?: ModelPolicy;
@@ -404,6 +402,8 @@ export interface AttentionCoverageSummary {
   agents: number;
   readable: number;
   notReadable: number;
+  /** Ended sessions, skipped by design: nothing on them can be acted on. */
+  ended: number;
   signals: Record<string, number>;
   preconditions: { withNotification: number; withProvenDeath: number };
 }
