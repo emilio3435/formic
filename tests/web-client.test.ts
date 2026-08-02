@@ -4504,6 +4504,31 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* GPT day review §2: the client recomputed contextPct from tokens.total while
+     the server shipped its own on 392 of 432 agents. They agreed — which is the
+     dangerous kind of agreement, two derivations that happen to match. Token
+     accounting is being corrected server-side and tokens.total is the input the
+     client walk divides by, so a corrected server figure beside an uncorrected
+     client one is the needsYou seam again, one field over. */
+  test("(2c) one agent's context percentage comes from the server when it ships one", () => {
+    const served = agent({ contextPct: 42, tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } });
+    // The walk would say 90; the wire says 42, and the wire wins.
+    expect(M.contextUsage(served.tokens).pct).toBe(90);
+    expect(M.agentContextPct(served)).toBe(42);
+
+    // Falls back to the walk only when the server reported nothing.
+    const walkOnly = agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } });
+    expect(M.agentContextPct(walkOnly)).toBe(90);
+
+    /* The walk accepts only latest-turn scope, so it can suppress a reading the
+       server considers authoritative. Session scope now survives. */
+    const sessionScope = agent({ contextPct: 37, tokens: { provenance: "observed", scope: "session", total: 5, contextWindow: 100 } });
+    expect(M.contextUsage(sessionScope.tokens)).toBeNull();
+    expect(M.agentContextPct(sessionScope)).toBe(37);
+
+    expect(M.agentContextPct(agent({ tokens: { provenance: "unknown" } }))).toBeNull();
+  });
+
   /* GPT day review 3.1: the rail said "No completion data yet" while
      completionsLastHour was 2. The sentence was gated on observedWindowMs, so a
      restarted tracker reported NOTHING KNOWN rather than this-much-known. A

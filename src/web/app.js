@@ -956,6 +956,7 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
+  agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
@@ -3719,6 +3720,27 @@ function rosterName(displayName, program) {
   return trimmed || full;
 }
 
+/* The authoritative context percentage for ONE agent.
+
+   The server computes contextPct per agent (392 of 432 carry it on the live
+   board) and the client was recomputing its own from tokens.total via
+   contextUsage. They agree today — measured, 0 disagreements — but that is the
+   dangerous kind of agreement: two derivations that happen to match. The client
+   walk also accepts ONLY latest-turn scope, so it can suppress a reading the
+   server considers authoritative.
+
+   It matters now rather than eventually: token accounting is being corrected
+   server-side (a session reporting 391.4M when ~99% of that magnitude is cache
+   re-reads), and tokens.total is exactly the input the client walk divides by. A
+   corrected contextPct beside an uncorrected client recomputation is the same
+   seam that produced the needsYou mess, one field over. Server first; the walk
+   stays for the absolute figures it alone can build. */
+function agentContextPct(agent) {
+  if (agent && Number.isFinite(agent.contextPct)) return agent.contextPct;
+  const walked = contextUsage(agent && agent.tokens);
+  return walked ? walked.pct : null;
+}
+
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -3846,7 +3868,8 @@ function renderAgentRow(agent, program, opts = {}) {
   // vitals-band precedent. Access + the naming detail fold into the aria-label.
   const ctxUsage = contextUsage(agent.tokens);
   const modelText = modelShort(agent.model) || "not reported";
-  const modelCtx = ctxUsage ? modelText + " · " + ctxUsage.pct + "%" : modelText;
+  const ctxPct = agentContextPct(agent);
+  const modelCtx = ctxPct != null ? modelText + " · " + ctxPct + "%" : modelText;
   const tokens = tokenSummary(agent.tokens);
 
   const instruments = el("span", { class: "row-instruments" },
