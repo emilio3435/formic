@@ -240,7 +240,23 @@ function programRollupCells(agents, rollup = null) {
          the fix's clothes. When they do not add up, the total is the only
          claim that is true. */
       : [{ value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" }]),
-    { value: String(r.working), label: "working" },
+    /* "1 agent · 1 working" is one fact wearing two cells, and at n=1 the
+       operator can see the entire program in the single row beneath it. The
+       rule already lives in this function — `0 alerts` is suppressed at zero —
+       it was simply never extended to a count that is trivially implied,
+       because at 400 agents the case does not arise. (Quiet-board audit §3.)
+
+       Deliberately narrower than the audit's "or when it equals the agent
+       count". At n>=2, "2 agents · 2 working" is NOT a restatement: two agents
+       could be none working, so the cell carries the fact that all of them are
+       live-working, and a collapsed program does not show the rows that would
+       say so otherwise. And "1 agent · 0 working" stays, because that cell is
+       what proves the client derives this count itself rather than trusting a
+       server figure — there is a test pinning exactly that drift. Only the
+       tautology goes. */
+    ...(agents.length === 1 && r.working === 1
+      ? []
+      : [{ value: String(r.working), label: "working" }]),
     ...(r.needsYou > 0
       /* Audit §11: "0 alerts" per program is one of three widgets that spent
          pixels asserting nothing needs you. An operator who learns a counter
@@ -267,7 +283,14 @@ function programRollupCells(agents, rollup = null) {
        row. Same vocabulary as the drawer's "used this session".
        (GPT lane day-review 4.5, downgraded to relayed-unverified — verified
        here, and it holds.) */
-    cells.push({ value: fmtTok(total), label: "session tokens", key: "tokens" });
+    /* One agent means no aggregation to explain the gap. This header reads
+       "2.2M session tokens" beside its ONLY row reading "826k latest call" —
+       thirteen-fold apart, with the whole population visible. At 400 agents
+       "the header sums many rows" is at least an available explanation; at n=1
+       there is nothing between the two numbers and the operator cannot
+       reconcile them. The row already carries the figure, in the more honest
+       unit, so the header stops competing with it. (Quiet-board audit §1.) */
+    if (agents.length > 1) cells.push({ value: fmtTok(total), label: "session tokens", key: "tokens" });
   }
   return cells;
 }
@@ -3015,10 +3038,30 @@ function renderTabs() {
        active and I implemented it; that was right about the restated counts and
        wrong about the lookback, which was the one thing only that line said. The
        disclosure belongs on the count it qualifies. (Day review 3.2.) */
-    const window = count != null && lookbackApplies(view) && state.lookbackHours != null
+    /* A lookback qualifies a number. There is no number to qualify at zero, and
+       "Idle 0 · 6h" spends three glyphs saying a window narrowed nothing. */
+    const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
       ? " · " + lookbackLabel(state.lookbackHours)
       : "";
     countNode.textContent = count == null ? "" : String(count) + window;
+    /* Zero counts go quiet rather than disappearing.
+
+       At n=3 the navigation reads "Needs you 0 | Now 3 | Working 3 | Idle 0 |
+       History 0" — three of five tabs at zero, and a row of zero counters is a
+       new operator's first impression of the interface. The audit asked for
+       Idle and History to be HIDDEN at zero, matching the summary band.
+
+       I disagree, for the reason I gave when rejecting the same proposal for the
+       Needs-you tab: a band cell is an instrument and a tab is a destination. A
+       tab that appears only once it has content never gets learned, the nav
+       changes shape underneath the operator as the fleet grows, and on the quiet
+       board — the one case this is meant to serve — it would teach a newcomer
+       that the board has three views when it has five.
+
+       Weight is the honest lever, and it is the counter-proposal I offered that
+       lane at the time: the tab keeps its place and its label, the zero recedes.
+       Nothing is hidden and nothing shouts. */
+    countNode.classList.toggle("is-zero", count === 0);
     // The Alerts (needs-you) tab count takes ember ink when there is anything to
     // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
     if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
