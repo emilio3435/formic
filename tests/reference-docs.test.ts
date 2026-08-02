@@ -1179,6 +1179,34 @@ describe("the cost window's limits are documented as the code enforces them", ()
    state the shape, which does not age, and to say explicitly that any specific
    ratio is stale. This pins that no such figure creeps back. */
 describe("no one-off measurement is presented as a standing fact", () => {
+  test("the cost sections quote no dollar figure while the two halves disagree", () => {
+    /* The in-window total is de-duplicated and priorSpend is not, so any pair
+       printed together is inconsistent by construction, and single figures move
+       as the fix lands. Direction is durable; magnitude is not. The board's own
+       example line and the "$0 means unknown" illustration are exempt — neither
+       is a measurement of this fleet. */
+    /* Anchor on the SECTION, not on the caveat's cross-reference to it — the
+       first occurrence of that phrase is a link at the top of the file, and
+       slicing from it swept in the summary band's example line. */
+    const guide = read("ANT-GUIDE.md");
+    /* Guard BOTH places cost is discussed. A figure slipped into the opening
+       caveat while a pin watching only the Usage section reported green. */
+    const costArea = guide.slice(
+      guide.indexOf("**Usage has its own windows"),
+      guide.indexOf("Treat any figure here"),
+    );
+    const caveat = guide.slice(
+      guide.indexOf("Cost totals were double-counting"),
+      guide.indexOf("Archive keeps things for less time"),
+    );
+    expect(costArea.length, "the cost section anchors moved").toBeGreaterThan(200);
+    expect(caveat.length, "the caveat anchors moved").toBeGreaterThan(200);
+    expect(caveat, "a dollar measurement came back into the cost caveat")
+      .not.toMatch(/\$[0-9][0-9,.]*/);
+    expect(costArea, "a dollar measurement came back into the cost section")
+      .not.toMatch(/\$[0-9][0-9,.]*/);
+  });
+
   test("the token-scale warning describes a shape, not a multiplier", () => {
     const g = read("ANT-GUIDE.md").replace(/\s+/g, " ");
     const warning = g.slice(g.indexOf("They are not the same unit"), g.indexOf("do not add up the column"));
@@ -1273,9 +1301,27 @@ describe("what the docs promise about incompleteness", () => {
     /* Blockquote markers survive whitespace-flattening, so "> " lands mid
        sentence; strip them before matching prose inside a quote block. */
     const prose = g.replace(/>\s*/g, "");
-    expect(prose, "the guide stopped saying which way the correction goes")
-      .toMatch(/expected to go down, not up/i);
-    expect(g, "the guide stopped distinguishing what was recorded from what was spent")
+    /* No alternations here. Three mutations slipped past OR-joined patterns
+       today: inverting one phrase while its twin carried the match. Each claim
+       gets its own assertion so a reworded half cannot be covered by the other. */
+    expect(prose, "the guide stopped saying a figure may have gone DOWN")
+      .toMatch(/gone \*\*down\*\*/i);
+    expect(prose, "the guide stopped ruling out an upward correction")
+      .toMatch(/never adds spend/i);
+    expect(prose, "the guide stopped describing the de-duplication mechanism")
+      .toMatch(/running total \*\*once\*\*/i);
+    /* The dedup landed for the in-window total but NOT for priorSpend, so
+       window + prior does not reconcile: measured across 30/60/90/120-day
+       windows the same record totalled four different amounts. A reader who
+       adds the two numbers gets a figure that depends on which window they
+       happened to pick, so the guide must tell them not to. */
+    expect(prose, "the guide stopped warning that the two cost figures cannot be added")
+      .toMatch(/do not add the two together/i);
+    expect(prose, "the guide stopped saying the before-window figure is not de-duplicated yet")
+      .toMatch(/not de-duplicated yet/i);
+    expect(prose, "the guide stopped saying the before-window figure reads high")
+      .toMatch(/reads\s+high/i);
+    expect(prose, "the guide stopped distinguishing what was recorded from what was spent")
       .toMatch(/what was recorded.*not the same as.*what was spent/i);
     const burnbar = read("src/server/burnbar.ts");
     expect(burnbar, "aggregatedRows stopped being a bare count — re-check whether the fix landed")

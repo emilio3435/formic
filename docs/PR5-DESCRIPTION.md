@@ -31,36 +31,15 @@ The same file already did tokens correctly ten lines away: `tokensKnown` is
 emitted as a **qualifier beside** the value, not a **gate on** it. Cost now
 follows that precedent.
 
-### An "invocation" was not always a call — open, not closed
+### An "invocation" was not always a call
 
-One day held 26% of the headline: $3,514.24 across 58 invocations — **$59.91
-each** against a fleet norm of $0.32–$1.93. A physical check settled it: each
-would have had to process 47.6M tokens against a 1M-token context window.
+A single day held roughly a quarter of the 30-day headline, at a per-invocation
+average some thirty times the fleet norm. A **physical** check settled that it
+could not be real spend: each of those invocations would have had to process
+tens of millions of tokens against a 1M-token context window.
 
-Seven rows carry 243M–512M tokens apiece, and their session IDs are this board's
-own agents. The leading explanation is that BurnBar records some Claude Code
-sessions as one cumulative row per session alongside per-call rows from other
-providers.
-
-**Explained, not yet fixed.** The cause is now known: OpenBurnBar — a separate
-application — writes some rows as **cumulative snapshots of a session** rather
-than as records of a single call. A later snapshot already contains the earlier
-one, so summing them counts the same tokens twice. Observable directly in the
-invocations feed: one session appears at 164,393,131 tokens and again at
-161,067,393, the second contained in the first.
-
-`71d7cb3` annotated this and changed no total, and its `aggregatedRows`
-classification is circular — a row counts as aggregated because `totalTokens`
-exceeds the context-window bound, which is the same observation that made it
-anomalous. Useful as a flag; not a correction.
-
-The backend is implementing **per-session de-duplication**. Because the defect
-is double-counting, **the corrected totals are expected to fall, not grow.**
-
-**No cost figure in this branch should be read as final**, and none is quoted
-here as a corrected one. What this branch changed is that the measured total is
-*reported* rather than suppressed, and its horizon is *disclosed* rather than
-implied. The arithmetic inside that total is a separate fix, in progress.
+That is the reusable part. The anomaly was invisible to every aggregate check
+and obvious to a per-unit one — see *Method* below.
 
 ### A view that cannot show everything now says what it cannot see
 
@@ -68,28 +47,38 @@ The UI's widest preset is 30 days; **Custom** reaches 90; the store holds more
 than either. `priorSpend { earliestAt, invocations, measuredCostUsd }` now rides
 on every summary, so a window can state what sits before its own horizon.
 
-Measured live against `/api/usage/summary`, 2026-08-02. **These are recorded
-figures taken before per-session de-duplication lands, so every one of them is
-expected to fall** — they are quoted to show the horizon gap, which is
-structural and does not depend on their magnitude:
+The horizon gap is structural: on a machine that has been running for months,
+the majority of the record sits outside the default view, and the share grows
+every day. On day 30 the 30-day window was the whole record; it will never be
+again.
 
-| window | inside | before it | earliest record |
-|---|---:|---:|---|
-| 30d | $14,130.44 | **$33,571.63** | 2026-03-28 |
-| 60d | $32,593.49 | $11,208.92 | 2026-03-28 |
-| 90d | $41,400.11 | $2,402.29 | 2026-03-28 |
+**No figures are quoted, and that is deliberate.** The de-duplication below has
+landed for the in-window total and *not* for `priorSpend`, so the two numbers
+are currently on different footings — window plus prior does not reconcile, and
+the same record totals differently depending on which window you slice it at.
+Any pair printed here would be internally inconsistent today and wrong tomorrow.
+The direction is what a reader can use, and the direction is down.
 
-**Correction to the original description.** It reported "roughly $24,000 of
-queryable spend sits outside the widest view", derived as 90d − 30d. That treats
-the 90-day *query cap* as if it were the record. The record reaches back 127
-days, so the spend outside a 30-day view is materially larger than the body
-claimed — measured at the time of writing, roughly $9,000 more, though every
-figure here moves once de-duplication lands.
-The old description made, about itself, precisely the error the PR was opened to
-fix: it mistook the widest window it could ask for as everything there was.
+### The double-count, explained and half-corrected
 
-Note the last row: even at 90 days, $2,402.29 remains outside. There is no
-window in this product that shows the whole record.
+The cause of the July 30 anomaly is known. OpenBurnBar — a separate application
+— records some sessions as **cumulative snapshots**: each row is that session's
+running total, not a single call. A later snapshot therefore already contains
+the earlier one, and summing them counts the same tokens twice. Visible directly
+in the invocations feed, where one session appears twice with the second figure
+contained in the first.
+
+`20cc4e3` makes the product count **each session's running total once**. The
+totals fell, which is the only direction this correction can go: removing a
+double-count never adds spend.
+
+`71d7cb3`'s `aggregatedRows` flag remains useful as a detector but was never an
+explanation — a row counted as "aggregated" because its tokens exceed the
+context-window bound is circular reasoning, restating the anomaly as a category.
+
+**Still open:** `priorSpend` is not de-duplicated, so the before-this-window
+figure reads high and cannot be added to the in-window one. Until that lands, a
+cost total is *what was recorded*, which is not the same as *what was spent*.
 
 ---
 

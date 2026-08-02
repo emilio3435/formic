@@ -28,14 +28,17 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 >
 > - **Cost figures do not yet say what falls outside your window.** The server
 >   knows; the card does not print it. See *Usage has its own windows* below.
-> - **Cost totals contain a known double-count, now being corrected.** Some
->   rows in the cost source are cumulative *snapshots* of a session rather than
->   records of single calls, so a later snapshot already contains the earlier
->   one and adding them counts the same tokens twice. That is what made one day
->   read as physically impossible. The cause is understood and a per-session
->   de-duplication is being implemented; **the totals are expected to go down,
->   not up.** Until it lands, treat a cost figure as *what was recorded*, which
->   is not the same as *what was spent*.
+> - **Cost totals were double-counting, and the correction goes downward.** The
+>   cost source records some sessions as running *snapshots* — each one a fresh
+>   total for that session, not a fresh call — so a later snapshot already
+>   contains the earlier one and adding them counts the same tokens twice. The
+>   board now counts each session's running total **once**, which is why a
+>   figure you saw earlier may have gone **down**: the correction removes
+>   double-counting, it never adds spend. One part is still catching up — the
+>   "spend before this window" figure is not de-duplicated yet, so it reads
+>   high, and window plus prior does not reconcile across different windows.
+>   **Do not add the two together**, and treat any cost figure as *what was
+>   recorded*, which is not the same as *what was spent*.
 > - **Archive keeps things for less time than it says.** See *Archive does not
 >   keep things as long as it claims* at the end.
 >
@@ -258,12 +261,17 @@ and only one of them has a button.
 
 **The guarantee being built here: this product will tell you when a view cannot
 show you everything.** Not "show you less and look complete" — say so, and say
-how much is outside. The measurement already exists. Ask the server for the last
-30 days today and it answers with the window's spend *and* what sits before it:
-on this machine, **$13,916 inside the window beside $33,570 of prior measured
-spend reaching back to 28 March**. A view that hides seventy percent of the
+how much is outside. The measurement already exists: ask the server for a window
+and it answers with that window's spend *and* what sits before it, back to the
+earliest record it holds. On a machine that has been running for months, most of
+the record is outside the default view. A window that hides the majority of the
 record while looking whole is the same defect as a cost of `$0` that means
 *unknown*, and it gets the same treatment.
+
+No figures are quoted here on purpose. The de-duplication described in the
+caveat at the top has landed for the in-window total and not yet for the
+before-this-window one, so those two numbers are currently on different footings
+and any pair printed here would be wrong within the day.
 
 *Where this stands today:* the server computes and returns it — the number above
 is a live reading, not a plan. The Usage card does not print it yet, so for now
