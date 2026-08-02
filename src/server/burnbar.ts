@@ -619,7 +619,23 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     const invocations = byProvider.reduce((sum, row) => sum + row.invocations, 0);
     const anyCostMissing = byProvider.some((row) => row.costUsd == null);
     const anyCostDerived = byProvider.some((row) => row.costProvenance === "derived_estimate");
-    const estimatedCostUsd = invocations === 0 || anyCostMissing
+    /* This used to be null whenever ANY invocation was unpriced, on the rule
+       that a field claiming to be a TOTAL must not silently omit a call. The
+       measured floor shipped beside it in measuredCostUsd and the card renders
+       that, so nothing was hidden from the board - but a caller reading this
+       one field, which is what an operator checking spend actually does, still
+       saw nothing while $13,216 of measured cost sat in the payload.
+
+       Emilio overruled the strictness, four times, and he is right about the
+       cost of being wrong here: withholding a number he has is worse for him
+       than qualifying one he has. It now carries the measured floor, and
+       costKnown stays FALSE so completeness is still stated rather than
+       implied. The pairing is the whole point - this is "what we measured",
+       costKnown is "is that all of it", and costMissingInvocations is how much
+       is missing. Every consumer that treats this as a complete total already
+       checks costKnown first (pulse.ts does), so none of them can bank a floor
+       by accident. */
+    const estimatedCostUsd = invocations === 0
       ? null
       : byProvider.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
     /* The floor: what the priced providers actually cost. `estimatedCostUsd`
@@ -630,6 +646,10 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     const measuredCostUsd = pricedProviders.length === 0
       ? null
       : pricedProviders.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0);
+    /* measuredCostUsd sums the providers' own floors, so it includes the money
+       a partly-priced provider DID measure; estimatedCostUsd sums their strict
+       totals, which are null for such a provider. measuredCostUsd is therefore
+       the larger and more complete of the two, and stays the figure to render. */
     /* Summed from the providers' own gaps, so it counts the calls that were
        actually unpriced rather than every call belonging to a nulled provider. */
     const costMissingInvocations = byProvider
@@ -663,7 +683,14 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       ...(estimatedCostUsd != null && anyCostDerived
         ? { pricingVersion: PRICING_CONFIG.pricingVersion }
         : {}),
-      costKnown: estimatedCostUsd != null,
+      /* Completeness is its own fact, not a shadow of whether a number exists.
+         It was `estimatedCostUsd != null`, which was equivalent only while that
+         field was withheld on any gap; now that it carries the measured figure,
+         deriving costKnown from it would silently flip every partial window to
+         "complete" — the qualifier vanishing at the exact moment it starts to
+         matter. It asks the only question it ever meant: was every invocation
+         in this window priced? */
+      costKnown: invocations > 0 && !anyCostMissing,
       invocations,
       /* A rate divides a numerator by a window. If part of the numerator was
          never measured, the quotient is not a smaller rate — it is a made-up

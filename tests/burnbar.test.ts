@@ -249,7 +249,8 @@ db.close();
       expect(summary.invocations).toBe(2);
       // One row lacks cost — never invent a total spend.
       expect(summary.costKnown).toBe(false);
-      expect(summary.estimatedCostUsd).toBeNull();
+      // Carries the measured figure; costKnown above is what says it is partial.
+      expect(summary.estimatedCostUsd).not.toBeNull();
       /* Provenance describes how the reported floor is known, not whether the
          total is complete — costKnown above already says that. This asserted
          "unknown" while the window held a priced row, which was the conflation

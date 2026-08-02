@@ -113,10 +113,12 @@ describe("a measured cost is never reported as unknown", () => {
       expect(summary.measuredCostUsd).toBeCloseTo(83, 6);
       expect(summary.costMissingInvocations).toBe(1);
 
-      /* And the total is still withheld, because it genuinely is not known.
-         Reporting the floor AS the total would be the opposite mistake — a
-         number that reads complete while one provider is missing from it. */
-      expect(summary.estimatedCostUsd).toBeNull();
+      /* estimatedCostUsd now carries the measured figure too, by Emilio's
+         ruling: withholding a number he has is worse for him than qualifying
+         one he has. What must NOT weaken is the qualifier — costKnown stays
+         false and the gap is still counted, so "this is what we measured" and
+         "that is not all of it" travel together. */
+      expect(summary.estimatedCostUsd).toBeCloseTo(83, 6);
       expect(summary.costKnown).toBe(false);
       /* Provenance describes HOW the reported floor is known, not whether the
          total is complete — costKnown and costMissingInvocations answer that.
