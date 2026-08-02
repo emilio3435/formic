@@ -57,6 +57,7 @@ No runtime dependencies. `bun install` only fetches TypeScript types.
 
 | Document | For |
 |---|---|
+| [TODAY.md](./TODAY.md) | **What changed on 2 August**, and which of it you can lean on. Two minutes. |
 | [ANT-GUIDE.md](./ANT-GUIDE.md) | **Using the board.** Written for someone who has never seen it. |
 | [QUICKSTART.md](./QUICKSTART.md) | Installing on a fresh Mac, about ten minutes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | How a transcript on disk becomes a controllable row |

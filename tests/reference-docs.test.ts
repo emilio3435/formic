@@ -1425,3 +1425,47 @@ describe("claims are re-measured after their foundations move", () => {
       .toMatch(/observed behaviour rather than inference/i);
   });
 });
+
+/* TODAY.md is a dated summary, which is the format most likely to age into a
+   lie — it is read by someone catching up, who has no way to tell a claim
+   written this morning from one still true. So it is pinned to the same code
+   as the guide, and required to keep the two admissions that make it honest
+   rather than a victory lap. */
+describe("the catch-up summary stays true to the code it summarises", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it carries the timestamp with the cost total, not just the total", () => {
+    const t = today();
+    const totals = [...t.matchAll(/\$3[0-9],[0-9]{3}/g)];
+    expect(totals.length, "the cost total vanished from the summary").toBeGreaterThan(0);
+    expect(t, "the summary states a total without saying when it was measured")
+      .toMatch(/Measured at [0-9]{2}:[0-9]{2}/);
+    /* The strongest evidence in the file is that the number MOVED while staying
+       consistent. Losing that turns "a reading" back into "a fact". */
+    expect(t, "the summary stopped showing that the total moves")
+      .toMatch(/Half an hour of work moved it|the same total read/i);
+  });
+
+  test("it does not claim the archive term has been observed", () => {
+    expect(today(), "the summary now implies thirty days of retention were demonstrated")
+      .toMatch(/full term is not proven/i);
+    expect(today(), "the summary stopped telling a reader to copy out what matters")
+      .toMatch(/copy it out of the drawer/i);
+  });
+
+  test("it keeps an open section rather than reading as a victory lap", () => {
+    const t = today();
+    expect(t, "the summary dropped its 'still open' section").toMatch(/Still open/i);
+    expect(t, "the summary stopped naming the claims nobody has confirmed")
+      .toMatch(/nobody has confirmed/i);
+  });
+
+  test("its cost claim rests on the same identity the guide pins", () => {
+    /* If the window/prior identity ever breaks again, this summary is wrong in
+       the most load-bearing sentence it has, so tie it to the same source. */
+    expect(read("src/server/burnbar.ts"), "priorSpend left the payload; TODAY.md's total assumes it")
+      .toContain("priorSpend");
+    expect(today(), "the summary stopped saying the total is the same from any window")
+      .toMatch(/identical from a one-day window and a ninety-day one/i);
+  });
+});
