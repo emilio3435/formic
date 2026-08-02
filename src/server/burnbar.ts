@@ -60,6 +60,11 @@ export interface UsageSummary {
     tokens: number;
     tokensMissing: number;
     costUsd: number | null;
+    /* The provider's own floor and gap. `costUsd` is null the moment any one of
+       its models is unpriced; these two say what it did measure and how many
+       calls it could not, so one unpriced model stops erasing the rest. */
+    measuredCostUsd: number | null;
+    costMissingInvocations: number;
     costProvenance?: CostProvenance;
     invocations: number;
   }>;
@@ -581,11 +586,27 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     const byProvider = [...providers].map(([provider, group]) => {
       const unknown = group.some((row) => row.costUsd == null);
       const derived = group.some((row) => row.costProvenance === "derived_estimate");
+      /* A provider is nulled whole as soon as ONE of its models is unpriced,
+         which is right for `costUsd` (a provider TOTAL) and wrong for everything
+         downstream that used to be derived from it. Cursor bills two calls, one
+         priced at $3.00 and one on a model with no published rate: the gate
+         suppressed the $3.00 it did measure AND, because the fleet gap counted
+         the invocations of every nulled provider, reported 2 unpriced calls
+         where exactly 1 was. It undercut the floor and inflated the hole beside
+         it, from the same cause. The provider row now carries its own floor and
+         its own gap, the same shape the fleet carries. */
+      const priced = group.filter((row) => row.costUsd != null);
       return {
         provider,
         tokens: group.reduce((sum, row) => sum + row.tokens, 0),
         tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
         costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
+        measuredCostUsd: priced.length === 0
+          ? null
+          : priced.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
+        costMissingInvocations: group
+          .filter((row) => row.costUsd == null)
+          .reduce((sum, row) => sum + row.invocations, 0),
         costProvenance: unknown ? "unknown" as const
           : derived ? "derived_estimate" as const
           : "measured" as const,
@@ -605,13 +626,14 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
        above stays null whenever ANY provider is unpriced, which is right for a
        field that claims to be the total — but it was the ONLY cost on the wire,
        so a single unpriced provider erased every measured dollar beside it. */
-    const pricedProviders = byProvider.filter((row) => row.costUsd != null);
+    const pricedProviders = byProvider.filter((row) => row.measuredCostUsd != null);
     const measuredCostUsd = pricedProviders.length === 0
       ? null
-      : pricedProviders.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+      : pricedProviders.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0);
+    /* Summed from the providers' own gaps, so it counts the calls that were
+       actually unpriced rather than every call belonging to a nulled provider. */
     const costMissingInvocations = byProvider
-      .filter((row) => row.costUsd == null)
-      .reduce((sum, row) => sum + row.invocations, 0);
+      .reduce((sum, row) => sum + row.costMissingInvocations, 0);
     const hours = Math.max((Date.parse(to) - Date.parse(from)) / 3_600_000, 1 / 60);
     return {
       ok: true,

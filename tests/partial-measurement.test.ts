@@ -137,8 +137,8 @@ describe("a partial measurement reports what it measured beside what it missed",
     expect(usage.costKnown).toBe(false);
   });
 
-  test.failing(`the gap counts the calls that were actually unpriced${suffix}`, async () => {
-    /* FAILS TODAY, and it is the same gate seen from the other side. Exactly
+  test.skipIf(gate)(`the gap counts the calls that were actually unpriced${suffix}`, async () => {
+    /* FIXED. Was the same gate seen from the other side. Exactly
        ONE call in this window has no price: Cursor's unpriced-model call. But
        costMissingInvocations sums the invocations of every provider whose cost
        was nulled, and Cursor was nulled whole — so the gap reports 2.
@@ -154,17 +154,17 @@ describe("a partial measurement reports what it measured beside what it missed",
     expect(usage.costMissingInvocations).toBe(1);
   });
 
-  test.skipIf(gate)(`the gap currently reports the 2 calls the provider gate suppressed${suffix}`, async () => {
+  test.skipIf(gate)(`the gap counts the unpriced call, not every call of a nulled provider${suffix}`, async () => {
     /* Control for the test above: pins today's number so the discrepancy is a
        measured difference rather than an assertion about nothing.
 
-       EXPECT THIS TO GO RED WHEN THE GATE IS FIXED — that is its job. Update it
-       to 1 alongside unmarking the failing test, and note the trap measured
-       here: simply removing the provider gate recovers the money and drops the
-       gap to 0, which claims full pricing coverage over a window that has an
-       unpriced call in it. The fix has to carry the per-row missing count up,
-       not just stop nulling. */
-    expect((await summary()).costMissingInvocations).toBe(2);
+       WENT RED WHEN THE GATE WAS FIXED — that was its job. Updated to 1, and
+       the trap it warned of is pinned rather than fallen into: simply removing
+       the provider gate would recover the money and drop the gap to 0, claiming
+       full pricing coverage over a window that has an unpriced call in it. The
+       fix carries the per-row missing count up instead, so the gap is 1 — the
+       one call that genuinely had no price. */
+    expect((await summary()).costMissingInvocations).toBe(1);
   });
 
   /* ---- THE REMAINING GATE: provider cost --------------------------------- */
@@ -184,7 +184,7 @@ describe("a partial measurement reports what it measured beside what it missed",
     expect(cursor?.costUsd).not.toBeNull();
   });
 
-  test.failing(`the fleet floor is not undercut by a provider-level gate${suffix}`, async () => {
+  test.skipIf(gate)(`the fleet floor is not undercut by a provider-level gate${suffix}`, async () => {
     /* FAILS TODAY, and this is why the remaining gate still matters even though
        the fleet level is fixed. The levels cascade: the fleet floor sums
        PROVIDERS whose cost survived, so Cursor being nulled at level 2 removes
@@ -199,13 +199,11 @@ describe("a partial measurement reports what it measured beside what it missed",
     expect(usage.measuredCostUsd).toBe(15);
   });
 
-  test.skipIf(gate)(`the floor reports the 12 dollars it currently reaches${suffix}`, async () => {
-    /* The control for the two failing tests above: it pins what the code does
-       now, so the gap is a measured difference rather than an assertion about
-       nothing. When the provider gate is fixed this must be updated to 15 and
-       the failing tests unmarked — all three describe the same dollar. */
+  test.skipIf(gate)(`the floor reaches all 15 dollars that were measured${suffix}`, async () => {
+    /* Was pinned at 12 while the provider gate suppressed Cursor's priced call.
+       $5.00 + $7.00 from Claude Code and the $3.00 Cursor did measure. */
     const usage = await summary();
 
-    expect(usage.measuredCostUsd).toBe(12);
+    expect(usage.measuredCostUsd).toBe(15);
   });
 });

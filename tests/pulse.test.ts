@@ -140,7 +140,7 @@ describe("PulseTracker", () => {
     const changedAsOf = iso(base + 4 * 60_000);
     const summaries: UsageSummary[] = [
       usageSummary({ available: false, provenance: "unavailable", estimatedCostUsd: null, costKnown: false, to: iso(base + 1 * 60_000) }),
-      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, tokensMissing: 0, costUsd: null, invocations: 2 }] }),
+      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, tokensMissing: 0, costUsd: null, measuredCostUsd: null, costMissingInvocations: 0, invocations: 2 }] }),
       usageSummary({ estimatedCostUsd: 1.234, to: firstAsOf }),
       usageSummary({ estimatedCostUsd: 1.231, to: sameRoundedAsOf }),
       usageSummary({ estimatedCostUsd: 1.239, to: changedAsOf }),
