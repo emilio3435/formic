@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { executeControl } from "../src/server/control";
+import { MAX_INSTRUCTION_BYTES } from "../src/server/http";
 import { resolveAgentTarget } from "../src/server/targets";
 import type { AgentSnapshot, ControlAction } from "../src/shared/types";
 import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
@@ -131,6 +132,29 @@ describe("executeControl refuses what the snapshot marked unavailable", () => {
 
     expect(mismatched.response.ok).toBe(false);
     expect(mismatched.response.error?.code).toBe("AGENT_IDENTITY_MISMATCH");
+  });
+});
+
+describe("the instruction budget is a number, not a self-reference", () => {
+  test("the cap stays a human-sized instruction rather than an arbitrary ceiling", () => {
+    /* Companion to the over-length test in control-safety.test.ts, which builds
+       its payload with "x".repeat(MAX_INSTRUCTION_BYTES + 1) and expects a
+       message interpolating the same constant. Both sides move together, so it
+       cannot see the constant's value directly — but it is NOT hollow, and is
+       deliberately left alone: mutation shows it catches a loosened cap, at 200k
+       and again at 100MB, where a separate body-size guard answers 413 instead
+       of the expected 400.
+
+       The direction it cannot see is tightening. Dropping the cap to 12 bytes
+       survives it completely: every real instruction would be refused, the
+       instruct control would be dead on every row, and the suite would stay
+       green. That is the axis pinned here.
+
+       An instruction is a sentence a human types to an agent, so the budget
+       belongs in kilobytes — large enough for a paragraph, too small to be a
+       file upload. */
+    expect(MAX_INSTRUCTION_BYTES).toBeGreaterThanOrEqual(1_000);
+    expect(MAX_INSTRUCTION_BYTES).toBeLessThanOrEqual(64_000);
   });
 });
 
