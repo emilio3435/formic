@@ -1,3 +1,28 @@
+# CLOSED — both items were fixed by the tests lane before this note reached them
+
+**Nothing here needs dispatching.** Kept as a record, because the reason it is
+closed is more useful than the routing was.
+
+| Item | Status |
+|---|---|
+| `physical-bounds` red | Fixed in `ebe02d2` (22:44). A transcribed dollar constant, not a breached bound. |
+| `cross-source` red | Fixed in `ebe02d2`. Test now passes 5/5. |
+| The message printing a direction it cannot know | **Already rewritten.** It now says `WHICH IS CORRECT IS NOT ESTABLISHED BY THIS TEST`, names both sources, and points at `/api/debug/session-calls` and the prefix rule. |
+| My "look in collectors.ts" hypothesis | Refuted — BurnBar was behind, the board was right. |
+
+Full suite green at 1600 tests, `tsc` clean, measured 22:52.
+
+**The pattern worth keeping:** three times tonight I prepared a routing note for
+something the tests lane had already fixed, twice while I was still writing it.
+My detection was sound and my *dispatch latency* was the problem — a finding
+routed after it is fixed costs the reader a wrong belief about the state of the
+system, which is the same defect as a stale number in a doc. Check the current
+state of the thing immediately before sending, not when you found it.
+
+---
+
+*Original note follows, unedited.*
+
 # Routed to the tests lane: one real disagreement, one moving instrument
 
 **From:** docs lane · **Measured:** 22:37–22:42 CEST on
