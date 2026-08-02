@@ -284,3 +284,46 @@ describe("a quiet board does not promise a number that is never coming", () => {
     expect(card.sublabel).not.toMatch(/not measured/i);
   });
 });
+
+/* The two window-naming properties confirmed in a browser on 878dd25, converted
+   to standing assertions so they cannot regress silently between rendered reads.
+   The geometry of 8edf115 stays browser-only — a stage that ends where its
+   content ends is a measurement of boxes, and nothing here can see a box. */
+describe("58daea6 / 8b31c96 — a rate names the window it was measured over", () => {
+  const burnBoard = (windowMs: number, extra: Record<string, unknown> = {}) => ({
+    generatedAt: "2026-08-02T21:40:00.000Z",
+    totals: {}, programs: [], issues: [], recentlyResolved: [],
+    controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
+    pulse: { burn: { tokensPerMin: 356_258, windowMs, costLastHourUsd: 1.34, ...extra } },
+  });
+
+  test("the BURN card names the window it measured, not the hour it did not", () => {
+    /* Verified rendered at 21:40: "10m average · $1.34 last hour" against a
+       payload carrying windowMs 600000. The rate's window and the cost's window
+       are different, and the card must not collapse them into one claim. */
+    const card = client.summaryWidgetData("burn", burnBoard(600_000) as never, "live");
+    expect(card.sublabel, "the BURN card stopped naming its measured window").toMatch(/10m/);
+    expect(card.sublabel, "the BURN card stopped labelling the rate an average").toMatch(/average/i);
+  });
+
+  test("the window in the label follows the window in the payload", () => {
+    /* The property a fixed string would also satisfy at one value. Browser-
+       confirmed on the usage card by switching 24h -> 7d and watching the label
+       move; asserted here across two payloads for the same reason. */
+    const ten = client.summaryWidgetData("burn", burnBoard(600_000) as never, "live");
+    const hour = client.summaryWidgetData("burn", burnBoard(3_600_000) as never, "live");
+    expect(ten.sublabel).not.toBe(hour.sublabel);
+    expect(hour.sublabel, "an hour-long window is not named as one").toMatch(/1h|60m/);
+  });
+
+  test("a complete cost renders bare and an incomplete one renders as a floor", () => {
+    /* The branch that did NOT render on the live board, because costIsFloor is
+       emitted only when true and the hour's cost was complete. Pinned here so
+       the marker cannot be dropped while nobody is watching a floor. */
+    const complete = client.summaryWidgetData("burn", burnBoard(600_000) as never, "live");
+    const floor = client.summaryWidgetData("burn", burnBoard(600_000, { costIsFloor: true }) as never, "live");
+    expect(complete.sublabel, "a complete cost is being marked as a floor").toContain("$1.34");
+    expect(complete.sublabel).not.toContain("≥");
+    expect(floor.sublabel, "an incomplete cost lost its floor marker").toContain("≥$1.34");
+  });
+});
