@@ -32,14 +32,18 @@ Four steps. Do these in order and you have used the tool correctly.
 
 ![The summary band](docs/guide-shots/shot-1-summary.png)
 
-**When nothing needs you the band is one line**, as above: what is shipping, what
-has finished this hour, what it is burning, and `All clear`. No cards, no numbers
-to read past. That line is the answer, and you can close the tab.
+**The band only shows you what it has something to say about.** A card with
+nothing to report is absent, not empty — so the shape of the band is itself the
+signal. Above, two cards: work in flight, and one session near its context limit.
 
-When something does need you it expands into cards, and **only `Findings` is a
-to-do list** — it names both what is wrong and what to do about it. The rest are
-context, not tasks: how much is shipping, what it is costing, how full the
-fullest context window is, and whether the system itself is healthy.
+**When nothing at all needs you it collapses to a single line** — what is
+shipping, what it is burning, and `All clear`. No cards, no numbers to read past.
+That line is the answer, and you can close the tab.
+
+When cards are showing, **only `Findings` is a to-do list** — it names both what
+is wrong and what to do about it. The rest are context, not tasks: how much is
+shipping, what it is costing, how full the fullest context window is, and whether
+the system itself is healthy.
 
 ### 2. The board opens on `Needs you`
 
