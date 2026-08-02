@@ -111,3 +111,74 @@ are certain.
 And the last thing, which is not a technique: **two of the eight got past me and were caught by
 someone reading behind me.** Run every check, and still expect to be wrong in a way you cannot see
 from inside. The counterweight needs a counterweight.
+
+---
+
+## The gap between a rule you can state and a rule you run
+
+This is the most transferable thing the day produced, and it is not one of the checks.
+
+**Every one of today's eight phantoms was produced by someone who had already written down the rule
+that would have prevented it.** I derived *divide before you compare* from the cost bounds at 15:21
+and failed that exact axis at 17:25. The operator wrote *verify before relaying* into their own
+standing instructions **this morning** and relayed three unverified findings by afternoon. The
+rules were not missing. They were not **installed**.
+
+**Note what that rules out.** It is not a memory problem — the operator's rule was hours old, mine
+was minutes old when I broke it. It is not a knowledge problem, a care problem, or a seniority
+problem. Both of us could have recited the rule while violating it.
+
+### Why stated rules do not fire
+
+**They arrive at the wrong moment.** *Divide before you compare* reads as a rule about
+interpretation. But my error happened at **collection** — when I wrote the query that counted 577
+agents. By the time I reached the interpreting step the wrong denominator was already inside a
+number I trusted, and the rule had nothing left to catch. **A rule phrased for the moment of
+reasoning cannot save you from the moment of measurement.**
+
+**They have no trigger.** Nothing announces itself as *"this is a relay"* or *"this is a rate."*
+A rule with no trigger must be invoked from memory, and invoking-from-memory is precisely the step
+that fails — reliably, and hardest when a finding feels strong, which is exactly when it matters.
+
+### What actually caught errors today
+
+Go through them and none of the catches were acts of remembering:
+
+- **A blank that could not be filled.** *"Population: ___ of ___ (set: ___)"* cannot be completed
+  as *576 of 576* once the question forces the word **live**. The error is not prevented; it is
+  made **impossible to write down**.
+- **An arithmetic contradiction.** My provider sweep reported a 12-day total smaller than the
+  one-day total inside it. That is impossible, so I looked, and found I had keyed on
+  `sessionId@startTime` instead of `sessionId`. **The data refused to be internally consistent
+  while I was wrong.**
+- **Another party reading behind me.** Two of eight, including one the operator caught in minutes.
+
+### The mechanism, stated once
+
+**A rule installs when skipping it produces something visibly incomplete or visibly
+contradictory — never when skipping it merely produces something wrong.**
+
+*Wrong* is invisible; that is its whole nature. **Incomplete is visible. Contradictory is visible.**
+So the work is not to write better rules or to remember them harder. It is to convert each rule
+into one of three things:
+
+1. **A blank** that cannot be filled while the error stands — the publication form.
+2. **An invariant** between two published numbers that breaks loudly on its own — the identities.
+   `window + prior = constant` needed nobody to remember anything; the 90-day shortfall announced
+   itself.
+3. **A second party** whose incentive is to disagree with you.
+
+**If a rule cannot be made into one of those three, expect to break it**, and plan for that rather
+than resolving to do better. My last three commits are full of resolutions; the blanks are what
+actually held.
+
+### And the limit, which matters more than the mechanism
+
+**Even all three together were not sufficient today.** The form has a blind spot it now documents.
+The identities were vacuous in six of twenty-eight cases. Two phantoms passed every artifact I had
+and were stopped by a person reading carefully.
+
+So the honest closing position is not that this is solved. **It is that the failure mode is
+structural rather than personal, and therefore worth engineering against instead of apologising
+for.** You will break a rule you wrote this morning. Build so that when you do, the page looks
+unfinished or the numbers refuse to agree — and keep someone reading behind you for the rest.
