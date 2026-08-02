@@ -104,11 +104,19 @@ still *looks* complete. The number is available; the pixel is not.
   in the last 24 hours**, **$243.73 over thirty days**. It has no row, no agent,
   no session, and no collector. Factory is the same at smaller scale.
 
-  **And the board says everything is fine.** The health line reads `4 of 4
-  collectors healthy`, which is true of the four it has and silent about the two
-  it does not — so the one surface that exists to tell you something is missing
-  is the surface asserting nothing is. The only place the spend appears is the
-  Usage tab's provider breakdown, which you have to already suspect to open.
+  **And the board positively asserts nothing is missing.** It is not silent. The
+  snapshot carries a field built to count exactly this — and it reads
+  **`"absent": 0`** while two billed providers have no collector. The health line
+  says `4 of 4 collectors healthy` beside it.
+
+  Both are true of their own population and false of the question you would ask
+  them. `sourceHealth` counts the four collectors the board has; Hermes and
+  Factory are not collectors, so they cannot register as absent ones. **A
+  counter whose population excludes the thing you are looking for will always
+  report zero, and zero reads as an answer.** That is what makes this dangerous
+  rather than merely incomplete: silence invites a question, and `absent: 0`
+  closes it. The only place the spend appears is the Usage tab's provider
+  breakdown, which you have to already suspect to open.
 
   This is the opposite failure from the ones fixed today. Those were wrong
   numbers, and a wrong number announces itself by disagreeing with something. An

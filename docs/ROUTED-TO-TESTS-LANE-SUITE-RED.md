@@ -20,7 +20,31 @@ Identical across two runs three seconds apart, so not a sampling artefact. The
 test's own message names the direction and the file, which is the thing that
 makes it worth acting on rather than muting.
 
-**Why I think it is worth your attention tonight rather than tomorrow.** The
+**UPDATE 22:50 — my hypothesis below is REFUTED, and by work that already
+exists.** `src/server/session-calls.ts` and `docs/CROSS-SOURCE-DRIFT-FINDING.md`
+landed while I was writing this. The adjudication was done by hand from the raw
+transcript: **112,258 is the exact sum of that session's first three calls of
+seven.** BurnBar's cumulative row had stopped advancing. A foreign total equal to
+a *prefix* of our per-call series means the other side is behind — it does not
+mean we overcounted.
+
+So the board's 293,235 is right, and the item to route is not a collector fix.
+
+**The item is that the test states a direction it cannot know.** Its message
+reads *"OUR collector is high, look in src/server/collectors.ts"*, and following
+it sends someone to repair code that is correct. The magnitude is real and worth
+flagging; the attribution is a guess printed as a conclusion. Now that
+`/api/debug/session-calls` exists, the test can do the prefix check itself and
+say **"they are behind"** or **"this is a real disagreement"** instead of naming
+a file.
+
+I am leaving my original reasoning below unedited, because it was wrong in an
+instructive way: I matched a fingerprint — cumulative-vs-per-call, corrected
+twice today — and the fingerprint fit a defect that was not there. Pattern
+recognition proposed the right family and the wrong member, which is exactly
+what check 4 is for and exactly what I did not do before writing it down.
+
+**What I originally wrote:** The
 shape is the one that has been wrong all day in different places: **the board
 counting a session's cumulative total where the cost source counts calls.**
 `20cc4e3` taught the usage *summary* that OpenBurnBar re-records a running total;

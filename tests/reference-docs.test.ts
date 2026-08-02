@@ -1727,6 +1727,30 @@ describe("TODAY.md names the providers the board cannot see", () => {
     expect(t, "the summary stopped saying the spend has no row, agent or collector")
       .toMatch(/no row, no agent,\s*no session, and no collector/i);
     expect(t, "the summary stopped explaining why 4 of 4 healthy is not a contradiction")
-      .toMatch(/true of the four it has and silent about the two/i);
+      .toMatch(/true of their own population and false of the question/i);
+  });
+});
+
+/* The third of the three, and the one that turns the other two from incomplete
+   into dangerous: the board does not merely omit these providers, it publishes
+   a count of what is absent and that count says zero. Pinned to the field, so
+   if sourceHealth ever learns about uncollected providers this paragraph fails
+   rather than misleading in the opposite direction. */
+describe("TODAY.md names the absent-zero assertion, not just the omission", () => {
+  test("the snapshot really does publish absent as a number", () => {
+    const snapshot = read("src/server/snapshot.ts");
+    expect(snapshot, "sourceHealth stopped publishing an absent count").toMatch(/absent/);
+  });
+
+  test("the summary says the board asserts absence rather than staying silent", () => {
+    const t = read("TODAY.md").replace(/\s+/g, " ");
+    expect(t, "TODAY.md stopped quoting the absent-zero field")
+      .toMatch(/`"absent": 0`/);
+    expect(t, "TODAY.md stopped saying the board asserts rather than omits")
+      .toMatch(/positively asserts nothing is missing/i);
+    expect(t, "TODAY.md stopped naming the population defect that produces it")
+      .toMatch(/population excludes the thing you are looking for/i);
+    expect(t, "TODAY.md stopped explaining why that is worse than silence")
+      .toMatch(/silence invites a question/i);
   });
 });
