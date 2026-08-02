@@ -62,12 +62,23 @@ Every row is **one AI session**. Left to right:
 | Name | Who it is, and the folder it is working in |
 | Message | The last thing it said |
 | Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Working`, `Idle` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Idle` on a mixed tab, or `Alert`, `Blocked`, `Failed`. Hover for the full state. |
-| Model · ctx | Which model, and how full its context window is |
-| Tokens | How much it has used |
+| Model · ctx | Which model, and how full **this session's** context window is right now |
+| Tokens | **The latest model call only** — not the session, not the day. See the warning below. |
 | Span | First activity to last activity — **including every hour it sat dormant.** Not time spent working. A session showing `3d` may have worked for ten minutes of it. |
 
 A row indented under another with `↳` is a **subagent** — something the row above
 it launched.
+
+> **The one number that will mislead you.** A row's **Tokens** is that agent's
+> *latest model call*. The **session tokens** figure on the grey program bar above
+> it is the *cumulative* total for every agent in that program, ended ones
+> included — on a real board, about a third of it came from sessions that are
+> already finished.
+>
+> They are not the same unit and **the program is not the sum of its rows.**
+> Measured here: `1.58B` on a program bar against `682k` on a row — roughly five
+> hundred times apart. If you want to know what a session has used in total,
+> open its drawer and read *used this session*; do not add up the column.
 
 ### 4. Click it, deal with it, press `Escape`
 
@@ -127,13 +138,17 @@ report.** A band that always renders cannot signal by rendering, so a card with
 no data is absent rather than showing you an empty one. Health also stays quiet
 when `Needs you` has already told you the same thing.
 
-| Card | What it tells you |
-|---|---|
-| **Needs you** | How many findings want a human. The only number that is a to-do list. |
-| **Momentum** | How many are shipping, and how many have gone quiet for 15+ minutes. |
-| **Burn** | Tokens per minute, and dollars per hour if cost data is available. |
-| **Context peak** | How full the fullest session's context window is, plus the median. A high peak means someone is about to run out of room. |
-| **Health** | One verdict for the whole system. |
+Each one counts a **different set of agents** over a **different stretch of time**,
+and none of them says so on its face. That is the single most useful thing to know
+about this band, so it is stated for each:
+
+| Card | What it tells you | Counts what, over what |
+|---|---|---|
+| **Needs you** | How many findings want a human. The only number that is a to-do list. | Findings, not agents — one finding can implicate many sessions. Right now the tab beside it counts *agents* and can read `0` while this reads `1`; that disagreement is a known defect being fixed, not a puzzle for you to solve. |
+| **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
+| **Burn** | A token rate, and spend if cost data is available. | The rate is an **average over the window it names** (`5m average`), summed across every session that reported, **including ended ones**. Spend comes from a separate tool over its own hour. Do not divide one by the other; they do not share a denominator. |
+| **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or idle) that report a window. Ended sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
+| **Health** | One verdict for the whole system. | Not a count. See the health section below. |
 
 Hide, show, and reorder these with **Customize summary**.
 
