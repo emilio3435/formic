@@ -157,3 +157,50 @@ describe("a row bigger than any context window is not one call", () => {
     }
   });
 });
+
+describe("the burn rate names a window it can be held to", () => {
+  test.skipIf(!canSqlcipher)("a cumulative session row does not become this window's rate", async () => {
+    /* The same defect one field over. processedTokens was the numerator, so a
+       462M-token session row - tokens accrued over that session's whole life -
+       was charged to the single window holding its startTime. Measured on
+       2026-07-30: 135,041,103 tokens/hour against 730,839 from the calls that
+       actually happened there, 185x, and a figure no fleet of this size could
+       produce. */
+    await withRows(MIXED, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+      const hours = 24;
+
+      // 650,000 + 420,000 from the two real calls; the session row is excluded.
+      expect(usage.burnRateTokensPerHour).toBeCloseTo(1_070_000 / hours, 6);
+      // processedTokens still reports everything, so the total is not lost.
+      expect(usage.processedTokens).toBe(1_070_000 + 462_914_085);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("with no aggregates the rate is unchanged, so this is not a discount", async () => {
+    /* The control. If the exclusion fired on ordinary traffic the rate would
+       understate, which is the same failure pointed the other way — and the
+       reassuring direction is the one nobody investigates. */
+    await withRows(ALL_CALLS, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.aggregatedInvocations).toBe(0);
+      expect(usage.burnRateTokensPerHour).toBeCloseTo(1_070_000 / 24, 6);
+      expect(usage.processedTokens).toBe(1_070_000);
+    });
+  });
+
+  test.skipIf(!canSqlcipher)("an unmeasured row still withholds the rate entirely", async () => {
+    /* The pre-existing rule this must not quietly repeal: a numerator missing a
+       term produces a made-up rate, not a smaller one. Excluding aggregates is
+       about attributing time correctly; it is not licence to publish a rate
+       over an incomplete count. */
+    await withRows(`${ALL_CALLS},
+      ('u9','Codex','s9','p','gpt-5.6-terra',NULL,NULL,0,0,NULL,0.10,'exact','${at(9)}','${at(9)}')`, async () => {
+      const usage = await getUsageSummary(WINDOW.from, WINDOW.to);
+
+      expect(usage.tokensMissing).toBe(1);
+      expect(usage.burnRateTokensPerHour).toBeNull();
+    });
+  });
+});

@@ -610,13 +610,18 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          -- Counted per row, not per group: a group average above the bound
          -- proves only that SOME row exceeds it, and blaming all of them would
          -- overstate the very count that exists to be trustworthy.
-         SUM(CASE WHEN totalTokens > ? THEN 1 ELSE 0 END) AS aggregatedRows
+         SUM(CASE WHEN totalTokens > ? THEN 1 ELSE 0 END) AS aggregatedRows,
+         -- Tokens this window can actually be held responsible for. A
+         -- cumulative session row spans the session's whole lifetime, so
+         -- dividing it by THIS window's hours credits hours of work to
+         -- whichever window happens to contain its startTime.
+         SUM(CASE WHEN totalTokens > ? THEN 0 ELSE COALESCE(totalTokens, 0) END) AS attributableTokens
        FROM token_usage
        WHERE startTime >= ? AND startTime < ?
        GROUP BY provider, model
        ORDER BY tokens DESC`,
-      // Bound order follows the SQL text: the SELECT placeholder precedes WHERE's.
-      [MAX_CONTEXT_WINDOW, dbFrom, dbTo],
+      // Bound order follows the SQL text: both SELECT placeholders precede WHERE's.
+      [MAX_CONTEXT_WINDOW, MAX_CONTEXT_WINDOW, dbFrom, dbTo],
     );
     const byModel = rows.map((row) => {
       const costMissing = num(row.costMissing) ?? 0;
@@ -685,6 +690,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       };
     });
     const aggregatedInvocations = rows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
+    const attributableTokens = rows.reduce((sum, row) => sum + (num(row.attributableTokens) ?? 0), 0);
     /* One aggregate over everything older than this window. Cheap, and it is
        the only way the card can distinguish "nothing was spent before this" from
        "we did not look". */
@@ -790,11 +796,23 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          in this window priced? */
       costKnown: invocations > 0 && !anyCostMissing,
       invocations,
-      /* A rate divides a numerator by a window. If part of the numerator was
-         never measured, the quotient is not a smaller rate — it is a made-up
-         one, stated to the same precision as a real one. Withhold it rather
-         than let a gap in the data read as a quiet period. */
-      burnRateTokensPerHour: tokensKnown ? processedTokens / hours : null,
+      /* A rate divides a numerator by a window, so both have to describe the
+         same period. If part of the numerator was never measured the quotient
+         is not a smaller rate but a made-up one, which is why tokensKnown gates
+         it at all.
+
+         The subtler half, and the reason processedTokens is NOT the numerator:
+         a cumulative session row carries tokens accrued over the session's
+         whole lifetime while sitting at a single startTime, so charging it to
+         that one window credits hours of work to whichever window happens to
+         contain it. Measured on 2026-07-30: 135,041,103 tokens/hour against
+         730,839/hour from the calls that actually occurred in the window - a
+         185x overstatement, and a figure no fleet of this size could produce.
+
+         So the rate is taken over rows this window can be held responsible for.
+         aggregatedInvocations says how many were left out, so the coverage
+         travels with the number rather than the number quietly meaning less. */
+      burnRateTokensPerHour: tokensKnown ? attributableTokens / hours : null,
       byProvider,
     };
   } catch (error) {
