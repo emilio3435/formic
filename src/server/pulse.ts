@@ -44,6 +44,7 @@ export class PulseTracker {
   #costInitialized = false;
   #costLastHourUsd: number | null = null;
   #costProvenance: "burnbar" | "unavailable" = "unavailable";
+  #costIsFloor = false;
   #costAsOf?: string;
   #costNote?: string;
   #latestCursorUnknownCount = 0;
@@ -183,6 +184,7 @@ export class PulseTracker {
         unknown: unknownAgents,
       },
       costLastHourUsd: this.#costLastHourUsd,
+      ...(this.#costIsFloor ? { costIsFloor: true } : {}),
       costProvenance: this.#costProvenance,
       ...(this.#costAsOf ? { costAsOf: this.#costAsOf } : {}),
       ...(this.#costNote ? { costNote: this.#costNote } : {}),
@@ -243,12 +245,31 @@ export class PulseTracker {
 
 
   #applyBurnSummary(summary: UsageSummary | undefined): void {
-    const roundedCost = summary?.available
+    /* The BURN card had the same fleet-level gate the usage card just lost: it
+       showed a cost only when EVERY invocation in the window was priced, so one
+       unpriced Cursor call turned an hour of measured spend into "cost
+       unavailable". The hour is the window an operator watches to decide
+       whether to keep a swarm running, so withholding it there is the most
+       expensive place to withhold it.
+
+       Fall back to the measured floor and say that is what it is. `costIsFloor`
+       exists so the card can mark it; a floor rendered as a total would be the
+       opposite error, and on this number it would understate real spend while
+       looking authoritative. */
+    const round = (value: number): number => Math.round(value * 100) / 100;
+    const complete = summary?.available
       && summary.costKnown
       && typeof summary.estimatedCostUsd === "number"
       && Number.isFinite(summary.estimatedCostUsd)
-      ? Math.round(summary.estimatedCostUsd * 100) / 100
+      ? round(summary.estimatedCostUsd)
       : null;
+    const floor = summary?.available
+      && typeof summary.measuredCostUsd === "number"
+      && Number.isFinite(summary.measuredCostUsd)
+      ? round(summary.measuredCostUsd)
+      : null;
+    const roundedCost = complete ?? floor;
+    const costIsFloor = complete === null && floor !== null;
     const cursorMissingInvocations = summary?.byProvider
       .filter(({ provider, costUsd, invocations }) => /cursor/i.test(provider) && costUsd === null)
       .reduce((total, row) => total + row.invocations, 0) ?? 0;
@@ -268,6 +289,8 @@ export class PulseTracker {
         : summary.available === false
           ? summary.error ?? "Cost source is unavailable."
           : "No priced invocations in this window."
+      : costIsFloor
+        ? `measured floor · ${summary?.costMissingInvocations ?? 0} of ${summary?.invocations ?? 0} calls unpriced`
       : cursorUnknownCount > 0
         ? `${cursorUnknownCount} Cursor ${cursorUnknownCount === 1 ? "session reports" : "sessions report"} no billing data`
         : undefined;
@@ -276,9 +299,11 @@ export class PulseTracker {
     // returns the same dollar total for a new reason still changes the card.
     if (this.#costInitialized
       && roundedCost === this.#costLastHourUsd
+      && costIsFloor === this.#costIsFloor
       && costNote === this.#costNote) return;
 
     this.#costLastHourUsd = roundedCost;
+    this.#costIsFloor = costIsFloor;
     this.#costProvenance = roundedCost === null ? "unavailable" : "burnbar";
     this.#costAsOf = roundedCost === null ? undefined : summary?.to;
     this.#costNote = costNote;

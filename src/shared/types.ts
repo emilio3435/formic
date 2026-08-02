@@ -388,6 +388,12 @@ export interface PulseBurn {
   windowMs: number;
   coverage: { reporting: number; eligible: number; unknown: number };
   costLastHourUsd: number | null;
+  /* True when costLastHourUsd is a measured FLOOR rather than a complete total,
+     because some invocation in the window carried no price. The card must mark
+     it — an unmarked floor read as a total is the failure the usage card's "≥"
+     exists to prevent, and it would be worse here because this figure is the
+     one an operator watches to decide whether to keep a swarm running. */
+  costIsFloor?: boolean;
   costProvenance: "burnbar" | "unavailable";
   costAsOf?: string;
   costNote?: string;

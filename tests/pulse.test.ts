@@ -140,7 +140,8 @@ describe("PulseTracker", () => {
     const changedAsOf = iso(base + 4 * 60_000);
     const summaries: UsageSummary[] = [
       usageSummary({ available: false, provenance: "unavailable", estimatedCostUsd: null, costKnown: false, to: iso(base + 1 * 60_000) }),
-      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, tokensMissing: 0, costUsd: null, measuredCostUsd: null, costMissingInvocations: 0, invocations: 2 }] }),
+      // Nothing priced at all, so there is no floor to fall back to either.
+      usageSummary({ available: true, estimatedCostUsd: 99, costKnown: false, measuredCostUsd: null, to: iso(base + 2 * 60_000), byProvider: [{ provider: "Cursor", tokens: 50, tokensMissing: 0, costUsd: null, measuredCostUsd: null, costMissingInvocations: 0, invocations: 2 }] }),
       usageSummary({ estimatedCostUsd: 1.234, to: firstAsOf }),
       usageSummary({ estimatedCostUsd: 1.231, to: sameRoundedAsOf }),
       usageSummary({ estimatedCostUsd: 1.239, to: changedAsOf }),
@@ -212,7 +213,9 @@ describe("PulseTracker", () => {
 
   test("a priced window with no cost reports the absence of priced invocations, not a source failure", async () => {
     const tracker = new PulseTracker(
-      async () => usageSummary({ available: true, estimatedCostUsd: null, costKnown: false }),
+      // "Priced nothing" means no floor either: a window with a measured floor
+      // is a different fact, covered in tests/burn-cost-floor.test.ts.
+      async () => usageSummary({ available: true, estimatedCostUsd: null, costKnown: false, measuredCostUsd: null }),
       base,
     );
     tracker.maybeRefreshBurnCost(base);
