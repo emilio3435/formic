@@ -36,7 +36,20 @@ export interface UsageSummary {
   /* How many invocations went unmeasured — the size of the gap, not just its
      existence, so the card can say "3,000 across 2 calls, 1 unmeasured". */
   tokensMissing: number;
+  /* The COMPLETE cost of the window, or null when any invocation in it is
+     unpriced. Kept strict: a consumer reading this alone must never mistake a
+     floor for a total. */
   estimatedCostUsd: number | null;
+  /* The cost we DID measure — the same "understatement is not a fabrication"
+     rule `processedTokens` already follows two fields up, finally applied to
+     money. Withholding this was the inverse of the honesty rule: it hid a
+     number we had rather than inventing one we did not. Measured on this board,
+     one unpriced provider (Cursor, 45 of 2,980 calls over 30 days) sent
+     $11,939.94 of measured spend to the card as "not reported". */
+  measuredCostUsd: number | null;
+  /* How many invocations carry no price — the size of the gap, so a card can
+     say "$11,939.94 across 2,935 of 2,980 calls" instead of going silent. */
+  costMissingInvocations: number;
   costProvenance?: CostProvenance;
   pricingVersion?: string;
   costKnown: boolean;
@@ -395,12 +408,41 @@ async function runEncryptedQuery(sql: string, params: unknown[] = []): Promise<Q
   return parsed.rows ?? [];
 }
 
+/* `range=7d` shorthand, in the units an operator asks in. The endpoint used to
+   accept only from/to and SILENTLY ignore anything else, so `?range=30d`
+   returned the 24-hour default with nothing to say it had been dropped —
+   a confident answer to a question that was never asked. The dashboard sends
+   explicit from/to and was never affected, but a hand-query was, and a window
+   parameter that quietly means something else is the worst kind on a cost
+   surface. Unparseable values are now rejected rather than ignored. */
+const RANGE_UNITS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+function parseRangeShorthand(raw: string): number | undefined {
+  const match = /^(\d+(?:\.\d+)?)([mhd])$/.exec(raw.trim());
+  if (!match) return undefined;
+  const span = Number(match[1]) * RANGE_UNITS[match[2]!]!;
+  return span > 0 ? span : undefined;
+}
+
 function parseRange(url: URL): { from: string; to: string } | string {
   const now = Date.now();
   const toRaw = url.searchParams.get("to");
   const fromRaw = url.searchParams.get("from");
+  const rangeRaw = url.searchParams.get("range");
   const toMs = toRaw ? Date.parse(toRaw) : now;
-  const fromMs = fromRaw ? Date.parse(fromRaw) : toMs - 24 * 60 * 60 * 1_000;
+  let rangeMs: number | undefined;
+  if (rangeRaw !== null) {
+    rangeMs = parseRangeShorthand(rangeRaw);
+    if (rangeMs === undefined) {
+      return `range must be a duration like 1h, 24h or 30d (got "${rangeRaw}").`;
+    }
+  }
+  // Explicit bounds win: a caller who states both meant the bounds.
+  const fromMs = fromRaw
+    ? Date.parse(fromRaw)
+    : rangeMs !== undefined
+      ? toMs - rangeMs
+      : toMs - 24 * 60 * 60 * 1_000;
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return "from and to must be ISO timestamps.";
   if (fromMs >= toMs) return "from must be earlier than to.";
   if (toMs - fromMs > 90 * 24 * 60 * 60 * 1_000) return "Range cannot exceed 90 days.";
@@ -464,6 +506,9 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     to,
     processedTokens: null,
     estimatedCostUsd: null,
+    // Nothing was read, so there is no measured floor either.
+    measuredCostUsd: null,
+    costMissingInvocations: 0,
     costProvenance: "unknown",
     costKnown: false,
     invocations: null,
@@ -556,6 +601,17 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
     const estimatedCostUsd = invocations === 0 || anyCostMissing
       ? null
       : byProvider.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+    /* The floor: what the priced providers actually cost. `estimatedCostUsd`
+       above stays null whenever ANY provider is unpriced, which is right for a
+       field that claims to be the total — but it was the ONLY cost on the wire,
+       so a single unpriced provider erased every measured dollar beside it. */
+    const pricedProviders = byProvider.filter((row) => row.costUsd != null);
+    const measuredCostUsd = pricedProviders.length === 0
+      ? null
+      : pricedProviders.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+    const costMissingInvocations = byProvider
+      .filter((row) => row.costUsd == null)
+      .reduce((sum, row) => sum + row.invocations, 0);
     const hours = Math.max((Date.parse(to) - Date.parse(from)) / 3_600_000, 1 / 60);
     return {
       ok: true,
@@ -569,6 +625,8 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       tokensKnown,
       tokensMissing,
       estimatedCostUsd,
+      measuredCostUsd,
+      costMissingInvocations,
       costProvenance: estimatedCostUsd == null ? "unknown"
         : anyCostDerived ? "derived_estimate"
         : "measured",
