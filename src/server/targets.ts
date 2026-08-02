@@ -1,4 +1,4 @@
-import type { CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier } from "../shared/types";
+import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -17,6 +17,7 @@ function target(
   resolution: CmuxTarget["resolution"],
   reason: string,
   agent?: CollectedAgent,
+  attestation?: CmuxTarget["attestation"],
 ): CmuxTarget {
   const surfaceCwd = surface.cwd ? normalizeCwd(surface.cwd) : undefined;
   const agentCwd = agent?.cwd ? normalizeCwd(agent.cwd) : undefined;
@@ -27,6 +28,7 @@ function target(
     (resolution === "exact" || resolution === "unique-cwd"),
   );
   return {
+    ...(attestation ? { attestation } : {}),
     workspaceId: surface.workspaceId,
     workspaceTitle: surface.workspaceTitle,
     surfaceId: surface.surfaceId,
@@ -107,8 +109,18 @@ function resolveAgentTargetInternal(
         outcome: "matched",
         detail: `Recorded cmux target IDs matched surface ${matches[0].surfaceId}${recorded.source === "binding" ? " via a persisted identity binding" : ""}.`,
       });
+      /* A persisted binding is the one path that mints `exact` without cmux
+         saying anything about this session in this scan. It was confirmed by
+         live lsof evidence once, which is why the mechanism exists — but "once"
+         is not "now", and the write gate had no way to tell the two apart. */
       return finish(
-        target(matches[0], "exact", recorded.reason ?? "Matched recorded cmux target IDs.", agent),
+        target(
+          matches[0],
+          "exact",
+          recorded.reason ?? "Matched recorded cmux target IDs.",
+          agent,
+          recorded.source === "binding" ? "remembered" : "live",
+        ),
         "recorded",
       );
     }
@@ -141,6 +153,8 @@ function resolveAgentTargetInternal(
         "exact",
         "Matched source session ID recorded by cmux.",
         agent,
+        // sourceSessionIds is cmux attesting, in this scan, that the session is here.
+        "live",
       ),
       "session",
     );
@@ -268,10 +282,33 @@ export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resol
     && (target.resolution === "exact" || target.resolution === "unique-cwd");
 }
 
-export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution">>(
+export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution" | "attestation">>(
   target: T,
 ): target is T & { surfaceId: string } {
-  return Boolean(target.surfaceId) && target.resolution === "exact";
+  return Boolean(target.surfaceId)
+    && target.resolution === "exact"
+    // EVER attested is not CURRENTLY attested. A persisted binding was true when
+    // it was written; nothing in this scan says the session is still there.
+    && target.attestation !== "remembered";
+}
+
+/* Affirmative evidence the agent is gone. Deliberately ONLY "died", which is
+   `processAlive === false` with process ids to have checked — the collector
+   looked and found the process absent.
+
+   "unknown" must keep writing. It is `processAlive === undefined`: the lsof
+   race the binding mechanism exists to survive, and on this fleet it is 24 of
+   29 live agents. Blocking it would disable Send on 83% of a working board —
+   trading a defect for an outage, which is the failure mode a liveness gate
+   invites.
+
+   "exited" is excluded too, for a subtler reason: it comes from
+   `transcriptEndedCleanly`, which for Claude sessions is `stop_reason:
+   "end_turn"` — the end of a TURN, not of a session. An agent waiting for your
+   reply reads "exited". Refusing writes there would switch off Send on exactly
+   the agents that are waiting for a human. */
+export function processKnownDead(agent: Pick<AgentSnapshot, "processState">): boolean {
+  return agent.processState === "died";
 }
 
 export function resolveAgentTargetWithTrace(

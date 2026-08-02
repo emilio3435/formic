@@ -68,6 +68,16 @@ export interface CmuxTarget {
    * display must not pretend the agent "lives" in the pane folder.
    */
   cwdMismatch?: boolean;
+  /* HOW the surface was attested, which `resolution` alone cannot say.
+
+     "live"       — cmux currently lists this session on this surface, either by
+                    sourceSessionIds or by recorded IDs the collector just read.
+     "remembered" — a persisted identity binding minted the match. It was true
+                    once; nothing in this scan confirms it still is.
+
+     Both produce `resolution: "exact"`, so the write gate could not tell "cmux
+     says the session is there" from "we wrote that down some time ago". */
+  attestation?: "live" | "remembered";
   resolution: TargetResolution;
   reason?: string;
 }

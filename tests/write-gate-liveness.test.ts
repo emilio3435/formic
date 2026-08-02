@@ -102,7 +102,7 @@ const send = (subject: AgentSnapshot, action: ControlAction, runner: RecordingRu
   );
 
 describe("liveness governs the write gate, not just resolution", () => {
-  test.failing("an instruction to a dead process is refused, and nothing is sent", async () => {
+  test("an instruction to a dead process is refused, and nothing is sent", async () => {
     /* The hole, stated as the guarantee. Nothing reaching the runner is the
        half that matters: a refusal issued after the text had already gone would
        have typed into the pane and then reported that it had not. */
@@ -114,7 +114,7 @@ describe("liveness governs the write gate, not just resolution", () => {
     expect(runner.argv).not.toContain("deploy to production");
   });
 
-  test.failing("an interrupt to a dead process is refused, and nothing is sent", async () => {
+  test("an interrupt to a dead process is refused, and nothing is sent", async () => {
     // Interrupt types Escape. On a pane the dead agent no longer occupies, it
     // reaches whoever took the pane over.
     const runner = new RecordingRunner();
@@ -124,7 +124,7 @@ describe("liveness governs the write gate, not just resolution", () => {
     expect(runner.commands).toEqual([]);
   });
 
-  test.failing("a dead process is refused even at the top resolution tier", async () => {
+  test("a dead process is refused even at the top resolution tier", async () => {
     /* The precise claim, isolated. `exact` is the strongest tier the gate
        knows, and a persisted binding can mint it for a pane that attests
        nothing. So the refusal must come from liveness, not from downgrading the
@@ -140,20 +140,24 @@ describe("liveness governs the write gate, not just resolution", () => {
     expect(result.response.ok).toBe(false);
   });
 
-  test("today the write goes through, which is why the three above are marked", async () => {
-    /* Pins the live hole so the gap is a measured difference rather than an
-       assertion about nothing. EXPECT THIS TO GO RED when the fix lands —
-       update it alongside unmarking the three tests above; all four describe
-       the same gate.
+  test("the refusal explains that the pane may now belong to someone else", async () => {
+    /* Was the control pinning the live hole — two commands issued to
+       PANE-ELSEWHERE with ok true for an agent the same snapshot rendered as
+       died. It went red when the fix landed, which is what it was for.
 
-       Measured on main: two commands issued to PANE-ELSEWHERE, ok true, for an
-       agent the same snapshot renders as died. */
+       What it pins now is the half a refusal has to carry: an operator who is
+       told "no" needs to know this is a dead row rather than a broken button,
+       and what to do instead. */
     const runner = new RecordingRunner();
     const result = await send(boundToADeadProcess(), "instruct", runner);
 
-    expect(result.response.ok).toBe(true);
-    expect(runner.argv).toContain("PANE-ELSEWHERE");
-    expect(runner.argv).toContain("deploy to production");
+    expect(result.response.ok).toBe(false);
+    expect(runner.argv).not.toContain("PANE-ELSEWHERE");
+    expect(runner.argv).not.toContain("deploy to production");
+    const message = result.response.error?.message ?? "";
+    expect(message).toMatch(/process was checked and is gone/i);
+    expect(message).toMatch(/belong to someone else|took it over/i);
+    expect(message).toMatch(/archive|start the agent again/i);
   });
 
   test("the evidence the gate ignores is present on the very agent it authorises", async () => {
