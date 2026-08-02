@@ -62,6 +62,18 @@ settled, which is exactly when someone stops quoting the timestamp. The paragrap
 total moves in jumps, not gradually — otherwise a reader who checks twice and sees the same figure
 concludes the caveat was over-cautious.
 
+**And the distinction the paragraph most needs is not about frequency at all.** A figure that
+changes because the board is **live** is a different thing from one that changes because it was
+**wrong**. Today it did both — $32,471 → $32,943 was partly new spend and partly four rounds of
+corrections landing underneath it — and `TODAY.md` currently leaves a reader unable to tell which.
+**The cost number is no longer unstable; reality is.** Suggested closing line for that paragraph:
+
+> It moves in steps, when new usage is ingested — not because the total is still being corrected.
+> The corrections landed today; what moves now is the fleet.
+
+Without that, the honest caveat reads as a warning that the number is still unreliable, which is
+the opposite of what the day established and undersells the work that made it trustworthy.
+
 ---
 
 ## Two things worth carrying past this document
