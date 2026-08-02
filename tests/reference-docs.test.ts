@@ -761,3 +761,67 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
     }
   });
 });
+
+/* The fresh-clone walk's first blocker, and it is not a doc bug.
+
+   A newcomer with no cmux — the configuration QUICKSTART explicitly blesses
+   ("Skip it if you only want to watch") — is promised a calm empty board:
+   "Watching. No sessions running yet." with a line counting HEALTHY collectors.
+   What the running product shows them instead is
+
+     No sessions found — and not every collector can see.
+     A degraded collector reports no sessions whether or not any are running,
+     so this board is incomplete rather than empty.
+     1 of 4 collectors degraded
+
+   on the first screen they ever see, with no way to tell it from a broken
+   install. The doc is right and the product is wrong, so this pins the doc's
+   promise rather than rewriting it to match the defect.
+
+   Root cause, snapshot.ts:271-275: `degradedSources` counts codex/claude/cursor
+   plus cmux, while the byProvider map beside it reports omp/codex/claude/cursor.
+   Two different populations share the word "collectors", so cmux being absent
+   spends a quarter of a denominator it is not in — and omp, which IS in the map,
+   can never be counted degraded at all. app.ts:751 already knows ("those count a
+   different population than their own byProvider map, which is a separate
+   unresolved defect this must not inherit") and routes /api/health around the
+   scalars; that is why /api/health says healthy while the board says degraded.
+   The quarantine covered the monitoring endpoint and left the day-one board,
+   which is the one surface where the reader has no prior to correct against.
+
+   Worst of all the sentence is not true here. cmux contributes no sessions —
+   it resolves terminals — so its absence cannot hide a single row. The board
+   tells a new operator their view may be incomplete when it is complete.
+
+   test.failing: passes while the defect stands, FAILS the day it is fixed, at
+   which point delete the .failing and keep the assertion. */
+describe("day one on a machine without cmux", () => {
+  const noCmuxSnapshot = {
+    generatedAt: "2026-08-02T12:44:51.004Z",
+    totals: { sourceHealth: { healthy: 3, degraded: 1, total: 4 } },
+  };
+
+  test("QUICKSTART promises the calm empty board, and pins it as rendered", () => {
+    expect(quickstart).toContain("Watching. No sessions running yet.");
+    expect(quickstart, "QUICKSTART stopped saying the count is of HEALTHY collectors")
+      .toMatch(/counting healthy collectors/i);
+  });
+
+  test.failing("a missing cmux must not make the board call itself incomplete", () => {
+    const verdict = M.emptyBoardVerdict(noCmuxSnapshot);
+    expect(verdict.message, "cmux absence is being reported as a blind session collector")
+      .toBe("Watching. No sessions running yet.");
+    expect(verdict.sources, "the count reads degraded on a healthy fleet")
+      .toBe("4 of 4 collectors healthy");
+  });
+
+  test("the two populations that share the word 'collectors' still disagree", () => {
+    const snap = read("src/server/snapshot.ts");
+    expect(snap, "degradedSources stopped counting cmux inside the provider total")
+      .toMatch(/\["codex", "claude", "cursor"\][\s\S]{0,320}cmuxReachable === false \? 1 : 0/);
+    expect(read("src/server/state.ts"), "byProvider no longer rides alongside the scalars")
+      .toContain("byProvider");
+    expect(read("src/server/app.ts"), "app.ts dropped the note that the scalars are defective")
+      .toContain("count a different population than their own byProvider");
+  });
+});
