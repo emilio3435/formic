@@ -1,7 +1,8 @@
 # What no test touches in `src/server`
 
-Derived from `bun test --coverage` at 1,488 passing tests, not from reading the
-code and guessing. Ranked by what an operator loses if the path breaks
+Derived from `bun test --coverage`, not from reading the code and guessing.
+First cut at 1,488 passing tests; **re-derived at 1,637**, which is what the
+Progress and ranking sections below reflect. Ranked by what an operator loses if the path breaks
 **silently** — a loud failure is a smaller problem than a quiet one.
 
 The headline is that coverage is genuinely high, and the gaps are not where the
@@ -83,44 +84,53 @@ that measured a fixture rather than the producer.
 | Entry | State |
 |---|---|
 | 1 `burnbar-query.ts` | closed — `tests/burnbar-query.test.ts` |
-| 3 `getUsageSeries` | closed — `tests/usage-series.test.ts`, **and it found a live defect** |
+| 3 `getUsageSeries` | closed — `tests/usage-series.test.ts`, **found a live defect** |
 | 4 Cursor GUI admission | closed — `tests/cursor-gui-admission.test.ts`, **found a duplicated error report** |
 | 7 SSE heartbeat | closed — `tests/sse-heartbeat.test.ts`. No defect in the code; one in the first test |
-| 2 `index.ts` | **skipped deliberately.** Loud on failure, and it cannot be imported — `Bun.serve` runs at module scope. Testing it means asserting on source text, which is what broke `server-runtime.test.ts` |
+| 9 `archive.ts` real file ops | closed — `tests/archive-durability.test.ts` |
+| — `getUsageWard` + `handleUsageRequest` | closed — `tests/usage-ward.test.ts`, **found a live defect** |
+| 2 `index.ts` | **skipped deliberately.** Loud on failure, and it cannot be imported — `Bun.serve` runs at module scope |
 
-Worth recording after four: **three of the four yielded a defect rather than only
-coverage.** Entry 1's comment-stripping was covered only by accident, by a
-neighbouring guard; entry 3's chart disagreed with the headline by a third;
-entry 4 reported one unreadable directory as two faults.
+`burnbar.ts` went 93.67% → 97.53% funcs, 90.42% → 95.67% lines in the process.
 
-Entry 7 is the exception, and it taught something the other three did not. The
-code was correct; the first test written for it was not. It cancelled a stream
-and asserted `expect(true).toBe(true)`, and it passed with the `clearInterval`
-line deleted. The leak is genuinely invisible in-process — the next beat throws
-into `enqueueClient`'s catch, which calls `removeClient` and swallows it — so
-the assertion had to move to whether a subprocess can exit at all. **An
-untested path can be closed by a test that examines nothing**, which is the
-same failure the caveat above describes, arriving from the other direction.
+**Four of the six worked entries yielded a defect rather than only coverage.**
+Entry 1's comment-stripping was covered only by accident, by a neighbouring
+guard; entry 3's chart disagreed with the headline by a third; entry 4 reported
+one unreadable directory as two faults; the ward capped its spike list at twelve
+and reported `complete: true, skipped: 0`.
+
+Entry 7 is the instructive exception. The code was correct and the first test
+written for it was not: it cancelled a stream, asserted `expect(true).toBe(true)`,
+and passed with the `clearInterval` line deleted. **An untested path can be
+closed by a test that examines nothing** — the same failure as the caveat above,
+arriving from the other direction.
 
 ---
 
-## Which remaining entries produce figures nothing cross-checks
+## The ranking that worked
 
-Entry 3 was a live defect precisely because `getUsageSeries` had no sibling
-figure to contradict it: the chart and the headline were two views of one
-window, and only one of them was ever checked. That property — *does anything
-else on this board disagree if this breaks* — predicts risk better than line
-count does, so the remaining entries are classified by it.
+Sorting by *does anything else on this board disagree if this breaks* predicted
+defects better than line count did. Every defect found came from a figure with
+no sibling:
+
+- `getUsageSeries` — the chart, which nothing compared against the headline.
+- `getUsageWard` — a spike ratio, computed and displayed nowhere else at all.
+
+And the ward is the sharper case. A series is at least a view of a total the
+headline also states; a spike is a claim about a comparison that exists in one
+place. The failure shape was correspondingly worse — not a wrong number but a
+confident all-clear, from a field named `coverage`.
+
+## What is left, ranked the same way
 
 | # | Entry | Cross-checked by | Verdict |
 |---|---|---|---|
-| 9 | `archive.ts` real `mkdir`/`writeText`, `archivedAgents()` | **nothing** | **The only remaining entry in entry 3's position.** Persisted history has no second source by construction: after a restart the archive either holds what happened or it does not, and no other figure on the board would contradict a wrong one. The real file operations are additionally never executed — every test substitutes in-memory ones — so a fault in `nodeFileOperations` appears only on a real machine, and appears as history that quietly was not there |
-| 6 | `state.ts:259–263` `unavailableSessions()` | partially | It reports `value: []` **and** an error per provider, so the health card contradicts a silently-empty board: an operator seeing zero agents also sees four unhealthy sources. What is *not* cross-checked is the **reason** — `collectionErrors[0] ?? deadlineError` publishes whichever error happened to land first, so a deadline can be reported under an unrelated collector's message. Presence is checked; attribution is not |
-| 5 | `identity.ts:577–584` | the write gate | Cross-checked by construction rather than by a second figure. An `identityConflict` empties `sourceSessionIds`, so `resolution` is not `exact`, so `canWriteToTarget` refuses. A misattribution here cannot reach a write without also disabling the control |
-| 8 | `debug-identity.ts:160–184` | n/a | Produces no figure — a debug drawer transcript. Wrong output is visible to whoever opened the drawer and read nowhere else |
+| 6 | `state.ts:259–263` `unavailableSessions()` | partially | Reports `value: []` **and** an error per provider, so the health card contradicts a silently-empty board. What is not checked is the **reason**: `collectionErrors[0] ?? deadlineError` publishes whichever error landed first, so a deadline can be reported under an unrelated collector's message. Presence checked, attribution not. **The best remaining entry** |
+| — | `burnbar.ts:571–578` `unavailableSource()` | nothing | Classifies WHY the cost source is unreadable — "not installed" against a key or keychain problem. Not a figure but a diagnosis, and it is the first thing a fresh machine sees. A misclassification sends someone to install software they already have |
+| 5 | `identity.ts:577–584` | the write gate | Cross-checked by construction: an `identityConflict` empties `sourceSessionIds`, so `resolution` is not `exact`, so `canWriteToTarget` refuses. A misattribution cannot reach a write without also disabling the control |
+| 8 | `debug-identity.ts:160–184` | n/a | Produces no figure — a debug drawer transcript, read only by whoever opened it |
 | 2 | `index.ts` | n/a | Produces no figure. Fails loudly at startup |
 
-So: **entry 9 is the one left worth ranking on this basis**, and it is the last
-untouched entry on the list that sits where entry 3 sat. Entry 6 is worth
-taking for its second half — the reason, not the presence — but a wrong reason
-is a smaller loss than history that was never written.
+`cursor.ts` still carries the most uncovered lines of any file, but they are
+scattered single-line guards rather than a block, and entry 4 already took the
+admission path that decides whether a session appears at all.
