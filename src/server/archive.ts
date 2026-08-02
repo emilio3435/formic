@@ -221,6 +221,14 @@ function archiveCopy(agent: CollectedAgent, archiveKind: ArchiveKind): StoredAge
     lastHumanMessage: agent.lastHumanMessage,
     lastUserMessage: agent.lastUserMessage,
     lastAgentMessage: agent.lastAgentMessage,
+    /* Measured on the live board after the restart: 362 agents, 269 of them
+       unreadable by the attention layer, and 133 of those were archived records
+       carrying lastAgentMessage but not this. An archived session that ended by
+       asking a question is exactly the one an operator can still act on, so
+       dropping the closing line here made the whole history permanently blind —
+       and the layer reported that blindness as "we could not read", correctly
+       but avoidably. */
+    lastAgentClosing: agent.lastAgentClosing,
     transcriptTail: agent.transcriptTail,
     artifacts: agent.artifacts.map((artifact) => ({ ...artifact })),
     gates: [...agent.gates],

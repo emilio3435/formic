@@ -129,6 +129,7 @@ describe("durable archive state", () => {
       lastHumanMessage: "Review the final routing diff.",
       lastUserMessage: "Please review the final routing diff.",
       lastAgentMessage: "PASS with exact identity evidence.",
+      lastAgentClosing: "Everything checks out, but publishing is your call.",
       transcriptTail: "PASS with exact identity evidence.",
       artifacts: [{ label: "Cursor transcript", path: "/Users/me/transcript.jsonl" }],
       gates: ["review passed"],
@@ -160,6 +161,14 @@ describe("durable archive state", () => {
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
     });
+    /* Measured live after the restart: 133 archived agents carried
+       lastAgentMessage but no closing line, because this projection dropped it.
+       An archived session that ended by handing a decision back is exactly the
+       one still worth acting on, so the history was permanently unreadable to
+       the attention layer — reported honestly as "could not read", but
+       avoidably so. The round trip has to carry it. */
+    expect(archived.lastAgentClosing).toBe(source.lastAgentClosing);
+    expect(archived.attentionSignal?.kind).toBe("handoff-stated");
     expect(reopened.archivedAgents()[0]?.allowCwdFallback).toBeFalse();
     expect(archived.controls.every((control) => !control.enabled)).toBeTrue();
   });
