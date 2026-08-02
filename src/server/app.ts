@@ -54,7 +54,27 @@ export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
 /* Under the 30s most proxies and browsers use to declare an idle stream dead. */
 export const SSE_HEARTBEAT_MS = 25_000;
-export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
+/* A client's stream is dropped once its unread backlog exceeds this. The number
+   has to be read against the payload it must carry: every client's FIRST event
+   is a whole snapshot, enqueued directly and deliberately unchecked, because a
+   delta is meaningless without the base it applies to.
+
+   At 2MB it had been overtaken. A live snapshot measured 2,334,323 bytes — 11%
+   OVER the entire budget — so from the moment of connection every client sat at
+   a negative desiredSize until it finished draining, and the next delta to
+   arrive in that window closed its stream. The guard meant to tolerate a slow
+   client and drop only a stuck one had no slack left to tolerate anything: one
+   byte behind and ten megabytes behind were the same verdict.
+
+   Measured, it was not yet biting — the drain takes 2.2ms on loopback against a
+   delta roughly every 3.8s, so the exposure is about 0.06% per update. But it
+   grows on both axes at once as the fleet does: a bigger board takes longer to
+   drain AND changes more often. 8MB is a little over three snapshots at today's
+   size, which is what a BACKLOG budget should mean — a client may fall a few
+   updates behind before it is given up on. Worst case it bounds memory at
+   MAX_SSE_CLIENTS x this, and `sseBacklogDrops` on /api/health says whether the
+   headroom is actually being used. */
+export const MAX_SSE_BACKLOG_BYTES = 8 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ACTION_LOG_ENTRIES = 500;
@@ -464,6 +484,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     return recollectInFlight;
   };
   const clients = new Set<ReadableStreamDefaultController<string>>();
+  /* Streams the server closed for backpressure, as distinct from clients that
+     left. Nonzero means the board is outgrowing its own delivery budget. */
+  let sseBacklogDrops = 0;
   const heartbeatTimers = new Map<ReadableStreamDefaultController<string>, ReturnType<typeof setInterval>>();
   const removeClient = (client: ReadableStreamDefaultController<string>): void => {
     clients.delete(client);
@@ -481,6 +504,18 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   };
   const enqueueClient = (client: ReadableStreamDefaultController<string>, event: string): void => {
     if (client.desiredSize !== null && client.desiredSize <= 0) {
+      /* Recorded, because this is the one disconnect the SERVER chooses. A
+         client that goes away throws on enqueue below and is simply forgotten;
+         this one was still connected and we stopped talking to it. It presents
+         to the operator as a board that quietly stopped updating — EventSource
+         reconnects, pulls another whole snapshot, and can be dropped again — so
+         leaving it uncounted meant the only symptom was staleness with nothing
+         anywhere to explain it. */
+      sseBacklogDrops += 1;
+      console.error(
+        `[SSE] dropped a client whose backlog exceeded ${MAX_SSE_BACKLOG_BYTES} bytes `
+        + `(${sseBacklogDrops} so far); it will reconnect and be sent a full snapshot again`,
+      );
       dropClient(client);
       return;
     }
@@ -842,6 +877,11 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             staleSources: [...staleSources],
             cmuxReachable,
             controlErrors,
+            /* Not part of `complete`: a dropped stream does not make the
+               SNAPSHOT incomplete, it makes delivery of it unreliable. It rides
+               here because this is where facts live that a liveness check calls
+               green — the board keeps rendering whatever it last received. */
+            sseBacklogDrops,
             ...(operatorStateError ? { operatorStateError } : {}),
             ...(configError ? { configError } : {}),
           },
