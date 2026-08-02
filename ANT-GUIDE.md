@@ -14,6 +14,14 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 > something, it says so instead of showing a plausible number. A blank is
 > usually honest, not broken.
 
+> **And the one caveat.** That rule is about *missing* numbers. A few of the
+> counters on the board are being reworked right now because they had the
+> opposite problem: arithmetically correct, but labelled as something they do
+> not measure — a total that counts the same thing twice, or a span that calls
+> dormant time working time. **Trust the verdicts and the lists; treat the
+> aggregate counters as rough until this note goes away.** The current list of
+> which ones is in `docs/` alongside the audit that found them.
+
 ---
 
 ## The 60-second version
@@ -172,14 +180,22 @@ display, because an `https` remote can carry a token.
 
 | Key | Does |
 |---|---|
+| `/` | Jump to the search box |
 | `↑` / `↓` | Move between rows |
+| `←` / `→` | Move between tabs |
 | `Home` / `End` | Jump to the first / last row |
 | `Enter` | Open the drawer for the highlighted row |
 | `Escape` | Close the drawer |
-| `Tab` | Move between buttons and controls |
+| `Tab` | Move between controls — the whole tab strip counts as one stop |
 
-Arrow keys stop at the top and bottom rather than wrapping, so you cannot
-accidentally teleport to the other end of a long board.
+Row arrows stop at the top and bottom rather than wrapping, so you cannot
+accidentally teleport to the other end of a long board. Tab arrows do wrap —
+there are only six, and going round is what you want.
+
+`Tab` treating the tab strip as a single stop is deliberate. Search used to be
+the eleventh stop of fourteen, with the six view tabs eating six of the ten
+ahead of it, so reaching the board's main filter meant tabbing past everything.
+That is what `/` is for.
 
 </details>
 
@@ -209,11 +225,11 @@ the **Evidence** and **Transcript** sections for raw detail.
 indentation and `↳`. Agents can carry roles like *orchestrator*, *frontend*,
 *backend*, *verifier*, or *tester*.
 
-**Swarm control** *(on screen, as `Select`)*
-: Acting on several agents at once. Click **Select**, tick the agents you want,
-and a bar appears letting you send one instruction to all of them (a
+**Swarm control** *(on screen, as `Select to send`)*
+: Acting on several agents at once. Click **Select to send**, tick the agents you
+want, and a bar appears letting you send one instruction to all of them (a
 **broadcast**). Agents that cannot be safely reached are not selectable, on
-purpose.
+purpose, so on a quiet board you may find nothing to tick.
 
 **Collector**
 : The part that reads each tool's log files — one per provider. When a collector
