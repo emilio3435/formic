@@ -160,7 +160,12 @@ function programRollupCells(agents) {
   const cells = [
     { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
     { value: String(r.working), label: "working" },
-    { value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: r.needsYou > 0 },
+    ...(r.needsYou > 0
+      /* Audit §11: "0 alerts" per program is one of three widgets that spent
+         pixels asserting nothing needs you. An operator who learns a counter
+         always reads 0 stops reading it, which is exactly when it turns 1. */
+      ? [{ value: String(r.needsYou), label: r.needsYou === 1 ? "alert" : "alerts", alert: true }]
+      : []),
   ];
   const withTokens = agents.filter((a) => a.tokens && typeof a.tokens.sessionTotal === "number");
   if (withTokens.length) {

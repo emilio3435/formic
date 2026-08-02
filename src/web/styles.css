@@ -1148,11 +1148,16 @@ body.feed-frozen .programs { opacity: 0.62; }
    then the rollup shrinks HONESTLY (min-width:0 + per-cell overflow) instead of
    being silently cropped by the .program overflow:clip ancestor. The alerts cell
    never shrinks and so is the last thing to go — it must always stay legible. */
-.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; align-items: baseline; gap: 0.1rem 0.7rem; }
-.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* Wraps rather than clips. Docked at 1440 the roster is ~550px and four cells
+   ellipsised into "169 a…  13 wo…  1 alert  1.15B t…" — fragments that carry no
+   meaning, with the alerts cell the one truncated hardest. scrollWidth agreed
+   with the clipped box, so nothing in the DOM reported a problem; only pixels
+   did. A second line costs one row of header height and loses nothing. */
+.program-rollup { margin-left: auto; display: inline-flex; flex: 0 1 auto; min-width: 0; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 0.1rem 0.7rem; }
+.program-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.28rem; flex: none; min-width: 0; }
 .program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.program-rollup-label { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.program-rollup-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */

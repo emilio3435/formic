@@ -3234,7 +3234,7 @@ describe("program-header at-a-glance rollups (C2)", () => {
     expect(textOf(alerting[0])).toContain("1alert");
   });
 
-  test("(b) calm earns no color: 0 alerts renders the count WITHOUT the ember class", () => {
+  test("(b) calm earns no cell at all: zero alerts renders nothing", () => {
     const agents = [
       mk({ id: "codex:w1", status: "running" }),
       mk({ id: "codex:w2", status: "running" }),
@@ -3243,8 +3243,12 @@ describe("program-header at-a-glance rollups (C2)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rollup: any = withDom(() => M.programHeadRollup(agents));
     const text = textOf(rollup);
-    expect(text).toContain("0alerts");                       // the alert cell still renders...
-    expect(allByClass(rollup, "is-alerting").length).toBe(0); // ...but takes no ember ink at zero
+    /* Was: the cell renders at 0 but takes no ember ink. Audit §11 goes further —
+       "0 alerts" on every program is one of three widgets asserting that nothing
+       needs you, and a counter that always reads 0 stops being read. Absence is
+       the stronger version of "earns no color". */
+    expect(text).not.toContain("alert");
+    expect(allByClass(rollup, "is-alerting").length).toBe(0);
   });
 
   test("(c) honest omission: an un-derivable token aggregate drops the token cell", () => {
@@ -3257,7 +3261,10 @@ describe("program-header at-a-glance rollups (C2)", () => {
     const text = textOf(rollup);
     expect(text).toContain("2agents");                              // counts are always derivable
     expect(text).not.toContain("tokens");                          // no session total → no faked aggregate
-    expect(allByClass(rollup, "program-rollup-cell").length).toBe(3); // agents · working · alert only
+    /* agents · working only. These two are healthy, so there is no alerts cell
+       either — audit §11. The subject of this test is the TOKEN cell's honest
+       omission, which still holds. */
+    expect(allByClass(rollup, "program-rollup-cell").length).toBe(2);
   });
 
   test("(d) header and drawer rollups share ONE aggregation source — no duplicated arithmetic", () => {
@@ -3756,12 +3763,14 @@ describe("scroll shell: review fixes", () => {
     const rollup = styles.match(/\.program-rollup\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rollup).toContain("min-width: 0");
     expect(rollup).toContain("flex: 0 1 auto");   // shrinks after the name truncates
+    /* The cells no longer shrink-and-clip individually. Docked at 1440 that
+       produced "169 a…  13 wo…  1 alert  1.15B t…" — the shrink order was
+       carefully tuned and the outcome was still fragments. The row wraps to a
+       second line instead, so no cell is ever cropped and the alerts cell needs
+       no special pinning to survive. */
+    expect(rollup).toContain("flex-wrap: wrap");
     const cell = styles.match(/\.program-rollup-cell\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(cell).toContain("min-width: 0");
-    expect(cell).toContain("overflow: hidden");
-    // The alerts cell is pinned against shrink — it is the last thing to give.
-    const alert = styles.match(/\.program-rollup-cell\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(alert).toContain("flex-shrink: 0");
+    expect(cell).not.toContain("overflow: hidden");
     // The tokens cell (tagged by JS with a key) is dropped on narrow screens.
     expect(source).toContain('label: "tokens", key: "tokens"');
     expect(source).toContain('" program-rollup-cell--" + c.key');
@@ -4478,6 +4487,27 @@ describe("FE-B: harness-backed client behavior", () => {
      the same contextPct the CTX column reads. Peak alone also hides the shape of
      the fleet — one agent at 90% reads identically to every agent at 90% — so
      the median is what makes the number interpretable. */
+  /* Cockpit audit §10 and §11. Docked at 1440 the program header rendered
+     "169 a…  13 wo…  1 alert  1.15B t…" — three of four cells clipped to
+     fragments, and "0 al…" is not information in any language. Notably
+     scrollWidth did NOT report clipping, so this is only provable from pixels;
+     the guard here is the two structural causes instead. */
+  test("(10a) the rollup drops a zero-alert cell and is allowed to wrap rather than clip", () => {
+    const calm = [agent({ id: "a:1", status: "running", activity: "working", outcome: "healthy" })];
+    const keys = M.programRollupCells(calm).map((c: { label: string }) => c.label);
+    expect(keys).not.toContain("alerts");   // nothing to say at zero
+    expect(keys).not.toContain("alert");
+
+    const alerting = [agent({ id: "a:2", status: "attention", activity: "idle", outcome: "needs-you" })];
+    expect(M.programRollupCells(alerting).map((c: { label: string }) => c.label)).toContain("alert");
+
+    /* Wrapping is what stops four cells ellipsising into fragments in a
+       550px-wide docked roster. nowrap was the cause. */
+    const rule = styles.match(/\.program-rollup \{[^}]*\}/)?.[0] ?? "";
+    expect(rule).not.toContain("flex-wrap: nowrap");
+    expect(rule).toContain("flex-wrap: wrap");
+  });
+
   /* Cockpit audit §9. Measured on the live roster: .agent-name renders the
      identical text at 15px/700/near-black while .row-session-tag — the only
      value that differs between rows — renders at 10.5px/400/muted on the
