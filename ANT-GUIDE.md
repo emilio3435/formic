@@ -64,7 +64,7 @@ Every row is **one AI session**. Left to right:
 | Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Working`, `Idle` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Idle` on a mixed tab, or `Alert`, `Blocked`, `Failed`. Hover for the full state. |
 | Model · ctx | Which model, and how full its context window is |
 | Tokens | How much it has used |
-| Elapsed | How long since it last moved |
+| Span | First activity to last activity — **including every hour it sat dormant.** Not time spent working. A session showing `3d` may have worked for ten minutes of it. |
 
 A row indented under another with `↳` is a **subagent** — something the row above
 it launched.
