@@ -227,7 +227,19 @@ const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by fold
 function programRollupCells(agents, rollup = null) {
   const r = deriveRollup(agents);
   const cells = [
-    { value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" },
+    /* "230 agents" was 33 live and 197 ended — 5.8x the operational population
+       with no ended denominator beside it, which is the needsYou defect in a
+       different cell: two populations sharing one word. Both are named when both
+       exist; a program with nothing finished still just reads "N agents".
+       (Magnitude audit §6.) */
+    ...(r.ended > 0 && r.live > 0 && r.live + r.ended === agents.length
+      ? [{ value: String(r.live), label: "live" }, { value: String(r.ended), label: "ended" }]
+      /* The split must ACCOUNT for everyone. deriveActivity also returns
+         "unknown", and naming two cohorts that do not sum to the roster would
+         silently drop the third — the same disappearing-population bug wearing
+         the fix's clothes. When they do not add up, the total is the only
+         claim that is true. */
+      : [{ value: String(agents.length), label: agents.length === 1 ? "agent" : "agents" }]),
     { value: String(r.working), label: "working" },
     ...(r.needsYou > 0
       /* Audit §11: "0 alerts" per program is one of three widgets that spent
@@ -822,9 +834,13 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const cost = burn.costLastHourUsd != null
       ? "$" + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
-    // Audit §20: coverage speaks only when incomplete. See context-peak below.
-    const coverage = burn.coverage && burn.coverage.reporting < burn.coverage.eligible
-      ? ` · ${burn.coverage.reporting}/${burn.coverage.eligible} reporting` : "";
+    /* No coverage suffix. It counted ELIGIBLE LIVE agents while the rate sums
+       deltas from every tracked reporter including ended ones — the same
+       wrong-population defect just removed from CONTEXT PEAK, and the same
+       reason: a coverage ratio attached to a figure it does not describe reads
+       as a completeness guarantee for a number it never measured.
+       (Magnitude audit §3, "two extras found here".) */
+    const coverage = "";
     /* The rate and the cost come from different places — the rate needs completed
        five-minute buckets, the cost comes from BurnBar — so one being absent says
        nothing about the other. Headlining "No data" above a real dollar figure
@@ -837,10 +853,18 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        failed BurnBar query and must never degrade into a rendered $0. */
     const sub = cost + coverage + (burn.costNote ? " · " + burn.costNote : "");
     if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
+    /* The rate is an average over a window the payload carries and the widget
+       never printed. windowMs is 300000 here — a five-minute average shown as a
+       bare "/min" invites reading it as an instantaneous rate, which is how a
+       rate and an hourly cost end up divided against each other. Say the window.
+       (Magnitude audit §3.) */
+    const windowNote = hasRate && Number.isFinite(burn.windowMs) && burn.windowMs > 0
+      ? " · " + fmtElapsed(burn.windowMs) + " average"
+      : "";
     return {
       value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
       unit: hasRate ? "/min" : "",
-      sublabel: sub,
+      sublabel: sub + windowNote,
       tone: hasRate ? "ok" : "missing",
     };
   }
@@ -964,7 +988,7 @@ globalThis.TheAntHill = {
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
-  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
+  systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
   healthRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
@@ -1872,6 +1896,16 @@ function calmSpendText(burn) {
   return typeof cost === "number" ? "$" + cost.toFixed(2) + " last hour" : "";
 }
 
+/* What the activity sparkline is actually showing. Five-minute buckets, so the
+   window is a function of how many exist — a freshly restarted tracker holds two
+   of them and must not call that an hour. */
+function sparklineLabel(buckets) {
+  const n = Array.isArray(buckets) ? buckets.length : 0;
+  const span = n * 5 * 60_000;
+  return "Active sessions per 5-minute bucket"
+    + (span > 0 ? ", last " + fmtElapsed(span) : ", no window observed yet");
+}
+
 function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   const snap = state.snap;
   const totals = totalsOf(snap);
@@ -1897,7 +1931,11 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
     line.append(el("span", { class: "pulse-watch", text: clause }));
   }
   const spark = pulse
-    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: "Active sessions per 5-minute bucket, last hour" })
+    /* The label used to claim "last hour" while the tracker held 12.7 minutes of
+       buckets — a 4.7x window overstatement, in an accessibility label no sighted
+       reader ever sees, which is why it took an audit to find. It now says the
+       window it actually has. (Magnitude audit §5.) */
+    ? svgSparkline(pulse.activity.buckets.map((b) => b.activeSessions), { label: sparklineLabel(pulse.activity.buckets) })
     : null;
   if (spark) line.append(spark);
   /* Once anything is being watched the trailing verdict cannot read "All clear":
@@ -3642,7 +3680,21 @@ function renderAgentColumnHeader() {
     el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
-    el("span", { class: "agent-column-label ri-col-label", text: "Elapsed" }));
+    /* "Span", not "Elapsed". The value is updatedAt − startedAt: first touch to
+       last touch, with every dormant hour inside it. One agent reads 87.1 days
+       and the arithmetic is CORRECT — startedAt really is 2026-05-06 — but
+       "Elapsed" beside a row invites "this has been grinding for three months",
+       which overstates actual activity by roughly 204x. 19 agents exceed 36
+       hours on this board and 8 exceed 30 days.
+
+       This is the sessionTotal disease in a different column: a true number whose
+       label claims something else. The number is not wrong, so the fix is the
+       word, not the maths. */
+    el("span", {
+      class: "agent-column-label ri-col-label",
+      title: "First activity to last activity, dormancy included — not time spent working",
+      text: "Span",
+    }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren) {
@@ -3920,7 +3972,8 @@ function renderAgentRow(agent, program, opts = {}) {
     elapsed && elapsed !== "—"
       ? el("span", {
         class: "ri-cell ri-elapsed",
-        "aria-label": "Elapsed: " + elapsed,
+        "aria-label": "Span, first to last activity: " + elapsed,
+        title: "First activity to last activity, dormancy included",
       },
         el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
       : null);

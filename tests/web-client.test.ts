@@ -474,6 +474,89 @@ describe("summary status and widgets", () => {
     expect(M.degradedSeverity(blockedAndNoisy, "live", false).key).toBe("blocking");
   });
 
+  /* Magnitude audit §5. The activity sparkline's accessible name claimed "last
+     hour" while the tracker held 12.7 minutes of buckets — a 4.7x window
+     overstatement, invisible to sighted readers, which is why it survived every
+     visual review. The window is a function of bucket count and must be read
+     from it. */
+  test("sparkline names the window it actually holds, not an assumed hour", () => {
+    // 12 five-minute buckets is the hour the label used to assert unconditionally.
+    expect(M.sparklineLabel(new Array(12).fill(0))).toContain("last 60m");
+    // The state that was lying: a freshly restarted tracker with two buckets.
+    expect(M.sparklineLabel([1, 2])).toContain("last 10m");
+    expect(M.sparklineLabel([1, 2])).not.toContain("hour");
+    // No buckets is no window — not a zero-length hour.
+    expect(M.sparklineLabel([])).toContain("no window observed yet");
+  });
+
+  /* Magnitude audit §6. "230 agents" was 33 live and 197 ended: 5.8x the
+     operational population under one word, the needsYou defect in a different
+     cell. Both cohorts are named — but only when they account for the whole
+     roster, or the fix would silently drop "unknown" the way the bug dropped
+     "ended". */
+  test("program rollup names live and ended separately, and only when they add up", () => {
+    const labels = (cells: Array<{ value: string; label: string }>) =>
+      cells.map((c) => c.value + " " + c.label);
+
+    const mixed = [
+      agent({ id: "a", activity: "working" }),
+      agent({ id: "b", activity: "idle" }),
+      agent({ id: "c", activity: "ended" }),
+      agent({ id: "d", activity: "ended" }),
+    ];
+    expect(labels(M.programRollupCells(mixed))).toEqual(
+      expect.arrayContaining(["2 live", "2 ended"]),
+    );
+    expect(labels(M.programRollupCells(mixed)).join(" ")).not.toContain("4 agents");
+
+    // Nothing ended yet: one population, so one word is honest.
+    const allLive = [agent({ id: "a", activity: "working" }), agent({ id: "b", activity: "idle" })];
+    expect(labels(M.programRollupCells(allLive))).toContain("2 agents");
+
+    /* An unaccounted-for cohort means the split cannot be trusted to sum, so the
+       total is the only true claim. This is the guard, not an edge case: naming
+       two of three populations is the original bug. */
+    const withUnknown = [...mixed, agent({ id: "e", activity: "unknown", lastActivityAt: null })];
+    const unknownCells = labels(M.programRollupCells(withUnknown));
+    expect(unknownCells).toContain("5 agents");
+    expect(unknownCells.join(" ")).not.toContain("live");
+  });
+
+  /* Magnitude audit §3. Two figures that could not both be true — 5,089,747
+     tok/min beside $4.41, an implied 1.5c per million against a real floor about
+     35x higher. The backend fixed the maths. What was left on this side was the
+     rate being shown as a bare "/min" while the payload carried windowMs=300000,
+     so a five-minute average read as an instantaneous rate, and a coverage suffix
+     counting eligible LIVE agents against a rate summed over every reporter
+     including ended ones. A rate whose window is unstated is a rate the operator
+     will divide against an hourly cost, which is exactly how this was found. */
+  test("BURN states the averaging window and does not attach live-only coverage to it", () => {
+    const snap = snapshot({
+      pulse: {
+        burn: {
+          tokensPerMin: 10_546,
+          windowMs: 300_000,
+          costLastHourUsd: null,
+          coverage: { reporting: 8, eligible: 33 },
+        },
+      },
+    });
+    const data = M.summaryWidgetData("burn", snap, "live", "percent", [], false);
+
+    expect(data.sublabel).toContain("5m average");
+    // The coverage ratio described a different population than the rate.
+    expect(data.sublabel).not.toContain("reporting");
+    expect(data.sublabel).not.toContain("8/33");
+
+    // No window on the wire means no window claim — never a fabricated default.
+    const noWindow = M.summaryWidgetData(
+      "burn", snapshot({ pulse: { burn: { tokensPerMin: 10_546, costLastHourUsd: null } } }),
+      "live", "percent", [], false,
+    );
+    expect(noWindow.sublabel).not.toContain("average");
+    expect(noWindow.value).toBe(M.fmtTok(10_546));
+  });
+
   /* F2: the BURN card read "cost unavailable" because the cost source returns
      null, and that is the correct render of an unknown — but nothing pinned it
      down. The failure worth guarding is not the missing number, it is a missing
@@ -1348,7 +1431,7 @@ describe("calm program and agent list rendering", () => {
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
     const header = withDom(() => plan[0].build());
     expect(header.className).toContain("agent-column-header");
-    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Elapsed"]) {
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Span"]) {
       expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -1611,7 +1694,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const header: any = withDom(() => M.renderAgentColumnHeader());
     const text = textOf(header);
-    for (const label of ["Agent", "Status", "Model", "Tokens", "Elapsed"]) {
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Span"]) {
       expect(text).toContain(label);
     }
   });
