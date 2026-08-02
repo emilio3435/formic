@@ -430,7 +430,10 @@ export interface HubSnapshot {
     working?: number;
     idle?: number;
     ended?: number;
+    /** Agents waiting on a human: the to-do list. Counted from attentionSignal. */
     needsYou?: number;
+    /** Operator issues — degraded sources, control faults. A different population. */
+    systemFindings?: number;
     history?: number;
     tokenReporting?: number;
     tokenEligible?: number;

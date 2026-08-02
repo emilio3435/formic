@@ -294,7 +294,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,
       ended: allAgents.filter((agent) => agent.activity === "ended").length,
-      needsYou: issues.length,
+      /* Agents waiting on a human, counted from the same signal the tab, the
+         title badge, the notifier and the program rollup all read. This was
+         issues.length — system findings — which meant the rollup cell and the
+         totals disagreed about what the word meant while sharing it. */
+      needsYou: allAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
+      /* System findings keep their own vocabulary. A degraded collector and an
+         agent that asked a question are both worth surfacing and neither is the
+         other; folding them into one word is what made "needs you" unreadable. */
+      systemFindings: issues.length,
       history: allAgents.filter((agent) => agent.activity === "ended").length,
       tokenReporting: workingAgents.filter((agent) => typeof agent.tokens.total === "number").length,
       tokenEligible: workingAgents.length,

@@ -187,11 +187,54 @@ function clean(value: string | null | undefined): string {
   return (value ?? "").replace(/\r/g, "").trim();
 }
 
+/* Clips at a word boundary. Measured on the live probe, the old form cut
+   "…migrate the legacy colum…" mid-word, which reads as a rendering bug rather
+   than an elision and costs the quote its authority. Falls back to the hard
+   slice only when there is no space to break on. */
 function truncate(value: string): string {
   const collapsed = value.replace(/\s+/g, " ").trim();
-  return collapsed.length <= MAX_EVIDENCE_CHARS
-    ? collapsed
-    : `${collapsed.slice(0, MAX_EVIDENCE_CHARS - 1).trimEnd()}…`;
+  if (collapsed.length <= MAX_EVIDENCE_CHARS) return collapsed;
+  const clipped = collapsed.slice(0, MAX_EVIDENCE_CHARS - 1);
+  const boundary = clipped.lastIndexOf(" ");
+  const kept = boundary > MAX_EVIDENCE_CHARS * 0.6 ? clipped.slice(0, boundary) : clipped;
+  return `${kept.trimEnd()}…`;
+}
+
+/* The alternatives the operator is being asked to choose between.
+
+   Three shapes, and the quote has to carry the CHOICE in all of them:
+     "…drop the column or migrate it first?"   the ask names both options
+     "…widen the lock or shard the queue. Which would you prefer?"
+                                                the options are the sentence BEFORE
+     "Option A … Option B …"                    the match spans sentences
+
+   So: take the sentence the match sits in; if that sentence is a bare ask with
+   no room for alternatives, reach back one sentence for them; and if the match
+   itself is longer than either, the match already spans the options. */
+const BARE_ASK_CHARS = 60;
+
+function sentences(value: string): string[] {
+  return value.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+}
+
+function forkQuote(source: string, match: RegExpExecArray): string {
+  const list = sentences(source);
+  let index = -1;
+  for (let i = 0; i < list.length; i += 1) {
+    if (FORK_PATTERNS.some((pattern) => pattern.test(list[i]!))) index = i;
+  }
+  if (index === -1) return match[0].trim();
+  const asked = list[index]!;
+  /* Reach back ONLY for an ask that names no alternatives. "Should I drop the
+     legacy column or migrate it first?" is self-contained, and prepending its
+     run-up buries the choice in the reasoning again — the exact defect this
+     replaced. "Which would you prefer?" is not, so its options are the sentence
+     before it. */
+  const selfContained = /\bor\b|\boption\b/i.test(asked);
+  const quote = !selfContained && asked.length < BARE_ASK_CHARS && index > 0
+    ? `${list[index - 1]!} ${asked}`
+    : asked;
+  return match[0].length > quote.length ? match[0].trim() : quote;
 }
 
 /* The sentence a match sits in, so evidence quotes a whole thought rather than
@@ -324,11 +367,20 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
      these two" is a more useful instruction than "answer it", and the operator
      can act on it without reading the transcript first. */
   const forkSource = closing || clean(input.lastAgentClosing);
-  if (forkSource && !isMachineText(forkSource) && FORK_PATTERNS.some((pattern) => pattern.test(forkSource))) {
+  const fork = forkSource && !isMachineText(forkSource)
+    ? FORK_PATTERNS.map((pattern) => pattern.exec(forkSource)).find(Boolean)
+    : undefined;
+  if (fork) {
     return {
       kind: "fork-unresolved",
       nextAction: "Pick one of the options it stopped between.",
-      evidence: truncate(forkSource),
+      /* Quote the OPTIONS, not the paragraph in front of them. The live probe
+         asked "Should I drop the legacy column or migrate it first?" after two
+         sentences of context, and the evidence opened on "…Dropping it now is a
+         one-way door" — the reasoning, not the choice the operator has to make.
+         An enumerated fork ("Option A … Option B") spans sentences, so when the
+         match itself is longer than its closing sentence the match wins. */
+      evidence: truncate(forkQuote(forkSource, fork)),
     };
   }
 

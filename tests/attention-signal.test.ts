@@ -443,3 +443,48 @@ describe("coverage preconditions are bounded by scope", () => {
     expect(fields.attentionSignal?.kind).toBe("permission-requested");
   });
 });
+
+describe("evidence quotes the choice, and never breaks a word", () => {
+  test("a fork after a long run-up quotes the options, not the reasoning", () => {
+    /* The exact text from the live end-to-end probe. The evidence used to open
+       on "…Dropping it now is a one-way door" — the reasoning — and cut off at
+       "legacy colum…" mid-word. The operator needs the choice, not the essay. */
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing:
+        "I traced the column through the writer and the backfill job. "
+        + "Dropping it now is a one-way door because the nightly export still reads it, "
+        + "and migrating in place needs a short write freeze. "
+        + "Should I drop the legacy column or migrate it first?",
+    }));
+
+    expect(signal.kind).toBe("fork-unresolved");
+    expect(signal.evidence).toBe("Should I drop the legacy column or migrate it first?");
+    expect(signal.evidence).not.toContain("one-way door");
+  });
+
+  test("a bare ask reaches back for the alternatives it is asking about", () => {
+    // "Which would you prefer?" alone names no options; they are the sentence before.
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing: "I can either widen the lock or shard the writer queue. Which would you prefer?",
+    }));
+
+    expect(signal.evidence).toContain("shard the writer queue");
+    expect(signal.evidence).toContain("Which would you prefer?");
+  });
+
+  test("evidence is never cut mid-word", () => {
+    /* "…migrate the legacy colum…" reads as a rendering bug rather than an
+       elision, and costs the quote its authority. One long ask, so the quote
+       genuinely exceeds the evidence cap and has to be clipped. */
+    const ask = `Should I ${"reconcile the ledger and ".repeat(12)}or leave it for the next run?`;
+    const signal = detectAttentionSignal(input({ lastAgentClosing: ask }));
+
+    const evidence = signal.evidence ?? "";
+    expect(evidence.endsWith("…")).toBe(true);
+    const body = evidence.slice(0, -1);
+    // Every clipped quote must end on a whole word from the original text.
+    expect(ask.replace(/\s+/g, " ")).toContain(body);
+    expect(/\w$/.test(body)).toBe(true);
+    expect(ask.replace(/\s+/g, " ").startsWith(body)).toBe(true);
+  });
+});

@@ -705,7 +705,12 @@ describe("snapshot control safety and SSE deduplication", () => {
       outcome: "needs-you",
       controlState: "observed-only",
     });
-    expect(snapshot.totals).toMatchObject({ working: 1, idle: 2, ended: 1, history: 1, needsYou: 1 });
+    /* needsYou means AGENTS WAITING ON A HUMAN. None of these is: the
+       "attention" status was set directly on the fixture without a cmux
+       notification object, so nothing here actually asks for anyone. The
+       operator issue it raises is a SYSTEM finding and is counted as one. */
+    expect(snapshot.totals).toMatchObject({ working: 1, idle: 2, ended: 1, history: 1, needsYou: 0 });
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
   });
 
   test("cmux identity failures become one human-readable system issue", () => {
@@ -735,7 +740,11 @@ describe("snapshot control safety and SSE deduplication", () => {
       }),
     ]);
     expect(snapshot.issues?.[0]?.summary).toContain("until one is closed");
-    expect(snapshot.totals.needsYou).toBe(1);
+    /* A cmux identity conflict is a system finding, not an agent waiting on a
+       human — different populations, different words. Folding them into one
+       number is what made "needs you" unreadable. */
+    expect(snapshot.totals.systemFindings).toBe(1);
+    expect(snapshot.totals.needsYou).toBe(0);
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, total: 4 });
   });
 
@@ -1628,5 +1637,87 @@ describe("a dead session is never given an instruction", () => {
     // Crediting skipped rows as "readable" would inflate the layer's apparent
     // reach with sessions it deliberately never looks at.
     expect(snapshot.attentionCoverage).toMatchObject({ agents: 2, ended: 1, readable: 1 });
+  });
+});
+
+describe("needs you means agents waiting on a human", () => {
+  /* One phrase had three meanings and they could not agree: totals.needsYou
+     counted system findings (issues.length), the program rollup counted any
+     agent whose outcome was not healthy, and the client counted attention
+     signals. The tab is named for the third, ANT-GUIDE.md promises the third in
+     writing, and the north star is about the third. All three now read the same
+     collection, and system findings keep their own word. */
+  const asking = () => collected({
+    id: "codex:asking",
+    sourceSessionId: "asking",
+    lastAgentClosing: "Publishing is your call.",
+  });
+
+  test("an agent waiting on a human is counted, in the totals and in its program rollup", () => {
+    const snapshot = buildSnapshot({
+      agents: [asking()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.attentionSignal?.kind).toBe("handoff-stated");
+    expect(snapshot.totals.needsYou).toBe(1);
+    // The rollup cell and the totals must never disagree again.
+    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(1);
+  });
+
+  test("a failed agent that asks nothing is NOT a to-do", () => {
+    /* The old rollup counted any non-healthy outcome. A failed session is a
+       fact about the work, not a request for a person — and the board already
+       shows the failure. */
+    const failed = collected({
+      id: "codex:failed",
+      sourceSessionId: "failed",
+      gates: ["build failed"],
+      lastAgentClosing: "The build failed on the third target.",
+    });
+    const snapshot = buildSnapshot({
+      agents: [failed],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(agent?.outcome).not.toBe("healthy");
+    expect(agent?.attentionSignal).toBeUndefined();
+    expect(snapshot.totals.needsYou).toBe(0);
+    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(0);
+  });
+
+  test("a system finding is counted separately and never as a to-do", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      cmuxErrors: ["cmux SURFACE-X is unreachable"],
+      cmuxReachable: false,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
+    expect(snapshot.totals.needsYou).toBe(0);
+  });
+
+  test("an agent waiting and a system finding are counted in different words", () => {
+    // Both present at once: the two numbers must be independent.
+    const snapshot = buildSnapshot({
+      agents: [asking()],
+      surfaces: [],
+      cmuxErrors: ["cmux SURFACE-X is unreachable"],
+      cmuxReachable: false,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.totals.needsYou).toBe(1);
+    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
   });
 });

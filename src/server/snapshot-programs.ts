@@ -50,7 +50,16 @@ export function rollupFor(agents: readonly AgentSnapshot[]): ProgramRollup {
     working: agents.filter((agent) => agent.activity === "working").length,
     idle: agents.filter((agent) => agent.activity === "idle").length,
     ended: agents.filter((agent) => agent.activity === "ended").length,
-    needsYou: agents.filter((agent) => agent.outcome && agent.outcome !== "healthy" && agent.activity !== "ended").length,
+    /* "Needs you" means AGENTS WAITING ON A HUMAN — the phrase the tab is named
+       for and the only number on the board that is a to-do list.
+
+       It used to count any agent whose outcome was not healthy, which is a
+       different population: a failed or blocked session is a fact about the
+       work, not a request for a person. Meanwhile totals.needsYou counted
+       system findings and the client counted attention signals, so one phrase
+       had three meanings and they could not agree. All three now read the same
+       collection. System findings keep their own name in totals. */
+    needsYou: agents.filter((agent) => Boolean(agent.attentionSignal)).length,
     blocked: outcomeCount("blocked"),
     failed: outcomeCount("failed"),
     linked: agents.filter((agent) => agent.controlState === "linked").length,
