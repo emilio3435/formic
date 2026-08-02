@@ -243,6 +243,102 @@ describe("a route it cannot prove is a route it does not take", () => {
   });
 });
 
+describe("a cwd string is not identity", () => {
+  /* The case this file MISSED on its first pass, and the one where a hollow
+     assertion has a real cost.
+
+     control.ts authorises writes on resolution "unique-cwd". targets.ts builds
+     that resolution from `cwdMatches.filter(s => s.sourceSessionIds.length === 0)`
+     — a pane with ZERO identity evidence, selected because its directory string
+     matches and nothing else claimed it. The reason it ships reads "the only
+     UNCLAIMED cmux surface with this exact cwd", which is the tell: unclaimed
+     is the absence of proof, not proof.
+
+     Measured on this build: an instruction addressed to codex:alpha is sent to
+     SURFACE-UNCLAIMED and answered ok:true, status 200. A swarm whose lanes
+     share one working tree — as this project's five do — makes that collision
+     ordinary rather than exotic, and the failure lands an instruction in a
+     stranger's terminal while telling the operator it succeeded.
+
+     Marked failing because the backend is landing fail-closed now. It runs on
+     every commit, and the moment "unique-cwd" leaves the authorised set this
+     reports "marked as failing but it passed" — remove the marker there and it
+     becomes a permanent guard against anyone re-permitting it. */
+  const cwdMatched = () => agent({
+    target: {
+      surfaceId: "SURFACE-UNCLAIMED",
+      resolution: "unique-cwd",
+      reason: "Matched one active source to the only unclaimed cmux surface with this exact cwd.",
+    },
+  });
+
+  test("a cwd-matched target is refused an instruction and sends nothing", async () => {
+    const runner = new RecordingRunner();
+    const result = await run(cwdMatched(), "instruct", runner, "deploy to production");
+
+    expect(result.response.ok).toBe(false);
+    expect(result.response.error?.code).toBe("UNSAFE_TARGET");
+    expect(runner.commands).toEqual([]);
+    expect(runner.argv).not.toContain("deploy to production");
+  });
+
+  /* STILL MARKED, and deliberately: this is an open disagreement, not an
+     oversight. The tests lane holds that focus should be refused too, because
+     it points an operator at a terminal never proven to be the agent's and the
+     operator then types there by hand. The interim ruling landed here scoped
+     the refusal to Send and Interrupt — the actions that put characters into a
+     tty — and kept focus, because looking at the pane is how an operator
+     resolves the ambiguity once the write controls are off. Left failing so the
+     question stays visible and flips the moment focus is gated. */
+  test.failing("a cwd-matched target is refused focus", async () => {
+    // Focus is the cheapest write and still moves an operator's attention to a
+    // terminal that was never proven to be the agent's.
+    const runner = new RecordingRunner();
+    const result = await run(cwdMatched(), "focus", runner);
+
+    expect(result.response.ok).toBe(false);
+    expect(runner.commands).toEqual([]);
+  });
+
+  test("a cwd-matched target is refused an interrupt", async () => {
+    // Interrupt sends Escape. On a stranger's terminal it cancels their work.
+    const runner = new RecordingRunner();
+    const result = await run(cwdMatched(), "interrupt", runner);
+
+    expect(result.response.ok).toBe(false);
+    expect(runner.commands).toEqual([]);
+  });
+
+  test("the refusal says why, so the control reads as off rather than broken", async () => {
+    /* Was the control pinning the vulnerable behaviour, and it went red when
+       fail-closed landed — which is what it was for. What it pins now is the
+       other half of the ruling: an operator must be able to tell a deliberate
+       refusal from a bug, and be told what would restore the control. */
+    const runner = new RecordingRunner();
+    const result = await run(cwdMatched(), "instruct", runner, "deploy to production");
+
+    expect(result.response.ok).toBe(false);
+    expect(runner.argv).not.toContain("SURFACE-UNCLAIMED");
+    expect(runner.argv).not.toContain("deploy to production");
+    const message = result.response.error?.message ?? "";
+    expect(message).toMatch(/working directory/i);
+    expect(message).toMatch(/not attested|cannot be proven/i);
+    // It names the way back, so the row does not read as permanently dead.
+    expect(message).toMatch(/as soon as cmux attests/i);
+  });
+
+  test("an exact match is still allowed, so the fix must not close the door entirely", () => {
+    /* The other side of the property. Refusing every route would also stop an
+       instruction reaching the agent it names, which is the same failure from
+       the opposite direction — and is what a panicked fix looks like. */
+    const runner = new RecordingRunner();
+    return run(agent(), "instruct", runner, "run the tests").then((result) => {
+      expect(result.response.ok).toBe(true);
+      expect(runner.argv).toContain(ALPHA_SURFACE);
+    });
+  });
+});
+
 describe("archive is a local record, not a message to the agent", () => {
   test("archiving sends no command to any surface", async () => {
     /* Archive files a session on this board; it does not touch the terminal.
