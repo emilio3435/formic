@@ -1561,6 +1561,25 @@ describe("modelShort — Cursor-native short forms within the 18-char bound", ()
     expect(M.modelShort("gpt-5-codex")).toBe("gpt-5-codex");
     expect(M.modelShort(null)).toBeNull();
   });
+
+  /* A placeholder is not a model name. The collector writes `<synthetic>` when it
+     manufactures a session and absence words like "unknown" when it has no model,
+     and both used to pass through unchanged into a slot whose fallback reads "not
+     reported" — a gap filled with something that reads like an answer, which is
+     the one thing this board must not do. Null here, so every caller's own
+     absence wording applies. Measured on the wire 2026-08-03: 3 agents carried
+     "<synthetic>", 7 carried no model field at all. */
+  test("collector placeholders are not model names", () => {
+    expect(M.modelShort("<synthetic>")).toBeNull();
+    expect(M.modelShort("<unknown>")).toBeNull();
+    expect(M.modelShort("unknown")).toBeNull();
+    expect(M.modelShort("Unknown")).toBeNull();
+    expect(M.modelShort("none")).toBeNull();
+    expect(M.modelShort("n/a")).toBeNull();
+    expect(M.modelShort("  ")).toBeNull();
+    // A real name that merely contains an absence word is still a real name.
+    expect(M.modelShort("unknown-forge-2")).toBe("unknown-forge-2");
+  });
 });
 
 describe("issues", () => {
@@ -2158,6 +2177,30 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     const text = textOf(instruments);
     expect(text).not.toContain("%");            // no invented percentage
     expect(text).not.toContain("not reported"); // cell omitted, never faked as text
+  });
+
+  /* The head guard (0f9c643) covered one surface out of two: the drawer omitted
+     the model for an agent carrying "<synthetic>" while the row behind it printed
+     the placeholder in the very slot a model name goes (evidence: e024422, two
+     screenshots of one archived Claude session). The row's own precedent for an
+     absent model is the words "not reported"; a placeholder is absence, so it
+     takes that path rather than being echoed back as a name. */
+  test("(b2) a collector placeholder reads as an absent model, not as a model name", () => {
+    for (const placeholder of ["<synthetic>", "unknown"]) {
+      const masked = agent({
+        provider: "claude",
+        model: placeholder,
+        tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row: any = withDom(() => M.renderAgentRow(masked, program));
+      const modelCell = findByClass(row, "ri-model");
+      expect(modelCell).not.toBeNull();
+      expect(textOf(modelCell)).not.toContain(placeholder);
+      expect(textOf(modelCell)).toContain("not reported");
+      // The measured context percentage is real and survives the guard.
+      expect(textOf(modelCell)).toContain("20%");
+    }
   });
 
   test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
@@ -5872,6 +5915,34 @@ describe("FE-B: harness-backed client behavior", () => {
       return domById.get("usage-panel");
     });
     expect(textOf(quiet)).toContain("No invocations in this range.");
+  });
+
+  /* The second instance of the same leak as the roster row (evidence e024422):
+     the Model column echoed whatever the collector wrote, so "<synthetic>" landed
+     in a column of model names while a genuinely absent model read "—". The
+     invocation is real either way; only the name is unknown, and the column's own
+     em dash already says that. */
+  test("the invocation table's Model column says nothing rather than a placeholder", () => {
+    const table = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: {
+          available: true,
+          invocations: [
+            { sessionId: "a1", provider: "claude", model: "<synthetic>", tokens: 10, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" },
+            { sessionId: "b2", provider: "codex", model: "gpt-5-codex", tokens: 20, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" },
+          ],
+        },
+      });
+      return domById.get("usage-panel");
+    });
+    const text = textOf(table);
+    expect(text).not.toContain("<synthetic>");
+    // The row itself is still reported, and a known model is still named.
+    expect(text).toContain("gpt-5-codex");
+    expect(text).toContain("—");
   });
 
   /* -------- finding 2: one agent's tick rebuilt the whole list -------------

@@ -27,9 +27,18 @@ const MODEL_SHORT = [
 // Anthropic families whose transcript id carries a version we want to keep
 // (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
 const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku"];
+/* A placeholder is not a model name. A collector writes a bracketed marker like
+   `<synthetic>` for a session it manufactured, and absence words like "unknown"
+   when it has no model at all. Both used to pass through unchanged into slots
+   whose fallback reads "not reported" or "—" — the gap filled with something
+   that reads like an answer. Null instead, so each caller's existing absence
+   wording applies and the model is reported as what it is: not known. */
+const MODEL_ABSENT = /^(?:unknown|unspecified|none|n\/a|null|undefined)$/i;
 export function modelShort(m) {
   if (!m) return null;
-  const low = m.toLowerCase();
+  const raw = String(m).trim();
+  if (!raw || /^<.*>$/.test(raw) || MODEL_ABSENT.test(raw)) return null;
+  const low = raw.toLowerCase();
   for (const fam of ANTHROPIC_VERSIONED) {
     const at = low.indexOf(fam);
     if (at === -1) continue;
@@ -52,7 +61,7 @@ export function modelShort(m) {
     return flat.length > 18 ? flat.slice(0, 17) + "…" : flat;
   }
   for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
-  return m.length > 18 ? m.slice(0, 17) + "…" : m;
+  return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
 }
 
 export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP" };
