@@ -5759,8 +5759,18 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
   dock.append(tools);
   if (archiveCap && safeLocked) {
+    /* The summary names the one thing behind it. It read "More", which told an
+       operator nothing about whether the click was worth making — and what is
+       actually behind it is a single DESTRUCTIVE action, so "More" understated
+       it in the one direction that matters.
+
+       Not folded into the evidence rail, which was the other candidate: that
+       rail holds things to READ (paths, tokens, identity, transcript) and this
+       holds one thing to DO. They are two doors onto different content, so
+       collapsing them would put a destructive control inside a drawer labelled
+       evidence — worse than the vague label it replaced. */
     dock.append(el("details", { class: "command-dock-more" },
-      el("summary", { text: "More" }),
+      el("summary", { text: "Archive this session" }),
       renderDockTool(agent, archiveCap, "archive", { held })));
   }
 
