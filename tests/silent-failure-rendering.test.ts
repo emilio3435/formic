@@ -97,6 +97,10 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
         codex: ["EACCES scanning ~/.codex"],
         claude: ["EACCES scanning ~/.claude"],
         cursor: ["cursor state db is locked"],
+        /* "four dead sources" counted three providers and the control plane.
+           omp is the fourth collector and was missing from the fixture, so the
+           scenario this file is named for was never actually all-sources-down. */
+        omp: ["EACCES scanning ~/.omp"],
       },
       cmuxErrors: ["cmux socket refused the connection"],
       cmuxReachable: false,
@@ -113,7 +117,7 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
     expect(snapshot.totals.tracked).toBe(0);
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: 0, degraded: 4, absent: 0, total: 4 });
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.controlHealth?.staleSources).toEqual(["codex", "claude", "cursor"]);
+    expect(snapshot.controlHealth?.staleSources).toEqual(["codex", "claude", "cursor", "omp"]);
   });
 
   test("every dead source raises its own issue, so the cause is never anonymous", () => {

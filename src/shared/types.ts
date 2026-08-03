@@ -1,4 +1,24 @@
+/* The runtime companion to `Provider`. The list was hand-written in three
+   places — identity-bindings, state, and the health accounting in snapshot —
+   and the third one dropped omp, which is how "4 of 4 collectors healthy" came
+   to be printed above a breakdown that could show omp broken. A type cannot be
+   iterated, so the list has to exist; it does not have to exist three times.
+
+   `satisfies` is what makes this load-bearing: adding a provider to the union
+   without adding it here fails the build rather than quietly under-counting.
+   identity-bindings.ts:59 and state.ts:188 still keep their own correct copies
+   and could read this instead — worth doing, not part of this fix. */
 export type Provider = "codex" | "omp" | "claude" | "cursor";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor"] as const satisfies readonly Provider[];
+/* Exhaustiveness in the other direction: `satisfies` proves every entry is a
+   Provider, and this proves every Provider is an entry. Adding one to the union
+   without adding it to the list fails the build here rather than quietly
+   under-counting collector health, which is exactly how omp went missing. The
+   union is left spelled out because the reference-doc tests read it from this
+   source to check the guide names the same roster the code has. */
+type ProvidersAreExhaustive = Exclude<Provider, (typeof PROVIDERS)[number]> extends never ? true : never;
+const _providersAreExhaustive: ProvidersAreExhaustive = true;
+void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
 export type ProcessState = "running" | "exited" | "died" | "unknown";

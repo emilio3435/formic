@@ -119,7 +119,12 @@ describe("snapshot edge cases", () => {
     expect(snapshot.totals.tracked).toBe(1);
   });
 
-  test("an unreachable control plane counts as a degraded source", () => {
+  test("an unreachable control plane is reported as itself, not as a broken collector", () => {
+    /* This used to assert { healthy: 3, degraded: 1 } — an unreachable cmux
+       pulled a COLLECTOR into the red. cmux is the control plane; the four
+       collectors are the four providers `collectSessions` returns, and all four
+       are fine here. The fault is real and still reported, once, by the field
+       that means it. */
     const snapshot = buildSnapshot({
       agents: [],
       surfaces: [],
@@ -129,7 +134,7 @@ describe("snapshot edge cases", () => {
     });
 
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
   });
 
   test("an unreachable control plane carries the errors that explain it", () => {

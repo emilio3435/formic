@@ -925,7 +925,9 @@ describe("day one on a machine without cmux", () => {
        working", and returning null there left a newcomer with no signal at the
        one moment they need one. */
     const { verdict: fresh, sourceHealth } = machineVerdict({
-      sourceAbsent: { codex: true, claude: true, cursor: true },
+      // All four collectors, omp included — the day-one machine has no omp
+      // directory either, and leaving it unstated made it read as installed.
+      sourceAbsent: { codex: true, omp: true, claude: true, cursor: true },
       cmuxAbsent: true,
       cmuxReachable: true,
     });
@@ -940,7 +942,10 @@ describe("day one on a machine without cmux", () => {
 
   test("a machine with one tool installed names the one and the absences", () => {
     const { verdict: partial } = machineVerdict({
-      sourceAbsent: { codex: true, cursor: true },
+      // Claude Code installed; codex, cursor and omp are not. The three absences
+      // are now three collectors rather than two collectors and the control
+      // plane, which is what the sentence claimed all along.
+      sourceAbsent: { codex: true, cursor: true, omp: true },
       cmuxAbsent: true,
       cmuxReachable: true,
     });

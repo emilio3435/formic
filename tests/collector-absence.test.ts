@@ -73,7 +73,9 @@ describe("a provider that was never installed is absent, not degraded", () => {
   test("an absent provider leaves the health ratio instead of failing it", () => {
     const absent = health({
       agents: [], surfaces: [], archiveStore,
-      sourceAbsent: { codex: true, claude: true, cursor: true },
+      /* omp named explicitly. The test always meant "every provider absent";
+         it could not say so while the health accounting was blind to omp. */
+      sourceAbsent: { codex: true, omp: true, claude: true, cursor: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
@@ -87,16 +89,87 @@ describe("a provider that was never installed is absent, not degraded", () => {
     expect(absent.healthy).toBe(0);
   });
 
-  test("the fresh-clone board: two providers installed, cmux and Cursor absent", () => {
+  test("the fresh-clone board: two providers installed, the rest absent", () => {
     const summary = health({
       agents: [], surfaces: [], archiveStore,
-      sourceAbsent: { cursor: true },
+      /* A virgin HOME has no omp directory either — proved above by "an empty
+         HOME reports every provider absent", which iterates all four. The old
+         fixture left omp unstated and the accounting silently read it as
+         installed-and-healthy, which is the bug this file now covers. */
+      sourceAbsent: { cursor: true, omp: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
     expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 2, total: 2 });
+  });
+});
+
+describe("the health count covers every collector that exists", () => {
+  /* Two disjoint sets were both being called four.
+
+     The count (healthy/degraded/absent/total) was computed over a hand-written
+     list — codex, claude, cursor — plus cmux. The byProvider breakdown that
+     ships beside it on the same card is built from the Provider union, which is
+     codex, OMP, claude, cursor. So omp was in the breakdown and never in the
+     count, cmux was in the count and never in the breakdown, and both sets
+     happened to have four members. "4 of 4 collectors healthy" printed above
+     four breakdown rows looked self-consistent for as long as nothing broke.
+
+     omp has a collector (collectors.ts) and reports its own absence like every
+     other provider (proved above, "an empty HOME reports every provider
+     absent"). Only this accounting could not see it. */
+
+  test("a broken omp collector is degraded, not silently healthy", () => {
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceErrors: { omp: ["EACCES reading the omp session directory"] },
+    });
+
+    /* Before the fix this read degraded: 0 — the card said every collector was
+       healthy while byProvider.omp.healthy was false on the same screen. */
+    expect(summary.degraded).toBe(1);
+    expect(summary.healthy).toBe(summary.total - 1);
+  });
+
+  test("an absent omp is absent, and does not inflate the ratio", () => {
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceAbsent: { omp: true },
+    });
+
+    expect(summary.absent).toBe(1);
+    // Not "watching" a provider that is not installed.
+    expect(summary.total).toBe(summary.healthy + summary.degraded);
+  });
+
+  test("healthy + degraded + absent accounts for every known collector", () => {
+    /* The identity the card's copy already claims: total + absent === the known
+       kinds, which is the four `collectSessions` returns. It used to hold only
+       because the two miscounts were the same size. */
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      sourceErrors: { claude: ["unreadable"] },
+      sourceAbsent: { cursor: true },
+    });
+
+    expect(summary.healthy + summary.degraded).toBe(summary.total);
+    expect(summary.total + summary.absent).toBe(4);
+  });
+
+  test("an unreachable cmux is not a broken collector", () => {
+    /* cmux is the control plane, not a collector. It used to be counted as a
+       fifth-that-looked-like-a-fourth, so an unreachable control plane printed
+       as a degraded COLLECTOR while `controlHealth.cmuxReachable` said the same
+       thing in its own words two cards away. */
+    const summary = health({
+      agents: [], surfaces: [], archiveStore,
+      cmuxReachable: false,
+    });
+
+    expect(summary.degraded).toBe(0);
+    expect(summary.total).toBe(4);
   });
 });
 
@@ -130,17 +203,29 @@ describe("a provider that IS present and unreadable still says so, loudly", () =
     expect(summary.absent).toBe(0);
   });
 
-  test("cmux installed but failing is degraded; cmux missing is not", () => {
-    const failing = health({
+  test("cmux installed but failing is loud; cmux missing is not", () => {
+    /* The same distinction this file is about, asserted where cmux actually
+       lives. cmux is the control plane, not a collector, so a broken one is a
+       loud `controlHealth` fault rather than a degraded COLLECTOR — reporting it
+       in both places is one fault wearing two labels. What must not change is
+       that broken stays loud and missing stays calm. */
+    const build = (input: Parameters<typeof buildSnapshot>[0]) => buildSnapshot(input);
+    const failing = build({
       agents: [], surfaces: [], archiveStore,
       cmuxReachable: false,
       cmuxErrors: ["cmux terminal discovery exited 1: connection refused"],
     });
-    const missing = health({ agents: [], surfaces: [], archiveStore, cmuxAbsent: true, cmuxReachable: false });
+    const missing = build({ agents: [], surfaces: [], archiveStore, cmuxAbsent: true, cmuxReachable: false });
 
-    expect(failing.degraded).toBe(1);
-    expect(missing.degraded).toBe(0);
-    expect(missing.absent).toBe(1);
+    // Broken: named, and named once.
+    expect(failing.controlHealth.errors).toContain("cmux terminal discovery exited 1: connection refused");
+    expect(failing.controlHealth.cmuxReachable).toBe(false);
+    // Missing: nothing to report.
+    expect(missing.controlHealth.errors).toEqual([]);
+
+    // And neither is a collector fault, because cmux is not a collector.
+    expect(failing.totals.sourceHealth!.degraded).toBe(0);
+    expect(missing.totals.sourceHealth!.absent).toBe(0);
   });
 });
 
@@ -201,24 +286,28 @@ describe("end to end, the way the docs lane walked it", () => {
     writeFileSync(join(home, "not-a-provider.txt"), "");
     const sessions = await collectSessions(home);
 
+    /* Derived from what the collectors actually returned, rather than a
+       hand-written list of them. The hand-written version named codex, claude
+       and cursor and quietly dropped omp — the same omission that put the
+       health accounting out of step with its own breakdown, reproduced here in
+       the one test that was supposed to catch it end to end. */
+    const providers = Object.keys(sessions) as (keyof typeof sessions)[];
     const summary = health({
       agents: [], surfaces: [], archiveStore,
-      sourceAbsent: {
-        codex: sessions.codex.absent === true,
-        claude: sessions.claude.absent === true,
-        cursor: sessions.cursor.absent === true,
-      },
-      sourceErrors: {
-        codex: sessions.codex.errors,
-        claude: sessions.claude.errors,
-        cursor: sessions.cursor.errors,
-      },
+      sourceAbsent: Object.fromEntries(
+        providers.map((provider) => [provider, sessions[provider].absent === true]),
+      ),
+      sourceErrors: Object.fromEntries(
+        providers.map((provider) => [provider, sessions[provider].errors]),
+      ),
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // Not one degraded collector anywhere, which is what "1 of 4 degraded" claimed.
     expect(summary.degraded).toBe(0);
-    expect(summary.absent).toBe(4);
+    expect(summary.absent).toBe(providers.length);
+    // Vacuity guard: an empty provider list would satisfy the line above.
+    expect(providers.length).toBe(4);
   });
 });

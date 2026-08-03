@@ -9,6 +9,7 @@ import type {
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
 import { MODEL_CONFIG } from "./model-config";
 import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
@@ -291,28 +292,33 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      because it had never been installed. This is the same honesty rule the rest
      of the board follows, pointed at the newcomer instead of at us: we spent
      the day deleting numbers that overclaimed, and this one underclaimed. */
-  const collectorProviders: Provider[] = ["codex", "claude", "cursor"];
-  const absentSources =
-    collectorProviders.filter((provider) =>
-      input.sourceAbsent?.[provider] === true
-      && (input.sourceErrors?.[provider]?.length ?? 0) === 0,
-    ).length + (input.cmuxAbsent === true ? 1 : 0);
-  const degradedSources =
-    collectorProviders.filter((provider) =>
-      (input.sourceErrors?.[provider]?.length ?? 0) > 0,
-    ).length + (
-      input.cmuxAbsent !== true
-        && (operationalCmuxErrors.length > 0 || input.cmuxReachable === false)
-        ? 1
-        : 0
-    );
-  /* The ratio counts collectors that EXIST on this machine. Reporting "3 of 4
-     healthy" for a missing cmux still reads as a fault to the person it is
-     shown to, and reporting "4 of 4 healthy" would claim we are watching four
-     things when two are not installed. Neither is the sentence a newcomer needs;
-     "2 of 2 collectors healthy" is both calm and true. `absent` ships beside it
-     so a card can name what is simply not here. */
-  const knownCollectors = 4;
+  /* Every provider that has a collector, not a hand-written subset of them.
+     This list said codex/claude/cursor and omitted omp, while the byProvider
+     breakdown shipped on the same card is built from all four. Both sets had
+     four members — omp missing here, cmux missing there — so the totals looked
+     consistent right up until an omp collector broke, at which point the header
+     read "healthy" and the drawer read "broken" off the same snapshot. */
+  const collectorProviders: readonly Provider[] = PROVIDERS;
+  const absentSources = collectorProviders.filter((provider) =>
+    input.sourceAbsent?.[provider] === true
+    && (input.sourceErrors?.[provider]?.length ?? 0) === 0,
+  ).length;
+  const degradedSources = collectorProviders.filter((provider) =>
+    (input.sourceErrors?.[provider]?.length ?? 0) > 0,
+  ).length;
+  /* The ratio counts collectors that EXIST on this machine, and cmux is not one
+     of them. `collectSessions` returns exactly { omp, codex, claude, cursor },
+     and ANT-GUIDE tells the reader "the four collectors are the same everywhere"
+     before naming those. cmux is the control plane: it has its own
+     `controlHealth.cmuxReachable`, its errors become operator issues, and it is
+     rendered separately. Counting it here made an unreachable control plane
+     print as a broken *collector* — the same fault under two labels, on a board
+     whose whole complaint about itself was repeated information.
+
+     The literal 4 that used to sit here was right by arithmetic accident. This
+     block dropped omp (-1) and added cmux (+1), and the two cancelled, so the
+     published ratio stayed plausible while its membership was wrong. */
+  const knownCollectors = collectorProviders.length;
   const sourceTotal = Math.max(0, knownCollectors - absentSources);
   const activeCursorAgents = liveAgents.filter((agent) => agent.provider === "cursor");
   const cursorModelHealth = {

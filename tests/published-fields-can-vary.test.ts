@@ -16,8 +16,8 @@ import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
    The mechanism here is a REGISTER, not a cleverer assertion.
 
-     Every scalar the board publishes is driven across ten fleet states. A
-     field that takes the same value in all ten must be named in
+     Every scalar the board publishes is driven across eleven fleet states. A
+     field that takes the same value in all eleven must be named in
      DELIBERATELY_CONSTANT, with a reason and a pointer to what still covers it.
 
    So collapsing a field to a constant turns this test red at the moment of the
@@ -32,7 +32,7 @@ import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
    WHAT IT CANNOT DO, stated plainly because the limit is real and load-bearing:
 
-     Its power is exactly the breadth of the ten states below. A field that is
+     Its power is exactly the breadth of the eleven states below. A field that is
      constant across these but varies in production will be registered wrongly,
      and the register entry will look like a considered decision when it is an
      artefact of my fixtures. So a new entry is only as good as the person
@@ -76,12 +76,10 @@ const DELIBERATELY_CONSTANT: Record<string, string> = {
     "Constant here because every state reports at the same instant relative to the tracker's start. Its real "
     + "behaviour is covered by tests/pulse-window-honesty.test.ts, which drives the clock forward and asserts "
     + "the window never exceeds the time actually watched.",
-  "totals.sourceHealth.total":
-    "Structurally four: the fleet has four collectors and that count is not a measurement. Covered by "
-    + "tests/snapshot-edges.test.ts, which asserts all four are healthy on an empty fleet.",
-  "totals.sourceHealth.absent":
-    "No fixture here can make a collector ABSENT rather than degraded, which needs a collector that failed to "
-    + "run at all. Covered by tests/collector-absence.test.ts.",
+  /* totals.sourceHealth.total and .absent were registered here on the grounds
+     that no fixture could move them. The "a collector that cannot read its
+     files" state moves both, so the entries were stale and are gone — which is
+     what this register is supposed to do to itself. */
   "totals.cursorModelHealth.unreported":
     "The Cursor pair here reports models on both sides, so nothing is unreported. The unreported verdict is "
     + "covered by tests/snapshot-edges.test.ts, which pins a child whose parent never reported a model.",
@@ -132,7 +130,7 @@ function published(agents: readonly CollectedAgent[], extra: Record<string, unkn
   return { ...snapshot, pulse: tracker.report(T0) };
 }
 
-/* Eight states an operator actually sees. The test is exactly as strong as
+/* Eleven states an operator actually sees. The test is exactly as strong as
    this list, so adding a state is the cheapest way to strengthen it. */
 const STATES: readonly { label: string; snapshot: unknown }[] = [
   { label: "empty fleet", snapshot: published([]) },
@@ -174,6 +172,16 @@ const STATES: readonly { label: string; snapshot: unknown }[] = [
   })]) },
   { label: "control plane unreachable", snapshot: published([agent()], {
     cmuxReachable: false, cmuxErrors: ["cmux socket refused the connection"],
+  }) },
+  /* A broken COLLECTOR, which is a different fault from a broken control plane
+     and now the only thing that moves sourceHealth. Once cmux stopped being
+     counted as a collector, the state above no longer varied those four fields
+     and the vacuity guard went red — correctly: every assertion about
+     sourceHealth had become unfalsifiable across this matrix. The answer is a
+     state that exercises them, not a register entry excusing them. */
+  { label: "a collector that cannot read its files", snapshot: published([agent()], {
+    sourceErrors: { claude: ["EACCES scanning ~/.claude/projects"] },
+    sourceAbsent: { cursor: true },
   }) },
   { label: "a large fleet", snapshot: published(many(25, (i) => ({
     status: i % 4 === 0 ? "stale" : "running",
@@ -232,7 +240,7 @@ describe("a field that stops varying announces itself", () => {
 
     expect(
       constant,
-      "These published fields took the same value in all ten fleet states. If that is "
+      "These published fields took the same value in all eleven fleet states. If that is "
       + "deliberate, add each to DELIBERATELY_CONSTANT with a reason and a pointer to what "
       + "still tests it. If it is not, a fix has just made every assertion about them unfalsifiable.",
     ).toEqual([]);
@@ -269,9 +277,9 @@ describe("a field that stops varying announces itself", () => {
     const seen = observedValues();
     const varying = [...seen.values()].filter((values) => values.size > 1).length;
 
-    expect(STATES.length).toBe(10);
+    expect(STATES.length).toBe(11);
     expect(seen.size, "no published scalars were collected at all").toBeGreaterThan(10);
-    expect(varying, "not one published field varied across ten states").toBeGreaterThan(5);
+    expect(varying, "not one published field varied across eleven states").toBeGreaterThan(5);
   });
 
   test("the states differ from each other, not just from the empty one", () => {
