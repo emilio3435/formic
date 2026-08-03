@@ -6752,6 +6752,60 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(M.feedFrozen({ conn: "connecting", snap: null }, FROZEN_NOW)).toBe(false);
   });
 
+  test("(1) a Send that cannot send does not render as the primary action", () => {
+    /* The panel used to say "you cannot act" and show a primary action in the
+       same breath. `.btn.primary` is declared after `.btn:disabled` at equal
+       specificity, so the primary fill won the cascade and a disabled Send
+       rendered solid ink — the highest-emphasis element on the drawer, beside
+       a composer reading "Instruction unavailable" and two dock tools the
+       server had already refused.
+
+       Measured when written: `controlsFor` gates instruct on `transmitRefusal`
+       and 724 of 731 live agents came back instruct:false, so this was the
+       normal rendering rather than an edge case.
+
+       Asserted on the CLASS rather than on a colour, because the class is what
+       the cascade reads and a test that could only see computed style would
+       need a browser this suite does not have. */
+    const refused = agent({
+      controls: [
+        { action: "focus", enabled: false },
+        { action: "instruct", enabled: false },
+        { action: "interrupt", enabled: false },
+        { action: "archive", enabled: true },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dock: any = withDom(() => M.renderCommandDock(refused, "observed-only", null, []));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send: any = buttonsOf(dock).find((b: any) => String(b.className).includes("command-send"));
+
+    expect(send).toBeDefined();
+    expect(send.hasAttribute("disabled")).toBe(true);
+    expect(String(send.className)).not.toContain("primary");
+  });
+
+  test("(1) a Send that CAN send keeps its emphasis", () => {
+    /* The control, and the reason the assertion above is not satisfied by
+       deleting the class outright: on a linked session Send is the primary
+       action and must look like one. */
+    const live = agent({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+        { action: "archive", enabled: true },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dock: any = withDom(() => M.renderCommandDock(live, "linked", null, []));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send: any = buttonsOf(dock).find((b: any) => String(b.className).includes("command-send"));
+
+    expect(send.hasAttribute("disabled")).toBe(false);
+    expect(String(send.className)).toContain("primary");
+  });
+
   test("(1) every control in the dock is held — and says so — on a frozen board", () => {
     const live = agent({
       controls: [

@@ -5743,7 +5743,27 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     },
       input,
       el("button", {
-        type: "submit", class: "btn primary command-send",
+        type: "submit",
+        /* `primary` is a claim about emphasis and it was made unconditionally.
+           `.btn.primary` is declared AFTER `.btn:disabled` at equal specificity
+           (0,2,0), so the primary fill wins the cascade and a Send that cannot
+           send still rendered solid ink — the highest-emphasis element on the
+           panel, sitting beside a composer reading "Instruction unavailable"
+           and two dock tools the server had already refused. The panel said
+           "you cannot act" and showed a primary action in the same breath.
+
+           Measured against the server rather than guessed: `controlsFor` gates
+           instruct on `transmitRefusal`, and on the live board 724 of 731
+           agents come back instruct:false. So this was the normal rendering,
+           not an edge case.
+
+           Gated on `sendable` — the server's verdict — rather than by adding a
+           rule to out-specify `.btn.primary`. The class then means what it
+           says, `.btn:disabled` styles it the way the design system already
+           intends, and the shared button rules are left alone. NOT gated on
+           `busy`: a send in flight can act, so it keeps its emphasis and
+           `.btn[aria-busy]` dims it, which is the existing correct look. */
+        class: "btn command-send" + (sendable ? " primary" : ""),
         disabled: sendable && !busy ? null : "",
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
