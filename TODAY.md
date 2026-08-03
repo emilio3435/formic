@@ -1,5 +1,31 @@
 # What changed on 2 August, and what you can lean on
 
+> **3 August, 14:00 — two corrections landed on top of everything below.** Both
+> were found by asking what a number's *membership* was rather than whether it
+> looked right, and both are pushed (`0df7714`, `d546c02`).
+>
+> **`4 of 4 collectors healthy` was counting the wrong four.** The ratio was
+> computed over codex/claude/cursor **plus cmux**; the breakdown printed beside
+> it on the same card was built from codex/**omp**/claude/cursor. Two disjoint
+> sets, both with four members, so the card looked self-consistent — but omp was
+> never counted and a broken omp collector would have shown *healthy* in the
+> header and *broken* in the drawer at the same time. cmux is the control plane,
+> not a collector; it keeps its own `controlHealth` and no longer double-reports
+> as a broken collector. **The number on screen is unchanged. Its membership is
+> now true.**
+>
+> **The board's real-history checks were grading 7.4% of their window.** They
+> asked for three months and got the most recent 500 rows — three days — because
+> `getUsageInvocations` caps there. It had always published `truncated: true`;
+> nothing read it. Two checks pinned to document real defects had gone *green*,
+> which reads as fixed: measured properly, there are **140 long-span sessions in
+> the window and zero visible in the capped page**. The defect never moved. They
+> now page the whole window (6,762 rows, zero duplicates), which immediately
+> surfaced two more defects truncation had been hiding — see **Open, with
+> numbers** at the end.
+
+
+
 Five lanes worked this board all day. Git has the changelog; this is the part
 git cannot tell you — **which of these you can now rely on, and which you
 cannot.** Five minutes — it was two when written at 18:00, and the evening
@@ -172,3 +198,41 @@ arithmetic.
 *This file describes one day. When it stops being the most recent thing that
 happened, archive it — a dated summary that outlives its date is exactly the
 kind of stale claim the rest of this work spent the day removing.*
+
+---
+
+## Open, with numbers (3 August)
+
+Four things are now measured rather than suspected. None is urgent; all are the
+kind that vanish if nobody writes them down.
+
+**31 rows are priced above the ceiling.** `GPT-5.5-High-[VibeProxy]-26` (30
+rows, max $31.93/M) and `Claude Opus 4.8 Fast Mode` (1 row, $30.83/M) are model
+names the price vector cannot recognise, so their blended rate is computed
+against a card with no entry for them. Historical, not ongoing — the newest is
+2026-06-08. The fix is a pricing decision: name them, normalise proxy-suffixed
+labels, or accept them as unpriceable.
+
+**The 24-hour session bound has about 2% headroom, not the 400% its comment
+claims.** That figure came from the truncated page. The worst legitimate session
+across the real window is 23.5 hours against a 24-hour ceiling, so the bound is
+one ordinary long session away from firing on good data.
+
+**One session's total dropped on our side.** BurnBar records 293,235 for
+`fe1d8020-259` — the figure this board published when the disagreement was first
+recorded, against BurnBar's 112,258 at the time. Its record was the truncated
+one, for the second time, and our collector was right twice. But the board now
+reports **13,775** for that same session, the agent is `stale`, and it falls
+outside the joined set — so no assertion covers it. Unexplained, and invisible
+to the cross-source check by construction.
+
+**Hermes and Factory have billed rows and no collector.** Four and two long-span
+rows respectively turned up in the paged window. The guide already says these two
+are not watched; this is the first time the blind spot has had a number attached.
+
+### Still yours, unchanged
+
+PR #5 — 163 commits, open, `MERGEABLE / CLEAN`. The two commits main gained are
+the squash-merges of #3 and #4, content this branch already carries. The
+spend-blocked frontend lane still needs you. The Pilot plan is written and
+amended and has not been started.
