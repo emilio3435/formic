@@ -5244,6 +5244,22 @@ function drawerObjective(agent) {
    has not. Compare against the title's own `·` segments and not a substring —
    "main" is a substring of "the-mountain-main" and would silently drop a
    program the title never named. */
+/* A placeholder is not a value. `modelShort` returns null for a missing model —
+   correct, and this line then omits it — but it passes an unrecognised string
+   through unchanged, and `<synthetic>` is on the wire right now: 2 live agents
+   carry it, one STALE and one ARCHIVED, so the head would print "<synthetic>"
+   in exactly the slot a model name goes. Absence words do the same:
+   modelShort("unknown") returns "unknown". Both fill a gap with something that
+   reads like an answer, which is the one thing this board must not do. Say
+   nothing instead — the model is then absent, which is true. */
+function realModelName(short) {
+  const text = String(short || "").trim();
+  if (!text) return "";
+  // A bracketed token is a marker the collector wrote, never a model's name.
+  if (/^<.*>$/.test(text)) return "";
+  return /^(?:unknown|unspecified|none|n\/a|null|undefined)$/i.test(text) ? "" : text;
+}
+
 function headSubParts(agent, program, titleText) {
   const said = new Set(
     String(titleText || "").split("·").map((part) => part.trim().toLowerCase()).filter(Boolean),
@@ -5252,7 +5268,7 @@ function headSubParts(agent, program, titleText) {
   return {
     program: unsaid(programName(program)),
     provider: unsaid(providerLabel(agent.provider)),
-    model: unsaid(modelShort(agent.model)),
+    model: unsaid(realModelName(modelShort(agent.model))),
   };
 }
 
