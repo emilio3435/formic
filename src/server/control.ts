@@ -75,11 +75,19 @@ export async function executeControl(
   }
   const capability = agent.controls.find((control) => control.action === request.action);
   if (!capability?.enabled) {
+    const refusal = request.action === "instruct" || request.action === "interrupt"
+      ? transmitRefusal({
+          target: agent.target,
+          processState: agent.processState,
+          archived: agent.status === "archived",
+          identityTrace: agent.identityTrace,
+        })
+      : null;
     return failure(
       request,
       409,
       "CONTROL_DISABLED",
-      capability?.reason ?? "This action is not available for the agent.",
+      refusal?.message ?? capability?.reason ?? "This action is not available for the agent.",
     );
   }
 
@@ -126,9 +134,9 @@ export async function executeControl(
      26a4585 fixed this side and left the board advertising Send on a row whose
      process was known dead. */
   const refusal = writesInput
-    ? transmitRefusal({ target: agent.target, processState: agent.processState })
+    ? transmitRefusal({ target: agent.target, processState: agent.processState, identityTrace: agent.identityTrace })
     : null;
-  if (refusal) return failure(request, 409, refusal.code, refusal.reason);
+  if (refusal) return failure(request, 409, refusal.code, refusal.message);
   const executable = dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
   const commands: string[][] = [];
   if (request.action === "focus") {

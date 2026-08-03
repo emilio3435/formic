@@ -2,6 +2,7 @@ import type {
   AgentSnapshot,
   HubPulse,
   HubSnapshot,
+  IdentityTrace,
   IssueLifecycle,
   IssueWorkState,
   OperatorIssue,
@@ -11,7 +12,7 @@ import type {
 } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
 import { MODEL_CONFIG } from "./model-config";
-import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
+import { resolveAgentTarget, resolveAgentTargetWithTrace, transmitRefusal, type TransmitRefusal } from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
 import {
@@ -72,6 +73,9 @@ export interface SnapshotInput {
   scanWindowHours?: number;
 }
 
+type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
+type AgentSnapshotWithControlRefusal = AgentSnapshot & { controlRefusal?: SnapshotControlRefusal };
+
 export function withPulse(snapshot: HubSnapshot, pulse: HubPulse): HubSnapshot {
   return { ...snapshot, pulse };
 }
@@ -99,6 +103,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
     const target = resolveAgentTarget(source, input.surfaces, sources);
+    let identityTrace: IdentityTrace | undefined;
+    const readIdentityTrace = (): IdentityTrace => {
+      identityTrace ??= resolveAgentTargetWithTrace(source, input.surfaces, sources).trace;
+      return identityTrace;
+    };
     const surface = target.surfaceId
       ? input.surfaces.find((candidate) => candidate.surfaceId === target.surfaceId)
       : undefined;
@@ -135,6 +144,19 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
     const activity = activityFor(source, archived);
+    const processState = processStateFor(source);
+    const initialRefusal = transmitRefusal({ target, processState, archived });
+    const refusal = initialRefusal?.code === "UNSAFE_TARGET"
+      ? transmitRefusal({ target, processState, archived, identityTrace: readIdentityTrace() })
+      : initialRefusal;
+    /* Ended rows already explain their terminal state and have no action to
+       recover. Shipping routing evidence on every history row added the same
+       three observations hundreds of times to a snapshot already over its SSE
+       budget. Keep the actionable shape on the live board; history can still
+       fetch the full identity trace on demand. */
+    const controlRefusal: SnapshotControlRefusal | undefined = activity !== "ended" && refusal
+      ? (({ message: _message, ...published }) => published)(refusal)
+      : undefined;
     // Freeze the elapsed clock only for a session that really ended. This used
     // to re-derive `archived || status === "stale"` independently of
     // activityFor, so a live-but-quiet session had its clock frozen by the same
@@ -156,13 +178,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
        on this machine has 1,575 calls. It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */
     const { callSizes: _callSizes, ...publishable } = source;
-    const agent: AgentSnapshot = {
+    const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
       programId: program.id,
       status: archived ? "archived" : notification ? "attention" : source.status,
       statusReason: snapshotStatusReason,
       activity,
-      processState: processStateFor(source),
+      processState,
       outcome,
       controlState,
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
@@ -177,7 +199,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         lastAgentMessage: source.lastAgentMessage,
         lastAgentClosing: source.lastAgentClosing,
         activity,
-        processState: processStateFor(source),
+        processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
       modelPolicy: cursorModelPolicy(source, sourcesById),
@@ -203,12 +225,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
-      controls: controlsFor(source, target, archived),
+      controls: controlsFor(source, target, archived, identityTrace),
+      ...(controlRefusal ? { controlRefusal } : {}),
     };
     Object.defineProperty(agent, "identityTrace", {
       configurable: false,
       enumerable: false,
-      get: () => resolveAgentTargetWithTrace(source, input.surfaces, sources).trace,
+      get: readIdentityTrace,
     });
     const group = programs.get(program.id) ?? { ...program, agents: [] };
     group.agents.push(agent);

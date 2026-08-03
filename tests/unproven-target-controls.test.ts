@@ -64,14 +64,15 @@ describe("the board does not offer a write it will refuse", () => {
     expect(control("interrupt").enabled).toBe(false);
   });
 
-  test("the reason names the cause, the risk and the way back", () => {
-    // "make the refusal SAY why so an operator understands the control is off
-    // rather than broken" — the three things that distinguishes.
+  test("the capability reason states the cause once instead of embedding the remedy", () => {
+    /* The server now publishes the remedy and routing observations once on the
+       agent-level controlRefusal. Keeping them in each capability reason made
+       Focus, Send and Interrupt repeat one paragraph under different labels. */
     const reason = by(CWD_MATCHED)("instruct").reason ?? "";
 
-    expect(reason).toMatch(/working directory/i);            // the cause
-    expect(reason).toMatch(/different agent|cannot be proven/i); // the risk
-    expect(reason).toMatch(/as soon as cmux attests/i);       // the way back
+    expect(reason).toMatch(/working directory/i);
+    expect(reason).toMatch(/different agent|cannot be proven/i);
+    expect(reason).not.toMatch(/as soon as cmux attests/i);
   });
 
   test("an attested row keeps every control, so this is a gate and not a wall", () => {
@@ -110,7 +111,7 @@ describe("the board does not offer a write it will refuse", () => {
 
     expect(archived("instruct").enabled).toBe(false);
     // An archived agent is not a routing problem; the reason must not claim it is.
-    expect(archived("instruct").reason).toBe("Agent is archived.");
+    expect(archived("instruct").reason).toBe("This agent is archived.");
     expect(archived("focus").enabled).toBe(false);
   });
 });

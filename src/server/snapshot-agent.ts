@@ -12,6 +12,7 @@ import type {
   AgentRole,
   AgentSnapshot,
   ControlCapability,
+  IdentityTrace,
   ModelPolicy,
   OperatorControlState,
   OutcomeState,
@@ -31,7 +32,12 @@ import type { CollectedAgent } from "./types";
    session. The reasons here are what the operator reads, so they say the
    control is deliberately off and what would turn it back on, rather than
    leaving a dead button that looks broken. */
-export function controlsFor(agent: CollectedAgent, target: AgentSnapshot["target"], archived: boolean): ControlCapability[] {
+export function controlsFor(
+  agent: CollectedAgent,
+  target: AgentSnapshot["target"],
+  archived: boolean,
+  identityTrace?: IdentityTrace,
+): ControlCapability[] {
   const routed = Boolean(target.surfaceId) && (target.resolution === "exact" || target.resolution === "unique-cwd");
   const targetReason = target.reason ?? "No safe cmux target is available.";
   /* The SAME predicate executeControl consults, so the button and the endpoint
@@ -40,11 +46,12 @@ export function controlsFor(agent: CollectedAgent, target: AgentSnapshot["target
      unsafe happened, and that is exactly the point — a control the system will
      refuse is a promise the board should never have made. Agreement by
      construction, not by remembering to edit both. */
-  const refusal = transmitRefusal({ target, processState: processStateFor(agent), archived });
+  const refusal = transmitRefusal({ target, processState: processStateFor(agent), archived, identityTrace });
+  const focusEnabled = routed && !archived;
   return [
-    { action: "focus", enabled: routed && !archived, reason: routed && !archived ? undefined : archived ? "Agent is archived." : targetReason },
-    { action: "instruct", enabled: !refusal, reason: refusal?.reason },
-    { action: "interrupt", enabled: !refusal, reason: refusal?.reason },
+    { action: "focus", enabled: focusEnabled, reason: focusEnabled ? undefined : refusal?.cause ?? targetReason },
+    { action: "instruct", enabled: !refusal, reason: refusal?.cause },
+    { action: "interrupt", enabled: !refusal, reason: refusal?.cause },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
   ];
 }
