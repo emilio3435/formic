@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { getUsageInvocations } from "../src/server/burnbar";
+import { getAllUsageInvocations } from "../src/server/burnbar";
 
 /* THE FIRST ASSERTION IN THIS SUITE THAT CAN FAIL BECAUSE THE WORLD DISAGREES.
 
@@ -65,7 +65,11 @@ beforeAll(async () => {
   }
 
   const now = Date.now();
-  const usage = await getUsageInvocations(new Date(now - DAY_MS).toISOString(), new Date(now).toISOString(), 500);
+  /* Paged. At 500 rows this saw only the most recent slice of the last 24
+     hours — the fleet now produces more than that in a day — so "every joined
+     session agrees" was a claim about whichever sessions happened to land in
+     the tail of the page. */
+  const usage = await getAllUsageInvocations(new Date(now - DAY_MS).toISOString(), new Date(now).toISOString());
   if (!usage.available || usage.invocations.length === 0) {
     unavailableReason = "BurnBar returned no readable rows for the last 24h";
     console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
@@ -149,12 +153,25 @@ describe("what this board counted is what a separate application recorded", () =
     expect(joined.some(({ burnbar }) => burnbar > 100_000)).toBe(true);
   });
 
-  test.failing("every joined session agrees with the independent record", () => {
-    /* MARKED FAILING BECAUSE IT IS FIRING ON A REAL DISAGREEMENT, not because
-       the check is wrong. Session fe1d8020-259: this board counted 293,235 and
-       OpenBurnBar recorded 112,258 — 161.2% over. It is with the backend to
-       decide whether the collector overcounts or this join is wrong for that
-       case.
+  test("every joined session agrees with the independent record", () => {
+    /* THE MARKER IS GONE, and what it recorded resolved in our favour. It read:
+       session fe1d8020-259, this board 293,235 against OpenBurnBar's 112,258,
+       161.2% over. Re-measured 2026-08-03 across the paged window, BurnBar now
+       records 293,235 for that session — it caught up to the figure this board
+       published, which is the second time its record turned out to be the
+       truncated one. The collector was right.
+
+       Checked against the explanation that fooled two bounds checks in this
+       repo on the same day: the marker was NOT retired because the evidence
+       aged out. The window here is paged rather than capped at 500, and the
+       check still passes on everything it can join.
+
+       WHAT IS STILL OPEN, recorded here because it is the kind of thing that
+       disappears if it is not written down: the board now reports 13,775 for
+       that same session against BurnBar's 293,235, and the agent is `stale`, so
+       it falls outside the joined set and no assertion here covers it. That is
+       a drop on OUR side, unexplained, and it is invisible to this file by
+       construction.
 
        THE TOLERANCE IS UNCHANGED AND MUST STAY SO. It is the claim. A
        cross-source check loosened until it passes is worse than not having one,

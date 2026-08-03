@@ -1047,6 +1047,118 @@ export async function getUsageSeries(
   }
 }
 
+const USAGE_ROW_COLUMNS =
+  `id, provider, model, sessionId, projectName, totalTokens,
+   inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
+   cost, provenanceConfidence, startTime, endTime`;
+
+function toUsageInvocation(row: Record<string, unknown>): UsageInvocation {
+  const model = str(row.model) || "unknown";
+  return {
+    id: str(row.id),
+    provider: str(row.provider) || "unknown",
+    model,
+    sessionId: str(row.sessionId),
+    projectName: str(row.projectName) || undefined,
+    tokens: num(row.totalTokens),
+    ...resolveUsageCost({
+      model,
+      inputTokens: num(row.inputTokens) ?? 0,
+      outputTokens: num(row.outputTokens) ?? 0,
+      cacheReadTokens: num(row.cacheReadTokens) ?? 0,
+      cacheCreationTokens: num(row.cacheCreationTokens) ?? 0,
+      measuredCostUsd: str(row.provenanceConfidence) === "exact" ? num(row.cost) : null,
+    }),
+    startTime: str(row.startTime),
+    endTime: str(row.endTime) || undefined,
+  };
+}
+
+/* Reads a whole window instead of its most recent page.
+
+   `getUsageInvocations` caps at 500 and says so honestly — it publishes
+   `matched` and `truncated`, and callers that ignore those fields get the most
+   recent 500 rows while believing they hold the window they asked for. That is
+   what happened to the real-history bounds checks: they queried three months,
+   received three days, and quietly graded 7.4% of the corpus (500 of 6,762)
+   under test names promising the lot. Two of them had been pinned `.failing` to
+   document real defects and went green not because anything was fixed but
+   because the rows carrying the evidence aged out of the page.
+
+   Keyset pagination rather than OFFSET: the sort is (startTime DESC, id DESC)
+   and the cursor is the last row of the previous page, so a row arriving
+   mid-scan cannot shift a later page and duplicate or skip a row. `maxRows` is
+   a stated ceiling — when it is hit the result says `truncated`, because a
+   silent cap is the whole bug this exists to answer. */
+export async function getAllUsageInvocations(
+  from: string,
+  to: string,
+  maxRows = 50_000,
+): Promise<UsageInvocationsResponse> {
+  const PAGE = 500;
+  try {
+    const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
+    const [totalRow] = await runEncryptedQuery(
+      `SELECT COUNT(*) AS matched FROM token_usage WHERE startTime >= ? AND startTime < ?`,
+      [dbFrom, dbTo],
+    );
+    const matched = num(totalRow?.matched) ?? 0;
+
+    const invocations: UsageInvocation[] = [];
+    let cursor: { startTime: string; id: string } | null = null;
+    for (;;) {
+      const rows: Record<string, unknown>[] = cursor
+        ? await runEncryptedQuery(
+          `SELECT ${USAGE_ROW_COLUMNS} FROM token_usage
+             WHERE startTime >= ? AND startTime < ?
+               AND (startTime < ? OR (startTime = ? AND id < ?))
+             ORDER BY startTime DESC, id DESC
+             LIMIT ?`,
+          [dbFrom, dbTo, cursor.startTime, cursor.startTime, cursor.id, PAGE],
+        )
+        : await runEncryptedQuery(
+          `SELECT ${USAGE_ROW_COLUMNS} FROM token_usage
+             WHERE startTime >= ? AND startTime < ?
+             ORDER BY startTime DESC, id DESC
+             LIMIT ?`,
+          [dbFrom, dbTo, PAGE],
+        );
+      if (rows.length === 0) break;
+      invocations.push(...rows.map(toUsageInvocation));
+      const last = rows[rows.length - 1]!;
+      cursor = { startTime: str(last.startTime), id: str(last.id) };
+      if (rows.length < PAGE || invocations.length >= maxRows) break;
+    }
+
+    return {
+      ok: true,
+      available: true,
+      provenance: "burnbar",
+      source: "burnbar",
+      from,
+      to,
+      limit: maxRows,
+      matched,
+      truncated: invocations.length < matched,
+      invocations,
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      available: false,
+      provenance: "unavailable",
+      source: "burnbar",
+      from,
+      to,
+      limit: maxRows,
+      matched: 0,
+      truncated: false,
+      invocations: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function getUsageInvocations(
   from: string,
   to: string,
@@ -1088,27 +1200,7 @@ export async function getUsageInvocations(
       limit: capped,
       matched,
       truncated: matched > rows.length,
-      invocations: rows.map((row) => {
-        const model = str(row.model) || "unknown";
-        return {
-          id: str(row.id),
-          provider: str(row.provider) || "unknown",
-          model,
-          sessionId: str(row.sessionId),
-          projectName: str(row.projectName) || undefined,
-          tokens: num(row.totalTokens),
-          ...resolveUsageCost({
-            model,
-            inputTokens: num(row.inputTokens) ?? 0,
-            outputTokens: num(row.outputTokens) ?? 0,
-            cacheReadTokens: num(row.cacheReadTokens) ?? 0,
-            cacheCreationTokens: num(row.cacheCreationTokens) ?? 0,
-            measuredCostUsd: str(row.provenanceConfidence) === "exact" ? num(row.cost) : null,
-          }),
-          startTime: str(row.startTime),
-          endTime: str(row.endTime) || undefined,
-        };
-      }),
+      invocations: rows.map(toUsageInvocation),
     };
   } catch (error) {
     return {

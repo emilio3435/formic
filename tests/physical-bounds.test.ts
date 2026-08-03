@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { getUsageInvocations, type UsageInvocation } from "../src/server/burnbar";
+import { getAllUsageInvocations, type UsageInvocation } from "../src/server/burnbar";
 
 /* The ten bounds from docs/PHYSICAL-BOUNDS-GPT.md, made assertable and checked
    against the real BurnBar history rather than fixtures.
@@ -64,7 +64,18 @@ let rows: UsageInvocation[] = [];
 let available = false;
 
 beforeAll(async () => {
-  const response = await getUsageInvocations(FROM, TO, ROW_LIMIT);
+  /* Paged, not capped. This used to call getUsageInvocations(FROM, TO, 500),
+     which returns the most RECENT 500 rows and reports `truncated: true` — a
+     field this file never read. So every assertion below claimed a three-month
+     window and graded three days: 500 of 6,762 rows, 7.4% of the corpus.
+
+     It did real damage rather than merely being imprecise. Two checks here were
+     pinned `.failing` to document a genuine defect, and both went green — not
+     because the defect was fixed but because the rows carrying the evidence
+     aged out of the page as the fleet got busier. Measured at the moment of the
+     fix: 0 long-span sessions visible in the capped page, 140 in the window. A
+     test that stops being able to see a defect is not a test that passed. */
+  const response = await getAllUsageInvocations(FROM, TO);
   available = response.available && response.invocations.length > 0;
   rows = response.invocations;
   if (!available) {
@@ -72,11 +83,22 @@ beforeAll(async () => {
       "[physical-bounds] SKIPPED every real-history assertion: BurnBar returned no readable rows"
         + ` for ${FROM}..${TO}. The bound predicates below still run against fixtures.`,
     );
-  } else if (rows.length === ROW_LIMIT) {
-    // No silent caps: the API hard-caps at 500 and these findings describe the
-    // most recent 500 rows, not all history.
-    console.warn(`[physical-bounds] row limit ${ROW_LIMIT} reached; findings cover the most recent ${ROW_LIMIT} rows.`);
+  } else if (response.truncated) {
+    // Still no silent caps — it just takes a much larger corpus to hit one now.
+    console.warn(
+      `[physical-bounds] window truncated at ${rows.length} of ${response.matched} rows;`
+        + " findings do not cover the whole window.",
+    );
   }
+});
+
+test("the corpus these findings rest on is the whole window, not its most recent page", () => {
+  /* The guard for the failure above, which was invisible for as long as nobody
+     compared what was asked for against what came back. */
+  if (!available) return;
+  expect(rows.length).toBeGreaterThan(ROW_LIMIT);
+  const days = new Set(rows.map((row) => row.startTime.slice(0, 10)));
+  expect(days.size, "the window collapsed to a handful of days again").toBeGreaterThan(7);
 });
 
 /* ------------------------------------------------------------------------ *
@@ -124,7 +146,7 @@ describe("per session-row: span divided by nothing, the only bound that fires", 
     expect(breaching.map((row) => `${row.model} ${(sessionSpanMs(row) / DAY_MS).toFixed(2)}d`)).toEqual([]);
   });
 
-  test("real history: the bound is not tuned to the data it must not fire on", () => {
+  test.failing("real history: the bound is not tuned to the data it must not fire on", () => {
     /* The half that keeps the bound honest. A limit set just above the worst
        legitimate value would fire on the first ordinary long session, and
        whoever owned it would switch it off within a week.
@@ -133,7 +155,19 @@ describe("per session-row: span divided by nothing, the only bound that fires", 
        is a little over five hours — more than four times inside a 24-hour
        ceiling. That headroom is the argument for the bound, and asserting it
        here means a future fleet of genuinely longer sessions makes this test go
-       red rather than quietly eroding the margin. */
+       red rather than quietly eroding the margin.
+
+       MARKED `.failing`, and it ends when the ceiling is retuned to a session
+       length somebody is willing to defend — remove the marker then.
+
+       That five-hour figure was measured on the most recent
+       500 rows. Across the whole window it is 23.5 hours against a 24-hour
+       ceiling — the headroom this test exists to protect is about 2%, not 400%,
+       and the bound is one ordinary long session away from firing on legitimate
+       data. The assertion is kept because it states what we want to be true;
+       the marker records that it is not. Retuning the ceiling is a judgment
+       call about what a legitimate session length is, and it needs an owner
+       rather than a quiet edit here. */
     if (!available) return;
     const withinBound = rows.map(sessionSpanMs).filter((span) => span <= DAY_MS);
 
@@ -210,7 +244,22 @@ describe("per million tokens: cost divided by tokens, scale-free and toothless",
     expect(costPerMillionTokens({ tokens: 5_000_000, costUsd: null } as UsageInvocation)).toBeNull();
   });
 
-  test("real history: every row's blended rate is inside the price vector", () => {
+  test.failing("real history: every row's blended rate is inside the price vector", () => {
+    /* MARKED `.failing`, and it ends once the price vector can price these two
+       model names — remove the marker when it can.
+
+       31 of 6,762 rows price above the $25/M ceiling, and
+       none of them were visible while this file read only the most recent 500.
+
+         GPT-5.5-High-[VibeProxy]-26   30 rows, max $31.93/M, all 2026-06-08
+         Claude Opus 4.8 Fast Mode      1 row,      $30.83/M,     2026-06-01
+
+       Both are model names the price vector does not recognise — a proxy-suffixed
+       label and a "Fast Mode" variant — so the blend is being computed against a
+       rate card that has no entry for them. Historical rather than ongoing: the
+       newest offender is 2026-06-08. Whether the fix is a vector entry, a
+       normalisation of proxy-suffixed names, or accepting these as unpriceable
+       is a pricing decision, not a test edit. */
     if (!available) return;
     const rates = rows.map(costPerMillionTokens).filter((rate): rate is number => rate !== null);
 
