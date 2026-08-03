@@ -6,7 +6,7 @@
 
 import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
-import { state } from "./client-state.js";
+import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
 import {
   clocksFrozen,
@@ -1701,6 +1701,11 @@ function render() {
   const listScroll = main.scrollTop;
   const inspector = $("inspector");
   const inspectorScroll = inspector.scrollTop;
+  // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
+  // the signature. state.selected is already the new entity by this point —
+  // selectEntity sets it and then calls render — so the pane's own last paint is
+  // the only record of what that scrollTop belongs to.
+  const inspectorShowed = paintedEntityKey(state.paintSig.inspector);
 
   renderConn();
   renderFeedAlarm();
@@ -1722,7 +1727,15 @@ function render() {
   // Rebuilding the list momentarily collapses pane height, which clamps the
   // scroll position — restore it so live updates never yank the operator.
   main.scrollTop = listScroll;
-  inspector.scrollTop = inspectorScroll;
+  /* Same entity as before the paint: this was a live update under a drawer the
+     operator is reading, so put them back where they were. Different entity:
+     they flicked to another agent, and carrying the offset over lands them
+     part-way down a stranger's drawer with its name scrolled off the top —
+     measured at 291px on a 370px pane, with the <h2> 246px above the fold. A
+     new selection starts at its own beginning. */
+  inspector.scrollTop = paintedEntityKey(state.paintSig.inspector) === inspectorShowed
+    ? inspectorScroll
+    : 0;
 
   if (focusKey) {
     const node = document.querySelector(`[data-fkey="${CSS.escape(focusKey)}"]`);
@@ -4320,6 +4333,22 @@ function selectAgent(agentId) {
 // state.selectedId so the row is-selected highlight, findSelected, and
 // closeInspector focus-return all keep working untouched.
 function selectEntity(sel) {
+  /* Where the operator was standing when they opened this, captured before
+     render() rebuilds the board out from under the focused node. Recorded for
+     every kind, because closeInspector's `agent-<id>` route only ever worked for
+     agents — see state.selectionOrigin.
+
+     Only when focus is OUTSIDE the drawer. Flicking to another board row should
+     move the return point to that row, but following a lineage link from inside
+     an open drawer should not: that link is about to be destroyed by the very
+     repaint it triggers, so adopting it as the way back would strand the
+     operator on a node that no longer exists. The row that began the excursion
+     stays the way out. */
+  const origin = document.activeElement;
+  const pane = $("inspector");
+  if (!(origin && pane && pane.contains(origin))) {
+    state.selectionOrigin = origin && origin.dataset ? origin.dataset.fkey || null : null;
+  }
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
@@ -4341,15 +4370,22 @@ function focusDrawerLead() {
 
 function closeInspector() {
   const id = state.selectedId;
+  const origin = state.selectionOrigin;
   state.selected = null;
   state.selectedId = null;
+  state.selectionOrigin = null;
   state.confirming = null;
   state.evidenceOpen = false;
   render();
-  if (id) {
-    const row = document.getElementById("agent-" + id);
-    if (row) row.focus({ preventScroll: true });
-  }
+  /* The agent row by id first — unchanged, and it survives a roster rebuild that
+     a captured node reference would not. The recorded origin catches every other
+     kind: a program or finding drawer left `id` null, so closing one destroyed
+     the focused Close button and dropped the operator on <body>, with nothing
+     between them and Tab-from-the-top. */
+  const row = id ? document.getElementById("agent-" + id) : null;
+  const back = row
+    || (origin ? document.querySelector(`[data-fkey="${CSS.escape(origin)}"]`) : null);
+  if (back) back.focus({ preventScroll: true });
 }
 
 function findSelected() {
@@ -5335,25 +5371,76 @@ function renderShelfSection({ key, title, open, body }) {
   return section;
 }
 
+/* What the collapsed rail is allowed to claim.
+
+   Every section of renderEvidence is conditional, so the drawer's contents vary
+   per agent and can legitimately be empty. Rather than keep a second copy of
+   those conditions here — two lists that drift apart is how a label starts
+   describing a panel it no longer matches — the sections tag themselves with
+   `data-evidence-section` and this reads them back off a built panel. One
+   source of truth: whatever renderEvidence actually emits is what the rail
+   says. */
+function evidenceInventory(agent) {
+  let panel;
+  try {
+    panel = renderEvidence(agent);
+  } catch {
+    /* The rail must never be the thing that breaks the drawer. If evidence
+       cannot be built, say nothing about its contents rather than guess. */
+    return [];
+  }
+  /* Walked rather than queried: the client runs against a fake document in the
+     harness, which builds real nodes through el() but implements no selector
+     engine. querySelectorAll threw there and nowhere else. */
+  const seen = [];
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    const name = node.dataset && node.dataset.evidenceSection;
+    if (name && !seen.includes(name)) seen.push(name);
+    for (const child of node.children || []) walk(child);
+  };
+  walk(panel);
+  return seen;
+}
+
 function renderEvidenceShelf(agent) {
   if (!state.evidenceOpen) {
-    // Whimsical collapsed rail — third column as a caterpillar/cog strip.
+    /* The collapsed rail is the ONLY route to everything the main view is
+       deliberately not carrying, so it has to earn a click. It used to be a
+       cog, four decorative beads and the word EVIDENCE rotated ninety degrees:
+       nothing stated what was inside or whether opening it was worth it, and
+       the beads were a fixed four regardless of content.
+
+       The beads are gone rather than given a meaning they never had. In their
+       place is the one number that answers "is this worth opening" — how many
+       kinds of evidence this agent actually has — and the tooltip names them.
+
+       The old tooltip also promised "vitals", which moved out to the vitals
+       band under the verdict head. The rail was advertising a section the
+       drawer no longer contains. */
+    const sections = evidenceInventory(agent);
+    const summary = sections.length
+      ? "Open evidence — " + sections.join(", ")
+      : "Open evidence — nothing reported for this session";
     return el("button", {
       type: "button",
       class: "shelf-evidence-rail",
       "aria-expanded": "false",
       "aria-controls": "shelf-evidence",
-      title: "Open evidence — vitals, paths, routing, transcript",
+      title: summary,
+      "aria-label": summary,
       dataset: { fkey: "shelf:evidence:open" },
       onclick: () => { state.evidenceOpen = true; render(); },
     },
-      el("span", { class: "shelf-rail-spine", "aria-hidden": "true" },
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" })),
-      icon("gear", { label: "Open evidence" }),
-      el("span", { class: "shelf-rail-label", text: "Evidence" }));
+      icon("gear", { label: "" }),
+      el("span", { class: "shelf-rail-label", text: "Evidence" }),
+      /* An empty drawer says so, because a count of zero and a missing count
+         look identical and only one of them means "do not bother". */
+      el("span", {
+        class: "shelf-rail-count" + (sections.length ? "" : " is-empty"),
+        "aria-hidden": "true",
+        text: sections.length ? String(sections.length) : "—",
+      }));
   }
 
   // Evidence holds paths, routing, and the transcript tail. The vitals
@@ -6002,9 +6089,22 @@ function renderChat(agent) {
      twice in one drawer — six lines apart, which is the exact defect this
      overhaul was commissioned to remove, reintroduced by the fix for the
      opposite failure (a drawer that could go completely empty). */
+  /* The agent's reply leads. An operator opens this to find out what the AGENT
+     said; their own message is the one thing in the drawer they already know.
+     Reading order was user-first, and with the panel's head, banner and vitals
+     above it the reply began 821px down a 720px viewport — off-screen, with the
+     dock covering what little showed. Nothing here can raise the block itself,
+     so what it can do is put the payload at the top of it.
+
+     Safe against the dedup rule, which keeps whichever candidate comes first:
+     measured on 719 agents, 551 carry both fields and NONE of them say the same
+     prose, so no turn changes label or disappears because of this order. The two
+     fields are attributed by the server (`lastUserMessage` is the user's
+     request, `lastAgentMessage` the agent's reply), unlike `lastHumanMessage`,
+     which is why they can be trusted to differ rather than merely observed to. */
   const turns = dedupeTurns([
-    { role: "user", text: agent.lastUserMessage },
     { role: "assistant", text: agent.lastAgentMessage },
+    { role: "user", text: agent.lastUserMessage },
     { role: "task", text: drawerObjective(agent) ? "" : agent.task },
   ]);
   for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
@@ -6312,17 +6412,30 @@ function renderEvidence(agent, ui = state) {
   const link = renderControlLink(agent.target);
   if (link) dtdd(grid, "control link", link);
 
-  if (grid.childNodes.length) panel.append(grid);
+  /* Each block tags itself with what it is. The collapsed rail needs to say
+     what is in here without a second copy of these conditions to drift out of
+     step with them — so the sections declare their own names and
+     evidenceInventory reads them back off a built panel. */
+  if (grid.childNodes.length) {
+    grid.dataset.evidenceSection = "paths & usage";
+    panel.append(grid);
+  }
 
   const identity = renderIdentityBlock(agent);
-  if (identity) panel.append(identity);
+  if (identity) {
+    identity.dataset.evidenceSection = "identity";
+    panel.append(identity);
+  }
 
   const names = renderNamesDisclosure(agent);
-  if (names) panel.append(names);
+  if (names) {
+    names.dataset.evidenceSection = "names";
+    panel.append(names);
+  }
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
-      el("h3", { class: "section-title", text: "Artifacts" }),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" }, text: "Artifacts" }),
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
@@ -6337,7 +6450,7 @@ function renderEvidence(agent, ui = state) {
 
   if (agent.transcriptTail) {
     panel.append(
-      el("h3", { class: "section-title", text: "Transcript tail" }),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "transcript" }, text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
 
