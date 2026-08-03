@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { getAllUsageInvocations } from "../src/server/burnbar";
+import type { ActivityState } from "../src/shared/types";
 
 /* THE FIRST ASSERTION IN THIS SUITE THAT CAN FAIL BECAUSE THE WORLD DISAGREES.
 
@@ -33,25 +34,75 @@ import { getAllUsageInvocations } from "../src/server/burnbar";
 
 const SNAPSHOT_URL = "http://127.0.0.1:4701/api/snapshot";
 const DAY_MS = 24 * 60 * 60 * 1_000;
-/** A session still burning between the two reads can drift a little; the
-    observed spread was 0.0%, so this is slack for liveness, not for accounting. */
+/* The hard gate for sessions whose two records have stopped moving. */
 const PER_SESSION_TOLERANCE_PCT = 5;
+/* The collectors call a transcript stale after 45 silent minutes. Reusing that
+   boundary makes "has not moved" mean the same thing here as on the board,
+   rather than adding a second guess about when activity has ended. */
+const SETTLED_QUIET_MS = 45 * 60 * 1_000;
+/* The board is read before BurnBar, so BurnBar can advance slightly between
+   reads. One tenth of the hard-gate tolerance forgives only sub-percent skew;
+   it cannot turn a material 5% accounting disagreement into agreement. */
+const LIVE_READ_SKEW_EPSILON_PCT = PER_SESSION_TOLERANCE_PCT / 10;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
 
-interface Joined {
+interface Comparison {
   readonly sessionId: string;
   readonly board: number;
   readonly burnbar: number;
   readonly driftPct: number;
 }
 
+interface Joined extends Comparison {
+  readonly boardActivity?: ActivityState;
+  readonly boardUpdatedAt: string;
+  readonly burnbarUpdatedAtMs?: number;
+}
+
+interface BurnBarSession {
+  readonly tokens: number;
+  readonly updatedAtMs?: number;
+}
+
 let available = false;
 let unavailableReason = "";
 let joined: Joined[] = [];
+let settled: Joined[] = [];
+let live: Joined[] = [];
 let burnbarSessions = 0;
 let uuidSessions = 0;
 let nonUuidSessions = 0;
 let unjoinedUuid: string[] = [];
+
+/* GRDB stores these UTC timestamps without a zone marker. Date.parse would
+   otherwise read them in the machine's local zone and move the quiet boundary. */
+const parseBurnBarTimestamp = (value: string): number =>
+  Date.parse(`${value.replace(" ", "T")}Z`);
+
+/* "Settled" rests on three real fields. `activity === ended` is the board's
+   lifecycle verdict and settles immediately. Otherwise board `updatedAt` and
+   BurnBar's newest row `endTime` must BOTH be quiet for the board's existing
+   45-minute stale interval. `endTime` is the useful foreign signal here: it can
+   advance while BurnBar rewrites a still-burning cumulative row. A missing or
+   invalid timestamp proves nothing, so that session stays live. */
+const isSettled = (row: Joined, nowMs: number): boolean => {
+  if (row.boardActivity === "ended") return true;
+  const boardUpdatedAtMs = Date.parse(row.boardUpdatedAt);
+  return Number.isFinite(boardUpdatedAtMs)
+    && row.burnbarUpdatedAtMs !== undefined
+    && Number.isFinite(row.burnbarUpdatedAtMs)
+    && nowMs - boardUpdatedAtMs >= SETTLED_QUIET_MS
+    && nowMs - row.burnbarUpdatedAtMs >= SETTLED_QUIET_MS;
+};
+
+/* One comparison serves the live assertion and its fixture proof. Board-ahead
+   is expected foreign-recorder lag; only board-behind beyond read skew is an
+   anomaly. */
+const liveAnomalies = (rows: readonly Comparison[]): Comparison[] =>
+  rows.filter(({ board, burnbar }) => {
+    if (board >= burnbar || burnbar <= 0) return false;
+    return (burnbar - board) / burnbar * 100 > LIVE_READ_SKEW_EPSILON_PCT;
+  });
 
 beforeAll(async () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,33 +130,69 @@ beforeAll(async () => {
   /* Burnbar records a session as one or more cumulative snapshot rows; the
      summary path collapses those, and here the per-session total is the sum of
      what this window returned for that id. */
-  const burnbarBySession = new Map<string, number>();
+  const burnbarBySession = new Map<string, BurnBarSession>();
   for (const row of usage.invocations) {
-    burnbarBySession.set(row.sessionId, (burnbarBySession.get(row.sessionId) ?? 0) + (row.tokens ?? 0));
+    const previous = burnbarBySession.get(row.sessionId);
+    const observedAtMs = row.endTime ? parseBurnBarTimestamp(row.endTime) : undefined;
+    burnbarBySession.set(row.sessionId, {
+      tokens: (previous?.tokens ?? 0) + (row.tokens ?? 0),
+      updatedAtMs: observedAtMs === undefined
+        ? previous?.updatedAtMs
+        : Math.max(previous?.updatedAtMs ?? -Infinity, observedAtMs),
+    });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const boardAgents: any[] = (snapshot.programs ?? []).flatMap((program: any) => program.agents ?? []);
-  const boardBySession = new Map<string, number>();
+  const boardBySession = new Map<string, { tokens: number; activity?: ActivityState; updatedAt: string }>();
   for (const agent of boardAgents) {
-    if (typeof agent?.tokens?.sessionProcessed === "number") {
-      boardBySession.set(agent.sourceSessionId, agent.tokens.sessionProcessed);
+    if (
+      typeof agent?.sourceSessionId === "string"
+      && typeof agent?.tokens?.sessionProcessed === "number"
+      && typeof agent?.updatedAt === "string"
+    ) {
+      boardBySession.set(agent.sourceSessionId, {
+        tokens: agent.tokens.sessionProcessed,
+        activity: agent.activity,
+        updatedAt: agent.updatedAt,
+      });
     }
   }
 
   burnbarSessions = burnbarBySession.size;
-  for (const [sessionId, burnbar] of burnbarBySession) {
+  for (const [sessionId, burnbarSession] of burnbarBySession) {
     const isUuid = UUID.test(sessionId);
     isUuid ? (uuidSessions += 1) : (nonUuidSessions += 1);
-    const board = boardBySession.get(sessionId);
-    if (board === undefined) {
+    const boardSession = boardBySession.get(sessionId);
+    if (boardSession === undefined) {
       if (isUuid) unjoinedUuid.push(sessionId);
       continue;
     }
+    const board = boardSession.tokens;
+    const burnbar = burnbarSession.tokens;
     const driftPct = burnbar > 0 ? Math.abs(board - burnbar) / burnbar * 100 : 0;
-    joined.push({ sessionId, board, burnbar, driftPct });
+    joined.push({
+      sessionId,
+      board,
+      burnbar,
+      driftPct,
+      boardActivity: boardSession.activity,
+      boardUpdatedAt: boardSession.updatedAt,
+      burnbarUpdatedAtMs: burnbarSession.updatedAtMs,
+    });
   }
   available = joined.length > 0;
+  if (!available) {
+    unavailableReason = "BurnBar returned rows, but none joined to a board session with token and update fields";
+    console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
+    return;
+  }
+  settled = joined.filter((row) => isSettled(row, now));
+  live = joined.filter((row) => !isSettled(row, now));
+  console.info(
+    `[cross-source] settled=${settled.length} live=${live.length} excluded=${nonUuidSessions} `
+    + `unjoined=${unjoinedUuid.length}`,
+  );
 });
 
 /* Says what a cross-source disagreement ESTABLISHES, which is less than it is
@@ -126,7 +213,7 @@ beforeAll(async () => {
 
    So it reports both figures, where each came from, and the direction, and it
    stops there. */
-const describeDrift = ({ sessionId, board, burnbar, driftPct }: Joined): string =>
+const describeDrift = ({ sessionId, board, burnbar, driftPct }: Comparison): string =>
   `${sessionId.slice(0, 12)}: this board counted ${board.toLocaleString()} `
   + `(per-call sizes summed from the session transcript) and OpenBurnBar recorded `
   + `${burnbar.toLocaleString()} (its cumulative row for the same session id) — `
@@ -150,10 +237,15 @@ describe("what this board counted is what a separate application recorded", () =
       return;
     }
     expect(joined.length, "too few sessions joined to be worth believing").toBeGreaterThan(20);
-    expect(joined.some(({ burnbar }) => burnbar > 100_000)).toBe(true);
+    expect(settled.length, "too few settled sessions for the 5% gate to be worth believing").toBeGreaterThan(20);
+    expect(settled.some(({ burnbar }) => burnbar > 100_000)).toBe(true);
+    expect(
+      live.length,
+      `${live.length} live sessions are excluded from the 5% gate, against ${settled.length} settled`,
+    ).toBeLessThan(settled.length);
   });
 
-  test("every joined session agrees with the independent record", () => {
+  test("every settled session agrees with the independent record", () => {
     /* THE MARKER IS GONE, and what it recorded resolved in our favour. It read:
        session fe1d8020-259, this board 293,235 against OpenBurnBar's 112,258,
        161.2% over. Re-measured 2026-08-03 across the paged window, BurnBar now
@@ -166,32 +258,77 @@ describe("what this board counted is what a separate application recorded", () =
        aged out. The window here is paged rather than capped at 500, and the
        check still passes on everything it can join.
 
-       WHAT IS STILL OPEN, recorded here because it is the kind of thing that
-       disappears if it is not written down: the board now reports 13,775 for
-       that same session against BurnBar's 293,235, and the agent is `stale`, so
-       it falls outside the joined set and no assertion here covers it. That is
-       a drop on OUR side, unexplained, and it is invisible to this file by
-       construction.
+       The later 13,775 reading was not `sessionProcessed`: it is the same
+       record's cache-exclusive `sessionTotal`. The persisted board record, the
+       raw transcript parse, and BurnBar all carry 293,235 for
+       `sessionProcessed`. This split now admits its ended/stale board row to the
+       settled set, so confusing those two token fields would make this hard
+       gate red instead of silently falling outside the join.
 
        THE TOLERANCE IS UNCHANGED AND MUST STAY SO. It is the claim. A
        cross-source check loosened until it passes is worse than not having one,
        because it converts the only externally-falsifiable assertion here back
        into an internal one while still reading as corroboration. So the
-       threshold stays at 5% and the marker carries the red instead, which keeps
-       the shared suite green for four other lanes and hard-fails the moment the
-       disagreement is resolved.
+       threshold stays at 5% and this settled hard gate carries the red until
+       the disagreement is resolved.
 
        The unavailable branch THROWS rather than returning, so a stopped board
-       keeps this marker satisfied instead of reporting "marked as failing but
-       it passed" every time the server is down. */
+       cannot turn an external agreement check green without comparing either
+       source. */
     /* THE ASSERTION. It can fail because a program that has never heard of this
        repository counted differently, which is true of nothing else here. */
     if (!available) throw new Error(`cross-source check did not run: ${unavailableReason}`);
-    const disagreeing = joined
+    const disagreeing = settled
       .filter(({ driftPct }) => driftPct > PER_SESSION_TOLERANCE_PCT)
       .map(describeDrift);
 
     expect(disagreeing).toEqual([]);
+  });
+
+  test("a live board may lead BurnBar, but it may not fall behind", () => {
+    if (!available) return;
+    expect(liveAnomalies(live).map(describeDrift)).toEqual([]);
+  });
+
+  test("the live direction check reports a board-lower fixture", () => {
+    const withinReadSkew: Comparison = {
+      sessionId: "11111111-1111-1111-1111-111111111111",
+      board: 99_600,
+      burnbar: 100_000,
+      driftPct: 0.4,
+    };
+    const droppedByBoard: Comparison = {
+      sessionId: "22222222-2222-2222-2222-222222222222",
+      board: 90_000,
+      burnbar: 100_000,
+      driftPct: 10,
+    };
+
+    expect(liveAnomalies([withinReadSkew, droppedByBoard]).map(describeDrift))
+      .toEqual([describeDrift(droppedByBoard)]);
+  });
+
+  test("the settled split requires both quiet clocks unless the board says ended", () => {
+    const now = Date.parse("2026-08-03T12:00:00.000Z");
+    const quiet: Joined = {
+      sessionId: "33333333-3333-3333-3333-333333333333",
+      board: 100_000,
+      burnbar: 100_000,
+      driftPct: 0,
+      boardActivity: "idle",
+      boardUpdatedAt: new Date(now - SETTLED_QUIET_MS).toISOString(),
+      burnbarUpdatedAtMs: now - SETTLED_QUIET_MS,
+    };
+
+    expect(isSettled(quiet, now)).toBe(true);
+    expect(isSettled({ ...quiet, boardUpdatedAt: new Date(now).toISOString() }, now)).toBe(false);
+    expect(isSettled({ ...quiet, burnbarUpdatedAtMs: now }, now)).toBe(false);
+    expect(isSettled({
+      ...quiet,
+      boardActivity: "ended",
+      boardUpdatedAt: new Date(now).toISOString(),
+      burnbarUpdatedAtMs: now,
+    }, now)).toBe(true);
   });
 
   test("the totals agree, so many small drifts in one direction cannot hide", () => {
@@ -199,13 +336,13 @@ describe("what this board counted is what a separate application recorded", () =
        accounting change would spend all of it the same way. The aggregate is
        where that shows, and it is asserted tighter. */
     if (!available) return;
-    const board = joined.reduce((total, row) => total + row.board, 0);
-    const burnbar = joined.reduce((total, row) => total + row.burnbar, 0);
+    const board = settled.reduce((total, row) => total + row.board, 0);
+    const burnbar = settled.reduce((total, row) => total + row.burnbar, 0);
     const driftPct = burnbar > 0 ? Math.abs(board - burnbar) / burnbar * 100 : 0;
 
     expect(
       driftPct,
-      `across ${joined.length} sessions this board counted ${board.toLocaleString()} and OpenBurnBar `
+      `across ${settled.length} settled sessions this board counted ${board.toLocaleString()} and OpenBurnBar `
       + `recorded ${burnbar.toLocaleString()} — ${board > burnbar ? "OUR total is high" : "OUR total is low"}`,
     ).toBeLessThan(1);
   });
