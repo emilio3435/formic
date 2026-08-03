@@ -5055,22 +5055,14 @@ function verdictGate(agent, outcome) {
    from one place: the ROW renders `liveness.label` only for `died` (app.js:4145),
    so this chip is the only surface that has ever shown the unknown wording.
    HANDOFF to L5 — fold this into LIVENESS_VIEW.unknown and delete the override. */
-const LIVENESS_UNKNOWN_LIVE = {
-  label: "No process evidence",
-  detail: "No process was found to link to this session, so its liveness cannot be reported. This does not clear on its own.",
-};
-
 function verdictLiveness(agent) {
   const view = livenessView(agent);
   if (!view) return null;
-  const shown = view.key === "unknown" && deriveActivity(agent) !== "ended"
-    ? { ...view, ...LIVENESS_UNKNOWN_LIVE }
-    : view;
   return el("span", {
-    class: "verdict-liveness liveness-" + shown.key,
-    title: shown.detail,
-    "aria-label": "Process: " + shown.label + ". " + shown.detail,
-  }, shown.key === "died" ? icon("warning") : null, shown.label);
+    class: "verdict-liveness liveness-" + view.key,
+    title: view.detail,
+    "aria-label": "Process: " + view.label + ". " + view.detail,
+  }, view.key === "died" ? icon("warning") : null, view.label);
 }
 
 /* ---------- attention: acknowledge / dismiss / snooze ----------
