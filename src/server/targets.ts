@@ -324,8 +324,60 @@ export interface TransmitRefusal {
   code: "AGENT_ARCHIVED" | "UNSAFE_TARGET" | "AGENT_NOT_RUNNING";
   cause: string;
   remedy: string;
-  evidence: string[];
+  evidence: {
+    resolutionSteps: string[];
+    scannedSurfaces: RoutingSurfaceObservation[];
+  };
   message: string;
+}
+
+export interface RoutingSurfaceObservation {
+  workspaceId?: string;
+  surfaceId: string;
+  paneId?: string;
+  tty?: string;
+  reportedSessionIds: string[];
+  sessionIdMatched: boolean;
+  cwdMatched: boolean;
+  reason: string;
+}
+
+export function routingSurfaceObservations(
+  agent: Pick<CollectedAgent, "sourceSessionId" | "cwd">,
+  surfaces: readonly CmuxSurface[],
+): RoutingSurfaceObservation[] {
+  return surfaces
+    .filter((surface) => surface.runtimeSurfaceReady !== false)
+    .map((surface) => {
+      const reportedSessionIds = [...surface.sourceSessionIds];
+      const sessionIdMatched = reportedSessionIds.includes(agent.sourceSessionId);
+      const cwdMatched = sameCwd(surface.cwd, agent.cwd);
+      const pane = surface.paneId
+        ? `Pane ${surface.paneId} (surface ${surface.surfaceId}${surface.tty ? `, ${surface.tty}` : ""})`
+        : `Surface ${surface.surfaceId}${surface.tty ? ` (${surface.tty})` : ""}`;
+      let reason: string;
+      if (sessionIdMatched) {
+        reason = `${pane} reported source session ${agent.sourceSessionId}.`;
+      } else if (reportedSessionIds.length === 0) {
+        reason = `${pane} reported no source session IDs; source session ${agent.sourceSessionId} could not match.`;
+      } else {
+        const noun = reportedSessionIds.length === 1 ? "session ID" : "session IDs";
+        reason = `${pane} reported ${noun} ${reportedSessionIds.join(", ")}; none equals source session ${agent.sourceSessionId}.`;
+      }
+      if (!sessionIdMatched && cwdMatched) {
+        reason += " Its cwd matches the source, but cwd evidence is not exact session identity.";
+      }
+      return {
+        ...(surface.workspaceId ? { workspaceId: surface.workspaceId } : {}),
+        surfaceId: surface.surfaceId,
+        ...(surface.paneId ? { paneId: surface.paneId } : {}),
+        ...(surface.tty ? { tty: surface.tty } : {}),
+        reportedSessionIds,
+        sessionIdMatched,
+        cwdMatched,
+        reason,
+      };
+    });
 }
 
 export function transmitRefusal(agent: {
@@ -333,18 +385,22 @@ export function transmitRefusal(agent: {
   processState?: ProcessState;
   archived?: boolean;
   identityTrace?: IdentityTrace;
+  routingObservations?: RoutingSurfaceObservation[];
 }): TransmitRefusal | null {
   const targetAttestation = agent.target.attestation;
   const refuse = (
     code: TransmitRefusal["code"],
     cause: string,
     remedy: string,
-    evidence: string[],
+    resolutionSteps: string[],
   ): TransmitRefusal => ({
     code,
     cause,
     remedy,
-    evidence,
+    evidence: {
+      resolutionSteps,
+      scannedSurfaces: agent.routingObservations ?? [],
+    },
     message: `${cause} ${remedy}`,
   });
   const routingEvidence = agent.identityTrace?.steps.map(({ detail }) => detail) ?? [

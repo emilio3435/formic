@@ -107,6 +107,8 @@ const surfaces: CmuxSurface[] = [
   },
   {
     surfaceId: "SURFACE-CONFLICT",
+    workspaceId: "WORKSPACE-CONFLICT",
+    paneId: "PANE-CONFLICT",
     tty: "ttys005",
     sourceSessionIds: [],
     identityConflict: "cmux SURFACE-CONFLICT has conflicting open agent session files on ttys005",
@@ -182,15 +184,68 @@ describe("read-only identity debug endpoint", () => {
       target: { surfaceId: "SURFACE-HEALTH" },
     });
     expect(body.agent.trace.steps).toHaveLength(2);
-    expect(body.relatedSurfaces).toHaveLength(1);
+    expect(body.relatedSurfaces).toHaveLength(2);
     expect(body.relatedSurfaces[0]).toMatchObject({
       surfaceId: "SURFACE-HEALTH",
+      routeObservation: {
+        reportedSessionIds: ["019f86c4-1558-7000-aeb8-26e2cfd0e8ec"],
+        sessionIdMatched: true,
+        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported source session 019f86c4-1558-7000-aeb8-26e2cfd0e8ec.",
+      },
       identityTrace: {
         outcome: "open-file-match",
         processes: [{ pid: 4242, command: "[redacted]", recognizedAgentProcess: true }],
       },
     });
+    expect(body.relatedSurfaces[1]).toMatchObject({
+      surfaceId: "SURFACE-CONFLICT",
+      paneId: "PANE-CONFLICT",
+      sourceSessionIds: [],
+      routeObservation: {
+        reportedSessionIds: [],
+        sessionIdMatched: false,
+        reason: "Pane PANE-CONFLICT (surface SURFACE-CONFLICT, ttys005) reported no source session IDs; source session 019f86c4-1558-7000-aeb8-26e2cfd0e8ec could not match.",
+      },
+    });
     expect(JSON.stringify(body)).not.toContain("super-secret");
+    fetch.dispose();
+  });
+
+  test("an unbound agent receives the observation from every pane the resolver scanned", async () => {
+    const fetch = appFetch();
+    const agentId = "codex:33333333-3333-4333-8333-333333333333";
+    const response = await fetch(
+      new Request(`http://127.0.0.1:4701/api/debug/identity?agent=${encodeURIComponent(agentId)}`),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.relatedSurfaces.map((surface: any) => surface.paneId)).toEqual([
+      "PANE-HEALTH",
+      "PANE-CONFLICT",
+    ]);
+    expect(body.relatedSurfaces.map((surface: any) => surface.routeObservation)).toEqual([
+      {
+        workspaceId: "WORKSPACE-HEALTH",
+        surfaceId: "SURFACE-HEALTH",
+        paneId: "PANE-HEALTH",
+        tty: "ttys033",
+        reportedSessionIds: ["019f86c4-1558-7000-aeb8-26e2cfd0e8ec"],
+        sessionIdMatched: false,
+        cwdMatched: false,
+        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported session ID 019f86c4-1558-7000-aeb8-26e2cfd0e8ec; none equals source session 33333333-3333-4333-8333-333333333333.",
+      },
+      {
+        workspaceId: "WORKSPACE-CONFLICT",
+        surfaceId: "SURFACE-CONFLICT",
+        paneId: "PANE-CONFLICT",
+        tty: "ttys005",
+        reportedSessionIds: [],
+        sessionIdMatched: false,
+        cwdMatched: false,
+        reason: "Pane PANE-CONFLICT (surface SURFACE-CONFLICT, ttys005) reported no source session IDs; source session 33333333-3333-4333-8333-333333333333 could not match.",
+      },
+    ]);
     fetch.dispose();
   });
 

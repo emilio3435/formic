@@ -12,7 +12,13 @@ import type {
 } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
 import { MODEL_CONFIG } from "./model-config";
-import { resolveAgentTarget, resolveAgentTargetWithTrace, transmitRefusal, type TransmitRefusal } from "./targets";
+import {
+  resolveAgentTarget,
+  resolveAgentTargetWithTrace,
+  routingSurfaceObservations,
+  transmitRefusal,
+  type TransmitRefusal,
+} from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
 import {
@@ -147,7 +153,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const processState = processStateFor(source);
     const initialRefusal = transmitRefusal({ target, processState, archived });
     const refusal = initialRefusal?.code === "UNSAFE_TARGET"
-      ? transmitRefusal({ target, processState, archived, identityTrace: readIdentityTrace() })
+      ? transmitRefusal({
+          target,
+          processState,
+          archived,
+          identityTrace: readIdentityTrace(),
+          routingObservations: routingSurfaceObservations(source, input.surfaces),
+        })
       : initialRefusal;
     /* Ended rows already explain their terminal state and have no action to
        recover. Shipping routing evidence on every history row added the same
