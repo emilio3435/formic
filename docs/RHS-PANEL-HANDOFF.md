@@ -31,6 +31,19 @@ someone this week:
 
 ## Current state
 
+> **Updated 2026-08-03 ~17:50 CDT by the takeover session.** Four of the five items
+> in "Suggested order of work" are settled — see the SHAs marked **LANDED** below.
+> `a699905` (row placeholder), `5620aa4` (payload dedup), `b864d8f` (liveness
+> wording). 23 commits unpushed, 187 above `main`, still nothing pushed.
+>
+> ```
+> 1702 pass · 0 fail · tsc exit 0 · tree clean but for docs/rhs-shots/lane6-be/
+> ```
+>
+> That zero is **fleet state, not a resolution**: the two cross-source failures
+> pass while the fleet is quiet and fail while it is busy, exactly as decision 1
+> describes. It is still open.
+
 ```
 1695 pass · 2 fail (consistently) · tsc exit 0 · tree clean but for docs/rhs-shots/lane6-be/
 ```
@@ -94,6 +107,11 @@ That was deliberate and worth continuing.
 
 ## Known defects and unfinished work
 
+**LANDED `a699905`.** The guard moved into `modelShort`, the one function every model
+slot passes through, so the head, the roster row and the invocation table now agree.
+Verified against the same archived session lane 4 screenshotted; 0 placeholders across
+55 model cells in all five views. Original text follows.
+
 **The placeholder guard was applied to the head but not to the list row.** The drawer now
 reads correctly while the row behind it still prints `<synthetic>`. Same leak, one surface
 over. Lane 4 was capturing a drawer-correct/row-wrong screenshot pair and naming the
@@ -105,6 +123,13 @@ its content is the `More` → `Archive this session` change. The real placeholde
 `0f9c643`. Two commits this session were mislabeled this way — content correct, authorship
 wrong — because four lanes edited one file and staged adjacent hunks.
 
+**LANDED `b864d8f`** — and the argument below was re-measured and half REFUTED before
+it was settled. Watching six samples over 21 minutes: 2 of 6 live agents wearing the
+chip cleared because a check *did* arrive and bind a process, while 4 never cleared at
+8–41 minutes. So neither "awaiting" nor "no evidence" is true of the population; the
+label is now `No matching process`, decided once in `LIVENESS_VIEW.unknown`, and says
+nothing about timing. `W4-B (3)` and `W5-B (1)` are green. Original text follows.
+
 **The liveness-chip wording is unfinished**, reverted in `4d81fe5`. Whoever retries it must
 keep `W4-B (3) the drawer states all four verdicts, so unknown reads as unknown` and
 `W5-B (1) a real processState reaches the row and the drawer` green.
@@ -112,6 +137,12 @@ keep `W4-B (3) the drawer states all four verdicts, so unknown reads as unknown`
 **`state.transcript` is single-agent by design** — switching agents discards the transcript
 rather than resetting scroll. Reversing it means holding every agent's transcript in
 memory. Reported deliberately without acting; it is an architecture tradeoff, not a bug.
+
+**LANDED `5620aa4`.** Active refusals now carry `observationsUrl` instead of the inline
+inventory; the proof stays whole at `/api/debug/identity`. Measured on real data, two
+servers reading the same cmux, 3 live refusals each: refusal payload **34,014 → 1,517
+bytes (−95.5%)**, proof 36,945 bytes fetched only when asked. Note the SSE figure below
+was never measured — it is **2.65 MB**, not 2.23 MB. Original text follows.
 
 **The routing observations add +55,384 bytes per snapshot (~4.1%)**, and the observation
 list repeats under every active refusal. The SSE payload was already 2.23 MB against a
@@ -223,8 +254,28 @@ and well-attributed. Both were worth checking, and checking cost one command eac
 
 ## Suggested order of work
 
-1. Fix the row-level `<synthetic>` leak (highest value, precisely scoped, evidence already captured)
+1. ~~Fix the row-level `<synthetic>` leak~~ — **DONE `a699905`**
 2. Get Emilio's call on the two cross-source markers so the suite has an unambiguous green
-3. Dedup the +55 KB routing observations against the SSE payload
-4. Retry the liveness-chip wording, keeping the two W4-B/W5-B tests green
-5. Decide the `app.js` committer question before running four lanes in that file again
+   — **STILL OPEN.** They pass right now only because the fleet is quiet.
+3. ~~Dedup the +55 KB routing observations against the SSE payload~~ — **DONE `5620aa4`**
+4. ~~Retry the liveness-chip wording, keeping the two W4-B/W5-B tests green~~ — **DONE `b864d8f`**
+5. ~~Decide the `app.js` committer question~~ — **ANSWERED BY CONSTRUCTION.** The takeover
+   session ran two lanes with disjoint ownership (one `src/web/**`, one `src/server/**`)
+   and a single orchestrator staging by path. Zero mis-attributions, zero collisions.
+   The rule that worked: partition by DIRECTORY, not by function inside one file.
+
+## What the takeover session found that the lanes' briefs did not
+
+- The **2.23 MB SSE payload** repeated through two handoffs was never measured. It is
+  **2.65 MB** (`/api/snapshot` 2,651,148 B; first SSE frame 2,655,450 B; subsequent
+  frames 110,021 B).
+- The **launchd service on `:4701` serves pre-change server code** whenever it has not
+  been restarted since the commit — it was started 10:27 and carried zero
+  `controlRefusal` / `observations` all evening. Never use production as the "before"
+  baseline for a server change. Static assets under `src/web/` are different: they are
+  read from disk per request, so frontend changes appear on reload with no restart.
+- A codex lane under `-s workspace-write` **cannot commit in this checkout** — the git
+  metadata lives outside the worktree
+  (`/Users/emilionunezgarcia/Developer/the-mountain/.git/worktrees/...`) and staging
+  fails with `Operation not permitted`. Have the orchestrator commit, or launch that
+  lane with a sandbox that includes the parent git dir.
