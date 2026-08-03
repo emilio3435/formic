@@ -326,7 +326,7 @@ export interface TransmitRefusal {
   remedy: string;
   evidence: {
     resolutionSteps: string[];
-    scannedSurfaces: RoutingSurfaceObservation[];
+    observationsUrl?: string;
   };
   message: string;
 }
@@ -385,7 +385,7 @@ export function transmitRefusal(agent: {
   processState?: ProcessState;
   archived?: boolean;
   identityTrace?: IdentityTrace;
-  routingObservations?: RoutingSurfaceObservation[];
+  routingObservationsUrl?: string;
 }): TransmitRefusal | null {
   const targetAttestation = agent.target.attestation;
   const refuse = (
@@ -399,7 +399,7 @@ export function transmitRefusal(agent: {
     remedy,
     evidence: {
       resolutionSteps,
-      scannedSurfaces: agent.routingObservations ?? [],
+      ...(agent.routingObservationsUrl ? { observationsUrl: agent.routingObservationsUrl } : {}),
     },
     message: `${cause} ${remedy}`,
   });

@@ -15,7 +15,6 @@ import { MODEL_CONFIG } from "./model-config";
 import {
   resolveAgentTarget,
   resolveAgentTargetWithTrace,
-  routingSurfaceObservations,
   transmitRefusal,
   type TransmitRefusal,
 } from "./targets";
@@ -158,14 +157,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           processState,
           archived,
           identityTrace: readIdentityTrace(),
-          routingObservations: routingSurfaceObservations(source, input.surfaces),
+          routingObservationsUrl: `/api/debug/identity?agent=${encodeURIComponent(source.id)}`,
         })
       : initialRefusal;
     /* Ended rows already explain their terminal state and have no action to
-       recover. Shipping routing evidence on every history row added the same
-       three observations hundreds of times to a snapshot already over its SSE
-       budget. Keep the actionable shape on the live board; history can still
-       fetch the full identity trace on demand. */
+       recover. Active refusals keep the actionable summary and point to their
+       on-demand pane observations; the shared surface inventory no longer rides
+       the snapshot once per refused agent. */
     const controlRefusal: SnapshotControlRefusal | undefined = activity !== "ended" && refusal
       ? (({ message: _message, ...published }) => published)(refusal)
       : undefined;
@@ -186,8 +184,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
        the one point a CollectedAgent becomes an AgentSnapshot, so there is a
        single boundary to test rather than a rule to remember: the snapshot is
-       already 2.23MB against a 2MB SSE backlog budget, and the largest session
-       on this machine has 1,575 calls. It is served on demand from
+       2.65MB against a 2MB SSE backlog budget (measured 2026-08-03, replacing a
+       stale 2.23MB), and the largest session on this machine has 1,575 calls.
+       It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */
     const { callSizes: _callSizes, ...publishable } = source;
     const agent: AgentSnapshotWithControlRefusal = {

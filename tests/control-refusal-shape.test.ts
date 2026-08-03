@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { identityDebugResponse } from "../src/server/debug-identity";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
@@ -40,7 +41,7 @@ const scannedSurfaces = [
 ];
 
 describe("control refusal wire shape", () => {
-  test("an unbound Cursor session carries one cause, one remedy, and the observations", () => {
+  test("an unbound Cursor session carries one cause, one remedy, and a route to its observations", async () => {
     /* This is the live production shape that previously forced the client to
        repeat one policy sentence across target, Focus, Send and Interrupt. The
        renderer can now address the explanation, recovery and proof separately. */
@@ -63,28 +64,7 @@ describe("control refusal wire shape", () => {
           "Source session ID is not present on any ready cmux surface this scan.",
           "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
         ],
-        scannedSurfaces: [
-          {
-            workspaceId: "WORKSPACE-OTHER",
-            surfaceId: "SURFACE-OTHER",
-            paneId: "PANE-OTHER",
-            tty: "ttys041",
-            reportedSessionIds: [otherSessionId],
-            sessionIdMatched: false,
-            cwdMatched: true,
-            reason: `Pane PANE-OTHER (surface SURFACE-OTHER, ttys041) reported session ID ${otherSessionId}; none equals source session ${cursor.sourceSessionId}. Its cwd matches the source, but cwd evidence is not exact session identity.`,
-          },
-          {
-            workspaceId: "WORKSPACE-EMPTY",
-            surfaceId: "SURFACE-EMPTY",
-            paneId: "PANE-EMPTY",
-            tty: "ttys042",
-            reportedSessionIds: [],
-            sessionIdMatched: false,
-            cwdMatched: false,
-            reason: `Pane PANE-EMPTY (surface SURFACE-EMPTY, ttys042) reported no source session IDs; source session ${cursor.sourceSessionId} could not match.`,
-          },
-        ],
+        observationsUrl: "/api/debug/identity?agent=cursor%3Abebe2e7c-c783-4449-b75d-d707cba51ac4",
       },
     });
     expect(agent.controlRefusal.message).toBeUndefined();
@@ -92,6 +72,48 @@ describe("control refusal wire shape", () => {
       .toBe(agent.controlRefusal.cause);
     expect(agent.controls.find(({ action }: any) => action === "instruct").reason)
       .toBe(agent.controlRefusal.cause);
+
+    const proofResponse = identityDebugResponse(
+      new URL(agent.controlRefusal.evidence.observationsUrl, "http://127.0.0.1:4701"),
+      snapshot,
+      scannedSurfaces,
+      {},
+    );
+    const proof = await proofResponse.json();
+    const reasons = proof.relatedSurfaces.map((surface: any) => surface.routeObservation.reason);
+    expect(reasons).toHaveLength(2);
+    expect(reasons.every((reason: unknown) => typeof reason === "string" && reason.length > 0)).toBe(true);
+  });
+
+  test("multiple refusals do not serialize one copy of the surface inventory per agent", () => {
+    const agents = [cursor, {
+      ...cursor,
+      id: "cursor:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      sourceSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }, {
+      ...cursor,
+      id: "cursor:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      sourceSessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    }];
+    const snapshot = buildSnapshot({
+      agents,
+      surfaces: scannedSurfaces,
+      archiveStore,
+      now: new Date("2026-08-03T17:09:30.000Z"),
+    });
+    const wire = JSON.parse(JSON.stringify(snapshot));
+    const refusals = wire.programs
+      .flatMap((program: any) => program.agents)
+      .map((agent: any) => agent.controlRefusal);
+    const serialized = JSON.stringify(wire);
+
+    expect(refusals).toHaveLength(agents.length);
+    expect(refusals.map((refusal: any) => refusal.evidence.observationsUrl)).toEqual(
+      agents.map(({ id }) => `/api/debug/identity?agent=${encodeURIComponent(id)}`),
+    );
+    expect(serialized).not.toContain('"scannedSurfaces"');
+    expect(serialized).not.toContain("SURFACE-OTHER");
+    expect(serialized).not.toContain(otherSessionId);
   });
 
   test("a linked session carries no refusal object", () => {
