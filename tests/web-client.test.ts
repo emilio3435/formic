@@ -2043,9 +2043,12 @@ describe("calm program and agent list rendering", () => {
        message". That panel is gone; the message now lives exactly once, as a
        Thread turn, which is what this test should be guarding. */
     expect(byClass(drawer, "last-human-message")).toBeNull();
-    const turn = byClass(drawer, "chat-turn-body");
-    expect(turn).not.toBeNull();
-    expect(textOf(turn)).toBe(message);
+    /* Asserted as PRESENCE among the turns, not as the first one. The check read
+       `byClass(...)[0]` and so quietly also asserted reading order, which the
+       comment above says was never the point — and it failed the moment the
+       agent's reply was promoted to lead the thread. Exactly once, still. */
+    const bodies = allByClass(drawer, "chat-turn-body").map((node: any) => textOf(node));
+    expect(bodies.filter((body: string) => body === message)).toHaveLength(1);
     expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
