@@ -5170,6 +5170,33 @@ function drawerObjective(agent) {
   return conciseText(task, 140);
 }
 
+/* The head said the same things twice, two lines apart, in different orders.
+   The title is not one shape: `agentName` returns an operator alias, else the
+   cmux terminal title, else `provider · folder` — so what it has already said
+   differs per agent, and a fixed deletion loses information in one shape while
+   fixing another. Both were verified in a browser rather than in the diff:
+
+     bare identity   h2 "Cursor · LaHormigaDormida"
+                     sub "LaHormigaDormida · Cursor · grok 4.5"   provider AND folder twice
+     aliased         h2 "RHS-6 BE payload · sol 5.6"
+                     sub "the-mountain-main · Codex · sol 5.6"    model twice, program only here
+
+   So the rule is subtractive, not a delete: this line says only what the title
+   has not. Compare against the title's own `·` segments and not a substring —
+   "main" is a substring of "the-mountain-main" and would silently drop a
+   program the title never named. */
+function headSubParts(agent, program, titleText) {
+  const said = new Set(
+    String(titleText || "").split("·").map((part) => part.trim().toLowerCase()).filter(Boolean),
+  );
+  const unsaid = (value) => (value && !said.has(value.toLowerCase()) ? value : "");
+  return {
+    program: unsaid(programName(program)),
+    provider: unsaid(providerLabel(agent.provider)),
+    model: unsaid(modelShort(agent.model)),
+  };
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const activity = deriveActivity(agent);
@@ -5204,10 +5231,22 @@ function renderAgentDrawer(pane, view) {
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   const tag = drawerSessionTag(agent);
   const objective = drawerObjective(agent);
+  const title = agentName(agent);
+  const sub = headSubParts(agent, program, title);
+  const subParts = {
+    program: sub.program,
+    chip: [sub.provider, sub.model].filter(Boolean).join(" · "),
+  };
+  /* Nothing left to say is not an empty line — it is no line. When the title
+     has already named all three, this row would otherwise render as a stray
+     gap under the heading. */
+  subParts.line = Boolean(subParts.program || subParts.chip);
   pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title" },
-        agentName(agent),
+        /* Same value the subtraction below compares against — one call, so the
+           two can never disagree about what the title said. */
+        title,
         tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
       objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
       sourceLine
@@ -5217,11 +5256,17 @@ function renderAgentDrawer(pane, view) {
           text: sourceLine,
         })
         : null,
-      el("p", { class: "inspector-sub" },
-        el("span", { text: programName(program) }),
-        " · ",
-        el("span", { class: "chip provider-" + agent.provider },
-          providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
+      subParts.line
+        ? el("p", { class: "inspector-sub" },
+          subParts.program ? el("span", { text: subParts.program }) : null,
+          subParts.program && subParts.chip ? " · " : null,
+          /* The provider chip keeps its colour class even when the title has
+             already named the provider in words: the channel is then carried
+             once, as ink, instead of twice, as text. */
+          subParts.chip
+            ? el("span", { class: "chip provider-" + agent.provider, text: subParts.chip })
+            : null)
+        : null,
       renderStatusLine(agent, activity, outcome, control, policy),
       verdictLiveness(agent),
       verdictGate(agent, outcome)),
