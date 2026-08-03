@@ -156,6 +156,24 @@ describe("drawer transition: render() and close honour the entity", () => {
     expect(source).toContain("if (back) back.focus({ preventScroll: true });");
   });
 
+  test("a control that renames itself under its own repaint does not strand focus", () => {
+    /* render() restores focus by data-fkey. A control whose key changes as a
+       result of the very click that repaints it is therefore unfindable, and
+       focus lands on <body> — the top of the document, from inside the drawer.
+       The Evidence disclosure is the live case: two keys for one control. */
+    expect(source).toContain('dataset: { fkey: "shelf:evidence:open" }');
+    expect(source).toContain('dataset: { fkey: "shelf:evidence:close" }');
+    expect(source).toContain("inspector.contains(document.activeElement)");
+    expect(source).toContain("else if (focusWasInDrawer && !inspector.hidden) focusDrawerLead();");
+  });
+
+  test("the fallback never guesses a sibling action button", () => {
+    // Prefix-matching would have found shelf:evidence:close, and also would have
+    // put focus on Archive when Interrupt disappeared. The fallback is the
+    // drawer lead precisely so it can never land on an action.
+    expect(source).not.toMatch(/data-fkey\^=|startsWith\(focusKey|focusKey\.slice\(0, focusKey\.lastIndexOf/);
+  });
+
   test("the origin is only re-recorded from outside the drawer", () => {
     // A lineage link inside the drawer is destroyed by the repaint it triggers;
     // adopting it as the way back would strand the operator on a dead node.

@@ -1701,6 +1701,9 @@ function render() {
   const listScroll = main.scrollTop;
   const inspector = $("inspector");
   const inspectorScroll = inspector.scrollTop;
+  // Whether the operator was standing INSIDE the drawer, so the restore below can
+  // tell "their control went away" from "they were never in here".
+  const focusWasInDrawer = Boolean(document.activeElement && inspector.contains(document.activeElement));
   // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
   // the signature. state.selected is already the new entity by this point —
   // selectEntity sets it and then calls render — so the pane's own last paint is
@@ -1740,6 +1743,21 @@ function render() {
   if (focusKey) {
     const node = document.querySelector(`[data-fkey="${CSS.escape(focusKey)}"]`);
     if (node) node.focus({ preventScroll: true });
+    /* The control renamed itself under the repaint it triggered, so the lookup
+       above finds nothing and focus falls to <body> — the top of the document,
+       from inside the panel the operator was working in. The Evidence disclosure
+       does exactly this: it is `shelf:evidence:open` before the click and
+       `shelf:evidence:close` after. Measured with a real Enter keypress on the
+       rail: activeElement === body.
+
+       The drawer's own lead is the fallback, deliberately and not something
+       cleverer. Matching the fkey's prefix would have found the renamed control
+       itself, but `act:<id>:interrupt` and `act:<id>:archive` share a prefix too,
+       and landing a keyboard operator on Archive because Interrupt went away is a
+       worse failure than the one being fixed. Only while the drawer is still
+       open: closeInspector runs its own return after its render, and stealing
+       focus back into a pane on its way out would fight it. */
+    else if (focusWasInDrawer && !inspector.hidden) focusDrawerLead();
   }
 }
 
