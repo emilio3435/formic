@@ -5598,7 +5598,28 @@ function renderControlBanner(agent, control) {
     el("strong", { text: brief.title }),
     " ",
     controlUnavailableText(control, agent));
-  if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  /* `why` earns its line everywhere except one cause, and the exception is the
+     common one. Measured on the live board: cause `missing` is 245 agents, and
+     there the banner says a single fact three times before reaching the remedy —
+
+       "Controls unavailable."                                        (title)
+       "Controls are unavailable - no safe cmux target is linked..."  (summary)
+       "No cmux terminal reports this session, so there is nothing
+        to route Focus or Send to."                                   (why)
+
+     Nothing is added by the third line: "no cmux target is linked" and "no cmux
+     terminal reports this session" are the same sentence twice.
+
+     Every other cause is left alone, and a first pass that dropped `why` for all
+     of them was wrong. `contested-terminal` and `shared-folder` NAME which
+     ambiguity — two sessions on one terminal, or two sharing a folder — where
+     the summary only says "ambiguous"; a test caught that, correctly. Archived
+     and died carry the risk of acting anyway, and `unproven` carries the reason
+     a cwd match can reach the wrong agent. Those are the sentences that stop a
+     retry, so they stay. */
+  if (brief.why && brief.cause !== "missing") {
+    copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  }
   copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
   copy.append(el("button", {
     type: "button",
