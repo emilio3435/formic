@@ -5050,29 +5050,11 @@ function verdictGate(agent, outcome) {
    states, so `unknown` is stated as unknown somewhere instead of silently
    looking like health. Null when the field is absent — the drawer head then
    holds exactly the nodes it holds today. */
-/* "Awaiting first check" promised an event that mostly never comes. Traced
-   rather than assumed: `processStateFor` returns "unknown" as its FALLTHROUGH,
-   and `processAlive` is only ever set when the agent carries `processIds` —
-   which `identity-bindings.ts:251` records only for a session whose process the
-   scan could actually see (`if (!provider || processIds.length === 0) continue`).
-   So unknown does not mean a check is pending. It means the check ran and found
-   no process to bind, and nothing further is scheduled.
-
-   Measured on the live board: 5 of 12 live agents, `processIds: null` on all 5
-   and present on all 7 of the others — a perfect correlation, not a race. Across
-   2.7 minutes five of six were unchanged, one nineteen minutes old still wore
-   it, and the single one that cleared did so by ENDING, not by a check arriving.
-
-   So it earns a chip — it is a real and persistent distinction, not the opening
-   state every agent passes through — but it must state the fact rather than
-   promise the event. LIVENESS_ENDED_UNKNOWN already says this correctly for the
-   ended case; this is the same fact while the session is live.
-
-   The word is overridden here rather than in LIVENESS_VIEW because that constant
-   lives in agent-model.js, which belongs to another lane. Verified safe to do so
-   from one place: the ROW renders `liveness.label` only for `died` (app.js:4145),
-   so this chip is the only surface that has ever shown the unknown wording.
-   HANDOFF to L5 — fold this into LIVENESS_VIEW.unknown and delete the override. */
+/* The words themselves live in LIVENESS_VIEW / LIVENESS_ENDED_UNKNOWN, which is
+   the only place they may be decided — an earlier attempt overrode the `unknown`
+   label HERE and left livenessView() and the rendered chip disagreeing about one
+   agent (c489040, reverted by 4d81fe5). This function renders what the model
+   says and nothing else. */
 function verdictLiveness(agent) {
   const view = livenessView(agent);
   if (!view) return null;

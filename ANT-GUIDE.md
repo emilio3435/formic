@@ -590,7 +590,7 @@ answer again.
 </details>
 
 <details>
-<summary><b>An agent says "Awaiting first check"</b></summary>
+<summary><b>An agent says "No matching process"</b></summary>
 
 That is the **process liveness** chip in the drawer. It answers what status alone
 cannot: *is this session's process actually still alive?* A crashed agent and a
@@ -601,12 +601,19 @@ cleanly finished one both just stop, and otherwise look identical.
 | **Process live** (green) | Still running. |
 | **Exited cleanly** (grey) | Finished properly. Done. |
 | **Died** (red) | The process is gone and nothing ended cleanly. **This is the one worth looking at.** |
-| **Awaiting first check** (grey, dashed) | Not checked yet. Ordinary and temporary. |
+| **No matching process** (grey, dashed) | The session is still on the board, but the scan has matched no process to it, so its liveness is unproven. It may match later or never — the board does not promise either. |
 | **No process evidence** (grey, dashed) | The session ended and no evidence was captured, so whether it finished or crashed can no longer be recovered. |
 
 No chip at all means the session predates process checking. Absence of evidence
 is never displayed as evidence of death, and most finished sessions on a busy
 board read **No process evidence**. That is normal.
+
+**No matching process** is normal too, and it is not a fault in the session: on a
+live board it tracks whether the board could route to the session's terminal at
+all. Every live agent wearing it in two measured snapshots was **Observed only**
+or **Quarantined**; every live agent reading **Process live** was **Linked**. If
+you want the process answer for one of them, fix the routing — the drawer's
+routing evidence says what the scan saw.
 
 </details>
 

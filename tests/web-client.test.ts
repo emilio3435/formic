@@ -7564,8 +7564,8 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // Unknown is never marked as death, but it is still stated to a reader.
     expect(byClass(unclear, "row-died")).toBeNull();
     expect(unclear.className.split(/\s+/)).not.toContain("is-died");
-    // agent() is `running`, so its unknown is the still-to-be-probed reading.
-    expect(unclear.attributes["aria-label"]).toContain("Process: Awaiting first check");
+    // agent() is `running`, so its unknown is the live reading — see (3b).
+    expect(unclear.attributes["aria-label"]).toContain("Process: No matching process");
   });
 
   test("(3) the drawer states all four verdicts, so unknown reads as unknown", () => {
@@ -7574,7 +7574,7 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
       ["running", "Process live", "liveness-running"],
       ["exited", "Exited cleanly", "liveness-exited"],
       ["died", "Died", "liveness-died"],
-      ["unknown", "Awaiting first check", "liveness-unknown"],
+      ["unknown", "No matching process", "liveness-unknown"],
     ];
     for (const [word, label, cls] of cases) {
       const chip = withDom(() => M.verdictLiveness(agent({ processLiveness: word })));
@@ -7586,24 +7586,39 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     expect(new Set(labels).size).toBe(4);
   });
 
-  /* One wire value, two different facts. On the live board 135 of the 140
-     `unknown` agents are ended sessions: nothing will ever probe them again, so
-     "Awaiting first check" would send the operator off to wait for a check that
-     is never coming. Only a session still on the board is actually awaiting one. */
-  test("(3b) unknown liveness distinguishes a pending check from one that will never come", () => {
-    const pending = M.livenessView(agent({ processState: "unknown", status: "running", activity: "working" }));
-    expect(pending.label).toBe("Awaiting first check");
-    expect(pending.detail).toContain("No process check has reported");
+  /* One wire value, two different facts — but NOT the two this test first
+     asserted. It used to read the live case as "Awaiting first check" and the
+     ended one as "No process evidence", on the theory that a live session is
+     genuinely waiting for a probe. Watched on the live board for 16 minutes
+     (2026-08-03 22:12–22:28 UTC), that theory holds for some sessions and fails
+     for others: of 6 live agents wearing the chip, 2 cleared within ~6 minutes
+     because a check arrived and bound a process, and 4 aged 7 to 40 minutes
+     never cleared. A label that promises a check is wrong for the second group
+     and a label that denies one is wrong for the first, so the live wording
+     states the fact and says nothing about timing.
+
+     The split still earns its keep, on the fact that DOES separate them: an
+     ended session will never be matched, so how it finished is closed
+     unanswered. 627 of the 631 unknowns on the board are ended sessions. */
+  test("(3b) unknown liveness separates a session that may still match from one that never will", () => {
+    const live = M.livenessView(agent({ processState: "unknown", status: "running", activity: "working" }));
+    expect(live.label).toBe("No matching process");
+    expect(live.detail).toContain("cannot say whether its process is alive");
+    // Never promise, and never deny, a check the board does not schedule.
+    expect(live.label).not.toContain("Awaiting");
+    expect(live.detail).not.toMatch(/yet|never|will/i);
 
     const finished = M.livenessView(agent({ processState: "unknown", status: "archived", activity: "ended" }));
     expect(finished.label).toBe("No process evidence");
+    // The ended chip carries the extra fact, and it is the one an operator acts
+    // on: the outcome is unrecoverable, not merely unobserved.
     expect(finished.detail).toContain("cannot be recovered");
-    expect(finished.label).not.toContain("Awaiting"); // never promise a check
+    expect(finished.label).not.toBe(live.label);
 
     // Same key either way, so the chip's styling and every selector still match.
-    expect(pending.key).toBe("unknown");
+    expect(live.key).toBe("unknown");
     expect(finished.key).toBe("unknown");
-    expect(pending.tone).toBe(finished.tone);
+    expect(live.tone).toBe(finished.tone);
 
     // The three states that ARE evidence are unaffected by activity.
     for (const [word, label] of [["running", "Process live"], ["exited", "Exited cleanly"], ["died", "Died"]]) {
@@ -7851,9 +7866,9 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
       ["running", "Process live"],
       ["exited", "Exited cleanly"],
       ["died", "Died"],
-      // agent() is `running`, so unknown reads as the pending-probe case; the
-      // ended reading is covered by (3b).
-      ["unknown", "Awaiting first check"],
+      // agent() is `running`, so unknown reads as the live case; the ended
+      // reading is covered by (3b).
+      ["unknown", "No matching process"],
     ];
     for (const [word, label] of wire) {
       expect(M.livenessState(agent({ processState: word })), word).toBe(word);
@@ -7909,7 +7924,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     const unclear = agent({ processState: "unknown" });
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: unclear, program: { id: "p", name: "P", agents: [unclear] } }));
-    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Awaiting first check");
+    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("No matching process");
   });
 
   /* The route that used to 403 every browser now answers. This is a verbatim
