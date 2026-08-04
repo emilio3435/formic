@@ -18,11 +18,11 @@ import { actionsFailureText, actionsUrl, apiFetch, API_READ_TIMEOUT_MS, ACTIONS_
 import { agoText } from "./text-formatters.js";
 import { agentName, agentsById, actionOutcomeView } from "./presentation.js";
 
-export const ACTION_KINDS = new Set(["focus", "instruct", "interrupt", "broadcast", "archive"]);
+export const ACTION_KINDS = new Set(["focus", "instruct", "interrupt", "broadcast", "archive", "unarchive"]);
 
 export const ACTION_KIND_LABELS = {
   focus: "Focus", instruct: "Send", interrupt: "Interrupt",
-  broadcast: "Broadcast", archive: "Archive",
+  broadcast: "Broadcast", archive: "Archive", unarchive: "Un-archive",
 };
 
 export const ACTIONS_RENDER_CAP = 100;
@@ -108,7 +108,7 @@ export function renderActionLog(ui = state, nameFor = null) {
   if (!log.items.length) {
     panel.append(el("p", {
       class: "action-log-note",
-      text: "No operator actions recorded yet. Focus, Send, Interrupt, Archive and Broadcast are journalled here as they happen — including the ones that fail.",
+      text: "No operator actions recorded yet. Focus, Send, Interrupt, Archive, Un-archive and Broadcast are journalled here as they happen — including the ones that fail.",
     }));
     return panel;
   }

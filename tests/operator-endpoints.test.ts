@@ -385,6 +385,41 @@ describe("operator action log", () => {
     fetch.dispose();
   });
 
+  test("records a successful un-archive in the action log", async () => {
+    const current = snapshot();
+    const unarchiveSnapshot = {
+      ...current,
+      programs: current.programs.map((program) => ({
+        ...program,
+        agents: program.agents.map((agent) => ({
+          ...agent,
+          controls: [...agent.controls, { action: "unarchive" as const, enabled: true }],
+        })),
+      })),
+    };
+    const actions = new MemoryActionLogStore(() => Date.parse("2026-07-28T09:12:03.114Z"));
+    const archiveStore: ArchiveStore = {
+      has: () => true,
+      archive: async () => {},
+      unarchive: async () => {},
+    };
+    const fetch = app(unarchiveSnapshot, { actions, archiveStore });
+
+    const response = await fetch(new Request(`${ORIGIN}/api/control`, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ action: "unarchive", agentId: "codex:test-session" }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(actions.list(1)).toMatchObject([{
+      kind: "unarchive",
+      outcome: "ok",
+      agentIds: ["codex:test-session"],
+    }]);
+    fetch.dispose();
+  });
+
   test("bounds the in-memory ring buffer at 500 newest actions", async () => {
     let now = Date.parse("2026-07-28T09:00:00.000Z");
     const store = new MemoryActionLogStore(() => now++);

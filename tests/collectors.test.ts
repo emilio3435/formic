@@ -413,6 +413,11 @@ describe("collector identity and usage truth", () => {
       parentSourceSessionId: "019f8650-960c-7dc0-b75a-68dda4a57a1b",
       threadDepth: 2,
       nickname: "Fermat",
+      identity: {
+        name: "Fermat",
+        source: "authored",
+        authoredBy: "codex-nickname",
+      },
     });
   });
 

@@ -34,7 +34,7 @@ function parseControlRequest(value: unknown): ControlRequest | string {
     return "Body contains an unsupported field.";
   }
   if (typeof record.action !== "string" || !CONTROL_ACTIONS.includes(record.action as ControlRequest["action"])) {
-    return "action must be focus, instruct, interrupt, or archive.";
+    return "action must be focus, instruct, interrupt, archive, or unarchive.";
   }
   if (typeof record.agentId !== "string" || !record.agentId.trim() || record.agentId.length > 300) {
     return "agentId must be a non-empty string no longer than 300 characters.";

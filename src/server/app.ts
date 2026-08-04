@@ -79,7 +79,7 @@ export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ACTION_LOG_ENTRIES = 500;
 
-export type OperatorActionKind = "focus" | "instruct" | "interrupt" | "broadcast" | "archive";
+export type OperatorActionKind = "focus" | "instruct" | "interrupt" | "broadcast" | "archive" | "unarchive";
 export type OperatorActionOutcome = "ok" | "failed" | "partial" | "staged";
 
 export interface OperatorAction {
@@ -223,7 +223,7 @@ function isOperatorAction(value: unknown): value is OperatorAction {
     action.id.startsWith("act_") &&
     typeof action.at === "string" &&
     Number.isFinite(Date.parse(action.at)) &&
-    ["focus", "instruct", "interrupt", "broadcast", "archive"].includes(String(action.kind)) &&
+    ["focus", "instruct", "interrupt", "broadcast", "archive", "unarchive"].includes(String(action.kind)) &&
     Array.isArray(action.agentIds) &&
     action.agentIds.every((agentId) => typeof agentId === "string") &&
     ["ok", "failed", "partial", "staged"].includes(String(action.outcome)) &&
@@ -414,7 +414,7 @@ async function recordControlAction(
   const kind = requestBody?.action;
   const agentId = requestBody?.agentId;
   if (
-    !["focus", "instruct", "interrupt", "archive"].includes(String(kind)) ||
+    !["focus", "instruct", "interrupt", "archive", "unarchive"].includes(String(kind)) ||
     typeof agentId !== "string"
   ) return;
   const body = await actionResponse(response);

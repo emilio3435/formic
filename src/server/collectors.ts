@@ -388,16 +388,16 @@ function makeAgent(input: {
     ? explicitName
     : undefined;
   /* Resolved here because this is where every provider's session becomes one
-     shape, so there is a single call site rather than four. ADDITIVE for now:
-     `displayName` below is untouched and still carries the derived string every
-     surface renders today. The two disagree on purpose until the client cuts
-     over — that disagreement is what the wire has to expose in order to be
-     testable before anything depends on it. */
+     shape, so there is a single call site rather than four. Codex's native
+     nickname is authored evidence, just like the explicit title fields from
+     the other providers; keep the legacy displayName below for old clients. */
+  const authoredName = usefulExplicitName ||
+    (input.provider === "codex" ? input.nickname : undefined);
   const identity = resolveAgentName({
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
-    authored: usefulExplicitName
-      ? { name: usefulExplicitName, by: AUTHORED_BY[input.provider] }
+    authored: authoredName
+      ? { name: authoredName, by: AUTHORED_BY[input.provider] }
       : undefined,
     originCwd: input.originCwd ?? input.cwd,
     taskName: taskDisplayName(input.task),
