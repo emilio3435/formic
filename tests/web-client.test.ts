@@ -517,6 +517,34 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* The calm line's bullet is punctuation, and punctuation does not outlive its
+     sentence.
+
+     Suppressing "0 shipping" at zero tracked (day-one review, 70ed00b) left the
+     mark rendering alone. Measured in the browser on a rebuilt n=0 fixture at
+     aba5551: mark "●", copy "", chip "All clear" — an orphaned dot before the
+     verdict, on the one screen whose whole job is to look deliberate rather than
+     broken. */
+  test("the calm line drops its bullet when it has nothing to say", () => {
+    /* A shape assertion over the renderer's source, and deliberately not a
+       behavioural one: renderPulseCalm is not exported, and exporting a renderer
+       purely to test it would widen this patch past the defect it fixes. The
+       trade is stated so the next reader knows what this does and does not
+       prove — it binds to the GATE, not to the pixels, and a rename of `copy`
+       will fail it even though behaviour is intact.
+
+       Mutation-checked: reverting the two spans to their unconditional form
+       fails this test, so it cannot pass over the bug it was written for. */
+    const src = readFileSync(join(import.meta.dir, "../src/web/app.js"), "utf8");
+    const fn = src.slice(src.indexOf("function renderPulseCalm"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+
+    // BOTH spans gate on the copy. A mark surviving an empty copy is the bug.
+    expect(body).toMatch(/copy \? el\("span", \{ class: "pulse-calm-mark"/);
+    expect(body).toMatch(/copy \? el\("span", \{ class: "pulse-calm-copy"/);
+    expect(body).not.toMatch(/\n\s*el\("span", \{ class: "pulse-calm-mark"/);
+  });
+
   /* Seen whole rather than one change at a time.
 
      A cmux pane title is a LIVE terminal title, so it carries whatever frame the
