@@ -667,10 +667,19 @@ export function snapshotAgents(snap) {
 
 export function sourceAgentName(agent) {
   if (!agent) return "";
+  /* The server decided this, across the whole fleet, and it is the only answer
+     that can be unique. Everything below is the pre-contract fallback, reachable
+     now only for an archived record filed before `identity` was published. */
+  if (agent.identity && agent.identity.name) return conciseText(agent.identity.name);
   if (agent.nickname) return conciseText(agent.nickname);
   const identity = cwdIdentityName(agent);
   const display = typeof agent.displayName === "string" ? agent.displayName.trim() : "";
-  // Keep short provider·folder identities; replace prompt-as-title blobs.
+  /* The heuristic this replaces, kept only for those legacy rows: "a name is
+     trustworthy if it contains · and is under 56 characters". It was an attempt
+     to tell an authored name from a derived one without being told which was
+     which, and it got the answer backwards — every DERIVED name matches it
+     (they are all "Provider · folder") and an authored one like "Lifecycle
+     Mapper" does not, so a name a human chose lost to the folder it ran in. */
   const shortIdentity = display.length > 0 && display.length <= 56 && display.includes("·");
   if (shortIdentity) return conciseText(display);
   if (identity) return conciseText(identity);

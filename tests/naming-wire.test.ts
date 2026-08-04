@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { parseClaudeJsonl, type ParseMetadata } from "../src/server/collectors";
 import { parseCursorSession } from "../src/server/cursor";
 import { JsonArchiveStore, type ArchiveFileOperations } from "../src/server/archive";
@@ -234,5 +234,48 @@ describe("an archived record keeps the name it had", () => {
     const archived = snapshot.programs.flatMap((program) => program.agents)[0];
     expect(archived?.identity?.name).toBe("Lifecycle Mapper");
     expect(archived?.identity?.source).toBe("authored");
+  });
+});
+
+describe("the client renders the name it was given", () => {
+  /* The cutover. `sourceAgentName` used to re-derive a name on the client behind
+     a heuristic — "trustworthy if it contains · and is under 56 characters" —
+     which every DERIVED name passes and an authored one fails. The server now
+     answers this question for the whole fleet, so the client's job is to read
+     the answer, not to have an opinion about it. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let presentation: any;
+
+  beforeAll(async () => {
+    // @ts-expect-error the dependency-free browser client has no declaration file
+    presentation = await import("../src/web/presentation.js");
+  });
+
+  test("an authored name beats the folder it happened to run in", () => {
+    /* The exact live regression: a Codex agent nicknamed "Lifecycle Mapper",
+       running in the-mountain-main, displayed as "Claude · the-mountain-main"
+       alongside 359 others. */
+    expect(presentation.sourceAgentName({
+      provider: "codex",
+      displayName: "Codex · the-mountain-main",
+      identity: { name: "Lifecycle Mapper", base: "Lifecycle Mapper", source: "authored" },
+    })).toBe("Lifecycle Mapper");
+  });
+
+  test("the server's disambiguator reaches the row intact", () => {
+    expect(presentation.sourceAgentName({
+      provider: "codex",
+      displayName: "Codex · lanes",
+      identity: { name: "Codex · lanes #0000aaa1", base: "Codex · lanes", source: "origin-cwd", disambiguator: "0000aaa1" },
+    })).toBe("Codex · lanes #0000aaa1");
+  });
+
+  test("a record filed before identity existed still gets its old name", () => {
+    /* The fallback is not dead code: thirty days of archived records were
+       written before this field, and History still has to name them. */
+    expect(presentation.sourceAgentName({
+      provider: "claude",
+      displayName: "Claude · the-mountain-main",
+    })).toBe("Claude · the-mountain-main");
   });
 });
