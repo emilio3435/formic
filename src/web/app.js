@@ -373,6 +373,29 @@ function sessionTag(agent) {
 /* Names that appear more than once across the agents given. Built once per
    paint from the whole board, not per program — two twins in different programs
    are exactly as confusing as two in the same one. */
+/* The names the landing screen offers for working sessions, at most three.
+
+   Split out of the all-clear block so the one-glance rule can be asserted
+   without the module's state plumbing — the same reason syncProgramList is its
+   own function.
+
+   Siblings in one checkout collide here and nowhere else on that screen:
+   agentName falls back to provider plus project basename, so two Claude
+   sessions in the same directory are both "Claude · shared-checkout". A roster
+   that says one name twice finds nobody, which is the incident the roster
+   exists to close, wearing a different hat. The row list already solved this
+   (see sessionTag); this reuses that answer rather than forking a second
+   naming rule. */
+function landingRosterNames(working, limit = 3) {
+  const shown = (working || []).slice(0, limit);
+  const ambiguous = ambiguousNames(working);
+  return shown.map((agent) => {
+    const name = agentName(agent);
+    const tag = ambiguous.has(name) ? sessionTag(agent) : "";
+    return tag ? name + " " + tag : name;
+  });
+}
+
 function ambiguousNames(agents) {
   const seen = new Map();
   for (const agent of agents || []) {
@@ -1095,7 +1118,7 @@ globalThis.TheAntHill = {
   contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
-  sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
+  sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
@@ -3916,7 +3939,7 @@ function renderPrograms() {
             .map((x) => x.agent)
             .filter((a) => lifecycleOf(a) === "working" && scopeOf(a) === "observed");
           if (!working.length) return [];
-          const named = working.slice(0, 3).map((a) => agentName(a));
+          const named = landingRosterNames(working);
           const rest = working.length - named.length;
           return [el("p", { class: "all-clear-roster" },
             el("span", { text: named.join(" · ") + (rest > 0 ? ` · +${rest} more` : "") }))];
