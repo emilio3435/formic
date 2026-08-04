@@ -43,11 +43,10 @@ function hub(collectors: Partial<HubCollectors>): HubState {
     enrichIdentity: async (surfaces: unknown) => ({ value: [...(surfaces as unknown[])], errors: [] }),
     ...collectors,
   } as unknown as HubCollectors;
-  return new HubState(
-    runner, archiveStore, [], full,
-    undefined, undefined, undefined, undefined, undefined,
-    60,
-  );
+  return new HubState(runner, archiveStore, [], {
+    collectors: full,
+    refreshAggregateTimeoutMs: 60,
+  });
 }
 
 const refresh = (state: HubState): Promise<HubSnapshot> => state.refresh({ cmux: true });
@@ -183,11 +182,10 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
       enrichIdentity: async (surfaces: unknown) => ({ value: [...(surfaces as unknown[])], errors: [] }),
       ...collectors,
     } as unknown as HubCollectors;
-    return new HubState(
-      runner, archiveStore, [], full,
-      undefined, undefined, undefined, undefined, undefined,
-      600_000,
-    );
+    return new HubState(runner, archiveStore, [], {
+      collectors: full,
+      refreshAggregateTimeoutMs: 600_000,
+    });
   };
 
   const sessionsWith = (id: string): SessionsResult => ({

@@ -297,12 +297,7 @@ describe("binding wiring through the refresh engine", () => {
       runner,
       { has: () => false, archive: async () => {} },
       [],
-      collectors,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      store,
+      { collectors, bindingStore: store },
     );
 
     const first = await state.refresh({ cmux: true });

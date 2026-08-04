@@ -41,6 +41,29 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 const REFRESH_WATCHDOG_MS = 12_000;
 export const REFRESH_AGGREGATE_TIMEOUT_MS = 10_000;
 
+/* Everything optional about a HubState, as one bag rather than a positional
+   tail.
+
+   This was twelve positional parameters, the last nine optional, and the cost
+   was not readability — it was that "add a store" and "add a store" are the
+   SAME EDIT to the same line. Three times in one day two lanes appended a
+   parameter here at once and collided; every call site also had to pad with
+   `undefined` to reach the slot it wanted, which is how a new argument lands
+   silently in the wrong position. A key has no position to fight over. */
+export interface HubStateOptions {
+  collectors?: HubCollectors;
+  settingsReader?: () => HubSettings;
+  triageReader?: () => readonly TriageQueueSummary[];
+  burnReader?: () => Promise<UsageSummary>;
+  cmuxExecutable?: string;
+  bindingStore?: IdentityBindingStore;
+  refreshAggregateTimeoutMs?: number;
+  sessionNames?: JsonSessionNameStore;
+  witnessStore?: ProcessWitnessStore;
+  /** Injectable so tests can pin a boot without a clock. */
+  bootId?: string;
+}
+
 export class HubState {
   #snapshot: HubSnapshot;
   #pulse: PulseTracker;
@@ -81,26 +104,36 @@ export class HubState {
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
 
+  private readonly collectors: HubCollectors;
+  private readonly settingsReader?: () => HubSettings;
+  private readonly triageReader?: () => readonly TriageQueueSummary[];
+  private readonly burnReader?: () => Promise<UsageSummary>;
+  private readonly cmuxExecutable: string;
+  private readonly bindingStore?: IdentityBindingStore;
+  private readonly refreshAggregateTimeoutMs: number;
+  /* Optional so every existing construction — and the tests are full of them —
+     keeps the derived names rather than requiring a naming store. */
+  private readonly sessionNames?: JsonSessionNameStore;
+  private readonly witnessStore?: ProcessWitnessStore;
+
   constructor(
     private readonly runner: CommandRunner,
     private readonly archiveStore: ArchiveStore,
     private readonly programHints: readonly ProgramHint[],
-    private readonly collectors: HubCollectors = DEFAULT_COLLECTORS,
-    private readonly settingsReader?: () => HubSettings,
-    private readonly triageReader?: () => readonly TriageQueueSummary[],
-    private readonly burnReader?: () => Promise<UsageSummary>,
-    private readonly cmuxExecutable = DEFAULT_CMUX_EXECUTABLE,
-    private readonly bindingStore?: IdentityBindingStore,
-    private readonly refreshAggregateTimeoutMs = REFRESH_AGGREGATE_TIMEOUT_MS,
-    /* Optional so every existing construction — and the tests are full of them —
-       keeps the derived names rather than requiring a naming store. */
-    private readonly sessionNames?: JsonSessionNameStore,
-    private readonly witnessStore?: ProcessWitnessStore,
-    bootId = currentBootId(uptime(), Date.now()),
+    options: HubStateOptions = {},
   ) {
-    this.#bootId = bootId;
+    this.collectors = options.collectors ?? DEFAULT_COLLECTORS;
+    this.settingsReader = options.settingsReader;
+    this.triageReader = options.triageReader;
+    this.burnReader = options.burnReader;
+    this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
+    this.bindingStore = options.bindingStore;
+    this.refreshAggregateTimeoutMs = options.refreshAggregateTimeoutMs ?? REFRESH_AGGREGATE_TIMEOUT_MS;
+    this.sessionNames = options.sessionNames;
+    this.witnessStore = options.witnessStore;
+    this.#bootId = options.bootId ?? currentBootId(uptime(), Date.now());
     this.#pulse = new PulseTracker(this.burnReader);
-    const bootSettings = settingsReader?.();
+    const bootSettings = this.settingsReader?.();
     this.#scanWindowHours = bootSettings?.scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
     const initialSnapshot = this.#withSourceHealth(buildSnapshot({
       agents: [],

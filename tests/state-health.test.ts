@@ -69,11 +69,7 @@ describe("cmux collection time truth", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      undefined,
-      undefined,
-      undefined,
-      "/opt/cmux/bin/cmux",
+      { collectors, cmuxExecutable: "/opt/cmux/bin/cmux" },
     );
 
     await state.refresh({ cmux: true });
@@ -103,7 +99,7 @@ describe("cmux collection time truth", () => {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
-    const state = new HubState(runner, archiveStore, [], collectors);
+    const state = new HubState(runner, archiveStore, [], { collectors });
 
     const sourceOnly = state.refresh();
     const queuedCmux = state.refresh({ cmux: true });
@@ -163,7 +159,7 @@ describe("cmux collection time truth", () => {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
-    const state = new HubState(runner, archiveStore, [], collectors);
+    const state = new HubState(runner, archiveStore, [], { collectors });
 
     await state.refresh({ cmux: true });
     const lastSuccessfulCheck = state.get().controlHealth.lastCheckedAt;
@@ -213,7 +209,7 @@ describe("cmux collection time truth", () => {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
-    const state = new HubState(runner, archiveStore, [], collectors);
+    const state = new HubState(runner, archiveStore, [], { collectors });
 
     const droppedRefresh = state.refresh();
     for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
@@ -262,13 +258,7 @@ describe("cmux collection time truth", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      5,
+      { collectors, refreshAggregateTimeoutMs: 5 },
     );
 
     const snapshot = await state.refresh({ cmux: true });
@@ -308,7 +298,7 @@ describe("cmux collection time truth", () => {
     const runner: CommandRunner = {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
-    const state = new HubState(runner, new MemoryArchiveStore(), [], collectors);
+    const state = new HubState(runner, new MemoryArchiveStore(), [], { collectors });
 
     const live = await state.refresh();
     includeSource = false;
@@ -337,9 +327,7 @@ describe("cmux collection time truth", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      undefined,
-      () => triageSummaries,
+      { collectors, triageReader: () => triageSummaries },
     );
 
     await state.refresh({ cmux: true });
@@ -367,7 +355,7 @@ describe("cmux collection time truth", () => {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
     const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
-    const state = new HubState(runner, archiveStore, [], collectors);
+    const state = new HubState(runner, archiveStore, [], { collectors });
 
     expect(state.get().totals.sourceHealth?.byProvider?.codex).toEqual({
       healthy: false,
@@ -408,10 +396,7 @@ describe("cmux collection time truth", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      undefined,
-      undefined,
-      burnReader,
+      { collectors, burnReader },
     );
 
     const refresh = state.refresh();
@@ -454,16 +439,18 @@ describe("operator thresholds reach the collectors", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      () => ({
-        version: 2,
-        activityFreshMinutes: 3,
-        activityQuietMinutes,
-        scanWindowHours: 36,
-        historyRetentionDays: 30,
-        historyRecordLimit: 5000,
-        defaultView: "needs-you",
-      }),
+      {
+        collectors,
+        settingsReader: () => ({
+          version: 2,
+          activityFreshMinutes: 3,
+          activityQuietMinutes,
+          scanWindowHours: 36,
+          historyRetentionDays: 30,
+          historyRecordLimit: 5000,
+          defaultView: "needs-you",
+        }),
+      },
     );
 
     await state.refresh({});
@@ -488,7 +475,7 @@ describe("operator thresholds reach the collectors", () => {
     const runner: CommandRunner = {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
-    const state = new HubState(runner, { has: () => false, archive: async () => {} }, [], collectors);
+    const state = new HubState(runner, { has: () => false, archive: async () => {} }, [], { collectors });
 
     await state.refresh({});
     expect(seen).toEqual([undefined]);
@@ -556,12 +543,7 @@ describe("what is recorded is what is published", () => {
       runner,
       archiveStore,
       [],
-      collectors,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      bindingStore,
+      { collectors, bindingStore },
     );
 
     const snapshot = await state.refresh({ cmux: true });

@@ -46,20 +46,14 @@ const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.
    costs the names, not the boot. */
 const sessionNameStore = await JsonSessionNameStore.open();
 
-const state = new HubState(
-  runner,
-  archiveStore,
-  programHints,
-  undefined,
-  () => settingsStore.get(),
-  () => triageStore.list(),
-  undefined,
+const state = new HubState(runner, archiveStore, programHints, {
+  settingsReader: () => settingsStore.get(),
+  triageReader: () => triageStore.list(),
   cmuxExecutable,
-  identityBindingStore,
-  undefined,
-  sessionNameStore,
-  processWitnessStore,
-);
+  bindingStore: identityBindingStore,
+  sessionNames: sessionNameStore,
+  witnessStore: processWitnessStore,
+});
 await state.refresh({ cmux: true });
 
 const mountainFetch = createMountainFetch({

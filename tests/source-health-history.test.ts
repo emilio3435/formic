@@ -54,7 +54,7 @@ function stateWith(scripts: ReadonlyArray<Partial<Record<Provider, CollectionRes
     notifications: async () => ({ value: [], errors: [] }),
     enrichIdentity: async (surfaces: unknown) => ({ value: surfaces, errors: [] }),
   } as never;
-  return new HubState(runner, archiveStore, [], collectors);
+  return new HubState(runner, archiveStore, [], { collectors });
 }
 
 const providerHealth = async (state: HubState, provider: Provider) => {
