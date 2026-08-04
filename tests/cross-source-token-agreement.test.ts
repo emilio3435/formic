@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { getAllUsageInvocations } from "../src/server/burnbar";
+import { getAllUsageInvocations, type UsageInvocation } from "../src/server/burnbar";
 import type { ActivityState } from "../src/shared/types";
 
 /* THE FIRST ASSERTION IN THIS SUITE THAT CAN FAIL BECAUSE THE WORLD DISAGREES.
@@ -64,6 +64,8 @@ interface BurnBarSession {
   readonly updatedAtMs?: number;
 }
 
+type BurnBarJoinRow = Pick<UsageInvocation, "sessionId" | "tokens" | "startTime" | "endTime">;
+
 let available = false;
 let unavailableReason = "";
 let joined: Joined[] = [];
@@ -78,6 +80,34 @@ let unjoinedUuid: string[] = [];
    otherwise read them in the machine's local zone and move the quiet boundary. */
 const parseBurnBarTimestamp = (value: string): number =>
   Date.parse(`${value.replace(" ", "T")}Z`);
+
+/* OpenBurnBar rows are cumulative session snapshots, not additive calls.
+   Measured 2026-08-04 across 3,053 rows / 24 multi-row sessions: every total
+   was monotonic by endTime and the last was the maximum; seven sessions also
+   carried exact token/start/end duplicates under different model labels. This
+   mirrors the summary query's established "latest cumulative snapshot wins"
+   rule. Exact repeats are removed explicitly, then MAX is safe because the
+   measured cumulative series is monotonic. */
+const aggregateBurnBarSessions = (rows: readonly BurnBarJoinRow[]): Map<string, BurnBarSession> => {
+  const sessions = new Map<string, BurnBarSession>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const fingerprint = JSON.stringify([row.sessionId, row.tokens, row.startTime, row.endTime ?? null]);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+
+    const previous = sessions.get(row.sessionId);
+    const observedAtMs = row.endTime ? parseBurnBarTimestamp(row.endTime) : undefined;
+    const tokens = row.tokens ?? 0;
+    sessions.set(row.sessionId, {
+      tokens: previous ? Math.max(previous.tokens, tokens) : tokens,
+      updatedAtMs: observedAtMs === undefined
+        ? previous?.updatedAtMs
+        : Math.max(previous?.updatedAtMs ?? -Infinity, observedAtMs),
+    });
+  }
+  return sessions;
+};
 
 /* "Settled" rests on three real fields. `activity === ended` is the board's
    lifecycle verdict and settles immediately. Otherwise board `updatedAt` and
@@ -127,20 +157,7 @@ beforeAll(async () => {
     return;
   }
 
-  /* Burnbar records a session as one or more cumulative snapshot rows; the
-     summary path collapses those, and here the per-session total is the sum of
-     what this window returned for that id. */
-  const burnbarBySession = new Map<string, BurnBarSession>();
-  for (const row of usage.invocations) {
-    const previous = burnbarBySession.get(row.sessionId);
-    const observedAtMs = row.endTime ? parseBurnBarTimestamp(row.endTime) : undefined;
-    burnbarBySession.set(row.sessionId, {
-      tokens: (previous?.tokens ?? 0) + (row.tokens ?? 0),
-      updatedAtMs: observedAtMs === undefined
-        ? previous?.updatedAtMs
-        : Math.max(previous?.updatedAtMs ?? -Infinity, observedAtMs),
-    });
-  }
+  const burnbarBySession = aggregateBurnBarSessions(usage.invocations);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const boardAgents: any[] = (snapshot.programs ?? []).flatMap((program: any) => program.agents ?? []);
@@ -306,6 +323,47 @@ describe("what this board counted is what a separate application recorded", () =
 
     expect(liveAnomalies([withinReadSkew, droppedByBoard]).map(describeDrift))
       .toEqual([describeDrift(droppedByBoard)]);
+  });
+
+  test("duplicate and advancing BurnBar snapshots each count once", () => {
+    const duplicateTotal = 30_538_511;
+    const finalTotal = 293_235;
+    const rows: BurnBarJoinRow[] = [
+      {
+        sessionId: "duplicate",
+        tokens: duplicateTotal,
+        startTime: "2026-08-03 21:49:12.043",
+        endTime: "2026-08-04 02:01:48.721",
+      },
+      /* Same observation under another model label. Model is deliberately not
+         part of the fingerprint because it cannot make the work happen twice. */
+      {
+        sessionId: "duplicate",
+        tokens: duplicateTotal,
+        startTime: "2026-08-03 21:49:12.043",
+        endTime: "2026-08-04 02:01:48.721",
+      },
+      {
+        sessionId: "advancing",
+        tokens: 112_258,
+        startTime: "2026-08-02 20:28:49.000",
+        endTime: "2026-08-02 20:29:02.414",
+      },
+      {
+        sessionId: "advancing",
+        tokens: finalTotal,
+        startTime: "2026-08-02 20:28:49.000",
+        endTime: "2026-08-02 20:29:37.000",
+      },
+    ];
+
+    const sessions = aggregateBurnBarSessions(rows);
+
+    expect(sessions.size).toBe(2);
+    expect(sessions.get("duplicate")?.tokens).toBe(duplicateTotal);
+    expect(sessions.get("advancing")?.tokens).toBe(finalTotal);
+    expect(sessions.get("advancing")?.updatedAtMs)
+      .toBe(parseBurnBarTimestamp("2026-08-02 20:29:37.000"));
   });
 
   test("the settled split requires both quiet clocks unless the board says ended", () => {
