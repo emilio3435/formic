@@ -2061,9 +2061,19 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
     const spend = calmSpendText(pulse.burn);
     if (spend) parts.push(spend);
   }
+  /* The mark is punctuation for the copy, so it goes when the copy does.
+
+     Suppressing "0 shipping" at zero tracked (day-one review) left this bullet
+     rendering alone: measured on the rebuilt n=0 fixture at aba5551, the calm
+     line was mark "●", copy "", chip "All clear" — an orphaned dot floating
+     before the verdict, which reads as a bullet whose text failed to load on the
+     one screen that exists to look deliberate. aria-hidden already says it
+     carries no meaning of its own; it should not survive the sentence it was
+     decorating. */
+  const copy = parts.join(" · ");
   const line = el("div", { class: "pulse-calm" + (watch.length ? " is-watching" : ""), role: "status" },
-    el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
-    el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+    copy ? el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }) : null,
+    copy ? el("span", { class: "pulse-calm-copy", text: copy }) : null);
   /* The murmur. Appended to the same line rather than promoted into a cell,
      because these signals are worth mentioning and not worth rearranging the
      board around — a volume knob instead of a switch. */
