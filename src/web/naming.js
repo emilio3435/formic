@@ -32,6 +32,7 @@ export const PROVIDER_DISPLAY_NAMES = {
   omp: "OMP",
   claude: "Claude",
   cursor: "Cursor",
+  factory: "Factory",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

@@ -161,20 +161,26 @@ arithmetic.
   read nothing else here, read that one — it is the most expensive thing found
   tonight.
 
-  **Hermes and Factory are billed and uncollected.** Your cost source reports
-  five providers; the board collects four. Hermes' entire activity is a cron job
-  called `cron_daily-watcher-001`: **$23.99 across 7,516,850 tokens in 20 calls
-  in the last 24 hours**, **$243.73 over thirty days**. It has no row, no agent,
-  no session, and no collector. Factory is the same at smaller scale.
+  **Hermes is billed and uncollected.** Your cost source reports five providers;
+  the board collects five, but not the same five. Hermes' entire activity is a
+  cron job called `cron_daily-watcher-001`: **$23.99 across 7,516,850 tokens in
+  20 calls in the last 24 hours**, **$243.73 over thirty days**. It has no row,
+  no agent, no session, and no collector.
+
+  **Factory was the same and no longer is.** It gained a collector on
+  2026-08-04 (`src/server/factory.ts`), so its sessions now carry rows, tokens
+  and a model like any other provider. Half of this finding is closed; the half
+  that remains is Hermes, and it is the expensive half.
 
   **And the board positively asserts nothing is missing.** It is not silent. The
   snapshot carries a field built to count exactly this — and it reads
   **`"absent": 0`** while two billed providers have no collector. The health line
-  says `4 of 4 collectors healthy` beside it.
+  says `5 of 5 collectors healthy` beside it — a full count of a roster that
+  does not include the provider being billed.
 
   Both are true of their own population and false of the question you would ask
-  them. `sourceHealth` counts the four collectors the board has; Hermes and
-  Factory are not collectors, so they cannot register as absent ones. **A
+  them. `sourceHealth` counts the collectors the board has; Hermes is not one,
+  so it cannot register as an absent one. **A
   counter whose population excludes the thing you are looking for will always
   report zero, and zero reads as an answer.** That is what makes this dangerous
   rather than merely incomplete: silence invites a question, and `absent: 0`
@@ -226,7 +232,7 @@ reports **13,775** for that same session, the agent is `stale`, and it falls
 outside the joined set — so no assertion covers it. Unexplained, and invisible
 to the cross-source check by construction.
 
-**Hermes and Factory have billed rows and no collector.** Four and two long-span
+**Hermes has billed rows and no collector.** Four and two long-span
 rows respectively turned up in the paged window. The guide already says these two
 are not watched; this is the first time the blind spot has had a number attached.
 

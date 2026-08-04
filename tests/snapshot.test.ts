@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -811,7 +812,7 @@ describe("snapshot control safety and SSE deduplication", () => {
        tell two panes apart. The conflict is a control-plane fault and is
        reported as one, above; it used to also dock a collector, which is the
        same finding wearing a second label. */
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
   });
 
   /* An identity conflict costs one thing: controls stay quarantined for the
@@ -845,7 +846,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect((snapshot.issues ?? []).filter(({ id }) => id === "system:cmux-identity-conflicts")).toEqual([]);
     // ...and nothing drives the board red: this is what makes Operational reachable.
     expect(snapshot.controlHealth.errors).toEqual([]);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
 
     // But the debris is still named, counted, and carries what to do about it.
     expect(snapshot.controlHealth.debris).toMatchObject({

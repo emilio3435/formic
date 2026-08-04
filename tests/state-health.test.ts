@@ -16,6 +16,7 @@ const emptySessions = () => ({
   codex: { value: [], errors: [] },
   claude: { value: [], errors: [] },
   cursor: { value: [], errors: [] },
+  factory: { value: [], errors: [] },
 });
 
 describe("cmux collection time truth", () => {
@@ -532,6 +533,7 @@ describe("what is recorded is what is published", () => {
         codex: { value: [collected], errors: [] },
         claude: { value: [], errors: [] },
         cursor: { value: [], errors: [] },
+        factory: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

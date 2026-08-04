@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { PulseTracker } from "../src/server/pulse";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { HubSnapshot } from "../src/shared/types";
@@ -128,7 +129,7 @@ describe("a board with almost nothing on it still computes", () => {
        4/4 healthy rather than 0/0 — which would render as a division by zero
        or an empty meter on first run. */
     for (const size of [0, 1, 3]) {
-      expect(fleetOf(size).totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+      expect(fleetOf(size).totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
     }
   });
 });

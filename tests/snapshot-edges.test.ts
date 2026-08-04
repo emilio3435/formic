@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
@@ -69,7 +70,7 @@ describe("snapshot edge cases", () => {
     const snapshot = buildSnapshot({ agents: [], surfaces: [], archiveStore, now: NOW });
 
     // No agents is not evidence of a broken collector.
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
     expect(snapshot.controlHealth?.cmuxReachable).toBe(true);
   });
 
@@ -145,7 +146,7 @@ describe("snapshot edge cases", () => {
     });
 
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
   });
 
   test("an unreachable control plane carries the errors that explain it", () => {

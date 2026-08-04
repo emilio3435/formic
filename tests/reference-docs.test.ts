@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildSnapshot, withPulse } from "../src/server/snapshot";
@@ -951,15 +952,16 @@ describe("day one on a machine without cmux", () => {
        working", and returning null there left a newcomer with no signal at the
        one moment they need one. */
     const { verdict: fresh, sourceHealth } = machineVerdict({
-      // All four collectors, omp included — the day-one machine has no omp
-      // directory either, and leaving it unstated made it read as installed.
-      sourceAbsent: { codex: true, omp: true, claude: true, cursor: true },
+      /* EVERY collector, built from the Provider union rather than listed, so
+         adding one cannot silently leave it "installed" on a machine the test
+         calls empty — which is exactly what happened when factory landed. */
+      sourceAbsent: Object.fromEntries(providers.map((name) => [name, true])),
       cmuxAbsent: true,
       cmuxReachable: true,
     });
 
     expect(sourceHealth, "absent collectors are counting as faults again")
-      .toMatchObject({ degraded: 0, absent: 4 });
+      .toMatchObject({ degraded: 0, absent: providers.length });
     expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
     expect(fresh.message).toBe("Watching. No sessions running yet.");
     expect(fresh.sources, "the day-one screen went silent again")
@@ -968,32 +970,32 @@ describe("day one on a machine without cmux", () => {
 
   test("a machine with one tool installed names the one and the absences", () => {
     const { verdict: partial } = machineVerdict({
-      // Claude Code installed; codex, cursor and omp are not. The three absences
-      // are now three collectors rather than two collectors and the control
-      // plane, which is what the sentence claimed all along.
-      sourceAbsent: { codex: true, cursor: true, omp: true },
+      // Claude Code installed; every other collector is not.
+      sourceAbsent: Object.fromEntries(
+        providers.filter((name) => name !== "claude").map((name) => [name, true]),
+      ),
       cmuxAbsent: true,
       cmuxReachable: true,
     });
 
-    expect(partial.sources).toBe("1 of 1 collectors healthy · 3 not installed");
+    expect(partial.sources).toBe(`1 of 1 collectors healthy · ${providers.length - 1} not installed`);
   });
 
   test("a fully-equipped machine keeps the documented count", () => {
     // This box, and the string QUICKSTART quotes.
     const { verdict: full } = machineVerdict({ cmuxReachable: true });
 
-    expect(full.sources).toBe("4 of 4 collectors healthy");
+    expect(full.sources).toBe(`${providers.length} of ${providers.length} collectors healthy`);
   });
 
   test("a collector that WAS healthy and now is not still alarms", () => {
     const failed = verdict({
-      healthy: 3, degraded: 1, total: 4,
-      byProvider: { omp: ok, codex: ok, claude: ok, cursor: broke },
+      healthy: PROVIDERS.length - 1, degraded: 1, total: PROVIDERS.length,
+      byProvider: { omp: ok, codex: ok, claude: ok, cursor: broke, factory: ok },
     });
     expect(failed.degraded, "a real degradation was muted along with the false one").toBe(true);
     expect(failed.message).toBe("No sessions found — and not every collector can see.");
-    expect(failed.sources).toBe("1 of 4 collectors degraded");
+    expect(failed.sources).toBe(`1 of ${PROVIDERS.length} collectors degraded`);
   });
 
   test("QUICKSTART quotes the empty-board strings the model renders", () => {
@@ -1001,7 +1003,11 @@ describe("day one on a machine without cmux", () => {
        actually renders, not what a fixture can be made to say. */
     const { verdict: full } = machineVerdict({ cmuxReachable: true });
     const { verdict: fresh } = machineVerdict({
-      sourceAbsent: { codex: true, claude: true, cursor: true },
+      /* Everything but one, derived — otherwise the "one tool installed" line
+         quietly becomes a two-tool line the moment a collector is added. */
+      sourceAbsent: Object.fromEntries(
+        providers.filter((name) => name !== "omp").map((name) => [name, true]),
+      ),
       cmuxAbsent: true,
       cmuxReachable: true,
     });
@@ -1014,14 +1020,14 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(4);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(5);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
         .toContain(provider === "claude" ? "~/.claude/projects" : provider);
     }
     const collectors = read("src/server/collectors.ts");
-    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects"]) {
+    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects", ".factory/sessions"]) {
       expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
       expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
     }
@@ -1035,7 +1041,7 @@ describe("day one on a machine without cmux", () => {
     expect(quickstart, "QUICKSTART no longer names absence separately from health")
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
-      .toMatch(/cmux is not one of the four/i);
+      .toMatch(/cmux is not one of the (?:four|five)/i);
   });
 
   /* The last wire, still open. state.ts sets #cmuxAbsent from cmux.absent, which
@@ -1726,20 +1732,25 @@ describe("the archive backlog is described as fixed, not as a shortfall", () => 
 
 /* The only finding of the evening that costs money nobody can observe. Pinned
    against the code that would make it stale: the collector roster. If a Hermes
-   or Factory collector is ever added, this paragraph is wrong and should fail
-   here rather than sit in a handover telling someone to go look. */
+   collector is ever added, this paragraph is wrong and should fail here rather
+   than sit in a handover telling someone to go look.
+
+   It already worked once. Factory was named here as billed-and-uncollected
+   until it gained a collector on 2026-08-04, and this test failed on the same
+   commit that added it — which is the whole reason the guard was written
+   against the Provider union instead of against prose. */
 describe("TODAY.md names the providers the board cannot see", () => {
   const today = () => read("TODAY.md").replace(/\s+/g, " ");
 
   test("the roster the board collects still excludes the providers named", () => {
     const providers = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     expect(providers, "the Provider union could not be read").toBeTruthy();
-    for (const absent of ["hermes", "factory"]) {
+    for (const absent of ["hermes"]) {
       expect(providers.toLowerCase(), `${absent} gained a collector — TODAY.md's blind-spot paragraph is now wrong`)
         .not.toContain(absent);
     }
     expect(today(), "TODAY.md stopped naming the uncollected providers")
-      .toMatch(/Hermes and Factory are billed and uncollected/i);
+      .toMatch(/Hermes is billed and uncollected/i);
   });
 
   test("it says this is an absent number, not a wrong one", () => {
@@ -1874,14 +1885,14 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
 describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
 
-  test("the four collectors it tells them to compare against are the real four", () => {
+  test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(4);
+    expect(names.length, "the Provider union changed shape").toBe(5);
     const g = guide();
     /* The guide names them in reader-facing form, so check the mapping rather
        than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP"]) {
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory"]) {
       expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
         .toContain(shown);
     }

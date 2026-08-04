@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,14 +76,14 @@ describe("a provider that was never installed is absent, not degraded", () => {
       agents: [], surfaces: [], archiveStore,
       /* omp named explicitly. The test always meant "every provider absent";
          it could not say so while the health accounting was blind to omp. */
-      sourceAbsent: { codex: true, omp: true, claude: true, cursor: true },
+      sourceAbsent: Object.fromEntries(PROVIDERS.map((name) => [name, true])),
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // Nothing is wrong, so nothing reads as wrong.
     expect(absent.degraded).toBe(0);
-    expect(absent.absent).toBe(4);
+    expect(absent.absent).toBe(PROVIDERS.length);
     /* And the ratio does not claim to watch what is not there: "0 of 0" rather
        than "4 of 4 healthy", which would be the same overclaim inverted. */
     expect(absent.total).toBe(0);
@@ -96,13 +97,13 @@ describe("a provider that was never installed is absent, not degraded", () => {
          HOME reports every provider absent", which iterates all four. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 2, total: 2 });
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 3, total: 2 });
   });
 });
 
@@ -151,11 +152,11 @@ describe("the health count covers every collector that exists", () => {
     const summary = health({
       agents: [], surfaces: [], archiveStore,
       sourceErrors: { claude: ["unreadable"] },
-      sourceAbsent: { cursor: true },
+      sourceAbsent: { cursor: true, factory: true },
     });
 
     expect(summary.healthy + summary.degraded).toBe(summary.total);
-    expect(summary.total + summary.absent).toBe(4);
+    expect(summary.total + summary.absent).toBe(PROVIDERS.length);
   });
 
   test("an unreachable cmux is not a broken collector", () => {
@@ -169,7 +170,7 @@ describe("the health count covers every collector that exists", () => {
     });
 
     expect(summary.degraded).toBe(0);
-    expect(summary.total).toBe(4);
+    expect(summary.total).toBe(PROVIDERS.length);
   });
 });
 
@@ -307,7 +308,10 @@ describe("end to end, the way the docs lane walked it", () => {
     // Not one degraded collector anywhere, which is what "1 of 4 degraded" claimed.
     expect(summary.degraded).toBe(0);
     expect(summary.absent).toBe(providers.length);
-    // Vacuity guard: an empty provider list would satisfy the line above.
-    expect(providers.length).toBe(4);
+    /* Vacuity guard: an empty provider list would satisfy the line above.
+       Checked against the union rather than a literal, so it keeps guarding
+       vacuity without failing every time a collector is added. */
+    expect(providers.length).toBe(PROVIDERS.length);
+    expect(providers.length).toBeGreaterThan(1);
   });
 });

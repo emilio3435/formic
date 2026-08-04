@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { resolveUsageCost, type PricingConfig } from "../src/server/burnbar";
+import { PROVIDERS } from "../src/shared/types";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
@@ -101,13 +102,14 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
            omp is the fourth collector and was missing from the fixture, so the
            scenario this file is named for was never actually all-sources-down. */
         omp: ["EACCES scanning ~/.omp"],
+        factory: ["EACCES scanning ~/.factory"],
       },
       cmuxErrors: ["cmux socket refused the connection"],
       cmuxReachable: false,
       now: NOW,
     });
 
-  test("zero tracked agents from four dead sources is reported as fully degraded", () => {
+  test("zero tracked agents from every dead source is reported as fully degraded", () => {
     const snapshot = allSourcesDown();
 
     /* tracked:0 here is not a fleet reading, it is the absence of one. The
@@ -115,9 +117,15 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
        health summary is the only thing standing between the operator and
        "nothing is running" — it has to be unambiguous. */
     expect(snapshot.totals.tracked).toBe(0);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 0, degraded: 4, absent: 0, total: 4 });
+    /* Counted from PROVIDERS rather than written as 4. The literal was already
+       wrong once — it counted three collectors and the control plane, so the
+       scenario this file is named for was not actually all-sources-down — and a
+       hardcoded total silently stops covering the newest collector every time
+       one is added. */
+    expect(snapshot.totals.sourceHealth)
+      .toEqual({ healthy: 0, degraded: PROVIDERS.length, absent: 0, total: PROVIDERS.length });
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.controlHealth?.staleSources).toEqual(["codex", "claude", "cursor", "omp"]);
+    expect([...(snapshot.controlHealth?.staleSources ?? [])].sort()).toEqual([...PROVIDERS].sort());
   });
 
   test("every dead source raises its own issue, so the cause is never anonymous", () => {
@@ -144,7 +152,8 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
     const quiet = buildSnapshot({ agents: [], surfaces: [], archiveStore, now: NOW });
 
     expect(quiet.totals.tracked).toBe(0);
-    expect(quiet.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
+    expect(quiet.totals.sourceHealth)
+      .toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
     expect(quiet.issues ?? []).toEqual([]);
   });
 });
@@ -181,7 +190,10 @@ describe("a partly-failed collection never silently shrinks the fleet", () => {
     });
 
     expect(snapshot.totals.tracked).toBe(1);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
+    /* One degraded, the rest healthy — expressed against PROVIDERS so the
+       "all but one" claim stays true as collectors are added. */
+    expect(snapshot.totals.sourceHealth)
+      .toEqual({ healthy: PROVIDERS.length - 1, degraded: 1, absent: 0, total: PROVIDERS.length });
     const claude = snapshot.issues?.find(({ id }) => id === "system:claude-collector");
     expect(claude?.severity).toBe("warning");
     expect(claude?.technicalDetails).toContain("EACCES scanning ~/.claude");

@@ -1089,6 +1089,7 @@ export function emptySnapshot(): HubSnapshot {
           codex: { healthy: false, lastHealthyAt: null },
           claude: { healthy: false, lastHealthyAt: null },
           cursor: { healthy: false, lastHealthyAt: null },
+    factory: { healthy: false, lastHealthyAt: null },
         },
       },
     },

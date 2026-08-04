@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
@@ -105,7 +106,7 @@ describe("hand-written snapshots describe a fleet the server can actually produc
     /* THE LIVE DIVERGENCE, and the same shape as reference-docs.test.ts:845.
 
        The web-client helper declares `sourceHealth: { healthy: 2, total: 2 }`.
-       The server emits `total: 4` — the fleet has four collectors and that
+       The server emits `total: PROVIDERS.length` — the fleet has that many collectors and that
        count is structural, not a measurement. So every client test using this
        helper renders "2/2 sources healthy" for a board that reports 4/4, and a
        change to how source health is displayed can pass here while altering
@@ -130,7 +131,7 @@ describe("hand-written snapshots describe a fleet the server can actually produc
     ];
 
     expect(new Set(counts).size).toBe(1);
-    expect(counts[0]).toBe(4);
+    expect(counts[0]).toBe(PROVIDERS.length);
   });
 
   test("a fixture omitting needsYou cannot exercise the surface the board opens on", () => {

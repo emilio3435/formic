@@ -313,16 +313,17 @@ finds this.
 
 ![The by-provider breakdown](docs/guide-shots/shot-6-providers.png)
 
-That is the list on the machine these screenshots came from, at `30d`. Four of
-the five names are collectors; **Hermes** and **Factory** are not, and their
-spend appears there and nowhere else on the board.
+That is the list on the machine these screenshots came from, at `30d`. **Factory**
+gained a collector on 2026-08-04 and now has rows like any other provider;
+**Hermes** still does not, and its spend appears there and nowhere else on the
+board.
 
 Health will not find it for you, and this is the part to understand rather than
-worry about. `4 of 4 collectors healthy` is counting the collectors the board
+worry about. `5 of 5 collectors healthy` is counting the collectors the board
 *has*, and they are genuinely fine. A tool it was never taught to watch has no
 collector, so there is nothing to report as unhealthy — the green line is
 accurate and simply does not cover the question. On the machine these
-screenshots came from, two billed providers sit outside it, one of them a daily
+screenshots came from, one billed provider sits outside it, and it is a daily
 cron job.
 
 That is not a fault to report; it is the shape of the instrument. **The board
@@ -331,7 +332,7 @@ Comparing them is your job, and it is a five-second one.**
 
 ### Finding out what *your* board cannot see
 
-The four collectors are the same everywhere. What differs from machine to
+The five collectors are the same everywhere. What differs from machine to
 machine is what else you are billed for, so this is a check you run on your own
 board rather than a list anyone can hand you.
 

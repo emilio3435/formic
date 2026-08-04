@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { HubState } from "../src/server/state";
 import type { ArchiveStore, CollectedAgent, CollectionResult, CommandRunner } from "../src/server/types";
 import type { Provider } from "../src/shared/types";
@@ -46,6 +47,7 @@ function stateWith(scripts: ReadonlyArray<Partial<Record<Provider, CollectionRes
         codex: script.codex ?? EMPTY,
         claude: script.claude ?? EMPTY,
         cursor: script.cursor ?? EMPTY,
+        factory: script.factory ?? EMPTY,
       };
     },
     cmux: async () => ({ value: [], errors: [] }),
@@ -135,6 +137,9 @@ describe("byProvider carries history, which one snapshot cannot", () => {
     await state.refresh();
 
     const byProvider = state.get().totals.sourceHealth?.byProvider ?? {};
-    expect(Object.keys(byProvider).sort()).toEqual(["claude", "codex", "cursor", "omp"]);
+    /* Derived from the union: the point of this test is that EVERY declared
+       provider reaches the wire, so a hardcoded list would stop testing that on
+       the very commit that adds one. */
+    expect(Object.keys(byProvider).sort()).toEqual([...PROVIDERS].sort());
   });
 });

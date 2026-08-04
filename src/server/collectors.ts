@@ -18,6 +18,7 @@ import { AGENT_IDLE_GAP_MS, MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type
 import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
+import { createFactoryParser, parseFactoryJsonl } from "./factory";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const fileCache = new Map<string, {
@@ -44,7 +45,7 @@ export interface ParseMetadata {
 
 type JsonRecord = Record<string, any>;
 
-interface IncrementalParser {
+export interface IncrementalParser {
   append(rows: readonly JsonRecord[]): void;
   result(meta: ParseMetadata): CollectedAgent | null;
 }
@@ -64,6 +65,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   omp: "OMP",
   claude: "Claude",
   cursor: "Cursor",
+  factory: "Factory",
 };
 
 const NON_TASK_PREFIXES = [
@@ -112,6 +114,12 @@ function parserFor(
   if (provider === "omp") return createOmpParser();
   if (provider === "codex") return createCodexParser();
   if (provider === "claude") return createClaudeParser();
+  if (provider === "factory") return createFactoryParser();
+  /* Reached only by a provider added to the union without an incremental parser
+     — which does NOT fail the build, because collectProvider takes the one-shot
+     parser as an argument and this lookup happens at run time. Factory did
+     exactly that on its first real run: zero agents, fifteen identical errors,
+     and a green test suite. */
   throw new Error(`incremental parser unavailable for ${provider}: ${parser.name}`);
 }
 
@@ -275,6 +283,7 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   omp: "omp-title",
   claude: "claude-subagent",
   cursor: "cursor-composer",
+  factory: "factory-title",
 };
 
 function statusFrom(
@@ -1072,11 +1081,12 @@ export async function collectSessions(
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
 ): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
-  const [omp, codex, claude, cursor] = await Promise.all([
+  const [omp, codex, claude, cursor, factory] = await Promise.all([
     collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
     collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
     collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs, thresholds),
     collectCursorSessions(home, Date.now(), windowMs, thresholds),
+    collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds),
   ]);
-  return { omp, codex, claude, cursor };
+  return { omp, codex, claude, cursor, factory };
 }

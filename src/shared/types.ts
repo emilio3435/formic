@@ -8,8 +8,8 @@
    without adding it here fails the build rather than quietly under-counting.
    identity-bindings.ts:59 and state.ts:188 still keep their own correct copies
    and could read this instead — worth doing, not part of this fix. */
-export type Provider = "codex" | "omp" | "claude" | "cursor";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor"] as const satisfies readonly Provider[];
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -37,6 +37,7 @@ export type AuthoredNameSource =
   | "claude-subagent"
   | "omp-title"
   | "cursor-composer"
+  | "factory-title"
   | "launch-env";
 /* What a session is called, decided once by src/server/naming.ts.
 

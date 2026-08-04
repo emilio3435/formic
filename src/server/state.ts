@@ -60,6 +60,7 @@ export class HubState {
     codex: { healthy: false, lastHealthyAt: null },
     claude: { healthy: false, lastHealthyAt: null },
     cursor: { healthy: false, lastHealthyAt: null },
+    factory: { healthy: false, lastHealthyAt: null },
   };
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
@@ -319,6 +320,7 @@ export class HubState {
         codex: { value: [], errors: [reason] },
         claude: { value: [], errors: [reason] },
         cursor: { value: [], errors: [reason] },
+        factory: { value: [], errors: [reason] },
       };
     };
     const sessions = sessionsResult ?? unavailableSessions();
