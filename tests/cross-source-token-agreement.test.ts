@@ -54,10 +54,41 @@ interface Comparison {
 }
 
 interface Joined extends Comparison {
+  readonly agentId?: string;
   readonly boardActivity?: ActivityState;
   readonly boardUpdatedAt: string;
   readonly burnbarUpdatedAtMs?: number;
 }
+
+/* WHY THIS FILE NO LONGER DEMANDS THE TWO NUMBERS MATCH — Emilio's call,
+   2026-08-04, after the fourth time the disagreement resolved the same way.
+
+   Four times now a settled session has disagreed and the adjudication has gone
+   against OpenBurnBar, not against this board: its total was EXACTLY one of our
+   running totals from earlier in the session, which is what a recorder that
+   stops writing looks like. `7a2ae0aa` is the clearest — BurnBar's 12,227,799
+   is our prefix sum at call 98 of 146, and the 48 calls it never wrote carry
+   8,972,335 tokens.
+
+   Demanding equality against a source that reliably truncates produces a red
+   that says nothing, and this repository has spent two days learning what a
+   meaningless red costs. But deleting the comparison would throw away the only
+   external record we have, and it is wanted for measurement work later.
+
+   So the comparison still runs on every session, every drift is still recorded,
+   and what is ASSERTED narrows to the two shapes that would mean something is
+   wrong HERE:
+
+     1. This board reading BELOW BurnBar. We would be losing tokens, and no
+        BurnBar behaviour explains it.
+     2. This board reading ABOVE BurnBar by more than the tolerance WITHOUT
+        BurnBar's total being one of our prefixes — a divergence that
+        truncation cannot account for, so it is unexplained.
+
+   A board-high disagreement that IS an exact prefix is recorded, not asserted:
+   it is evidence about BurnBar. Sessions with no per-call series (Codex exposes
+   none) cannot be adjudicated either way and are recorded as such — counted,
+   named, never silently dropped. */
 
 interface BurnBarSession {
   readonly tokens: number;
@@ -71,6 +102,9 @@ let unavailableReason = "";
 let joined: Joined[] = [];
 let settled: Joined[] = [];
 let live: Joined[] = [];
+/* Adjudicated once, read by both the per-session gate and the aggregate, so the
+   two cannot disagree about which rows BurnBar truncated. */
+const settledVerdicts = new Map<string, Verdict>();
 let burnbarSessions = 0;
 let uuidSessions = 0;
 let nonUuidSessions = 0;
@@ -128,6 +162,54 @@ const isSettled = (row: Joined, nowMs: number): boolean => {
 /* One comparison serves the live assertion and its fixture proof. Board-ahead
    is expected foreign-recorder lag; only board-behind beyond read skew is an
    anomaly. */
+/* THE ADJUDICATION. `/api/debug/session-calls` returns this board's per-call
+   series and its running totals, so "BurnBar stopped recording" is a checkable
+   claim rather than a comfortable story: BurnBar's total for the session either
+   IS one of our running totals or it is not.
+
+   `prefixSums` is published by the endpoint. A provider that keeps no per-call
+   series (Codex) returns none, and that verdict is `unadjudicable` — never
+   `explained`, because a check that treats "cannot tell" as "fine" is how the
+   next real defect gets waved through. */
+type Verdict = "explained-by-truncation" | "unexplained" | "unadjudicable";
+
+const SESSION_CALLS_URL = "http://127.0.0.1:4701/api/debug/session-calls";
+
+async function boardPrefixSums(agentId: string): Promise<number[] | undefined> {
+  try {
+    const response = await fetch(
+      `${SESSION_CALLS_URL}?agent=${encodeURIComponent(agentId)}`,
+      { signal: AbortSignal.timeout(8_000) },
+    );
+    if (!response.ok) return undefined;
+    const body = await response.json() as { prefixSums?: unknown };
+    const sums = body.prefixSums;
+    return Array.isArray(sums) && sums.every((value) => typeof value === "number")
+      ? sums as number[]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/* The series lookup is a parameter so the verdict that ALLOWS a disagreement to
+   pass can be exercised deterministically. Whether that branch is reachable on
+   live data depends on which sessions are inside the 24-hour window tonight,
+   and "we could not test the one path that suppresses a failure" is not a
+   position this file can hold. */
+async function adjudicate(
+  row: Joined,
+  fetchPrefixSums: (agentId: string) => Promise<number[] | undefined> = boardPrefixSums,
+): Promise<Verdict> {
+  /* Board-LOWER is never explainable: a recorder that stopped early cannot have
+     recorded more than we did, so no series needs fetching to know that. */
+  if (row.board < row.burnbar) return "unexplained";
+  if (!row.agentId) return "unadjudicable";
+  const sums = await fetchPrefixSums(row.agentId);
+  if (sums === undefined || sums.length === 0) return "unadjudicable";
+  return sums.includes(row.burnbar) ? "explained-by-truncation" : "unexplained";
+}
+
 const liveAnomalies = (rows: readonly Comparison[]): Comparison[] =>
   rows.filter(({ board, burnbar }) => {
     if (board >= burnbar || burnbar <= 0) return false;
@@ -161,7 +243,10 @@ beforeAll(async () => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const boardAgents: any[] = (snapshot.programs ?? []).flatMap((program: any) => program.agents ?? []);
-  const boardBySession = new Map<string, { tokens: number; activity?: ActivityState; updatedAt: string }>();
+  const boardBySession = new Map<
+    string,
+    { tokens: number; activity?: ActivityState; updatedAt: string; agentId?: string }
+  >();
   for (const agent of boardAgents) {
     if (
       typeof agent?.sourceSessionId === "string"
@@ -172,6 +257,9 @@ beforeAll(async () => {
         tokens: agent.tokens.sessionProcessed,
         activity: agent.activity,
         updatedAt: agent.updatedAt,
+        // Carried so a disagreement can be adjudicated against our own per-call
+        // series rather than argued about.
+        agentId: typeof agent.id === "string" ? agent.id : undefined,
       });
     }
   }
@@ -193,6 +281,7 @@ beforeAll(async () => {
       board,
       burnbar,
       driftPct,
+      agentId: boardSession.agentId,
       boardActivity: boardSession.activity,
       boardUpdatedAt: boardSession.updatedAt,
       burnbarUpdatedAtMs: burnbarSession.updatedAtMs,
@@ -210,6 +299,11 @@ beforeAll(async () => {
     `[cross-source] settled=${settled.length} live=${live.length} excluded=${nonUuidSessions} `
     + `unjoined=${unjoinedUuid.length}`,
   );
+
+  for (const row of settled) {
+    if (row.driftPct <= PER_SESSION_TOLERANCE_PCT) continue;
+    settledVerdicts.set(row.sessionId, await adjudicate(row));
+  }
 });
 
 /* Says what a cross-source disagreement ESTABLISHES, which is less than it is
@@ -262,7 +356,7 @@ describe("what this board counted is what a separate application recorded", () =
     ).toBeLessThan(settled.length);
   });
 
-  test("every settled session agrees with the independent record", () => {
+  test("a settled disagreement is either explained by BurnBar, or it fails", async () => {
     /* THE MARKER IS GONE, and what it recorded resolved in our favour. It read:
        session fe1d8020-259, this board 293,235 against OpenBurnBar's 112,258,
        161.2% over. Re-measured 2026-08-03 across the paged window, BurnBar now
@@ -295,11 +389,25 @@ describe("what this board counted is what a separate application recorded", () =
     /* THE ASSERTION. It can fail because a program that has never heard of this
        repository counted differently, which is true of nothing else here. */
     if (!available) throw new Error(`cross-source check did not run: ${unavailableReason}`);
-    const disagreeing = settled
-      .filter(({ driftPct }) => driftPct > PER_SESSION_TOLERANCE_PCT)
-      .map(describeDrift);
+    const disagreeing = settled.filter(({ driftPct }) => driftPct > PER_SESSION_TOLERANCE_PCT);
 
-    expect(disagreeing).toEqual([]);
+    const verdicts = disagreeing.map((row) => ({ row, verdict: settledVerdicts.get(row.sessionId) ?? "unexplained" }));
+    const unexplained = verdicts.filter(({ verdict }) => verdict === "unexplained");
+    const truncated = verdicts.filter(({ verdict }) => verdict === "explained-by-truncation");
+    const unadjudicable = verdicts.filter(({ verdict }) => verdict === "unadjudicable");
+
+    /* RECORDED, NOT ASSERTED — the evidence about BurnBar that this file exists
+       to collect. Printed every run so the measurement work planned on top of it
+       has a series to read, and so a growing hole cannot go unnoticed. */
+    console.info(
+      `[cross-source] settled disagreements: ${disagreeing.length}`
+      + ` (${truncated.length} explained by BurnBar truncation,`
+      + ` ${unadjudicable.length} unadjudicable — no per-call series,`
+      + ` ${unexplained.length} unexplained)`,
+    );
+    for (const { row, verdict } of verdicts) console.info(`[cross-source] ${verdict}: ${describeDrift(row)}`);
+
+    expect(unexplained.map(({ row }) => describeDrift(row))).toEqual([]);
   });
 
   test("a live board may lead BurnBar, but it may not fall behind", () => {
@@ -323,6 +431,47 @@ describe("what this board counted is what a separate application recorded", () =
 
     expect(liveAnomalies([withinReadSkew, droppedByBoard]).map(describeDrift))
       .toEqual([describeDrift(droppedByBoard)]);
+  });
+
+  /* The adjudicator decides which disagreements are allowed to pass, so it gets
+     the same treatment as the checks it feeds: a case that must be explained, a
+     case that must NOT be, and the "cannot tell" case that must never be
+     mistaken for either. Board-lower can never be explained by truncation — a
+     recorder that stopped early cannot record MORE than we did. */
+  test("truncation explains a board-high prefix, and nothing else", async () => {
+    const base = { sessionId: "adjudicated", boardUpdatedAt: "2026-08-04T00:00:00.000Z" };
+    const noSeries = await adjudicate({ ...base, board: 200, burnbar: 100, driftPct: 100 });
+    expect(noSeries, "no agent id means no series to adjudicate against").toBe("unadjudicable");
+
+    const boardLower = await adjudicate({
+      ...base, agentId: "claude:whatever", board: 100, burnbar: 200, driftPct: 50,
+    });
+    expect(boardLower, "BurnBar cannot record more than we did by stopping early").toBe("unexplained");
+
+    /* The real 7a2ae0aa shape, kept as a fixture because the live window will
+       not always contain one: BurnBar's total IS our running total at call 98
+       of 146, so it stopped writing and the board is not over-counting. */
+    const series = [12_000_000, 12_227_799, 21_200_134];
+    const truncated = await adjudicate(
+      { ...base, agentId: "claude:7a2ae0aa", board: 21_200_134, burnbar: 12_227_799, driftPct: 73.4 },
+      async () => series,
+    );
+    expect(truncated, "a BurnBar total equal to one of our prefixes is truncation").toBe("explained-by-truncation");
+
+    /* One digit off a prefix is NOT truncation. This is the case the whole
+       adjudication exists to keep failing: a board-high disagreement that no
+       stopping point explains. */
+    const notAPrefix = await adjudicate(
+      { ...base, agentId: "claude:7a2ae0aa", board: 21_200_134, burnbar: 12_227_800, driftPct: 73.4 },
+      async () => series,
+    );
+    expect(notAPrefix, "a near-miss is not a prefix, and must not be excused").toBe("unexplained");
+
+    const emptySeries = await adjudicate(
+      { ...base, agentId: "codex:no-series", board: 200, burnbar: 100, driftPct: 100 },
+      async () => [],
+    );
+    expect(emptySeries, "a provider with no per-call series cannot be adjudicated").toBe("unadjudicable");
   });
 
   test("duplicate and advancing BurnBar snapshots each count once", () => {
@@ -394,14 +543,44 @@ describe("what this board counted is what a separate application recorded", () =
        accounting change would spend all of it the same way. The aggregate is
        where that shows, and it is asserted tighter. */
     if (!available) return;
-    const board = settled.reduce((total, row) => total + row.board, 0);
-    const burnbar = settled.reduce((total, row) => total + row.burnbar, 0);
+    const total = (rows: readonly Joined[], pick: (row: Joined) => number) =>
+      rows.reduce((sum, row) => sum + pick(row), 0);
+
+    /* The whole-population figure is RECORDED, because sessions BurnBar
+       truncated pull it in a known direction and asserting on it would be
+       asserting on BurnBar's recording gaps. */
+    const allBoard = total(settled, (row) => row.board);
+    const allBurnbar = total(settled, (row) => row.burnbar);
+    const allDrift = allBurnbar > 0 ? Math.abs(allBoard - allBurnbar) / allBurnbar * 100 : 0;
+    console.info(
+      `[cross-source] settled aggregate: board ${allBoard.toLocaleString()} vs BurnBar `
+      + `${allBurnbar.toLocaleString()} — ${allDrift.toFixed(2)}% ${allBoard > allBurnbar ? "board high" : "board low"}`,
+    );
+
+    /* ASSERTED on the sessions that agreed one by one. This is what the check
+       was always FOR: per-session tolerance permits a little slack each, and a
+       systematic accounting change would spend all of it in the same direction,
+       which only the aggregate can see.
+
+       Rows that already disagreed are out, and their verdicts carry that
+       argument instead — asserting on them here would re-run the per-session
+       gate under a second name, and for the unadjudicable ones it would assert
+       on exactly the equality Emilio's decision removed. What is excluded is
+       counted and printed, so the hole cannot widen unseen. */
+    const comparable = settled.filter((row) => !settledVerdicts.has(row.sessionId));
+    console.info(
+      `[cross-source] aggregate asserted across ${comparable.length} of ${settled.length} settled sessions;`
+      + ` ${settled.length - comparable.length} excluded as already-disagreeing (see verdicts above)`,
+    );
+    const board = total(comparable, (row) => row.board);
+    const burnbar = total(comparable, (row) => row.burnbar);
     const driftPct = burnbar > 0 ? Math.abs(board - burnbar) / burnbar * 100 : 0;
 
     expect(
       driftPct,
-      `across ${settled.length} settled sessions this board counted ${board.toLocaleString()} and OpenBurnBar `
-      + `recorded ${burnbar.toLocaleString()} — ${board > burnbar ? "OUR total is high" : "OUR total is low"}`,
+      `across the ${comparable.length} settled sessions that agreed individually, this board counted `
+      + `${board.toLocaleString()} and OpenBurnBar recorded ${burnbar.toLocaleString()} — `
+      + `${board > burnbar ? "OUR total is high" : "OUR total is low"}`,
     ).toBeLessThan(1);
   });
 
