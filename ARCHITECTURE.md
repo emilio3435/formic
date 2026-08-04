@@ -97,6 +97,17 @@ SVG meters), `text-formatters.js`, `api-client.js` (fetch + envelope handling),
 `client-catalogs.js`, `repaint.js`, `feed-freshness.js`, `transcript.js`,
 `notifications.js`, and `action-log.js`.
 
+`lifecycle.js` is the client's mirror of `src/server/lifecycle.ts`, and it is
+the one module here that is deliberately a copy. The server publishes
+`lifecycle` on every agent, but a snapshot can arrive without it, and when that
+happens this client has to answer the same question — it used to answer it
+differently, mapping a quiet session straight to "ended" with none of the
+server's rescue for a process that is demonstrably alive. The duplication is not
+the hazard; two *unverified* implementations were. Both are executed against
+`tests/fixtures/lifecycle-truth-table.json` by `tests/lifecycle.test.ts` and
+`tests/lifecycle-parity.test.ts`, so a rule that lands in one and not the other
+fails immediately, by name.
+
 `repaint.js` is small and load-bearing: it holds an indirection to `render()`
 (`setRepaint` / `repaint`) so modules can ask for a repaint without importing
 the render tree. `render()` was the dependency hub that made this client
