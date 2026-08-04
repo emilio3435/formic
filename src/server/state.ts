@@ -61,6 +61,10 @@ export class HubState {
   /* One naming pass at a time; a second refresh while one runs simply skips. */
   #naming?: Promise<void>;
   #refreshStartedAtMs?: number;
+  /* Which refresh pass is the current one. Only the watchdog below can put two
+     passes in flight at once, and when it does, the abandoned one must stop
+     writing — see #superseded. */
+  #refreshGeneration = 0;
   #cmuxRequested = false;
   #refreshingCmux = false;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
@@ -187,7 +191,8 @@ export class HubState {
       this.#refreshingCmux = false;
     }
     if (options.cmux) this.#cmuxRequested = true;
-    const refresh = this.#drainRefreshes().finally(() => {
+    const generation = ++this.#refreshGeneration;
+    const refresh = this.#drainRefreshes(generation).finally(() => {
       if (this.#refreshing !== refresh) return;
       this.#refreshing = undefined;
       this.#refreshStartedAtMs = undefined;
@@ -197,18 +202,30 @@ export class HubState {
     return refresh;
   }
 
-  async #drainRefreshes(): Promise<HubSnapshot> {
+  /* A newer pass has taken over, so this one was abandoned by the watchdog and
+     everything it holds is older than what the board already publishes. Checked
+     at each await boundary that precedes a write, because the damage is not
+     only the snapshot: source health, the cmux surfaces, the notifications and
+     `#rosterComplete` — which is what lets an ending be called provable — are
+     all read by whichever pass runs next. */
+  #superseded(generation: number): boolean {
+    return generation !== this.#refreshGeneration;
+  }
+
+  async #drainRefreshes(generation: number): Promise<HubSnapshot> {
     let snapshot = this.#snapshot;
     do {
+      if (this.#superseded(generation)) return this.#snapshot;
       const cmux = this.#cmuxRequested;
       this.#cmuxRequested = false;
       this.#refreshingCmux = cmux;
       try {
-        snapshot = await this.#performRefresh({ cmux });
+        snapshot = await this.#performRefresh({ cmux }, generation);
       } finally {
-        this.#refreshingCmux = false;
+        // Never clear a flag the pass that replaced this one is relying on.
+        if (!this.#superseded(generation)) this.#refreshingCmux = false;
       }
-    } while (this.#cmuxRequested);
+    } while (!this.#superseded(generation) && this.#cmuxRequested);
     return snapshot;
   }
 
@@ -235,7 +252,7 @@ export class HubState {
     })();
   }
 
-  async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
+  async #performRefresh(options: { cmux?: boolean }, generation: number): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     /* From the union, not a second list. This WAS a literal, and the literal
        silently dropped Factory: the collector read its sessions correctly and
@@ -313,6 +330,9 @@ export class HubState {
       }),
     ]);
     if (aggregateSettled && deadlineTimer) clearTimeout(deadlineTimer);
+    /* Collection is done; from here every line writes. If the watchdog gave up
+       on this pass while it was collecting, stop before the first write. */
+    if (this.#superseded(generation)) return this.#snapshot;
     const deadlineError = `collector aggregate exceeded ${this.refreshAggregateTimeoutMs}ms deadline`;
     if (!aggregateSettled) {
       collectionErrors.push(deadlineError);
@@ -391,6 +411,7 @@ export class HubState {
         bindingErrors = this.bindingStore
           ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
           : [];
+        if (this.#superseded(generation)) return this.#snapshot;
       }
       if (notifications && notifications.errors.length === 0) {
         this.#notifications = notifications.value;
@@ -448,6 +469,10 @@ export class HubState {
         ])],
       ]),
     ) as Record<Provider, string[]>;
+    /* The witness and archive writes above are the last awaits before this
+       pass publishes. A pass superseded during them would otherwise replace a
+       newer board with readings taken before it. */
+    if (this.#superseded(generation)) return this.#snapshot;
     this.#sourceAbsent = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].absent === true]),
     ) as Record<Provider, boolean>;

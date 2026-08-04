@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { PROVIDERS } from "../src/shared/types";
 import { HubState } from "../src/server/state";
 import type { HubCollectors } from "../src/server/state";
@@ -156,5 +156,103 @@ describe("when collection runs out of time the board says so", () => {
     expect(during.controlHealth.staleSources.length).toBe(PROVIDERS.length);
     expect(after.controlHealth.staleSources).toEqual([]);
     expect(after.controlHealth.errors).toEqual([]);
+  });
+});
+
+/* The other way a refresh runs out of time: not the aggregate deadline, but the
+   WATCHDOG. `refresh()` normally collapses concurrent callers onto one in-flight
+   pass, so only one is ever writing. The watchdog is the deliberate exception —
+   past REFRESH_WATCHDOG_MS it stops waiting on a pass and starts a replacement,
+   which is the only way the board recovers from a collector that never returns.
+
+   Nothing stopped the abandoned pass from finishing later and publishing
+   anyway. It writes `#snapshot` and every derived record beside it — source
+   health, issue lifecycle, and now `processRosterComplete`, which is what makes
+   an ending provable. So a pass declared too slow to wait for could still
+   overwrite its replacement with older readings, and the board would silently
+   go backwards in time. */
+describe("a refresh the watchdog abandoned does not publish over its replacement", () => {
+  const WATCHDOG_MS = 12_000;
+
+  /** A hub whose deadline is far enough out that only the watchdog is in play. */
+  const patientHub = (collectors: Partial<HubCollectors>): HubState => {
+    const full = {
+      sessions: async () => empty(),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces: unknown) => ({ value: [...(surfaces as unknown[])], errors: [] }),
+      ...collectors,
+    } as unknown as HubCollectors;
+    return new HubState(
+      runner, archiveStore, [], full,
+      undefined, undefined, undefined, undefined, undefined,
+      600_000,
+    );
+  };
+
+  const sessionsWith = (id: string): SessionsResult => ({
+    ...empty(),
+    codex: {
+      value: [{
+        id: `codex:${id}`,
+        provider: "codex",
+        sourceSessionId: id,
+        displayName: id,
+        status: "running",
+        statusReason: "Fixture activity.",
+        updatedAt: "2026-08-04T12:00:00.000Z",
+        tokens: { provenance: "observed", total: 1 },
+        artifacts: [],
+        gates: [],
+      }],
+      errors: [],
+    },
+  });
+
+  const idsOn = (state: HubState): string[] =>
+    state.get().programs.flatMap((program) => program.agents.map((agent) => agent.id));
+
+  test("the stale pass's agents never replace the newer pass's", async () => {
+    let nowMs = 1_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let call = 0;
+      const state = patientHub({
+        sessions: async () => {
+          call += 1;
+          if (call === 1) {
+            await held;
+            return sessionsWith("stale");
+          }
+          return sessionsWith("fresh");
+        },
+      });
+
+      const abandoned = state.refresh();
+      // Past the watchdog: the next caller stops waiting and starts its own pass.
+      nowMs += WATCHDOG_MS + 1_000;
+      await state.refresh();
+      expect(idsOn(state)).toEqual(["codex:fresh"]);
+
+      // The abandoned pass now finishes. Its readings are older than what the
+      // board already published, and it must not be the last writer.
+      release();
+      await abandoned;
+      expect(idsOn(state)).toEqual(["codex:fresh"]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a pass nothing abandoned still publishes normally", async () => {
+    /* The contrast case. A guard that simply refused to publish would pass the
+       test above and leave the board frozen forever. */
+    const state = patientHub({ sessions: async () => sessionsWith("only") });
+
+    await state.refresh();
+
+    expect(idsOn(state)).toEqual(["codex:only"]);
   });
 });
