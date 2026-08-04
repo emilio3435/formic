@@ -131,10 +131,26 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
   test("every dead source raises its own issue, so the cause is never anonymous", () => {
     const ids = (allSourcesDown().issues ?? []).map(({ id }) => id);
 
-    expect(ids).toContain("system:codex-collector");
-    expect(ids).toContain("system:claude-collector");
-    expect(ids).toContain("system:cursor-collector");
+    /* Walked from PROVIDERS rather than listed. The listed form named three of
+       the five collectors, so omp and Factory could die, be counted in the
+       degraded tally above, and raise nothing that said WHICH source had gone.
+       A degrade with no named cause is the same silence this file exists to
+       prevent — the operator sees "1 degraded" and has nowhere to look. */
+    for (const provider of PROVIDERS) {
+      expect(ids).toContain(`system:${provider}-collector`);
+    }
     expect(ids).toContain("system:cmux-control");
+  });
+
+  test("a dead source is named in words, not just in an id", () => {
+    /* The id is for the board; the title is the whole message to the human. A
+       provider the label chain never learned about would still produce an id
+       here, so the id assertions above cannot catch a source that reaches the
+       operator as "undefined collection is degraded". */
+    const factory = allSourcesDown().issues?.find(({ id }) => id === "system:factory-collector");
+
+    expect(factory?.title).toBe("Factory collection is degraded");
+    expect(factory?.technicalDetails).toContain("EACCES scanning ~/.factory");
   });
 
   test("a lost control plane is an error, not an advisory", () => {

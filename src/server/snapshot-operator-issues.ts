@@ -16,6 +16,8 @@ import type {
   OperatorIssue,
   Provider,
 } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
+import { PROVIDER_DISPLAY_NAMES } from "./naming";
 import type { CmuxSurface } from "./types";
 
 const IDENTITY_CONFLICT_PATTERN = /conflicting open agent session files/i;
@@ -173,10 +175,15 @@ export function buildOperatorIssues(
     });
   }
 
-  for (const provider of ["codex", "claude", "cursor"] as const) {
+  /* Walked from PROVIDERS, and named from the same Record<Provider, string> the
+     rest of the board reads. The listed form covered three of five collectors
+     and chained ternaries for their names, so omp and Factory could fail, be
+     counted in the degraded tally, and raise nothing that said which source had
+     gone — a number with no cause, which is the failure this file is about. */
+  for (const provider of PROVIDERS) {
     const errors = [...(sourceErrors?.[provider] ?? [])];
     if (errors.length === 0) continue;
-    const label = provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "Cursor";
+    const label = PROVIDER_DISPLAY_NAMES[provider];
     issues.push({
       id: `system:${provider}-collector`,
       kind: "system",
