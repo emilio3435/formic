@@ -59,7 +59,8 @@ Four steps. Do these in order and you have used the tool correctly.
 
 **The band only shows you what it has something to say about.** A card with
 nothing to report is absent, not empty — so the shape of the band is itself the
-signal. Above, two cards: work in flight, and one session near its context limit.
+signal. Above, four cards: two findings to review, the fullest context window on
+the machine, work in flight, and what it is burning.
 
 **When nothing needs you it collapses to a single line** — what is shipping,
 what it is burning, and a one-word verdict. No cards, no numbers to read past.
