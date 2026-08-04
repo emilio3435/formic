@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   disambiguate,
+  paneRename,
   resolveAgentName,
   sessionTag,
   MAX_NAME_LENGTH,
@@ -251,5 +252,57 @@ describe("names stay within the one cap the operator shares", () => {
     /* Proof the four cases exercised four different tiers rather than all
        falling through to the same one. */
     expect(sources).toEqual(["operator-alias", "authored", "origin-cwd", "task"]);
+  });
+});
+
+describe("telling a cmux rename from a title cmux wrote itself", () => {
+  /* Factory publishes `isSessionTitleManuallySet`; cmux publishes no such flag,
+     so a pane title has to be read for whether a human could plausibly have
+     typed it. Getting this wrong is not neutral — cmux titles EVERY pane, so
+     accepting its defaults means the account name outranks a distilled title.
+     Measured on the live board: "Ant Hill Naming & Lifecycle Investigation"
+     was replaced by "emilionunezgarcia". */
+  const HOME = "/Users/ant";
+
+  test("a title the operator typed is a rename", () => {
+    expect(paneRename("Implement approved plan for unified piglet", "/Users/ant/Developer/x", HOME))
+      .toBe("Implement approved plan for unified piglet");
+  });
+
+  test("the account name is not a rename", () => {
+    expect(paneRename("ant", "/Users/ant/Developer/x", HOME)).toBeUndefined();
+    // Case is cmux's business, not the operator's.
+    expect(paneRename("Ant", "/Users/ant/Developer/x", HOME)).toBeUndefined();
+  });
+
+  test("a path is not a rename", () => {
+    expect(paneRename("~", "/Users/ant", HOME)).toBeUndefined();
+    expect(paneRename("~/Developer/the-mountain-main", "/Users/ant/Developer/the-mountain-main", HOME))
+      .toBeUndefined();
+    expect(paneRename("/Users/ant/Developer/x", "/Users/ant/Developer/x", HOME)).toBeUndefined();
+  });
+
+  test("the pane's own folder name is not a rename", () => {
+    /* cmux's default for a project pane. It reads like a name and is the one
+       default most likely to be mistaken for one. */
+    expect(paneRename("LaHormigaDormida", "/Users/ant/Developer/LaHormigaDormida", HOME))
+      .toBeUndefined();
+  });
+
+  test("a folder name typed onto a pane sitting somewhere else IS a rename", () => {
+    // The contrast case: the rule is "echoes this pane's folder", not "looks
+    // like a folder". An operator who names a pane after the project it is
+    // working ON, from a different directory, meant it.
+    expect(paneRename("LaHormigaDormida", "/Users/ant", HOME)).toBe("LaHormigaDormida");
+  });
+
+  test("the boilerplate every other name-shaped field is checked for is rejected here too", () => {
+    expect(paneRename("Session update", "/Users/ant/Developer/x", HOME)).toBeUndefined();
+    expect(paneRename("new agent", "/Users/ant/Developer/x", HOME)).toBeUndefined();
+  });
+
+  test("nothing at all is not a rename", () => {
+    expect(paneRename(undefined, "/Users/ant", HOME)).toBeUndefined();
+    expect(paneRename("   ", "/Users/ant", HOME)).toBeUndefined();
   });
 });

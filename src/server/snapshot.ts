@@ -54,7 +54,7 @@ import {
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
-import { disambiguate } from "./naming";
+import { disambiguate, paneRename } from "./naming";
 import type { SessionNameRecord } from "./session-names";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
@@ -378,7 +378,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : undefined,
       threadDepth: source.threadDepth,
       nickname: source.nickname,
-      surfaceTitle: surface?.title,
+      /* Only when a human plausibly typed it — cmux titles every pane, and its
+         own defaults must not arrive on the board wearing a rename's authority. */
+      surfaceTitle: paneRename(surface?.title, surface?.cwd),
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
       lastAgentClosing: source.lastAgentClosing,

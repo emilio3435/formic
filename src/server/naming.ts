@@ -106,6 +106,36 @@ function usableName(raw?: string): string | undefined {
   return trimmed;
 }
 
+/* A cmux pane title, but only when a human plausibly typed it.
+
+   Factory says outright whether its title was set by hand
+   (`isSessionTitleManuallySet`); cmux publishes no such flag and titles EVERY
+   pane, so the distinction has to be read off the title itself. Its defaults
+   are the account name, the pane's folder, and the folder path — all of which
+   read like names, and all of which would outrank the fleet's own answer if
+   accepted. Measured on the live board 2026-08-04: a pane titled
+   "emilionunezgarcia" replaced the distilled "Ant Hill Naming & Lifecycle
+   Investigation".
+
+   The rule is "echoes THIS pane's folder", not "looks like a folder": an
+   operator who titles a pane after the project it works on, from somewhere
+   else, meant it. */
+export function paneRename(
+  title?: string,
+  paneCwd?: string,
+  homeDir: string = homedir(),
+): string | undefined {
+  const trimmed = title?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("~") || trimmed.startsWith("/")) return undefined;
+  const echoes = (candidate?: string): boolean => {
+    const name = candidate ? basename(candidate.replace(/\/+$/, "")) : "";
+    return name !== "" && name.toLowerCase() === trimmed.toLowerCase();
+  };
+  if (echoes(homeDir) || echoes(paneCwd)) return undefined;
+  return usableName(trimmed);
+}
+
 /* One cap, applied to every tier. A derived name is allowed to be as long as a
    name an operator could type and no longer. */
 function capped(name: string): string {

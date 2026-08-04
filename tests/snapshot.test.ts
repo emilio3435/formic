@@ -374,6 +374,28 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs[0]?.agents[0]?.surfaceTitle).toBeUndefined();
   });
 
+  test("a title cmux wrote itself is not published as the operator's", () => {
+    /* cmux titles every pane whether or not a human did, and its defaults —
+       the folder, the folder path, the account name — all read like names.
+       Publishing one hands it the authority of a rename, which on the live
+       board meant a pane titled after its own directory outranking the name
+       the fleet had distilled for that session. */
+    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        ...uniqueSurface,
+        cwd: "/Users/emilionunezgarcia/Developer/LaHormigaDormida",
+        sourceSessionIds: [source.sourceSessionId],
+        title: "LaHormigaDormida",
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.surfaceTitle).toBeUndefined();
+  });
+
   test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",
