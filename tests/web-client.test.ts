@@ -5689,6 +5689,77 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(row.attributes["aria-label"]).toContain("Claude · the-mountain-main");
   });
 
+  /* A name the operator typed outranks a name the fleet derived — that is the
+     whole point of being able to type one. `agentName` has always resolved that
+     order correctly; what these pin is that the ROW asks it. The row reads
+     `identity.base` directly to keep the words loud and the hex quiet, and a
+     row that reads the server's field without first asking whether a human
+     overrode it renders a rename that saved, round-tripped, and then appeared
+     to do nothing — indistinguishable from a broken button. */
+  const named = (over: Record<string, unknown> = {}) => agent({
+    id: "claude:named", sourceSessionId: "cccc-3333", provider: "claude", programId: "p",
+    identity: { name: "PR Automation Review & Fix #cccc3333", base: "PR Automation Review & Fix", disambiguator: "#cccc3333", source: "task" },
+    ...over,
+  });
+
+  test("a session the operator renamed in Ant Hill shows that name on the row", async () => {
+    const a = named();
+    const program = { id: "p", name: "the-mountain-main", agents: [a] };
+
+    await withState({ aliases: new Map([["agent:claude:named", "Nightly release check"]]) }, () => {
+      const row = withDom(() => M.renderAgentRow(a, program));
+      expect(textOf(byClass(row, "agent-name"))).toBe("Nightly release check");
+    });
+  });
+
+  test("a cmux pane the operator renamed shows that name on the row", async () => {
+    /* A SURFACE rename is this pane's own name, so it belongs to the session
+       even when the pane's folder differs from where the session runs — which
+       is the normal shape of an orchestrator: parked in the home directory,
+       working in a project. A WORKSPACE title is broader context and stays
+       suppressed on that mismatch, or a home-cwd orchestrator would borrow the
+       name of whatever project it was parked beside. */
+    const a = named({
+      surfaceTitle: "Agent identity and naming contract",
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdMismatch: true },
+    });
+    const program = { id: "p", name: "the-mountain-main", agents: [a] };
+
+    await withState({ aliases: new Map() }, () => {
+      const row = withDom(() => M.renderAgentRow(a, program));
+      expect(textOf(byClass(row, "agent-name"))).toBe("Agent identity and naming contract");
+    });
+  });
+
+  test("a workspace title still loses to the fleet's name on a cwd mismatch", async () => {
+    // The contrast case. Without it the two tests above would pass on a client
+    // that had simply started trusting every title cmux reports.
+    const a = named({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdMismatch: true },
+    });
+    const program = { id: "p", name: "the-mountain-main", agents: [a] };
+
+    await withState({ aliases: new Map() }, () => {
+      const row = withDom(() => M.renderAgentRow(a, program));
+      expect(textOf(byClass(row, "agent-name"))).toBe("PR Automation Review & Fix");
+    });
+  });
+
+  test("the server's hex tag stays behind the fleet's name, and off the operator's", async () => {
+    /* The tag disambiguates one derived name from thirty identical ones. A name
+       the operator chose needs no such help, and printing "#cccc3333" after it
+       is the text wall the split was introduced to remove. */
+    const a = named();
+    const program = { id: "p", name: "the-mountain-main", agents: [a] };
+
+    await withState({ aliases: new Map() }, () => {
+      expect(textOf(byClass(withDom(() => M.renderAgentRow(a, program)), "agent-name-wrap"))).toContain("#cccc3333");
+    });
+    await withState({ aliases: new Map([["agent:claude:named", "Nightly release check"]]) }, () => {
+      expect(textOf(byClass(withDom(() => M.renderAgentRow(a, program)), "agent-name-wrap"))).not.toContain("#cccc3333");
+    });
+  });
+
   /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
      Two live sessions share one cmux pane" beside "Advisory · 1 degraded source"
      — the second in a full-width row. attentionSummary and topSourceIssue read

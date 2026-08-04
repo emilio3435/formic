@@ -329,6 +329,51 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
   });
 
+  test("the linked pane's own title is published, separately from its workspace's", () => {
+    /* The collector has read `surface.title` all along and the snapshot dropped
+       it, so a terminal the operator renamed reached the board as whatever the
+       WORKSPACE was called. The two are published side by side because they
+       carry different claims: the pane title names this session, the workspace
+       title only names where it is parked — which is why the client may trust
+       one across a cwd mismatch and not the other. */
+    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        ...uniqueSurface,
+        cwd: "/Users/emilionunezgarcia/Developer/LaHormigaDormida",
+        sourceSessionIds: [source.sourceSessionId],
+        title: "Agent identity and naming contract",
+        workspaceTitle: "CODEX - Platform UX",
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const agent = snapshot.programs[0]?.agents[0];
+
+    expect(agent?.surfaceTitle).toBe("Agent identity and naming contract");
+    expect(agent?.target?.workspaceTitle).toBe("CODEX - Platform UX");
+  });
+
+  test("a session on a pane nobody renamed publishes no pane title", () => {
+    // The contrast case: `surfaceTitle` must stay absent rather than falling
+    // back to the workspace name, or the client's cwd-mismatch rule above would
+    // let every workspace title through under the pane title's authority.
+    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [source.sourceSessionId],
+        workspaceTitle: "CODEX - Platform UX",
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.surfaceTitle).toBeUndefined();
+  });
+
   test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
     const source = collected({
       cwd: "/Users/emilionunezgarcia",

@@ -378,6 +378,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : undefined,
       threadDepth: source.threadDepth,
       nickname: source.nickname,
+      surfaceTitle: surface?.title,
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
       lastAgentClosing: source.lastAgentClosing,

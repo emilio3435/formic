@@ -162,7 +162,12 @@ export const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id }
 /* Every live agent can take a presentation label. Prefer editing the linked
    cmux workspace when present so Ant Hill names stay hunt-able in the wild. */
 
-export function agentName(agent) {
+/* The name a HUMAN typed for this row, or "" when nobody did: a label entered
+   in Ant Hill, then one typed onto the cmux pane itself. Split out from
+   agentName so a caller can tell "the operator named this" from "the fleet
+   named this" without comparing strings — the row needs that distinction to
+   decide whether the server's disambiguator belongs beside the name. */
+export function operatorName(agent) {
   if (!agent) return "";
   const agentLabel = state.aliases.get(presentationLabelKey(agentLabelTarget(agent)));
   if (agentLabel) return agentLabel;
@@ -170,12 +175,21 @@ export function agentName(agent) {
     const workspaceLabel = state.aliases.get(presentationLabelKey(workspaceLabelTarget(agent.target.workspaceId)));
     if (workspaceLabel) return workspaceLabel;
   }
-  // Prefer the cmux terminal title only when the session cwd agrees with the
-  // pane. A home-cwd orch parked in a project-titled workspace must stay
-  // "Codex · Home" — not borrow the workspace name.
   const terminal = terminalSourceName(agent);
-  if (terminal && !agent.target?.cwdMismatch) return terminal;
-  return sourceAgentName(agent);
+  /* A SURFACE rename is this pane's own name and belongs to the session even
+     when the pane's folder differs — an orchestrator parked in the home
+     directory while its work lives in a project is the normal shape, not an
+     anomaly. A WORKSPACE title is broader context, so it stays suppressed on
+     that mismatch: otherwise the same home-cwd orchestrator borrows the name of
+     whichever project it happens to sit beside. */
+  const renamed = typeof agent.surfaceTitle === "string" && agent.surfaceTitle.trim() !== "";
+  if (terminal && (renamed || !agent.target?.cwdMismatch)) return terminal;
+  return "";
+}
+
+export function agentName(agent) {
+  if (!agent) return "";
+  return operatorName(agent) || sourceAgentName(agent);
 }
 
 /* Presentation-only labels. Source identities stay stable; the label is a
@@ -791,9 +805,16 @@ export function stripSpinnerFrame(title) {
 }
 
 export function terminalSourceName(agent) {
-  const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
+  /* The pane's own rename first, the workspace's title second. cmux reports
+     both and they mean different things — see operatorName, which is the only
+     caller that acts on the difference. */
+  const surface = agent && typeof agent.surfaceTitle === "string"
+    ? stripSpinnerFrame(agent.surfaceTitle.trim()).trim()
+    : "";
+  const workspace = agent && agent.target && typeof agent.target.workspaceTitle === "string"
     ? stripSpinnerFrame(agent.target.workspaceTitle.trim()).trim()
     : "";
+  const title = surface || workspace;
   return title ? conciseText(title) : "";
 }
 

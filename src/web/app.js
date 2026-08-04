@@ -49,6 +49,7 @@ import {
   agentLabelEligible,
   agentLabelTarget,
   agentName,
+  operatorName,
   collisionLine,
   conciseText,
   controlUnavailableText,
@@ -4546,9 +4547,17 @@ function renderAgentRow(agent, program, opts = {}) {
      of hex when 30 automation rows print it: "PR Automation Review & Fix
      #e5eba703". Split back apart here so the words stay loud and the hex goes
      quiet, in the muted style the tag already had. */
+  /* ...but only when the name on the row IS the server's. A label the operator
+     typed — in Ant Hill, or onto the cmux pane — outranks a derived one, and a
+     row that read `identity.base` unconditionally showed a rename that saved,
+     round-tripped and then appeared to do nothing. The disambiguator goes with
+     the derived name it disambiguates: thirty identical "PR Automation Review &
+     Fix" rows need the hex, one "Nightly release check" does not, and printing
+     it there is the same text wall the split removed. */
+  const operatorLabel = operatorName(agent);
   const identityBase = agent.identity && agent.identity.base;
-  const serverTag = agent.identity && agent.identity.disambiguator;
-  const visibleName = identityBase || displayName;
+  const serverTag = operatorLabel ? "" : (agent.identity && agent.identity.disambiguator);
+  const visibleName = operatorLabel || identityBase || displayName;
   /* Only for rows the server did not name — archived records written before
      `identity` existed, which the client still has to tell apart itself. */
   const clientTag = !serverTag && opts.ambiguousNames && opts.ambiguousNames.has(displayName)

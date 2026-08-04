@@ -362,6 +362,11 @@ export interface AgentSnapshot {
   parentAgentId?: string;
   threadDepth?: number;
   nickname?: string;
+  /** The linked cmux PANE's own title — what the operator typed when they
+      renamed that terminal. Distinct from `target.workspaceTitle`, which names
+      the whole workspace: the pane title is a claim about this session, the
+      workspace title is only a claim about where it is parked. */
+  surfaceTitle?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
   /** Latest sanitized human-legible USER request; null when none survived cleaning. */
