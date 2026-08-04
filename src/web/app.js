@@ -5967,7 +5967,7 @@ function dtdd(grid, label, value, opts = {}) {
         title: hint, "aria-label": `${label}: ${hint}`, text: label,
       }))
     : el("dt", { text: label }));
-  const dd = el("dd", {});
+  const dd = el("dd", opts.wide ? { class: "is-wide" } : {});
   if (value.nodeType) dd.append(value);
   else dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
   grid.append(dd);
@@ -6487,8 +6487,13 @@ function renderEvidence(agent, ui = state) {
     }), { hint: SESSION_TOTAL_HINT });
   }
 
+  /* Wide, because this value is a sentence plus a row of buttons rather than a
+     figure: in the Evidence shelf the 8rem label gutter left it 178px, which is
+     one copy button per line, and the third one landed past the shelf's own
+     floor. Measured at 1440 in a browser, where "Copy pane" rendered 35px below
+     it and was sliced by the section's border. */
   const link = renderControlLink(agent.target);
-  if (link) dtdd(grid, "control link", link);
+  if (link) dtdd(grid, "control link", link, { wide: true });
 
   /* Each block tags itself with what it is. The collapsed rail needs to say
      what is in here without a second copy of these conditions to drift out of

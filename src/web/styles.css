@@ -2561,9 +2561,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 .evidence-control-sentence { margin: 0; font-size: 13.5px; line-height: 1.4; }
 .evidence-ids { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .evidence-copy-id { min-height: 30px; font-size: 11.5px; }
+/* Tighter than a standalone .btn.sm because these three are one set, and the
+   set reads as a row or not at all. At the shelf's 1440px width the inherited
+   0.65rem gutters put the row 2px over the panel and wrapped the last button
+   onto a line of its own, straight across the scroll fold. Carries .btn to
+   outrank the .btn.sm shorthand it is narrowing. */
+.evidence-ids .btn.evidence-copy-id { padding-inline: 0.45rem; }
 .detail-grid { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem 0.8rem; margin: 0; }
 .detail-grid dt { font: 700 10px/1.4 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+/* A value that is a paragraph plus a row of controls takes the panel's width
+   instead of the value column's, with its label above it rather than beside it.
+   The 8rem label gutter is affordable for a figure; for the control-link row it
+   was the difference between three buttons on one line and three lines of one
+   button, in a shelf whose height is fixed by the Thread column next to it. */
+.detail-grid dd.is-wide { grid-column: 1 / -1; }
 .detail-grid dd code { color: var(--muted); }
 /* Glossary terms: dotted underline signals "hover/focus for a plain-language
    explainer"; the tooltip itself is the native title (keyboard-reachable via

@@ -596,6 +596,56 @@ describe("collector identity and usage truth", () => {
     expect(agent?.displayName).toBe("Claude · Home");
   });
 
+  /* The drawer prints `task` under the heading as the standing objective, so
+     anything that survives collection is read as a sentence a human wrote.
+     Three live agents printed `<command-name>/model</command-name>` there, with
+     the command's own stdout — ANSI escapes and all — queued right behind it. */
+  test("slash-command plumbing is chrome, not the objective, and the next instruction is", () => {
+    const claudeUser = (content: string, at: string) => JSON.stringify({
+      type: "user",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia",
+      timestamp: at,
+      message: { role: "user", content },
+    });
+    const agent = parseClaudeJsonl([
+      claudeUser(
+        "<command-name>/model</command-name>\n"
+        + "            <command-message>model</command-message>\n"
+        + "            <command-args></command-args>",
+        "2026-07-21T23:00:00.000Z",
+      ),
+      claudeUser(
+        "<local-command-stdout>Set model to [1mFable 5[22m and saved as your"
+        + " default for new sessions</local-command-stdout>",
+        "2026-07-21T23:00:01.000Z",
+      ),
+      claudeUser("Fix the evidence drawer's clipped controls.", "2026-07-21T23:00:02.000Z"),
+    ].join("\n"), { nowMs });
+
+    expect(agent?.task).toBe("Fix the evidence drawer's clipped controls.");
+    expect(agent?.task).not.toContain("<command-name>");
+    expect(agent?.task).not.toContain("<local-command-stdout>");
+  });
+
+  test("a slash command's arguments are the objective, as the sentence they were typed as", () => {
+    const agent = parseClaudeJsonl(JSON.stringify({
+      type: "user",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      message: {
+        role: "user",
+        content: "<command-name>/qa</command-name>\n"
+          + "            <command-message>qa</command-message>\n"
+          + "            <command-args>fix the login page</command-args>",
+      },
+    }), { nowMs });
+
+    expect(agent?.task).toBe("/qa fix the login page");
+    expect(agent?.task).not.toContain("<command-args>");
+  });
+
   test("partially written trailing records do not erase a valid live session", () => {
     const agent = parseOmpJsonl(`${fixture("omp-session.jsonl")}\n{"type":"message"`, {
       nowMs,

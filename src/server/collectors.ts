@@ -159,6 +159,49 @@ function plainText(value: unknown): string | undefined {
   return text || undefined;
 }
 
+/* Transcript plumbing is not prose. A slash command lands in the transcript as
+   its own run of user turns — the invocation envelope, then the command's own
+   stdout, its caveats, and injected reminders — and every one of them used to
+   survive into `task`, which the drawer prints under the heading as the standing
+   objective. Three live agents printed `<command-name>/model</command-name>`
+   there, and behind it sat `<local-command-stdout>Set model to ␛[1mFable 5…`:
+   raw markup, ANSI escapes and all, in the slot that answers "which lane is
+   this". The same defect class as a `<synthetic>` placeholder reaching a model
+   slot.
+
+   `taskDisplayName` already refuses to read a NAME out of these lines. This is
+   the same list held one layer earlier, so the task itself never carries them.
+   `<file …>` is not on it: that wrapper is a human pasting a file, and the lines
+   above unwrap it and keep what is inside.
+
+   The one exception is the invocation's arguments, because those are the part a
+   human typed: `/qa fix the login page` stays a task and reads as the sentence
+   it was written as. A bare `/model` is chrome, and returning undefined for it
+   keeps the scan looking for the instruction that follows — better than freezing
+   a session's objective on a keystroke that states nothing about the work. */
+const PLUMBING_ENVELOPE =
+  /^<(?:command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr|local-command-caveat|system-reminder)\b/i;
+function commandInvocation(text: string): string | undefined {
+  const name = text.match(/^<command-name>\s*([\s\S]*?)\s*<\/command-name>/i)?.[1]?.trim();
+  const args = text.match(/<command-args>\s*([\s\S]*?)\s*<\/command-args>/i)?.[1]?.trim();
+  if (!name || !args) return undefined;
+  return `${name} ${args}`;
+}
+
+/* The same rule for a task that arrives already collected. Collection is not
+   the only door into the board: the archive replays records written before this
+   existed, and a session last active in July is never re-collected, so its
+   stored task is frozen exactly as it was read then. Two archived agents were
+   still printing `<command-name>/model</command-name>` on the live board after
+   the collector stopped producing it — the guard on one path only, which is how
+   `<synthetic>` reached the row while the head above it was clean. */
+export function readableTask(task: string | undefined): string | undefined {
+  const text = task?.trim();
+  if (!text) return undefined;
+  if (!PLUMBING_ENVELOPE.test(text)) return task;
+  return commandInvocation(text)?.slice(0, 500);
+}
+
 function userTask(value: unknown): string | undefined {
   const raw = plainText(value);
   if (!raw) return undefined;
@@ -172,6 +215,8 @@ function userTask(value: unknown): string | undefined {
     .replace(/^<file name=(?:"[^"]+"|'[^']+')>\s*/i, "")
     .replace(/\s*<\/file>\s*$/i, "")
     .trim();
+  // Whatever the envelope holds, the markup itself never reaches a reader.
+  if (PLUMBING_ENVELOPE.test(text)) return readableTask(text);
   if (NON_TASK_PREFIXES.some((pattern) => pattern.test(text)) || CONTINUATION_ONLY.test(text)) {
     return undefined;
   }
