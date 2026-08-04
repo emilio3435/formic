@@ -81,7 +81,9 @@ describe("snapshot edge cases", () => {
       displayName: "Bare",
       status: "waiting",
       statusReason: "",
-      updatedAt: "2026-07-21T23:00:00.000Z",
+      // Genuinely quiet, not merely labelled so — the verdict comes from the
+      // clock and the evidence now, never from the provider's status word.
+      updatedAt: "2026-07-21T22:40:00.000Z",
       tokens: {},
       artifacts: [],
       gates: [],
@@ -98,25 +100,34 @@ describe("snapshot edge cases", () => {
     expect(snapshot.totals.tokens).toBeUndefined();
   });
 
-  test("an unrecognized status degrades to unknown instead of guessing working", () => {
-    // AgentStatus is a closed union, so this only arrives from a collector
-    // parsing a source format that changed under us. The default must not
-    // promote an unreadable session into the working count or hand it controls.
-    const snapshot = buildSnapshot({
-      agents: [collected({ status: "banana" as CollectedAgent["status"] })],
+  test("an unrecognized status cannot influence the verdict at all", () => {
+    /* STRONGER THAN IT WAS, and for a better reason.
+
+       This used to assert that a status word the board could not parse degraded
+       to "unknown" rather than being guessed at. The classifier no longer reads
+       the status word from ANY provider, so a format that changed under us can
+       no longer reach the verdict to degrade it: two sessions identical except
+       for a nonsense status are classified identically, from the evidence they
+       carry. The old failure mode is not handled better, it is unreachable. */
+    const evidence = { updatedAt: "2026-07-21T22:40:00.000Z" } as const;
+    const sane = buildSnapshot({
+      agents: [collected(evidence)],
       surfaces: [],
       archiveStore,
       now: NOW,
     });
-    const agent = agentsOf(snapshot)[0]!;
+    const garbled = buildSnapshot({
+      agents: [collected({ ...evidence, status: "banana" as CollectedAgent["status"] })],
+      surfaces: [],
+      archiveStore,
+      now: NOW,
+    });
 
-    expect(agent.activity).toBe("unknown");
-    expect(agent.processState).toBe("unknown");
-    expect(snapshot.totals.working).toBe(0);
-    expect(snapshot.totals.idle).toBe(0);
-    expect(snapshot.totals.ended).toBe(0);
+    expect(agentsOf(garbled)[0]!.lifecycle).toBe("waiting");
+    expect(agentsOf(garbled)[0]!.lifecycle).toBe(agentsOf(sane)[0]!.lifecycle);
+    expect(garbled.totals.byLifecycle).toEqual(sane.totals.byLifecycle);
     // It is still tracked: an unreadable session must not vanish from the board.
-    expect(snapshot.totals.tracked).toBe(1);
+    expect(garbled.totals.tracked).toBe(1);
   });
 
   test("an unreachable control plane is reported as itself, not as a broken collector", () => {
@@ -158,7 +169,12 @@ describe("snapshot edge cases", () => {
 
   test("a stale session with a live process is idle, and controls survive", () => {
     const snapshot = buildSnapshot({
-      agents: [collected({ status: "stale", processAlive: true, processIds: [4_242] })],
+      agents: [collected({
+        status: "stale",
+        updatedAt: "2026-07-21T20:00:00.000Z",
+        processAlive: true,
+        processIds: [4_242],
+      })],
       surfaces: [],
       archiveStore,
       now: NOW,
@@ -172,19 +188,24 @@ describe("snapshot edge cases", () => {
     expect(snapshot.totals.ended).toBe(0);
   });
 
-  test("a stale session with no process evidence reads as ended, not died", () => {
+  test("a stale session with no process evidence reads as unverified, not ended and not died", () => {
+    /* The original claim — "absent evidence is not evidence of death" — is
+       preserved and extended. It was already true that this row must not say
+       "died"; what it also must not say, and used to, is "ended". Both are
+       assertions about a process nobody checked. */
     const snapshot = buildSnapshot({
-      agents: [collected({ status: "stale" })],
+      agents: [collected({ status: "stale", updatedAt: "2026-07-21T20:00:00.000Z" })],
       surfaces: [],
       archiveStore,
       now: NOW,
     });
     const agent = agentsOf(snapshot)[0]!;
 
-    expect(agent.activity).toBe("ended");
-    // Absent evidence is not evidence of death.
+    expect(agent.lifecycle).toBe("unverified");
+    expect(agent.provenance).toBe("no-evidence");
     expect(agent.processState).toBe("unknown");
-    expect(snapshot.totals.ended).toBe(1);
+    expect(snapshot.totals.ended).toBe(0);
+    expect(snapshot.totals.byLifecycle?.unverified).toBe(1);
   });
 
   test("a Cursor child whose parent never reported a model is unreported, not accused", () => {

@@ -1,6 +1,8 @@
 import type {
   AgentSnapshot,
+  CollectionScope,
   HubPulse,
+  LifecycleState,
   HubSnapshot,
   IdentityTrace,
   IssueLifecycle,
@@ -38,16 +40,19 @@ export {
   withIssueDecoration,
 } from "./snapshot-issues";
 import {
-  activityFor,
+  activityForLifecycle,
   contextPctFor,
   controlsFor,
   cursorModelPolicy,
   effortFor,
+  lifecycleFor,
   operatorControlState,
   outcomeFor,
   processStateFor,
   roleFor,
+  statusForLifecycle,
 } from "./snapshot-agent";
+import type { LifecycleThresholds } from "./lifecycle";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -76,6 +81,8 @@ export interface SnapshotInput {
   triageSummaries?: readonly TriageQueueSummary[];
   now?: Date;
   scanWindowHours?: number;
+  /** The operator's freshness and quiet bands; defaults when absent. */
+  thresholds?: LifecycleThresholds;
 }
 
 type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
@@ -96,6 +103,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);
   }
 
+  /* Collection scope, derived at the one place both populations are in hand.
+
+     `input.agents` is what THIS scan actually read; `archivedAgents` is the
+     filing cabinet, which re-enters the merge on every refresh for thirty days.
+     A record present only in the second has left the scan window: still
+     findable, no longer watched, and — critically — never counted live. Without
+     this gate a turn-complete record would sit in Waiting and in totals.live
+     forever, resurrected by the very store that was meant to remember it. */
+  const collectedIds = new Set(input.agents.map((agent) => agent.id));
   const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
@@ -148,39 +164,72 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
-    const activity = activityFor(source, archived);
-    const processState = processStateFor(source);
-    const initialRefusal = transmitRefusal({ target, processState, archived });
+    const scope: CollectionScope = collectedIds.has(source.id) ? "observed" : "retained";
+    const operatorArchived = input.archiveStore.has(source.id);
+    const verdict = lifecycleFor(source, {
+      operatorArchived,
+      scope,
+      nowMs,
+      thresholds: input.thresholds,
+      /* Records written before this contract carry no verdict of their own. The
+         one thing still knowable about them is whether a human filed them, so
+         that is what a legacy operator archive freezes as; everything else
+         reads as aged-out, which is exactly what it is. */
+      persisted: source.lifecycle
+        ? { lifecycle: source.lifecycle, provenance: source.provenance }
+        : operatorArchived
+          ? { lifecycle: "finished", provenance: "operator-archive" }
+          : undefined,
+    });
+    /* Every word below is now a reading of ONE verdict. `activity` and `status`
+       are translations of it into the two older vocabularies, not second
+       opinions about it — which is what they were, and why the board could call
+       the same session live in its totals and finished in its rows. */
+    const finished = verdict.lifecycle === "finished";
+    const retained = scope === "retained";
+    const terminal = finished || retained;
+    const activity = activityForLifecycle(verdict.lifecycle, scope);
+    const processState = retained ? undefined : processStateFor(source);
+    const initialRefusal = transmitRefusal({ target, processState, archived: terminal });
     const refusal = initialRefusal?.code === "UNSAFE_TARGET"
       ? transmitRefusal({
           target,
           processState,
-          archived,
+          archived: terminal,
           identityTrace: readIdentityTrace(),
           routingObservationsUrl: `/api/debug/identity?agent=${encodeURIComponent(source.id)}`,
         })
       : initialRefusal;
-    /* Ended rows already explain their terminal state and have no action to
-       recover. Active refusals keep the actionable summary and point to their
-       on-demand pane observations; the shared surface inventory no longer rides
-       the snapshot once per refused agent. */
-    const controlRefusal: SnapshotControlRefusal | undefined = activity !== "ended" && refusal
-      ? (({ message: _message, ...published }) => published)(refusal)
-      : undefined;
-    // Freeze the elapsed clock only for a session that really ended. This used
-    // to re-derive `archived || status === "stale"` independently of
-    // activityFor, so a live-but-quiet session had its clock frozen by the same
-    // inference that mislabelled it — one verdict, read in two places.
-    const ended = activity === "ended";
-    const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
-    const outcome = outcomeFor(source, archived, Boolean(notification));
-    const controlState = operatorControlState(target, archived || activity === "ended");
+    /* Suppressed for terminal rows, which already explain themselves and have
+       no action to recover — and for unverified rows, which are the largest
+       population on this board and would otherwise each attach a refusal
+       payload AND force an eager identity trace. That is roughly 190 traces and
+       100-150 KB per snapshot spent saying "we could not verify this", which
+       the row's own word already says. */
+    const controlRefusal: SnapshotControlRefusal | undefined =
+      !terminal && verdict.lifecycle !== "unverified" && refusal
+        ? (({ message: _message, ...published }) => published)(refusal)
+        : undefined;
+    /* The clock freezes only where something is known to have stopped.
+
+       Unverified deliberately keeps running. Freezing it would be the old ghost
+       claim restated in a subtler place: a frozen clock asserts a moment the
+       session ended, and the entire point of that state is that no such moment
+       was ever observed. A running clock on a silent row reads as "it has been
+       this long since we heard anything", which is exactly true. */
+    const elapsedEndMs = terminal && Number.isFinite(updatedAtMs)
+      ? Math.min(nowMs, updatedAtMs)
+      : nowMs;
+    const outcome = outcomeFor(source, terminal, Boolean(notification));
+    const controlState = operatorControlState(target, terminal);
     const contextPct = contextPctFor(source);
-    const snapshotStatusReason = archived
-      ? "Archived by source or operator."
+    const snapshotStatusReason = retained
+      ? verdict.reason
       : notificationSummary
         ? `Unread cmux notification: ${notificationSummary}`
-        : source.statusReason;
+        : finished
+          ? verdict.reason
+          : source.statusReason;
     /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
        the one point a CollectedAgent becomes an AgentSnapshot, so there is a
        single boundary to test rather than a rule to remember: the snapshot is
@@ -192,9 +241,18 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
       programId: program.id,
-      status: archived ? "archived" : notification ? "attention" : source.status,
+      /* An unread notification no longer overwrites the status. It used to,
+         which is how a working session came to publish `status: "attention"` —
+         one field answering two different questions, and losing the first. What
+         the notification means rides `attention`, its own field, where it can be
+         an overlay instead of a replacement. */
+      status: statusForLifecycle(verdict.lifecycle, scope),
       statusReason: snapshotStatusReason,
       activity,
+      lifecycle: verdict.lifecycle,
+      provenance: verdict.provenance,
+      scope,
+      ...(notification ? { attention: true } : {}),
       processState,
       outcome,
       controlState,
@@ -236,7 +294,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
-      controls: controlsFor(source, target, archived, identityTrace),
+      /* Un-archive is offered only where it is HONOURED: the store must be able
+         to do it, and the ending must be one a human made. */
+      controls: controlsFor(
+        source,
+        target,
+        archived,
+        identityTrace,
+        Boolean(input.archiveStore.unarchive) && operatorArchived,
+      ),
       ...(controlRefusal ? { controlRefusal } : {}),
     };
     Object.defineProperty(agent, "identityTrace", {
@@ -263,6 +329,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       left.name.localeCompare(right.name),
     );
   const allAgents = orderedPrograms.flatMap((program) => program.agents);
+  /* The lifecycle census counts only what is still being watched. Every one of
+     these gates on scope, because a retained record that reads "waiting" is
+     describing what it was doing when the board last saw it, not what it is
+     doing now — counting it live is the resurrection hole. */
+  const observedAgents = allAgents.filter((agent) => agent.scope !== "retained");
+  const countLifecycle = (state: LifecycleState): number =>
+    observedAgents.filter((agent) => agent.lifecycle === state).length;
+  const byLifecycle = {
+    working: countLifecycle("working"),
+    waiting: countLifecycle("waiting"),
+    unverified: countLifecycle("unverified"),
+    finished: countLifecycle("finished"),
+  };
+  const retained = allAgents.length - observedAgents.length;
   const liveAgents = allAgents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
   const workingAgents = allAgents.filter((agent) => agent.activity === "working");
   const tokenValues = workingAgents
@@ -397,16 +477,18 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     totals: {
       live: liveAgents.length,
       tracked: allAgents.length,
-      attention: allAgents.filter((agent) => agent.status === "attention").length,
+      attention: observedAgents.filter((agent) => agent.attention === true).length,
       tokens: tokenValues.length ? tokenValues.reduce((total, value) => total + value, 0) : undefined,
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,
       ended: allAgents.filter((agent) => agent.activity === "ended").length,
+      byLifecycle,
+      retained,
       /* Agents waiting on a human, counted from the same signal the tab, the
          title badge, the notifier and the program rollup all read. This was
          issues.length — system findings — which meant the rollup cell and the
          totals disagreed about what the word meant while sharing it. */
-      needsYou: allAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
+      needsYou: observedAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
       /* System findings keep their own vocabulary. A degraded collector and an
          agent that asked a question are both worth surfacing and neither is the
          other; folding them into one word is what made "needs you" unreadable. */

@@ -43,7 +43,14 @@ describe("collector identity and usage truth", () => {
       "/Users/emilionunezgarcia/Developer/hd/master/health/tester/v2/20260721",
     );
     expect(agent?.displayName).toBe("Health tester");
-    expect(agent?.status).toBe("archived");
+    /* NOT archived. The parser used to close every OMP session it read, on the
+       reasoning that OMP is a legacy read-only source — which made "this file
+       is old" and "this session ended" the same statement, and put 724 of 815
+       sessions into history whether or not any had ended. This fixture records
+       no `session_exit`, so nothing here ended; its silence is read by the
+       clock like every other provider's. */
+    expect(agent?.status).toBe("stale");
+    expect(agent?.endEvidence).toBeUndefined();
     expect(agent?.transcriptEndedCleanly).toBeUndefined();
     expect(agent?.statusReason).toContain("Legacy OMP history");
     expect(agent?.tokens).toEqual({
@@ -233,8 +240,23 @@ describe("collector identity and usage truth", () => {
       "Goal: Verify the immutable Lane 0 candidate.\n\nSuccess means: the gate is honest.",
     );
     expect(agent?.displayName).toBe("OMP · hd-master-health-20260721");
-    expect(agent?.status).toBe("archived");
+    // Historical because it is quiet, not because it is OMP. See above.
+    expect(agent?.status).toBe("stale");
     expect(agent?.lastHumanMessage).toBe("Goal: Verify the immutable Lane 0 candidate. Success means: the gate is honest.");
+  });
+
+  test("an OMP session that really did exit is still archived, on its own record", () => {
+    /* The other side of removing the blanket archive, and the reason removing it
+       is safe: OMP does emit a genuine ending, and that ending is still honoured
+       — now as the ONLY thing that closes an OMP session. */
+    const exited = parseOmpJsonl([
+      JSON.stringify({ type: "session", id: "019f86c4-1558-7000-aeb8-26e2cfd0e8ff", timestamp: "2026-07-21T22:00:00.000Z" }),
+      JSON.stringify({ type: "custom", timestamp: "2026-07-21T22:20:00.000Z", data: { kind: "session_exit" } }),
+    ].join("\n"), { nowMs });
+
+    expect(exited?.status).toBe("archived");
+    expect(exited?.endEvidence).toBe("session-exit");
+    expect(exited?.transcriptEndedCleanly).toBe(true);
   });
 
   test("Codex exposes latest-request usage and keeps the cumulative session total separate", () => {

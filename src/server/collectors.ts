@@ -1,7 +1,11 @@
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { open, readdir, stat } from "node:fs/promises";
-import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
+import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
+import {
+  DEFAULT_LIFECYCLE_THRESHOLDS,
+  type LifecycleThresholds,
+} from "./lifecycle";
 import {
   extractLastHumanMessage,
   extractClosingByRole,
@@ -29,6 +33,11 @@ export interface ParseMetadata {
   sourcePath?: string;
   mtimeMs?: number;
   nowMs?: number;
+  /* The operator's freshness and quiet bands, carried from the settings store
+     down to the one function that compares an age against them. Optional so
+     every existing caller — and there are a lot of them in tests — keeps
+     working against the shipped defaults. */
+  thresholds?: LifecycleThresholds;
 }
 
 type JsonRecord = Record<string, any>;
@@ -256,20 +265,29 @@ function taskDisplayName(task?: string): string | undefined {
   return firstLine.length > 100 ? `${firstLine.slice(0, 99).trimEnd()}…` : firstLine;
 }
 
-function statusFrom(updatedAt: string, exited: boolean, nowMs: number): {
+function statusFrom(
+  updatedAt: string,
+  exited: boolean,
+  nowMs: number,
+  thresholds: LifecycleThresholds = DEFAULT_LIFECYCLE_THRESHOLDS,
+): {
   status: AgentStatus;
   reason: string;
 } {
   if (exited) return { status: "archived", reason: "Source recorded a session exit." };
   const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
-  if (ageMs < 3 * 60_000) return { status: "running", reason: "Source activity within 3 minutes." };
-  if (ageMs < 45 * 60_000) return { status: "waiting", reason: "No source activity in the last 3 minutes." };
+  if (ageMs < thresholds.freshMs) return { status: "running", reason: "Source activity within 3 minutes." };
+  if (ageMs < thresholds.quietMs) return { status: "waiting", reason: "No source activity in the last 3 minutes." };
   return { status: "stale", reason: "No source activity in the last 45 minutes." };
 }
 
-function withCurrentStatus(agent: CollectedAgent, nowMs: number): CollectedAgent {
+function withCurrentStatus(
+  agent: CollectedAgent,
+  nowMs: number,
+  thresholds?: LifecycleThresholds,
+): CollectedAgent {
   if (agent.status === "archived") return agent;
-  const status = statusFrom(agent.updatedAt, false, nowMs);
+  const status = statusFrom(agent.updatedAt, false, nowMs, thresholds);
   return {
     ...agent,
     status: status.status,
@@ -303,12 +321,17 @@ function makeAgent(input: {
   humanMessages?: readonly HumanMessageCandidate[];
   statusReason?: string;
   exited?: boolean;
+  /* What `exited` actually meant for this provider. Passing it beside the
+     boolean rather than replacing the boolean keeps this slice inert: nothing
+     reads the discriminant yet, and every existing verdict is untouched. */
+  endEvidence?: EndEvidence;
   meta: ParseMetadata;
 }): CollectedAgent {
   const status = statusFrom(
     input.updatedAt,
     input.exited ?? false,
     input.meta.nowMs ?? Date.now(),
+    input.meta.thresholds,
   );
   const statusReason = input.statusReason ?? status.reason;
   const normalizedCwd = input.cwd?.replace(/\/+$/, "");
@@ -371,6 +394,7 @@ function makeAgent(input: {
       : [],
     gates: [],
     transcriptEndedCleanly: input.exited === true || undefined,
+    endEvidence: input.exited === true ? input.endEvidence : undefined,
   };
 }
 
@@ -478,9 +502,19 @@ function createOmpParser(): IncrementalParser {
         humanMessages: humanMessages(messages),
         statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
+        // OMP's session_exit is the real thing: a record that the session, not a
+        // turn, is over.
+        endEvidence: "session-exit",
         meta,
       });
-      return { ...agent, status: "archived" };
+      /* No unconditional archive. This line used to read
+         `return { ...agent, status: "archived" }`, which filed EVERY OMP
+         session as ended whether or not one had ever ended — the reason 724 of
+         815 sessions on this machine read as archived while eleven live
+         processes hid among them. OMP does record a real ending, `session_exit`,
+         and `exited` above carries it; that is the only thing that finishes an
+         OMP session now. */
+      return agent;
     },
   };
 }
@@ -602,6 +636,9 @@ function createCodexParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
+        // Codex `task_complete` closes a TURN. The session stays open, and the
+        // next user message clears the flag again a few lines above.
+        endEvidence: "turn-complete",
         meta,
       });
     },
@@ -773,6 +810,9 @@ function createClaudeParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
+        // Claude `stop_reason:"end_turn"` is the model yielding the floor, not
+        // the session closing. The very next user message reopens it.
+        endEvidence: "turn-complete",
         meta,
       });
     },
@@ -882,6 +922,7 @@ async function collectProvider(
   depth: number,
   parser: (jsonl: string, meta: ParseMetadata) => CollectedAgent | null,
   windowMs: number,
+  thresholds?: LifecycleThresholds,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -903,7 +944,7 @@ async function collectProvider(
           cached.ino === details.ino &&
           cached.mtimeMs === details.mtimeMs &&
           cached.size === details.size) {
-          if (cached.agent) agents.push(withCurrentStatus(cached.agent, Date.now()));
+          if (cached.agent) agents.push(withCurrentStatus(cached.agent, Date.now(), thresholds));
           return;
         }
         const canAppend = cached &&
@@ -928,7 +969,7 @@ async function collectProvider(
           const reset = parserFor(provider, parser);
           const complete = completeJsonRecords(chunk);
           reset.append(complete.rows);
-          const parsed = reset.result({ sourcePath: path, mtimeMs: details.mtimeMs });
+          const parsed = reset.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds });
           fileCache.set(path, {
             provider,
             dev: details.dev,
@@ -945,7 +986,7 @@ async function collectProvider(
         const complete = completeJsonRecords(Buffer.concat([prefix, chunk]));
         incremental.append(complete.rows);
         const parsed = retainProcessEvidence(
-          incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs }),
+          incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds }),
           canAppend ? cached.agent : undefined,
         );
         fileCache.set(path, {
@@ -970,12 +1011,13 @@ async function collectProvider(
 export async function collectSessions(
   home = homedir(),
   windowMs = DEFAULT_SESSION_WINDOW_MS,
+  thresholds?: LifecycleThresholds,
 ): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
   const [omp, codex, claude, cursor] = await Promise.all([
-    collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs),
-    collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs),
-    collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs),
-    collectCursorSessions(home, Date.now(), windowMs),
+    collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
+    collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
+    collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs, thresholds),
+    collectCursorSessions(home, Date.now(), windowMs, thresholds),
   ]);
   return { omp, codex, claude, cursor };
 }

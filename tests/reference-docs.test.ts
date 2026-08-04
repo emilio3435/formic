@@ -71,6 +71,7 @@ beforeAll(async () => {
    snapshot, PulseTracker for the pulse, and only the MACHINE is described. */
 const producedBoard = (input: {
   agents?: readonly CollectedAgent[];
+  operatorArchived?: boolean;
   cmuxReachable?: boolean;
   cmuxErrors?: readonly string[];
   cmuxAbsent?: boolean;
@@ -81,7 +82,7 @@ const producedBoard = (input: {
   const snapshot = buildSnapshot({
     agents: input.agents ?? [],
     surfaces: [],
-    archiveStore: { has: () => false, archive: async () => {} },
+    archiveStore: { has: () => input.operatorArchived === true, archive: async () => {} },
     now,
     ...(input.cmuxReachable === undefined ? {} : { cmuxReachable: input.cmuxReachable }),
     ...(input.cmuxErrors ? { cmuxErrors: input.cmuxErrors } : {}),
@@ -200,12 +201,34 @@ describe("README.md stays true to the product", () => {
        "unknown"` would only assert that the client renders a word someone
        typed, and whether the server still produces that state would go
        unchecked. */
+    /* Two rows, because "no process evidence" now means two different things
+       and README's promise is about the second.
+
+       A quiet session nobody checked is UNVERIFIED — it may still be running,
+       and the chip says the process was not matched rather than that there is
+       none to match. A session the source closed, with no process evidence, is
+       finished, and that is the row README points a stranger at. */
     const quiet = producedBoard({
-      agents: [{ ...workingAgent, status: "stale", statusReason: "Quiet for 45 minutes." } as CollectedAgent],
+      agents: [{ ...workingAgent, status: "stale", updatedAt: "2026-08-02T09:00:00.000Z", statusReason: "Quiet for 45 minutes." } as CollectedAgent],
     });
     const quietRow = quiet.programs.flatMap((program) => program.agents)[0];
+    expect(quietRow?.lifecycle, "a quiet unchecked session stopped reading unverified").toBe("unverified");
     expect(quietRow?.processState, "a session with no process evidence stopped reading unknown").toBe("unknown");
-    const noEvidence = agentModel.livenessView(quietRow);
+
+    /* README's promise, on the unverified row: never "dead" for a process
+       nobody looked at. */
+    expect(agentModel.livenessView(quietRow)?.label).not.toBe("Died");
+
+    /* And the exact words, on the row that produces them: a session an operator
+       filed, whose process was never observed. A provider exit reports "Exited
+       cleanly" because the source watched it close; this one nobody watched. */
+    const filed = producedBoard({
+      agents: [{ ...workingAgent, statusReason: "Archived by operator." } as CollectedAgent],
+      operatorArchived: true,
+    });
+    const filedRow = filed.programs.flatMap((program) => program.agents)[0];
+    expect(filedRow?.processState).toBe("unknown");
+    const noEvidence = agentModel.livenessView(filedRow);
     expect(noEvidence?.label, "an ended agent with no evidence stopped reading as 'No process evidence'")
       .toBe("No process evidence");
   });
@@ -510,10 +533,13 @@ describe("SECURITY.md describes the boundary the code implements", () => {
      removing a check fails the suite rather than quietly widening the boundary
      while the doc still promises it. */
 
-  test("the control surface is exactly the four actions it lists", () => {
-    expect(security).toContain("`focus`, `instruct`, `interrupt`, and local `archive`");
+  test("the control surface is exactly the actions it lists", () => {
+    /* Five now. `unarchive` is the undo the board had been PROMISING in copy
+       since the archive shipped — "Un-archive it from History if you filed it
+       early" — with no endpoint behind the sentence. */
+    expect(security).toContain("`focus`, `instruct`, `interrupt`, and local `archive`/`unarchive`");
     expect(read("src/server/control.ts"))
-      .toContain('export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"]');
+      .toContain('export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"]');
   });
 
   test("instruct really does reject CR/LF and oversized text", () => {
@@ -528,7 +554,7 @@ describe("SECURITY.md describes the boundary the code implements", () => {
     expect(read("src/server/http.ts")).toContain("MAX_CONTROL_SNAPSHOT_AGE_MS = 30_000");
     // Archive is exempt because it changes local data, not cmux.
     expect(security).toContain("`archive` is exempt");
-    expect(read("src/server/http.ts")).toContain('parsed.action !== "archive"');
+    expect(read("src/server/http.ts")).toContain('parsed.action !== "archive" && parsed.action !== "unarchive"');
     // Broadcast was documented as UNPROTECTED for a day after it was fixed.
     expect(security).toContain("STALE_SNAPSHOT");
     expect(read("src/server/broadcast.ts")).toContain("STALE_SNAPSHOT");

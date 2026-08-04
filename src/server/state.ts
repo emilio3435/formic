@@ -8,7 +8,7 @@ import { PulseTracker } from "./pulse";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
-import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
+import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
 import type { UsageSummary } from "./burnbar";
 
 export interface HubCollectors {
@@ -69,7 +69,8 @@ export class HubState {
     private readonly refreshAggregateTimeoutMs = REFRESH_AGGREGATE_TIMEOUT_MS,
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
-    this.#scanWindowHours = settingsReader?.().scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
+    const bootSettings = settingsReader?.();
+    this.#scanWindowHours = bootSettings?.scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
     const initialSnapshot = this.#withSourceHealth(buildSnapshot({
       agents: [],
       surfaces: [],
@@ -82,6 +83,7 @@ export class HubState {
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
+      thresholds: bootSettings ? lifecycleThresholds(bootSettings) : undefined,
     }));
     this.#snapshot = withPulse(initialSnapshot, this.#pulse.report(Date.now()));
   }
@@ -186,8 +188,14 @@ export class HubState {
   async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     const providers: Provider[] = ["omp", "codex", "claude", "cursor"];
-    this.#scanWindowHours = this.settingsReader?.().scanWindowHours ?? this.#scanWindowHours;
+    const settings = this.settingsReader?.();
+    this.#scanWindowHours = settings?.scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
+    /* Read every refresh, not at construction: a settings POST triggers a
+       refresh, and an operator who just widened their quiet threshold should
+       see the board reclassify on that refresh rather than at the next
+       restart. */
+    const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
@@ -210,7 +218,7 @@ export class HubState {
     };
     let aggregateSettled = false;
     const aggregate = Promise.all([
-      capture("session collection failed", this.collectors.sessions(homedir(), windowMs), (value) => {
+      capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
         sessionsResult = value;
       }),
       ...(options.cmux
@@ -295,12 +303,6 @@ export class HubState {
     }
     const collectedAgents = providers.flatMap((provider) => sessions[provider].value);
     let historyError: string | undefined;
-    try {
-      await this.archiveStore.record?.(collectedAgents);
-    } catch (error) {
-      historyError = `session history persistence failed: ${error instanceof Error ? error.message : String(error)}`;
-      console.error(`[HubState] ${historyError}`);
-    }
     if (cmux) {
       /* Not installed is not unreachable. `cmuxReachable === false` drives a
          degraded collector and the "controls are off" banner, both of which are
@@ -339,6 +341,25 @@ export class HubState {
         ...collectionErrors,
       ])];
     }
+    /* Bridged FIRST, then recorded, then published — one set of agents through
+       all three. The history write used to run before the bindings bridge, so a
+       record captured process evidence the snapshot never published and the
+       snapshot published evidence the record never saw. Two answers about the
+       same session in the same refresh, and the archive kept the older one. */
+    const publishedAgents = this.bindingStore
+      ? bridgeAgentsWithBindings(
+          this.bindingStore,
+          collectedAgents,
+          this.#surfaces,
+          this.#liveAgentProcessIds,
+        )
+      : collectedAgents;
+    try {
+      await this.archiveStore.record?.(publishedAgents);
+    } catch (error) {
+      historyError = `session history persistence failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`[HubState] ${historyError}`);
+    }
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [
         provider,
@@ -353,14 +374,7 @@ export class HubState {
       providers.map((provider) => [provider, sessions[provider].absent === true]),
     ) as Record<Provider, boolean>;
     const built = this.#withSourceHealth(buildSnapshot({
-      agents: this.bindingStore
-        ? bridgeAgentsWithBindings(
-            this.bindingStore,
-            collectedAgents,
-            this.#surfaces,
-            this.#liveAgentProcessIds,
-          )
-        : collectedAgents,
+      agents: publishedAgents,
       surfaces: this.#surfaces,
       notifications: this.#notifications,
       programHints: this.programHints,
@@ -376,6 +390,7 @@ export class HubState {
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
+      thresholds,
     }));
     this.#hasSourceSnapshot = true;
     this.#recentlyResolved = [...(built.recentlyResolved ?? [])];

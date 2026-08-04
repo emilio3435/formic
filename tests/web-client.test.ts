@@ -25,7 +25,34 @@ beforeAll(async () => {
   styles = readFileSync(join(import.meta.dir, "../src/web/styles.css"), "utf8");
 });
 
+/* The legacy status word a fixture asks for, translated into the lifecycle the
+   server would actually publish beside it. Fixtures here are hand-written wire
+   payloads, and the server puts `lifecycle` on every agent now — one without it
+   is a snapshot from an older server, which is a real case but not the one most
+   of these tests are about. Overriding `lifecycle` explicitly still works, and
+   omitting BOTH is how the legacy-fallback tests exercise the fallback. */
+const LIFECYCLE_FOR_STATUS: Record<string, string> = {
+  running: "working",
+  waiting: "waiting",
+  // The old activityFor mapped `waiting|attention -> idle`, and idle is Waiting.
+  attention: "waiting",
+  stale: "unverified",
+  archived: "finished",
+};
+
+/* Some fixtures state the older ACTIVITY word instead. Same translation, other
+   vocabulary — and it is the vocabulary the server derives from the lifecycle
+   now, so reading it back the other way is exactly right. */
+const LIFECYCLE_FOR_ACTIVITY: Record<string, string> = {
+  working: "working",
+  idle: "waiting",
+  unknown: "unverified",
+  ended: "finished",
+};
+
 function agent(overrides: Record<string, unknown> = {}) {
+  const status = typeof overrides.status === "string" ? overrides.status : "running";
+  const activity = typeof overrides.activity === "string" ? overrides.activity : undefined;
   return {
     id: "codex:a1",
     provider: "codex",
@@ -35,6 +62,8 @@ function agent(overrides: Record<string, unknown> = {}) {
     status: "running",
     statusReason: "Streaming output.",
     updatedAt: "2026-07-22T03:00:00.000Z",
+    lifecycle: (activity ? LIFECYCLE_FOR_ACTIVITY[activity] : LIFECYCLE_FOR_STATUS[status]) ?? "working",
+    scope: "observed",
     tokens: { provenance: "observed", total: 1200 },
     artifacts: [],
     gates: [],
@@ -51,6 +80,8 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
     totals: {
       live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      byLifecycle: { working: 1, waiting: 0, unverified: 0, finished: 0 },
+      retained: 0,
       sourceHealth: { healthy: 2, degraded: 0, absent: 0, total: 2 },
     },
     programs: [{ id: "p", name: "P", agents: [agent()] }],
@@ -603,10 +634,12 @@ describe("summary status and widgets", () => {
       target: { surfaceId: "s1", resolution: "unique-cwd", workspaceTitle: "cmux: alpha" },
     }));
     const dead = brief(agent({
-      activity: "ended", status: "stale", processState: "died", processAlive: false,
-      processIds: [123], target: routed,
+      activity: "ended", lifecycle: "finished", provenance: "process-died",
+      processState: "died", processAlive: false, processIds: [123], target: routed,
     }));
-    const archived = brief(agent({ activity: "ended", status: "archived", target: routed }));
+    const archived = brief(agent({
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive", target: routed,
+    }));
 
     // Three different sentences, not one message wearing three hats.
     const titles = [pane.title, dead.title, archived.title];
@@ -636,17 +669,25 @@ describe("summary status and widgets", () => {
        problem for a session that has ENDED sends the operator to fix something
        that no longer matters. */
     const both = brief(agent({
-      activity: "ended", status: "archived", processState: "died",
-      processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive",
+      processState: "died", processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
     }));
     expect(both.cause).toBe("archived");
 
     // And the short form the dock's accessible text uses splits the same way.
-    expect(M.controlUnavailableText("observed-only", agent({ activity: "ended", status: "archived" })))
-      .toMatch(/archived/);
     expect(M.controlUnavailableText("observed-only", agent({
-      activity: "ended", status: "stale", processState: "died", processAlive: false, processIds: [1],
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive",
+    }))).toMatch(/you archived/i);
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", lifecycle: "finished", provenance: "process-died",
+      processState: "died", processAlive: false, processIds: [1],
     }))).toMatch(/process is gone/);
+    /* The ending a human did NOT make now says so. It used to read "this
+       session is archived" for a provider exit, which credits the operator with
+       a decision they never took. */
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", lifecycle: "finished", provenance: "provider-exit",
+    }))).toMatch(/session exit/i);
     // With no agent it still answers, rather than throwing on the old signature.
     expect(M.controlUnavailableText("quarantined")).toMatch(/ambiguous/);
   });
@@ -1803,17 +1844,26 @@ describe("broadcast recipient eligibility", () => {
   });
 
   test("ineligible recipients name their reason from the same state the gate reads", () => {
-    // Ended splits archived (explicit) vs ended (stale / other non-live).
-    expect(M.broadcastIneligibleReason(agent({ status: "archived" }))).toBe("archived");
-    expect(M.broadcastIneligibleReason(agent({ status: "stale" }))).toBe("ended");
-    expect(M.broadcastIneligibleReason(agent({ activity: "ended", status: "running" }))).toBe("ended");
+    /* Four reasons where there used to be one word for four facts. "Archived"
+       covered a provider exit, an operator's decision, a dead process and a
+       record that simply aged out, so the chip explaining why a recipient was
+       unavailable told the operator nothing they could act on. */
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "operator-archive" }))).toBe("archived");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "provider-exit" }))).toBe("finished");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "process-died" }))).toBe("process died");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "waiting", scope: "retained" }))).toBe("in history");
+    /* And an unverified session is NOT one of them. Nothing ended it, so the
+       reason it cannot be sent to — if it cannot — is about its target, not
+       about it being over. */
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "unverified", target: { resolution: "missing" } })))
+      .toBe("view only");
     // Live-but-locked reads its control state: ambiguous target → quarantined,
     // everything else → view only. Same fields deriveControlState consumes.
     expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
     expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
     expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
     // Never the bare "unavailable" placeholder.
-    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } })]) {
+    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } }), agent({ lifecycle: "unverified" })]) {
       expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
     }
   });
@@ -2053,14 +2103,16 @@ describe("calm program and agent list rendering", () => {
        there the tab IS the answer. */
     expect(M.rowStateWords("working", "healthy", "now")).toEqual([]);      // the dominant case
     expect(M.rowStateWords("working", "healthy", "working")).toEqual([]);  // pinned by the tab
-    expect(M.rowStateWords("idle", "healthy", "idle")).toEqual([]);        // pinned by the tab
+    expect(M.rowStateWords("idle", "healthy", "waiting")).toEqual([]);     // pinned by the tab
     expect(M.rowStateWords("ended", "healthy", "history")).toEqual([]);    // pinned by the tab
 
     // An exceptional outcome is never silent, in any view.
     expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Alert"]);
     expect(M.rowStateWords("working", "failed", "working")).toEqual(["Failed"]);
     // A mixed view still distinguishes a non-dominant activity.
-    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Idle", "Alert"]);
+    // "Idle" is spelled Waiting now: idle blamed the agent for a silence that is
+    // usually the operator's move.
+    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Waiting", "Alert"]);
 
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -5323,7 +5375,7 @@ describe("FE-B: harness-backed client behavior", () => {
      on the wire, and the note renders only once you are already in that view. */
   test("(3.2) a lookback-filtered tab count discloses its window", () => {
     expect(M.lookbackApplies("history")).toBe(true);
-    expect(M.lookbackApplies("idle")).toBe(true);
+    expect(M.lookbackApplies("waiting")).toBe(true);
     expect(M.lookbackApplies("now")).toBe(false);
     expect(M.lookbackApplies("needs-you")).toBe(false);
     // The suffix is built from the same label the filter bar uses, so the tab and
@@ -5806,7 +5858,7 @@ describe("FE-B: harness-backed client behavior", () => {
      server reported. */
   test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
     const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
-      M.renderFilterBar(listUi({ view: "idle", ...ui }));
+      M.renderFilterBar(listUi({ view: "waiting", ...ui }));
       const bar = domById.get("filter-bar");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
@@ -5842,7 +5894,7 @@ describe("FE-B: harness-backed client behavior", () => {
 
     // Idle/History: Lookback presets + All + Custom, then the Scan window.
     withDom(() => {
-      M.renderFilterBar(listUi({ view: "idle", lookbackHours: 6, scanWindowHours: 36 }));
+      M.renderFilterBar(listUi({ view: "waiting", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
       expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
       expect(keys.every(Boolean)).toBe(true);
@@ -8410,5 +8462,95 @@ describe("W6-B: sequenced snapshot deltas stay complete", () => {
         expect((G.document.body as FakeNode).classList.contains("feed-frozen")).toBe(true);
       });
     });
+  });
+});
+
+describe("the lifecycle contract on the board itself", () => {
+  const quiet = (overrides: Record<string, unknown> = {}) => agent({
+    id: "codex:quiet", lifecycle: "unverified", provenance: "no-evidence",
+    activity: "unknown", status: "stale",
+    updatedAt: "2026-07-20T03:00:00.000Z",
+    ...overrides,
+  });
+
+  test("five tabs, and Waiting is where an unverified session is findable", () => {
+    expect(M.OPS_VIEWS).toEqual(["needs-you", "now", "waiting", "history"]);
+    expect(M.viewMatches("waiting", quiet())).toBe(true);
+    // Not History: that is where the original missing-session incident sent it.
+    expect(M.viewMatches("history", quiet())).toBe(false);
+    // And not Now, which is active work.
+    expect(M.viewMatches("now", quiet())).toBe(false);
+  });
+
+  test("the Unverified group ignores the lookback, and ordinary Waiting rows do not", () => {
+    /* Without this exemption the flagship state of the contract ships invisible:
+       these sessions are quiet BY DEFINITION, so at the default six-hour
+       lookback almost every one of them would be filtered out of the only tab
+       that shows them. */
+    const now = Date.parse("2026-07-22T03:00:00.000Z");
+    const old = { updatedAt: "2026-07-20T03:00:00.000Z" };
+    expect(M.passesLookback(quiet(old), "waiting", 6, now)).toBe(true);
+    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "waiting", 6, now)).toBe(false);
+    // The exemption is scoped to the views that filter at all.
+    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "now", 6, now)).toBe(true);
+  });
+
+  test("an unverified session is in neither the live count nor the finished one", () => {
+    const snap = snapshot({
+      totals: {
+        live: 1, tracked: 3, attention: 0,
+        byLifecycle: { working: 1, waiting: 0, unverified: 1, finished: 1 },
+        retained: 0,
+      },
+      programs: [{ id: "p", name: "P", agents: [agent(), quiet(), agent({ id: "codex:done", lifecycle: "finished" })] }],
+    });
+    const totals = M.totalsOf(snap);
+    expect(totals.working).toBe(1);
+    expect(totals.unverified).toBe(1);
+    expect(totals.live).toBe(1);
+  });
+
+  test("the settings preview classifies the board in hand, at the numbers being typed", () => {
+    /* The panel's whole reason for existing: it says what these thresholds do to
+       THIS board before the operator commits to them. Same classifier the
+       server runs, so the preview and the post-save board agree. */
+    const now = Date.parse("2026-07-22T03:00:00.000Z");
+    const snap = snapshot({
+      programs: [{
+        id: "p", name: "P",
+        agents: [
+          { ...agent({ id: "codex:fresh" }), lifecycle: undefined, updatedAt: "2026-07-22T02:59:00.000Z" },
+          { ...agent({ id: "codex:mid" }), lifecycle: undefined, updatedAt: "2026-07-22T02:55:00.000Z" },
+          { ...agent({ id: "codex:quiet" }), lifecycle: undefined, updatedAt: "2026-07-22T02:40:00.000Z" },
+        ],
+      }],
+    });
+
+    // Defaults: 1 minute Working; 5 and 20 minutes both Waiting.
+    expect(M.settingsPreview(snap, 3, 45, now)).toMatchObject({ working: 1, waiting: 2, unverified: 0 });
+    // Focused shortens the quiet band to fifteen minutes, and the oldest moves.
+    expect(M.settingsPreview(snap, 2, 15, now)).toMatchObject({ working: 1, waiting: 1, unverified: 1 });
+    // Long-running keeps ten minutes of silence inside Working.
+    expect(M.settingsPreview(snap, 10, 180, now)).toMatchObject({ working: 2, waiting: 1, unverified: 0 });
+  });
+
+  test("the preview sentence names all four states in the operator's words", () => {
+    const text = M.settingsPreviewText({ working: 3, waiting: 14, unverified: 188, finished: 12, retained: 608 });
+    expect(text).toContain("3 Working");
+    expect(text).toContain("14 Waiting");
+    expect(text).toContain("188 Unverified");
+    // Finished and retained are one thing to an operator: they are in History.
+    expect(text).toContain("620 History");
+  });
+
+  test("the presets fill the fields rather than storing a mode", () => {
+    /* A stored mode is a fourth thing to reason about and hides the numbers it
+       sets. These teach the thresholds by example. */
+    expect(M.SETTINGS_PRESETS.map((p: { id: string }) => p.id))
+      .toEqual(["focused", "balanced", "long-running"]);
+    const balanced = M.SETTINGS_PRESETS.find((p: { id: string }) => p.id === "balanced");
+    expect(balanced).toMatchObject({ fresh: 3, quiet: 45 });
+    // Every preset keeps quiet longer than fresh, or it would delete the Waiting band.
+    for (const preset of M.SETTINGS_PRESETS) expect(preset.quiet).toBeGreaterThan(preset.fresh);
   });
 });

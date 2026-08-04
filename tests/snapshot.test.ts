@@ -17,7 +17,7 @@ import {
 } from "../src/server/identity-bindings";
 import { PulseTracker } from "../src/server/pulse";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
-import type { HubPulse, IssueLifecycle, OperatorIssue } from "../src/shared/types";
+import type { HubPulse, IssueLifecycle, LifecycleState, OperatorIssue } from "../src/shared/types";
 
 const fixture = (name: string): string =>
   readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
@@ -131,7 +131,7 @@ describe("snapshot control safety and SSE deduplication", () => {
         id: `codex:archive-${index}`,
         sourceSessionId: `archive-${index}`,
         displayName: `Archived session ${index}`,
-        status: "archived",
+        endEvidence: "session-exit",
         transcriptTail: "x".repeat(2_000),
       }),
     );
@@ -155,12 +155,20 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshotFingerprint(nextTick)).toBe(snapshotFingerprint(first));
   });
 
-  test("stale elapsed time stops at the last observed activity", () => {
+  test("a finished session's elapsed time stops at the last observed activity", () => {
+    /* The claim is unchanged: an ending freezes the clock at the last turn, so
+       a row cannot report two days of "work" it did not do. What changed is
+       what counts as an ending — this fixture had only silence, and silence
+       alone no longer stops the clock (see "the elapsed clock freezes only
+       where something is known to have stopped"). It carries a checked, gone
+       process now, which is a real ending and always was. */
     const snapshot = buildSnapshot({
       agents: [collected({
         status: "stale",
         startedAt: "2026-07-21T20:00:00.000Z",
         updatedAt: "2026-07-21T20:05:00.000Z",
+        processIds: [4242],
+        processAlive: false,
       })],
       surfaces: [],
       archiveStore,
@@ -174,11 +182,23 @@ describe("snapshot control safety and SSE deduplication", () => {
     const snapshot = buildSnapshot({
       agents: [
         collected({ id: "codex:running", sourceSessionId: "running", processIds: [101], processAlive: true }),
+        /* "Exited cleanly — this one is done" is a claim about the SESSION, so
+           only a session exit may make it. It used to fire on
+           transcriptEndedCleanly, which Claude and Codex mint from a COMPLETED
+           TURN, so a session waiting on its operator advertised its process as
+           cleanly finished. OMP's session_exit is the real thing. */
         collected({
           id: "omp:exited",
           provider: "omp",
           sourceSessionId: "exited",
-          status: "archived",
+          endEvidence: "session-exit",
+          transcriptEndedCleanly: true,
+        }),
+        collected({
+          id: "claude:turn-done",
+          provider: "claude",
+          sourceSessionId: "turn-done",
+          endEvidence: "turn-complete",
           transcriptEndedCleanly: true,
         }),
         collected({ id: "codex:died", sourceSessionId: "died", processIds: [202], processAlive: false }),
@@ -195,6 +215,8 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(states).toEqual({
       "codex:running": "running",
       "omp:exited": "exited",
+      // A finished TURN is not a finished process, and no longer says it is.
+      "claude:turn-done": "unknown",
       "codex:died": "died",
       "claude:unknown": "unknown",
     });
@@ -383,13 +405,16 @@ describe("snapshot control safety and SSE deduplication", () => {
           id: "codex:idle-lifetime",
           sourceSessionId: "idle-lifetime",
           status: "waiting",
+          // Actually quiet, rather than merely labelled so: the fixture used to
+          // claim "waiting" beside a transcript written thirty seconds earlier.
+          updatedAt: "2026-07-21T22:40:00.000Z",
           tokens: { total: 900_000, sessionTotal: 90_000_000, scope: "latest-turn", provenance: "observed" },
         }),
         collected({
           id: "omp:history",
           provider: "omp",
           sourceSessionId: "history",
-          status: "archived",
+          endEvidence: "session-exit",
           tokens: { total: 50_000, provenance: "observed" },
         }),
       ],
@@ -530,7 +555,7 @@ describe("snapshot control safety and SSE deduplication", () => {
       agents: [
         collected({ tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 20 } }),
         collected({ id: "codex:idle", sourceSessionId: "idle", status: "waiting", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 40 } }),
-        collected({ id: "codex:ended", sourceSessionId: "ended", status: "archived", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 100 } }),
+        collected({ id: "codex:ended", sourceSessionId: "ended", endEvidence: "session-exit", tokens: { provenance: "observed", scope: "session", contextWindow: 100, total: 100 } }),
       ],
       surfaces: [],
       archiveStore,
@@ -575,12 +600,17 @@ describe("snapshot control safety and SSE deduplication", () => {
           status: "waiting",
         }),
         collected({
+          /* The INACTIVE mismatch, which is the whole reason both exist: only
+             live sessions count toward fleet model health. The fixture used to
+             say "stale" beside a transcript written thirty seconds earlier, so
+             it was inactive by assertion rather than by evidence. */
           id: "cursor:child-mismatch",
           provider: "cursor",
           sourceSessionId: "child-mismatch",
           parentSourceSessionId: "grok",
           model: "gpt-5.6-sol-xhigh",
           status: "stale",
+          updatedAt: "2026-07-21T18:00:00.000Z",
         }),
         collected({
           id: "cursor:active-child-mismatch",
@@ -663,7 +693,17 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect((snapshot.issues ?? []).some((issue) => issue.id.startsWith("system:cursor-model-policy"))).toBe(false);
   });
 
-  test("provider-native statuses become one operator state language", () => {
+  test("provider-native evidence becomes one operator state language", () => {
+    /* Rewritten with EVIDENCE where it used to carry provider status words.
+
+       Every fixture below used to state its answer directly — status "waiting",
+       status "attention" — and the snapshot copied it through. That is what made
+       four provider vocabularies into four different truths about the board. The
+       classifier reads what a source actually recorded, so a Cursor turn ending
+       has to be a turn ending here, and an agent asking for a human has to have
+       something that asked. The fixture that could not supply real evidence for
+       "attention" is the clearest evidence of the old defect: that state was
+       reachable by assertion alone. */
     const snapshot = buildSnapshot({
       agents: [
         collected(),
@@ -673,51 +713,66 @@ describe("snapshot control safety and SSE deduplication", () => {
           sourceSessionId: "ended-turn",
           status: "waiting",
           statusReason: "Cursor recorded the last turn as successfully ended.",
+          endEvidence: "turn-complete",
         }),
         collected({
           id: "codex:stale-history",
           sourceSessionId: "stale-history",
           status: "stale",
           updatedAt: "2026-07-21T20:00:00.000Z",
+          processIds: [4242],
+          processAlive: false,
         }),
         collected({
           id: "codex:notification",
           sourceSessionId: "notification",
-          status: "attention",
           statusReason: "Unread notification.",
         }),
       ],
       surfaces: [
         { ...uniqueSurface, sourceSessionIds: ["test-session"] },
         { ...uniqueSurface, surfaceId: "SURFACE-CURSOR", sourceSessionIds: ["ended-turn"] },
+        { ...uniqueSurface, surfaceId: "SURFACE-NOTIFY", sourceSessionIds: ["notification"] },
       ],
+      notifications: [{ surfaceId: "SURFACE-NOTIFY", body: "May I write to the database?" }],
       archiveStore,
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
     const agents = snapshot.programs.flatMap(({ agents }) => agents);
 
     expect(agents.find(({ id }) => id === "codex:test-session")).toMatchObject({
+      lifecycle: "working",
       activity: "working",
       outcome: "healthy",
       controlState: "linked",
     });
+    // A finished turn is a wait, and a wait keeps its controls.
     expect(agents.find(({ id }) => id === "cursor:ended-turn")).toMatchObject({
+      lifecycle: "waiting",
+      provenance: "turn-complete",
       activity: "idle",
       outcome: "healthy",
       controlState: "linked",
     });
-    expect(agents.find(({ id }) => id === "codex:stale-history")?.activity).toBe("ended");
-    expect(agents.find(({ id }) => id === "codex:notification")).toMatchObject({
-      activity: "idle",
-      outcome: "needs-you",
-      controlState: "observed-only",
+    // A checked, gone process is the ending here — not the three hours of silence.
+    expect(agents.find(({ id }) => id === "codex:stale-history")).toMatchObject({
+      lifecycle: "finished",
+      provenance: "process-died",
+      activity: "ended",
     });
-    /* needsYou means AGENTS WAITING ON A HUMAN. None of these is: the
-       "attention" status was set directly on the fixture without a cmux
-       notification object, so nothing here actually asks for anyone. The
-       operator issue it raises is a SYSTEM finding and is counted as one. */
-    expect(snapshot.totals).toMatchObject({ working: 1, idle: 2, ended: 1, history: 1, needsYou: 0 });
-    expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
+    /* The overlay, and the whole of what changed about it: an unread
+       notification adds `attention` and an outcome, and leaves the lifecycle
+       exactly where it was. It used to overwrite the status outright. */
+    expect(agents.find(({ id }) => id === "codex:notification")).toMatchObject({
+      lifecycle: "working",
+      attention: true,
+      outcome: "needs-you",
+      controlState: "linked",
+    });
+    expect(snapshot.totals).toMatchObject({ working: 2, idle: 1, ended: 1, history: 1 });
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 2, waiting: 1, unverified: 0, finished: 1 });
+    // This one really is waiting on a human, and it is counted as one.
+    expect(snapshot.totals.needsYou).toBe(1);
   });
 
   test("cmux identity failures become one human-readable system issue", () => {
@@ -769,9 +824,9 @@ describe("snapshot control safety and SSE deduplication", () => {
     const finished = collected({
       id: "codex:finished-wave",
       sourceSessionId: "finished-wave",
-      // Outside the activity window: buildSnapshot derives this as "ended".
+      // The source recorded an ending, which is what makes this pane debris.
       updatedAt: "2026-07-14T09:00:00.000Z",
-      status: "archived",
+      endEvidence: "session-exit",
     });
     const snapshot = buildSnapshot({
       agents: [finished],
@@ -1526,42 +1581,85 @@ describe("a stale transcript is silence, not an ending", () => {
     expect(live.nextAction).toBeUndefined();
   });
 
-  test("the elapsed clock keeps running for a session that never ended", () => {
+  test("the elapsed clock freezes only where something is known to have stopped", () => {
     const live = build(staleSession({ processIds: [4242], processAlive: true }));
     const ghost = build(staleSession());
+    const dead = build(staleSession({ processIds: [4242], processAlive: false }));
+    const running = Date.parse("2026-07-21T23:00:30.000Z") - Date.parse("2026-07-21T20:00:00.000Z");
+    const frozen = Date.parse("2026-07-21T22:00:00.000Z") - Date.parse("2026-07-21T20:00:00.000Z");
 
-    // Frozen at the last transcript write for a real ending...
-    expect(ghost.elapsedMs).toBe(Date.parse("2026-07-21T22:00:00.000Z") - Date.parse("2026-07-21T20:00:00.000Z"));
-    // ...and still running for a session that is merely quiet.
-    expect(live.elapsedMs).toBe(Date.parse("2026-07-21T23:00:30.000Z") - Date.parse("2026-07-21T20:00:00.000Z"));
-    expect(live.elapsedMs).toBeGreaterThan(ghost.elapsedMs!);
+    // A checked, gone process is an ending, and its clock stops at the last turn.
+    expect(dead.elapsedMs).toBe(frozen);
+    // A quiet session with a live process never ended; its clock runs.
+    expect(live.elapsedMs).toBe(running);
+    /* And so does the unverified one — DELIBERATELY REVERSED from what this
+       assertion used to claim. A frozen clock states the moment a session
+       ended. Nothing observed such a moment here, so freezing it would be the
+       old ghost claim restated in a subtler place: the row would name a time of
+       death the board never witnessed. Running reads as "this long since we
+       heard anything", which is exactly what is known. */
+    expect(ghost.elapsedMs).toBe(running);
+    expect(ghost.elapsedMs).toBeGreaterThan(dead.elapsedMs!);
   });
 
-  test("absent liveness evidence still ends a quiet session", () => {
-    // Absent-first, unchanged. This is every agent whose terminal has gone, and
-    // it is the majority of the fleet — silence alone must still read as ended.
+  test("absent liveness evidence never ends a quiet session — it says so instead", () => {
+    /* THE REVERSAL THIS PROGRAM EXISTS FOR. This assertion used to read
+       "absent liveness evidence still ends a quiet session", and it was the
+       single most consequential false statement the board made: 85 sessions on
+       this machine filed as finished because nothing had checked them.
+
+       Absent-first is not abandoned, it is completed. Silence plus nothing to
+       check is still not "alive" — it is not counted live, and it is not
+       counted finished either. It gets the one word that is true. */
     const ghost = build(staleSession());
     expect(ghost.processState).toBe("unknown");
-    expect(ghost.activity).toBe("ended");
-    expect(ghost.controlState).toBe("observed-only");
+    expect(ghost.lifecycle).toBe("unverified");
+    expect(ghost.provenance).toBe("no-evidence");
+    expect(ghost.activity).not.toBe("ended");
 
-    // A process the scan proved is GONE ends the session too — only positive
-    // evidence of life can keep it open.
+    // A process the scan proved is GONE is still an ending. Evidence, not silence.
     const dead = build(staleSession({ processIds: [4242], processAlive: false }));
     expect(dead.processState).toBe("died");
-    expect(dead.activity).toBe("ended");
+    expect(dead.lifecycle).toBe("finished");
+    expect(dead.provenance).toBe("process-died");
+  });
+
+  test("an unverified session keeps the controls a finished one loses", () => {
+    /* The practical half of the reversal, and the reason it matters more than
+       vocabulary. Filing these as ended cost the operator every control on
+       them; six agents were measured holding unread requests for a human from
+       rows the board had closed. */
+    const ghost = build(staleSession());
+    expect(ghost.controlState).toBe("linked");
+    expect(ghost.controls.find(({ action }) => action === "instruct")?.enabled).toBe(true);
+
+    const dead = build(staleSession({ processIds: [4242], processAlive: false }));
+    expect(dead.controlState).toBe("observed-only");
+    expect(dead.controls.find(({ action }) => action === "instruct")?.enabled).toBe(false);
   });
 
   test("a recorded session exit still ends the session, whatever the pid table says", () => {
-    // `archived` is the source saying "this session is over". It outranks a
-    // live pid, which after an exit is a shell, not an agent.
+    /* Unchanged claim, stated through the discriminant that now carries it. A
+       source saying "this session is over" outranks a live pid, which after an
+       exit is a shell and not an agent. What changed is that a completed TURN
+       can no longer make this claim by riding the same boolean. */
     const exited = build(staleSession({
-      status: "archived",
+      endEvidence: "session-exit",
       transcriptEndedCleanly: true,
       processIds: [4242],
       processAlive: true,
     }));
+    expect(exited.lifecycle).toBe("finished");
+    expect(exited.provenance).toBe("provider-exit");
     expect(exited.activity).toBe("ended");
+
+    const turnFinished = build(staleSession({
+      endEvidence: "turn-complete",
+      transcriptEndedCleanly: true,
+      processIds: [4242],
+      processAlive: true,
+    }));
+    expect(turnFinished.lifecycle).toBe("waiting");
   });
 
   test("the rescued sessions move out of history and into the live totals", () => {
@@ -1575,8 +1673,11 @@ describe("a stale transcript is silence, not an ending", () => {
       archiveStore,
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
-    // Two quiet-but-alive sessions are live; only the evidence-free one is history.
-    expect(snapshot.totals).toMatchObject({ idle: 2, ended: 1, history: 1 });
+    /* Two quiet-but-alive sessions are live. The third is no longer history:
+       nothing ended it, so it is unverified — findable, counted under its own
+       name, and absent from both the live census and the finished one. */
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 0, waiting: 2, unverified: 1, finished: 0 });
+    expect(snapshot.totals).toMatchObject({ idle: 2, ended: 0, history: 0 });
   });
 });
 
@@ -1596,7 +1697,9 @@ describe("a dead session is never given an instruction", () => {
     const asking = collected({
       id: "codex:asked-then-died",
       sourceSessionId: "asked-then-died",
-      status: "archived",
+      // The source recorded the ending. Silence alone would leave this session
+      // unverified, and an unverified session CAN still be answered.
+      endEvidence: "session-exit",
       lastAgentClosing: "Publishing is your call. Should I roll the migration back?",
       updatedAt: "2026-07-14T09:00:00.000Z",
     });
@@ -1639,7 +1742,7 @@ describe("a dead session is never given an instruction", () => {
   test("ended rows are counted as out of scope, not as coverage the layer earned", () => {
     const snapshot = buildSnapshot({
       agents: [
-        collected({ id: "codex:done", sourceSessionId: "done", status: "archived",
+        collected({ id: "codex:done", sourceSessionId: "done", endEvidence: "session-exit",
           lastAgentClosing: "All landed.", updatedAt: "2026-07-14T09:00:00.000Z" }),
         collected({ id: "codex:alive", sourceSessionId: "alive", lastAgentClosing: "All landed." }),
       ],
@@ -1775,7 +1878,7 @@ describe("context coverage ships with the number it describes", () => {
     const snapshot = buildSnapshot({
       agents: [
         reporting(100, 40),
-        reporting(100, 99, { id: "codex:done", sourceSessionId: "done", status: "archived" }),
+        reporting(100, 99, { id: "codex:done", sourceSessionId: "done", endEvidence: "session-exit" }),
       ],
       surfaces: [],
       archiveStore,
@@ -1786,5 +1889,217 @@ describe("context coverage ships with the number it describes", () => {
     expect(snapshot.contextPeak).toBe(40);
     expect(snapshot.contextReporting).toBe(1);
     expect(snapshot.contextEligible).toBe(1);
+  });
+});
+
+describe("the lifecycle verdict is published, and nothing overwrites it", () => {
+  /* The wire half of the contract. Everything asserted here is additive: the
+     legacy `activity`/`status` words are unchanged in this slice, and these
+     tests exist so the NEXT slice — which makes those words derive from this
+     verdict — cannot move them without a red test naming the move. */
+  const NOW = new Date("2026-08-04T12:00:00.000Z");
+  const at = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString();
+
+  const build = (agents: readonly CollectedAgent[], store: ArchiveStore = archiveStore) =>
+    buildSnapshot({ agents, surfaces: [], archiveStore: store, now: NOW });
+
+  const only = (snapshot: ReturnType<typeof buildSnapshot>) => snapshot.programs[0]!.agents[0]!;
+
+  test("a working session carries its verdict, its provenance and its scope", () => {
+    const agent = only(build([collected({ updatedAt: at(30_000) })]));
+    expect(agent.lifecycle).toBe("working");
+    expect(agent.provenance).toBe("recency");
+    expect(agent.scope).toBe("observed");
+  });
+
+  test("a quiet session with no process evidence publishes unverified, not finished", () => {
+    /* The 85 sessions this program exists for. Asserted on the wire field
+       rather than through a rendered word, because the wire is what every
+       surface will read. */
+    const agent = only(build([collected({
+      status: "stale",
+      updatedAt: at(5 * 3_600_000),
+      processAlive: undefined,
+    })]));
+    expect(agent.lifecycle).toBe("unverified");
+    expect(agent.provenance).toBe("no-evidence");
+  });
+
+  test("a quiet session with a live process publishes waiting", () => {
+    const agent = only(build([collected({
+      status: "stale",
+      updatedAt: at(3 * 3_600_000),
+      processAlive: true,
+      processIds: [4242],
+    })]));
+    expect(agent.lifecycle).toBe("waiting");
+    expect(agent.provenance).toBe("process-live-quiet");
+  });
+
+  test("an operator archive publishes its own provenance, distinct from a source exit", () => {
+    const operatorStore: ArchiveStore = { has: () => true, archive: async () => {} };
+    const archived = only(build([collected({ updatedAt: at(30_000) })], operatorStore));
+    expect(archived.lifecycle).toBe("finished");
+    expect(archived.provenance).toBe("operator-archive");
+
+    const exited = only(build([collected({
+      updatedAt: at(30_000),
+      endEvidence: "session-exit",
+      transcriptEndedCleanly: true,
+    })]));
+    expect(exited.lifecycle).toBe("finished");
+    expect(exited.provenance).toBe("provider-exit");
+  });
+
+  test("a completed turn publishes waiting — the agent yielded, it did not end", () => {
+    const agent = only(build([collected({
+      updatedAt: at(10 * 60_000),
+      endEvidence: "turn-complete",
+      transcriptEndedCleanly: true,
+    })]));
+    expect(agent.lifecycle).toBe("waiting");
+    expect(agent.provenance).toBe("turn-complete");
+  });
+
+  test("a record the scan no longer reaches is retained, and keeps the verdict it was filed with", () => {
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:gone",
+        sourceSessionId: "gone",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+        lifecycle: "waiting",
+        provenance: "turn-complete",
+      })],
+    };
+    const agent = only(build([], store));
+    expect(agent.scope).toBe("retained");
+    expect(agent.lifecycle).toBe("waiting");
+    // Nobody ended it; the board simply stopped watching, and the row says so.
+    expect(agent.provenance).toBe("aged-out");
+  });
+
+  test("a legacy record with no stored verdict still names the one thing known about it", () => {
+    /* Written before this contract existed. `has(id)` is the only surviving
+       evidence that a human filed it, and it is enough to keep the operator's
+       decision from being reported as "we stopped watching". */
+    const store: ArchiveStore = {
+      has: (id) => id === "codex:filed",
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:filed",
+        sourceSessionId: "filed",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+      })],
+    };
+    const agent = only(build([], store));
+    expect(agent.scope).toBe("retained");
+    expect(agent.provenance).toBe("operator-archive");
+  });
+
+  test("a cmux notification never rewrites the lifecycle", () => {
+    /* Attention is an OVERLAY. It may add a row word, a tab membership and a
+       badge; it may not change what the session is doing. The old wire had
+       notifications overwrite `status` outright, which is precisely how a
+       working session came to read as something else entirely. */
+    const surfaces: CmuxSurface[] = [{
+      surfaceId: "s1",
+      cwd: "/Users/emilionunezgarcia/Developer/unique-project",
+      sourceSessionIds: ["test-session"],
+      runtimeSurfaceReady: true,
+    }];
+    const cases: Array<[LifecycleState, Partial<CollectedAgent>]> = [
+      ["working", { updatedAt: at(30_000) }],
+      ["waiting", { updatedAt: at(10 * 60_000), processAlive: true, processIds: [42] }],
+      ["unverified", { updatedAt: at(5 * 3_600_000), processAlive: undefined }],
+    ];
+    for (const [label, overrides] of cases) {
+      const withoutNotification = buildSnapshot({
+        agents: [collected(overrides)],
+        surfaces,
+        archiveStore,
+        now: NOW,
+      }).programs[0]!.agents[0]!;
+      const withNotification = buildSnapshot({
+        agents: [collected(overrides)],
+        surfaces,
+        notifications: [{ surfaceId: "s1", body: "May I run the migration?" }],
+        archiveStore,
+        now: NOW,
+      }).programs[0]!.agents[0]!;
+
+      expect(withoutNotification.lifecycle, `${label} without a notification`).toBe(label);
+      expect(withNotification.lifecycle, `a notification moved the ${label} lifecycle`).toBe(label);
+      expect(withNotification.provenance).toBe(withoutNotification.provenance);
+    }
+  });
+
+  test("the lifecycle census counts observed sessions and totals reconcile with retained", () => {
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:gone",
+        sourceSessionId: "gone",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+        lifecycle: "waiting",
+        provenance: "turn-complete",
+      })],
+    };
+    const snapshot = build([
+      collected({ id: "codex:w", sourceSessionId: "w", updatedAt: at(30_000) }),
+      collected({ id: "codex:q", sourceSessionId: "q", updatedAt: at(3 * 3_600_000), processAlive: true, processIds: [7] }),
+      collected({ id: "codex:u", sourceSessionId: "u", updatedAt: at(5 * 3_600_000), processAlive: undefined }),
+    ], store);
+
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 1, waiting: 1, unverified: 1, finished: 0 });
+    expect(snapshot.totals.retained).toBe(1);
+    const { working, waiting, unverified, finished } = snapshot.totals.byLifecycle!;
+    expect(working + waiting + unverified + finished + snapshot.totals.retained!)
+      .toBe(snapshot.totals.tracked);
+  });
+
+  test("a retained record is never counted live, however alive it used to look", () => {
+    /* The resurrection hole. Retained records re-enter the merge on every
+       refresh for thirty days; without the scope gate a record filed while
+       working would sit in the live census forever. */
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:ghost",
+        sourceSessionId: "ghost",
+        updatedAt: at(30_000),
+        archivedAt: at(40 * 3_600_000),
+        processAlive: true,
+        processIds: [999],
+        lifecycle: "working",
+        provenance: "recency",
+      })],
+    };
+    const snapshot = build([], store);
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 0, waiting: 0, unverified: 0, finished: 0 });
+    expect(snapshot.totals.retained).toBe(1);
+  });
+
+  test("the operator's thresholds reach the published verdict", () => {
+    const quiet = [collected({ updatedAt: at(20 * 60_000), processAlive: undefined })];
+    expect(only(build(quiet)).lifecycle).toBe("waiting");
+    expect(
+      buildSnapshot({
+        agents: quiet,
+        surfaces: [],
+        archiveStore,
+        now: NOW,
+        thresholds: { freshMs: 2 * 60_000, quietMs: 15 * 60_000 },
+      }).programs[0]!.agents[0]!.lifecycle,
+    ).toBe("unverified");
   });
 });

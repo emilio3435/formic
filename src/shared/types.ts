@@ -21,12 +21,47 @@ const _providersAreExhaustive: ProvidersAreExhaustive = true;
 void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
+/* The one bucket every session occupies. Four states, and the fourth is the
+   point: `unverified` is the answer for a session that has gone quiet with no
+   process to check, which the board used to file as ended. Absence of evidence
+   was being published as evidence of an ending. */
+export type LifecycleState = "working" | "waiting" | "unverified" | "finished";
+/* Why the lifecycle says what it says. The first four are the four distinct
+   facts that "archived" used to collapse into one word — a provider recorded an
+   exit, a human filed it, its process was checked and gone, or it simply left
+   the scan window. The rest explain a Waiting or Unverified verdict. */
+export type LifecycleProvenance =
+  | "provider-exit"
+  | "operator-archive"
+  | "process-died"
+  | "aged-out"
+  | "recency"
+  | "turn-complete"
+  | "process-live-quiet"
+  | "no-evidence"
+  | "turn-complete-aged";
+/* Whether the session is still being watched or survives only as a record.
+   Collection scope, not lifecycle: a retained record is filed in History because
+   it left the scan window, which is a fact about the board's reach rather than
+   about the session's ending. */
+export type CollectionScope = "observed" | "retained";
+/* What a source actually recorded, kept apart because the two are not the same
+   claim and were being carried on one boolean. `session-exit` ends a session
+   (OMP session_exit, Cursor is_archived). `turn-complete` ends a TURN (Claude
+   end_turn, Codex task_complete, Cursor turn_ended:success) and says nothing
+   about whether the session is over — targets.ts:305-310 already knew this for
+   write-gating while the classifier was still treating it as an ending. */
+export type EndEvidence = "session-exit" | "turn-complete";
 export type ProcessState = "running" | "exited" | "died" | "unknown";
 export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";
 export type AgentRole = "orchestrator" | "verifier" | "automation" | "frontend" | "backend" | "tester" | "agent";
 export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
-export type ControlAction = "focus" | "instruct" | "interrupt" | "archive";
+/* `unarchive` is net-new. The board has told operators "Un-archive it from
+   History if you filed it early" since the archive shipped, and there was no
+   store method, no endpoint and no button behind that sentence — `#agentIds`
+   only ever grew. A promise the product could not keep. */
+export type ControlAction = "focus" | "instruct" | "interrupt" | "archive" | "unarchive";
 
 /* Two different measurements live here and the names have to keep them apart.
 
@@ -230,6 +265,24 @@ export interface AgentSnapshot {
   status: AgentStatus;
   statusReason: string;
   activity?: ActivityState;
+  /* The one bucket this session occupies, and why. `lifecycle` is the verdict
+     every surface is meant to read; `activity` and `status` above are the older
+     vocabularies, published alongside it during the transition and derived from
+     this same verdict rather than computed separately. */
+  lifecycle?: LifecycleState;
+  provenance?: LifecycleProvenance;
+  /* Whether the board is still watching this session or only holds a record of
+     it. Deliberately not part of the lifecycle: leaving the scan window is a
+     fact about the board's reach, not about the session's ending, and folding
+     the two is how "archived" came to mean four different things. */
+  scope?: CollectionScope;
+  /** Which clean completion a source recorded, when it recorded one. */
+  endEvidence?: EndEvidence;
+  /* An unread cmux notification is waiting on this session. An OVERLAY: it adds
+     a row word, a tab membership and a badge, and it never changes what the
+     session is doing. It used to be published by overwriting `status` with
+     "attention", so one field answered two questions and lost the first. */
+  attention?: boolean;
   /** Process/transcript lifecycle evidence; unknown means the sources cannot distinguish it safely. */
   processState?: ProcessState;
   outcome?: OutcomeState;
@@ -556,6 +609,20 @@ export interface HubSnapshot {
     working?: number;
     idle?: number;
     ended?: number;
+    /* The lifecycle census, counted over OBSERVED sessions only. `live` above is
+       working + waiting; `unverified` is deliberately in neither `live` nor
+       `finished`, because counting the unverifiable as live would repeat the
+       current lie in the opposite direction. */
+    byLifecycle?: {
+      working: number;
+      waiting: number;
+      unverified: number;
+      finished: number;
+    };
+    /* Sessions that survive only as a record — out of the scan window, held by
+       the archive. Counted apart from byLifecycle so `tracked` reconciles as
+       the sum of the two, and so nothing retained can ever be counted live. */
+    retained?: number;
     /** Agents waiting on a human: the to-do list. Counted from attentionSignal. */
     needsYou?: number;
     /** Operator issues — degraded sources, control faults. A different population. */

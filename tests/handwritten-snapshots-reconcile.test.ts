@@ -57,6 +57,11 @@ const server = (agents: readonly CollectedAgent[] = [collected()]): any =>
    couple two test files, and the point is to notice when they drift apart. */
 const WEB_CLIENT_TOTALS_KEYS = [
   "live", "tracked", "attention", "working", "idle", "history", "sourceHealth",
+  /* Added rather than excused. The lifecycle census and the retained count are
+     what the tabs, the vitals line and the Unverified group read, so a client
+     fixture without them would render the very surfaces this contract exists
+     for against fields that are not there. */
+  "byLifecycle", "retained",
 ] as const;
 
 /* What that fixture omits today. Enumerated so the omission is a decision on

@@ -39,6 +39,11 @@ export const state = {
      this 36 as though the server had confirmed it. */
   settingsError: "",
   settingsPending: false,
+  /* The whole v2 settings object as the server last served it, so the panel can
+     render current values rather than guessing at defaults. */
+  settings: null,
+  settingsLoaded: false,
+  settingsPanelOpen: false,
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,

@@ -32,6 +32,11 @@
   /* semantic aliases */
   --working: var(--moss);
   --idle: var(--slate);
+  /* Its own ink, because it is its own state. Sharing --ended's clay is what
+     made an unverifiable session LOOK finished before it was called finished —
+     the styling asserted an ending the data never had. Quiet and dashed rather
+     than muted-and-done. */
+  --unverified: color-mix(in srgb, var(--slate) 78%, var(--ink));
   --ended: var(--clay);
   --needs: var(--ember);
   --blocked: var(--ember);
@@ -1433,7 +1438,9 @@ body.feed-frozen .programs { opacity: 0.62; }
 .act-glyph { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--line-strong); }
 .act-working { color: var(--working); } .act-working.act-glyph { background: var(--working); box-shadow: 0 0 0 3px color-mix(in srgb, var(--working) 22%, transparent); }
 .act-idle { color: var(--idle); } .act-idle.act-glyph { background: var(--idle); }
-.act-ended, .act-unknown { color: var(--ended); } .act-ended.act-glyph, .act-unknown.act-glyph { background: var(--ended); }
+.act-ended { color: var(--ended); } .act-ended.act-glyph { background: var(--ended); }
+.act-unknown { color: var(--unverified); }
+.act-unknown.act-glyph { background: transparent; border: 1px dashed var(--unverified); }
 .act-glyph.outcome-needs-you { background: var(--needs); box-shadow: 0 0 0 3px color-mix(in srgb, var(--needs) 28%, transparent); }
 .act-glyph.outcome-blocked { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 28%, transparent); }
 .act-glyph.outcome-failed { background: var(--failed); box-shadow: 0 0 0 3px color-mix(in srgb, var(--failed) 28%, transparent); }
@@ -3068,3 +3075,29 @@ body.feed-frozen .programs { opacity: 0.62; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- settings panel ---------- */
+/* The board's timing thresholds, which decide what every session on it is
+   called. Styled as a disclosure rather than a modal: it is read beside the
+   board it changes, and the live preview line is only useful next to the
+   numbers it is predicting. */
+.settings-panel { border-bottom: 1px solid var(--rule); background: var(--surface-2); }
+.settings-inner { max-width: 62rem; margin: 0 auto; padding: 1rem 1.25rem 1.25rem; display: grid; gap: 0.75rem; }
+.settings-inner h2 { font-size: 1rem; margin: 0; }
+.settings-lede { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.settings-presets { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.settings-field { display: grid; gap: 0.25rem; max-width: 40rem; }
+.settings-field-label { font-weight: 600; font-size: 0.9rem; }
+.settings-input { width: 7rem; padding: 0.3rem 0.45rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; }
+.settings-help { color: var(--muted); font-size: 0.8rem; }
+/* The preview is the point of the panel: it says what these numbers do to the
+   board in front of you, before you commit to them. */
+.settings-preview { margin: 0; padding: 0.5rem 0.65rem; border-left: var(--signal-rail) solid var(--working); background: var(--moss-soft); font-size: 0.85rem; }
+.settings-advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.settings-advanced[open] { display: grid; gap: 0.75rem; }
+.settings-actions { display: flex; gap: 0.5rem; }
+/* The Unverified group inside Waiting: quiet and set apart, never styled as
+   finished work. */
+.unverified-group { border-top: 1px dashed var(--unverified); margin-top: 0.5rem; padding-top: 0.5rem; }
+.unverified-group-head { color: var(--unverified); font-size: 0.82rem; }
+.all-clear-roster { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.85rem; }

@@ -33,8 +33,8 @@ describe("ANT-GUIDE.md stays true to the product", () => {
     expect(tabs.length).toBeGreaterThan(0);
     // The guide uses the human labels, not the internal ids.
     const labels: Record<string, string> = {
-      now: "Now", "needs-you": "Needs you", working: "Working",
-      idle: "Idle", history: "History", usage: "Usage",
+      now: "Now", "needs-you": "Needs you",
+      waiting: "Waiting", history: "History", usage: "Usage",
     };
     for (const tab of tabs) {
       const label = labels[tab];

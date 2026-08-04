@@ -42,6 +42,19 @@ function target(
   };
 }
 
+/* Which sources may compete for a pane by working directory alone.
+
+   The band is the point, not the word. cwd fallback picks among panes carrying
+   NO identity evidence, by elimination on a directory string, so every extra
+   candidate makes the elimination weaker — on this machine 26 agents share one
+   checkout, and a pool that admits all of them turns `unique-cwd` into
+   `ambiguous` for every one. Fresh and mid-band sessions are the ones plausibly
+   sitting in a terminal right now; a session quiet long enough to be unverified
+   is not, and admitting it would cost the mid-band sessions their controls.
+
+   `status` is still what is read because bridging runs on collected agents,
+   before any verdict exists — but "running or waiting" is now exactly the
+   fresh-or-mid band, and the lifecycle contract is what defines it. */
 function eligibleForCwdFallback(agent: CollectedAgent): boolean {
   return agent.status === "running" || agent.status === "waiting";
 }

@@ -59,7 +59,8 @@ separate-user broker.
   ready cmux surface match; absence by itself never becomes a target.
 
 - **Structured control actions.** The terminal-control API accepts only
-  `focus`, `instruct`, `interrupt`, and local `archive`. Callers cannot provide
+  `focus`, `instruct`, `interrupt`, and local `archive`/`unarchive`. The last two
+  change this board's own records and never reach a terminal. Callers cannot provide
   an executable, argv array, cwd, arbitrary key, raw cmux RPC, or shell-spawn
   request. `instruct` rejects CR/LF and oversized text. This limits the API
   shape, but an allowed one-line instruction is still typed into the terminal

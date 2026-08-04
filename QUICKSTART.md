@@ -74,7 +74,15 @@ shows up on its own.
 
 The board opens on a **6-hour** window even though the last **36 hours** are
 scanned. If it looks empty, widen the lookback (1h / 6h / 24h / 36h) before
-concluding nothing was collected.
+concluding nothing was collected. Both numbers are yours to change — the gear in
+the masthead opens Settings, where the lookback lives beside the scan window and
+the two thresholds that decide what every session is called.
+
+One thing you will see that no other board shows: a collapsed **Unverified**
+group at the bottom of `Waiting`. Those are sessions that have gone quiet with no
+process left to check, which is not the same as finished. Ant Hill says so rather
+than filing them as ended, and that group deliberately ignores the lookback —
+it is a disclosure of what cannot be accounted for, not a list of recent things.
 
 ## Expected on a monitoring-only install
 

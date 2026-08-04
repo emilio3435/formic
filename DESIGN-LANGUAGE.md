@@ -67,8 +67,18 @@ value. 41 tokens in `:root`, 7 component-scoped (48 total).
 | `--working` | `var(--moss)` | | `--needs` | `var(--ember)` |
 | `--idle` | `var(--slate)` | | `--blocked` | `var(--ember)` |
 | `--ended` | `var(--clay)` | | `--failed` | `#b42318` |
+| `--unverified` | slate mixed toward ink | | | |
 | `--ok` | `var(--moss)` | | `--bad` | `#b42318` |
 | `--warn` | `var(--amber)` | | `--terracotta` | `var(--ember)` (legacy alias) |
+
+**Ruling: `--unverified` is its own ink, not a shade of `--ended`.** An
+unverified session is one the board cannot account for, not one that finished.
+It shared `--ended`'s clay through `.act-unknown`, so the styling asserted an
+ending the data never had — and it asserted it for the largest population on the
+board. The dashed treatment is deliberate and matches the `unknown` liveness
+chip: a dashed edge already means "not confirmed" in this vocabulary, and
+reusing it costs nothing to learn. (Decision: recorded 2026-08-04 with the
+session lifecycle contract.)
 
 **Ruling: `--failed` is ink-only.** There is deliberately no `--failed-soft`
 token; failed states that need a background tint borrow `--ember-soft` instead.

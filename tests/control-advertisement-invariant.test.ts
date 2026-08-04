@@ -66,7 +66,10 @@ const RESOLUTIONS: readonly TargetResolution[] = ["exact", "unique-cwd", "ambigu
 const ATTESTATIONS: readonly (AgentSnapshot["target"]["attestation"])[] = ["live", "remembered", undefined];
 const LIVENESSES = Object.keys(LIVENESS) as Liveness[];
 const ARCHIVED = [false, true] as const;
-const ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"];
+/* `unarchive` joins the sweep for the same reason the others are in it: a new
+   action is exactly where an advertise/honour gap appears, because the two
+   sides are written at different moments by whoever is adding it. */
+const ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"];
 
 interface AgentState {
   readonly resolution: TargetResolution;
@@ -119,7 +122,9 @@ function agentFor(state: AgentState): AgentSnapshot {
     activity: state.liveness === "running" ? "working" : "ended",
     processState: processStateFor(collected),
     target,
-    controls: controlsFor(collected, target, state.archived),
+    /* Un-archive is offered only where it is honoured, so the harness has to
+       model both halves: a store that CAN undo, and an ending a human made. */
+    controls: controlsFor(collected, target, state.archived, undefined, state.archived),
   } as AgentSnapshot;
 }
 
@@ -127,7 +132,11 @@ const advertised = (agent: AgentSnapshot, action: ControlAction): boolean =>
   agent.controls.find((control) => control.action === action)?.enabled ?? false;
 
 async function accepts(agent: AgentSnapshot, action: ControlAction): Promise<boolean> {
-  const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+  const archiveStore: ArchiveStore = {
+    has: () => false,
+    archive: async () => {},
+    unarchive: async () => {},
+  };
   const result = await executeControl(
     { agentId: agent.id, action, ...(action === "instruct" ? { instruction: "deploy" } : {}) },
     agent,

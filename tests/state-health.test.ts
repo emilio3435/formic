@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { MemoryArchiveStore } from "../src/server/archive";
 import { HubState, type HubCollectors } from "../src/server/state";
+import type { IdentityBindingStore } from "../src/server/identity-bindings";
 import type {
   ArchiveStore,
   CmuxNotification,
@@ -422,5 +423,152 @@ describe("cmux collection time truth", () => {
     expect(settled).toBe(true);
     expect(burnCalls).toBe(1);
     expect((await refresh).pulse).toBeDefined();
+  });
+});
+
+describe("operator thresholds reach the collectors", () => {
+  /* The settings the board classifies by are useless if they stop at the store.
+     This asserts the whole path — settingsReader -> HubState -> collectSessions
+     -> ParseMetadata -> the comparison — by watching what the collector is
+     handed, and asserts it is re-read per refresh rather than captured once at
+     construction, because a settings POST triggers a refresh and the operator
+     expects that refresh to use their new numbers. */
+  test("a refresh hands the collector the operator's freshness and quiet bands", async () => {
+    const seen: Array<{ freshMs: number; quietMs: number } | undefined> = [];
+    const collectors: HubCollectors = {
+      sessions: async (_home, _windowMs, thresholds) => {
+        seen.push(thresholds);
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    let activityQuietMinutes = 45;
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      () => ({
+        version: 2,
+        activityFreshMinutes: 3,
+        activityQuietMinutes,
+        scanWindowHours: 36,
+        historyRetentionDays: 30,
+        historyRecordLimit: 5000,
+        defaultView: "needs-you",
+      }),
+    );
+
+    await state.refresh({});
+    expect(seen.at(-1)).toEqual({ freshMs: 3 * 60_000, quietMs: 45 * 60_000 });
+
+    activityQuietMinutes = 180;
+    await state.refresh({});
+    expect(seen.at(-1)).toEqual({ freshMs: 3 * 60_000, quietMs: 180 * 60_000 });
+  });
+
+  test("a hub with no settings store leaves the collector on its own defaults", async () => {
+    const seen: Array<unknown> = [];
+    const collectors: HubCollectors = {
+      sessions: async (_home, _windowMs, thresholds) => {
+        seen.push(thresholds);
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const state = new HubState(runner, { has: () => false, archive: async () => {} }, [], collectors);
+
+    await state.refresh({});
+    expect(seen).toEqual([undefined]);
+  });
+});
+
+describe("what is recorded is what is published", () => {
+  /* The history write used to run BEFORE the bindings bridge, and the bridge
+     rewrites processAlive/processIds for every bound agent. So the record
+     captured pre-bridge evidence while the snapshot published post-bridge
+     evidence — two answers about the same session in the same refresh, and the
+     archive kept the older one. Harmless while a record was just a row of text;
+     not harmless now that the record carries a lifecycle verdict derived from
+     exactly the evidence the two disagreed about. */
+  test("the archive records the agents the snapshot publishes, after bridging", async () => {
+    const collected: CollectedAgent = {
+      id: "codex:bridged",
+      provider: "codex",
+      sourceSessionId: "bridged",
+      displayName: "Bridged session",
+      cwd: "/Users/me/project",
+      status: "running",
+      statusReason: "Observed.",
+      updatedAt: new Date().toISOString(),
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const recorded: CollectedAgent[][] = [];
+    const archiveStore: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      record: async (agents) => {
+        calls.push("record");
+        recorded.push(agents.map((agent) => ({ ...agent })));
+      },
+      archivedAgents: () => [],
+    };
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        omp: { value: [], errors: [] },
+        codex: { value: [collected], errors: [] },
+        claude: { value: [], errors: [] },
+        cursor: { value: [], errors: [] },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    /* The bridge is observed through the store it reads. Every bound agent
+       makes buildSnapshot's input pass through `get`, so a `get` that lands
+       AFTER the history write is the exact defect this asserts against. */
+    const calls: string[] = [];
+    const bindingStore: IdentityBindingStore = {
+      get: (sessionId) => { calls.push(`bridge:${sessionId}`); return undefined; },
+      list: () => [],
+      put: async () => {},
+      putMany: async () => {},
+    };
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      bindingStore,
+    );
+
+    const snapshot = await state.refresh({ cmux: true });
+
+    expect(recorded).toHaveLength(1);
+    const published = snapshot.programs.flatMap((program) => program.agents);
+    expect(recorded[0]!.map(({ id }) => id)).toEqual(published.map(({ id }) => id));
+    // Both sides of the claim: the bridge ran, and it ran first.
+    expect(calls).toContain("bridge:bridged");
+    expect(calls.indexOf("bridge:bridged")).toBeLessThan(calls.indexOf("record"));
   });
 });

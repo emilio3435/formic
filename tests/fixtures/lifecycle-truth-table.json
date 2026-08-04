@@ -1,0 +1,237 @@
+{
+  "purpose": "The lifecycle contract, written once and executed twice. tests/lifecycle.test.ts runs these through the server classifier; tests/lifecycle-parity.test.ts runs the same rows through the web client's mirror. A rule that lives in one implementation and not the other cannot survive both files.",
+  "thresholds": { "freshMs": 180000, "quietMs": 2700000 },
+  "cases": [
+    {
+      "name": "an operator archive outranks a fresh, live session",
+      "row": 1,
+      "claim": "Human intent beats every machine fact. The contradiction is disclosed on the row, not silently overturned.",
+      "evidence": { "ageMs": 1000, "operatorArchived": true, "processAlive": true, "processIds": [4242] },
+      "expect": { "lifecycle": "finished", "provenance": "operator-archive", "reason": "Archived by operator." }
+    },
+    {
+      "name": "an operator archive outranks a recorded session exit",
+      "row": 1,
+      "claim": "Both say finished; the operator's reason is the one a human recognises.",
+      "evidence": { "ageMs": 7200000, "operatorArchived": true, "endEvidence": "session-exit" },
+      "expect": { "lifecycle": "finished", "provenance": "operator-archive", "reason": "Archived by operator." }
+    },
+    {
+      "name": "an operator archive outranks a confirmed dead process",
+      "row": 1,
+      "claim": "Row order, not evidence strength, decides which reason gets published.",
+      "evidence": { "ageMs": 7200000, "operatorArchived": true, "processAlive": false, "processIds": [77] },
+      "expect": { "lifecycle": "finished", "provenance": "operator-archive", "reason": "Archived by operator." }
+    },
+    {
+      "name": "a recorded session exit outranks the clock",
+      "row": 2,
+      "claim": "A source that says the session is over is believed even one second after it wrote.",
+      "evidence": { "ageMs": 1000, "endEvidence": "session-exit" },
+      "expect": { "lifecycle": "finished", "provenance": "provider-exit", "reason": "Source recorded a session exit." }
+    },
+    {
+      "name": "a recorded session exit outranks a process that is still up",
+      "row": 2,
+      "claim": "The harness can linger after the session closes; the row discloses the contradiction rather than reopening the session.",
+      "evidence": { "ageMs": 600000, "endEvidence": "session-exit", "processAlive": true, "processIds": [9001] },
+      "expect": { "lifecycle": "finished", "provenance": "provider-exit", "reason": "Source recorded a session exit." }
+    },
+    {
+      "name": "a recorded session exit finishes a long-quiet session with no process evidence",
+      "row": 2,
+      "claim": "This is the one quiet+unavailable case that IS an ending, because something recorded one.",
+      "evidence": { "ageMs": 18000000, "endEvidence": "session-exit" },
+      "expect": { "lifecycle": "finished", "provenance": "provider-exit", "reason": "Source recorded a session exit." }
+    },
+    {
+      "name": "fresh transcript writes outrank a dead-process probe",
+      "row": 4,
+      "claim": "Probes lie more often than a file being written to right now does — codex renamed to codex-next cost this board a wave of false deaths.",
+      "evidence": { "ageMs": 30000, "processAlive": false, "processIds": [1234] },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Fresh transcript writes outrank a stale process probe." }
+    },
+    {
+      "name": "a dead process ends a session that is no longer fresh",
+      "row": 3,
+      "claim": "Checked, by id, and gone. This is evidence, so it is allowed to finish a session.",
+      "evidence": { "ageMs": 600000, "processAlive": false, "processIds": [1234] },
+      "expect": { "lifecycle": "finished", "provenance": "process-died", "reason": "Process checked and gone; nothing ended cleanly." }
+    },
+    {
+      "name": "a dead process ends a long-quiet session",
+      "row": 3,
+      "claim": "The same verdict past the quiet threshold, so silence is never what did the finishing.",
+      "evidence": { "ageMs": 18000000, "processAlive": false, "processIds": [1234] },
+      "expect": { "lifecycle": "finished", "provenance": "process-died", "reason": "Process checked and gone; nothing ended cleanly." }
+    },
+    {
+      "name": "a negative liveness answer with no process ids is not death",
+      "row": 10,
+      "claim": "processAlive:false without the ids it was about is an unanswered question, not a gone process.",
+      "evidence": { "ageMs": 18000000, "processAlive": false },
+      "expect": { "lifecycle": "unverified", "provenance": "no-evidence", "reason": "No activity in 5h and no process evidence — could not verify an ending." }
+    },
+    {
+      "name": "a turn that finished moments ago is a wait, not an ending",
+      "row": 5,
+      "claim": "Claude end_turn and Codex task_complete are the agent yielding the floor.",
+      "evidence": { "ageMs": 30000, "endEvidence": "turn-complete" },
+      "expect": { "lifecycle": "waiting", "provenance": "turn-complete", "reason": "Turn finished — waiting on you." }
+    },
+    {
+      "name": "fresh activity with nothing else recorded is working",
+      "row": 6,
+      "claim": "The plain case, and the reason names the threshold that produced it.",
+      "evidence": { "ageMs": 30000 },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Source activity within the last 3 minutes." }
+    },
+    {
+      "name": "fresh activity with a live process is working",
+      "row": 6,
+      "claim": "A live process adds nothing the clock has not already said.",
+      "evidence": { "ageMs": 30000, "processAlive": true, "processIds": [4242] },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Source activity within the last 3 minutes." }
+    },
+    {
+      "name": "an age below zero is clamped rather than believed",
+      "row": 6,
+      "claim": "Clock skew between a file mtime and the scan produces negative ages; a session cannot be working in the future or old because of it.",
+      "evidence": { "ageMs": -60000 },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Source activity within the last 3 minutes." }
+    },
+    {
+      "name": "silence inside the quiet threshold is waiting",
+      "row": 7,
+      "claim": "The mid band: quiet enough to stop working, not quiet enough to doubt.",
+      "evidence": { "ageMs": 600000 },
+      "expect": { "lifecycle": "waiting", "provenance": "recency", "reason": "No source activity in the last 3 minutes." }
+    },
+    {
+      "name": "a turn-complete session in the mid band keeps the turn's reason",
+      "row": 7,
+      "claim": "Same lifecycle as plain recency, different provenance — the stall detector reads this to know whose move it is.",
+      "evidence": { "ageMs": 600000, "endEvidence": "turn-complete" },
+      "expect": { "lifecycle": "waiting", "provenance": "turn-complete", "reason": "Turn finished — waiting on you." }
+    },
+    {
+      "name": "a live process in the mid band is still waiting",
+      "row": 7,
+      "claim": "The mid band does not consult the process table; it does not need to.",
+      "evidence": { "ageMs": 600000, "processAlive": true, "processIds": [4242] },
+      "expect": { "lifecycle": "waiting", "provenance": "recency", "reason": "No source activity in the last 3 minutes." }
+    },
+    {
+      "name": "a live process is never finished by silence",
+      "row": 8,
+      "claim": "Three hours quiet with a process that answers is waiting, and the row says how long it has been.",
+      "evidence": { "ageMs": 10800000, "processAlive": true, "processIds": [4242] },
+      "expect": { "lifecycle": "waiting", "provenance": "process-live-quiet", "reason": "Quiet 3h · process live." }
+    },
+    {
+      "name": "a completed turn does not demote a process that is still alive",
+      "row": 8,
+      "claim": "Row 8 outranks row 9: evidence of life beats absence of a reply.",
+      "evidence": { "ageMs": 10800000, "endEvidence": "turn-complete", "processAlive": true, "processIds": [4242] },
+      "expect": { "lifecycle": "waiting", "provenance": "process-live-quiet", "reason": "Quiet 3h · process live." }
+    },
+    {
+      "name": "a turn that finished hours ago with nothing to check is unverified",
+      "row": 9,
+      "claim": "Filing this as Waiting would put ~105 sessions nobody is waiting on into every stall alarm and burn denominator.",
+      "evidence": { "ageMs": 7200000, "endEvidence": "turn-complete" },
+      "expect": { "lifecycle": "unverified", "provenance": "turn-complete-aged", "reason": "Turn finished 2h ago; no reply and no process evidence." }
+    },
+    {
+      "name": "long silence with no process evidence is unverified, never finished",
+      "row": 10,
+      "claim": "The core of the contract: absence of evidence is not evidence of an ending.",
+      "evidence": { "ageMs": 18000000 },
+      "expect": { "lifecycle": "unverified", "provenance": "no-evidence", "reason": "No activity in 5h and no process evidence — could not verify an ending." }
+    },
+    {
+      "name": "a probe that failed this scan reads as unavailable, not as death",
+      "row": 11,
+      "claim": "A collector or probe outage leaves processAlive undefined. The evidence gap surfaces through source health; it never demotes a lifecycle.",
+      "evidence": { "ageMs": 172800000 },
+      "expect": { "lifecycle": "unverified", "provenance": "no-evidence", "reason": "No activity in 2d and no process evidence — could not verify an ending." }
+    },
+    {
+      "name": "the working band closes at the freshness threshold, not later",
+      "row": 6,
+      "claim": "One millisecond under the threshold is still working.",
+      "evidence": { "ageMs": 179999 },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Source activity within the last 3 minutes." }
+    },
+    {
+      "name": "the freshness threshold itself is already waiting",
+      "row": 7,
+      "claim": "Bands are closed-open: at exactly F the session has left the working band.",
+      "evidence": { "ageMs": 180000 },
+      "expect": { "lifecycle": "waiting", "provenance": "recency", "reason": "No source activity in the last 3 minutes." }
+    },
+    {
+      "name": "the waiting band closes at the quiet threshold, not later",
+      "row": 7,
+      "claim": "One millisecond under the quiet threshold is still waiting.",
+      "evidence": { "ageMs": 2699999 },
+      "expect": { "lifecycle": "waiting", "provenance": "recency", "reason": "No source activity in the last 3 minutes." }
+    },
+    {
+      "name": "the quiet threshold itself is already unverified",
+      "row": 10,
+      "claim": "At exactly Q with nothing to check, the board stops claiming to know.",
+      "evidence": { "ageMs": 2700000 },
+      "expect": { "lifecycle": "unverified", "provenance": "no-evidence", "reason": "No activity in 45m and no process evidence — could not verify an ending." }
+    },
+    {
+      "name": "a retained record keeps the provider exit it was filed with",
+      "row": 12,
+      "claim": "archiveCopy strips process evidence, so a record out of the scan window carries its verdict instead of being re-derived from nothing.",
+      "evidence": { "ageMs": 604800000, "scope": "retained", "persisted": { "lifecycle": "finished", "provenance": "provider-exit" } },
+      "expect": { "lifecycle": "finished", "provenance": "provider-exit", "reason": "Source recorded a session exit." }
+    },
+    {
+      "name": "a retained record keeps the operator archive it was filed with",
+      "row": 12,
+      "claim": "Provider exit and operator archive stay permanently distinguishable in History.",
+      "evidence": { "ageMs": 604800000, "scope": "retained", "persisted": { "lifecycle": "finished", "provenance": "operator-archive" } },
+      "expect": { "lifecycle": "finished", "provenance": "operator-archive", "reason": "Archived by operator." }
+    },
+    {
+      "name": "a session that left the scan window while waiting is aged out, not ended",
+      "row": 12,
+      "claim": "The fourth reason a row is in History: nobody ended it, the board simply stopped watching.",
+      "evidence": { "ageMs": 604800000, "scope": "retained", "persisted": { "lifecycle": "waiting", "provenance": "turn-complete" } },
+      "expect": { "lifecycle": "waiting", "provenance": "aged-out", "reason": "Left the scan window without an ending — no longer watched." }
+    },
+    {
+      "name": "a session that left the scan window while unverified stays unverified",
+      "row": 12,
+      "claim": "Custody does not upgrade a verdict into an ending it never had.",
+      "evidence": { "ageMs": 604800000, "scope": "retained", "persisted": { "lifecycle": "unverified", "provenance": "no-evidence" } },
+      "expect": { "lifecycle": "unverified", "provenance": "aged-out", "reason": "Left the scan window without an ending — no longer watched." }
+    },
+    {
+      "name": "a legacy record with no persisted verdict reads as aged out",
+      "row": 12,
+      "claim": "Records written before this contract existed still load, and say the one true thing about themselves.",
+      "evidence": { "ageMs": 604800000, "scope": "retained" },
+      "expect": { "lifecycle": "finished", "provenance": "aged-out", "reason": "Left the scan window without an ending — no longer watched." }
+    },
+    {
+      "name": "custody freezes the verdict even when the surviving fields look alive",
+      "row": 12,
+      "claim": "Retained records re-enter the merge every refresh for thirty days; re-deriving them would resurrect a fleet out of the filing cabinet.",
+      "evidence": { "ageMs": 1000, "scope": "retained", "processAlive": true, "processIds": [4242], "persisted": { "lifecycle": "unverified", "provenance": "no-evidence" } },
+      "expect": { "lifecycle": "unverified", "provenance": "aged-out", "reason": "Left the scan window without an ending — no longer watched." }
+    },
+    {
+      "name": "an observed session is classified from evidence, not frozen",
+      "row": 12,
+      "claim": "The other side of the custody rule: a persisted verdict is ignored while the session is still being watched.",
+      "evidence": { "ageMs": 30000, "scope": "observed", "persisted": { "lifecycle": "finished", "provenance": "provider-exit" } },
+      "expect": { "lifecycle": "working", "provenance": "recency", "reason": "Source activity within the last 3 minutes." }
+    }
+  ]
+}

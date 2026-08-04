@@ -56,7 +56,12 @@ describe("notification-derived attention truth", () => {
       "newer-exact",
       "other-surface",
     ]);
-    expect(exactAgent?.status).toBe("attention");
+    /* The overlay, on its own field. It used to be published by overwriting
+       `status`, so one field answered "what is this session doing" and "is
+       something waiting on you" and lost the first. The lifecycle is untouched
+       by the notification, which is the whole point of the separation. */
+    expect(exactAgent?.attention).toBe(true);
+    expect(exactAgent?.lifecycle).toBe("waiting");
     expect(exactAgent?.statusReason).toContain("Newest exact-surface blocker");
     expect(exactAgent?.statusReason).not.toContain("This read message");
     expect(exactAgent?.statusReason).not.toContain("Must not leak across agents");
@@ -96,7 +101,10 @@ describe("notification-derived attention truth", () => {
     });
     const agent = snapshot.programs[0]?.agents[0];
 
-    expect(agent?.status).toBe("waiting");
+    /* No overlay at all: the notification belonged to whoever held this surface
+       before, and it must not follow the pane to its next occupant. Asserted on
+       the field the overlay actually uses, so its absence is what is checked. */
+    expect(agent?.attention).toBeUndefined();
     expect(agent?.statusReason).toBe("New session is waiting normally.");
     expect(agent?.transcriptTail).toBe("Working normally.");
     expect(snapshot.totals.attention).toBe(0);

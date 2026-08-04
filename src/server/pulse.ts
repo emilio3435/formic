@@ -8,6 +8,19 @@ import type {
 } from "../shared/types";
 
 const BUCKET_MS = 5 * 60_000;
+
+/* The live population, named once instead of spelled out as an activity pair in
+   four places. Working and waiting are what "live" means under the lifecycle
+   contract; unverified is deliberately excluded, because a session nothing can
+   vouch for must not be counted as running work, and finished and retained are
+   excluded for the obvious reason. Scope is part of the test: a retained record
+   re-enters the snapshot on every refresh, and counting it live is how history
+   would inflate the burn rate forever. */
+function isLive(agent: AgentSnapshot): boolean {
+  if (agent.scope === "retained") return false;
+  if (agent.lifecycle) return agent.lifecycle === "working" || agent.lifecycle === "waiting";
+  return agent.activity === "working" || agent.activity === "idle";
+}
 const HOUR_MS = 60 * 60_000;
 // One definition of "quiet long enough to not be working", shared with the
 // collectors' active-time accumulator so the two cannot drift apart.
@@ -74,7 +87,7 @@ export class PulseTracker {
     this.#latestSnapshot = snapshot;
     this.#latestCursorUnknownCount = snapshot.programs
       .flatMap((program) => program.agents)
-      .filter((agent) => (agent.activity === "working" || agent.activity === "idle") && agent.provider === "cursor")
+      .filter((agent) => isLive(agent) && agent.provider === "cursor")
       .length;
     const currentStartMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS;
     const currentBucket = this.#ensureBucket(currentStartMs);
@@ -103,7 +116,7 @@ export class PulseTracker {
 
       if (
         updatedAtAdvanced
-        && (agent.activity === "working" || agent.activity === "idle")
+        && isLive(agent)
         && !currentBucket.activeAgentIds.has(agent.id)
       ) {
         currentBucket.activeAgentIds.add(agent.id);
@@ -171,7 +184,7 @@ export class PulseTracker {
       Math.min(HOUR_MS, Math.max(0, nowMs - this.#observedSinceMs)) / BUCKET_MS,
     ) * BUCKET_MS;
     const agents = this.#latestSnapshot?.programs.flatMap((program) => program.agents) ?? [];
-    const liveAgents = agents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
+    const liveAgents = agents.filter(isLive);
     const eligibleAgents = liveAgents.filter((agent) => agent.provider !== "cursor" && agent.tokens.provenance !== "unknown");
     const reportingAgents = eligibleAgents.filter(
       (agent) => agent.tokens.provenance === "observed"
@@ -179,10 +192,21 @@ export class PulseTracker {
         && Number.isFinite(agent.tokens.sessionTotal),
     );
     const unknownAgents = liveAgents.length - eligibleAgents.length;
+    /* Stalled means "quiet and nobody knows why", which is why a completed turn
+       is excluded from it.
+
+       A turn-complete session is quiet for a reason that is written down: it is
+       waiting on its operator. Alarming about that would be the board raising an
+       alarm about the operator's own inbox — and at the measured shape of this
+       fleet it would put roughly 130 sessions into a signal meant to name a
+       handful. The provenance is what makes the distinction available; before
+       it, silence was silence. */
     const stalledAgentIds = liveAgents
       .filter((agent) => {
         const updatedAtMs = Date.parse(agent.updatedAt);
-        return agent.status !== "attention"
+        if (agent.provenance === "turn-complete" || agent.provenance === "turn-complete-aged") return false;
+        return agent.attention !== true
+          && !agent.attentionSignal
           && agent.outcome === "healthy"
           && Number.isFinite(updatedAtMs)
           && nowMs - updatedAtMs >= STALL_THRESHOLD_MS;

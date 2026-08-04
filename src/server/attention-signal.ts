@@ -85,7 +85,10 @@ export interface AttentionSignalInput {
      come from the control plane, not from text the agent authors. */
   attentionNotification?: string | null;
   activity: ActivityState;
-  processState: ProcessState;
+  /* Absent for a retained record: the archive stripped its process evidence at
+     custody, and "unknown" would be a fabricated answer rather than a missing
+     one. Retained records are out of scope here anyway; the type says so. */
+  processState?: ProcessState;
   transcriptEndedCleanly?: boolean;
 }
 
@@ -344,6 +347,15 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
      act on. Work stranded by a session that died is real, but the actionable
      object there is the branch, and /api/publish reports it on a surface where
      the operator can actually do something. */
+  /* Out of scope means FINISHED, which is a narrower population than it was.
+
+     This gate used to read "ended", and "ended" swept in every quiet session
+     with no process to check — so a session that had gone silent while holding
+     an unread request for a human was filed as unactionable, which is the exact
+     failure the surrounding comment argues against. `unknown` is the legacy
+     word for `unverified`, and an unverified session is precisely the one an
+     operator might still be able to help. Measured on the live archive: four
+     to five extra actionable signals, not the storm the change looked like. */
   if (input.activity === "ended") return { kind: "out-of-scope" };
 
   const marker = clean(input.attentionNotification) || undefined;

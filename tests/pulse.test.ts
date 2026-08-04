@@ -94,7 +94,9 @@ describe("PulseTracker", () => {
     const tracker = new PulseTracker(undefined, base);
     tracker.observe(
       snapshot([
-        agent({ id: "attention", status: "attention", activity: "idle", outcome: "healthy", updatedAt: iso(now - 20 * 60_000) }),
+        // Attention rides its own field now. It used to be published by
+        // overwriting `status`, which is why this fixture asserted it there.
+        agent({ id: "attention", attention: true, activity: "idle", outcome: "healthy", updatedAt: iso(now - 20 * 60_000) }),
         agent({ id: "ended", status: "archived", activity: "ended", outcome: "healthy", updatedAt: iso(now - 20 * 60_000) }),
         agent({ id: "fresh", updatedAt: iso(now - 14 * 60_000) }),
         agent({ id: "stalled", activity: "idle", status: "waiting", updatedAt: iso(now - 15 * 60_000) }),
@@ -104,6 +106,37 @@ describe("PulseTracker", () => {
 
     expect(tracker.report(now).momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["stalled"] });
     expect(tracker.report(now).momentum.stallThresholdMs).toBe(15 * 60_000);
+  });
+
+  test("a session waiting on its operator is not stalled, however long it has been quiet", () => {
+    /* Stalled means "quiet and nobody knows why". A session whose last turn
+       completed is quiet for a reason that is written down: it is waiting on a
+       human. Alarming about it would be the board raising an alarm about the
+       operator's own inbox — and at the shape of a real fleet it would put
+       roughly 130 sessions into a signal meant to name a handful. */
+    const now = base + HOUR_MS;
+    const tracker = new PulseTracker(undefined, base);
+    tracker.observe(
+      snapshot([
+        agent({
+          id: "turn-done",
+          lifecycle: "waiting",
+          provenance: "turn-complete",
+          activity: "idle",
+          updatedAt: iso(now - 3 * HOUR_MS),
+        }),
+        agent({
+          id: "silent",
+          lifecycle: "waiting",
+          provenance: "process-live-quiet",
+          activity: "idle",
+          updatedAt: iso(now - 3 * HOUR_MS),
+        }),
+      ]),
+      now,
+    );
+
+    expect(tracker.report(now).momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["silent"] });
   });
 
   test("derives token rate from observed deltas, excludes Cursor, and never subtracts after a reset", () => {

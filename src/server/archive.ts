@@ -3,8 +3,23 @@ import { dirname } from "node:path";
 import { readableTask } from "./collectors";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
+/* The defaults, not the law. Retention and the record cap are operator settings
+   now (`historyRetentionDays`, `historyRecordLimit`), and the store reads them
+   through an injected reader so a change takes effect on the next commit
+   instead of at the next restart. These stay as the values used when nothing
+   injects anything — tests, and any caller that has no settings store. */
 export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const MAX_ARCHIVE_RECORDS = 5_000;
+
+export interface ArchiveLimits {
+  retentionMs: number;
+  recordLimit: number;
+}
+
+const DEFAULT_ARCHIVE_LIMITS: ArchiveLimits = {
+  retentionMs: ARCHIVE_RETENTION_MS,
+  recordLimit: MAX_ARCHIVE_RECORDS,
+};
 
 type ArchiveKind = "operator" | "history";
 /* `archivedAt` is when WE stored the record, which is not `updatedAt`, when the
@@ -44,14 +59,16 @@ export class JsonArchiveStore implements ArchiveStore {
     private readonly path: string,
     private readonly files: ArchiveFileOperations,
     private readonly now: () => number,
+    private readonly limits: () => ArchiveLimits,
   ) {}
 
   static async open(
     path: string,
     files: ArchiveFileOperations = nodeFileOperations,
     now: () => number = Date.now,
+    limits: () => ArchiveLimits = () => DEFAULT_ARCHIVE_LIMITS,
   ): Promise<JsonArchiveStore> {
-    const store = new JsonArchiveStore(path, files, now);
+    const store = new JsonArchiveStore(path, files, now, limits);
     try {
       const parsed = JSON.parse(await files.readText(path));
       if (Array.isArray(parsed)) {
@@ -63,7 +80,7 @@ export class JsonArchiveStore implements ArchiveStore {
             if (stored.archiveKind && stored.archiveKind !== "operator" && stored.archiveKind !== "history") {
               throw new Error("archive file contains an invalid archive kind");
             }
-            if (!isFresh(value, now())) continue;
+            if (!isFresh(value, now(), limits().retentionMs)) continue;
             if (stored.archiveKind !== "history") store.#agentIds.add(value.id);
             store.#agents.set(value.id, stored);
           } else {
@@ -113,6 +130,27 @@ export class JsonArchiveStore implements ArchiveStore {
     return this.#enqueue(() => this.#persistHistory(agents));
   }
 
+  /* Undo an operator archive without losing the record.
+
+     The id leaves `#agentIds`, which is what "this board archived it" means, and
+     the record is DEMOTED to history rather than deleted — an operator undoing a
+     filing decision is not asking to destroy what the session did, and a
+     destructive undo is a worse failure than the one it repairs. Idempotent:
+     un-archiving something that was never archived is a no-op, not an error. */
+  unarchive(agentId: string): Promise<void> {
+    return this.#enqueue(() => this.#persistUnarchive(agentId));
+  }
+
+  async #persistUnarchive(agentId: string): Promise<void> {
+    const existing = this.#agents.get(agentId);
+    if (!this.#agentIds.has(agentId) && existing?.archiveKind !== "operator") return;
+    const nextAgentIds = new Set(this.#agentIds);
+    nextAgentIds.delete(agentId);
+    const nextAgents = new Map(this.#agents);
+    if (existing) nextAgents.set(agentId, { ...existing, archiveKind: "history" });
+    await this.#commit(nextAgentIds, nextAgents);
+  }
+
   #enqueue(operation: () => Promise<void>): Promise<void> {
     const write = this.#writeQueue.then(operation);
     // A failed write rejects its caller but does not poison later queued writes.
@@ -153,23 +191,25 @@ export class JsonArchiveStore implements ArchiveStore {
       nextAgents.set(agent.id, copy);
       changed = true;
     }
+    const { retentionMs, recordLimit } = this.limits();
     const needsPrune = nextAgents.size + [...nextAgentIds].filter((id) => !nextAgents.has(id)).length >
-      MAX_ARCHIVE_RECORDS || [...nextAgents.values()].some((agent) => !isFresh(agent, this.now()));
+      recordLimit || [...nextAgents.values()].some((agent) => !isFresh(agent, this.now(), retentionMs));
     if (!changed && !needsPrune) return;
     await this.#commit(nextAgentIds, nextAgents);
   }
 
   async #commit(agentIds: Set<string>, agents: Map<string, StoredAgent>): Promise<void> {
+    const { retentionMs, recordLimit } = this.limits();
     const retainedAgents = [...agents.values()]
-      .filter((agent) => isFresh(agent, this.now()))
+      .filter((agent) => isFresh(agent, this.now(), retentionMs))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
-      .slice(0, MAX_ARCHIVE_RECORDS);
+      .slice(0, recordLimit);
     const retainedAgentIds = new Set(
       retainedAgents
         .filter((agent) => agent.archiveKind !== "history")
         .map((agent) => agent.id),
     );
-    const remaining = MAX_ARCHIVE_RECORDS - retainedAgents.length;
+    const remaining = recordLimit - retainedAgents.length;
     const plainIds = [...agentIds]
       .filter((id) => !agents.has(id))
       .sort()
@@ -204,6 +244,12 @@ export class MemoryArchiveStore implements ArchiveStore {
   async archive(agentId: string, agent?: CollectedAgent): Promise<void> {
     this.#agentIds.add(agentId);
     if (agent) this.#agents.set(agentId, archiveCopy(agent, "operator", Date.now(), this.#agents.get(agentId)?.archivedAt));
+  }
+
+  async unarchive(agentId: string): Promise<void> {
+    this.#agentIds.delete(agentId);
+    const existing = this.#agents.get(agentId);
+    if (existing) this.#agents.set(agentId, { ...existing, archiveKind: "history" });
   }
 
   async record(agents: readonly CollectedAgent[]): Promise<void> {
@@ -257,6 +303,14 @@ function archiveCopy(
     gates: [...agent.gates],
     allowCwdFallback: agent.allowCwdFallback,
     recordedTarget: agent.recordedTarget ? { ...agent.recordedTarget } : undefined,
+    /* The verdict and the evidence behind it, written down BECAUSE the evidence
+       itself is not. Everything above is an allow-list that deliberately drops
+       processAlive/processIds — a record out of the scan window has no process
+       to check and never will — so without these three fields a re-entering
+       record would be reclassified from nothing at all. */
+    endEvidence: agent.endEvidence,
+    lifecycle: agent.lifecycle,
+    provenance: agent.provenance,
     archiveKind,
     /* Set once, on first archive, and carried forward on every later rewrite.
        Re-stamping it would restart the retention clock each time a record was
@@ -267,6 +321,10 @@ function archiveCopy(
   };
 }
 
+/* `archiveKind` stays off the wire. It is custody bookkeeping, and the fact it
+   used to be the only carrier of — "a human filed this" versus "this is simply
+   the record we kept" — now ships explicitly as `provenance`, declared, with
+   the operator-archive case still readable through `has(id)`. */
 function publicCopy(agent: StoredAgent): CollectedAgent {
   const { archiveKind: _, ...copy } = agent;
   /* Read, not write: the stored record keeps whatever was true when it was
@@ -283,9 +341,9 @@ function sameAgent(left: StoredAgent, right: StoredAgent): boolean {
    Records written before archivedAt existed have none; they fall back to
    updatedAt, which is the old behaviour and the only honest option - inventing
    an archive time for them would be fabricating the very evidence this adds. */
-function isFresh(agent: StoredAgent, nowMs: number): boolean {
+function isFresh(agent: StoredAgent, nowMs: number, retentionMs = ARCHIVE_RETENTION_MS): boolean {
   const retentionStart = Date.parse(agent.archivedAt ?? agent.updatedAt);
-  return Number.isFinite(retentionStart) && nowMs - retentionStart <= ARCHIVE_RETENTION_MS;
+  return Number.isFinite(retentionStart) && nowMs - retentionStart <= retentionMs;
 }
 
 function isCollectedAgent(value: unknown): value is CollectedAgent {

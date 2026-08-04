@@ -79,7 +79,13 @@ export async function executeControl(
       ? transmitRefusal({
           target: agent.target,
           processState: agent.processState,
-          archived: agent.status === "archived",
+          /* Read from the lifecycle, which is what controlsFor consulted when
+             it decided whether to offer this button. Reading `status` here and
+             the verdict there is how the two sides of one seam drift: the board
+             offers a control the endpoint then refuses, or worse, the reverse. */
+          archived: agent.lifecycle
+            ? agent.lifecycle === "finished" || agent.scope === "retained"
+            : agent.status === "archived",
           identityTrace: agent.identityTrace,
         })
       : null;
@@ -100,6 +106,27 @@ export async function executeControl(
         500,
         "ARCHIVE_WRITE_FAILED",
         `Could not persist archive state: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  }
+
+  if (request.action === "unarchive") {
+    /* Refused rather than silently ignored when the store cannot do it. A
+       control the system will not honour is a promise the board should never
+       have made — the same invariant that keeps the button and this endpoint
+       agreeing about everything else. */
+    if (!dependencies.archiveStore.unarchive) {
+      return failure(request, 409, "CONTROL_DISABLED", "This archive store cannot un-archive a session.");
+    }
+    try {
+      await dependencies.archiveStore.unarchive(agent.id);
+    } catch (error) {
+      return failure(
+        request,
+        500,
+        "ARCHIVE_WRITE_FAILED",
+        `Could not un-archive: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
@@ -189,4 +216,4 @@ export async function executeControl(
   return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
 }
 
-export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"];
+export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"];

@@ -53,6 +53,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 
 | Module | Decides |
 |---|---|
+| `lifecycle.ts` | The one place a session's lifecycle is decided (`classifyLifecycle`): Working, Waiting, Unverified, or Finished, plus the provenance saying why. Its governing rule is that absence of evidence is not evidence of an ending — a quiet session with no process to check is `unverified`, never finished. The rules live outside the code, in `tests/fixtures/lifecycle-truth-table.json`, so every implementation of them can be executed against the same table |
 | `snapshot-agent.ts` | Per-agent view: capabilities (`controlsFor`), activity, outcome, `contextPct` |
 | `snapshot-issues.ts`, `snapshot-operator-issues.ts` | What counts as a finding, and how identity conflicts split into live faults vs debris |
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |
@@ -89,12 +90,30 @@ itself — snapshot age, collector state — on a slower clock than the board's.
 `app.js`, which imports the rest. There is no build step — the server serves the
 files as they are on disk.
 
+The board's five ops views are `needs-you`, `now`, `waiting`, `history` and
+`usage` (`client-catalogs.js`). Membership is decided by `viewMatches` from the
+lifecycle and scope the server publishes, never from a provider status word.
+`waiting` also carries the collapsed Unverified group, which is deliberately
+exempt from the display lookback — the lookback is a recency filter, and a
+coverage disclosure that hides most of the gap is worse than none.
+
 `app.js` holds the render tree and the board's own state machine. Around it:
 `presentation.js` (pure derivations from a snapshot — the layer tests exercise
 directly), `agent-model.js`, `client-state.js`, `dom-primitives.js` (`el`, icons,
 SVG meters), `text-formatters.js`, `api-client.js` (fetch + envelope handling),
 `client-catalogs.js`, `repaint.js`, `feed-freshness.js`, `transcript.js`,
 `notifications.js`, and `action-log.js`.
+
+`lifecycle.js` is the client's mirror of `src/server/lifecycle.ts`, and it is
+the one module here that is deliberately a copy. The server publishes
+`lifecycle` on every agent, but a snapshot can arrive without it, and when that
+happens this client has to answer the same question — it used to answer it
+differently, mapping a quiet session straight to "ended" with none of the
+server's rescue for a process that is demonstrably alive. The duplication is not
+the hazard; two *unverified* implementations were. Both are executed against
+`tests/fixtures/lifecycle-truth-table.json` by `tests/lifecycle.test.ts` and
+`tests/lifecycle-parity.test.ts`, so a rule that lands in one and not the other
+fails immediately, by name.
 
 `repaint.js` is small and load-bearing: it holds an indirection to `render()`
 (`setRepaint` / `repaint`) so modules can ask for a repaint without importing

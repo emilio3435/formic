@@ -13,6 +13,7 @@ import type {
 } from "../src/shared/types";
 import type {
   ArchiveStore,
+  CollectedAgent,
   CommandResult,
   CommandRunner,
 } from "../src/server/types";
@@ -572,5 +573,89 @@ describe("same-origin loopback control HTTP boundary", () => {
 
     expect(response.status).toBe(200);
     expect(store.archived).toEqual(["codex:test-session"]);
+  });
+});
+
+describe("un-archive reaches the server and is gated like every other control", () => {
+  /* The endpoint half of a promise the copy had been making alone. */
+  const archived: CollectedAgent = {
+    id: "codex:filed",
+    provider: "codex",
+    sourceSessionId: "filed",
+    displayName: "Filed",
+    status: "archived",
+    statusReason: "Archived by operator.",
+    updatedAt: "2026-08-04T10:00:00.000Z",
+    tokens: { provenance: "unknown" },
+    artifacts: [],
+    gates: [],
+  };
+
+  function snapshotWith(controls: Array<{ action: string; enabled: boolean }>) {
+    return {
+      programs: [{
+        id: "p", name: "P",
+        agents: [{
+          ...archived, programId: "p", lastHumanMessage: null,
+          lifecycle: "finished", provenance: "operator-archive", scope: "observed",
+          target: { resolution: "missing", reason: "No target." },
+          controls,
+        }],
+      }],
+    } as unknown as HubSnapshot;
+  }
+
+  const post = (body: unknown) => new Request("http://127.0.0.1:4701/api/control", {
+    method: "POST",
+    headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  test("an advertised un-archive is honoured, without needing a fresh snapshot", async () => {
+    /* Archive and un-archive change this board's own records and never reach a
+       terminal, so neither is behind the 30-second staleness gate that protects
+       writes into someone else's tty. */
+    const unarchived: string[] = [];
+    const response = await handleControlRequest(post({ agentId: "codex:filed", action: "unarchive" }), {
+      runner: { run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }) },
+      archiveStore: {
+        has: () => true,
+        archive: async () => {},
+        unarchive: async (id: string) => { unarchived.push(id); },
+      },
+      getSnapshot: () => snapshotWith([{ action: "unarchive", enabled: true }]),
+      // Deliberately ancient: the gate must not apply here.
+      now: () => Date.parse("2030-01-01T00:00:00.000Z"),
+    });
+
+    expect(response.status).toBe(200);
+    expect(unarchived).toEqual(["codex:filed"]);
+  });
+
+  test("an un-advertised un-archive is refused, so the button and the endpoint cannot drift", async () => {
+    const unarchived: string[] = [];
+    const response = await handleControlRequest(post({ agentId: "codex:filed", action: "unarchive" }), {
+      runner: { run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }) },
+      archiveStore: {
+        has: () => true,
+        archive: async () => {},
+        unarchive: async (id: string) => { unarchived.push(id); },
+      },
+      getSnapshot: () => snapshotWith([{ action: "unarchive", enabled: false }]),
+    });
+
+    expect(response.status).toBe(409);
+    expect(unarchived).toEqual([]);
+  });
+
+  test("a store that cannot un-archive refuses rather than reporting a success it did not perform", async () => {
+    const response = await handleControlRequest(post({ agentId: "codex:filed", action: "unarchive" }), {
+      runner: { run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }) },
+      archiveStore: { has: () => true, archive: async () => {} },
+      getSnapshot: () => snapshotWith([{ action: "unarchive", enabled: true }]),
+    });
+
+    expect(response.status).toBe(409);
+    expect(JSON.stringify(await response.json())).toContain("cannot un-archive");
   });
 });

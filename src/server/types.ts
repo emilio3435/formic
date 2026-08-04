@@ -2,6 +2,9 @@ import type {
   AgentStatus,
   Artifact,
   CostUsage,
+  EndEvidence,
+  LifecycleProvenance,
+  LifecycleState,
   Provider,
   SurfaceIdentityTrace,
   TokenUsage,
@@ -70,6 +73,21 @@ export interface CollectedAgent {
   gates: string[];
   /** True only when the latest provider turn contains an explicit clean-completion record. */
   transcriptEndedCleanly?: boolean;
+  /* WHICH clean completion it was, which the boolean above cannot say.
+     `transcriptEndedCleanly` is minted from turn-level events for Claude and
+     Codex and from a real session fact for OMP, so one flag carried two
+     incompatible claims and everything downstream had to guess which it held.
+     A session ending and a turn ending are different events and get different
+     values here. */
+  endEvidence?: EndEvidence;
+  /* The lifecycle verdict FROZEN at custody time, present only on archive
+     records. `archiveCopy` strips process evidence by allow-list, so a record
+     that has left the scan window cannot be reclassified from what survives —
+     re-deriving it would turn the whole filing cabinet into "no process
+     evidence" and invent an unverified fleet out of history. It carries its
+     answer instead. */
+  lifecycle?: LifecycleState;
+  provenance?: LifecycleProvenance;
   /** Exact process IDs retained from a confirmed identity scan. */
   processIds?: number[];
   /** Current liveness of the retained process IDs; absent when no trustworthy scan checked them. */
@@ -152,6 +170,10 @@ export interface CommandRunner {
 export interface ArchiveStore {
   has(agentId: string): boolean;
   archive(agentId: string, agent?: CollectedAgent): Promise<void>;
+  /* Optional so a store that cannot undo simply does not advertise the control
+     — controlsFor asks before offering it, which is the advertisement invariant
+     this repo already enforces both ways. */
+  unarchive?(agentId: string): Promise<void>;
   record?(agents: readonly CollectedAgent[]): Promise<void>;
   archivedAgents?(): readonly CollectedAgent[];
   /* Set when an empty archive is standing in for one that could not be read.

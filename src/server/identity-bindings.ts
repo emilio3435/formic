@@ -346,13 +346,28 @@ export function bridgeAgentsWithBindings(
     const transcriptOpen = processIds?.length && trace
       ? trace.openFileMatches.some(({ pid }) => processIds.includes(pid))
       : undefined;
+    /* NO-ERASE. The bridge exists to FILL gaps in process evidence, and it used
+       to overwrite unconditionally — so a binding with nothing to say replaced a
+       proven `processAlive: true` with `undefined`, erasing the one fact that
+       separates a live session from an unverifiable one.
+
+       That was survivable while unavailable evidence and death produced the same
+       verdict. It is not now: erasing a positive answer moves a session out of
+       Waiting and into Unverified, which is the board forgetting something it
+       had already established. A defined answer on the agent wins; the bridge
+       only speaks where the agent is silent. */
     const withProcessEvidence: CollectedAgent = {
       ...agent,
-      processIds,
-      processAlive,
-      transcriptOpen,
+      processIds: processIds ?? agent.processIds,
+      processAlive: processAlive ?? agent.processAlive,
+      transcriptOpen: transcriptOpen ?? agent.transcriptOpen,
     };
     if (agent.recordedTarget) return withProcessEvidence;
+    /* Fresh or mid-band only, which is the same pool targets.ts admits to cwd
+       fallback and for the same reason: bridging a session quiet enough to be
+       unverified would hand a pane to a session nothing can vouch for. This runs
+       on collected agents, before any verdict exists, so it reads the parse-time
+       status — where "running or waiting" IS the fresh-or-mid band. */
     if (agent.status !== "running" && agent.status !== "waiting") return withProcessEvidence;
     if (liveSessionIds.has(sessionId)) return withProcessEvidence;
     // The bound surface carrying exact evidence for a DIFFERENT session is a

@@ -14,7 +14,7 @@ leaves the machine.
 
 ## What it does
 
-- **Every session, one board.** Claude Code, Codex, Cursor — live, idle and
+- **Every session, one board.** Claude Code, Codex, Cursor — live, waiting and
   finished, grouped by project.
 - **Opens on what needs you.** Not on everything. If nothing is waiting, it says
   so and you close the tab.

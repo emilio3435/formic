@@ -27,6 +27,11 @@
         <!-- Opt-in out-of-page alerts. Permission is requested from this click
              and nowhere else — never on load. -->
         <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Notifications off</button>
+        <!-- The board's timing thresholds, which decide what every session on
+             it is called. They were compiled-in constants; an operator running
+             overnight swarms had no way to say "45 minutes of silence is normal
+             here" except to edit source. -->
+        <button type="button" class="btn settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="settings-panel">Settings</button>
         <p id="conn-badge" class="conn conn-connecting">
           <span class="conn-dot" aria-hidden="true"></span>
           <span id="conn-label">Connecting</span>
@@ -39,6 +44,8 @@
       </div>
     </div>
   </header>
+
+  <div id="settings-panel" class="settings-panel" hidden aria-labelledby="settings-panel-title"></div>
 
   <!-- Staleness alarm. Sits in the reading path between the masthead and the
        summary so a frozen feed cannot be missed by not looking at a badge. -->
@@ -71,8 +78,7 @@
           <nav class="views" role="group" aria-label="View" id="views">
             <button type="button" class="view-tab is-current" data-view="needs-you" aria-pressed="true">Needs you<span class="count" id="count-needs-you"></span></button>
             <button type="button" class="view-tab" data-view="now" aria-pressed="false">Now<span class="count" id="count-now"></span></button>
-            <button type="button" class="view-tab" data-view="working" aria-pressed="false">Working<span class="count" id="count-working"></span></button>
-            <button type="button" class="view-tab" data-view="idle" aria-pressed="false">Idle<span class="count" id="count-idle"></span></button>
+            <button type="button" class="view-tab" data-view="waiting" aria-pressed="false">Waiting<span class="count" id="count-waiting"></span></button>
             <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
             <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
           </nav>
