@@ -6983,6 +6983,46 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(M.nextTranscriptLimit(1000)).toBeNull();
   });
 
+  test("controlOutcome believes success only when the body says so in a boolean", () => {
+    // The invariant that matters: HTTP completion alone is never success. This
+    // used to be reachable only by driving sendControl through a fake DOM and a
+    // fake fetch; it is now a value in, a sentence out.
+    expect(M.controlOutcome("instruct", "Claude · main", { status: 200, body: { ok: true } }))
+      .toEqual({ ok: true, message: "Send succeeded (Claude · main)" });
+
+    // A 200 with an empty body, and a 200 whose body never parsed, are failures.
+    for (const body of [{}, null, undefined, { ok: "yes" }]) {
+      const out = M.controlOutcome("instruct", "A", { status: 200, body });
+      expect(out.ok, JSON.stringify(body)).toBe(false);
+      expect(out.message).toContain("unexpected response");
+      expect(out.message).toContain("HTTP 200");
+    }
+  });
+
+  test("controlOutcome reports every part of a refusal the server gave it", () => {
+    const out = M.controlOutcome("interrupt", "A", {
+      status: 200,
+      body: { ok: false, error: { code: "CMUX_FAILED", message: "no pane", exitCode: 3, stderr: "  boom  " } },
+    });
+    expect(out.ok).toBe(false);
+    // Code, message, exit code and stderr each survive — a refusal the operator
+    // cannot act on is the reason this control plane logs exit codes at all.
+    expect(out.message).toBe("Interrupt failed [CMUX_FAILED]: no pane (exit 3)\nboom");
+
+    // exitCode 0 is a real value and must not be dropped by a falsy check.
+    expect(M.controlOutcome("focus", "A", { status: 200, body: { ok: false, error: { exitCode: 0 } } }).message)
+      .toContain("(exit 0)");
+
+    // A transport failure names itself; an error with no message still says something.
+    expect(M.controlOutcome("archive", "A", { error: new Error("socket hang up") }).message)
+      .toBe("Archive failed: socket hang up");
+    expect(M.controlOutcome("archive", "A", { error: {} }).message).toContain("network error");
+
+    // An unknown action degrades to its own name rather than "undefined".
+    expect(M.controlOutcome("teleport", "A", { status: 200, body: { ok: true } }).message)
+      .toBe("teleport succeeded (A)");
+  });
+
   test("(2) a build without the route says so — it never claims the agent is silent", () => {
     // The exact shape a server with no such route returns: 404, non-JSON body.
     expect(M.transcriptFailureText(404, null)).toBe("Transcript view is not available in this build.");

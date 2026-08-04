@@ -97,6 +97,7 @@ import {
   API_WRITE_TIMEOUT_MS,
   clampActionsLimit,
   clampTranscriptLimit,
+  controlOutcome,
   nextTranscriptLimit,
   readEndpointOriginNote,
   serverUnreachableHint,
@@ -127,6 +128,7 @@ import {
   withinLookback,
 } from "./agent-model.js";
 import {
+  ACTION_LABELS,
   ACTIVITY_LABELS,
   CONTROL_LABELS,
   DEFAULT_LOOKBACK_HOURS,
@@ -1109,6 +1111,7 @@ globalThis.TheAntHill = {
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
+  controlOutcome,
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
@@ -5644,7 +5647,6 @@ function closeButton() {
 
 /* ---------- inspector: command dock ---------- */
 
-const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive" };
 const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);
 
 function capability(agent, action) {
@@ -6567,29 +6569,10 @@ async function sendControl(agent, action, instruction) {
     }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
-
-    if (body && typeof body.ok === "boolean") {
-      if (body.ok) {
-        result = { ok: true, message: ACTION_LABELS[action] + " succeeded (" + agentName(agent) + ")" };
-        if (action === "instruct") state.drafts.delete(agent.id);
-      } else {
-        const err = body.error || {};
-        let msg = ACTION_LABELS[action] + " failed";
-        if (err.code) msg += " [" + err.code + "]";
-        if (err.message) msg += ": " + err.message;
-        if (err.exitCode != null) msg += " (exit " + err.exitCode + ")";
-        if (err.stderr) msg += "\n" + err.stderr.trim();
-        result = { ok: false, message: msg };
-      }
-    } else {
-      // HTTP completion alone is never success.
-      result = {
-        ok: false,
-        message: ACTION_LABELS[action] + " failed: server returned an unexpected response (HTTP " + res.status + ")",
-      };
-    }
+    result = controlOutcome(action, agentName(agent), { status: res.status, body });
+    if (result.ok && action === "instruct") state.drafts.delete(agent.id);
   } catch (err) {
-    result = { ok: false, message: ACTION_LABELS[action] + " failed: " + (err && err.message ? err.message : "network error") };
+    result = controlOutcome(action, agentName(agent), { error: err });
   }
 
   state.pending.delete(key);

@@ -12,6 +12,10 @@
    module state, no rendering: the callers own what to DO with a failure, this
    owns how to ask and how to describe the asking going wrong. */
 
+/* ACTION_LABELS is the only catalog this module reads; client-catalogs.js has no
+   imports of its own, so this stays acyclic. */
+import { ACTION_LABELS } from "./client-catalogs.js";
+
 export const API_READ_TIMEOUT_MS = 10_000;
 
 export const API_TRANSCRIPT_TIMEOUT_MS = 30_000;
@@ -134,6 +138,40 @@ export function actionsFailureText(status, body) {
 export function serverUnreachableHint(host) {
   const where = host ? "on " + host : "at this address";
   return "Check that the Ant Hill server is running " + where + ", then retry.";
+}
+
+/* Reading a control response is the same shape as transcriptFailureText and
+   actionsFailureText above: status + body in, the operator's sentence out. It
+   lived inside sendControl, welded to state.pending, render() and toast(), so
+   the one invariant that matters here — HTTP completion alone is never success —
+   could only be exercised through a DOM and fetch harness.
+
+   `ok` is believed only when the body says so in a boolean. A 200 carrying {},
+   a non-JSON body, or a transport error are all failures: the server journals
+   the attempt either way, and telling the operator a keystroke landed when it
+   may not have is the one lie this control plane cannot afford.
+
+   agentLabel is passed in rather than derived: naming an agent is presentation,
+   and this module stays free of the board. */
+export function controlOutcome(action, agentLabel, { status, body, error } = {}) {
+  const label = ACTION_LABELS[action] || action;
+  if (error) {
+    return { ok: false, message: label + " failed: " + (error && error.message ? error.message : "network error") };
+  }
+  if (body && typeof body.ok === "boolean") {
+    if (body.ok) return { ok: true, message: label + " succeeded (" + agentLabel + ")" };
+    const err = body.error || {};
+    let msg = label + " failed";
+    if (err.code) msg += " [" + err.code + "]";
+    if (err.message) msg += ": " + err.message;
+    if (err.exitCode != null) msg += " (exit " + err.exitCode + ")";
+    if (err.stderr) msg += "\n" + err.stderr.trim();
+    return { ok: false, message: msg };
+  }
+  return {
+    ok: false,
+    message: label + " failed: server returned an unexpected response (HTTP " + status + ")",
+  };
 }
 
 /* The board is blank until the first snapshot resolves: the client is a deferred
