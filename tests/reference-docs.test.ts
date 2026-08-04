@@ -533,10 +533,13 @@ describe("SECURITY.md describes the boundary the code implements", () => {
      removing a check fails the suite rather than quietly widening the boundary
      while the doc still promises it. */
 
-  test("the control surface is exactly the four actions it lists", () => {
-    expect(security).toContain("`focus`, `instruct`, `interrupt`, and local `archive`");
+  test("the control surface is exactly the actions it lists", () => {
+    /* Five now. `unarchive` is the undo the board had been PROMISING in copy
+       since the archive shipped — "Un-archive it from History if you filed it
+       early" — with no endpoint behind the sentence. */
+    expect(security).toContain("`focus`, `instruct`, `interrupt`, and local `archive`/`unarchive`");
     expect(read("src/server/control.ts"))
-      .toContain('export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"]');
+      .toContain('export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"]');
   });
 
   test("instruct really does reject CR/LF and oversized text", () => {
@@ -551,7 +554,7 @@ describe("SECURITY.md describes the boundary the code implements", () => {
     expect(read("src/server/http.ts")).toContain("MAX_CONTROL_SNAPSHOT_AGE_MS = 30_000");
     // Archive is exempt because it changes local data, not cmux.
     expect(security).toContain("`archive` is exempt");
-    expect(read("src/server/http.ts")).toContain('parsed.action !== "archive"');
+    expect(read("src/server/http.ts")).toContain('parsed.action !== "archive" && parsed.action !== "unarchive"');
     // Broadcast was documented as UNPROTECTED for a day after it was fixed.
     expect(security).toContain("STALE_SNAPSHOT");
     expect(read("src/server/broadcast.ts")).toContain("STALE_SNAPSHOT");

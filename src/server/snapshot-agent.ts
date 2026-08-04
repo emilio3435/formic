@@ -46,6 +46,11 @@ export function controlsFor(
   target: AgentSnapshot["target"],
   archived: boolean,
   identityTrace?: IdentityTrace,
+  /* Whether the store backing this board can undo an archive. Passed in rather
+     than assumed, because the advertisement invariant here is "offered iff
+     honoured" — a button for a store that cannot do the thing is exactly the
+     shape this file exists to prevent. */
+  canUnarchive = false,
 ): ControlCapability[] {
   const routed = Boolean(target.surfaceId) && (target.resolution === "exact" || target.resolution === "unique-cwd");
   const targetReason = target.reason ?? "No safe cmux target is available.";
@@ -62,6 +67,21 @@ export function controlsFor(
     { action: "instruct", enabled: !refusal, reason: refusal?.cause },
     { action: "interrupt", enabled: !refusal, reason: refusal?.cause },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
+    /* The other direction, and it took until now to exist. The board has told
+       operators "Un-archive it from History if you filed it early" since the
+       archive shipped, with no store method, endpoint or button behind the
+       sentence. Only an OPERATOR archive can be undone: a provider exit and a
+       dead process are facts, not filings, and offering to reverse them would
+       promise something no undo can deliver. */
+    {
+      action: "unarchive",
+      enabled: archived && canUnarchive,
+      reason: !archived
+        ? "This session is not archived."
+        : canUnarchive
+          ? undefined
+          : "This board's archive store cannot un-archive.",
+    },
   ];
 }
 

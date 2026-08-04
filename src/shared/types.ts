@@ -57,7 +57,11 @@ export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";
 export type AgentRole = "orchestrator" | "verifier" | "automation" | "frontend" | "backend" | "tester" | "agent";
 export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
-export type ControlAction = "focus" | "instruct" | "interrupt" | "archive";
+/* `unarchive` is net-new. The board has told operators "Un-archive it from
+   History if you filed it early" since the archive shipped, and there was no
+   store method, no endpoint and no button behind that sentence — `#agentIds`
+   only ever grew. A promise the product could not keep. */
+export type ControlAction = "focus" | "instruct" | "interrupt" | "archive" | "unarchive";
 
 /* Two different measurements live here and the names have to keep them apart.
 

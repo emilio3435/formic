@@ -53,7 +53,7 @@ export const CONTROL_LABELS = {
    app.js because controlOutcome() turns a control response into the sentence the
    operator reads, and api-client.js must never import from app.js — that would
    be the first import cycle in src/web. */
-export const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive" };
+export const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive", unarchive: "Un-archive" };
 
 /* Attention first, deliberately. The board used to open on "now" — every routine
    working agent — with the attention tab reading 0 beside it. A cockpit whose

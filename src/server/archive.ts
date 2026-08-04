@@ -130,6 +130,27 @@ export class JsonArchiveStore implements ArchiveStore {
     return this.#enqueue(() => this.#persistHistory(agents));
   }
 
+  /* Undo an operator archive without losing the record.
+
+     The id leaves `#agentIds`, which is what "this board archived it" means, and
+     the record is DEMOTED to history rather than deleted — an operator undoing a
+     filing decision is not asking to destroy what the session did, and a
+     destructive undo is a worse failure than the one it repairs. Idempotent:
+     un-archiving something that was never archived is a no-op, not an error. */
+  unarchive(agentId: string): Promise<void> {
+    return this.#enqueue(() => this.#persistUnarchive(agentId));
+  }
+
+  async #persistUnarchive(agentId: string): Promise<void> {
+    const existing = this.#agents.get(agentId);
+    if (!this.#agentIds.has(agentId) && existing?.archiveKind !== "operator") return;
+    const nextAgentIds = new Set(this.#agentIds);
+    nextAgentIds.delete(agentId);
+    const nextAgents = new Map(this.#agents);
+    if (existing) nextAgents.set(agentId, { ...existing, archiveKind: "history" });
+    await this.#commit(nextAgentIds, nextAgents);
+  }
+
   #enqueue(operation: () => Promise<void>): Promise<void> {
     const write = this.#writeQueue.then(operation);
     // A failed write rejects its caller but does not poison later queued writes.
@@ -223,6 +244,12 @@ export class MemoryArchiveStore implements ArchiveStore {
   async archive(agentId: string, agent?: CollectedAgent): Promise<void> {
     this.#agentIds.add(agentId);
     if (agent) this.#agents.set(agentId, archiveCopy(agent, "operator", Date.now(), this.#agents.get(agentId)?.archivedAt));
+  }
+
+  async unarchive(agentId: string): Promise<void> {
+    this.#agentIds.delete(agentId);
+    const existing = this.#agents.get(agentId);
+    if (existing) this.#agents.set(agentId, { ...existing, archiveKind: "history" });
   }
 
   async record(agents: readonly CollectedAgent[]): Promise<void> {

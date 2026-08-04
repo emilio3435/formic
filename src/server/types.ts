@@ -170,6 +170,10 @@ export interface CommandRunner {
 export interface ArchiveStore {
   has(agentId: string): boolean;
   archive(agentId: string, agent?: CollectedAgent): Promise<void>;
+  /* Optional so a store that cannot undo simply does not advertise the control
+     — controlsFor asks before offering it, which is the advertisement invariant
+     this repo already enforces both ways. */
+  unarchive?(agentId: string): Promise<void>;
   record?(agents: readonly CollectedAgent[]): Promise<void>;
   archivedAgents?(): readonly CollectedAgent[];
   /* Set when an empty archive is standing in for one that could not be read.

@@ -509,6 +509,27 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
      before, including the ones no human had touched — so an operator was told
      they had made a decision they had not made, about a session a provider
      closed or that simply drifted out of the scan window. */
+  /* The contradiction, disclosed rather than resolved. An operator archive
+     outranks a live process — human intent wins — and a source can record an
+     exit while its harness lingers. Silently overturning either would be the
+     board deciding it knows better than the evidence in front of it; saying so
+     lets the operator decide. */
+  if (ended && livenessState(agent) === "running") {
+    return {
+      title: why === "operator-archive"
+        ? "You archived this session, and its process is still running."
+        : "This session ended, but its process is still up.",
+      summary: why === "operator-archive"
+        ? "Your decision stands — the board files it as finished — but something is still running under it."
+        : "The source recorded a session exit while a matching process is still alive; the harness may be lingering.",
+      why: "These are two different sources of truth and they disagree. The board reports both rather than picking one quietly.",
+      nextStep: why === "operator-archive"
+        ? "Un-archive it if you filed it early, or leave it filed and let the process finish."
+        : "Check the terminal if this is unexpected.",
+      cause: "archived",
+      steps: [],
+    };
+  }
   if (ended && why === "provider-exit") {
     return {
       title: "This session ended.",
@@ -539,7 +560,9 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
       why: "Archiving files a session as finished and takes it off the working board. It stays readable in History.",
       /* No repair step, because nothing is broken. Offering one would invent a
          problem out of a deliberate choice. */
-      nextStep: "Nothing to do. Un-archive it from History if you filed it early.",
+      /* Finally true. This sentence shipped with the archive and had no store
+         method, endpoint or button behind it for its entire life. */
+      nextStep: "Nothing to do. Un-archive it if you filed it early.",
       cause: "archived",
       steps: [],
     };

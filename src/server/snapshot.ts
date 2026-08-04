@@ -294,7 +294,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
-      controls: controlsFor(source, target, archived, identityTrace),
+      /* Un-archive is offered only where it is HONOURED: the store must be able
+         to do it, and the ending must be one a human made. */
+      controls: controlsFor(
+        source,
+        target,
+        archived,
+        identityTrace,
+        Boolean(input.archiveStore.unarchive) && operatorArchived,
+      ),
       ...(controlRefusal ? { controlRefusal } : {}),
     };
     Object.defineProperty(agent, "identityTrace", {

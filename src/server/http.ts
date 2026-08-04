@@ -88,7 +88,9 @@ export async function handleControlRequest(
   if (typeof parsed === "string") return requestError(400, "INVALID_CONTROL_REQUEST", parsed);
 
   const snapshot = dependencies.getSnapshot();
-  if (parsed.action !== "archive") {
+  /* Archive and un-archive are filing decisions about a record, not writes into
+     a terminal, so neither needs a fresh snapshot to be safe. */
+  if (parsed.action !== "archive" && parsed.action !== "unarchive") {
     const generatedAt = Date.parse(snapshot.generatedAt);
     const ageMs = (dependencies.now?.() ?? Date.now()) - generatedAt;
     if (!Number.isFinite(generatedAt) || ageMs > MAX_CONTROL_SNAPSHOT_AGE_MS) {

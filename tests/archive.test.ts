@@ -214,7 +214,14 @@ describe("durable archive state", () => {
     expect(archived.attentionSignal).toBeUndefined();
     expect(archived.nextAction).toBeUndefined();
     expect(reopened.archivedAgents()[0]?.allowCwdFallback).toBeFalse();
-    expect(archived.controls.every((control) => !control.enabled)).toBeTrue();
+    /* Every control that would REACH the session is disabled — there is nothing
+       there to reach. The one exception is the new undo, which does not touch a
+       terminal at all: it reverses this board's own filing decision, and it is
+       the thing the drawer has been telling operators to do since the archive
+       shipped without anything behind the sentence. */
+    const reachable = archived.controls.filter(({ action }) => action !== "unarchive");
+    expect(reachable.every((control) => !control.enabled)).toBeTrue();
+    expect(archived.controls.find(({ action }) => action === "unarchive")?.enabled).toBeTrue();
   });
 
   test("agent archive records older than the retention window are pruned on load", async () => {
@@ -610,5 +617,98 @@ describe("a record carries the verdict it was filed with", () => {
     );
     await store.record([source]);
     expect(store.archivedAgents()[0]).not.toHaveProperty("archiveKind");
+  });
+});
+
+describe("un-archive: the undo the board had been promising", () => {
+  /* The drawer has told operators "Un-archive it from History if you filed it
+     early" since the archive shipped. There was no store method, no endpoint and
+     no button behind that sentence — `#agentIds` only ever grew. */
+  function virtualFiles() {
+    const contents = new Map<string, string>();
+    const files: ArchiveFileOperations = {
+      readText: async (path) => {
+        const value = contents.get(path);
+        if (value === undefined) throw missingFile();
+        return value;
+      },
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    return { contents, files };
+  }
+
+  const source: CollectedAgent = {
+    id: "codex:filed-early",
+    provider: "codex",
+    sourceSessionId: "filed-early",
+    displayName: "Filed early",
+    status: "running",
+    statusReason: "Still going.",
+    updatedAt: "2026-08-04T10:00:00.000Z",
+    tokens: { provenance: "unknown" },
+    artifacts: [],
+    gates: [],
+  };
+
+  const openStore = (path: string, files: ArchiveFileOperations) =>
+    JsonArchiveStore.open(path, files, () => Date.parse("2026-08-04T11:00:00.000Z"));
+
+  test("it demotes the record rather than destroying it", () => {
+    /* The load-bearing half. An operator undoing a FILING decision is not asking
+       to lose what the session did, and a destructive undo is a worse failure
+       than the one it repairs. */
+    return (async () => {
+      const { files } = virtualFiles();
+      const store = await openStore("/virtual/unarchive.json", files);
+      await store.archive(source.id, source);
+      expect(store.has(source.id)).toBeTrue();
+
+      await store.unarchive(source.id);
+
+      expect(store.has(source.id)).toBeFalse();
+      expect(store.archivedAgents().map(({ id }) => id)).toContain(source.id);
+    })();
+  });
+
+  test("it survives a reload, so the undo is not just in memory", async () => {
+    const { files } = virtualFiles();
+    const store = await openStore("/virtual/unarchive-persist.json", files);
+    await store.archive(source.id, source);
+    await store.unarchive(source.id);
+
+    const reopened = await openStore("/virtual/unarchive-persist.json", files);
+    expect(reopened.has(source.id)).toBeFalse();
+    expect(reopened.archivedAgents().map(({ id }) => id)).toContain(source.id);
+  });
+
+  test("it is idempotent, and un-archiving something never archived is not an error", async () => {
+    const { contents, files } = virtualFiles();
+    const store = await openStore("/virtual/unarchive-idem.json", files);
+    await store.archive(source.id, source);
+    await store.unarchive(source.id);
+    const afterFirst = contents.get("/virtual/unarchive-idem.json");
+
+    await store.unarchive(source.id);
+    await store.unarchive("codex:never-existed");
+
+    expect(contents.get("/virtual/unarchive-idem.json")).toBe(afterFirst);
+    expect(store.has(source.id)).toBeFalse();
+  });
+
+  test("a re-archive after an un-archive works, and keeps the original custody time", async () => {
+    /* Retention runs from custody, and an operator changing their mind twice
+       must not restart the clock — that is how a record would become immortal. */
+    const { files } = virtualFiles();
+    const store = await openStore("/virtual/unarchive-recycle.json", files);
+    await store.archive(source.id, source);
+    const firstCustody = store.archivedAgents()[0]?.archivedAt;
+
+    await store.unarchive(source.id);
+    await store.archive(source.id, source);
+
+    expect(store.has(source.id)).toBeTrue();
+    expect(store.archivedAgents()[0]?.archivedAt).toBe(firstCustody);
   });
 });

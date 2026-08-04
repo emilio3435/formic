@@ -5906,7 +5906,8 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   const instructCap = capability(agent, "instruct");
   const interruptCap = capability(agent, "interrupt");
   const archiveCap = capability(agent, "archive");
-  if (!focusCap && !instructCap && !interruptCap && !archiveCap) {
+  const unarchiveCap = capability(agent, "unarchive");
+  if (!focusCap && !instructCap && !interruptCap && !archiveCap && !unarchiveCap) {
     return el("span", { hidden: "" });
   }
 
@@ -6026,6 +6027,11 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
   // the dock does not offer a destructive peer next to dead controls.
   if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
+  /* The undo, wherever the row is. It is not destructive and it is not a peer of
+     the safe controls, so it does not hide behind the same lock — an operator
+     who filed something early is looking at exactly this row and needs the verb
+     the drawer has been naming at them all along. */
+  if (unarchiveCap && unarchiveCap.enabled) tools.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
   dock.append(tools);
   if (archiveCap && safeLocked) {
     /* The summary names the one thing behind it. It read "More", which told an

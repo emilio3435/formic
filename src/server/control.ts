@@ -111,6 +111,27 @@ export async function executeControl(
     return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
   }
 
+  if (request.action === "unarchive") {
+    /* Refused rather than silently ignored when the store cannot do it. A
+       control the system will not honour is a promise the board should never
+       have made — the same invariant that keeps the button and this endpoint
+       agreeing about everything else. */
+    if (!dependencies.archiveStore.unarchive) {
+      return failure(request, 409, "CONTROL_DISABLED", "This archive store cannot un-archive a session.");
+    }
+    try {
+      await dependencies.archiveStore.unarchive(agent.id);
+    } catch (error) {
+      return failure(
+        request,
+        500,
+        "ARCHIVE_WRITE_FAILED",
+        `Could not un-archive: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  }
+
   if (!canAddressTarget(agent.target)) {
     return failure(request, 409, "UNSAFE_TARGET", agent.target.reason ?? "No safe cmux surface target is available.");
   }
@@ -195,4 +216,4 @@ export async function executeControl(
   return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
 }
 
-export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive"];
+export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"];
