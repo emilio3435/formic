@@ -4350,9 +4350,21 @@ function renderAgentRow(agent, program, opts = {}) {
   /* Empty unless another visible row carries this exact name — see sessionTag.
      opts.ambiguousNames is absent on the drawer/preview call paths, which is
      why this defaults to no tag rather than to computing one. */
-  const nameTag = opts.ambiguousNames && opts.ambiguousNames.has(displayName)
+  /* The server publishes `base` and `disambiguator` as separate fields, and the
+     row is the reason they are separate. `identity.name` is the two already
+     joined — correct as one unique string for search, logs and aria, and a wall
+     of hex when 30 automation rows print it: "PR Automation Review & Fix
+     #e5eba703". Split back apart here so the words stay loud and the hex goes
+     quiet, in the muted style the tag already had. */
+  const identityBase = agent.identity && agent.identity.base;
+  const serverTag = agent.identity && agent.identity.disambiguator;
+  const visibleName = identityBase || displayName;
+  /* Only for rows the server did not name — archived records written before
+     `identity` existed, which the client still has to tell apart itself. */
+  const clientTag = !serverTag && opts.ambiguousNames && opts.ambiguousNames.has(displayName)
     ? sessionTag(agent)
     : "";
+  const nameTag = serverTag || clientTag;
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
@@ -4376,7 +4388,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
     el("span", { class: "agent-name-wrap" },
-      el("span", { class: "agent-name", text: rosterName(displayName, program) }),
+      el("span", { class: "agent-name", text: rosterName(visibleName, program) }),
       /* The disambiguator rides the loud line. It used to sit on the tag row
          below in the faintest style on the row, which put the only value that
          separates two rows furthest from the eye. */
@@ -4481,10 +4493,15 @@ function renderAgentRow(agent, program, opts = {}) {
     tokens.known
       ? el("span", {
         class: "ri-cell ri-tokens",
-        "aria-label": "Tokens: " + tokens.text,
+        /* The screen reader still hears the whole qualification: the mark is a
+           visual shorthand, and a shorthand nobody can see is a regression. */
+        "aria-label": "Tokens: " + tokens.text + (tokens.scopeMarked ? ", latest model call" : ""),
         title: tokens.title,
       },
-        el("span", { class: "ri-value mono", text: tokens.text }))
+        el("span", { class: "ri-value mono", text: tokens.text }),
+        tokens.scopeMarked
+          ? el("span", { class: "ri-scope-mark", "aria-hidden": "true", text: "ⓘ" })
+          : null)
       : null,
     elapsed && elapsed !== "—"
       ? el("span", {

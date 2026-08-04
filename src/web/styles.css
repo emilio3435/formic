@@ -1522,6 +1522,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 600;
   color: var(--muted);
 }
+/* The one character that says "this number has a condition on it". Deliberately
+   faint and deliberately present: the qualifier used to be words on every row
+   (loud, repetitive) and before that a hover-only title (invisible). */
+.ri-scope-mark {
+  font-size: 9.5px;
+  color: var(--faint);
+  margin-left: 0.15rem;
+  vertical-align: super;
+  line-height: 1;
+}
 .row-session-tag {
   font-family: var(--font-mono);
   font-size: 10.5px;

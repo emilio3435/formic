@@ -1446,8 +1446,12 @@ describe("token honesty", () => {
   });
 
   test("observed and estimated totals are formatted and marked", () => {
-    expect(M.tokenSummary({ provenance: "observed", total: 1_500_000 }).text).toBe("1.5M tokens");
-    expect(M.tokenSummary({ provenance: "estimated", total: 2000 }).text).toBe("≈2k tokens");
+    /* The noun is gone from the value: the column header already says Tokens,
+       so repeating it under every number was the header printed 250 times. */
+    expect(M.tokenSummary({ provenance: "observed", total: 1_500_000 }).text).toBe("1.5M");
+    expect(M.tokenSummary({ provenance: "estimated", total: 2000 }).text).toBe("≈2k");
+    // The estimate mark is what must survive — it changes what the number means.
+    expect(M.tokenSummary({ provenance: "estimated", total: 2000 }).text.startsWith("≈")).toBe(true);
   });
 
   test("totals expose reporting coverage instead of inventing numbers", () => {
@@ -1467,20 +1471,42 @@ describe("latest-turn token semantics", () => {
      .label and .title, neither of which the row renders. That is how a row came
      to show "128k tokens" beside a program's "65.7M session tokens": ~500x
      apart, not summable, and qualified only on hover. (Render-first audit §2.) */
-  test("latest-turn usage says so in the text a reader can actually see", () => {
+  test("latest-turn usage is marked, and the mark is not the words", () => {
+    /* The property has not changed: a reader must be able to SEE that this
+       number is qualified. What changed is the cost. Printing "latest call"
+       satisfied it by spending eleven characters on every one of ~250 rows to
+       state something true of nearly all of them; the mark satisfies it with
+       one. What must never come back is the third option — a bare number whose
+       only qualification is a title attribute nobody hovers. */
     const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 42_000, input: 40_000, output: 2000 });
-    expect(s.label).toBe("latest call");
-    expect(s.text).toBe("42k latest call");
-    expect(s.title).toContain("latest model call");
+    expect(s.text).toBe("42k");
+    expect(s.scopeMarked).toBe(true);
+    expect(s.title).toContain("Latest model call");
+    // The sentence has to say what it is NOT, since the confusion is with the rollup.
+    expect(s.title).toContain("NOT the session total");
 
-    /* The word must not appear where it would be a lie. A scope the source did
-       not report gets the neutral noun, not an invented precision. */
-    expect(M.tokenSummary({ provenance: "observed", total: 1200 }).text).toBe("1k tokens");
-    expect(M.tokenSummary({ provenance: "observed", scope: "session", total: 1200 }).text).toBe("1k tokens");
+    /* The mark must not appear where it would be a lie. A scope the source did
+       not report gets no mark, rather than an invented precision. */
+    expect(M.tokenSummary({ provenance: "observed", total: 1200 }).scopeMarked).toBe(false);
+    expect(M.tokenSummary({ provenance: "observed", scope: "session", total: 1200 }).scopeMarked).toBe(false);
+    expect(M.tokenSummary({ provenance: "observed", scope: "session", total: 1200 }).text).toBe("1k");
 
-    // The estimate mark survives in front of the scope, not instead of it.
-    expect(M.tokenSummary({ provenance: "estimated", scope: "latest-turn", total: 42_000 }).text)
-      .toBe("≈42k latest call");
+    // The estimate mark is about provenance, not scope, and still leads the number.
+    expect(M.tokenSummary({ provenance: "estimated", scope: "latest-turn", total: 42_000 }).text).toBe("≈42k");
+  });
+
+  test("the rendered row carries the mark, not just the summary object", () => {
+    /* The regression this whole thread is about was a qualification that existed
+       in a field nothing rendered. Asserting `scopeMarked` alone would repeat
+       exactly that mistake, so this reads the DOM. */
+    const row = withDom(() => M.renderAgentRow(
+      agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 42_000 } }),
+      { id: "p", name: "P" },
+    ));
+    const cell = byClass(row, "ri-tokens");
+    expect(cell).not.toBeNull();
+    expect(allByClass(cell, "ri-scope-mark").length).toBe(1);
+    expect(String(cell.attributes?.["aria-label"])).toContain("latest model call");
   });
 
   test("legacy tokens without a scope keep the neutral label", () => {

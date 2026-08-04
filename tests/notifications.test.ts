@@ -5,7 +5,7 @@ import {
   collectCmuxNotifications,
   parseCmuxNotifications,
 } from "../src/server/cmux";
-import { buildSnapshot } from "../src/server/snapshot";
+import { buildSnapshot, summarizeNotification } from "../src/server/snapshot";
 import type {
   ArchiveStore,
   CmuxSurface,
@@ -62,9 +62,22 @@ describe("notification-derived attention truth", () => {
        by the notification, which is the whole point of the separation. */
     expect(exactAgent?.attention).toBe(true);
     expect(exactAgent?.lifecycle).toBe("waiting");
-    expect(exactAgent?.statusReason).toContain("Newest exact-surface blocker");
-    expect(exactAgent?.statusReason).not.toContain("This read message");
+    /* Still the NEWEST exact-surface notification and no other — identified by
+       its title now rather than its body, because the body no longer travels on
+       the status line. The read one and the other surface's must not leak. */
+    expect(exactAgent?.statusReason).toContain("Blocked");
+    expect(exactAgent?.statusReason).not.toContain("Resolved");
+    expect(exactAgent?.statusReason).not.toContain("Other agent");
     expect(exactAgent?.statusReason).not.toContain("Must not leak across agents");
+
+    /* The status line is a STATE, not a paste. It used to carry title, subtitle
+       AND body cut at 500 characters, which put raw markdown, a URL and a commit
+       SHA into the field a row uses to say what a session is doing. The body is
+       not lost — it rides transcriptTail, asserted below. */
+    expect(exactAgent?.statusReason).not.toContain("Newest exact-surface blocker");
+    expect((exactAgent?.statusReason ?? "").length).toBeLessThanOrEqual(120);
+    expect(exactAgent?.transcriptTail).toContain("Newest exact-surface blocker");
+
     expect(snapshot.totals.attention).toBe(1);
   });
 
@@ -108,5 +121,43 @@ describe("notification-derived attention truth", () => {
     expect(agent?.statusReason).toBe("New session is waiting normally.");
     expect(agent?.transcriptTail).toBe("Working normally.");
     expect(snapshot.totals.attention).toBe(0);
+  });
+});
+
+describe("a notification summary is a row, not a paste", () => {
+  /* Measured on the live board 2026-08-04, the status line of a real row read:
+     "Unread cmux notification: Codex — Completed in LaHormigaDormida — Merged
+     and closed the active Hormiga recovery chain: - [PR #387](https://github.com
+     /Imagine-That-Ai/LaHormigaDormida/pull/387) merged as `6edfb56d7`, fixing
+     Inbox/Watch truth, stale-write races, harn…" — 280 characters of markdown,
+     a URL and a SHA, truncated mid-word, in the field that answers "what is
+     this session doing". */
+  test("markdown links become their text, not their URL", () => {
+    expect(summarizeNotification("Merged [PR #387](https://github.com/x/y/pull/387)"))
+      .toBe("Merged PR #387");
+  });
+
+  test("bare URLs and code ticks are dropped", () => {
+    expect(summarizeNotification("Merged as `6edfb56d7` see https://github.com/x/y"))
+      .toBe("Merged as 6edfb56d7 see");
+  });
+
+  test("a long notification is cut to something a row can hold", () => {
+    const summary = summarizeNotification("x".repeat(400))!;
+    expect(summary.length).toBeLessThanOrEqual(90);
+    expect(summary.endsWith("…")).toBe(true);
+  });
+
+  test("title and subtitle are joined; a missing one is not punctuation", () => {
+    expect(summarizeNotification("Codex", "Completed")).toBe("Codex — Completed");
+    expect(summarizeNotification("Codex")).toBe("Codex");
+    expect(summarizeNotification(undefined, "Completed")).toBe("Completed");
+  });
+
+  test("nothing to say is undefined rather than an empty label", () => {
+    expect(summarizeNotification()).toBeUndefined();
+    expect(summarizeNotification("   ", "")).toBeUndefined();
+    // A title that was ONLY a URL leaves nothing behind, and must not become " — ".
+    expect(summarizeNotification("https://github.com/x/y")).toBeUndefined();
   });
 });

@@ -100,6 +100,32 @@ export function withPulse(snapshot: HubSnapshot, pulse: HubPulse): HubSnapshot {
   return { ...snapshot, pulse };
 }
 
+/* What a row can show of a cmux notification: who it is from and what happened,
+   with none of the prose. Kept short enough to sit on one line beside everything
+   else a row already carries — an operator who wants the rest opens the drawer,
+   where the untruncated body already is. */
+const MAX_NOTIFICATION_SUMMARY = 90;
+
+export function summarizeNotification(title?: string, subtitle?: string): string | undefined {
+  const parts = [title, subtitle]
+    .map((part) => (typeof part === "string" ? part.trim() : ""))
+    .filter(Boolean)
+    /* A notification title can itself carry markdown and links. Strip them
+       rather than print the syntax: "[PR #387](https://…)" reads as the URL it
+       hides, and the row has no room to be a hyperlink. */
+    .map((part) => part
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/https?:\/\/\S+/g, "")
+      .replace(/\s+/g, " ")
+      .trim())
+    .filter(Boolean);
+  if (!parts.length) return undefined;
+  const joined = parts.join(" — ");
+  if (joined.length <= MAX_NOTIFICATION_SUMMARY) return joined;
+  return `${joined.slice(0, MAX_NOTIFICATION_SUMMARY - 1).trimEnd()}…`;
+}
+
 export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const now = input.now ?? new Date();
   const nowMs = now.getTime();
@@ -202,8 +228,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       surface,
       target.resolution === "exact" && !target.cwdMismatch,
     );
+    /* The status line is a STATE, not a paste.
+       This joined title, subtitle and body and cut the result at 500
+       characters, which put things like "Codex — Completed in LaHormigaDormida
+       — Merged and closed the active Hormiga recovery chain: - [PR #387](https
+       ://github.com/…) merged as `6edfb56d7`, fixing Inbox/Watch truth,
+       stale-write races, harn…" into the one field a row uses to say what a
+       session is doing. Raw markdown, a URL and a commit SHA, truncated
+       mid-word.
+
+       The body is not lost and never was: it already rides `transcriptTail`
+       below as "[Attention] …" and reaches the attention layer intact. What
+       belongs HERE is only what a row can show — who, and what happened. */
     const notificationSummary = notification
-      ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)
+      ? summarizeNotification(notification.title, notification.subtitle)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
     const scope: CollectionScope = collectedIds.has(source.id) ? "observed" : "retained";

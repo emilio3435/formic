@@ -378,24 +378,30 @@ export function tokenSummary(tokens) {
   if (tokens.input != null) parts.push("in " + fmtTok(tokens.input));
   if (tokens.output != null) parts.push("out " + fmtTok(tokens.output));
   if (tokens.cachedInput != null) parts.push("cache " + fmtTok(tokens.cachedInput));
-  const scopeNote = tokens.scope === "latest-turn" ? "latest model call · " : "";
+  const latestTurn = tokens.scope === "latest-turn";
+  const scopeNote = latestTurn
+    ? "Latest model call — NOT the session total, and not addable to the program rollup. "
+    : "Cumulative tokens for this session. ";
   const title = scopeNote + (parts.length ? parts.join(" · ") + " · " : "") + "provenance: " + tokens.provenance;
-  /* The scope is part of the number, not a tooltip. A row read "128k tokens"
-     beside a program rollup reading "65.7M session tokens" — the row is the
-     LATEST model call, the rollup is cumulative sessionTotal across every agent
-     including ended ones, roughly 500x apart and not summable. The qualifier
-     existed, in a title attribute, and a qualification visible only on hover is
-     a qualification that does not exist: nobody hovers a number that looks
-     self-explanatory.
+  /* The scope is a MARK, not a sentence.
 
-     " tokens" was also the weakest possible word here, since the column header
-     already says Tokens. Spending it on the scope costs nothing and makes the
-     impossible addition visibly impossible. (Render-first audit §2.) */
-  const scopeWord = tokens.scope === "latest-turn" ? " latest call" : " tokens";
+     It has been both extremes and both were wrong. It began as a bare number
+     with the qualifier hidden in a title attribute, and a qualification visible
+     only on hover is one that does not exist — a row reading "128k tokens" sat
+     beside a program rollup reading "65.7M session tokens", roughly 500x apart
+     and not summable, with nothing on screen saying so. The fix was to print
+     "latest call" on the row, which made the qualification real but printed two
+     words on every one of 250 rows to say something that is true of nearly all
+     of them.
+
+     `scopeMarked` keeps what mattered — something VISIBLE that says "this
+     number has a condition on it" — and spends one character on it instead of
+     eleven. The full sentence is one hover away, and now there is a mark that
+     tells you to hover. */
   const text = tokens.total != null
-    ? marks[tokens.provenance] + fmtTok(tokens.total) + scopeWord
+    ? marks[tokens.provenance] + fmtTok(tokens.total)
     : marks[tokens.provenance] + parts.join(" · ");
-  return { label, text, known: true, title };
+  return { label, text, known: true, title, scopeMarked: latestTurn };
 }
 
 export function contextUsage(tokens) {
