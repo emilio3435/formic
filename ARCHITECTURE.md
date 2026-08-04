@@ -64,6 +64,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |
 | `burnbar.ts`, `burnbar-query.ts` | Cost, read from an external encrypted OpenBurnBar database in an isolated subprocess |
 | `model-config.ts` | Model families, context windows, and Cursor-native policy from `config/models.json` |
+| `naming.ts` | What an agent is called. One ordered chain, first match wins: an operator alias outranks a name the launcher authored, which outranks the directory the session **began** in, which outranks its task line. Names freeze at origin because a transcript records cwd per entry — reading the latest let a name follow the shell, so one session renamed itself four times in four minutes and was published under a neighbouring lane's name. Uniqueness is a property of the fleet rather than of any session, so `disambiguate` is handed every agent at once and is the only thing permitted to append a session tag |
 | `program-aliases.ts`, `settings.ts` | Operator-set names and the scan window, persisted under `data/` |
 | `command.ts` | The child-process runner every shell probe goes through; its timeout always settles |
 
