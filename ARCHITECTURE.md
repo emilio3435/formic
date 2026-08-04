@@ -116,6 +116,17 @@ the hazard; two *unverified* implementations were. Both are executed against
 `tests/lifecycle-parity.test.ts`, so a rule that lands in one and not the other
 fails immediately, by name.
 
+`naming.js` is the same arrangement for a different question: a mirror of
+`src/server/naming.ts`, not a second opinion. The server publishes each agent's
+resolved identity, so on a current snapshot this file decides nothing — it
+exists for archived rows written before that field did. Naming had already been
+forked this way once and the fork was invisible: the server built a name from
+the working directory while the client rebuilt a different one behind a
+"contains · and is under 56 characters" heuristic, and an agent deliberately
+named "Lifecycle Mapper" lost to the derived "Claude · the-mountain-main". So
+the rules live in `tests/fixtures/naming-truth-table.json` and
+`tests/naming-parity.test.ts` executes both copies against it.
+
 `repaint.js` is small and load-bearing: it holds an indirection to `render()`
 (`setRepaint` / `repaint`) so modules can ask for a repaint without importing
 the render tree. `render()` was the dependency hub that made this client
