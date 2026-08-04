@@ -55,6 +55,7 @@ import {
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
 import { disambiguate } from "./naming";
+import type { SessionNameRecord } from "./session-names";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -65,6 +66,11 @@ import {
 
 export interface SnapshotInput {
   agents: readonly CollectedAgent[];
+  /* An authored title for an agent id, when one has been written down.
+     Optional: every caller without it — and there are many in tests — keeps the
+     derived names, which is also what the board shows before the first naming
+     pass completes. */
+  sessionNames?: (agentId: string) => SessionNameRecord | undefined;
   surfaces: readonly CmuxSurface[];
   notifications?: readonly CmuxNotification[];
   programHints?: readonly ProgramHint[];
@@ -127,9 +133,28 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const named = sources.filter(
     (source): source is CollectedAgent & { identity: AgentIdentity } => Boolean(source.identity),
   );
+  /* An authored title, where one has been written down, outranks everything the
+     board could derive — that is the contract's own precedence, applied at the
+     one point the whole fleet is in hand. Overlaid HERE rather than in the
+     collectors because the title is produced out of band: a collector runs
+     synchronously while naming waits on a model, so the board publishes the
+     derived name immediately and picks the authored one up on a later pass. */
+  const titled = named.map((source) => {
+    const remembered = input.sessionNames?.(source.id);
+    if (!remembered) return source;
+    return {
+      ...source,
+      identity: {
+        name: remembered.name,
+        base: remembered.name,
+        source: "authored" as const,
+        authoredBy: remembered.by,
+      },
+    };
+  });
   const identitiesById = new Map(
     disambiguate(
-      named.map((source) => ({ sourceSessionId: source.sourceSessionId, identity: source.identity })),
+      titled.map((source) => ({ sourceSessionId: source.sourceSessionId, identity: source.identity })),
     ).map((identity, index) => [named[index]!.id, identity] as const),
   );
   const childCounts = new Map<string, number>();

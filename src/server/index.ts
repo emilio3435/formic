@@ -6,6 +6,7 @@ import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { runtimeCmuxExecutable } from "./cmux";
 import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
+import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { archiveLimits, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
@@ -35,6 +36,11 @@ const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "d
 const identityBindingStore = await JsonIdentityBindingStore.open(join(PROJECT_ROOT, "data/identity-bindings.json"));
 const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJECT_ROOT, "data/investigations"));
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
+/* Opened before the board so the very first snapshot already carries whatever
+   titles a previous run wrote down. `open` never rejects — an unreadable cache
+   costs the names, not the boot. */
+const sessionNameStore = await JsonSessionNameStore.open();
+
 const state = new HubState(
   runner,
   archiveStore,
@@ -45,6 +51,8 @@ const state = new HubState(
   undefined,
   cmuxExecutable,
   identityBindingStore,
+  undefined,
+  sessionNameStore,
 );
 await state.refresh({ cmux: true });
 

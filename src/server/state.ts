@@ -5,11 +5,17 @@ import { collectCmux, collectCmuxNotifications, DEFAULT_CMUX_EXECUTABLE } from "
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
-import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
+import type { ArchiveStore, CmuxNotification, CmuxSurface, CollectedAgent, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
 import type { UsageSummary } from "./burnbar";
+import {
+  candidateFor,
+  nameSessions,
+  type JsonSessionNameStore,
+  type NameCandidate,
+} from "./session-names";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -40,6 +46,8 @@ export class HubState {
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #liveAgentProcessIds?: number[];
   #refreshing?: Promise<HubSnapshot>;
+  /* One naming pass at a time; a second refresh while one runs simply skips. */
+  #naming?: Promise<void>;
   #refreshStartedAtMs?: number;
   #cmuxRequested = false;
   #refreshingCmux = false;
@@ -67,6 +75,9 @@ export class HubState {
     private readonly cmuxExecutable = DEFAULT_CMUX_EXECUTABLE,
     private readonly bindingStore?: IdentityBindingStore,
     private readonly refreshAggregateTimeoutMs = REFRESH_AGGREGATE_TIMEOUT_MS,
+    /* Optional so every existing construction — and the tests are full of them —
+       keeps the derived names rather than requiring a naming store. */
+    private readonly sessionNames?: JsonSessionNameStore,
   ) {
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = settingsReader?.();
@@ -183,6 +194,29 @@ export class HubState {
       }
     } while (this.#cmuxRequested);
     return snapshot;
+  }
+
+  /* Fire-and-forget, deliberately. The refresh that just finished has already
+     published everything the operator asked for, and naming is an improvement
+     on a fallback that already works — so it must never be able to delay a pass,
+     fail one, or run two at once. One pass at a time, awaited by nobody, and
+     every error swallowed into a log line. */
+  #nameNewSessions(agents: readonly CollectedAgent[]): void {
+    const store = this.sessionNames;
+    if (!store || this.#naming) return;
+    const unnamed = agents.filter((agent) => !store.has(agent.id));
+    if (!unnamed.length) return;
+    this.#naming = (async () => {
+      try {
+        const candidates = (await Promise.all(unnamed.slice(0, 40).map((agent) => candidateFor(agent))))
+          .filter((candidate): candidate is NameCandidate => Boolean(candidate));
+        if (candidates.length) await nameSessions(candidates, { store });
+      } catch (error) {
+        console.error(`[HubState] naming pass failed: ${String(error)}`);
+      } finally {
+        this.#naming = undefined;
+      }
+    })();
   }
 
   async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
@@ -385,6 +419,7 @@ export class HubState {
       cmuxReachable: this.#cmuxReachable,
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
       archiveStore: this.archiveStore,
+      sessionNames: this.sessionNames ? (id) => this.sessionNames!.get(id) : undefined,
       issueLifecycle: this.#issueLifecycle,
       previousIssues: this.#hasSourceSnapshot ? this.#snapshot.issues : undefined,
       recentlyResolved: this.#recentlyResolved,
@@ -404,6 +439,7 @@ export class HubState {
     this.#pulse.maybeRefreshBurnCost();
     this.#snapshot = withPulse(built, this.#pulse.report(pulseNowMs));
     for (const listener of this.#listeners) listener(this.#snapshot);
+    this.#nameNewSessions(publishedAgents);
     return this.#snapshot;
   }
 }
