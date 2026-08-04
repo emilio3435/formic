@@ -17,7 +17,7 @@ import {
 } from "../src/server/identity-bindings";
 import { PulseTracker } from "../src/server/pulse";
 import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
-import type { HubPulse, IssueLifecycle, OperatorIssue } from "../src/shared/types";
+import type { HubPulse, IssueLifecycle, LifecycleState, OperatorIssue } from "../src/shared/types";
 
 const fixture = (name: string): string =>
   readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
@@ -1786,5 +1786,217 @@ describe("context coverage ships with the number it describes", () => {
     expect(snapshot.contextPeak).toBe(40);
     expect(snapshot.contextReporting).toBe(1);
     expect(snapshot.contextEligible).toBe(1);
+  });
+});
+
+describe("the lifecycle verdict is published, and nothing overwrites it", () => {
+  /* The wire half of the contract. Everything asserted here is additive: the
+     legacy `activity`/`status` words are unchanged in this slice, and these
+     tests exist so the NEXT slice — which makes those words derive from this
+     verdict — cannot move them without a red test naming the move. */
+  const NOW = new Date("2026-08-04T12:00:00.000Z");
+  const at = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString();
+
+  const build = (agents: readonly CollectedAgent[], store: ArchiveStore = archiveStore) =>
+    buildSnapshot({ agents, surfaces: [], archiveStore: store, now: NOW });
+
+  const only = (snapshot: ReturnType<typeof buildSnapshot>) => snapshot.programs[0]!.agents[0]!;
+
+  test("a working session carries its verdict, its provenance and its scope", () => {
+    const agent = only(build([collected({ updatedAt: at(30_000) })]));
+    expect(agent.lifecycle).toBe("working");
+    expect(agent.provenance).toBe("recency");
+    expect(agent.scope).toBe("observed");
+  });
+
+  test("a quiet session with no process evidence publishes unverified, not finished", () => {
+    /* The 85 sessions this program exists for. Asserted on the wire field
+       rather than through a rendered word, because the wire is what every
+       surface will read. */
+    const agent = only(build([collected({
+      status: "stale",
+      updatedAt: at(5 * 3_600_000),
+      processAlive: undefined,
+    })]));
+    expect(agent.lifecycle).toBe("unverified");
+    expect(agent.provenance).toBe("no-evidence");
+  });
+
+  test("a quiet session with a live process publishes waiting", () => {
+    const agent = only(build([collected({
+      status: "stale",
+      updatedAt: at(3 * 3_600_000),
+      processAlive: true,
+      processIds: [4242],
+    })]));
+    expect(agent.lifecycle).toBe("waiting");
+    expect(agent.provenance).toBe("process-live-quiet");
+  });
+
+  test("an operator archive publishes its own provenance, distinct from a source exit", () => {
+    const operatorStore: ArchiveStore = { has: () => true, archive: async () => {} };
+    const archived = only(build([collected({ updatedAt: at(30_000) })], operatorStore));
+    expect(archived.lifecycle).toBe("finished");
+    expect(archived.provenance).toBe("operator-archive");
+
+    const exited = only(build([collected({
+      updatedAt: at(30_000),
+      endEvidence: "session-exit",
+      transcriptEndedCleanly: true,
+    })]));
+    expect(exited.lifecycle).toBe("finished");
+    expect(exited.provenance).toBe("provider-exit");
+  });
+
+  test("a completed turn publishes waiting — the agent yielded, it did not end", () => {
+    const agent = only(build([collected({
+      updatedAt: at(10 * 60_000),
+      endEvidence: "turn-complete",
+      transcriptEndedCleanly: true,
+    })]));
+    expect(agent.lifecycle).toBe("waiting");
+    expect(agent.provenance).toBe("turn-complete");
+  });
+
+  test("a record the scan no longer reaches is retained, and keeps the verdict it was filed with", () => {
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:gone",
+        sourceSessionId: "gone",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+        lifecycle: "waiting",
+        provenance: "turn-complete",
+      })],
+    };
+    const agent = only(build([], store));
+    expect(agent.scope).toBe("retained");
+    expect(agent.lifecycle).toBe("waiting");
+    // Nobody ended it; the board simply stopped watching, and the row says so.
+    expect(agent.provenance).toBe("aged-out");
+  });
+
+  test("a legacy record with no stored verdict still names the one thing known about it", () => {
+    /* Written before this contract existed. `has(id)` is the only surviving
+       evidence that a human filed it, and it is enough to keep the operator's
+       decision from being reported as "we stopped watching". */
+    const store: ArchiveStore = {
+      has: (id) => id === "codex:filed",
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:filed",
+        sourceSessionId: "filed",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+      })],
+    };
+    const agent = only(build([], store));
+    expect(agent.scope).toBe("retained");
+    expect(agent.provenance).toBe("operator-archive");
+  });
+
+  test("a cmux notification never rewrites the lifecycle", () => {
+    /* Attention is an OVERLAY. It may add a row word, a tab membership and a
+       badge; it may not change what the session is doing. The old wire had
+       notifications overwrite `status` outright, which is precisely how a
+       working session came to read as something else entirely. */
+    const surfaces: CmuxSurface[] = [{
+      surfaceId: "s1",
+      cwd: "/Users/emilionunezgarcia/Developer/unique-project",
+      sourceSessionIds: ["test-session"],
+      runtimeSurfaceReady: true,
+    }];
+    const cases: Array<[LifecycleState, Partial<CollectedAgent>]> = [
+      ["working", { updatedAt: at(30_000) }],
+      ["waiting", { updatedAt: at(10 * 60_000), processAlive: true, processIds: [42] }],
+      ["unverified", { updatedAt: at(5 * 3_600_000), processAlive: undefined }],
+    ];
+    for (const [label, overrides] of cases) {
+      const withoutNotification = buildSnapshot({
+        agents: [collected(overrides)],
+        surfaces,
+        archiveStore,
+        now: NOW,
+      }).programs[0]!.agents[0]!;
+      const withNotification = buildSnapshot({
+        agents: [collected(overrides)],
+        surfaces,
+        notifications: [{ surfaceId: "s1", body: "May I run the migration?" }],
+        archiveStore,
+        now: NOW,
+      }).programs[0]!.agents[0]!;
+
+      expect(withoutNotification.lifecycle, `${label} without a notification`).toBe(label);
+      expect(withNotification.lifecycle, `a notification moved the ${label} lifecycle`).toBe(label);
+      expect(withNotification.provenance).toBe(withoutNotification.provenance);
+    }
+  });
+
+  test("the lifecycle census counts observed sessions and totals reconcile with retained", () => {
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:gone",
+        sourceSessionId: "gone",
+        status: "archived",
+        updatedAt: at(48 * 3_600_000),
+        archivedAt: at(40 * 3_600_000),
+        lifecycle: "waiting",
+        provenance: "turn-complete",
+      })],
+    };
+    const snapshot = build([
+      collected({ id: "codex:w", sourceSessionId: "w", updatedAt: at(30_000) }),
+      collected({ id: "codex:q", sourceSessionId: "q", updatedAt: at(3 * 3_600_000), processAlive: true, processIds: [7] }),
+      collected({ id: "codex:u", sourceSessionId: "u", updatedAt: at(5 * 3_600_000), processAlive: undefined }),
+    ], store);
+
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 1, waiting: 1, unverified: 1, finished: 0 });
+    expect(snapshot.totals.retained).toBe(1);
+    const { working, waiting, unverified, finished } = snapshot.totals.byLifecycle!;
+    expect(working + waiting + unverified + finished + snapshot.totals.retained!)
+      .toBe(snapshot.totals.tracked);
+  });
+
+  test("a retained record is never counted live, however alive it used to look", () => {
+    /* The resurrection hole. Retained records re-enter the merge on every
+       refresh for thirty days; without the scope gate a record filed while
+       working would sit in the live census forever. */
+    const store: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      archivedAgents: () => [collected({
+        id: "codex:ghost",
+        sourceSessionId: "ghost",
+        updatedAt: at(30_000),
+        archivedAt: at(40 * 3_600_000),
+        processAlive: true,
+        processIds: [999],
+        lifecycle: "working",
+        provenance: "recency",
+      })],
+    };
+    const snapshot = build([], store);
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 0, waiting: 0, unverified: 0, finished: 0 });
+    expect(snapshot.totals.retained).toBe(1);
+  });
+
+  test("the operator's thresholds reach the published verdict", () => {
+    const quiet = [collected({ updatedAt: at(20 * 60_000), processAlive: undefined })];
+    expect(only(build(quiet)).lifecycle).toBe("waiting");
+    expect(
+      buildSnapshot({
+        agents: quiet,
+        surfaces: [],
+        archiveStore,
+        now: NOW,
+        thresholds: { freshMs: 2 * 60_000, quietMs: 15 * 60_000 },
+      }).programs[0]!.agents[0]!.lifecycle,
+    ).toBe("unverified");
   });
 });

@@ -11,13 +11,21 @@ import type {
   ActivityState,
   AgentRole,
   AgentSnapshot,
+  CollectionScope,
   ControlCapability,
   IdentityTrace,
+  LifecycleProvenance,
+  LifecycleState,
   ModelPolicy,
   OperatorControlState,
   OutcomeState,
   ProcessState,
 } from "../shared/types";
+import {
+  classifyLifecycle,
+  type LifecycleThresholds,
+  type LifecycleVerdict,
+} from "./lifecycle";
 import { MODEL_CONFIG, cursorNativeFamily } from "./model-config";
 import { transmitRefusal } from "./targets";
 import type { CollectedAgent } from "./types";
@@ -54,6 +62,38 @@ export function controlsFor(
     { action: "interrupt", enabled: !refusal, reason: refusal?.cause },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
   ];
+}
+
+/* The bridge from a collected agent to the lifecycle contract.
+
+   Its whole job is reading evidence off the record and handing it to the one
+   classifier — no verdict is reached here. Kept separate from
+   `classifyLifecycle` so that module stays a pure statement of the rules,
+   testable from a fixture with no CollectedAgent in sight, while the mapping
+   from this repo's field names lives where the field names do. */
+export function lifecycleFor(
+  agent: CollectedAgent,
+  input: {
+    operatorArchived: boolean;
+    scope: CollectionScope;
+    nowMs: number;
+    thresholds?: LifecycleThresholds;
+    persisted?: { lifecycle?: LifecycleState; provenance?: LifecycleProvenance };
+  },
+): LifecycleVerdict {
+  const updatedAtMs = Date.parse(agent.updatedAt);
+  return classifyLifecycle(
+    {
+      ageMs: Number.isFinite(updatedAtMs) ? Math.max(0, input.nowMs - updatedAtMs) : 0,
+      operatorArchived: input.operatorArchived,
+      endEvidence: agent.endEvidence,
+      processAlive: agent.processAlive,
+      processIds: agent.processIds,
+      scope: input.scope,
+      persisted: input.persisted,
+    },
+    input.thresholds,
+  );
 }
 
 export function activityFor(agent: CollectedAgent, archived: boolean): ActivityState {

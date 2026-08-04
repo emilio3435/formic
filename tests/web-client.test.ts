@@ -51,6 +51,8 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
     totals: {
       live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      byLifecycle: { working: 1, waiting: 0, unverified: 0, finished: 0 },
+      retained: 0,
       sourceHealth: { healthy: 2, degraded: 0, absent: 0, total: 2 },
     },
     programs: [{ id: "p", name: "P", agents: [agent()] }],

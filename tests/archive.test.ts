@@ -515,3 +515,100 @@ describe("retention and the record cap are operator settings, not constants", ()
     expect(store.archivedAgents().map(({ id }) => id)).not.toContain("codex:kept");
   });
 });
+
+describe("a record carries the verdict it was filed with", () => {
+  /* archiveCopy is an ALLOW-LIST, and it deliberately drops processAlive and
+     processIds — a record out of the scan window has no process to check and
+     never will. So a re-entering record cannot be reclassified from what
+     survives; without these fields the entire archive would re-derive as "no
+     process evidence" and the board would invent an unverified fleet out of its
+     own filing cabinet. */
+  function virtualFiles() {
+    const contents = new Map<string, string>();
+    const files: ArchiveFileOperations = {
+      readText: async (path) => {
+        const value = contents.get(path);
+        if (value === undefined) throw missingFile();
+        return value;
+      },
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    return { contents, files };
+  }
+
+  const source: CollectedAgent = {
+    id: "codex:verdict",
+    provider: "codex",
+    sourceSessionId: "verdict",
+    displayName: "Verdict session",
+    status: "waiting",
+    statusReason: "Turn finished — waiting on you.",
+    updatedAt: "2026-08-04T10:00:00.000Z",
+    tokens: { provenance: "unknown" },
+    artifacts: [],
+    gates: [],
+    endEvidence: "turn-complete",
+    lifecycle: "waiting",
+    provenance: "turn-complete",
+    processAlive: true,
+    processIds: [4242],
+  };
+
+  test("the verdict and the evidence discriminant survive a write and a reload", async () => {
+    const { files } = virtualFiles();
+    const now = () => Date.parse("2026-08-04T11:00:00.000Z");
+    const store = await JsonArchiveStore.open("/virtual/verdict.json", files, now);
+    await store.record([source]);
+
+    const reopened = await JsonArchiveStore.open("/virtual/verdict.json", files, now);
+    const stored = reopened.archivedAgents()[0]!;
+    expect(stored.lifecycle).toBe("waiting");
+    expect(stored.provenance).toBe("turn-complete");
+    expect(stored.endEvidence).toBe("turn-complete");
+  });
+
+  test("the process evidence it was classified from is still stripped, which is why the verdict has to travel", async () => {
+    const { files } = virtualFiles();
+    const now = () => Date.parse("2026-08-04T11:00:00.000Z");
+    const store = await JsonArchiveStore.open("/virtual/stripped.json", files, now);
+    await store.record([source]);
+
+    const stored = store.archivedAgents()[0]!;
+    expect(stored.processAlive).toBeUndefined();
+    expect(stored.processIds).toBeUndefined();
+  });
+
+  test("a record written before the contract existed still loads, carrying no verdict", async () => {
+    const { contents, files } = virtualFiles();
+    const legacy = { ...source };
+    delete legacy.lifecycle;
+    delete legacy.provenance;
+    delete legacy.endEvidence;
+    contents.set("/virtual/legacy.json", JSON.stringify([
+      { ...legacy, archiveKind: "history", archivedAt: "2026-08-04T10:30:00.000Z" },
+    ]));
+
+    const store = await JsonArchiveStore.open(
+      "/virtual/legacy.json",
+      files,
+      () => Date.parse("2026-08-04T11:00:00.000Z"),
+    );
+    const stored = store.archivedAgents()[0]!;
+    expect(stored.id).toBe("codex:verdict");
+    expect(stored.lifecycle).toBeUndefined();
+    expect(stored.provenance).toBeUndefined();
+  });
+
+  test("custody bookkeeping stays off the wire", async () => {
+    const { files } = virtualFiles();
+    const store = await JsonArchiveStore.open(
+      "/virtual/kind.json",
+      files,
+      () => Date.parse("2026-08-04T11:00:00.000Z"),
+    );
+    await store.record([source]);
+    expect(store.archivedAgents()[0]).not.toHaveProperty("archiveKind");
+  });
+});

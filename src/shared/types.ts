@@ -261,6 +261,19 @@ export interface AgentSnapshot {
   status: AgentStatus;
   statusReason: string;
   activity?: ActivityState;
+  /* The one bucket this session occupies, and why. `lifecycle` is the verdict
+     every surface is meant to read; `activity` and `status` above are the older
+     vocabularies, published alongside it during the transition and derived from
+     this same verdict rather than computed separately. */
+  lifecycle?: LifecycleState;
+  provenance?: LifecycleProvenance;
+  /* Whether the board is still watching this session or only holds a record of
+     it. Deliberately not part of the lifecycle: leaving the scan window is a
+     fact about the board's reach, not about the session's ending, and folding
+     the two is how "archived" came to mean four different things. */
+  scope?: CollectionScope;
+  /** Which clean completion a source recorded, when it recorded one. */
+  endEvidence?: EndEvidence;
   /** Process/transcript lifecycle evidence; unknown means the sources cannot distinguish it safely. */
   processState?: ProcessState;
   outcome?: OutcomeState;
@@ -587,6 +600,20 @@ export interface HubSnapshot {
     working?: number;
     idle?: number;
     ended?: number;
+    /* The lifecycle census, counted over OBSERVED sessions only. `live` above is
+       working + waiting; `unverified` is deliberately in neither `live` nor
+       `finished`, because counting the unverifiable as live would repeat the
+       current lie in the opposite direction. */
+    byLifecycle?: {
+      working: number;
+      waiting: number;
+      unverified: number;
+      finished: number;
+    };
+    /* Sessions that survive only as a record — out of the scan window, held by
+       the archive. Counted apart from byLifecycle so `tracked` reconciles as
+       the sum of the two, and so nothing retained can ever be counted live. */
+    retained?: number;
     /** Agents waiting on a human: the to-do list. Counted from attentionSignal. */
     needsYou?: number;
     /** Operator issues — degraded sources, control faults. A different population. */

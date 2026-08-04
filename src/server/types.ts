@@ -3,6 +3,8 @@ import type {
   Artifact,
   CostUsage,
   EndEvidence,
+  LifecycleProvenance,
+  LifecycleState,
   Provider,
   SurfaceIdentityTrace,
   TokenUsage,
@@ -78,6 +80,14 @@ export interface CollectedAgent {
      A session ending and a turn ending are different events and get different
      values here. */
   endEvidence?: EndEvidence;
+  /* The lifecycle verdict FROZEN at custody time, present only on archive
+     records. `archiveCopy` strips process evidence by allow-list, so a record
+     that has left the scan window cannot be reclassified from what survives —
+     re-deriving it would turn the whole filing cabinet into "no process
+     evidence" and invent an unverified fleet out of history. It carries its
+     answer instead. */
+  lifecycle?: LifecycleState;
+  provenance?: LifecycleProvenance;
   /** Exact process IDs retained from a confirmed identity scan. */
   processIds?: number[];
   /** Current liveness of the retained process IDs; absent when no trustworthy scan checked them. */

@@ -276,6 +276,14 @@ function archiveCopy(
     gates: [...agent.gates],
     allowCwdFallback: agent.allowCwdFallback,
     recordedTarget: agent.recordedTarget ? { ...agent.recordedTarget } : undefined,
+    /* The verdict and the evidence behind it, written down BECAUSE the evidence
+       itself is not. Everything above is an allow-list that deliberately drops
+       processAlive/processIds — a record out of the scan window has no process
+       to check and never will — so without these three fields a re-entering
+       record would be reclassified from nothing at all. */
+    endEvidence: agent.endEvidence,
+    lifecycle: agent.lifecycle,
+    provenance: agent.provenance,
     archiveKind,
     /* Set once, on first archive, and carried forward on every later rewrite.
        Re-stamping it would restart the retention clock each time a record was
@@ -286,6 +294,10 @@ function archiveCopy(
   };
 }
 
+/* `archiveKind` stays off the wire. It is custody bookkeeping, and the fact it
+   used to be the only carrier of — "a human filed this" versus "this is simply
+   the record we kept" — now ships explicitly as `provenance`, declared, with
+   the operator-archive case still readable through `has(id)`. */
 function publicCopy(agent: StoredAgent): CollectedAgent {
   const { archiveKind: _, ...copy } = agent;
   /* Read, not write: the stored record keeps whatever was true when it was

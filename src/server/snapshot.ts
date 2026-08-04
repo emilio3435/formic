@@ -1,6 +1,8 @@
 import type {
   AgentSnapshot,
+  CollectionScope,
   HubPulse,
+  LifecycleState,
   HubSnapshot,
   IdentityTrace,
   IssueLifecycle,
@@ -43,11 +45,13 @@ import {
   controlsFor,
   cursorModelPolicy,
   effortFor,
+  lifecycleFor,
   operatorControlState,
   outcomeFor,
   processStateFor,
   roleFor,
 } from "./snapshot-agent";
+import type { LifecycleThresholds } from "./lifecycle";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -76,6 +80,8 @@ export interface SnapshotInput {
   triageSummaries?: readonly TriageQueueSummary[];
   now?: Date;
   scanWindowHours?: number;
+  /** The operator's freshness and quiet bands; defaults when absent. */
+  thresholds?: LifecycleThresholds;
 }
 
 type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
@@ -96,6 +102,15 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);
   }
 
+  /* Collection scope, derived at the one place both populations are in hand.
+
+     `input.agents` is what THIS scan actually read; `archivedAgents` is the
+     filing cabinet, which re-enters the merge on every refresh for thirty days.
+     A record present only in the second has left the scan window: still
+     findable, no longer watched, and — critically — never counted live. Without
+     this gate a turn-complete record would sit in Waiting and in totals.live
+     forever, resurrected by the very store that was meant to remember it. */
+  const collectedIds = new Set(input.agents.map((agent) => agent.id));
   const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
@@ -148,6 +163,23 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ? [notification.title, notification.subtitle, notification.body].filter(Boolean).join(" — ").slice(0, 500)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
+    const scope: CollectionScope = collectedIds.has(source.id) ? "observed" : "retained";
+    const operatorArchived = input.archiveStore.has(source.id);
+    const verdict = lifecycleFor(source, {
+      operatorArchived,
+      scope,
+      nowMs,
+      thresholds: input.thresholds,
+      /* Records written before this contract carry no verdict of their own. The
+         one thing still knowable about them is whether a human filed them, so
+         that is what a legacy operator archive freezes as; everything else
+         reads as aged-out, which is exactly what it is. */
+      persisted: source.lifecycle
+        ? { lifecycle: source.lifecycle, provenance: source.provenance }
+        : operatorArchived
+          ? { lifecycle: "finished", provenance: "operator-archive" }
+          : undefined,
+    });
     const activity = activityFor(source, archived);
     const processState = processStateFor(source);
     const initialRefusal = transmitRefusal({ target, processState, archived });
@@ -195,6 +227,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       status: archived ? "archived" : notification ? "attention" : source.status,
       statusReason: snapshotStatusReason,
       activity,
+      lifecycle: verdict.lifecycle,
+      provenance: verdict.provenance,
+      scope,
       processState,
       outcome,
       controlState,
@@ -263,6 +298,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       left.name.localeCompare(right.name),
     );
   const allAgents = orderedPrograms.flatMap((program) => program.agents);
+  /* The lifecycle census counts only what is still being watched. Every one of
+     these gates on scope, because a retained record that reads "waiting" is
+     describing what it was doing when the board last saw it, not what it is
+     doing now — counting it live is the resurrection hole. */
+  const observedAgents = allAgents.filter((agent) => agent.scope !== "retained");
+  const countLifecycle = (state: LifecycleState): number =>
+    observedAgents.filter((agent) => agent.lifecycle === state).length;
+  const byLifecycle = {
+    working: countLifecycle("working"),
+    waiting: countLifecycle("waiting"),
+    unverified: countLifecycle("unverified"),
+    finished: countLifecycle("finished"),
+  };
+  const retained = allAgents.length - observedAgents.length;
   const liveAgents = allAgents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
   const workingAgents = allAgents.filter((agent) => agent.activity === "working");
   const tokenValues = workingAgents
@@ -402,6 +451,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,
       ended: allAgents.filter((agent) => agent.activity === "ended").length,
+      byLifecycle,
+      retained,
       /* Agents waiting on a human, counted from the same signal the tab, the
          title badge, the notifier and the program rollup all read. This was
          issues.length — system findings — which meant the rollup cell and the
