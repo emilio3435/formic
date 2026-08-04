@@ -167,8 +167,15 @@ describe("per session-row: span divided by nothing, the only bound that fires", 
        data. The assertion is kept because it states what we want to be true;
        the marker records that it is not. Retuning the ceiling is a judgment
        call about what a legitimate session length is, and it needs an owner
-       rather than a quiet edit here. */
-    if (!available) return;
+       rather than a quiet edit here.
+
+       Unreadable history THROWS here rather than returning, matching the span
+       check above. `if (!available) return` is the right quiet for a plain
+       test, but under `.failing` quiet means passing, and bun reports a passing
+       `.failing` test as "marked as failing but it passed" — a red that accuses
+       someone of fixing a defect they did not touch, every time BurnBar cannot
+       be read. */
+    expect(available).toBe(true);
     const withinBound = rows.map(sessionSpanMs).filter((span) => span <= DAY_MS);
 
     expect(withinBound.length).toBeGreaterThan(0);
@@ -259,8 +266,12 @@ describe("per million tokens: cost divided by tokens, scale-free and toothless",
        rate card that has no entry for them. Historical rather than ongoing: the
        newest offender is 2026-06-08. Whether the fix is a vector entry, a
        normalisation of proxy-suffixed names, or accepting these as unpriceable
-       is a pricing decision, not a test edit. */
-    if (!available) return;
+       is a pricing decision, not a test edit.
+
+       Unreadable history THROWS rather than returning, for the reason given on
+       the span bound above: a quiet `.failing` test passes, and a passing
+       `.failing` test is reported as a failure. */
+    expect(available).toBe(true);
     const rates = rows.map(costPerMillionTokens).filter((rate): rate is number => rate !== null);
 
     expect(rates.length).toBeGreaterThan(50);
