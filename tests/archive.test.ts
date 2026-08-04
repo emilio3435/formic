@@ -54,6 +54,44 @@ describe("durable archive state", () => {
     ]);
   });
 
+  /* A record written before the collector refused transcript plumbing keeps
+     printing it: an archived session is never re-collected, so its stored task
+     is frozen as it was read. Two of them were still putting
+     `<command-name>/model</command-name>` under the drawer's heading, where the
+     standing objective goes, after the collector had stopped producing it. */
+  test("an archived task that is transcript plumbing does not survive the read", async () => {
+    const contents = new Map<string, string>();
+    const files: ArchiveFileOperations = {
+      readText: async (path) => {
+        const value = contents.get(path);
+        if (value === undefined) throw missingFile();
+        return value;
+      },
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    const source: CollectedAgent = {
+      id: "claude:plumbing",
+      provider: "claude",
+      sourceSessionId: "plumbing",
+      displayName: "Claude · Home",
+      task: "<command-name>/model</command-name>\n<command-args></command-args>",
+      status: "running",
+      statusReason: "Source is active.",
+      updatedAt: "2026-07-23T20:00:00.000Z",
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+    const store = await JsonArchiveStore.open("/virtual/archive.json", files, () =>
+      Date.parse(source.updatedAt));
+
+    await store.record([source]);
+
+    expect(store.archivedAgents()[0]?.task).toBeUndefined();
+  });
+
   /* An archive we could not read is not an empty archive. Booting on empty is
      right — the hub must start — but it silently returns every dismissed
      session to the board as live work, so the count of what is running is

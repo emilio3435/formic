@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { readableTask } from "./collectors";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
 export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -268,7 +269,10 @@ function archiveCopy(
 
 function publicCopy(agent: StoredAgent): CollectedAgent {
   const { archiveKind: _, ...copy } = agent;
-  return copy;
+  /* Read, not write: the stored record keeps whatever was true when it was
+     written, and this is the one door every archived agent leaves by. A record
+     from July still holds a task the collector would no longer produce. */
+  return { ...copy, task: readableTask(copy.task) };
 }
 
 function sameAgent(left: StoredAgent, right: StoredAgent): boolean {
