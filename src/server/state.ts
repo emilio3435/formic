@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
 import { collectCmux, collectCmuxNotifications, DEFAULT_CMUX_EXECUTABLE } from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
@@ -222,7 +223,12 @@ export class HubState {
 
   async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
-    const providers: Provider[] = ["omp", "codex", "claude", "cursor"];
+    /* From the union, not a second list. This WAS a literal, and the literal
+       silently dropped Factory: the collector read its sessions correctly and
+       this loop never asked for them, so the board showed zero rows and marked
+       the source unhealthy — with a green suite, because nothing tested that
+       every collected provider survives the refresh. */
+    const providers: Provider[] = [...PROVIDERS];
     const settings = this.settingsReader?.();
     this.#scanWindowHours = settings?.scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;

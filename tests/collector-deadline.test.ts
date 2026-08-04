@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PROVIDERS } from "../src/shared/types";
 import { HubState } from "../src/server/state";
 import type { HubCollectors } from "../src/server/state";
 import type { ArchiveStore, CommandRunner } from "../src/server/types";
@@ -52,7 +53,7 @@ function hub(collectors: Partial<HubCollectors>): HubState {
 const refresh = (state: HubState): Promise<HubSnapshot> => state.refresh({ cmux: true });
 
 describe("when collection runs out of time the board says so", () => {
-  test("a hung collector leaves no agents AND four stale sources", async () => {
+  test("a hung collector leaves no agents AND every source stale", async () => {
     /* The property that already held, asserted because everything below
        depends on it: an empty board is never published without the four
        providers also being marked stale. Zero agents and no complaint is the
@@ -60,8 +61,9 @@ describe("when collection runs out of time the board says so", () => {
     const snapshot = await refresh(hub({ sessions: () => never() }));
 
     expect(snapshot.totals.live).toBe(0);
-    expect([...snapshot.controlHealth.staleSources].sort())
-      .toEqual(["claude", "codex", "cursor", "omp"]);
+    /* EVERY source, from the union — a hung collector must not leave the newest
+       provider quietly unmarked. */
+    expect([...snapshot.controlHealth.staleSources].sort()).toEqual([...PROVIDERS].sort());
     expect(snapshot.controlHealth.errors.length).toBeGreaterThan(0);
   });
 
@@ -151,7 +153,7 @@ describe("when collection runs out of time the board says so", () => {
     hang = false;
     const after = await refresh(state);
 
-    expect(during.controlHealth.staleSources.length).toBe(4);
+    expect(during.controlHealth.staleSources.length).toBe(PROVIDERS.length);
     expect(after.controlHealth.staleSources).toEqual([]);
     expect(after.controlHealth.errors).toEqual([]);
   });

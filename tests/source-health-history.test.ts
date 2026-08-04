@@ -143,3 +143,60 @@ describe("byProvider carries history, which one snapshot cannot", () => {
     expect(Object.keys(byProvider).sort()).toEqual([...PROVIDERS].sort());
   });
 });
+
+describe("every collected provider survives the refresh", () => {
+  /* The gap that let Factory ship broken. `collectSessions` returned its
+     sessions correctly and `#performRefresh` iterated a SECOND, hardcoded list
+     that did not include it — so the rows were read and then dropped, the source
+     was marked unhealthy, and the whole suite stayed green because every test
+     asserted about providers the literal already contained.
+
+     Driven from the union so it covers the provider added next, not the one
+     added last. */
+  const agentFor = (provider: Provider): CollectedAgent => ({
+    id: `${provider}:s1`,
+    provider,
+    sourceSessionId: "s1",
+    displayName: `${provider} session`,
+    identity: { name: `${provider} session`, base: `${provider} session`, source: "origin-cwd" },
+    cwd: "/Users/ant/Developer/thing",
+    status: "running",
+    statusReason: "recent",
+    updatedAt: new Date().toISOString(),
+    tokens: { provenance: "unknown" },
+    artifacts: [],
+    gates: [],
+  });
+
+  test("a session from any provider reaches the board, not just the ones a literal listed", async () => {
+    const everyProvider = Object.fromEntries(
+      PROVIDERS.map((provider) => [provider, { value: [agentFor(provider)], errors: [] }]),
+    ) as Partial<Record<Provider, CollectionResult<CollectedAgent[]>>>;
+
+    const state = stateWith([everyProvider]);
+    await state.refresh();
+
+    const seen = new Set(
+      state.get().programs.flatMap(({ agents }) => agents).map(({ provider }) => provider),
+    );
+    for (const provider of PROVIDERS) {
+      expect(seen.has(provider), `${provider} was collected but never reached the board`).toBe(true);
+    }
+  });
+
+  test("a provider that collected cleanly is reported healthy", async () => {
+    /* The other half of the same defect: dropped rows also left the source
+       reading unhealthy, which is the more alarming symptom of the two. */
+    const everyProvider = Object.fromEntries(
+      PROVIDERS.map((provider) => [provider, { value: [agentFor(provider)], errors: [] }]),
+    ) as Partial<Record<Provider, CollectionResult<CollectedAgent[]>>>;
+
+    const state = stateWith([everyProvider]);
+    await state.refresh();
+
+    for (const provider of PROVIDERS) {
+      expect(await providerHealth(state, provider), `${provider} collected cleanly and still reads unhealthy`)
+        .toMatchObject({ healthy: true });
+    }
+  });
+});
