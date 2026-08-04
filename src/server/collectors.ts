@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { open, readdir, stat } from "node:fs/promises";
-import type { AgentStatus, Provider, TokenUsage } from "../shared/types";
+import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
+import { DEFAULT_FRESH_MS, DEFAULT_QUIET_MS } from "./lifecycle";
 import {
   extractLastHumanMessage,
   extractClosingByRole,
@@ -262,8 +263,8 @@ function statusFrom(updatedAt: string, exited: boolean, nowMs: number): {
 } {
   if (exited) return { status: "archived", reason: "Source recorded a session exit." };
   const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
-  if (ageMs < 3 * 60_000) return { status: "running", reason: "Source activity within 3 minutes." };
-  if (ageMs < 45 * 60_000) return { status: "waiting", reason: "No source activity in the last 3 minutes." };
+  if (ageMs < DEFAULT_FRESH_MS) return { status: "running", reason: "Source activity within 3 minutes." };
+  if (ageMs < DEFAULT_QUIET_MS) return { status: "waiting", reason: "No source activity in the last 3 minutes." };
   return { status: "stale", reason: "No source activity in the last 45 minutes." };
 }
 
@@ -303,6 +304,10 @@ function makeAgent(input: {
   humanMessages?: readonly HumanMessageCandidate[];
   statusReason?: string;
   exited?: boolean;
+  /* What `exited` actually meant for this provider. Passing it beside the
+     boolean rather than replacing the boolean keeps this slice inert: nothing
+     reads the discriminant yet, and every existing verdict is untouched. */
+  endEvidence?: EndEvidence;
   meta: ParseMetadata;
 }): CollectedAgent {
   const status = statusFrom(
@@ -371,6 +376,7 @@ function makeAgent(input: {
       : [],
     gates: [],
     transcriptEndedCleanly: input.exited === true || undefined,
+    endEvidence: input.exited === true ? input.endEvidence : undefined,
   };
 }
 
@@ -478,6 +484,9 @@ function createOmpParser(): IncrementalParser {
         humanMessages: humanMessages(messages),
         statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
+        // OMP's session_exit is the real thing: a record that the session, not a
+        // turn, is over.
+        endEvidence: "session-exit",
         meta,
       });
       return { ...agent, status: "archived" };
@@ -602,6 +611,9 @@ function createCodexParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
+        // Codex `task_complete` closes a TURN. The session stays open, and the
+        // next user message clears the flag again a few lines above.
+        endEvidence: "turn-complete",
         meta,
       });
     },
@@ -773,6 +785,9 @@ function createClaudeParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         exited,
+        // Claude `stop_reason:"end_turn"` is the model yielding the floor, not
+        // the session closing. The very next user message reopens it.
+        endEvidence: "turn-complete",
         meta,
       });
     },

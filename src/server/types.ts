@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   Artifact,
   CostUsage,
+  EndEvidence,
   Provider,
   SurfaceIdentityTrace,
   TokenUsage,
@@ -70,6 +71,13 @@ export interface CollectedAgent {
   gates: string[];
   /** True only when the latest provider turn contains an explicit clean-completion record. */
   transcriptEndedCleanly?: boolean;
+  /* WHICH clean completion it was, which the boolean above cannot say.
+     `transcriptEndedCleanly` is minted from turn-level events for Claude and
+     Codex and from a real session fact for OMP, so one flag carried two
+     incompatible claims and everything downstream had to guess which it held.
+     A session ending and a turn ending are different events and get different
+     values here. */
+  endEvidence?: EndEvidence;
   /** Exact process IDs retained from a confirmed identity scan. */
   processIds?: number[];
   /** Current liveness of the retained process IDs; absent when no trustworthy scan checked them. */

@@ -21,6 +21,37 @@ const _providersAreExhaustive: ProvidersAreExhaustive = true;
 void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
+/* The one bucket every session occupies. Four states, and the fourth is the
+   point: `unverified` is the answer for a session that has gone quiet with no
+   process to check, which the board used to file as ended. Absence of evidence
+   was being published as evidence of an ending. */
+export type LifecycleState = "working" | "waiting" | "unverified" | "finished";
+/* Why the lifecycle says what it says. The first four are the four distinct
+   facts that "archived" used to collapse into one word — a provider recorded an
+   exit, a human filed it, its process was checked and gone, or it simply left
+   the scan window. The rest explain a Waiting or Unverified verdict. */
+export type LifecycleProvenance =
+  | "provider-exit"
+  | "operator-archive"
+  | "process-died"
+  | "aged-out"
+  | "recency"
+  | "turn-complete"
+  | "process-live-quiet"
+  | "no-evidence"
+  | "turn-complete-aged";
+/* Whether the session is still being watched or survives only as a record.
+   Collection scope, not lifecycle: a retained record is filed in History because
+   it left the scan window, which is a fact about the board's reach rather than
+   about the session's ending. */
+export type CollectionScope = "observed" | "retained";
+/* What a source actually recorded, kept apart because the two are not the same
+   claim and were being carried on one boolean. `session-exit` ends a session
+   (OMP session_exit, Cursor is_archived). `turn-complete` ends a TURN (Claude
+   end_turn, Codex task_complete, Cursor turn_ended:success) and says nothing
+   about whether the session is over — targets.ts:305-310 already knew this for
+   write-gating while the classifier was still treating it as an ending. */
+export type EndEvidence = "session-exit" | "turn-complete";
 export type ProcessState = "running" | "exited" | "died" | "unknown";
 export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";

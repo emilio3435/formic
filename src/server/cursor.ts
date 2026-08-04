@@ -11,6 +11,7 @@ import {
   type HumanMessageCandidate,
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import { DEFAULT_FRESH_MS, DEFAULT_QUIET_MS } from "./lifecycle";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -202,13 +203,13 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   if (input.archived) {
     status = "archived";
     statusReason = "Cursor marked this GUI agent archived.";
-  } else if (ageMs >= 45 * 60_000) {
+  } else if (ageMs >= DEFAULT_QUIET_MS) {
     status = "stale";
     statusReason = "Cursor session metadata has not changed in 45 minutes.";
   } else if (turnStatus && turnStatus !== "success") {
     status = "attention";
     statusReason = `Cursor recorded the last turn as ${turnStatus}.`;
-  } else if (ageMs < 3 * 60_000) {
+  } else if (ageMs < DEFAULT_FRESH_MS) {
     // Freshness wins over a stale turn_ended:"success" record. That record is the
     // last completed turn in the cumulative transcript and persists forever, so a
     // newly streaming turn (no new turn_ended yet) must not force the session idle.
@@ -258,6 +259,13 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
       : [],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor turn: ${turnStatus}`] : [],
+    // Cursor speaks both dialects. `is_archived` is the GUI's own record that
+    // the conversation is closed; `turn_ended:"success"` is one turn landing.
+    endEvidence: input.archived
+      ? "session-exit"
+      : turnStatus === "success"
+        ? "turn-complete"
+        : undefined,
     allowCwdFallback: input.allowCwdFallback,
   };
 }
@@ -275,16 +283,16 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
   const failed = Boolean(turnStatus) && turnStatus !== "success";
   const status: CollectedAgent["status"] =
     failed ? "stale"
-    : ageMs >= 45 * 60_000 ? "stale"
-    : ageMs < 3 * 60_000 ? "running"
+    : ageMs >= DEFAULT_QUIET_MS ? "stale"
+    : ageMs < DEFAULT_FRESH_MS ? "running"
     : turnStatus === "success" ? "stale"
     : "waiting";
   const statusReason =
     failed
       ? `Cursor child recorded the last turn as ${turnStatus}.`
-    : ageMs >= 45 * 60_000
+    : ageMs >= DEFAULT_QUIET_MS
       ? "Cursor child transcript has not changed in 45 minutes."
-    : ageMs < 3 * 60_000
+    : ageMs < DEFAULT_FRESH_MS
       ? "Cursor child transcript changed within the last 3 minutes."
     : turnStatus === "success"
       ? `Cursor child recorded the last turn as ${turnStatus}.`
@@ -318,6 +326,9 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],
+    // A child has no archive flag of its own; a successful turn is the only
+    // ending it can report, and it is a turn ending.
+    endEvidence: turnStatus === "success" ? "turn-complete" : undefined,
     allowCwdFallback: false,
   };
 }

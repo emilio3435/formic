@@ -53,6 +53,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 
 | Module | Decides |
 |---|---|
+| `lifecycle.ts` | The one place a session's lifecycle is decided (`classifyLifecycle`): Working, Waiting, Unverified, or Finished, plus the provenance saying why. Its governing rule is that absence of evidence is not evidence of an ending — a quiet session with no process to check is `unverified`, never finished. The rules live outside the code, in `tests/fixtures/lifecycle-truth-table.json`, so every implementation of them can be executed against the same table |
 | `snapshot-agent.ts` | Per-agent view: capabilities (`controlsFor`), activity, outcome, `contextPct` |
 | `snapshot-issues.ts`, `snapshot-operator-issues.ts` | What counts as a finding, and how identity conflicts split into live faults vs debris |
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |
