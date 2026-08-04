@@ -1,4 +1,24 @@
+/* The runtime companion to `Provider`. The list was hand-written in three
+   places — identity-bindings, state, and the health accounting in snapshot —
+   and the third one dropped omp, which is how "4 of 4 collectors healthy" came
+   to be printed above a breakdown that could show omp broken. A type cannot be
+   iterated, so the list has to exist; it does not have to exist three times.
+
+   `satisfies` is what makes this load-bearing: adding a provider to the union
+   without adding it here fails the build rather than quietly under-counting.
+   identity-bindings.ts:59 and state.ts:188 still keep their own correct copies
+   and could read this instead — worth doing, not part of this fix. */
 export type Provider = "codex" | "omp" | "claude" | "cursor";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor"] as const satisfies readonly Provider[];
+/* Exhaustiveness in the other direction: `satisfies` proves every entry is a
+   Provider, and this proves every Provider is an entry. Adding one to the union
+   without adding it to the list fails the build here rather than quietly
+   under-counting collector health, which is exactly how omp went missing. The
+   union is left spelled out because the reference-doc tests read it from this
+   source to check the guide names the same roster the code has. */
+type ProvidersAreExhaustive = Exclude<Provider, (typeof PROVIDERS)[number]> extends never ? true : never;
+const _providersAreExhaustive: ProvidersAreExhaustive = true;
+void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
 export type ProcessState = "running" | "exited" | "died" | "unknown";
@@ -34,6 +54,24 @@ export interface TokenUsage {
   sessionTotal?: number;
   /** Session-cumulative cache READS. Re-read context, billed at a fraction. */
   sessionCachedInput?: number;
+  /* The session's PROCESSED total: every call's size summed, cache re-reads
+     included. Deliberately the one figure this board shares a unit with an
+     outside source.
+
+     `sessionTotal` is consumption — each prompt token counted once — which is
+     the right number for "what did this cost" and is measured by nothing else
+     on this machine. OpenBurnBar, a separate application that has no idea this
+     repo exists, derives usage from its own store and records the PROCESSED
+     total per session. Both derivations reach the same sessions (46 of 50 rows
+     in a 24h window carry a sessionId matching a board sourceSessionId
+     exactly), but they could not be compared, because the board published only
+     consumption and BurnBar publishes only processed — the 2.6x-16.9x spread
+     between them was just the cache multiplier, not a disagreement.
+
+     Publishing this puts the two on the same unit, which makes it the first
+     figure on this board that can be checked against a source outside it.
+     Everything else verifies internal consistency. */
+  sessionProcessed?: number;
   contextWindow?: number;
   scope?: "latest-turn" | "session" | "unknown";
   provenance: "observed" | "estimated" | "unknown";
@@ -411,7 +449,16 @@ export interface PulseBurn {
 
 export interface PulseActivityBucket {
   start: string;
-  activeSessions: number;
+  /* Null when the bucket was never successfully observed — every refresh inside
+     it came back with all four collectors stale, or no refresh landed in it at
+     all because the process was busy or restarting.
+
+     `tokens` has always been nullable for this reason; `activeSessions` was not,
+     so an outage published 0 and drew a trough identical to a genuinely quiet
+     five minutes. "We could not look" and "nothing was happening" are different
+     facts, and nothing else on this board computes an activity trend, so no
+     second figure would ever have contradicted the wrong one. */
+  activeSessions: number | null;
   tokens: number | null;
 }
 

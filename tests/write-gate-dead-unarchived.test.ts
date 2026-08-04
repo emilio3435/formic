@@ -149,18 +149,20 @@ describe("the liveness gate fires where archiving would not have", () => {
 });
 
 describe("the UI still offers the button, so the server gate is the only guard", () => {
-  test("controlsFor leaves instruct enabled on a dead, unarchived agent", () => {
-    /* controlsFor computes `proven && !archived` and never consults process
-       evidence, so the operator is shown a live Send button on a row the same
-       snapshot marks died.
+  test("controlsFor refuses instruct on a dead, unarchived agent, as the endpoint does", () => {
+    /* Was pinned at `true`: controlsFor computed `proven && !archived` and never
+       consulted process evidence, so the operator saw a live Send button on a
+       row the same snapshot marked died, and the endpoint then answered 409.
 
-       This is why the server gate cannot be traded for a UI change: anyone
-       removing it on the belief that the button is already hidden would reopen
-       the hole silently, and this test is what says otherwise. */
+       Both now read one predicate (transmitRefusal), so they cannot disagree by
+       construction rather than by both being remembered — which is what failed.
+       The server gate still cannot be traded for a UI change; it is now simply
+       impossible for the UI to advertise what the server will refuse. */
     const capabilities = controlsFor(collectedDead, EXACT_TARGET, false);
     const instruct = capabilities.find(({ action }) => action === "instruct");
 
-    expect(instruct?.enabled).toBe(true);
+    expect(instruct?.enabled).toBe(false);
+    expect(instruct?.reason).toMatch(/process was checked and is gone/i);
   });
 
   test("archiving is what disables it, which is the masking this file undoes", () => {

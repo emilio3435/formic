@@ -1857,29 +1857,42 @@ body.feed-frozen .programs { opacity: 0.62; }
   outline: none;
 }
 .shelf-evidence-rail .ico { width: 1.05rem; height: 1.05rem; flex: none; }
-.shelf-rail-spine {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.28rem;
-  padding: 0.15rem 0 0.1rem;
-}
-.shelf-rail-bead {
-  width: 0.42rem;
-  height: 0.42rem;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--ember) 55%, var(--sand));
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--ember) 20%, transparent);
-}
-.shelf-rail-bead:nth-child(2) { width: 0.5rem; height: 0.5rem; opacity: 0.9; }
-.shelf-rail-bead:nth-child(3) { width: 0.58rem; height: 0.58rem; opacity: 0.8; }
-.shelf-rail-bead:nth-child(4) { width: 0.42rem; height: 0.42rem; opacity: 0.65; }
+/* The decorative bead strip is gone: four fixed dots that never varied with
+   content and stated nothing. The count that replaced them is below. */
 .shelf-rail-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font: 750 10px/1 var(--font-mono);
-  letter-spacing: 0.16em;
+  /* Was 750 10px at --muted: the least legible text on the panel, on the one
+     control that opens everything the main view is not allowed to show. */
+  font: 750 11px/1 var(--font-mono);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--ink);
+}
+/* How many kinds of evidence this agent actually has. Reads upright inside a
+   vertical rail, because a rotated number is a glyph nobody parses at a
+   glance. */
+.shelf-rail-count {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.22rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ember) 22%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--ember) 45%, transparent);
+  color: var(--ink);
+  font: 700 10px/1 var(--font-mono);
+  flex: none;
+}
+/* Nothing to open. Stated rather than shown as "0", which reads as a count
+   that failed to load. */
+.shelf-rail-count.is-empty {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--line-strong);
+  color: var(--muted);
 }
 .shelf-cog {
   display: inline-flex;
@@ -1928,7 +1941,7 @@ body.feed-frozen .programs { opacity: 0.62; }
     align-self: start;
     padding: 0.45rem 0.85rem;
   }
-  .shelf-rail-spine { flex-direction: row; padding: 0; }
+  /* The bead-strip layout rule went with the beads. */
   .shelf-rail-label {
     writing-mode: horizontal-tb;
     transform: none;
@@ -2548,9 +2561,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 .evidence-control-sentence { margin: 0; font-size: 13.5px; line-height: 1.4; }
 .evidence-ids { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .evidence-copy-id { min-height: 30px; font-size: 11.5px; }
+/* Tighter than a standalone .btn.sm because these three are one set, and the
+   set reads as a row or not at all. At the shelf's 1440px width the inherited
+   0.65rem gutters put the row 2px over the panel and wrapped the last button
+   onto a line of its own, straight across the scroll fold. Carries .btn to
+   outrank the .btn.sm shorthand it is narrowing. */
+.evidence-ids .btn.evidence-copy-id { padding-inline: 0.45rem; }
 .detail-grid { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem 0.8rem; margin: 0; }
 .detail-grid dt { font: 700 10px/1.4 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+/* A value that is a paragraph plus a row of controls takes the panel's width
+   instead of the value column's, with its label above it rather than beside it.
+   The 8rem label gutter is affordable for a figure; for the control-link row it
+   was the difference between three buttons on one line and three lines of one
+   button, in a shelf whose height is fixed by the Thread column next to it. */
+.detail-grid dd.is-wide { grid-column: 1 / -1; }
 .detail-grid dd code { color: var(--muted); }
 /* Glossary terms: dotted underline signals "hover/focus for a plain-language
    explainer"; the tooltip itself is the native title (keyboard-reachable via

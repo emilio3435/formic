@@ -255,19 +255,36 @@ export class HubState {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
     }
-    const unavailableError = collectionErrors[0] ?? deadlineError;
-    const unavailableSessions = (): SessionsResult => ({
-      omp: { value: [], errors: [unavailableError] },
-      codex: { value: [], errors: [unavailableError] },
-      claude: { value: [], errors: [unavailableError] },
-      cursor: { value: [], errors: [unavailableError] },
-    });
+    /* A result missing because the DEADLINE fired did not fail for some other
+       collector's reason. This published `collectionErrors[0]` — whichever
+       error happened to land first — so a machine where cmux is not installed
+       (fails in milliseconds) and transcript reading is slow (never finishes)
+       told the operator that Claude, Codex, OMP and Cursor were all unavailable
+       because "cmux discovery failed: spawn cmux ENOENT". None of them had
+       failed; they had not finished, and the reader was sent to the one
+       subsystem that was not the problem.
+
+       Each missing result now answers with its OWN failure if it had one, and
+       with the deadline otherwise. Reporting "we ran out of time" is honest;
+       naming another component is a guess, and a confident wrong one costs more
+       than saying less. */
+    const reasonFor = (label: string): string =>
+      collectionErrors.find((error) => error.startsWith(`${label}:`)) ?? deadlineError;
+    const unavailableSessions = (): SessionsResult => {
+      const reason = reasonFor("session collection failed");
+      return {
+        omp: { value: [], errors: [reason] },
+        codex: { value: [], errors: [reason] },
+        claude: { value: [], errors: [reason] },
+        cursor: { value: [], errors: [reason] },
+      };
+    };
     const sessions = sessionsResult ?? unavailableSessions();
     const cmux = options.cmux
-      ? cmuxResult ?? { value: [], errors: [unavailableError] }
+      ? cmuxResult ?? { value: [], errors: [reasonFor("cmux discovery failed")] }
       : undefined;
     const notifications = options.cmux
-      ? notificationsResult ?? { value: [], errors: [unavailableError] }
+      ? notificationsResult ?? { value: [], errors: [reasonFor("cmux notification collection failed")] }
       : undefined;
     const collectedAt = new Date().toISOString();
     for (const provider of providers) {

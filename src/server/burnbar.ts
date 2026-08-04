@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { MODEL_CONFIG } from "./model-config";
 
 const KEYCHAIN_SERVICE = "com.openburnbar.database-encryption";
 const KEYCHAIN_ACCOUNT = "database-encryption-key-v1";
@@ -36,6 +37,48 @@ export interface UsageSummary {
   /* How many invocations went unmeasured — the size of the gap, not just its
      existence, so the card can say "3,000 across 2 calls, 1 unmeasured". */
   tokensMissing: number;
+  /* Rows whose token count exceeds any context window this fleet runs, which
+     makes them provably NOT single calls.
+
+     BurnBar records some Claude Code sessions as one cumulative row per session
+     alongside per-call rows from other providers. On 2026-07-30 seven such rows
+     carried 243M-512M tokens each against a 1M window, and their session ids
+     are this board's own agents. So `invocations` counts two different units,
+     and every ratio over it - cost per invocation, or comparing a 24h count of
+     175 with a 30d count of 3006 - divides by a mixed denominator.
+
+     The COST is not affected and is deliberately not adjusted: all 58 of those
+     rows are provenance "measured", provider-reported, and price at $1.27/M
+     against a normal-row median of $1.63/M. Cache reads are billed on every
+     turn, so a long session genuinely accrues that spend. The token counts are
+     cumulative with cache reads re-counted per turn - the same shape as the
+     sessionTotal defect fixed in collectors.ts, here inside a database we do
+     not own. Reported rather than repaired: the money is real, the unit is what
+     is wrong. */
+  aggregatedInvocations: number;
+  /* Stored rows that a later snapshot of the same session superseded, and which
+     are therefore NOT summed. Published so the collapse is auditable: the dedup
+     is right for cumulative snapshots and would be wrong for two genuinely
+     distinct calls sharing a session id, and this is the number that would make
+     that visible instead of silently deleting spend. */
+  supersededSnapshots: number;
+  /* What exists BEFORE this window, so a view can say what it is not showing.
+
+     The UI offered 1h/24h/7d/30d and the API refused anything over 90 days,
+     while the database holds ~130 days. Measured: a 30-day view shows
+     $13,216.67 of $42,886.25 — it silently omitted $29,669.59, 69.2% of all
+     recorded spend, on the surface an operator uses to judge what a fleet
+     costs. Nothing said so.
+
+     Same rule as costKnown: a view that cannot show everything states what it
+     cannot see rather than suppressing the value or implying completeness.
+     `earliestAt` is how far back the source goes at all, so a card can offer to
+     widen rather than leaving the operator to guess a bound. */
+  priorSpend: {
+    earliestAt: string | null;
+    invocations: number;
+    measuredCostUsd: number | null;
+  };
   /* The COMPLETE cost of the window, or null when any invocation in it is
      unpriced. Kept strict: a consumer reading this alone must never mistake a
      floor for a total. */
@@ -121,6 +164,16 @@ export interface UsageInvocationsResponse {
   from: string;
   to: string;
   limit: number;
+  /* How many rows the window actually holds, so a caller can tell a complete
+     answer from a truncated one.
+
+     LIMIT returned the first 500 by startTime and said nothing about the rest.
+     A reader counting from it — as I did while auditing token magnitudes, and
+     briefly concluded two queries disagreed — sees a plausible, complete-looking
+     list that describes a fifth of the window. Same rule the window horizon now
+     follows: a view that cannot show everything says what it cannot see. */
+  matched: number;
+  truncated: boolean;
   invocations: UsageInvocation[];
   error?: string;
 }
@@ -159,6 +212,22 @@ export interface CostResult {
   costProvenance: CostProvenance;
   pricingVersion?: string;
 }
+
+/* The largest context window this fleet runs. A grouped row carrying more
+   tokens than this per invocation cannot be describing single calls. Read from
+   config rather than hardcoded so a fleet on bigger models raises the bound
+   instead of quietly reclassifying its ordinary rows as aggregates. */
+/* A query bound, not a retention policy: finite so a malformed request cannot
+   scan without limit, wide enough that no real history is unreachable. Named
+   rather than inline because reference-docs derives the documented ceiling from
+   it — the guide's claim that each limit is stricter than the next only holds
+   if all three are read from source. */
+const MAX_RANGE_MS = 400 * 24 * 60 * 60 * 1_000;
+
+const MAX_CONTEXT_WINDOW = Math.max(
+  ...Object.values(MODEL_CONFIG.claudeContextWindows ?? {}),
+  1_000_000,
+);
 
 const EMPTY_PRICING_CONFIG: PricingConfig = {
   pricingVersion: "unavailable",
@@ -295,7 +364,13 @@ export interface UsageWardResponse {
      left unscored because one of their windows had unmeasured rows — without
      it, "no spikes" would read as an all-clear the ward never actually
      established. */
-  spikeCoverage: { complete: boolean; skipped: number };
+  /* `truncated` counts spikes RANKED BUT NOT RETURNED because the response caps
+     the list. Without it the cap was silent: measured with 15 models spiking,
+     the ward returned 12 and reported `complete: true, skipped: 0` — a field
+     named coverage asserting it had covered everything while three alarms were
+     dropped. Nothing else on the board computes spikes, so no second figure
+     would ever have contradicted that. */
+  spikeCoverage: { complete: boolean; skipped: number; truncated: number };
   quotaPressure: Array<{ provider: string; label: string; usedPercent: number; resetsAt?: string }>;
   /* The ward answers from two independent sources: spikes from the encrypted
      database, quota pressure from the provider_quotas.json sidecar. Either can
@@ -450,7 +525,13 @@ function parseRange(url: URL): { from: string; to: string } | string {
       : toMs - 24 * 60 * 60 * 1_000;
   if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return "from and to must be ISO timestamps.";
   if (fromMs >= toMs) return "from must be earlier than to.";
-  if (toMs - fromMs > 90 * 24 * 60 * 60 * 1_000) return "Range cannot exceed 90 days.";
+  /* Was 90 days, which refused windows the DATA supports: the source holds
+     ~130 days, so a 120-day query returned 400 while queryable spend sat behind
+     the refusal. The bound exists to stop an unbounded scan, not to decide what
+     an operator may ask about. */
+  if (toMs - fromMs > MAX_RANGE_MS) {
+    return `Range cannot exceed ${Math.round(MAX_RANGE_MS / 86_400_000)} days.`;
+  }
   return { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() };
 }
 
@@ -510,6 +591,12 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     from,
     to,
     processedTokens: null,
+    // Nothing was read, so nothing can be classified as an aggregate either.
+    aggregatedInvocations: 0,
+    supersededSnapshots: 0,
+    // And nothing is known about what lies before the window, which is not the
+    // same as knowing there is nothing.
+    priorSpend: { earliestAt: null, invocations: 0, measuredCostUsd: null },
     estimatedCostUsd: null,
     // Nothing was read, so there is no measured floor either.
     measuredCostUsd: null,
@@ -523,13 +610,118 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
   };
 }
 
+/* The aggregation, applied to ANY set of deduplicated rows.
+
+   It lived inline and served only the window; priorSpend summed measuredCost
+   straight from SQL instead. The two disagreed in a way nobody would guess: a
+   model group holding BOTH exact and unpriced rows has its whole cost nulled
+   here when the model has no published price, discarding the exact cost inside
+   it, while a raw SUM kept that. So window + prior varied by $3,899 depending
+   on where the split fell - after the dedup fix had already closed a $17,698
+   version of the same disagreement.
+
+   One function, called by both halves. Two paths that must agree eventually do
+   not; today that has happened four times. */
+function aggregateRows(queryRows: readonly QueryRow[]) {
+  const byModel = queryRows.map((row) => {
+    const costMissing = num(row.costMissing) ?? 0;
+    const measuredCost = num(row.measuredCost) ?? 0;
+    const derived = resolveUsageCost({
+      model: str(row.model),
+      inputTokens: num(row.unpricedInputTokens) ?? 0,
+      outputTokens: num(row.unpricedOutputTokens) ?? 0,
+      cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
+      cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
+      measuredCostUsd: null,
+    });
+    const cost = costMissing === 0
+      ? { costUsd: measuredCost, costProvenance: "measured" as const }
+      : derived.costUsd == null
+        ? derived
+        : {
+          costUsd: measuredCost + derived.costUsd,
+          costProvenance: "derived_estimate" as const,
+          pricingVersion: derived.pricingVersion,
+        };
+    return {
+      provider: str(row.provider) || "unknown",
+      // null here means every row in the group was unmeasured, which
+      // tokensMissing states outright — 0 is the measured subtotal, not a claim.
+      tokens: num(row.tokens) ?? 0,
+      tokensMissing: num(row.tokensMissing) ?? 0,
+      invocations: num(row.invocations) ?? 0,
+      /* The floor for THIS group, always a number and never nulled.
+
+         `costUsd` above goes null when the group holds an unpriced row, which
+         is right for a total and throws away the exact cost sitting beside it.
+         Provider floors were rebuilt from those nulls, so the floor was not
+         additive: splitting a mixed group at a window boundary could separate
+         its exact rows from its unpriced ones and RAISE the total. Measured as
+         a $1,824 disagreement at the 30-day split alone.
+
+         This is the c58d85c defect one level further down — a partial measure
+         suppressed because part of it was missing. */
+      floorUsd: measuredCost + (derived.costUsd ?? 0),
+      ...cost,
+    };
+  });
+  const providers = new Map<string, typeof byModel>();
+  for (const row of byModel) {
+    const group = providers.get(row.provider) ?? [];
+    group.push(row);
+    providers.set(row.provider, group);
+  }
+  const byProvider = [...providers].map(([provider, group]) => {
+    const unknown = group.some((row) => row.costUsd == null);
+    const derived = group.some((row) => row.costProvenance === "derived_estimate");
+    /* A provider is nulled whole as soon as ONE of its models is unpriced,
+       which is right for `costUsd` (a provider TOTAL) and wrong for everything
+       downstream that used to be derived from it. Cursor bills two calls, one
+       priced at $3.00 and one on a model with no published rate: the gate
+       suppressed the $3.00 it did measure AND, because the fleet gap counted
+       the invocations of every nulled provider, reported 2 unpriced calls
+       where exactly 1 was. It undercut the floor and inflated the hole beside
+       it, from the same cause. The provider row now carries its own floor and
+       its own gap, the same shape the fleet carries. */
+    const priced = group.filter((row) => row.costUsd != null);
+    return {
+      provider,
+      tokens: group.reduce((sum, row) => sum + row.tokens, 0),
+      tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
+      costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
+      /* Summed from every group's own floor, so it is additive: the same rows
+         produce the same floor however they are partitioned.
+
+         Null when NOTHING in the provider could be priced at all, because a
+         floor of 0 asserts "we measured no spend here" where the truth is "we
+         could price none of it" — absent-first, which summing alone would have
+         quietly repealed. */
+      measuredCostUsd: group.every((row) => row.costUsd == null && row.floorUsd === 0)
+        ? null
+        : group.reduce((sum, row) => sum + row.floorUsd, 0),
+      costMissingInvocations: group
+        .filter((row) => row.costUsd == null)
+        .reduce((sum, row) => sum + row.invocations, 0),
+      costProvenance: unknown ? "unknown" as const
+        : derived ? "derived_estimate" as const
+        : "measured" as const,
+      invocations: group.reduce((sum, row) => sum + row.invocations, 0),
+    };
+  });
+  return { byProvider };
+}
+
 export async function getUsageSummary(from: string, to: string): Promise<UsageSummary> {
   try {
     const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
     const rows = await runEncryptedQuery(
       `SELECT
+         /* The window and everything before it come from ONE scan, split here
+            rather than fetched by two queries that must agree. */
+         CASE WHEN startTime < ? THEN 1 ELSE 0 END AS isPrior,
          provider,
          COALESCE(model, 'unknown') AS model,
+         MIN(startTime) AS earliestStart,
          COUNT(*) AS invocations,
          -- Bare SUM skips NULLs instead of scoring them zero, so this is the
          -- sum of what was actually measured; tokensMissing carries the rest.
@@ -540,96 +732,135 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheReadTokens, 0) END) AS unpricedCacheReadTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE COALESCE(cacheCreationTokens, 0) END) AS unpricedCacheCreationTokens,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
-         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing
-       FROM token_usage
-       WHERE startTime >= ? AND startTime < ?
-       GROUP BY provider, model
+         SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing,
+         -- Check 5 as SQL: a single call cannot carry more tokens than the
+         -- context window it ran in, so a ROW above that bound is not a call.
+         -- Counted per row, not per group: a group average above the bound
+         -- proves only that SOME row exceeds it, and blaming all of them would
+         -- overstate the very count that exists to be trustworthy.
+         SUM(CASE WHEN totalTokens > ? THEN 1 ELSE 0 END) AS aggregatedRows,
+         -- Tokens this window can actually be held responsible for. A
+         -- cumulative session row spans the session's whole lifetime, so
+         -- dividing it by THIS window's hours credits hours of work to
+         -- whichever window happens to contain its startTime.
+         SUM(CASE WHEN totalTokens > ? THEN 0 ELSE COALESCE(totalTokens, 0) END) AS attributableTokens,
+         -- How many stored rows were superseded by a later snapshot of the same
+         -- session. Published so the collapse is auditable rather than silent:
+         -- if a provider ever records two genuinely DISTINCT calls under one
+         -- session id, this dedup would drop one, and this is the number that
+         -- would show it happening.
+         SUM(snapshotRows - 1) AS supersededRows
+       FROM (
+         /* One row per SESSION, not per stored row.
+
+            OpenBurnBar - a separate application; this repo contains no INSERT,
+            UPDATE or DELETE against token_usage - records a session's RUNNING
+            TOTAL and re-records it as the session progresses. Proven on this
+            data: every one of the 22 multi-row sessions across 3,039 rows and
+            three providers shares a startTime, carries advancing endTimes and
+            has monotonically growing totals. 513M then 572M for one session,
+            476M then 483M for another. The later row CONTAINS the earlier one,
+            so SUM() over both double-counted the whole session.
+
+            MAX(endTime) with bare columns is SQLite's documented behaviour:
+            the unaggregated columns come from the row that supplied the max.
+            That is exactly "keep the latest snapshot".
+
+            The key falls back to the row id when a session id is missing, so
+            rows with no session collapse into themselves rather than into
+            each other - grouping every session-less row together would be a
+            far larger data loss than the one being fixed. */
+         SELECT *, MAX(endTime) AS latestEndTime, COUNT(*) AS snapshotRows
+         FROM token_usage
+         WHERE startTime < ?
+         GROUP BY provider, COALESCE(NULLIF(sessionId, ''), id)
+       )
+       GROUP BY isPrior, provider, model
        ORDER BY tokens DESC`,
-      [dbFrom, dbTo],
+      // Bound order follows the SQL text: the isPrior split, the two
+      // context-window bounds, then the inner scan's upper bound.
+      [dbFrom, MAX_CONTEXT_WINDOW, MAX_CONTEXT_WINDOW, dbTo],
     );
-    const byModel = rows.map((row) => {
-      const costMissing = num(row.costMissing) ?? 0;
-      const measuredCost = num(row.measuredCost) ?? 0;
-      const derived = resolveUsageCost({
-        model: str(row.model),
-        inputTokens: num(row.unpricedInputTokens) ?? 0,
-        outputTokens: num(row.unpricedOutputTokens) ?? 0,
-        cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
-        cacheCreationTokens: num(row.unpricedCacheCreationTokens) ?? 0,
-        measuredCostUsd: null,
-      });
-      const cost = costMissing === 0
-        ? { costUsd: measuredCost, costProvenance: "measured" as const }
-        : derived.costUsd == null
-          ? derived
-          : {
-            costUsd: measuredCost + derived.costUsd,
-            costProvenance: "derived_estimate" as const,
-            pricingVersion: derived.pricingVersion,
-          };
-      return {
-        provider: str(row.provider) || "unknown",
-        // null here means every row in the group was unmeasured, which
-        // tokensMissing states outright — 0 is the measured subtotal, not a claim.
-        tokens: num(row.tokens) ?? 0,
-        tokensMissing: num(row.tokensMissing) ?? 0,
-        invocations: num(row.invocations) ?? 0,
-        ...cost,
-      };
-    });
-    const providers = new Map<string, typeof byModel>();
-    for (const row of byModel) {
-      const group = providers.get(row.provider) ?? [];
-      group.push(row);
-      providers.set(row.provider, group);
-    }
-    const byProvider = [...providers].map(([provider, group]) => {
-      const unknown = group.some((row) => row.costUsd == null);
-      const derived = group.some((row) => row.costProvenance === "derived_estimate");
-      /* A provider is nulled whole as soon as ONE of its models is unpriced,
-         which is right for `costUsd` (a provider TOTAL) and wrong for everything
-         downstream that used to be derived from it. Cursor bills two calls, one
-         priced at $3.00 and one on a model with no published rate: the gate
-         suppressed the $3.00 it did measure AND, because the fleet gap counted
-         the invocations of every nulled provider, reported 2 unpriced calls
-         where exactly 1 was. It undercut the floor and inflated the hole beside
-         it, from the same cause. The provider row now carries its own floor and
-         its own gap, the same shape the fleet carries. */
-      const priced = group.filter((row) => row.costUsd != null);
-      return {
-        provider,
-        tokens: group.reduce((sum, row) => sum + row.tokens, 0),
-        tokensMissing: group.reduce((sum, row) => sum + row.tokensMissing, 0),
-        costUsd: unknown ? null : group.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
-        measuredCostUsd: priced.length === 0
-          ? null
-          : priced.reduce((sum, row) => sum + (row.costUsd ?? 0), 0),
-        costMissingInvocations: group
-          .filter((row) => row.costUsd == null)
-          .reduce((sum, row) => sum + row.invocations, 0),
-        costProvenance: unknown ? "unknown" as const
-          : derived ? "derived_estimate" as const
-          : "measured" as const,
-        invocations: group.reduce((sum, row) => sum + row.invocations, 0),
-      };
-    });
+    /* One scan, split at the window's lower bound, both halves deduplicated by
+       the same subquery AND summed by the same function. window + prior is then
+       the same total however the window is drawn, by construction. */
+    const windowRows = rows.filter((row) => (num(row.isPrior) ?? 0) === 0);
+    const priorRows = rows.filter((row) => (num(row.isPrior) ?? 0) === 1);
+    const { byProvider } = aggregateRows(windowRows);
+    const prior = aggregateRows(priorRows);
+    const aggregatedInvocations = windowRows.reduce((sum, row) => sum + (num(row.aggregatedRows) ?? 0), 0);
+    const attributableTokens = windowRows.reduce((sum, row) => sum + (num(row.attributableTokens) ?? 0), 0);
+    const supersededSnapshots = windowRows.reduce((sum, row) => sum + (num(row.supersededRows) ?? 0), 0);
+    /* Prior spend, from the SAME rows and the SAME aggregation as the window.
+       It was a separate query summing measuredCost directly, so it kept adding
+       raw snapshots after the window learned not to, and disagreed again on
+       unpriced model groups. The field added to disclose what a window cannot
+       see was the least trustworthy number on the payload. */
+    const priorInvocations = prior.byProvider.reduce((sum, row) => sum + row.invocations, 0);
+    const pricedPrior = prior.byProvider.filter((row) => row.measuredCostUsd != null);
+    const priorEarliestRaw = priorRows
+      .map((row) => str(row.earliestStart))
+      .filter(Boolean)
+      .sort()[0] ?? "";
+    const priorSpend = {
+      /* SQLite gives back BurnBar's own "yyyy-MM-dd HH:mm:ss.SSS" UTC text;
+         hand it on as ISO so a consumer is not left parsing a private format. */
+      earliestAt: priorEarliestRaw
+        ? new Date(`${priorEarliestRaw.replace(" ", "T")}Z`).toISOString()
+        : null,
+      invocations: priorInvocations,
+      // Absent-first: no rows before the window is "nothing there", not "$0 spent".
+      measuredCostUsd: pricedPrior.length === 0
+        ? null
+        : pricedPrior.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0),
+    };
     const processedTokens = byProvider.reduce((sum, row) => sum + row.tokens, 0);
     const tokensMissing = byProvider.reduce((sum, row) => sum + row.tokensMissing, 0);
     const tokensKnown = tokensMissing === 0;
     const invocations = byProvider.reduce((sum, row) => sum + row.invocations, 0);
     const anyCostMissing = byProvider.some((row) => row.costUsd == null);
     const anyCostDerived = byProvider.some((row) => row.costProvenance === "derived_estimate");
-    const estimatedCostUsd = invocations === 0 || anyCostMissing
-      ? null
-      : byProvider.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
-    /* The floor: what the priced providers actually cost. `estimatedCostUsd`
-       above stays null whenever ANY provider is unpriced, which is right for a
-       field that claims to be the total — but it was the ONLY cost on the wire,
-       so a single unpriced provider erased every measured dollar beside it. */
+    /* This used to be null whenever ANY invocation was unpriced, on the rule
+       that a field claiming to be a TOTAL must not silently omit a call. The
+       measured floor shipped beside it in measuredCostUsd and the card renders
+       that, so nothing was hidden from the board - but a caller reading this
+       one field, which is what an operator checking spend actually does, still
+       saw nothing while $13,216 of measured cost sat in the payload.
+
+       Emilio overruled the strictness, four times, and he is right about the
+       cost of being wrong here: withholding a number he has is worse for him
+       than qualifying one he has. It now carries the measured floor, and
+       costKnown stays FALSE so completeness is still stated rather than
+       implied. The pairing is the whole point - this is "what we measured",
+       costKnown is "is that all of it", and costMissingInvocations is how much
+       is missing. Every consumer that treats this as a complete total already
+       checks costKnown first (pulse.ts does), so none of them can bank a floor
+       by accident. */
+    /* Both cost figures are the SAME additive floor, and that is the fix.
+
+       estimatedCostUsd used to sum `row.costUsd ?? 0`. A provider holding any
+       unpriced row has costUsd null — right for a strict per-provider total —
+       and `?? 0` then dropped that provider's ENTIRE measured cost to zero
+       without saying so. Not the strict total (which would be null), not the
+       floor: a third quantity nobody had defined.
+
+       Measured live, it silently deleted $6,563.55 as soon as the window was
+       wide enough to include the provider concerned — invisible at 1d, 7d and
+       30d, present from 60d out. Anything summing estimatedCostUsd against
+       priorSpend (which uses the floor) therefore lost exactly that much, and
+       only past the point where the two populations diverged.
+
+       This is the c58d85c defect for the third time: a partial measure
+       suppressed because part of it was missing. `?? 0` is how it hid here —
+       an absent value coerced to a confident zero. Both fields now come from
+       the same additive floor, so the identity holds at EVERY window rather
+       than at the ones we happen to check. costKnown still carries whether the
+       figure is complete; that is its job, not the value's. */
     const pricedProviders = byProvider.filter((row) => row.measuredCostUsd != null);
     const measuredCostUsd = pricedProviders.length === 0
       ? null
       : pricedProviders.reduce((sum, row) => sum + (row.measuredCostUsd ?? 0), 0);
+    const estimatedCostUsd = invocations === 0 ? null : measuredCostUsd;
     /* Summed from the providers' own gaps, so it counts the calls that were
        actually unpriced rather than every call belonging to a nulled provider. */
     const costMissingInvocations = byProvider
@@ -646,6 +877,9 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       processedTokens,
       tokensKnown,
       tokensMissing,
+      aggregatedInvocations,
+      supersededSnapshots,
+      priorSpend,
       estimatedCostUsd,
       measuredCostUsd,
       costMissingInvocations,
@@ -663,13 +897,32 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
       ...(estimatedCostUsd != null && anyCostDerived
         ? { pricingVersion: PRICING_CONFIG.pricingVersion }
         : {}),
-      costKnown: estimatedCostUsd != null,
+      /* Completeness is its own fact, not a shadow of whether a number exists.
+         It was `estimatedCostUsd != null`, which was equivalent only while that
+         field was withheld on any gap; now that it carries the measured figure,
+         deriving costKnown from it would silently flip every partial window to
+         "complete" — the qualifier vanishing at the exact moment it starts to
+         matter. It asks the only question it ever meant: was every invocation
+         in this window priced? */
+      costKnown: invocations > 0 && !anyCostMissing,
       invocations,
-      /* A rate divides a numerator by a window. If part of the numerator was
-         never measured, the quotient is not a smaller rate — it is a made-up
-         one, stated to the same precision as a real one. Withhold it rather
-         than let a gap in the data read as a quiet period. */
-      burnRateTokensPerHour: tokensKnown ? processedTokens / hours : null,
+      /* A rate divides a numerator by a window, so both have to describe the
+         same period. If part of the numerator was never measured the quotient
+         is not a smaller rate but a made-up one, which is why tokensKnown gates
+         it at all.
+
+         The subtler half, and the reason processedTokens is NOT the numerator:
+         a cumulative session row carries tokens accrued over the session's
+         whole lifetime while sitting at a single startTime, so charging it to
+         that one window credits hours of work to whichever window happens to
+         contain it. Measured on 2026-07-30: 135,041,103 tokens/hour against
+         730,839/hour from the calls that actually occurred in the window - a
+         185x overstatement, and a figure no fleet of this size could produce.
+
+         So the rate is taken over rows this window can be held responsible for.
+         aggregatedInvocations says how many were left out, so the coverage
+         travels with the number rather than the number quietly meaning less. */
+      burnRateTokensPerHour: tokensKnown ? attributableTokens / hours : null,
       byProvider,
     };
   } catch (error) {
@@ -717,8 +970,25 @@ export async function getUsageSeries(
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN cost ELSE 0 END) AS measuredCost,
          SUM(CASE WHEN provenanceConfidence = 'exact' THEN 0 ELSE 1 END) AS costMissing,
          COUNT(*) AS invocations
-       FROM token_usage
-       WHERE startTime >= ? AND startTime < ?
+       FROM (
+         /* One row per SESSION, exactly as the summary does since 20cc4e3.
+
+            OpenBurnBar re-records a session's RUNNING TOTAL as it progresses,
+            so summing the rows counts the same work once per snapshot. The
+            summary stopped doing that; this query kept doing it, because
+            nothing tested the chart. Measured before the fix: the series
+            over-counted the headline by 4.65 BILLION tokens and $3,489.57 over
+            thirty days — from 28 extra rows, exactly the supersededSnapshots
+            figure the summary already reports.
+
+            Two figures on one page disagreeing by a third is worse than either
+            being wrong alone: it makes both unbelievable, and the chart is the
+            one nothing else contradicts. */
+         SELECT *, MAX(endTime) AS latestEndTime
+         FROM token_usage
+         WHERE startTime >= ? AND startTime < ?
+         GROUP BY provider, COALESCE(NULLIF(sessionId, ''), id)
+       )
        GROUP BY bucketStart, provider, model
        ORDER BY bucketStart ASC, provider ASC, model ASC`,
       [dbFrom, dbTo],
@@ -777,6 +1047,118 @@ export async function getUsageSeries(
   }
 }
 
+const USAGE_ROW_COLUMNS =
+  `id, provider, model, sessionId, projectName, totalTokens,
+   inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
+   cost, provenanceConfidence, startTime, endTime`;
+
+function toUsageInvocation(row: Record<string, unknown>): UsageInvocation {
+  const model = str(row.model) || "unknown";
+  return {
+    id: str(row.id),
+    provider: str(row.provider) || "unknown",
+    model,
+    sessionId: str(row.sessionId),
+    projectName: str(row.projectName) || undefined,
+    tokens: num(row.totalTokens),
+    ...resolveUsageCost({
+      model,
+      inputTokens: num(row.inputTokens) ?? 0,
+      outputTokens: num(row.outputTokens) ?? 0,
+      cacheReadTokens: num(row.cacheReadTokens) ?? 0,
+      cacheCreationTokens: num(row.cacheCreationTokens) ?? 0,
+      measuredCostUsd: str(row.provenanceConfidence) === "exact" ? num(row.cost) : null,
+    }),
+    startTime: str(row.startTime),
+    endTime: str(row.endTime) || undefined,
+  };
+}
+
+/* Reads a whole window instead of its most recent page.
+
+   `getUsageInvocations` caps at 500 and says so honestly — it publishes
+   `matched` and `truncated`, and callers that ignore those fields get the most
+   recent 500 rows while believing they hold the window they asked for. That is
+   what happened to the real-history bounds checks: they queried three months,
+   received three days, and quietly graded 7.4% of the corpus (500 of 6,762)
+   under test names promising the lot. Two of them had been pinned `.failing` to
+   document real defects and went green not because anything was fixed but
+   because the rows carrying the evidence aged out of the page.
+
+   Keyset pagination rather than OFFSET: the sort is (startTime DESC, id DESC)
+   and the cursor is the last row of the previous page, so a row arriving
+   mid-scan cannot shift a later page and duplicate or skip a row. `maxRows` is
+   a stated ceiling — when it is hit the result says `truncated`, because a
+   silent cap is the whole bug this exists to answer. */
+export async function getAllUsageInvocations(
+  from: string,
+  to: string,
+  maxRows = 50_000,
+): Promise<UsageInvocationsResponse> {
+  const PAGE = 500;
+  try {
+    const [dbFrom, dbTo] = [toBurnBarTimestamp(from), toBurnBarTimestamp(to)];
+    const [totalRow] = await runEncryptedQuery(
+      `SELECT COUNT(*) AS matched FROM token_usage WHERE startTime >= ? AND startTime < ?`,
+      [dbFrom, dbTo],
+    );
+    const matched = num(totalRow?.matched) ?? 0;
+
+    const invocations: UsageInvocation[] = [];
+    let cursor: { startTime: string; id: string } | null = null;
+    for (;;) {
+      const rows: Record<string, unknown>[] = cursor
+        ? await runEncryptedQuery(
+          `SELECT ${USAGE_ROW_COLUMNS} FROM token_usage
+             WHERE startTime >= ? AND startTime < ?
+               AND (startTime < ? OR (startTime = ? AND id < ?))
+             ORDER BY startTime DESC, id DESC
+             LIMIT ?`,
+          [dbFrom, dbTo, cursor.startTime, cursor.startTime, cursor.id, PAGE],
+        )
+        : await runEncryptedQuery(
+          `SELECT ${USAGE_ROW_COLUMNS} FROM token_usage
+             WHERE startTime >= ? AND startTime < ?
+             ORDER BY startTime DESC, id DESC
+             LIMIT ?`,
+          [dbFrom, dbTo, PAGE],
+        );
+      if (rows.length === 0) break;
+      invocations.push(...rows.map(toUsageInvocation));
+      const last = rows[rows.length - 1]!;
+      cursor = { startTime: str(last.startTime), id: str(last.id) };
+      if (rows.length < PAGE || invocations.length >= maxRows) break;
+    }
+
+    return {
+      ok: true,
+      available: true,
+      provenance: "burnbar",
+      source: "burnbar",
+      from,
+      to,
+      limit: maxRows,
+      matched,
+      truncated: invocations.length < matched,
+      invocations,
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      available: false,
+      provenance: "unavailable",
+      source: "burnbar",
+      from,
+      to,
+      limit: maxRows,
+      matched: 0,
+      truncated: false,
+      invocations: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function getUsageInvocations(
   from: string,
   to: string,
@@ -800,6 +1182,14 @@ export async function getUsageInvocations(
        LIMIT ?`,
       [dbFrom, dbTo, capped],
     );
+    /* Counted, not inferred from rows.length === capped. A window holding
+       exactly 500 rows is complete, and guessing from the boundary would
+       report it as truncated forever. */
+    const [totalRow] = await runEncryptedQuery(
+      `SELECT COUNT(*) AS matched FROM token_usage WHERE startTime >= ? AND startTime < ?`,
+      [dbFrom, dbTo],
+    );
+    const matched = num(totalRow?.matched) ?? rows.length;
     return {
       ok: true,
       available: true,
@@ -808,27 +1198,9 @@ export async function getUsageInvocations(
       from,
       to,
       limit: capped,
-      invocations: rows.map((row) => {
-        const model = str(row.model) || "unknown";
-        return {
-          id: str(row.id),
-          provider: str(row.provider) || "unknown",
-          model,
-          sessionId: str(row.sessionId),
-          projectName: str(row.projectName) || undefined,
-          tokens: num(row.totalTokens),
-          ...resolveUsageCost({
-            model,
-            inputTokens: num(row.inputTokens) ?? 0,
-            outputTokens: num(row.outputTokens) ?? 0,
-            cacheReadTokens: num(row.cacheReadTokens) ?? 0,
-            cacheCreationTokens: num(row.cacheCreationTokens) ?? 0,
-            measuredCostUsd: str(row.provenanceConfidence) === "exact" ? num(row.cost) : null,
-          }),
-          startTime: str(row.startTime),
-          endTime: str(row.endTime) || undefined,
-        };
-      }),
+      matched,
+      truncated: matched > rows.length,
+      invocations: rows.map(toUsageInvocation),
     };
   } catch (error) {
     return {
@@ -839,6 +1211,10 @@ export async function getUsageInvocations(
       from,
       to,
       limit: capped,
+      // Nothing was read, so nothing is known about how much there was. 0
+      // matched with truncated false would claim an empty window.
+      matched: 0,
+      truncated: false,
       invocations: [],
       error: error instanceof Error ? error.message : String(error),
     };
@@ -900,6 +1276,11 @@ export async function getUsageQuotas(): Promise<UsageQuotasResponse> {
     };
   }
 }
+
+/** The ward returns the worst offenders, not all of them; the count it dropped
+    is disclosed rather than left to be inferred from a list that happens to be
+    exactly this long. */
+const MAX_WARD_SPIKES = 12;
 
 export async function getUsageWard(from: string, to: string): Promise<UsageWardResponse> {
   const fromMs = Date.parse(from);
@@ -988,8 +1369,13 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       source: "burnbar",
       from,
       to,
-      spikes: spikes.slice(0, 12),
-      spikeCoverage: { complete: unmeasured.size === 0, skipped: unmeasured.size },
+      spikes: spikes.slice(0, MAX_WARD_SPIKES),
+      spikeCoverage: {
+        // Complete means BOTH: nothing left unscored, and nothing ranked away.
+        complete: unmeasured.size === 0 && spikes.length <= MAX_WARD_SPIKES,
+        skipped: unmeasured.size,
+        truncated: Math.max(0, spikes.length - MAX_WARD_SPIKES),
+      },
       quotaPressure: quotaPressure.slice(0, 12),
       quotas: quotas.available
         ? { available: true }
@@ -1005,7 +1391,7 @@ export async function getUsageWard(from: string, to: string): Promise<UsageWardR
       to,
       spikes: [],
       // Nothing was scored, so nothing is claimed about spikes either.
-      spikeCoverage: { complete: false, skipped: 0 },
+      spikeCoverage: { complete: false, skipped: 0, truncated: 0 },
       quotaPressure: [],
       // The database failed before the sidecar was ever consulted.
       quotas: { available: false, error: "Quotas were not read." },

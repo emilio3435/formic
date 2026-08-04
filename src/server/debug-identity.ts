@@ -8,6 +8,7 @@ import type {
   TargetResolution,
 } from "../shared/types";
 import { readableHumanMessage } from "./human-message";
+import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
 export interface IdentityDebugSummary {
@@ -36,7 +37,10 @@ function summarize(agent: AgentSnapshot): IdentityDebugSummary {
   };
 }
 
-function surfaceView(surface: CmuxSurface): Record<string, unknown> {
+function surfaceView(
+  surface: CmuxSurface,
+  routeObservation?: RoutingSurfaceObservation,
+): Record<string, unknown> {
   const identityTrace = surface.identityTrace
     ? {
         ...surface.identityTrace,
@@ -55,21 +59,9 @@ function surfaceView(surface: CmuxSurface): Record<string, unknown> {
     runtimeSurfaceReady: surface.runtimeSurfaceReady,
     sourceSessionIds: surface.sourceSessionIds,
     identityConflict: surface.identityConflict,
+    routeObservation,
     identityTrace,
   };
-}
-
-function relatedTo(agent: AgentSnapshot, surface: CmuxSurface): boolean {
-  if (agent.target.surfaceId === surface.surfaceId) return true;
-  if (agent.identityTrace?.bindingBridge?.surfaceId === surface.surfaceId) return true;
-  const sessionId = agent.sourceSessionId.toLowerCase();
-  if (surface.sourceSessionIds.some((id) => id.toLowerCase() === sessionId)) return true;
-  const trace = surface.identityTrace;
-  if (!trace) return false;
-  return (
-    trace.openFileMatches.some((match) => match.sessionId.toLowerCase() === sessionId) ||
-    trace.commandHints.some((hint) => hint.resolvedSessionId?.toLowerCase() === sessionId)
-  );
 }
 
 /**
@@ -111,6 +103,10 @@ export function identityDebugResponse(
       { status: 404, headers: responseHeaders },
     );
   }
+  const observations = routingSurfaceObservations(agent, surfaces);
+  const observationBySurface = new Map(
+    observations.map((observation) => [observation.surfaceId, observation]),
+  );
   return Response.json(
     {
       ok: true,
@@ -124,7 +120,9 @@ export function identityDebugResponse(
         target: agent.target,
         trace: agent.identityTrace,
       },
-      relatedSurfaces: surfaces.filter((surface) => relatedTo(agent, surface)).map(surfaceView),
+      relatedSurfaces: surfaces
+        .filter((surface) => surface.runtimeSurfaceReady !== false)
+        .map((surface) => surfaceView(surface, observationBySurface.get(surface.surfaceId))),
     },
     { headers: responseHeaders },
   );

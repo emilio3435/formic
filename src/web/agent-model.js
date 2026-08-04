@@ -98,16 +98,34 @@ export const LIVENESS_VIEW = {
   running: { label: "Process live", tone: "ok", detail: "The agent's process is still running." },
   exited: { label: "Exited cleanly", tone: "calm", detail: "The process finished and its transcript ended cleanly — this one is done." },
   died: { label: "Died", tone: "alert", detail: "The process is gone and nothing ended cleanly. This session stopped without finishing." },
-  /* "Liveness unknown" named the tool's gap rather than the world's state, and
-     read as a defect. For an agent still on the board, unknown means the prober
-     has not reported yet — ordinary and temporary, so say that. */
-  unknown: { label: "Awaiting first check", tone: "quiet", detail: "No process check has reported for this session yet." },
+  /* Two earlier wordings, and the reason each failed, because the next reader
+     will otherwise propose one of them again.
+
+     "Liveness unknown" named the tool's gap rather than the world's state and
+     read as a defect. "Awaiting first check" replaced it and promised an event
+     instead — a promise the board keeps for some sessions and breaks for
+     others. Watched live for 16 minutes (2026-08-03 22:12–22:28 UTC): of the 6
+     live agents that wore this chip, 2 cleared within ~6 minutes of starting
+     because a check DID arrive and bound a process — neither ended — while 4
+     aged 7 to 40 minutes never cleared at all. So the honest label cannot speak
+     about timing in either direction.
+
+     What is true of all of them is the fact itself. `processStateFor` returns
+     "unknown" as its FALLTHROUGH, reached whenever no process was matched to
+     the session: `identity-bindings.ts:251` records process ids only for a
+     session whose process the scan could actually see. Measured, it tracks
+     routing rather than time — across both samples 11 of 11 live unknowns were
+     `observed-only` or `quarantined` and 7 of 7 live knowns were `linked`. */
+  unknown: { label: "No matching process", tone: "quiet", detail: "Nothing in the process scan matches this session, so the board cannot say whether its process is alive." },
 };
 
-/* The same wire value on an ENDED session is a different fact: nothing is going
-   to check it, so "awaiting" would send the operator off to wait for something
-   that is never coming. On the live board this is not an edge case — 135 of the
-   140 unknowns are ended sessions. */
+/* The same wire value on an ENDED session carries one more fact, and it is the
+   one an operator acts on: nothing will ever match it now, so the question of
+   how it finished is closed unanswered rather than open. That is why the split
+   survives the rewording above — not because a live session is "awaiting" and
+   this one is not, but because only this one is unrecoverable. On the live
+   board it is the common case, not an edge case: 627 of 631 unknowns are ended
+   sessions. */
 export const LIVENESS_ENDED_UNKNOWN = {
   label: "No process evidence",
   tone: "quiet",

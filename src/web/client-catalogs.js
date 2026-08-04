@@ -12,6 +12,12 @@ export const CONTROL_LABELS = {
   quarantined: "Quarantined",
 };
 
+/* The operator-facing verb for each control action. It lives here rather than in
+   app.js because controlOutcome() turns a control response into the sentence the
+   operator reads, and api-client.js must never import from app.js — that would
+   be the first import cycle in src/web. */
+export const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive" };
+
 /* Attention first, deliberately. The board used to open on "now" — every routine
    working agent — with the attention tab reading 0 beside it. A cockpit whose
    landing state is "show me all routine work" cannot also claim to stay silent

@@ -12,6 +12,7 @@ import {
   type AttentionStore,
 } from "./cmux";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
+import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
 import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
@@ -51,7 +52,29 @@ const SECURITY_HEADERS = {
 
 export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
-export const MAX_SSE_BACKLOG_BYTES = 2 * 1024 * 1024;
+/* Under the 30s most proxies and browsers use to declare an idle stream dead. */
+export const SSE_HEARTBEAT_MS = 25_000;
+/* A client's stream is dropped once its unread backlog exceeds this. The number
+   has to be read against the payload it must carry: every client's FIRST event
+   is a whole snapshot, enqueued directly and deliberately unchecked, because a
+   delta is meaningless without the base it applies to.
+
+   At 2MB it had been overtaken. A live snapshot measured 2,334,323 bytes — 11%
+   OVER the entire budget — so from the moment of connection every client sat at
+   a negative desiredSize until it finished draining, and the next delta to
+   arrive in that window closed its stream. The guard meant to tolerate a slow
+   client and drop only a stuck one had no slack left to tolerate anything: one
+   byte behind and ten megabytes behind were the same verdict.
+
+   Measured, it was not yet biting — the drain takes 2.2ms on loopback against a
+   delta roughly every 3.8s, so the exposure is about 0.06% per update. But it
+   grows on both axes at once as the fleet does: a bigger board takes longer to
+   drain AND changes more often. 8MB is a little over three snapshots at today's
+   size, which is what a BACKLOG budget should mean — a client may fall a few
+   updates behind before it is given up on. Worst case it bounds memory at
+   MAX_SSE_CLIENTS x this, and `sseBacklogDrops` on /api/health says whether the
+   headroom is actually being used. */
+export const MAX_SSE_BACKLOG_BYTES = 8 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ACTION_LOG_ENTRIES = 500;
@@ -218,6 +241,27 @@ function isLoopback(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
 }
 
+/* Retention as observed rather than as configured. `oldestDays` is the age of
+   the oldest record we still hold, which is the only number that answers "is
+   the promise being kept" — a policy of 30 days delivering 11 is a different
+   fact from one delivering 30, and until now neither was visible. */
+function deliveredRetention(
+  agents: readonly { archivedAt?: string }[],
+  nowMs: number,
+): { measured: number; unmeasurable: number; oldestDays: number | null } {
+  const ages = agents
+    .map((agent) => (agent.archivedAt ? nowMs - Date.parse(agent.archivedAt) : Number.NaN))
+    .filter((age) => Number.isFinite(age) && age >= 0);
+  return {
+    measured: ages.length,
+    // Written before archivedAt existed. Counted, not guessed at.
+    unmeasurable: agents.length - ages.length,
+    oldestDays: ages.length === 0
+      ? null
+      : Math.round((Math.max(...ages) / (24 * 60 * 60 * 1_000)) * 10) / 10,
+  };
+}
+
 function compactSnapshotFingerprint(snapshot: HubSnapshot): string {
   return createHash("sha256").update(snapshotFingerprint(snapshot)).digest("base64url");
 }
@@ -285,6 +329,13 @@ export interface MountainAppDependencies {
   /* Repository root for the read-only publish surface. Defaults to the web
      root's parent, which is the checkout in every deployment we ship. */
   repoRoot?: string;
+  /* How often an idle event stream sends a heartbeat. Injectable ONLY so the
+     path can be exercised: at the shipped 25s no test can afford to wait, which
+     is why the interval callback was among the largest never-executed blocks in
+     src/server. The heartbeat is what tells a client the connection is alive,
+     so a stream that silently stops sending is a board that stops updating and
+     reads as merely quiet — the failure this project keeps finding. */
+  heartbeatMs?: number;
 }
 
 export interface MountainFetch {
@@ -433,6 +484,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     return recollectInFlight;
   };
   const clients = new Set<ReadableStreamDefaultController<string>>();
+  /* Streams the server closed for backpressure, as distinct from clients that
+     left. Nonzero means the board is outgrowing its own delivery budget. */
+  let sseBacklogDrops = 0;
   const heartbeatTimers = new Map<ReadableStreamDefaultController<string>, ReturnType<typeof setInterval>>();
   const removeClient = (client: ReadableStreamDefaultController<string>): void => {
     clients.delete(client);
@@ -450,6 +504,18 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   };
   const enqueueClient = (client: ReadableStreamDefaultController<string>, event: string): void => {
     if (client.desiredSize !== null && client.desiredSize <= 0) {
+      /* Recorded, because this is the one disconnect the SERVER chooses. A
+         client that goes away throws on enqueue below and is simply forgotten;
+         this one was still connected and we stopped talking to it. It presents
+         to the operator as a board that quietly stopped updating — EventSource
+         reconnects, pulls another whole snapshot, and can be dropped again — so
+         leaving it uncounted meant the only symptom was staleness with nothing
+         anywhere to explain it. */
+      sseBacklogDrops += 1;
+      console.error(
+        `[SSE] dropped a client whose backlog exceeded ${MAX_SSE_BACKLOG_BYTES} bytes `
+        + `(${sseBacklogDrops} so far); it will reconnect and be sent a full snapshot again`,
+      );
       dropClient(client);
       return;
     }
@@ -594,7 +660,21 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         {
           schemaVersion: 1,
           exportedAt,
+          /* The POLICY. It was published alone, which made it a claim nobody
+             could check: the window was measured from each agent's last
+             activity rather than from when we archived it, so a session quiet
+             for 31 days was pruned on the very next commit while the operator
+             was told ok: true. A constant printed beside data it does not
+             describe is the same defect as a figure with no coverage. */
           retentionDays: ARCHIVE_RETENTION_MS / (24 * 60 * 60 * 1_000),
+          /* What was actually DELIVERED, measured from the records themselves.
+             Absent-first: records written before archivedAt existed cannot be
+             measured, and are counted rather than guessed at, so a reader can
+             tell "we kept 30 days" from "we cannot yet say". */
+          deliveredRetention: deliveredRetention(
+            dependencies.archiveStore.archivedAgents?.() ?? [],
+            Date.parse(exportedAt),
+          ),
           maxRecords: MAX_ARCHIVE_RECORDS,
           agents: dependencies.archiveStore.archivedAgents?.() ?? [],
         },
@@ -741,6 +821,13 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         );
       }
     }
+    if (request.method === "GET" && url.pathname === "/api/debug/session-calls") {
+      const agentId = url.searchParams.get("agent");
+      if (!agentId) {
+        return responseError(400, "AGENT_REQUIRED", "Pass ?agent=<agent id> to read a session's per-call series.");
+      }
+      return sessionCallsResponse(dependencies.state.get(), agentId, SECURITY_HEADERS);
+    }
     if (request.method === "GET" && url.pathname === "/api/debug/identity") {
       return identityDebugResponse(url, dependencies.state.get(), dependencies.state.surfaces?.() ?? [], SECURITY_HEADERS);
     }
@@ -790,6 +877,11 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             staleSources: [...staleSources],
             cmuxReachable,
             controlErrors,
+            /* Not part of `complete`: a dropped stream does not make the
+               SNAPSHOT incomplete, it makes delivery of it unreliable. It rides
+               here because this is where facts live that a liveness check calls
+               green — the board keeps rendering whatever it last received. */
+            sseBacklogDrops,
             ...(operatorStateError ? { operatorStateError } : {}),
             ...(configError ? { configError } : {}),
           },
@@ -829,7 +921,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
                 controller,
                 `event: heartbeat\ndata: ${JSON.stringify({ ts: new Date().toISOString() })}\n\n`,
               );
-            }, 25_000),
+            }, dependencies.heartbeatMs ?? SSE_HEARTBEAT_MS),
           );
         },
         cancel() {

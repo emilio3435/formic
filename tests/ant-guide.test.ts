@@ -60,7 +60,7 @@ describe("ANT-GUIDE.md stays true to the product", () => {
 
   test("the liveness chips it tabulates are the ones the client renders", () => {
     // Both readings of `unknown` included — the guide explains why they differ.
-    for (const label of ["Process live", "Exited cleanly", "Died", "Awaiting first check", "No process evidence"]) {
+    for (const label of ["Process live", "Exited cleanly", "Died", "No matching process", "No process evidence"]) {
       expect(app, `${label} is not a label the client produces`).toContain(`label: "${label}"`);
       expect(guide, `guide omits the ${label} chip`).toContain(`**${label}**`);
     }

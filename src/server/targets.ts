@@ -1,4 +1,4 @@
-import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier } from "../shared/types";
+import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier, ProcessState } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -307,6 +307,154 @@ export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resol
    "end_turn"` — the end of a TURN, not of a session. An agent waiting for your
    reply reads "exited". Refusing writes there would switch off Send on exactly
    the agents that are waiting for a human. */
+/* ONE predicate for "may we put characters into this pane", read by the button
+   and by the endpoint.
+
+   26a4585 closed executeControl and left controlsFor untouched, so the board
+   offered Send on a row whose process was known dead and the endpoint then
+   answered 409. Nothing unsafe happened - and that is the point: a surface
+   claiming something the system will not honour is the class this project has
+   spent two days removing, and it recurred here because agreement depended on
+   two call sites being edited together. It had already failed that way once
+   with unique-cwd, in app.ts.
+
+   So agreement is by construction. Both callers ask this and neither restates
+   the rule. Returns the refusal an operator should read, or null to transmit. */
+export interface TransmitRefusal {
+  code: "AGENT_ARCHIVED" | "UNSAFE_TARGET" | "AGENT_NOT_RUNNING";
+  cause: string;
+  remedy: string;
+  evidence: {
+    resolutionSteps: string[];
+    observationsUrl?: string;
+  };
+  message: string;
+}
+
+export interface RoutingSurfaceObservation {
+  workspaceId?: string;
+  surfaceId: string;
+  paneId?: string;
+  tty?: string;
+  reportedSessionIds: string[];
+  sessionIdMatched: boolean;
+  cwdMatched: boolean;
+  reason: string;
+}
+
+export function routingSurfaceObservations(
+  agent: Pick<CollectedAgent, "sourceSessionId" | "cwd">,
+  surfaces: readonly CmuxSurface[],
+): RoutingSurfaceObservation[] {
+  return surfaces
+    .filter((surface) => surface.runtimeSurfaceReady !== false)
+    .map((surface) => {
+      const reportedSessionIds = [...surface.sourceSessionIds];
+      const sessionIdMatched = reportedSessionIds.includes(agent.sourceSessionId);
+      const cwdMatched = sameCwd(surface.cwd, agent.cwd);
+      const pane = surface.paneId
+        ? `Pane ${surface.paneId} (surface ${surface.surfaceId}${surface.tty ? `, ${surface.tty}` : ""})`
+        : `Surface ${surface.surfaceId}${surface.tty ? ` (${surface.tty})` : ""}`;
+      let reason: string;
+      if (sessionIdMatched) {
+        reason = `${pane} reported source session ${agent.sourceSessionId}.`;
+      } else if (reportedSessionIds.length === 0) {
+        reason = `${pane} reported no source session IDs; source session ${agent.sourceSessionId} could not match.`;
+      } else {
+        const noun = reportedSessionIds.length === 1 ? "session ID" : "session IDs";
+        reason = `${pane} reported ${noun} ${reportedSessionIds.join(", ")}; none equals source session ${agent.sourceSessionId}.`;
+      }
+      if (!sessionIdMatched && cwdMatched) {
+        reason += " Its cwd matches the source, but cwd evidence is not exact session identity.";
+      }
+      return {
+        ...(surface.workspaceId ? { workspaceId: surface.workspaceId } : {}),
+        surfaceId: surface.surfaceId,
+        ...(surface.paneId ? { paneId: surface.paneId } : {}),
+        ...(surface.tty ? { tty: surface.tty } : {}),
+        reportedSessionIds,
+        sessionIdMatched,
+        cwdMatched,
+        reason,
+      };
+    });
+}
+
+export function transmitRefusal(agent: {
+  target: Pick<CmuxTarget, "surfaceId" | "resolution" | "attestation" | "reason">;
+  processState?: ProcessState;
+  archived?: boolean;
+  identityTrace?: IdentityTrace;
+  routingObservationsUrl?: string;
+}): TransmitRefusal | null {
+  const targetAttestation = agent.target.attestation;
+  const refuse = (
+    code: TransmitRefusal["code"],
+    cause: string,
+    remedy: string,
+    resolutionSteps: string[],
+  ): TransmitRefusal => ({
+    code,
+    cause,
+    remedy,
+    evidence: {
+      resolutionSteps,
+      ...(agent.routingObservationsUrl ? { observationsUrl: agent.routingObservationsUrl } : {}),
+    },
+    message: `${cause} ${remedy}`,
+  });
+  const routingEvidence = agent.identityTrace?.steps.map(({ detail }) => detail) ?? [
+    `Target resolver returned ${agent.target.resolution}${agent.target.surfaceId ? ` for surface ${agent.target.surfaceId}` : " with no surface"}.`,
+  ];
+  if (agent.archived) {
+    return refuse(
+      "AGENT_ARCHIVED",
+      "This agent is archived.",
+      "Read it in History, or start a new session if more work is needed.",
+      ["The current snapshot marks this agent as archived."],
+    );
+  }
+  if (!canAddressTarget(agent.target)) {
+    const cursorRequiresExact = agent.identityTrace?.steps.some(
+      ({ detail }) => detail === "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+    ) ?? false;
+    return refuse(
+      "UNSAFE_TARGET",
+      cursorRequiresExact
+        ? "No safe cmux target is linked to this session."
+        : agent.target.reason ?? "No safe cmux surface target is available.",
+      agent.target.resolution === "ambiguous"
+        ? "Inspect the routing evidence, then remove the conflicting claim so one exact session identity remains."
+        : cursorRequiresExact
+          ? "Open it in a cmux pane (or start the agent from one); the next scan binds it."
+          : "Open or start the agent in a cmux pane; the next scan links it when cmux reports the session.",
+      routingEvidence,
+    );
+  }
+  if (processKnownDead(agent)) {
+    return refuse(
+      "AGENT_NOT_RUNNING",
+      "This agent's process was checked and is gone, so its pane may now belong to someone else. Sending here could reach whoever took it over.",
+      "Archive the row, or start the agent again.",
+      ["The PID-backed liveness check reported process state died."],
+    );
+  }
+  if (!canWriteToTarget(agent.target)) {
+    const remembered = targetAttestation === "remembered";
+    return refuse(
+      "UNSAFE_TARGET",
+      remembered
+        ? "This pane is linked only by a remembered binding, so the session on it is not confirmed in this scan. Sending here could reach a different agent."
+        : "This pane was matched by its working directory, not attested by cmux, so the session on it cannot be proven. Sending here could reach a different agent.",
+      remembered
+        ? "Focus still works; Send and Interrupt return when cmux re-attests the session."
+        : "Focus still works; Send and Interrupt return as soon as cmux attests the session.",
+      routingEvidence,
+    );
+  }
+  return null;
+}
+
 export function processKnownDead(agent: Pick<AgentSnapshot, "processState">): boolean {
   return agent.processState === "died";
 }

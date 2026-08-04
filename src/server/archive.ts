@@ -1,12 +1,19 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { readableTask } from "./collectors";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
 export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const MAX_ARCHIVE_RECORDS = 5_000;
 
 type ArchiveKind = "operator" | "history";
-type StoredAgent = CollectedAgent & { archiveKind?: ArchiveKind };
+/* `archivedAt` is when WE stored the record, which is not `updatedAt`, when the
+   agent last did anything. Retention was measured from the latter, so archiving
+   a session last active 31 days ago pruned it on the very next commit while the
+   operator was told ok: true - the request destroyed the thing it was meant to
+   preserve. And 0 of 546 records carried an archive time, so it could not even
+   be diagnosed afterwards. */
+type StoredAgent = CollectedAgent & { archiveKind?: ArchiveKind; archivedAt?: string };
 
 export interface ArchiveFileOperations {
   readText(path: string): Promise<string>;
@@ -114,8 +121,11 @@ export class JsonArchiveStore implements ArchiveStore {
   }
 
   async #persistArchive(agentId: string, agent?: CollectedAgent): Promise<void> {
-    const archivedAgent = agent ? archiveCopy(agent, "operator") : undefined;
     const existing = this.#agents.get(agentId);
+    // Custody began when the record was FIRST stored; a re-archive is not a new one.
+    const archivedAgent = agent
+      ? archiveCopy(agent, "operator", this.now(), existing?.archivedAt)
+      : undefined;
     if (
       this.#agentIds.has(agentId) &&
       (!archivedAgent || (existing?.archiveKind === "operator" && sameAgent(existing, archivedAgent)))
@@ -123,7 +133,7 @@ export class JsonArchiveStore implements ArchiveStore {
     const nextAgentIds = new Set(this.#agentIds).add(agentId);
     const nextAgents = new Map(this.#agents);
     if (archivedAgent) nextAgents.set(agentId, archivedAgent);
-    else if (existing) nextAgents.set(agentId, archiveCopy(existing, "operator"));
+    else if (existing) nextAgents.set(agentId, archiveCopy(existing, "operator", this.now(), existing.archivedAt));
     await this.#commit(nextAgentIds, nextAgents);
   }
 
@@ -132,8 +142,13 @@ export class JsonArchiveStore implements ArchiveStore {
     const nextAgents = new Map(this.#agents);
     let changed = false;
     for (const agent of agents) {
-      const copy = archiveCopy(agent, nextAgentIds.has(agent.id) ? "operator" : "history");
       const existing = nextAgents.get(agent.id);
+      const copy = archiveCopy(
+        agent,
+        nextAgentIds.has(agent.id) ? "operator" : "history",
+        this.now(),
+        existing?.archivedAt,
+      );
       if (existing && sameAgent(existing, copy)) continue;
       nextAgents.set(agent.id, copy);
       changed = true;
@@ -188,17 +203,25 @@ export class MemoryArchiveStore implements ArchiveStore {
 
   async archive(agentId: string, agent?: CollectedAgent): Promise<void> {
     this.#agentIds.add(agentId);
-    if (agent) this.#agents.set(agentId, archiveCopy(agent, "operator"));
+    if (agent) this.#agents.set(agentId, archiveCopy(agent, "operator", Date.now(), this.#agents.get(agentId)?.archivedAt));
   }
 
   async record(agents: readonly CollectedAgent[]): Promise<void> {
     for (const agent of agents) {
-      this.#agents.set(agent.id, archiveCopy(agent, this.#agentIds.has(agent.id) ? "operator" : "history"));
+      this.#agents.set(
+        agent.id,
+        archiveCopy(agent, this.#agentIds.has(agent.id) ? "operator" : "history", Date.now(), this.#agents.get(agent.id)?.archivedAt),
+      );
     }
   }
 }
 
-function archiveCopy(agent: CollectedAgent, archiveKind: ArchiveKind): StoredAgent {
+function archiveCopy(
+  agent: CollectedAgent,
+  archiveKind: ArchiveKind,
+  nowMs: number,
+  existingArchivedAt?: string,
+): StoredAgent {
   return {
     id: agent.id,
     provider: agent.provider,
@@ -235,21 +258,34 @@ function archiveCopy(agent: CollectedAgent, archiveKind: ArchiveKind): StoredAge
     allowCwdFallback: agent.allowCwdFallback,
     recordedTarget: agent.recordedTarget ? { ...agent.recordedTarget } : undefined,
     archiveKind,
+    /* Set once, on first archive, and carried forward on every later rewrite.
+       Re-stamping it would restart the retention clock each time a record was
+       touched, so nothing would ever expire; and because sameAgent compares
+       whole records, a fresh timestamp on every pass would also rewrite the
+       file continuously. */
+    archivedAt: existingArchivedAt ?? new Date(nowMs).toISOString(),
   };
 }
 
 function publicCopy(agent: StoredAgent): CollectedAgent {
   const { archiveKind: _, ...copy } = agent;
-  return copy;
+  /* Read, not write: the stored record keeps whatever was true when it was
+     written, and this is the one door every archived agent leaves by. A record
+     from July still holds a task the collector would no longer produce. */
+  return { ...copy, task: readableTask(copy.task) };
 }
 
 function sameAgent(left: StoredAgent, right: StoredAgent): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function isFresh(agent: CollectedAgent, nowMs: number): boolean {
-  const updatedAtMs = Date.parse(agent.updatedAt);
-  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs <= ARCHIVE_RETENTION_MS;
+/* Retention runs from when we took custody, not from when the agent last spoke.
+   Records written before archivedAt existed have none; they fall back to
+   updatedAt, which is the old behaviour and the only honest option - inventing
+   an archive time for them would be fabricating the very evidence this adds. */
+function isFresh(agent: StoredAgent, nowMs: number): boolean {
+  const retentionStart = Date.parse(agent.archivedAt ?? agent.updatedAt);
+  return Number.isFinite(retentionStart) && nowMs - retentionStart <= ARCHIVE_RETENTION_MS;
 }
 
 function isCollectedAgent(value: unknown): value is CollectedAgent {

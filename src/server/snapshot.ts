@@ -2,6 +2,7 @@ import type {
   AgentSnapshot,
   HubPulse,
   HubSnapshot,
+  IdentityTrace,
   IssueLifecycle,
   IssueWorkState,
   OperatorIssue,
@@ -9,8 +10,14 @@ import type {
   Provider,
   TriageQueueSummary,
 } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
 import { MODEL_CONFIG } from "./model-config";
-import { resolveAgentTarget, resolveAgentTargetWithTrace } from "./targets";
+import {
+  resolveAgentTarget,
+  resolveAgentTargetWithTrace,
+  transmitRefusal,
+  type TransmitRefusal,
+} from "./targets";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
 import {
@@ -71,6 +78,9 @@ export interface SnapshotInput {
   scanWindowHours?: number;
 }
 
+type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
+type AgentSnapshotWithControlRefusal = AgentSnapshot & { controlRefusal?: SnapshotControlRefusal };
+
 export function withPulse(snapshot: HubSnapshot, pulse: HubPulse): HubSnapshot {
   return { ...snapshot, pulse };
 }
@@ -98,6 +108,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
     const target = resolveAgentTarget(source, input.surfaces, sources);
+    let identityTrace: IdentityTrace | undefined;
+    const readIdentityTrace = (): IdentityTrace => {
+      identityTrace ??= resolveAgentTargetWithTrace(source, input.surfaces, sources).trace;
+      return identityTrace;
+    };
     const surface = target.surfaceId
       ? input.surfaces.find((candidate) => candidate.surfaceId === target.surfaceId)
       : undefined;
@@ -134,6 +149,24 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
     const activity = activityFor(source, archived);
+    const processState = processStateFor(source);
+    const initialRefusal = transmitRefusal({ target, processState, archived });
+    const refusal = initialRefusal?.code === "UNSAFE_TARGET"
+      ? transmitRefusal({
+          target,
+          processState,
+          archived,
+          identityTrace: readIdentityTrace(),
+          routingObservationsUrl: `/api/debug/identity?agent=${encodeURIComponent(source.id)}`,
+        })
+      : initialRefusal;
+    /* Ended rows already explain their terminal state and have no action to
+       recover. Active refusals keep the actionable summary and point to their
+       on-demand pane observations; the shared surface inventory no longer rides
+       the snapshot once per refused agent. */
+    const controlRefusal: SnapshotControlRefusal | undefined = activity !== "ended" && refusal
+      ? (({ message: _message, ...published }) => published)(refusal)
+      : undefined;
     // Freeze the elapsed clock only for a session that really ended. This used
     // to re-derive `archived || status === "stale"` independently of
     // activityFor, so a live-but-quiet session had its clock frozen by the same
@@ -148,13 +181,21 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       : notificationSummary
         ? `Unread cmux notification: ${notificationSummary}`
         : source.statusReason;
-    const agent: AgentSnapshot = {
-      ...source,
+    /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
+       the one point a CollectedAgent becomes an AgentSnapshot, so there is a
+       single boundary to test rather than a rule to remember: the snapshot is
+       2.65MB against a 2MB SSE backlog budget (measured 2026-08-03, replacing a
+       stale 2.23MB), and the largest session on this machine has 1,575 calls.
+       It is served on demand from
+       /api/debug/session-calls, where the cost is paid by whoever asks. */
+    const { callSizes: _callSizes, ...publishable } = source;
+    const agent: AgentSnapshotWithControlRefusal = {
+      ...publishable,
       programId: program.id,
       status: archived ? "archived" : notification ? "attention" : source.status,
       statusReason: snapshotStatusReason,
       activity,
-      processState: processStateFor(source),
+      processState,
       outcome,
       controlState,
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
@@ -169,7 +210,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         lastAgentMessage: source.lastAgentMessage,
         lastAgentClosing: source.lastAgentClosing,
         activity,
-        processState: processStateFor(source),
+        processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
       modelPolicy: cursorModelPolicy(source, sourcesById),
@@ -195,12 +236,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
         : undefined,
       target,
-      controls: controlsFor(source, target, archived),
+      controls: controlsFor(source, target, archived, identityTrace),
+      ...(controlRefusal ? { controlRefusal } : {}),
     };
     Object.defineProperty(agent, "identityTrace", {
       configurable: false,
       enumerable: false,
-      get: () => resolveAgentTargetWithTrace(source, input.surfaces, sources).trace,
+      get: readIdentityTrace,
     });
     const group = programs.get(program.id) ?? { ...program, agents: [] };
     group.agents.push(agent);
@@ -284,28 +326,33 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      because it had never been installed. This is the same honesty rule the rest
      of the board follows, pointed at the newcomer instead of at us: we spent
      the day deleting numbers that overclaimed, and this one underclaimed. */
-  const collectorProviders: Provider[] = ["codex", "claude", "cursor"];
-  const absentSources =
-    collectorProviders.filter((provider) =>
-      input.sourceAbsent?.[provider] === true
-      && (input.sourceErrors?.[provider]?.length ?? 0) === 0,
-    ).length + (input.cmuxAbsent === true ? 1 : 0);
-  const degradedSources =
-    collectorProviders.filter((provider) =>
-      (input.sourceErrors?.[provider]?.length ?? 0) > 0,
-    ).length + (
-      input.cmuxAbsent !== true
-        && (operationalCmuxErrors.length > 0 || input.cmuxReachable === false)
-        ? 1
-        : 0
-    );
-  /* The ratio counts collectors that EXIST on this machine. Reporting "3 of 4
-     healthy" for a missing cmux still reads as a fault to the person it is
-     shown to, and reporting "4 of 4 healthy" would claim we are watching four
-     things when two are not installed. Neither is the sentence a newcomer needs;
-     "2 of 2 collectors healthy" is both calm and true. `absent` ships beside it
-     so a card can name what is simply not here. */
-  const knownCollectors = 4;
+  /* Every provider that has a collector, not a hand-written subset of them.
+     This list said codex/claude/cursor and omitted omp, while the byProvider
+     breakdown shipped on the same card is built from all four. Both sets had
+     four members — omp missing here, cmux missing there — so the totals looked
+     consistent right up until an omp collector broke, at which point the header
+     read "healthy" and the drawer read "broken" off the same snapshot. */
+  const collectorProviders: readonly Provider[] = PROVIDERS;
+  const absentSources = collectorProviders.filter((provider) =>
+    input.sourceAbsent?.[provider] === true
+    && (input.sourceErrors?.[provider]?.length ?? 0) === 0,
+  ).length;
+  const degradedSources = collectorProviders.filter((provider) =>
+    (input.sourceErrors?.[provider]?.length ?? 0) > 0,
+  ).length;
+  /* The ratio counts collectors that EXIST on this machine, and cmux is not one
+     of them. `collectSessions` returns exactly { omp, codex, claude, cursor },
+     and ANT-GUIDE tells the reader "the four collectors are the same everywhere"
+     before naming those. cmux is the control plane: it has its own
+     `controlHealth.cmuxReachable`, its errors become operator issues, and it is
+     rendered separately. Counting it here made an unreachable control plane
+     print as a broken *collector* — the same fault under two labels, on a board
+     whose whole complaint about itself was repeated information.
+
+     The literal 4 that used to sit here was right by arithmetic accident. This
+     block dropped omp (-1) and added cmux (+1), and the two cancelled, so the
+     published ratio stayed plausible while its membership was wrong. */
+  const knownCollectors = collectorProviders.length;
   const sourceTotal = Math.max(0, knownCollectors - absentSources);
   const activeCursorAgents = liveAgents.filter((agent) => agent.provider === "cursor");
   const cursorModelHealth = {
@@ -332,11 +379,18 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     controlHealth: {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),
-      errors: [
+      /* Deduplicated. `sourceErrors` is flattened across providers, and a fault
+         that stops the whole aggregate stops all four of them, so one deadline
+         arrived here as ten entries. Harmless while this was only counted; the
+         card now prints the first and appends "(+N more)", which turned two
+         real faults into "(+9 more)" and sent an operator looking for eight
+         problems that did not exist. Per-provider errors keep their copies —
+         that is what `staleSources` is derived from. */
+      errors: [...new Set([
         ...operationalCmuxErrors,
         ...sourceErrors,
         ...(archiveLoadError ? [archiveLoadError] : []),
-      ],
+      ])],
       staleSources,
       ...(debris ? { debris } : {}),
     },

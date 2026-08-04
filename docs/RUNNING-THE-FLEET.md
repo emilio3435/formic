@@ -41,9 +41,80 @@ one carries the argument**:
    would have accepted any value within an order of magnitude, you have not
    checked it.**
 
+6. **Check the instrument, not just the subject.** Checks 1–5 all point at the
+   claim. This one points at the apparatus that produced it — the fixture, the
+   helper, the server, the browser. **A defect in the instrument is invisible to
+   every check aimed at the thing under test**, so no amount of scrutinising the
+   claim will surface it.
+
 Check 5 is separate on purpose. The first four are about provenance — did you
 open the artifact. A number can be measured by you, quoted correctly, and still
 be meaningless.
+
+**Why this is a check and not a footnote.** Three separate failures in one day
+were the instrument rather than the subject, and none of the other five could
+have caught any of them:
+
+- **A helper disarmed the assertions it fed** (`0c90740`). Four assertions hunted
+  `NaN`, `Infinity`, `undefined` in a rendered band; the helper building that
+  band wrote `String(value ?? "")`, turning `undefined` into `""` *before the
+  regex saw it*. The instrument was defending the product against the exact
+  fault the test existed to find.
+- **A uniform fixture made a property unverifiable** (`e3ab575`). Five identical
+  turns from `Array.from({length: 5}, () => …)`. `tokens.total` means
+  *latest-turn* — but across identical turns, "latest", "first" and "max" return
+  the same number. Mutation-proved: a first-turn parser survived, and so did a
+  max-turn parser. **A factory that repeats itself makes every property
+  depending on order or position unverifiable downstream, and each consumer
+  reads fine in isolation.**
+- **A server outlived the commit under test.** A fix was nearly reported broken
+  because the running process predated it. The measurement was accurate — about
+  a build nobody was shipping.
+
+The common shape: **the subject was fine and the apparatus was the defect.**
+Reading the claim more carefully finds none of these, because the claim was
+never the problem. That is why it earns a numbered slot rather than a reminder
+to be careful.
+
+The generalisation, which is what survives being copied into another project:
+**anything that stands between you and the thing you are measuring can lie, and
+it will do so silently, because an instrument that fails loudly is one you would
+have already fixed.** Ask what your apparatus would have to do for a false pass
+to look exactly like a true one.
+
+For a running system that question has a three-command answer — and the check's
+own first outing is the best argument for it. Step 2 as originally written asked
+`lsof -ti tcp:4701 | head -1`, which returned a headless Chromium holding a
+connection to the port rather than the server listening on it. It reported a
+server that was current as being four commits stale. **The instrument-check had
+a defective instrument**, which is the point restated at its own expense:
+`-sTCP:LISTEN` is not a detail.
+
+```bash
+# 1. What branch does the worktree serve, and at what commit?
+git -C ~/Developer/the-mountain-main branch --show-current
+git -C ~/Developer/the-mountain-main rev-parse --short HEAD
+
+# 2. Did the server boot before or after the commit under test?
+#    -sTCP:LISTEN is load-bearing. Without it this returns whatever process
+#    happens to hold a CONNECTION to the port — a browser, a curl, your own
+#    headless Chromium — and you read a client's start time as the server's.
+#    That reported a current server as four fixes stale on its first real use.
+ps -o lstart= -p "$(lsof -ti tcp:4701 -sTCP:LISTEN | head -1)"
+git log -1 --format='%ad' --date=format:'%H:%M' <sha-under-test>
+
+# 3. THE ONE THAT ACTUALLY SETTLES IT — is the client the browser receives the
+#    client on disk? A stale server can still serve fresh static files, and a
+#    fresh server can serve a cached bundle, so infer neither from step 2.
+curl -s http://127.0.0.1:4701/app.js -o /tmp/served-app.js
+md5 -q /tmp/served-app.js src/web/app.js      # two identical lines, or stop
+git log --since="<server boot time>" --oneline -- src/web
+```
+
+Step 3 is the check; steps 1 and 2 are context for reading it. If the two md5s
+differ, nothing measured through that browser describes the branch — it
+describes whatever the server last read from disk. **The difference between
+measuring the product and measuring a memory of it costs one `curl`.**
 
 **Why this needs to be procedural rather than a resolution to be careful:**
 unchecked relays cluster exactly where a finding feels strongest. An agent's most
@@ -54,6 +125,15 @@ argument.
 
 The tell that you have not really read something: **you can quote the line but
 not its surroundings.**
+
+**Check the state again immediately before you send it.** Not when you found it.
+Three times in one evening I prepared a routing note for something another lane
+had already fixed — twice while I was still writing it. Detection was sound;
+*dispatch latency* was the defect, and a finding routed after it is fixed is not
+harmless: it costs the reader a wrong belief about the state of the system,
+which is the same failure as a stale number in a document arriving by a
+different route. Same discipline as dating a measurement, pointed at a claim
+about someone else's work.
 
 Full working, with two worked failures: [`VERIFICATION-RULE-GPT.md`](./VERIFICATION-RULE-GPT.md).
 

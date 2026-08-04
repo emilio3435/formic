@@ -6,7 +6,7 @@
 
 import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
-import { state } from "./client-state.js";
+import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
 import {
   clocksFrozen,
@@ -54,6 +54,7 @@ import {
   controlUnavailableText,
   elapsedDataset,
   focusDestinationHint,
+  focusButtonLabel,
   identityTraceView,
   investigationView,
   issueLifecycle,
@@ -77,6 +78,7 @@ import {
   terminalBreadcrumb,
   terminalIdentity,
   terminalSourceName,
+  stripSpinnerFrame,
   workspaceLabelTarget,
   agentsById,
   IDENTITY_TIER_LABELS,
@@ -95,6 +97,7 @@ import {
   API_WRITE_TIMEOUT_MS,
   clampActionsLimit,
   clampTranscriptLimit,
+  controlOutcome,
   nextTranscriptLimit,
   readEndpointOriginNote,
   serverUnreachableHint,
@@ -125,6 +128,7 @@ import {
   withinLookback,
 } from "./agent-model.js";
 import {
+  ACTION_LABELS,
   ACTIVITY_LABELS,
   CONTROL_LABELS,
   DEFAULT_LOOKBACK_HOURS,
@@ -835,6 +839,17 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
               ? "cmux unreachable — terminal titles and Focus/Send stay offline."
+              /* The error TEXT, not just how many there are. The server writes
+                 sentences here — "probe failed 2 times … so Focus, Send and
+                 Interrupt stay off until it answers" — and the card rendered
+                 only the count, so an operator watching Send disappear read "1
+                 error" and could not tell a failed probe from a changed policy.
+                 The message exists to be read; counting it is the same defect
+                 as withholding it. */
+              : errors > 0
+                ? (errors === 1
+                  ? control.errors[0]
+                  : `${control.errors[0]} (+${errors - 1} more)`)
               : source && source.degraded > 0
                 ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
                 : "Source or control evidence needs review.",
@@ -868,7 +883,16 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   }
   if (id === "momentum") {
     const momentum = snap.pulse && snap.pulse.momentum;
-    let sublabel = "No completion data yet.";
+    /* "yet" promises a number that is never coming. The server withholds
+       completions permanently — success is unverifiable and completion is
+       undetectable for most providers — and says so in `completionsProvenance`,
+       which nothing read. On a busy board the stall text fills this line so the
+       promise never showed; on a quiet or brand-new one it is the first thing a
+       newcomer reads about the counter. Saying "not measured" once is honest;
+       saying "not yet" forever is the same overclaim in a patient voice. */
+    let sublabel = momentum && momentum.completionsProvenance === "not-observable"
+      ? "Completions are not measured — no source reports them reliably."
+      : "No completion data yet.";
     if (momentum) {
       // Window honesty: a freshly restarted tracker says how long it has
       // actually watched, never a fabricated "this hour". Below one full
@@ -917,8 +941,18 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        bare "/min" invites reading it as an instantaneous rate, which is how a
        rate and an hourly cost end up divided against each other. Say the window.
        (Magnitude audit §3.) */
+    /* The window sits FIRST, next to the rate it describes. It used to be
+       appended last, after the cost clause, so the cell read
+       "36k/min · $4.20 last hour · 10m average" — three fragments in which the
+       rate's qualifier had the cost's window between it and the rate, and
+       therefore read as qualifying the cost.
+
+       That only became wrong when the cost came back. While costLastHourUsd was
+       null the clause sat directly under the rate and was unambiguous; the
+       backend restoring the figure put a differently-windowed number in
+       between. Two fixes, each correct, composing into a crossed sentence. */
     const windowNote = hasRate && Number.isFinite(burn.windowMs) && burn.windowMs > 0
-      ? " · " + fmtElapsed(burn.windowMs) + " average"
+      ? fmtElapsed(burn.windowMs) + " average"
       : "";
     /* What the rate cannot see. This is the honest half of the coverage suffix
        deleted above: `unknown` counts LIVE agents whose provider reports no
@@ -934,7 +968,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     return {
       value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
       unit: hasRate ? "/min" : "",
-      sublabel: sub + windowNote + blindNote,
+      sublabel: [windowNote, sub].filter(Boolean).join(" · ") + blindNote,
       tone: hasRate ? "ok" : "missing",
     };
   }
@@ -1045,7 +1079,7 @@ globalThis.TheAntHill = {
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames,
-  preferredRenameTarget, terminalSourceName, terminalIdentity, terminalBreadcrumb, focusDestinationHint, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
   quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
@@ -1077,6 +1111,7 @@ globalThis.TheAntHill = {
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
+  controlOutcome,
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
@@ -1669,6 +1704,14 @@ function render() {
   const listScroll = main.scrollTop;
   const inspector = $("inspector");
   const inspectorScroll = inspector.scrollTop;
+  // Whether the operator was standing INSIDE the drawer, so the restore below can
+  // tell "their control went away" from "they were never in here".
+  const focusWasInDrawer = Boolean(document.activeElement && inspector.contains(document.activeElement));
+  // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
+  // the signature. state.selected is already the new entity by this point —
+  // selectEntity sets it and then calls render — so the pane's own last paint is
+  // the only record of what that scrollTop belongs to.
+  const inspectorShowed = paintedEntityKey(state.paintSig.inspector);
 
   renderConn();
   renderFeedAlarm();
@@ -1690,11 +1733,34 @@ function render() {
   // Rebuilding the list momentarily collapses pane height, which clamps the
   // scroll position — restore it so live updates never yank the operator.
   main.scrollTop = listScroll;
-  inspector.scrollTop = inspectorScroll;
+  /* Same entity as before the paint: this was a live update under a drawer the
+     operator is reading, so put them back where they were. Different entity:
+     they flicked to another agent, and carrying the offset over lands them
+     part-way down a stranger's drawer with its name scrolled off the top —
+     measured at 291px on a 370px pane, with the <h2> 246px above the fold. A
+     new selection starts at its own beginning. */
+  inspector.scrollTop = paintedEntityKey(state.paintSig.inspector) === inspectorShowed
+    ? inspectorScroll
+    : 0;
 
   if (focusKey) {
     const node = document.querySelector(`[data-fkey="${CSS.escape(focusKey)}"]`);
     if (node) node.focus({ preventScroll: true });
+    /* The control renamed itself under the repaint it triggered, so the lookup
+       above finds nothing and focus falls to <body> — the top of the document,
+       from inside the panel the operator was working in. The Evidence disclosure
+       does exactly this: it is `shelf:evidence:open` before the click and
+       `shelf:evidence:close` after. Measured with a real Enter keypress on the
+       rail: activeElement === body.
+
+       The drawer's own lead is the fallback, deliberately and not something
+       cleverer. Matching the fkey's prefix would have found the renamed control
+       itself, but `act:<id>:interrupt` and `act:<id>:archive` share a prefix too,
+       and landing a keyboard operator on Archive because Interrupt went away is a
+       worse failure than the one being fixed. Only while the drawer is still
+       open: closeInspector runs its own return after its render, and stealing
+       focus back into a pane on its way out would fight it. */
+    else if (focusWasInDrawer && !inspector.hidden) focusDrawerLead();
   }
 }
 
@@ -1998,9 +2064,19 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
     const spend = calmSpendText(pulse.burn);
     if (spend) parts.push(spend);
   }
+  /* The mark is punctuation for the copy, so it goes when the copy does.
+
+     Suppressing "0 shipping" at zero tracked (day-one review) left this bullet
+     rendering alone: measured on the rebuilt n=0 fixture at aba5551, the calm
+     line was mark "●", copy "", chip "All clear" — an orphaned dot floating
+     before the verdict, which reads as a bullet whose text failed to load on the
+     one screen that exists to look deliberate. aria-hidden already says it
+     carries no meaning of its own; it should not survive the sentence it was
+     decorating. */
+  const copy = parts.join(" · ");
   const line = el("div", { class: "pulse-calm" + (watch.length ? " is-watching" : ""), role: "status" },
-    el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }),
-    el("span", { class: "pulse-calm-copy", text: parts.join(" · ") }));
+    copy ? el("span", { class: "pulse-calm-mark", "aria-hidden": "true", text: "●" }) : null,
+    copy ? el("span", { class: "pulse-calm-copy", text: copy }) : null);
   /* The murmur. Appended to the same line rather than promoted into a cell,
      because these signals are worth mentioning and not worth rearranging the
      board around — a volume knob instead of a switch. */
@@ -4288,6 +4364,22 @@ function selectAgent(agentId) {
 // state.selectedId so the row is-selected highlight, findSelected, and
 // closeInspector focus-return all keep working untouched.
 function selectEntity(sel) {
+  /* Where the operator was standing when they opened this, captured before
+     render() rebuilds the board out from under the focused node. Recorded for
+     every kind, because closeInspector's `agent-<id>` route only ever worked for
+     agents — see state.selectionOrigin.
+
+     Only when focus is OUTSIDE the drawer. Flicking to another board row should
+     move the return point to that row, but following a lineage link from inside
+     an open drawer should not: that link is about to be destroyed by the very
+     repaint it triggers, so adopting it as the way back would strand the
+     operator on a node that no longer exists. The row that began the excursion
+     stays the way out. */
+  const origin = document.activeElement;
+  const pane = $("inspector");
+  if (!(origin && pane && pane.contains(origin))) {
+    state.selectionOrigin = origin && origin.dataset ? origin.dataset.fkey || null : null;
+  }
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
@@ -4309,15 +4401,22 @@ function focusDrawerLead() {
 
 function closeInspector() {
   const id = state.selectedId;
+  const origin = state.selectionOrigin;
   state.selected = null;
   state.selectedId = null;
+  state.selectionOrigin = null;
   state.confirming = null;
   state.evidenceOpen = false;
   render();
-  if (id) {
-    const row = document.getElementById("agent-" + id);
-    if (row) row.focus({ preventScroll: true });
-  }
+  /* The agent row by id first — unchanged, and it survives a roster rebuild that
+     a captured node reference would not. The recorded origin catches every other
+     kind: a program or finding drawer left `id` null, so closing one destroyed
+     the focused Close button and dropped the operator on <body>, with nothing
+     between them and Tab-from-the-top. */
+  const row = id ? document.getElementById("agent-" + id) : null;
+  const back = row
+    || (origin ? document.querySelector(`[data-fkey="${CSS.escape(origin)}"]`) : null);
+  if (back) back.focus({ preventScroll: true });
 }
 
 function findSelected() {
@@ -4964,6 +5063,11 @@ function verdictGate(agent, outcome) {
    states, so `unknown` is stated as unknown somewhere instead of silently
    looking like health. Null when the field is absent — the drawer head then
    holds exactly the nodes it holds today. */
+/* The words themselves live in LIVENESS_VIEW / LIVENESS_ENDED_UNKNOWN, which is
+   the only place they may be decided — an earlier attempt overrode the `unknown`
+   label HERE and left livenessView() and the rendered chip disagreeing about one
+   agent (c489040, reverted by 4d81fe5). This function renders what the model
+   says and nothing else. */
 function verdictLiveness(agent) {
   const view = livenessView(agent);
   if (!view) return null;
@@ -5138,6 +5242,37 @@ function drawerObjective(agent) {
   return conciseText(task, 140);
 }
 
+/* The head said the same things twice, two lines apart, in different orders.
+   The title is not one shape: `agentName` returns an operator alias, else the
+   cmux terminal title, else `provider · folder` — so what it has already said
+   differs per agent, and a fixed deletion loses information in one shape while
+   fixing another. Both were verified in a browser rather than in the diff:
+
+     bare identity   h2 "Cursor · LaHormigaDormida"
+                     sub "LaHormigaDormida · Cursor · grok 4.5"   provider AND folder twice
+     aliased         h2 "RHS-6 BE payload · sol 5.6"
+                     sub "the-mountain-main · Codex · sol 5.6"    model twice, program only here
+
+   So the rule is subtractive, not a delete: this line says only what the title
+   has not. Compare against the title's own `·` segments and not a substring —
+   "main" is a substring of "the-mountain-main" and would silently drop a
+   program the title never named. */
+/* The placeholder guard this line used to carry itself now lives in
+   `modelShort`, which is the one function every model slot goes through — the
+   head, the roster row and the invocation table. It was here alone, so the head
+   omitted `<synthetic>` while the row two pixels behind it printed it. */
+function headSubParts(agent, program, titleText) {
+  const said = new Set(
+    String(titleText || "").split("·").map((part) => part.trim().toLowerCase()).filter(Boolean),
+  );
+  const unsaid = (value) => (value && !said.has(value.toLowerCase()) ? value : "");
+  return {
+    program: unsaid(programName(program)),
+    provider: unsaid(providerLabel(agent.provider)),
+    model: unsaid(modelShort(agent.model)),
+  };
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const activity = deriveActivity(agent);
@@ -5172,10 +5307,22 @@ function renderAgentDrawer(pane, view) {
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   const tag = drawerSessionTag(agent);
   const objective = drawerObjective(agent);
+  const title = agentName(agent);
+  const sub = headSubParts(agent, program, title);
+  const subParts = {
+    program: sub.program,
+    chip: [sub.provider, sub.model].filter(Boolean).join(" · "),
+  };
+  /* Nothing left to say is not an empty line — it is no line. When the title
+     has already named all three, this row would otherwise render as a stray
+     gap under the heading. */
+  subParts.line = Boolean(subParts.program || subParts.chip);
   pane.append(el("div", { class: "inspector-head inspector-verdict" },
     el("div", { class: "inspector-id" },
       el("h2", { class: "inspector-title" },
-        agentName(agent),
+        /* Same value the subtraction below compares against — one call, so the
+           two can never disagree about what the title said. */
+        title,
         tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
       objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
       sourceLine
@@ -5185,11 +5332,17 @@ function renderAgentDrawer(pane, view) {
           text: sourceLine,
         })
         : null,
-      el("p", { class: "inspector-sub" },
-        el("span", { text: programName(program) }),
-        " · ",
-        el("span", { class: "chip provider-" + agent.provider },
-          providerLabel(agent.provider) + (modelShort(agent.model) ? " · " + modelShort(agent.model) : ""))),
+      subParts.line
+        ? el("p", { class: "inspector-sub" },
+          subParts.program ? el("span", { text: subParts.program }) : null,
+          subParts.program && subParts.chip ? " · " : null,
+          /* The provider chip keeps its colour class even when the title has
+             already named the provider in words: the channel is then carried
+             once, as ink, instead of twice, as text. */
+          subParts.chip
+            ? el("span", { class: "chip provider-" + agent.provider, text: subParts.chip })
+            : null)
+        : null,
       renderStatusLine(agent, activity, outcome, control, policy),
       verdictLiveness(agent),
       verdictGate(agent, outcome)),
@@ -5258,25 +5411,76 @@ function renderShelfSection({ key, title, open, body }) {
   return section;
 }
 
+/* What the collapsed rail is allowed to claim.
+
+   Every section of renderEvidence is conditional, so the drawer's contents vary
+   per agent and can legitimately be empty. Rather than keep a second copy of
+   those conditions here — two lists that drift apart is how a label starts
+   describing a panel it no longer matches — the sections tag themselves with
+   `data-evidence-section` and this reads them back off a built panel. One
+   source of truth: whatever renderEvidence actually emits is what the rail
+   says. */
+function evidenceInventory(agent) {
+  let panel;
+  try {
+    panel = renderEvidence(agent);
+  } catch {
+    /* The rail must never be the thing that breaks the drawer. If evidence
+       cannot be built, say nothing about its contents rather than guess. */
+    return [];
+  }
+  /* Walked rather than queried: the client runs against a fake document in the
+     harness, which builds real nodes through el() but implements no selector
+     engine. querySelectorAll threw there and nowhere else. */
+  const seen = [];
+  const walk = (node) => {
+    if (!node || typeof node !== "object") return;
+    const name = node.dataset && node.dataset.evidenceSection;
+    if (name && !seen.includes(name)) seen.push(name);
+    for (const child of node.children || []) walk(child);
+  };
+  walk(panel);
+  return seen;
+}
+
 function renderEvidenceShelf(agent) {
   if (!state.evidenceOpen) {
-    // Whimsical collapsed rail — third column as a caterpillar/cog strip.
+    /* The collapsed rail is the ONLY route to everything the main view is
+       deliberately not carrying, so it has to earn a click. It used to be a
+       cog, four decorative beads and the word EVIDENCE rotated ninety degrees:
+       nothing stated what was inside or whether opening it was worth it, and
+       the beads were a fixed four regardless of content.
+
+       The beads are gone rather than given a meaning they never had. In their
+       place is the one number that answers "is this worth opening" — how many
+       kinds of evidence this agent actually has — and the tooltip names them.
+
+       The old tooltip also promised "vitals", which moved out to the vitals
+       band under the verdict head. The rail was advertising a section the
+       drawer no longer contains. */
+    const sections = evidenceInventory(agent);
+    const summary = sections.length
+      ? "Open evidence — " + sections.join(", ")
+      : "Open evidence — nothing reported for this session";
     return el("button", {
       type: "button",
       class: "shelf-evidence-rail",
       "aria-expanded": "false",
       "aria-controls": "shelf-evidence",
-      title: "Open evidence — vitals, paths, routing, transcript",
+      title: summary,
+      "aria-label": summary,
       dataset: { fkey: "shelf:evidence:open" },
       onclick: () => { state.evidenceOpen = true; render(); },
     },
-      el("span", { class: "shelf-rail-spine", "aria-hidden": "true" },
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" }),
-        el("span", { class: "shelf-rail-bead" })),
-      icon("gear", { label: "Open evidence" }),
-      el("span", { class: "shelf-rail-label", text: "Evidence" }));
+      icon("gear", { label: "" }),
+      el("span", { class: "shelf-rail-label", text: "Evidence" }),
+      /* An empty drawer says so, because a count of zero and a missing count
+         look identical and only one of them means "do not bother". */
+      el("span", {
+        class: "shelf-rail-count" + (sections.length ? "" : " is-empty"),
+        "aria-hidden": "true",
+        text: sections.length ? String(sections.length) : "—",
+      }));
   }
 
   // Evidence holds paths, routing, and the transcript tail. The vitals
@@ -5403,7 +5607,28 @@ function renderControlBanner(agent, control) {
     el("strong", { text: brief.title }),
     " ",
     controlUnavailableText(control, agent));
-  if (brief.why) copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  /* `why` earns its line everywhere except one cause, and the exception is the
+     common one. Measured on the live board: cause `missing` is 245 agents, and
+     there the banner says a single fact three times before reaching the remedy —
+
+       "Controls unavailable."                                        (title)
+       "Controls are unavailable - no safe cmux target is linked..."  (summary)
+       "No cmux terminal reports this session, so there is nothing
+        to route Focus or Send to."                                   (why)
+
+     Nothing is added by the third line: "no cmux target is linked" and "no cmux
+     terminal reports this session" are the same sentence twice.
+
+     Every other cause is left alone, and a first pass that dropped `why` for all
+     of them was wrong. `contested-terminal` and `shared-folder` NAME which
+     ambiguity — two sessions on one terminal, or two sharing a folder — where
+     the summary only says "ambiguous"; a test caught that, correctly. Archived
+     and died carry the risk of acting anyway, and `unproven` carries the reason
+     a cwd match can reach the wrong agent. Those are the sentences that stop a
+     retry, so they stay. */
+  if (brief.why && brief.cause !== "missing") {
+    copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+  }
   copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
   copy.append(el("button", {
     type: "button",
@@ -5432,7 +5657,6 @@ function closeButton() {
 
 /* ---------- inspector: command dock ---------- */
 
-const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive" };
 const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);
 
 function capability(agent, action) {
@@ -5535,7 +5759,27 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     },
       input,
       el("button", {
-        type: "submit", class: "btn primary command-send",
+        type: "submit",
+        /* `primary` is a claim about emphasis and it was made unconditionally.
+           `.btn.primary` is declared AFTER `.btn:disabled` at equal specificity
+           (0,2,0), so the primary fill wins the cascade and a Send that cannot
+           send still rendered solid ink — the highest-emphasis element on the
+           panel, sitting beside a composer reading "Instruction unavailable"
+           and two dock tools the server had already refused. The panel said
+           "you cannot act" and showed a primary action in the same breath.
+
+           Measured against the server rather than guessed: `controlsFor` gates
+           instruct on `transmitRefusal`, and on the live board 724 of 731
+           agents come back instruct:false. So this was the normal rendering,
+           not an edge case.
+
+           Gated on `sendable` — the server's verdict — rather than by adding a
+           rule to out-specify `.btn.primary`. The class then means what it
+           says, `.btn:disabled` styles it the way the design system already
+           intends, and the shared button rules are left alone. NOT gated on
+           `busy`: a send in flight can act, so it keeps its emphasis and
+           `.btn[aria-busy]` dims it, which is the existing correct look. */
+        class: "btn command-send" + (sendable ? " primary" : ""),
         disabled: sendable && !busy ? null : "",
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
@@ -5551,8 +5795,18 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
   dock.append(tools);
   if (archiveCap && safeLocked) {
+    /* The summary names the one thing behind it. It read "More", which told an
+       operator nothing about whether the click was worth making — and what is
+       actually behind it is a single DESTRUCTIVE action, so "More" understated
+       it in the one direction that matters.
+
+       Not folded into the evidence rail, which was the other candidate: that
+       rail holds things to READ (paths, tokens, identity, transcript) and this
+       holds one thing to DO. They are two doors onto different content, so
+       collapsing them would put a destructive control inside a drawer labelled
+       evidence — worse than the vague label it replaced. */
     dock.append(el("details", { class: "command-dock-more" },
-      el("summary", { text: "More" }),
+      el("summary", { text: "Archive this session" }),
       renderDockTool(agent, archiveCap, "archive", { held })));
   }
 
@@ -5617,7 +5871,13 @@ function renderDockTool(agent, cap, action, opts = {}) {
     },
   },
     icon(action === "focus" ? "focus" : action === "interrupt" ? "interrupt" : "archive"),
-    busy ? label + "…" : label);
+    /* Focus names where it is about to take you, on the rows where that is not
+       provable. Everything else keeps its plain label. */
+    busy
+      ? label + "…"
+      : action === "focus"
+        ? focusButtonLabel(agent, deriveControlState(agent))
+        : label);
 }
 
 function sourceWorkspaceLabel(target) {
@@ -5719,7 +5979,7 @@ function dtdd(grid, label, value, opts = {}) {
         title: hint, "aria-label": `${label}: ${hint}`, text: label,
       }))
     : el("dt", { text: label }));
-  const dd = el("dd", {});
+  const dd = el("dd", opts.wide ? { class: "is-wide" } : {});
   if (value.nodeType) dd.append(value);
   else dd.append(opts.code ? el("code", { text: String(value) }) : String(value));
   grid.append(dd);
@@ -5919,9 +6179,22 @@ function renderChat(agent) {
      twice in one drawer — six lines apart, which is the exact defect this
      overhaul was commissioned to remove, reintroduced by the fix for the
      opposite failure (a drawer that could go completely empty). */
+  /* The agent's reply leads. An operator opens this to find out what the AGENT
+     said; their own message is the one thing in the drawer they already know.
+     Reading order was user-first, and with the panel's head, banner and vitals
+     above it the reply began 821px down a 720px viewport — off-screen, with the
+     dock covering what little showed. Nothing here can raise the block itself,
+     so what it can do is put the payload at the top of it.
+
+     Safe against the dedup rule, which keeps whichever candidate comes first:
+     measured on 719 agents, 551 carry both fields and NONE of them say the same
+     prose, so no turn changes label or disappears because of this order. The two
+     fields are attributed by the server (`lastUserMessage` is the user's
+     request, `lastAgentMessage` the agent's reply), unlike `lastHumanMessage`,
+     which is why they can be trusted to differ rather than merely observed to. */
   const turns = dedupeTurns([
-    { role: "user", text: agent.lastUserMessage },
     { role: "assistant", text: agent.lastAgentMessage },
+    { role: "user", text: agent.lastUserMessage },
     { role: "task", text: drawerObjective(agent) ? "" : agent.task },
   ]);
   for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
@@ -6226,20 +6499,38 @@ function renderEvidence(agent, ui = state) {
     }), { hint: SESSION_TOTAL_HINT });
   }
 
+  /* Wide, because this value is a sentence plus a row of buttons rather than a
+     figure: in the Evidence shelf the 8rem label gutter left it 178px, which is
+     one copy button per line, and the third one landed past the shelf's own
+     floor. Measured at 1440 in a browser, where "Copy pane" rendered 35px below
+     it and was sliced by the section's border. */
   const link = renderControlLink(agent.target);
-  if (link) dtdd(grid, "control link", link);
+  if (link) dtdd(grid, "control link", link, { wide: true });
 
-  if (grid.childNodes.length) panel.append(grid);
+  /* Each block tags itself with what it is. The collapsed rail needs to say
+     what is in here without a second copy of these conditions to drift out of
+     step with them — so the sections declare their own names and
+     evidenceInventory reads them back off a built panel. */
+  if (grid.childNodes.length) {
+    grid.dataset.evidenceSection = "paths & usage";
+    panel.append(grid);
+  }
 
   const identity = renderIdentityBlock(agent);
-  if (identity) panel.append(identity);
+  if (identity) {
+    identity.dataset.evidenceSection = "identity";
+    panel.append(identity);
+  }
 
   const names = renderNamesDisclosure(agent);
-  if (names) panel.append(names);
+  if (names) {
+    names.dataset.evidenceSection = "names";
+    panel.append(names);
+  }
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
-      el("h3", { class: "section-title", text: "Artifacts" }),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" }, text: "Artifacts" }),
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
@@ -6254,7 +6545,7 @@ function renderEvidence(agent, ui = state) {
 
   if (agent.transcriptTail) {
     panel.append(
-      el("h3", { class: "section-title", text: "Transcript tail" }),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "transcript" }, text: "Transcript tail" }),
       el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
   }
 
@@ -6288,29 +6579,10 @@ async function sendControl(agent, action, instruction) {
     }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
-
-    if (body && typeof body.ok === "boolean") {
-      if (body.ok) {
-        result = { ok: true, message: ACTION_LABELS[action] + " succeeded (" + agentName(agent) + ")" };
-        if (action === "instruct") state.drafts.delete(agent.id);
-      } else {
-        const err = body.error || {};
-        let msg = ACTION_LABELS[action] + " failed";
-        if (err.code) msg += " [" + err.code + "]";
-        if (err.message) msg += ": " + err.message;
-        if (err.exitCode != null) msg += " (exit " + err.exitCode + ")";
-        if (err.stderr) msg += "\n" + err.stderr.trim();
-        result = { ok: false, message: msg };
-      }
-    } else {
-      // HTTP completion alone is never success.
-      result = {
-        ok: false,
-        message: ACTION_LABELS[action] + " failed: server returned an unexpected response (HTTP " + res.status + ")",
-      };
-    }
+    result = controlOutcome(action, agentName(agent), { status: res.status, body });
+    if (result.ok && action === "instruct") state.drafts.delete(agent.id);
   } catch (err) {
-    result = { ok: false, message: ACTION_LABELS[action] + " failed: " + (err && err.message ? err.message : "network error") };
+    result = controlOutcome(action, agentName(agent), { error: err });
   }
 
   state.pending.delete(key);
@@ -6754,6 +7026,9 @@ function emptyBoardVerdict(snap) {
     : (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
   const degraded = broken > 0;
   const healthy = sources && Number.isFinite(sources.healthy) ? sources.healthy : 0;
+  // Collectors with nothing installed to read. Absent-first: a wire without the
+  // field reports 0 rather than inventing absences.
+  const absent = sources && Number.isFinite(sources.absent) ? sources.absent : 0;
   return {
     degraded,
     message: degraded
@@ -6771,11 +7046,25 @@ function emptyBoardVerdict(snap) {
        makes "all four are fine" legible; an absolute count would have hidden
        the very reassurance the screen exists to give. Their reasoning is better
        than mine was and the string is documented, so it stands. */
+    /* On a machine with none of the four installed the denominator went to
+       zero and this returned null, so the day-one screen lost the very line
+       QUICKSTART sends a newcomer to look for — the one it calls "the proof the
+       board is working". Silence at exactly the moment someone needs a signal.
+
+       So absence is stated rather than counted or hidden. A newcomer with no
+       tools installed is told what would appear here; a newcomer with one is
+       told their one collector is fine AND that three are simply not installed,
+       which is the distinction 42d842e drew at the source. Degradation still
+       outranks both: a blind collector is a fault and says so first. */
     sources: degraded
       ? `${broken} of ${total} collectors degraded`
       : total > 0
-        ? `${healthy} of ${total} collectors healthy`
-        : null,
+        ? (absent > 0
+          ? `${healthy} of ${total} collectors healthy · ${absent} not installed`
+          : `${healthy} of ${total} collectors healthy`)
+        : absent > 0
+          ? "No collectors installed yet — Claude Code, Codex or Cursor will appear here"
+          : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };
 }

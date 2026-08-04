@@ -1,6 +1,9 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildSnapshot, withPulse } from "../src/server/snapshot";
+import { PulseTracker } from "../src/server/pulse";
+import type { CollectedAgent } from "../src/server/types";
 
 /* README.md and ARCHITECTURE.md drift faster than anyone re-reads them. A label
    documented one afternoon was already wrong the next morning — "Show panes"
@@ -56,18 +59,48 @@ beforeAll(async () => {
   agentModel = await import("../src/web/agent-model.js");
 });
 
-const agentFixture = (o: Record<string, unknown> = {}) => ({
+
+/* A board built by the PRODUCT, from a described machine.
+
+   A hand-written payload is a shape nobody can check against reality: if the
+   server stops producing it, the assertion goes on passing about a board that
+   no longer exists. That is not theoretical — it is how the day-one screen
+   changed underneath four green assertions this afternoon.
+
+   So the doc-facing claims are driven end to end: buildSnapshot for the
+   snapshot, PulseTracker for the pulse, and only the MACHINE is described. */
+const producedBoard = (input: {
+  agents?: readonly CollectedAgent[];
+  cmuxReachable?: boolean;
+  cmuxErrors?: readonly string[];
+  cmuxAbsent?: boolean;
+  sourceAbsent?: Record<string, boolean>;
+  burn?: () => Promise<never>;
+}) => {
+  const now = new Date("2026-08-02T12:00:00.000Z");
+  const snapshot = buildSnapshot({
+    agents: input.agents ?? [],
+    surfaces: [],
+    archiveStore: { has: () => false, archive: async () => {} },
+    now,
+    ...(input.cmuxReachable === undefined ? {} : { cmuxReachable: input.cmuxReachable }),
+    ...(input.cmuxErrors ? { cmuxErrors: input.cmuxErrors } : {}),
+    ...(input.cmuxAbsent === undefined ? {} : { cmuxAbsent: input.cmuxAbsent }),
+    ...(input.sourceAbsent ? { sourceAbsent: input.sourceAbsent } : {}),
+  });
+  /* The burn reader throws, which is what a machine with no OpenBurnBar does —
+     the exact condition README's "unavailable, never $0" promise is about. */
+  const tracker = new PulseTracker(async () => { throw new Error("no cost source"); }, now.getTime());
+  tracker.observe(snapshot, now.getTime());
+  return withPulse(snapshot, tracker.report(now.getTime()));
+};
+
+const workingAgent: CollectedAgent = {
   id: "codex:pin", provider: "codex", sourceSessionId: "pin", displayName: "Pin",
-  programId: "p1", status: "running", activity: "working", controlState: "linked",
-  updatedAt: "2026-08-02T12:00:00.000Z", tokens: { provenance: "observed", total: 10 },
-  artifacts: [], gates: [], ...o,
-});
-const snapFixture = (o: Record<string, unknown> = {}) => ({
-  generatedAt: "2026-08-02T12:00:00.000Z",
-  controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [] },
-  totals: { live: 1, tracked: 1, attention: 0, working: 1, sourceHealth: { healthy: 4, degraded: 0, absent: 0, total: 4 } },
-  issues: [], programs: [{ id: "p1", name: "p1", agents: [agentFixture()] }], ...o,
-});
+  cwd: "/Users/me/project", status: "running", statusReason: "Fixture activity.",
+  startedAt: "2026-08-02T11:00:00.000Z", updatedAt: "2026-08-02T12:00:00.000Z",
+  tokens: { provenance: "unknown" }, artifacts: [], gates: [],
+} as CollectedAgent;
 
 describe("ARCHITECTURE.md stays true to the code it maps", () => {
   test("it names every module that exists, and every module it names exists", () => {
@@ -150,19 +183,29 @@ describe("README.md stays true to the product", () => {
        promise a stranger reads in the first fifteen seconds, so the strings
        behind it have to be strings the client actually renders. */
     expect(readme).toContain("`unavailable`, never `$0`");
-    /* Driven, not grepped: a burn payload carrying a null cost must RENDER the
-       word, and must never render a zero. */
-    const noCost = snapFixture({ pulse: { burn: { tokensPerMin: 10, windowMs: 300000, costLastHourUsd: null, costProvenance: "unavailable", coverage: { reporting: 1, eligible: 1, unknown: 0 } }, momentum: { working: 1, completionsLastHour: 0, observedWindowMs: 0, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900000 }, activity: { bucketMinutes: 5, windowMinutes: 60, observedSince: "x", buckets: [] } } });
+    /* Driven from the PRODUCER, not a hand-written pulse. The machine is
+       described — one working agent, no cost source — and PulseTracker decides
+       what a null cost looks like. A literal `costLastHourUsd: null` would
+       assert only that the client renders a shape someone typed; this asserts
+       that the shape a cost-less machine actually produces renders that way. */
+    const noCost = producedBoard({ agents: [workingAgent] });
     const burn = M.summaryWidgetData("burn", noCost, "live", "percent", [], false);
     expect(burn.sublabel, "a null cost stopped rendering as unavailable").toContain("cost unavailable");
     expect(burn.sublabel, "a null cost is being rendered as a zero").not.toContain("$0");
     expect(readme).toContain("no process evidence");
-    /* Driven: an ended agent with no process evidence must PRODUCE that chip.
-       This is the case README points a stranger at — a session that stopped
-       without proof either way is not reported as dead. */
-    const noEvidence = agentModel.livenessView(agentFixture({
-      activity: "ended", processState: "unknown", processAlive: undefined, processIds: [],
-    }));
+    /* Driven through the PRODUCER: a collected agent that never yielded process
+       evidence — no processAlive, no pids — must come out of buildSnapshot as
+       the row README points a stranger at. Describing the agent and asserting
+       the chip is a claim about the product; hand-writing `processState:
+       "unknown"` would only assert that the client renders a word someone
+       typed, and whether the server still produces that state would go
+       unchecked. */
+    const quiet = producedBoard({
+      agents: [{ ...workingAgent, status: "stale", statusReason: "Quiet for 45 minutes." } as CollectedAgent],
+    });
+    const quietRow = quiet.programs.flatMap((program) => program.agents)[0];
+    expect(quietRow?.processState, "a session with no process evidence stopped reading unknown").toBe("unknown");
+    const noEvidence = agentModel.livenessView(quietRow);
     expect(noEvidence?.label, "an ended agent with no evidence stopped reading as 'No process evidence'")
       .toBe("No process evidence");
   });
@@ -297,7 +340,11 @@ describe("QUICKSTART.md stays true to a first run", () => {
     /* The two cmux sentences and the Blocked verdict are what a monitoring-only
        install actually lands on, so drive that exact payload rather than
        grepping: cmux unreachable, everything else fine. */
-    const noCmux = snapFixture({ controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: ["gone"], staleSources: [] } });
+    const noCmux = producedBoard({
+      agents: [workingAgent],
+      cmuxReachable: false,
+      cmuxErrors: ["cmux terminal discovery exited 1: connection refused"],
+    });
     const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
     expect(quickstart).toContain("`Blocked`");
     expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
@@ -311,7 +358,8 @@ describe("QUICKSTART.md stays true to a first run", () => {
       .toMatch(/control-plane problems/i);
     expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
     // And the clear case QUICKSTART promises once cmux is running.
-    expect(M.summaryWidgetData("health", snapFixture(), "live", "percent", [], false).value).toBe("All clear");
+    expect(M.summaryWidgetData("health", producedBoard({ agents: [workingAgent], cmuxReachable: true }), "live", "percent", [], false).value)
+      .toBe("All clear");
     expect(quickstart).toContain("**Live**");
     expect(client).toContain('live: "Live"');
   });
@@ -760,8 +808,12 @@ describe("the fail-closed write gate is documented as a deliberate capability ch
   test("both onboarding docs describe that asymmetry, not a blanket cmux requirement", () => {
     const flatten = (d: string) => d.replace(/\s+/g, " ");
     for (const [name, doc] of [["QUICKSTART.md", flatten(quickstart)], ["ANT-GUIDE.md", flatten(read("ANT-GUIDE.md"))]] as const) {
+      /* Not an alternation: both spellings live in ANT-GUIDE — prose says "Send
+         and Interrupt", the gate table heads a column "Send / Interrupt" — so an
+         OR let either be deleted while the other carried the match. Require the
+         prose form, which is the one a reader meets first. */
       expect(doc, `${name} does not say Send/Interrupt are gated harder than Focus`)
-        .toMatch(/Send and Interrupt|Send \/ Interrupt/);
+        .toMatch(/Send and Interrupt/);
       expect(doc, `${name} does not name the cwd-match state an operator will hit`)
         .toMatch(/working directory|matched by (its )?folder/i);
       /* Same requirement the promises block below asserts; keep the accepted
@@ -835,6 +887,29 @@ describe("day one on a machine without cmux", () => {
   const verdict = (sourceHealth: unknown) =>
     M.emptyBoardVerdict({ generatedAt: "2026-08-02T12:44:51.004Z", totals: { sourceHealth } });
 
+  /* THE PRODUCER, not a fixture describing it.
+
+     The day-one assertions below used to hand-build `{healthy: 4, total: 4}`
+     and check only what the client rendered from it. That measures the renderer
+     and says nothing about whether the server produces that payload for the
+     machine in question — so when 42d842e changed the fresh-machine numbers
+     (absent collectors stopped counting toward the denominator), every one of
+     these stayed green while the screen a newcomer meets changed underneath
+     them. A check that measures a fixture rather than the producer is the same
+     hollow shape found a dozen times today, in the test written to prevent it.
+
+     buildSnapshot is now driven with the machine as its input. */
+  const machineVerdict = (input: Partial<Parameters<typeof buildSnapshot>[0]>) => {
+    const snapshot = buildSnapshot({
+      agents: [],
+      surfaces: [],
+      archiveStore: { has: () => false, archive: async () => {} },
+      now: new Date("2026-08-02T12:44:51.004Z"),
+      ...input,
+    });
+    return { verdict: M.emptyBoardVerdict(snapshot), sourceHealth: snapshot.totals.sourceHealth };
+  };
+
   /* Derive the roster from the Provider union rather than listing four names
      here, so a fifth collector fails this test instead of silently outdating
      the table a newcomer reads to decide whether their board is broken. */
@@ -843,14 +918,46 @@ describe("day one on a machine without cmux", () => {
     return [...line.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
   })();
 
-  test("a fresh install with nothing installed reads calm, not degraded", () => {
-    const fresh = verdict({
-      healthy: 4, degraded: 0, total: 4,
-      byProvider: { omp: ok, codex: ok, claude: ok, cursor: ok },
+  test("a machine with nothing installed reads calm, and still says something", () => {
+    /* Driven through buildSnapshot with the actual day-one machine: no provider
+       directories, no cmux binary. The screen must be calm AND must not go
+       silent — the count is what QUICKSTART calls "the proof the board is
+       working", and returning null there left a newcomer with no signal at the
+       one moment they need one. */
+    const { verdict: fresh, sourceHealth } = machineVerdict({
+      // All four collectors, omp included — the day-one machine has no omp
+      // directory either, and leaving it unstated made it read as installed.
+      sourceAbsent: { codex: true, omp: true, claude: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
     });
+
+    expect(sourceHealth, "absent collectors are counting as faults again")
+      .toMatchObject({ degraded: 0, absent: 4 });
     expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
     expect(fresh.message).toBe("Watching. No sessions running yet.");
-    expect(fresh.sources).toBe("4 of 4 collectors healthy");
+    expect(fresh.sources, "the day-one screen went silent again")
+      .toBe("No collectors installed yet — Claude Code, Codex or Cursor will appear here");
+  });
+
+  test("a machine with one tool installed names the one and the absences", () => {
+    const { verdict: partial } = machineVerdict({
+      // Claude Code installed; codex, cursor and omp are not. The three absences
+      // are now three collectors rather than two collectors and the control
+      // plane, which is what the sentence claimed all along.
+      sourceAbsent: { codex: true, cursor: true, omp: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
+    });
+
+    expect(partial.sources).toBe("1 of 1 collectors healthy · 3 not installed");
+  });
+
+  test("a fully-equipped machine keeps the documented count", () => {
+    // This box, and the string QUICKSTART quotes.
+    const { verdict: full } = machineVerdict({ cmuxReachable: true });
+
+    expect(full.sources).toBe("4 of 4 collectors healthy");
   });
 
   test("a collector that WAS healthy and now is not still alarms", () => {
@@ -864,13 +971,19 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART quotes the empty-board strings the model renders", () => {
-    const fresh = verdict({
-      healthy: providers.length, degraded: 0, total: providers.length,
-      byProvider: Object.fromEntries(providers.map((p) => [p, ok])),
+    /* Driven from the producer too: QUICKSTART must quote what a machine
+       actually renders, not what a fixture can be made to say. */
+    const { verdict: full } = machineVerdict({ cmuxReachable: true });
+    const { verdict: fresh } = machineVerdict({
+      sourceAbsent: { codex: true, claude: true, cursor: true },
+      cmuxAbsent: true,
+      cmuxReachable: true,
     });
     expect(quickstart, "QUICKSTART no longer quotes the calm empty-board message")
-      .toContain(fresh.message);
+      .toContain(full.message);
     expect(quickstart, "QUICKSTART no longer quotes the healthy count as rendered")
+      .toContain(full.sources);
+    expect(quickstart, "QUICKSTART does not describe the day-one screen it renders")
       .toContain(fresh.sources);
   });
 
@@ -886,8 +999,15 @@ describe("day one on a machine without cmux", () => {
       expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
       expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
     }
-    expect(quickstart, "QUICKSTART stopped saying an absent tool still reads healthy")
-      .toMatch(/absent, and expect all four to still read healthy/i);
+    /* Was "expect all four to still read healthy" — the promise option C
+       replaced. Absent collectors no longer pad the denominator; they are named
+       separately, because a count that read 4 of 4 on a machine running none of
+       them was a number meaning one thing and reading as another. What must
+       survive is the REASSURANCE: an absent tool is not a fault. */
+    expect(quickstart, "QUICKSTART stopped saying an absent tool is not a fault")
+      .toMatch(/expect most of these to be absent, and expect that to be fine/i);
+    expect(quickstart, "QUICKSTART no longer names absence separately from health")
+      .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
       .toMatch(/cmux is not one of the four/i);
   });
@@ -941,10 +1061,18 @@ describe("the safety promises the docs make on the product's behalf", () => {
 
   test("both docs promise the board refuses a session that has exited", () => {
     for (const [name, doc] of both()) {
-      expect(doc, `${name} dropped the liveness promise`)
-        .toMatch(/already exited|process is gone/i);
+      /* Each of these had two phrasings alive in the same document, so removing
+         one passed. Both are now required: the promise AND the reason it
+         exists, which is the half a reader needs to believe it. */
+      expect(doc, `${name} dropped the liveness promise`).toMatch(/already exited/i);
+      /* "process is gone" in ANT-GUIDE, "found the process gone" in QUICKSTART —
+         the same claim, different grammar. Match the claim, not one sentence. */
+      expect(doc, `${name} stopped saying the process is gone, not merely quiet`)
+        .toMatch(/process (is )?gone/i);
       expect(doc, `${name} does not explain WHY a dead agent's pane is dangerous`)
-        .toMatch(/pane outlives the agent|belongs to your shell/i);
+        .toMatch(/pane outlives the agent/i);
+      expect(doc, `${name} stopped saying whose the pane becomes`)
+        .toMatch(/belongs to your shell/i);
     }
   });
 
@@ -980,7 +1108,7 @@ describe("the safety promises the docs make on the product's behalf", () => {
 
      test.failing: flips the moment any authorisation path reads agent liveness,
      at which point drop .failing and keep the assertion. */
-  test.failing("no write is authorised against a process the board knows is dead", async () => {
+  test("no write is authorised against a process the board knows is dead", async () => {
     const { controlsFor } = await import("../src/server/snapshot-agent");
     const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
     const attested = { surfaceId: "s1", resolution: "exact", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
@@ -988,5 +1116,810 @@ describe("the safety promises the docs make on the product's behalf", () => {
     expect(caps.instruct, "Send is still offered on an agent whose process is gone").toBe(false);
     expect(caps.interrupt, "Interrupt is still offered on an agent whose process is gone").toBe(false);
     expect(caps.focus, "Focus must stay on — it is the documented way to go and look").toBe(true);
+  });
+});
+
+/* PR 3 and PR 4 are both merged, so the pr4:SYMBOL markers and the test that
+   enforced them are gone — every claim they guarded is now true of main. This
+   one assertion outlived them, because it is not about merge state: the guide
+   tells a reader that a dead row shows a LIT Send which refuses on press, and
+   that is only worth saying while the button and the gate disagree. */
+describe("the guide describes the dead-row controls as they actually behave", () => {
+  test("controlsFor greys instruct on a process the gate will refuse", async () => {
+    /* It learned. controlsFor and control.ts now read one predicate
+       (transmitRefusal), so the capability comes back disabled and the guide's
+       "read the chip rather than the button" paragraph went with it, exactly as
+       this test said it must. */
+    const { controlsFor } = await import("../src/server/snapshot-agent");
+    const attested = { surfaceId: "s1", resolution: "exact", attestation: "attested", reason: undefined, surfaceCwd: "/x", surfaceTitle: undefined } as never;
+    const dead = { status: "running", processAlive: false, processIds: [4242] } as never;
+    const instruct = controlsFor(dead, attested, false).find((c) => c.action === "instruct");
+    expect(instruct?.enabled, "a dead row is offering Send again").toBe(false);
+    const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    /* The guide must no longer tell a reader to distrust the button, because
+       the button is now the truth. A doc that still says "refused when pressed"
+       would be describing a behaviour the code no longer has. */
+    expect(guide, "the guide still says a dead row's Send looks live")
+      .not.toMatch(/refused when pressed|still shows a lit/i);
+    expect(guide, "the guide stopped saying a dead row's Send is greyed out")
+      .toMatch(/greyed out to match/i);
+  });
+});
+
+/* Read as a SET, not three files. Each was edited many times in one day by
+   different passes, and the failure mode stopped being staleness and became
+   contradiction: the same claim restated in a third vocabulary, or two
+   sentences that cannot both be true. These pin the seams between the files. */
+describe("README, QUICKSTART and ANT-GUIDE cohere as one set", () => {
+  const flat = (d: string) => d.replace(/\s+/g, " ");
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("one state, one name: the health verdict a reader is told to look for", () => {
+    /* ANT-GUIDE's table said `Blocked` and its troubleshooting said `Blocking`
+       for the same cmux-less state. The card headline is "Blocked"
+       (SEVERITY_HEADLINE in app.js); "Blocking" is an internal severity label.
+       A guide that uses both teaches a word the screen never shows. */
+    expect(read("src/web/app.js"), "the card headline stopped being Blocked")
+      .toMatch(/SEVERITY_HEADLINE\s*=\s*\{\s*blocking:\s*"Blocked"/);
+    for (const [name, doc] of [["ANT-GUIDE.md", guide()], ["QUICKSTART.md", quickstart]] as const) {
+      expect(doc, `${name} tells the reader to look for "Blocking", which no card shows`)
+        .not.toMatch(/`Blocking`/);
+    }
+  });
+
+  test("the identity promise is stated once per document, not three times", () => {
+    /* It appeared three times in ANT-GUIDE alone, in three vocabularies —
+       "cannot name", "cannot positively identify", "cannot prove it has
+       identified" — which reads as three different rules. One statement per
+       file: README summarises, QUICKSTART and the guide each promise it once. */
+    const phrasings = /(refuses|refuse|will not|would not|never) to type into a terminal it cannot|not type into a terminal it cannot|type into a terminal it cannot/gi;
+    const count = (d: string) => (flat(d).match(phrasings) ?? []).length;
+    expect(count(guide()), "ANT-GUIDE states the identity promise more than once again").toBeLessThanOrEqual(1);
+    expect(count(readme), "README states the identity promise more than once").toBeLessThanOrEqual(1);
+    expect(count(quickstart), "QUICKSTART states the identity promise more than once").toBeLessThanOrEqual(1);
+  });
+
+  test("the cost-honesty rule is not restated inside QUICKSTART", () => {
+    /* README owns this rule. QUICKSTART gives the concrete monitoring-only
+       case once; it used to also carry a general restatement of both examples. */
+    const mentions = (flat(quickstart).match(/reads? `?unavailable`?|never invents a number/gi) ?? []).length;
+    expect(mentions, "QUICKSTART states the cost-honesty rule twice again").toBeLessThanOrEqual(1);
+    expect(readme, "README stopped owning the honesty rule").toContain("It refuses to invent numbers");
+  });
+
+  test("every cross-document link resolves to a file that exists", () => {
+    for (const [name, doc] of [["README.md", readme], ["QUICKSTART.md", quickstart], ["ANT-GUIDE.md", guide()]] as const) {
+      for (const [, target] of doc.matchAll(/\]\(\.\/([A-Za-z0-9._/-]+)\)/g)) {
+        expect(existsSync(join(ROOT, target)), `${name} links to ./${target}, which does not exist`).toBe(true);
+      }
+    }
+  });
+
+  test("the cmux link points at the project this actually integrates with", () => {
+    /* mountain-labs/cmux 404s even authenticated — it never existed. The real
+       one is manaflow-ai/cmux, the Ghostty-based macOS terminal for AI coding
+       agents whose panes and notifications this reads. A stranger's first
+       click from the front door must not land on a 404. */
+    expect(readme, "README points at a cmux repo that does not exist")
+      .not.toContain("mountain-labs/cmux");
+    expect(readme, "README stopped linking cmux at all").toContain("manaflow-ai/cmux");
+  });
+});
+
+/* PR 5's subject is money being HIDDEN rather than overstated, which is the
+   harder direction to notice: a window always looks complete. The guide now
+   states the limitation, and every number in that paragraph is derived here
+   from the code that produces it, because a hardcoded "30d" or "90 days" is
+   exactly the kind of figure that outlives its source. */
+describe("the cost window's limits are documented as the code enforces them", () => {
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("the guide lists the presets the UI actually offers, widest included", () => {
+    const catalogs = read("src/web/client-catalogs.js");
+    const block = catalogs.slice(catalogs.indexOf("USAGE_RANGE_PRESETS"));
+    const labels = [...block.slice(0, block.indexOf("]")).matchAll(/label:\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(labels.length, "the usage presets changed shape").toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(guide(), `ANT-GUIDE stopped listing the \`${label}\` usage preset`).toContain(`\`${label}\``);
+    }
+    const widest = labels[labels.length - 1];
+    expect(guide(), `ANT-GUIDE no longer names \`${widest}\` as the widest preset`)
+      .toMatch(new RegExp(`\\\`${widest}\\\`[^\\n]*(is not "everything"|not "everything")`));
+  });
+
+  test("both ceilings are documented as the code sets them", () => {
+    /* Derive, never hardcode. This cap moved twice in one session — a literal
+       90, then a named MAX_RANGE_MS of 400, then back — while a neighbouring
+       lane reworked the file underneath. Only reading it from source each run
+       caught that the guide had gone stale within minutes of being written.
+       Matches either form so an in-flight refactor fails loudly, not silently. */
+    const app = read("src/web/app.js");
+    const burnbar = read("src/server/burnbar.ts");
+    const customDays = Number(app.match(/Math\.min\(24 \* (\d+),/)?.[1]);
+    expect(customDays, "the Custom clamp could not be read from app.js").toBeGreaterThan(0);
+
+    const guideText = guide();
+    expect(guideText, `ANT-GUIDE stopped documenting the ${customDays}-day Custom ceiling in hours`)
+      .toContain(`${customDays} days (\`${customDays * 24}\`)`);
+    expect(app, "the Custom prompt stopped asking for hours")
+      .toContain('window.prompt("Usage range hours"');
+
+    /* The server cap's exact value is NOT pinned. It changed three times during
+       one session while a neighbouring lane reworked burnbar.ts, and a doc that
+       chases it would be stale between commits. What must hold is the invariant
+       the guide actually relies on: a bound exists, and the UI cannot ask for
+       more than it allows — so the widest question a reader can pose is the
+       Custom clamp, whatever the server's ceiling happens to be. */
+    expect(burnbar, "the range bound disappeared; the guide promises one exists")
+      .toMatch(/Range cannot exceed/);
+    const serverDays = Number(
+      burnbar.match(/MAX_RANGE_MS = (\d+) \*/)?.[1]
+      ?? burnbar.match(/toMs - fromMs > (\d+) \* 24/)?.[1],
+    );
+    if (Number.isFinite(serverDays)) {
+      expect(serverDays, "the UI can now request a range the server will refuse")
+        .toBeGreaterThanOrEqual(customDays);
+    }
+  });
+
+  test("the guide says the shortfall is silent, which is the whole finding", () => {
+    const flat = guide().replace(/\s+/g, " ");
+    /* An alternation was too weak here: replacing "Nothing on the card says any
+       of this" with the OPPOSITE claim still passed, because the other phrasing
+       carried the match on its own. Require the negative claim itself, and
+       reject a doc that says the card reports its own coverage — if that ever
+       becomes true, this paragraph is what has to change. */
+    expect(flat, "ANT-GUIDE stopped warning that nothing on the card says it is truncated")
+      .toMatch(/nothing on the card says/i);
+    expect(flat, "ANT-GUIDE now claims the card shows coverage; verify that shipped before saying so")
+      .not.toMatch(/the card shows its coverage/i);
+    /* Both halves, not an alternation. Inverting one while the other stands
+       leaves the guide contradicting itself and still passing — the same weak
+       shape that let a "coverage is shown" edit through a paragraph that says
+       the opposite two lines earlier. */
+    expect(flat, "ANT-GUIDE stopped stating the gap grows").toMatch(/gap only widens/i);
+    expect(flat, "ANT-GUIDE stopped saying the omission grows silently over time")
+      .toMatch(/it has hidden more/i);
+    /* The claim this whole section exists for, and it was unpinned until a
+       mutation removed it and nothing failed: the store outlasts the widest
+       window a reader can ask for. Without this sentence the table reads as a
+       complete account of the limits, which is the surprise it exists to
+       prevent. */
+    /* The second alternative was a substring of the first and could never fire
+       independently — an alternation that only ever tested one thing. */
+    expect(flat, "ANT-GUIDE stopped saying the record outlasts the widest window")
+      .toMatch(/database keeps going after that/i);
+    expect(flat, "ANT-GUIDE stopped distinguishing the widest button from the widest question")
+      .toMatch(/widest \*button\*[\s\S]{0,80}widest\s+\*question\*/i);
+    /* No percentage is pinned on purpose: the audit measured 32.6% on one
+       machine on one day, and that share moves every day by construction. */
+    expect(guide(), "a machine-specific coverage percentage was hardcoded into the guide")
+      .not.toMatch(/3[0-9]\.\d\s*%/);
+  });
+});
+
+/* Three claims added when priorSpend landed and the archive audit closed. Each
+   one is a promise about incompleteness, which is the hardest kind to keep
+   honest: the failure mode is silence, so nothing breaks when it lapses. */
+/* A ledger discipline, not a claim about the board: any figure in the guide
+   that came from a one-off measurement has to be either re-measured or removed,
+   because a measured number ages into a false one silently. The token-ratio
+   warning said "roughly five hundred times", measured in an earlier session;
+   re-measured live it was 1802x. The fix was not a fresher number — it was to
+   state the shape, which does not age, and to say explicitly that any specific
+   ratio is stale. This pins that no such figure creeps back. */
+describe("no one-off measurement is presented as a standing fact", () => {
+  test("any cost total is dated and labelled a reading, not left as a fact", () => {
+    /* This guard used to forbid dollar figures outright, while the halves
+       disagreed. That is retired: both are de-duplicated and a number is now
+       worth stating. But the guard nearly became a false green first — it
+       watched one slice of the file, and the figure I added sat just outside
+       it, so it reported clean for the wrong reason.
+
+       The rule that survives: a total may appear, and when it does it must
+       carry WHEN it was measured and the warning that it moves. A bare number
+       in a doc is the thing that ages into a lie. */
+    const guide = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    const totals = [...guide.matchAll(/\$3[0-9],[0-9]{3}/g)];
+    expect(totals.length, "the whole-record total vanished from the guide").toBeGreaterThan(0);
+    for (const m of totals) {
+      const around = guide.slice(Math.max(0, m.index - 320), m.index + 320);
+      expect(around, `a cost total near "${m[0]}" carries no measurement date`)
+        .toMatch(/20[0-9]{2}-[0-9]{2}-[0-9]{2}/);
+    }
+    expect(guide, "the guide stopped warning that the total is a reading that moves")
+      .toMatch(/a reading, not a fact/i);
+  });
+
+  test("the token-scale warning describes a shape, not a multiplier", () => {
+    const g = read("ANT-GUIDE.md").replace(/\s+/g, " ");
+    const warning = g.slice(g.indexOf("They are not the same unit"), g.indexOf("do not add up the column"));
+    expect(warning, "the token warning went missing").toContain("not the sum of its rows");
+    expect(warning, "a specific multiplier came back into the token warning")
+      .not.toMatch(/\b(five hundred|\d{2,4})\s*(times|x)\b/i);
+    /* The guide wraps this inside a blockquote, so "moves daily" arrives as
+       "moves > daily" once whitespace is flattened. Strip the markers rather
+       than loosening the claim. */
+    const prose = warning.replace(/>\s*/g, "");
+    expect(prose, "the warning stopped saying the multiplier moves")
+      .toMatch(/moves daily/i);
+    expect(prose, "the warning stopped telling a reader that quoted ratios are stale")
+      .toMatch(/out of date/i);
+  });
+});
+
+describe("what the docs promise about incompleteness", () => {
+  const guide = () => read("ANT-GUIDE.md");
+  const flat = (d: string) => d.replace(/\s+/g, " ");
+
+  test("the prior-spend guarantee names the field the server actually returns", () => {
+    const burnbar = read("src/server/burnbar.ts");
+    expect(burnbar, "priorSpend left the payload; the guide promises it").toContain("priorSpend");
+    for (const field of ["earliestAt", "invocations", "measuredCostUsd"]) {
+      expect(burnbar, `priorSpend.${field} is gone`).toContain(field);
+    }
+    expect(flat(guide()), "ANT-GUIDE stopped stating the tell-you-what-is-missing guarantee")
+      .toMatch(/tell you when a view cannot show you everything/i);
+  });
+
+  test("the guide says the card does not print it yet, while that is true", () => {
+    /* The whole point of writing this down. The server computes priorSpend and
+       the client fetches the payload that carries it, but no cost reader in
+       app.js touches the field, so the card still looks complete. If the client
+       ever reads it, this test fails and the "not yet" sentence comes out. */
+    const app = read("src/web/app.js");
+    expect(app, "the client fetches the summary that carries priorSpend").toContain("/api/usage/summary?");
+    expect(app, "the client now reads priorSpend — delete the 'not yet' sentence from the guide")
+      .not.toContain("priorSpend");
+    expect(flat(guide()), "ANT-GUIDE claims the card prints it; verify that shipped first")
+      .toMatch(/does not print it yet/i);
+  });
+
+  test("the archive warning matches the clock the code actually uses", () => {
+    const archive = read("src/server/archive.ts");
+    const days = Number(archive.match(/ARCHIVE_RETENTION_MS = (\d+) \* 24/)?.[1]);
+    expect(days, "the archive retention constant was reshaped").toBeGreaterThan(0);
+    /* Retention is measured from the AGENT's last activity, and nothing stores
+       when the operator archived. Both are why delivered < advertised. */
+    /* The premise, stated so it survives the fix that is landing. The warning
+       is warranted while retention can still be measured from the AGENT's
+       timestamp rather than the archive's. Before the fix that was the only
+       clock; after it, `archivedAt ?? updatedAt` keeps the old clock for every
+       record stored before the fix — which is why the guide distinguishes what
+       you archive from here on from what is already in there. This fails only
+       when the updatedAt path is gone entirely, at which point the warning has
+       genuinely expired. */
+    expect(archive, "retention no longer falls back to the agent's own timestamp — the warning can go")
+      .toMatch(/archivedAt \?\? agent\.updatedAt|nowMs - updatedAtMs <= ARCHIVE_RETENTION_MS/);
+    expect(read("src/server/app.ts"), "retentionDays is no longer a constant — re-check the warning")
+      .toContain("retentionDays: ARCHIVE_RETENTION_MS /");
+    const g = flat(guide());
+    expect(g, `ANT-GUIDE stopped advertising the ${days}-day figure it is warning about`)
+      .toContain(`**${days} days**`);
+    expect(g, "ANT-GUIDE stopped saying the clock starts at last activity, not at archive time")
+      .toMatch(/from the session's last activity/i);
+    expect(g, "ANT-GUIDE stopped warning that an old session can be pruned immediately")
+      .toMatch(/pruned on the next save/i);
+    /* Unpinned until a mutation deleted it and nothing failed. The fix works by
+       stamping the archive time, so it cannot reach records stored before it —
+       a reader who takes "fixed" to mean "my existing archive is safe" has been
+       misled by the good news rather than the bad. */
+    /* One canonical phrasing for this claim — "forward-only" — asserted here
+       and in the re-measurement suite below. Two spellings of the same
+       requirement is how a reword ends up failing in one place and passing in
+       the other. */
+    expect(g, "ANT-GUIDE stopped saying the repair only helps what you archive afterwards")
+      .toMatch(/forward-only/i);
+  });
+
+  test("the narrowed caveat no longer calls the whole board rough", () => {
+    const g = flat(guide());
+    expect(g, "the blanket 'treat the aggregate counters as rough' warning came back")
+      .not.toMatch(/treat the aggregate counters as rough/i);
+    expect(g, "the caveat stopped naming the gaps that remain")
+      .toMatch(/three things that are still open/i);
+    /* The July 30 anomaly is ANNOTATED, not fixed: 71d7cb3 added an
+       aggregatedRows count and changed no total, and the classification is
+       circular — a row counts as aggregated because its tokens exceed the bound
+       that made it anomalous. It is still inside every reported cost figure, so
+       the guide must not let a reader take a cost total as what was spent. */
+    /* The anomaly is now EXPLAINED — OpenBurnBar writes some rows as cumulative
+       session snapshots, so a later snapshot contains the earlier one and
+       summing double-counts — but not yet FIXED. Two things the guide must keep
+       saying until per-session de-duplication lands: that a total is what was
+       recorded rather than what was spent, and which DIRECTION the correction
+       goes, because a reader told only "the numbers are wrong" will assume the
+       bill is higher than shown when it is lower. */
+    expect(g, "the guide stopped naming the double-count in cost totals")
+      .toMatch(/double-count/i);
+    /* Blockquote markers survive whitespace-flattening, so "> " lands mid
+       sentence; strip them before matching prose inside a quote block. */
+    const prose = g.replace(/>\s*/g, "");
+    /* No alternations here. Three mutations slipped past OR-joined patterns
+       today: inverting one phrase while its twin carried the match. Each claim
+       gets its own assertion so a reworded half cannot be covered by the other. */
+    expect(prose, "the guide stopped saying a figure may have gone DOWN")
+      .toMatch(/gone \*\*down\*\*/i);
+    expect(prose, "the guide stopped ruling out an upward correction")
+      .toMatch(/never adds spend/i);
+    expect(prose, "the guide stopped describing the de-duplication mechanism")
+      .toMatch(/running total \*\*once\*\*/i);
+    /* Both halves are de-duplicated now (681411c put window and prior on one
+       scan), so the earlier "do not add these" warning is retired and the
+       durable claim replaces it: window + prior is the whole record, and the
+       same whole whichever window you ask through. Verified live across nine
+       windows from 1 day to 399 — cost and invocation counts both constant.
+       That property is what the guide promises; the amount is a reading. */
+    /* Emphasis markers sit inside this sentence (*same*), so match around them
+       rather than through them. */
+    expect(prose, "the guide stopped saying a window plus its prior is the whole record")
+      .toMatch(/spend before it and you get the whole recorded history/i);
+    expect(prose, "the guide stopped labelling the total a reading rather than a fact")
+      .toMatch(/a reading, not a fact/i);
+    /* The identity now holds on BOTH reported figures — measuredCostUsd and
+       estimatedCostUsd agree at every window, verified across seven from 1 day
+       to 399 after the range clamp was fixed. The earlier caveat is retired.
+
+       What must NOT come back is the unqualified version. When this claim was
+       first made it rested on reading one field; the other was short by
+       $6,563.55 and nobody had looked. So the guide has to say the identity
+       holds on BOTH figures, not merely that it holds. */
+    expect(prose, "the guide stopped promising the whole-record identity")
+      .toMatch(/same whole whichever window you ask through/i);
+    expect(prose, "the guide asserts the identity without saying it was checked on both figures")
+      .toMatch(/both of the figures the payload reports/i);
+    expect(prose, "the guide stopped saying how many windows agree")
+      .toMatch(/seven different windows/i);
+    const burnbar = read("src/server/burnbar.ts");
+    expect(burnbar, "aggregatedRows stopped being a bare count — re-check whether the fix landed")
+      .toContain("AS aggregatedRows");
+  });
+});
+
+/* Separating "true of the running product" from "true of a commit that landed".
+   The guide's gate table has four rows; two of them describe states a healthy
+   board almost never occupies, so they cannot be observed on demand. That is
+   not a reason to drop them — they are the safety behaviour — but it IS a
+   reason to say which rows have been watched and which were exercised at the
+   gate. These pin the honesty of that distinction rather than the states. */
+describe("the guide separates what was observed from what was exercised", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("the gate table admits which rows have not been seen on a live board", () => {
+    expect(guide(), "the guide stopped distinguishing seen from reasoned")
+      .toMatch(/seen rather than reasoned/i);
+    /* Superseded: both rows have since been produced on a probe and watched.
+       The requirement is now that the guide keeps the weaker qualifier rather
+       than the stronger claim — asserted in the re-measurement suite below, in
+       one place rather than two spellings. */
+    expect(guide(), "the guide stopped qualifying how the two rare rows were seen")
+      .toMatch(/produced on demand rather than met in the wild/i);
+  });
+
+  test("the collapsed summary line does not promise All clear unconditionally", () => {
+    /* app.js: once anything is being watched the trailing verdict CANNOT read
+       "All clear" — it reads the calm verdict instead. Observed live as
+       "Watch" beside a quiet count, while the guide claimed "All clear". */
+    const app = read("src/web/app.js");
+    expect(app, "the watched-verdict branch went away; re-check the guide")
+      .toMatch(/cannot read "All clear"/);
+    const g = guide();
+    expect(g, "the guide promises All clear unconditionally again")
+      .toMatch(/`All clear` only when nothing is being watched/i);
+    expect(g, "the guide stopped naming the Watch verdict a reader will actually see")
+      .toMatch(/reads \*\*`Watch`\*\* instead/);
+  });
+});
+
+/* A claim is not "verified" because it was true when written — it is verified
+   if it has been re-measured since the code beneath it last changed. Two claims
+   in this guide sit on code that moved late in the day, and both are pinned to
+   the property that would make them false rather than to the reading. */
+describe("claims are re-measured after their foundations move", () => {
+  const prose = () => read("ANT-GUIDE.md").replace(/\s+/g, " ").replace(/>\s*/g, "");
+
+  test("the archive warning reports both measurable and unmeasurable records", () => {
+    /* archive.ts changed at 16:09 (7be12d2) and the guide was re-measured
+       against the running server afterwards: 360 of 578 records stamped, 218
+       not. The shape that matters is that BOTH are reported — an average would
+       hide the unmeasurable ones behind the measured ones. */
+    const app = read("src/server/app.ts");
+    expect(app, "deliveredRetention stopped separating measurable from unmeasurable")
+      .toMatch(/unmeasurable/);
+    expect(app, "retention is no longer measured from the records themselves")
+      .toContain("deliveredRetention(");
+    expect(prose(), "the guide stopped reporting how many records cannot be measured")
+      .toMatch(/do not\./i);
+    expect(prose(), "the guide stopped saying the repair is forward-only")
+      .toMatch(/forward-only/i);
+  });
+
+  test("the archive guide does not claim a term it has not yet observed", () => {
+    /* The mechanism is verifiable now; the thirty-day outcome is not, and
+       cannot be for thirty days. A guide that says "fixed" without that
+       distinction invites a reader to trust a term nobody has watched elapse. */
+    expect(prose(), "the guide now implies the full retention term has been demonstrated")
+      .toMatch(/has not been demonstrated yet/i);
+    expect(prose(), "the guide stopped saying the clock starts right rather than the term being proven")
+      .toMatch(/clock now starts in the right place/i);
+  });
+
+  test("the gate table's unobserved rows are still unobserved", () => {
+    /* snapshot-agent.ts changed at 16:20 (858a993). Re-measured live after:
+       the observable rows match, and unique-cwd and died remain absent from the
+       board, so the "tested, not yet witnessed" note is still the true one. If
+       it is ever dropped, it must be because a row was actually seen. */
+    /* Both rows have now been produced on a probe agent and watched through a
+       running server (unique-cwd via a synthetic transcript resolved onto a
+       real unclaimed pane; died via a seeded binding whose PIDs are gone). The
+       note changed from "not yet witnessed" to observed — but the guide must
+       keep the weaker qualifier, because producing a state on demand is not the
+       same as meeting it in the wild. */
+    expect(prose(), "the guide overstates the evidence for the two rare rows")
+      .toMatch(/produced on demand rather than met in the wild/i);
+    expect(prose(), "the guide stopped saying the rare rows were actually observed")
+      .toMatch(/observed behaviour rather than inference/i);
+  });
+});
+
+/* TODAY.md is a dated summary, which is the format most likely to age into a
+   lie — it is read by someone catching up, who has no way to tell a claim
+   written this morning from one still true. So it is pinned to the same code
+   as the guide, and required to keep the two admissions that make it honest
+   rather than a victory lap. */
+describe("the catch-up summary stays true to the code it summarises", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it carries the timestamp with the cost total, not just the total", () => {
+    const t = today();
+    const totals = [...t.matchAll(/\$3[0-9],[0-9]{3}/g)];
+    expect(totals.length, "the cost total vanished from the summary").toBeGreaterThan(0);
+    /* Emphasis markers sit between the words and the clock, so match around
+       them rather than through them. */
+    expect(t, "the summary states a total without saying when it was measured")
+      .toMatch(/Measured at \*{0,2}[0-9]{2}:[0-9]{2}/);
+    /* The strongest evidence in the file is that the number MOVED while staying
+       consistent. Losing that turns "a reading" back into "a fact". */
+    /* Both halves, not an alternation — the sixth time today an OR-joined
+       pattern let one phrase cover for the other's removal. The evidence is
+       BOTH that several readings exist and that one of them moved. */
+    expect(t, "the summary stopped listing multiple readings").toMatch(/readings today/i);
+    expect(t, "the summary stopped showing that the total moved")
+      .toMatch(/moved it by \$[0-9]/i);
+    /* TODAY.md's own copy of the reading-not-a-fact label was unpinned — the
+       two pins carrying that phrase both read ANT-GUIDE, and a mutation that
+       removed it from TODAY.md passed 92/0. Two documents, one claim, one pin
+       between them: exactly the docs-and-tests entanglement named as an open
+       problem in CLAIM-OWNERSHIP-PROPOSAL.md, found in my own file. */
+    expect(t, "TODAY.md stopped labelling the total a reading rather than a fact")
+      .toMatch(/a reading, not a fact/i);
+  });
+
+  test("it does not claim the archive term has been observed", () => {
+    expect(today(), "the summary now implies thirty days of retention were demonstrated")
+      .toMatch(/full term is not proven/i);
+    expect(today(), "the summary stopped telling a reader to copy out what matters")
+      .toMatch(/copy it out of the drawer/i);
+  });
+
+  test("it tells a returning reader what to do first, not only what to believe", () => {
+    /* Knowing what is trustworthy does not tell you where to start. The first
+       action is the product's own answer to the only question it exists to
+       answer, which also makes it a live smoke test: if the board cannot load
+       or cannot say, that is the first thing worth knowing. */
+    const t = today();
+    expect(t, "the summary stopped telling a reader where to start")
+      .toMatch(/Start here/i);
+    expect(t, "the start-here line no longer points at the running board")
+      .toContain("127.0.0.1:4701");
+    expect(t, "the start-here line stopped naming the tab that answers the question")
+      .toMatch(/`Needs you`/);
+    /* And it must stay honest about the empty case, which is the common one. */
+    expect(t, "the summary stopped saying an empty Needs you is an answer")
+      .toMatch(/nothing needs you then nothing does/i);
+  });
+
+  test("it keeps an open section rather than reading as a victory lap", () => {
+    const t = today();
+    expect(t, "the summary dropped its 'still open' section").toMatch(/Still open/i);
+    expect(t, "the summary stopped naming the claims nobody has confirmed")
+      .toMatch(/nobody has confirmed/i);
+  });
+
+  test("its cost claim rests on the same identity the guide pins", () => {
+    /* If the window/prior identity ever breaks again, this summary is wrong in
+       the most load-bearing sentence it has, so tie it to the same source. */
+    expect(read("src/server/burnbar.ts"), "priorSpend left the payload; TODAY.md's total assumes it")
+      .toContain("priorSpend");
+    expect(today(), "the summary stopped saying the total is the same from any window")
+      .toMatch(/identical to the cent from a one-day window and a ninety-day one/i);
+    /* The GPT lane's finding, and the one most likely to be lost in an edit:
+       the figure moves in STEPS when usage is ingested, not continuously. A
+       reader who checks twice, sees the same number and concludes the caveat
+       was over-cautious has been misled by the caveat's own wording. */
+    expect(today(), "the summary stopped saying the total moves in steps rather than drifting")
+      .toMatch(/moves in \*{0,2}steps\*{0,2}/i);
+    expect(today(), "the summary stopped distinguishing a live figure from a wrong one")
+      .toMatch(/no longer unstable; reality is/i);
+  });
+});
+
+/* Two claims the GPT lane's adversarial pass corrected, pinned so they cannot
+   quietly revert to the confident version. Both were wrong in the same way:
+   true of what I tested, stated as though true in general. */
+describe("the summary's scope survives an adversarial read", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it does not claim no cmux workspace was touched", () => {
+    /* I wrote "No cmux workspace was created or removed" meaning my own probes.
+       A returning reader takes it as "nothing disturbed my cmux today", and the
+       GPT lane created and closed eleven. The replacement says who did what and
+       that someone checked — more useful than the absolute claim was. */
+    expect(today(), "the blanket no-workspaces-touched claim came back")
+      .not.toMatch(/No cmux workspace was created or removed/i);
+    expect(today(), "the summary stopped saying the machine was not idle")
+      .toMatch(/every one was removed and confirmed gone/i);
+  });
+
+  test("the day-one claim is scoped to what this machine can actually show", () => {
+    /* Every provider is installed here, so the absent-collector path cannot be
+       produced on this box: a healthy reading is what you would see whether or
+       not the fix landed. Fixture-verified is the honest word. */
+    expect(today(), "the summary stopped admitting the day-one path is fixture-verified")
+      .toMatch(/verified against fixtures, not observed on a bare install/i);
+    /* And it must quote what a PARTIAL install shows, since that is the real
+       first-run case — option C changed this string at 18:18. */
+    const app = read("src/web/app.js");
+    expect(app, "the not-installed suffix left emptyBoardVerdict").toMatch(/not installed/);
+    expect(today(), "the summary stopped quoting what a partial install reads")
+      .toMatch(/1 of 1 collectors healthy · 3 not installed/);
+  });
+});
+
+/* The most durable fact in the archive paragraph, and the last thing added:
+   the unmeasurable count is a FIXED backlog, not a growing shortfall. Measured
+   218 across four readings while the stamped count climbed 377 -> 383. A reader
+   given only the ratio cannot tell those apart, and would reasonably assume the
+   fix is failing to keep up. */
+describe("the archive backlog is described as fixed, not as a shortfall", () => {
+  test("the summary separates the stuck records from the growing ones", () => {
+    const today = read("TODAY.md").replace(/\s+/g, " ");
+    expect(today, "the summary stopped naming the unmeasurable backlog")
+      .toMatch(/218 records have no stamp/i);
+    expect(today, "the summary stopped saying the backlog is fixed rather than a shortfall")
+      .toMatch(/fixed backlog rather than a shortfall/i);
+    /* And it must not promise the number is permanent: unstamped records still
+       prune on the old clock, so the backlog shrinks as they age out. */
+    expect(today, "the summary implies the backlog is permanent")
+      .toMatch(/shrinks only as those records age out/i);
+    const archive = read("src/server/archive.ts");
+    expect(archive, "retention no longer falls back to updatedAt — the backlog claim changes")
+      .toMatch(/archivedAt \?\? agent\.updatedAt/);
+  });
+});
+
+/* The only finding of the evening that costs money nobody can observe. Pinned
+   against the code that would make it stale: the collector roster. If a Hermes
+   or Factory collector is ever added, this paragraph is wrong and should fail
+   here rather than sit in a handover telling someone to go look. */
+describe("TODAY.md names the providers the board cannot see", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("the roster the board collects still excludes the providers named", () => {
+    const providers = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    expect(providers, "the Provider union could not be read").toBeTruthy();
+    for (const absent of ["hermes", "factory"]) {
+      expect(providers.toLowerCase(), `${absent} gained a collector — TODAY.md's blind-spot paragraph is now wrong`)
+        .not.toContain(absent);
+    }
+    expect(today(), "TODAY.md stopped naming the uncollected providers")
+      .toMatch(/Hermes and Factory are billed and uncollected/i);
+  });
+
+  test("it says this is an absent number, not a wrong one", () => {
+    /* The distinction is the whole point: a wrong number announces itself by
+       disagreeing with something, and an absent one agrees with everything. */
+    const t = today();
+    /* The section must LEAD with what the board is blind to, not with what the
+       number is not. A reader who takes away one sentence must take away that
+       one, so it is pinned as the opening claim rather than as a caveat. */
+    expect(t, "the summary stopped leading with what the board is blind to")
+      .toMatch(/blind to two billed providers and one recurring job/i);
+    expect(t, "the summary stopped saying the health card contradicts it")
+      .toMatch(/asserts nothing is missing/i);
+    expect(t, "the summary stopped distinguishing an absent number from a wrong one")
+      .toMatch(/An absent one agrees with everything/i);
+    expect(t, "the summary stopped saying the spend has no row, agent or collector")
+      .toMatch(/no row, no agent,\s*no session, and no collector/i);
+    expect(t, "the summary stopped explaining why 4 of 4 healthy is not a contradiction")
+      .toMatch(/true of their own population and false of the question/i);
+  });
+});
+
+/* The third of the three, and the one that turns the other two from incomplete
+   into dangerous: the board does not merely omit these providers, it publishes
+   a count of what is absent and that count says zero. Pinned to the field, so
+   if sourceHealth ever learns about uncollected providers this paragraph fails
+   rather than misleading in the opposite direction. */
+describe("TODAY.md names the absent-zero assertion, not just the omission", () => {
+  test("the snapshot really does publish absent as a number", () => {
+    const snapshot = read("src/server/snapshot.ts");
+    expect(snapshot, "sourceHealth stopped publishing an absent count").toMatch(/absent/);
+  });
+
+  test("the summary says the board asserts absence rather than staying silent", () => {
+    const t = read("TODAY.md").replace(/\s+/g, " ");
+    expect(t, "TODAY.md stopped quoting the absent-zero field")
+      .toMatch(/`"absent": 0`/);
+    expect(t, "TODAY.md stopped saying the board asserts rather than omits")
+      .toMatch(/positively asserts nothing is missing/i);
+    expect(t, "TODAY.md stopped naming the population defect that produces it")
+      .toMatch(/population excludes the thing you are looking for/i);
+    expect(t, "TODAY.md stopped explaining why that is worse than silence")
+      .toMatch(/silence invites a question/i);
+  });
+});
+
+/* The five-hour update. TODAY.md was written at 18:00 and the evening produced
+   findings that change what a reader should believe about how settled the
+   verification is — chiefly that the first EXTERNAL check ran tonight, found a
+   disagreement on its first pass, and its verdict rests on arithmetic no test
+   repeats. Pinned so the section cannot decay into "we checked and it was fine". */
+describe("TODAY.md is honest about how young the verification is", () => {
+  const today = () => read("TODAY.md").replace(/\s+/g, " ");
+
+  test("it says the external check is new and that the board held", () => {
+    const t = today();
+    expect(t, "TODAY.md stopped saying the board was checked against an outside record")
+      .toMatch(/checked against an outside record for the first time/i);
+    expect(t, "TODAY.md stopped saying our collector was the correct one")
+      .toMatch(/Our collector was right/i);
+    expect(t, "TODAY.md stopped explaining why BurnBar's figure was lower")
+      .toMatch(/cumulative row had stopped advancing/i);
+  });
+
+  test("it separates the audited mechanism from the unaudited verdict", () => {
+    /* The distinction that keeps this honest: the prefix rule has tests in both
+       directions (session-calls.test.ts), while the one adjudication actually
+       performed was a hand recomputation recorded in prose. Conflating them
+       would make the story sound finished. */
+    const t = today();
+    expect(t, "TODAY.md stopped saying the adjudication mechanism is tested")
+      .toMatch(/mechanism is properly tested, in both directions/i);
+    expect(t, "TODAY.md stopped admitting the verdict itself is unrepeated")
+      .toMatch(/established \*\*by hand from the raw transcript\*\*/i);
+    expect(t, "TODAY.md stopped saying nothing would catch a wrong recomputation")
+      .toMatch(/nothing here would catch it/i);
+    /* And the mechanism it credits must actually exist with both directions. */
+    const arb = read("tests/session-calls.test.ts");
+    expect(arb, "the prefix rule lost its positive case").toMatch(/equal to a prefix is recognisable/i);
+    expect(arb, "the prefix rule lost its negative case").toMatch(/NOT a prefix does not match/i);
+  });
+});
+
+/* The guide's job is to make someone competent, not worried, so the blind spot
+   is taught as a habit rather than filed as a defect: the cost figure has two
+   boundaries, the window and the provider set, and the reader is given the
+   five-second check that finds the second one. These pin the habit and the
+   honesty that makes it necessary — a guide that kept one without the other
+   would either alarm without helping or reassure without warrant. */
+describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("it names the second boundary on the cost figure", () => {
+    const g = guide();
+    expect(g, "the guide stopped saying the cost figure is bounded by which tools it watches")
+      .toMatch(/second boundary/i);
+    expect(g, "the guide stopped warning that unwatched spend leaves no gap behind")
+      .toMatch(/no gap where one should be/i);
+  });
+
+  test("it gives the reader the check rather than the grievance", () => {
+    const g = guide();
+    expect(g, "the guide stopped telling the reader to read the provider list")
+      .toMatch(/read the provider list/i);
+    expect(g, "the guide stopped saying the list comes from billing, not from collectors")
+      .toMatch(/from your billing source rather than from the board's collectors/i);
+    expect(g, "the guide stopped naming what an unmatched provider means")
+      .toMatch(/cannot find as a row is a tool the board is not watching/i);
+  });
+
+  test("it explains why a green health line does not cover this", () => {
+    /* Without this the reader concludes the health card is lying. It is not —
+       it is answering a narrower question accurately, which is the distinction
+       that keeps the guide from reading as a defect list. */
+    const g = guide();
+    expect(g, "the guide stopped explaining that the green line is accurate but narrower")
+      .toMatch(/accurate and simply does not cover the question/i);
+    expect(g, "the guide stopped saying an unwatched tool has no collector to fail")
+      .toMatch(/no collector, so there is nothing to report as unhealthy/i);
+    /* And the glossary must carry the same qualifier, since that is where a
+       reader looks up what a collector is. */
+    expect(g, "the Collector glossary entry lost the taught-about qualifier")
+      .toMatch(/one per provider \*\*the board was taught about\*\*/i);
+  });
+});
+
+/* The procedure a reader runs on their OWN board. The four collectors are
+   universal; the billed set is not, so a list we wrote is ours and useless to
+   them. Pinned to the code that makes each step true, and to the two boundaries
+   that stop it being oversold: the window must be widened first, and the check
+   inherits the cost source's own blind spot. */
+describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
+  const guide = () => read("ANT-GUIDE.md").replace(/\s+/g, " ");
+
+  test("the four collectors it tells them to compare against are the real four", () => {
+    const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
+    const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+    expect(names.length, "the Provider union changed shape").toBe(4);
+    const g = guide();
+    /* The guide names them in reader-facing form, so check the mapping rather
+       than the identifiers. */
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP"]) {
+      expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
+        .toContain(shown);
+    }
+  });
+
+  test("it tells them to widen the window BEFORE reading the list", () => {
+    /* Measured: the breakdown lists only providers with spend inside the
+       window, and one provider on this machine appears at 30d and not at 24h.
+       A reader who skips this step runs the check and concludes wrongly. */
+    const g = guide();
+    expect(g, "the guide stopped telling the reader to widen the range first")
+      .toMatch(/Do this first/i);
+    expect(g, "the guide stopped explaining why a short window hides a periodic job")
+      .toMatch(/invisible at `24h`/i);
+  });
+
+  test("it states the check's own boundary rather than overselling it", () => {
+    const g = guide();
+    expect(g, "the guide stopped admitting the check inherits the cost source's blind spot")
+      .toMatch(/invisible to both/i);
+    expect(g, "the guide stopped saying the check cannot run without a cost source")
+      .toMatch(/no list and this check cannot run/i);
+    expect(g, "the guide stopped naming the real backstop")
+      .toMatch(/it is your actual bill/i);
+    /* The cost source can genuinely be absent — that is not hypothetical. */
+    expect(read("src/server/burnbar.ts"), "the not_installed state disappeared")
+      .toMatch(/not_installed/);
+  });
+});
+
+/* Screenshots are the one part of a guide that cannot be pinned to the code, so
+   they are pinned to each other: every image the guide embeds must exist, and
+   the captions that describe them must be dated the way every other measured
+   claim in this project is. A caption is a measurement of a picture. */
+describe("the guide's screenshots and their captions stay honest", () => {
+  const guide = () => read("ANT-GUIDE.md");
+
+  test("every embedded shot exists on disk", () => {
+    const refs = [...guide().matchAll(/!\[[^\]]*\]\((docs\/guide-shots\/[^)]+)\)/g)].map((m) => m[1]);
+    expect(refs.length, "the guide stopped embedding screenshots").toBeGreaterThan(0);
+    for (const ref of refs) {
+      expect(existsSync(join(ROOT, ref)), `ANT-GUIDE embeds ${ref}, which does not exist`).toBe(true);
+    }
+  });
+
+  test("the hero caption describes the picture rather than apologising for it", () => {
+    /* It used to promise "dozens of sessions at once" above a shot that now
+       reads Needs you 0. A caption that contradicts its image teaches a reader
+       to distrust both. It is now dated and states what the shot shows. */
+    const g = guide().replace(/\s+/g, " ");
+    expect(g, "the hero caption lost its date, so nobody can tell when it stopped being true")
+      .toMatch(/Taken at [0-9]{2}:[0-9]{2} on [0-9]+ [A-Z][a-z]+/);
+    expect(g, "the caption went back to promising a crowded board")
+      .not.toMatch(/running dozens of sessions at once/i);
+    expect(g, "the caption stopped explaining why a busy fleet can still need nobody")
+      .toMatch(/busy fleet and an empty to-do list are not a contradiction/i);
+  });
+
+  test("the provider shot is embedded where the check that needs it lives", () => {
+    const g = guide();
+    const idx = g.indexOf("shot-6-providers.png");
+    expect(idx, "the provider breakdown shot is not embedded").toBeGreaterThan(-1);
+    const around = g.slice(Math.max(0, idx - 1400), idx + 400);
+    expect(around, "the provider shot drifted away from the check it illustrates")
+      .toMatch(/read the provider list|by provider/i);
   });
 });

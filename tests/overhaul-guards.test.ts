@@ -94,7 +94,12 @@ describe("health severity: the quiet half must not be bought with the loud half"
     expect(control).toBeDefined();
     expect(control?.severity).toBe("error");
     expect(snapshot.controlHealth?.cmuxReachable).toBe(false);
-    expect(snapshot.totals.sourceHealth?.degraded ?? 0).toBeGreaterThan(0);
+    /* Carried by controlHealth, which is where a control-plane fault belongs.
+       This used to also require sourceHealth.degraded > 0 — the same fault
+       counted a second time as a broken COLLECTOR. The loudness this test
+       protects is asserted above and here; what changed is that it is stated
+       once. */
+    expect(snapshot.controlHealth?.errors).toContain("cmux socket refused the connection");
   });
 
   test("a control-plane fault names the agents it actually blocks", () => {
@@ -225,7 +230,11 @@ describe("health severity: the quiet half must not be bought with the loud half"
 
     expect(conflict?.severity).toBe("error");
     expect(conflict?.affectedAgentIds).toContain("codex:live");
-    expect(snapshot.totals.sourceHealth?.degraded).toBeGreaterThan(0);
+    /* An identity conflict is a control-plane fault, so it is loud in
+       controlHealth rather than in the collector ratio. The collectors are
+       reading their files perfectly well here; it is cmux that cannot say which
+       pane is which. */
+    expect(snapshot.controlHealth?.errors.length).toBeGreaterThan(0);
     // A live conflict is a fault, not tidying, so it must not be filed as debris.
     expect(snapshot.controlHealth?.debris).toBeUndefined();
   });

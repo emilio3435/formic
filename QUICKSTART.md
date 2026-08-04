@@ -79,24 +79,37 @@ concluding nothing was collected.
 ## Expected on a monitoring-only install
 
 - **An empty board** reading `Watching. No sessions running yet.`, with a line
-  beneath it counting **healthy** collectors — `4 of 4 collectors healthy` on a
-  machine that has just been set up. Nothing has run yet, and only sessions from
-  roughly the last day and a half are scanned. That count is the proof the board
-  is working: a stalled client cannot manufacture a ticking snapshot age. If a
-  collector really is degraded it says so there instead, because an empty board
-  with a blind collector is an *unknown* fleet rather than an empty one.
-- **A `Blocked` health card**, offering one next step: `Start cmux, then Refresh
-  — Focus and Send come back on their own.` Its detail line counts what it found
-  — on a machine with no cmux it typically reads `2 control-plane problems may
+  beneath it describing your collectors. What it says depends on what you have:
+
+  | You have | The line reads |
+  |---|---|
+  | none of the four yet | `No collectors installed yet — Claude Code, Codex or Cursor will appear here` |
+  | one of them | `1 of 1 collectors healthy · 3 not installed` |
+  | all four | `4 of 4 collectors healthy` |
+
+  That line is the proof the board is working: a stalled client cannot
+  manufacture a ticking snapshot age. **It counts collectors that can SEE, not
+  tools you have installed** — a tool you do not use is *absent*, which is a
+  complete answer ("this never ran here") rather than a gap, so it is named
+  separately and never counted as a fault. If a collector really is *degraded*
+  the line says that instead, because an empty board with a blind collector is
+  an *unknown* fleet rather than an empty one.
+- **An `All clear` health card.** Not having cmux is not a fault: it collects no
+  sessions, so its absence cannot hide a row. You lose Focus and Send and
+  nothing else, and [§ Optional](#optional-enable-focus-and-send) turns them on
+  later. A row you cannot act on says so on the row itself, with the reason.
+
+  You will see a **`Blocked`** card instead if cmux is *installed but not
+  running* — a control plane that should answer and does not. It offers one next
+  step: `Start cmux, then Refresh — Focus and Send come back on their own.`
+  Its detail line counts what it found — typically `2 control-plane problems may
   limit focus, instruction, or interrupt actions.`, one for terminal discovery
   and one for notifications. The number is a count, so expect it to differ.
-  Correct behavior: without cmux the dashboard cannot prove which terminal owns
-  which session, so it refuses to type into one. With cmux running and nothing
-  wrong, the same card reads `All clear`.
+  That is a real fault; a missing cmux is not.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 
-### Why it still says 4 of 4 when you have none of them
+### What the four collectors are
 
 The count is of collectors that can **see**, not of tools you have installed.
 There are four, and they read what each tool already writes to disk:
@@ -108,10 +121,11 @@ There are four, and they read what each tool already writes to disk:
 | **Cursor** | Cursor's own session store | you use Cursor |
 | **OMP** | `~/.omp/agent/sessions/` | almost certainly not — it is a legacy source kept for old history |
 
-**Expect most of these to be absent, and expect all four to still read healthy.**
-A directory that does not exist is a complete answer — *this tool never ran
-here* — and no session can be hiding behind it. Most people will run one or two
-of these tools and never see anything but `4 of 4`. Watch for `degraded`
+**Expect most of these to be absent, and expect that to be fine.** A directory
+that does not exist is a complete answer — *this tool never ran here* — and no
+session can be hiding behind it, so an absent collector is named separately and
+never counted as a fault. Most people run one or two of these and see a line
+like `1 of 1 collectors healthy · 3 not installed`. Watch for `degraded`
 instead, which means something *stopped* a collector reading — a permissions or
 I/O failure — and is the only case where sessions could exist that the board
 cannot show you.
@@ -155,12 +169,16 @@ of these is a guarantee, not a missing feature:
 - **It will never type into a session that has already exited.** The pane
   outlives the agent and usually belongs to your shell by then, so an
   instruction to a dead agent would land in whatever is sitting there now. Once
-  the board knows the process is gone, the write controls close.
+  the board has checked and found the process gone, the Send is refused and says
+  the pane may now belong to someone else.
 - **It will never act on a stale picture.** Which terminal an agent is on has a
   short shelf life. If the board's evidence is too old to trust, the write is
   refused rather than sent to where the agent used to be.
-- **It never invents a number.** A cost with no source reads `unavailable`, not
-  `$0`. A collector that was never installed reads *absent*, not *broken*.
+
+And one it promises always to do: **tell you when a view cannot show you
+everything.** A cost window reports what falls outside it rather than presenting
+its own horizon as the whole record — the server returns that figure today, and
+the card is being taught to print it.
 
 **Focus is exempt from all of it, on purpose.** Looking costs nothing and going
 to the pane is how you recover, so there is always a way in. The board is never

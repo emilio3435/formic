@@ -101,6 +101,56 @@ kill is scoped to PIDs that `lsof` reports listening on that port — but anythi
 else holding 4701 dies too. It repairs the worktree the script itself lives in
 (`ANTHILL_REPO` overrides), so run it from the worktree you mean to fix.
 
+## The one script that touches no ports and no service
+
+```bash
+zsh ~/Developer/the-mountain-main/scripts/constant-collapse.sh --plan   # say what it would do
+zsh ~/Developer/the-mountain-main/scripts/constant-collapse.sh --yes    # actually do it
+```
+
+**Note the `zsh`.** Every other script here runs under `bash`; this one uses zsh
+parameter expansion and fails immediately under bash with `line 78: A: unbound
+variable`. Not a broken script — the wrong interpreter.
+
+**What it answers.** Ordinary mutation testing asks whether an assertion *can*
+fail. This asks whether, given what the product now emits, it still *can* — the
+two come apart when a fix collapses a field to a constant and every assertion
+naming it quietly becomes unfalsifiable while the suite stays green. It
+collapses each field in a spec and reports which collapses nothing notices.
+
+**Reads:** `src/`, `tests/`, `config/`, `package.json`, `tsconfig.json` and
+`bunfig.toml`, copied into a scratch directory; `node_modules`, symlinked; a
+spec file if `--spec` is given, otherwise a built-in one. Some of the tests it
+runs read the OpenBurnBar sqlite database — a read; `--no-live` skips them.
+
+**Writes:** one `mktemp -d` directory, removed on exit. **Nothing in this
+repository** — not `src/`, not `tests/`, not `data/`, not git state, not a
+plist. Verified rather than taken on trust: `git status` is byte-identical
+before and after a `--plan` run, and no lab directory is left behind.
+
+**Safe against a live board — yes.** It runs `bun test` and nothing else. It
+starts no server, contacts no server, binds no port, and touches neither :4701
+nor launchd. The deploy and launchd test suites are excluded by default
+precisely so a live machine does not have its LaunchAgent paths exercised
+repeatedly; `--include-deploy` overrides that, and you should read those tests
+before using it.
+
+**Safe under the shared checkout — yes, deliberately.** It copies the tree
+before mutating anything, so the five lanes may commit freely while it runs. An
+earlier version mutated `src/` in place and reverted afterwards, which is unsafe
+here: another lane running tests during that window sees a broken tree, and a
+lane committing during it can commit the mutation.
+
+**Guards, each one exercised rather than read:** it refuses to run without
+`--yes` (exit 1); `--plan` prints the plan and stops; an unrecognised argument
+is rejected. It also aborts if the baseline suite is not stable across two runs,
+because a flaky suite makes every result meaningless. Expect roughly one full
+test run per collapse.
+
+**Reading the output:** `killed` is good — an assertion depends on that field.
+`SURVIVED` means nothing in the suite can fail because of it. `NO-MATCH` means
+the spec is stale, which is not a pass.
+
 ## Shared-checkout hazard
 
 These worktrees get concurrent commits from other agents mid-session. Before any

@@ -192,6 +192,41 @@ describe("DEFECT: cmux.ts backdates an unreadable notification to the epoch", ()
     expect(store.filter(arriving)).toHaveLength(1);
   });
 
+  test("acknowledging an UNDATED notification retires that exact notification", async () => {
+    /* The line that makes refusing to invent a timestamp survivable, and it was
+       covered by nothing: mutation testing removed the identity check from
+       filter() and all 1,359 tests still passed.
+
+       Without it, an undated notification can never be retired — `createdAt ===
+       undefined` returns true forever — so declining to backdate to 1970 would
+       trade a permanent silence for a permanent nag, and the fix would have
+       swapped one wrong answer for another. Identity is what closes it: the id
+       is recorded on acknowledge, and the same notification does not come back. */
+    const store = new MemoryAttentionStore(() => NOW_MS);
+    const undated = parseCmuxNotifications(wire({ id: "n7", created_at: "yesterday" }));
+    store.observe(undated);
+    expect(store.filter(undated)).toHaveLength(1);
+
+    await store.apply("SURF-A", "acknowledge");
+
+    // Same notification, still undated. Acknowledged means acknowledged.
+    expect(store.filter(undated)).toHaveLength(0);
+  });
+
+  test("a DIFFERENT notification on an acknowledged surface still gets through", () => {
+    /* The other side, so identity cannot become a blanket mute: acknowledging
+       one request for a human must not silence the next one. */
+    const store = new MemoryAttentionStore(() => NOW_MS);
+    const first = parseCmuxNotifications(wire({ id: "n7", created_at: "yesterday" }));
+    store.observe(first);
+    void store.apply("SURF-A", "acknowledge");
+
+    const second = parseCmuxNotifications(wire({ id: "n8", created_at: "yesterday" }));
+    store.observe(second);
+
+    expect(store.filter(second)).toHaveLength(1);
+  });
+
   test("a notification with no surface id is not dropped without a trace", () => {
     // A flatMap returns [] for it, so the unread count silently shrinks.
     // Whatever the right handling is — attribute it, or report it — vanishing
@@ -322,6 +357,21 @@ describe("DEFECT: cursor.ts swallows an unreadable subagents directory", () => {
        file pushes to errors. */
     const result = await collectCursorSessions(await cursorHome("unreadable"), 1784692000000);
     expect(result.errors.join(" ")).toContain("subagents");
+  });
+
+  test("BOTH readers of the subagents directory report the failure, not just one", async () => {
+    /* Two independent paths read that directory — collectCursorChildSessions
+       for the roster and transcriptEvidence for the count — and each got its own
+       fix. Mutation testing showed the first one was covered by nothing: silence
+       it and every test still passed, because the second supplies an error
+       string containing "subagents" that satisfies the same assertion.
+
+       So the count is pinned rather than the substring. One reader going quiet
+       again is a live subagent missing from the roster with nothing recorded. */
+    const result = await collectCursorSessions(await cursorHome("unreadable"), 1784692000000);
+    const subagentErrors = result.errors.filter((error) => error.includes("subagents"));
+
+    expect(subagentErrors.length).toBeGreaterThanOrEqual(2);
   });
 
   test("an unreadable directory does not report zero descendants", async () => {

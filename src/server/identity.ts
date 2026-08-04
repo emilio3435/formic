@@ -9,6 +9,12 @@ import { cmuxCommand, runtimeCmuxExecutable } from "./cmux";
 import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } from "./types";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/* Two attempts on a short deadline rather than one long one. The probe is
+   almost the entire identity system on a fleet whose surfaces report no tty, so
+   a single transient failure costs every write control until the next scan. */
+const ATTRIBUTION_ATTEMPTS = 2;
+const ATTRIBUTION_TIMEOUT_MS = 4_000;
+
 const CMUX_PROCESS_ATTRIBUTION_PARAMS = JSON.stringify({
   all_windows: true,
   include_processes: true,
@@ -268,22 +274,53 @@ export async function enrichCmuxIdentity(
   let attributedPids = new Map<string, Set<number>>();
   let attributionError: string | undefined;
   if (readySurfaces.some((surface) => !surface.tty)) {
-    const attributionResult = await runner.run(
-      cmuxCommand(runtimeCmuxExecutable(), ["rpc", "system.top", CMUX_PROCESS_ATTRIBUTION_PARAMS]),
-      10_000,
-    );
-    if (attributionResult.timedOut || attributionResult.exitCode !== 0) {
-      attributionError = attributionResult.timedOut
-        ? "cmux process attribution timed out"
-        : `cmux process attribution exited ${attributionResult.exitCode}: ${attributionResult.stderr.trim() || "no stderr"}`;
-    } else {
-      try {
-        attributedPids = parseCmuxProcessAttribution(attributionResult.stdout);
-      } catch (error) {
-        attributionError = `cmux process attribution returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`;
+    /* This probe carries almost the whole identity system. Measured on this
+       fleet: 18 of 19 surfaces report no tty, and every one of the 10 surfaces
+       cmux names a session on is attributed here rather than by tty. So a
+       transient failure does not degrade identity gracefully — it removes the
+       only evidence the write gate has, and after today's fixes that means Send
+       and Interrupt switch OFF fleet-wide rather than misroute.
+
+       That is the safe direction and it stays. What it must not be is
+       inexplicable: an operator watching the controls vanish deserves to know a
+       probe failed rather than that a policy changed. So the probe retries
+       once, on a shorter deadline, and whatever it ends up reporting names
+       itself as a probe failure and says what it cost.
+
+       Shorter deadline WITH a retry, not instead of one: two 4s attempts fail
+       faster than one 10s attempt, so a wedged cmux costs less than it did
+       while a merely slow one now gets a second chance it never had. */
+    const attempts: string[] = [];
+    for (let attempt = 1; attempt <= ATTRIBUTION_ATTEMPTS; attempt += 1) {
+      const attributionResult = await runner.run(
+        cmuxCommand(runtimeCmuxExecutable(), ["rpc", "system.top", CMUX_PROCESS_ATTRIBUTION_PARAMS]),
+        ATTRIBUTION_TIMEOUT_MS,
+      );
+      if (attributionResult.timedOut) {
+        attempts.push(`timed out after ${ATTRIBUTION_TIMEOUT_MS}ms`);
+      } else if (attributionResult.exitCode !== 0) {
+        attempts.push(`exited ${attributionResult.exitCode}: ${attributionResult.stderr.trim() || "no stderr"}`);
+      } else {
+        try {
+          attributedPids = parseCmuxProcessAttribution(attributionResult.stdout);
+          attempts.length = 0;
+          break;
+        } catch (error) {
+          attempts.push(`invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
-    if (attributionError) errors.push(attributionError);
+    if (attempts.length > 0) {
+      /* Named as what it is. "cmux process attribution" alone read as a
+         configuration problem; this says a probe failed, how many times, and
+         what the operator loses by it — which is the difference between a
+         control that looks broken and one an operator can wait out. */
+      attributionError = `cmux process attribution probe failed ${attempts.length}`
+        + `${attempts.length === 1 ? " time" : " times"} (${attempts.join("; ")}).`
+        + " Session identity for panes without a tty is unavailable this scan,"
+        + " so Focus, Send and Interrupt stay off until it answers.";
+      errors.push(attributionError);
+    }
   }
 
   const allAttributedPids = new Set([...attributedPids.values()].flatMap((pids) => [...pids]));

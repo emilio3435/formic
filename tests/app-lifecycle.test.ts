@@ -82,7 +82,7 @@ describe("health endpoint", () => {
         ageMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
         maxAgeMs: MAX_HEALTH_SNAPSHOT_AGE_MS,
       },
-      data: { complete: true, staleSources: [], cmuxReachable: true, controlErrors: 0 },
+      data: { complete: true, staleSources: [], cmuxReachable: true, controlErrors: 0, sseBacklogDrops: 0 },
     });
 
     current = lifecycleSnapshot(new Date(now - MAX_HEALTH_SNAPSHOT_AGE_MS - 1).toISOString());

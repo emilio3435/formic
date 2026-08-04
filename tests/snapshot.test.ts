@@ -752,7 +752,11 @@ describe("snapshot control safety and SSE deduplication", () => {
        number is what made "needs you" unreadable. */
     expect(snapshot.totals.systemFindings).toBe(1);
     expect(snapshot.totals.needsYou).toBe(0);
-    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 3, degraded: 1, absent: 0, total: 4 });
+    /* All four collectors are reading their files fine — it is cmux that cannot
+       tell two panes apart. The conflict is a control-plane fault and is
+       reported as one, above; it used to also dock a collector, which is the
+       same finding wearing a second label. */
+    expect(snapshot.totals.sourceHealth).toEqual({ healthy: 4, degraded: 0, absent: 0, total: 4 });
   });
 
   /* An identity conflict costs one thing: controls stay quarantined for the
@@ -848,8 +852,10 @@ describe("snapshot control safety and SSE deduplication", () => {
     // No threshold to tune and no state to reset: the classification follows
     // the evidence, so reopening work in the pane restores the alarm.
     expect(snapshot.controlHealth.debris).toBeUndefined();
+    /* The restored alarm lives here — one control-plane error, not a docked
+       collector. The collectors never stopped reading anything. */
     expect(snapshot.controlHealth.errors).toHaveLength(1);
-    expect(snapshot.totals.sourceHealth?.degraded).toBe(1);
+    expect(snapshot.totals.sourceHealth?.degraded).toBe(0);
     const issue = (snapshot.issues ?? []).find(({ id }) => id === "system:cmux-identity-conflicts");
     expect(issue?.severity).toBe("error");
     expect(issue?.affectedAgentIds).toEqual([live.id]);

@@ -257,6 +257,30 @@ export function elapsedDataset(agent, generatedAt) {
     : {};
 }
 
+/* The destination as a VISIBLE label, not a tooltip.
+
+   focusDestinationHint below is a `title` attribute — the weakest disclosure
+   surface there is. It never appears on keyboard focus or touch, and an
+   operator who moves the mouse to the button and clicks reads nothing. The
+   strong wording lives in the drawer banner, which requires having already
+   stopped to investigate.
+
+   That is backwards for the row it matters on. `unique-cwd` is matched by
+   folder among panes carrying no identity evidence, so Focus can walk an
+   operator to a stranger's terminal while the row still reads healthy — and
+   naming the destination is what this project chose INSTEAD of gating the
+   control, because looking is how an operator recovers once the write controls
+   are off. A name nobody sees is not an alternative to gating.
+
+   Only on unproven rows: on a `linked` row the destination is proven and a
+   suffix on every button would be noise that trains the eye to skip it. */
+export function focusButtonLabel(agent, controlState) {
+  if (controlState !== "unproven") return "Focus";
+  const id = terminalIdentity(agent);
+  const name = id ? (id.paneFolder || id.title) : "";
+  return name ? "Focus → " + name : "Focus";
+}
+
 export function focusDestinationHint(agent) {
   const id = terminalIdentity(agent);
   if (!id) return "Jump to terminal pane";
@@ -674,9 +698,27 @@ export function terminalIdentity(agent) {
    name often already IS the terminal title). Returns "" when nothing new
    survives, so the tag never echoes the name back at the operator. */
 
+/* A cmux pane title is a live terminal title, so it carries whatever animation
+   frame the agent inside it happened to be drawing when the scan ran. Measured
+   on the board: agentName() returned "⠐ Swarm audit backend investigation with
+   codex" and "⠂ Deploy backend fixes via Codex" — a single frame of Claude
+   Code's braille spinner, frozen into the session's NAME and rendered wherever
+   that name goes: the roster row, the finding title in the summary band, the
+   drawer head, the notification. The displayName underneath was clean the whole
+   time.
+
+   Only leading spinner glyphs, and only the two families that are actually
+   spinners: the Braille Patterns block and the asterisk dingbats Claude Code
+   cycles. Names legitimately contain emoji and punctuation, so this does not
+   reach for anything more general than the thing it was built to remove. */
+const SPINNER_PREFIX = /^(?:[\u2800-\u28FF\u2722\u2733\u273B\u273D\u2731\u2217*]+\s+)+/;
+export function stripSpinnerFrame(title) {
+  return typeof title === "string" ? title.replace(SPINNER_PREFIX, "") : title;
+}
+
 export function terminalSourceName(agent) {
   const title = agent && agent.target && typeof agent.target.workspaceTitle === "string"
-    ? agent.target.workspaceTitle.trim()
+    ? stripSpinnerFrame(agent.target.workspaceTitle.trim()).trim()
     : "";
   return title ? conciseText(title) : "";
 }

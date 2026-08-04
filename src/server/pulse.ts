@@ -28,9 +28,17 @@ interface AgentMemory {
 interface ActivityBucket {
   startMs: number;
   activeSessions: number;
+  /* Refreshes that landed in this bucket carrying real collector output. Zero
+     means the count beside it describes nothing that was measured. */
+  measuredObservations: number;
   tokens: number | null;
   activeAgentIds: Set<string>;
 }
+
+/** Every provider stale means session collection produced nothing at all, so an
+    agent count taken from that snapshot is not a small number — it is no
+    number. A partial failure still measures something and is left alone. */
+const PROVIDER_COUNT = 4;
 
 export class PulseTracker {
   #observedSinceMs: number;
@@ -70,6 +78,13 @@ export class PulseTracker {
       .length;
     const currentStartMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS;
     const currentBucket = this.#ensureBucket(currentStartMs);
+    /* A snapshot carrying no health information is not evidence of an outage,
+       so it counts as measured. Defaulting the other way would blank the trend
+       for any caller that builds a snapshot without controlHealth — turning a
+       marker for "we could not look" into one that fires when we did. */
+    if ((snapshot.controlHealth?.staleSources?.length ?? 0) < PROVIDER_COUNT) {
+      currentBucket.measuredObservations += 1;
+    }
     const seen = new Set<string>();
 
     for (const agent of snapshot.programs.flatMap((program) => program.agents)) {
@@ -207,7 +222,7 @@ export class PulseTracker {
         observedSince: this.#observedSince,
         buckets: completedBuckets.map((bucket): PulseActivityBucket => ({
           start: new Date(bucket.startMs).toISOString(),
-          activeSessions: bucket.activeSessions,
+          activeSessions: bucket.measuredObservations > 0 ? bucket.activeSessions : null,
           tokens: bucket.tokens,
         })),
       },
@@ -223,6 +238,7 @@ export class PulseTracker {
         this.#buckets.set(startMs, {
           startMs,
           activeSessions: 0,
+          measuredObservations: 0,
           tokens: null,
           activeAgentIds: new Set(),
         });
@@ -231,6 +247,7 @@ export class PulseTracker {
       this.#buckets.set(currentStartMs, {
         startMs: currentStartMs,
         activeSessions: 0,
+        measuredObservations: 0,
         tokens: null,
         activeAgentIds: new Set(),
       });

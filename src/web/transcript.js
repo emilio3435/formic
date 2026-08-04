@@ -57,6 +57,47 @@ export function normalizeTranscript(body) {
   };
 }
 
+/* Where the log opens, and where it goes back to after a repaint.
+
+   `render()` already saves and restores the INSPECTOR PANE's scrollTop across a
+   paint, and reasons carefully about it: same entity, put the operator back;
+   different entity, start at the beginning. That mechanism does not reach the
+   boxes inside the pane, and this log is one — a nested scroll container that is
+   rebuilt on every paint with no record of where it was.
+
+   Two consequences, both measured on the live board at 1280x720:
+
+   1. It opened at the TOP. `transcriptWindow` deliberately keeps the NEWEST 300
+      turns; the log then showed the oldest of them, with scrollHeight 24,950
+      against a 350px window — the newest turn, which is the reason anyone opens
+      a transcript, sat 24,600px out of view.
+   2. Scrolling was undone. Scroll to the newest turn, let one repaint through,
+      and the node is replaced at scrollTop 0 — so reading a long transcript on a
+      live board means being returned to the oldest visible turn every few
+      seconds.
+
+   The sibling rule inverts here on purpose. For the drawer, "the beginning" is
+   the top, because that is where the agent's name is. For a transcript the
+   operator's beginning is the LATEST turn, so a first view of a new agent's log
+   opens at the bottom rather than the top. Same principle — start where the
+   reader would start — opposite end. */
+let logScroll = { agentId: null, top: null };
+
+function anchorLog(log, agentId) {
+  const resumed = logScroll.agentId === agentId && typeof logScroll.top === "number";
+  const place = () => { log.scrollTop = resumed ? logScroll.top : log.scrollHeight; };
+  /* Once now in case the node is already in the document, once after the paint
+     because a detached node has no scrollHeight to scroll to. Setting it on a
+     node a later repaint has already discarded is harmless. */
+  place();
+  const defer = typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame
+    : typeof setTimeout === "function"
+      ? (fn) => setTimeout(fn, 0)
+      : null;
+  if (defer) defer(place);
+}
+
 export function transcriptLineNode(line) {
   return el("div", { class: "tr-line", dataset: { role: line.role } },
     el("div", { class: "tr-meta" },
@@ -135,9 +176,14 @@ export function renderTranscriptPanel(agent, ui = state) {
   section.append(head);
 
   if (data.lines.length) {
-    const log = el("div", { class: "transcript-log", tabindex: "0", "aria-label": "Transcript turns" });
+    const log = el("div", {
+      class: "transcript-log", tabindex: "0", "aria-label": "Transcript turns",
+      // The operator's own position, so the next paint can put them back.
+      onscroll: () => { logScroll = { agentId: agent.id, top: log.scrollTop }; },
+    });
     for (const line of transcriptWindow(data.lines).shown) log.append(transcriptLineNode(line));
     section.append(log);
+    anchorLog(log, agent.id);
   }
   return section;
 }

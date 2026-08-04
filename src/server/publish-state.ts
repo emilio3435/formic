@@ -133,7 +133,18 @@ export async function readPublishState(
   const remoteResult = await git(runner, cwd, ["remote", "get-url", "origin"]);
   if (remoteResult.exitCode !== 0) {
     /* No origin is a real answer, not a failure to report: a repo with nowhere
-       to publish has no unpublished work by definition. */
+       to publish has no unpublished work by definition.
+
+       But "no origin" is a CAUSE, and this reported it without establishing it.
+       `git remote get-url` also fails when the directory is not a repository at
+       all — someone who downloaded a zip rather than cloning — and telling them
+       to configure a remote sends them to fix the wrong thing. Naming a cause
+       we did not check is the defect this file exists to avoid, so the two are
+       now distinguished by asking. */
+    const insideRepo = await git(runner, cwd, ["rev-parse", "--is-inside-work-tree"]);
+    if (insideRepo.exitCode !== 0) {
+      return unavailable("This folder is not a git repository, so there is nothing to publish from.");
+    }
     return unavailable("No origin remote is configured, so nothing can be published.");
   }
   const remote = displayRemote(remoteResult.stdout);

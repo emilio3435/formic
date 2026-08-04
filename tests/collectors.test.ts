@@ -57,6 +57,7 @@ describe("collector identity and usage truth", () => {
       total: 76_153,
       sessionTotal: 1_442,
       sessionCachedInput: 74_711,
+      sessionProcessed: 76_153,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -200,6 +201,7 @@ describe("collector identity and usage truth", () => {
       // Two calls of new work; the 74,716 of re-reads is carried separately.
       sessionTotal: 1_450,
       sessionCachedInput: 74_716,
+      sessionProcessed: 76_166,
       scope: "latest-turn",
       provenance: "observed",
     });
@@ -249,6 +251,7 @@ describe("collector identity and usage truth", () => {
          Cumulative input minus cached, plus output. */
       sessionTotal: 27_909,
       sessionCachedInput: 33_792,
+      sessionProcessed: 61_701,
       contextWindow: 258_400,
       scope: "latest-turn",
       provenance: "observed",
@@ -463,6 +466,7 @@ describe("collector identity and usage truth", () => {
       // No cache reads in this fixture, so consumption and size agree.
       sessionTotal: 50_790,
       sessionCachedInput: 0,
+      sessionProcessed: 50_790,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -545,6 +549,13 @@ describe("collector identity and usage truth", () => {
       sessionTotal: 89,
       // The re-reads those two calls made, under their own name: 30 + 7.
       sessionCachedInput: 37,
+      /* PROCESSED, the unit OpenBurnBar records: the same two calls at full
+         size, 100 + 26. Note it is the 126 the comment above calls "the old
+         value" — that number was never wrong, it was the wrong ANSWER to
+         "what did this consume". It is the right answer to "what did the
+         provider process", and it is now published under that name instead of
+         being mistaken for the other. */
+      sessionProcessed: 126,
       contextWindow: 1_000_000,
       scope: "latest-turn",
       provenance: "observed",
@@ -583,6 +594,56 @@ describe("collector identity and usage truth", () => {
 
     expect(agent?.task).toBe("Mission: Redesign the Platforms operating room.");
     expect(agent?.displayName).toBe("Claude · Home");
+  });
+
+  /* The drawer prints `task` under the heading as the standing objective, so
+     anything that survives collection is read as a sentence a human wrote.
+     Three live agents printed `<command-name>/model</command-name>` there, with
+     the command's own stdout — ANSI escapes and all — queued right behind it. */
+  test("slash-command plumbing is chrome, not the objective, and the next instruction is", () => {
+    const claudeUser = (content: string, at: string) => JSON.stringify({
+      type: "user",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia",
+      timestamp: at,
+      message: { role: "user", content },
+    });
+    const agent = parseClaudeJsonl([
+      claudeUser(
+        "<command-name>/model</command-name>\n"
+        + "            <command-message>model</command-message>\n"
+        + "            <command-args></command-args>",
+        "2026-07-21T23:00:00.000Z",
+      ),
+      claudeUser(
+        "<local-command-stdout>Set model to [1mFable 5[22m and saved as your"
+        + " default for new sessions</local-command-stdout>",
+        "2026-07-21T23:00:01.000Z",
+      ),
+      claudeUser("Fix the evidence drawer's clipped controls.", "2026-07-21T23:00:02.000Z"),
+    ].join("\n"), { nowMs });
+
+    expect(agent?.task).toBe("Fix the evidence drawer's clipped controls.");
+    expect(agent?.task).not.toContain("<command-name>");
+    expect(agent?.task).not.toContain("<local-command-stdout>");
+  });
+
+  test("a slash command's arguments are the objective, as the sentence they were typed as", () => {
+    const agent = parseClaudeJsonl(JSON.stringify({
+      type: "user",
+      sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
+      cwd: "/Users/emilionunezgarcia",
+      timestamp: "2026-07-21T23:00:00.000Z",
+      message: {
+        role: "user",
+        content: "<command-name>/qa</command-name>\n"
+          + "            <command-message>qa</command-message>\n"
+          + "            <command-args>fix the login page</command-args>",
+      },
+    }), { nowMs });
+
+    expect(agent?.task).toBe("/qa fix the login page");
+    expect(agent?.task).not.toContain("<command-args>");
   });
 
   test("partially written trailing records do not erase a valid live session", () => {

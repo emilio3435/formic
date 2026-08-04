@@ -131,8 +131,22 @@ describe("a partial measurement reports what it measured beside what it missed",
        cost on the wire and therefore withheld entirely. */
     const usage = await summary();
 
-    expect(usage.estimatedCostUsd).toBeNull();
+    /* Was `toBeNull()`, on the reasoning that a field claiming to be a TOTAL
+       must not omit an unpriced call. Emilio overruled it: the operator reads
+       this field, and withholding a measured figure costs him more than
+       qualifying it. costKnown below is what now carries "not all of it". */
+    expect(usage.estimatedCostUsd).not.toBeNull();
     expect(usage.measuredCostUsd).not.toBeNull();
+    /* They are now the SAME figure, and that assertion is corrected rather than
+       relaxed. It used to require the floor to be strictly LARGER, which was
+       true only because estimatedCostUsd summed each provider's strict total
+       with `?? 0` and so coerced a partly-priced provider's whole measured cost
+       to zero. The gap this pinned was the defect, not a design: live it was
+       $6,563.55, visible only once the window widened enough to include that
+       provider. Both figures are one additive floor now; costKnown carries
+       completeness, which is its job and not the value's. */
+    expect(usage.measuredCostUsd).toBe(usage.estimatedCostUsd);
+    expect(usage.measuredCostUsd!).toBeGreaterThan(0);
     expect(usage.costMissingInvocations).toBeGreaterThan(0);
     expect(usage.costKnown).toBe(false);
   });

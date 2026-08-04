@@ -70,6 +70,12 @@ export const state = {
   programOverrides: new Map(), // programId -> "open" | "closed"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
+  /* data-fkey of whatever the operator was standing on when they opened the
+     drawer, so closing it can put them back. closeInspector used to return focus
+     via `agent-<selectedId>`, and selectedId is null for every kind that is not
+     an agent — so closing a program or finding drawer destroyed the focused
+     Close button and dropped a keyboard operator on <body>. */
+  selectionOrigin: null,
   evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
   // Terminal-level identity evidence for the open drawer. The pids, commands
   // and open-file matches that say "ttys082 has both of these sessions open"
@@ -118,3 +124,25 @@ export const state = {
   // surfaces showing whatever markup they were served with.
   paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
 };
+
+/* WHICH entity a painted inspector signature describes — the kind and id that
+   inspectorPaintSig writes first, with every data field after them dropped.
+
+   render() saves the drawer's scrollTop before painting and puts it back after,
+   which is right for a live repaint: an SSE snapshot landing must not yank an
+   operator who is reading. It was also being applied across a SELECTION CHANGE,
+   where it is wrong for the same reason it is right above — measured on the live
+   board, switching from an agent scrolled 291px down left the next agent's panel
+   at 291px with its <h2> 246px above the top of the pane, so the operator was
+   looking at an unnamed drawer holding a live Send box.
+
+   A reader rather than the decision itself: the module holds the data, and what
+   to do about a changed entity stays with the code that owns the repaint. Kept
+   here because `paintSig` is here, and reading the first two fields of that
+   string is knowledge about this object's shape. */
+export function paintedEntityKey(sig) {
+  // "closed" and "" are not entities and must never compare equal to one.
+  if (typeof sig !== "string" || !sig || sig === "closed") return null;
+  const [kind, id] = sig.split("\u001f");
+  return kind + "\u001f" + (id || "");
+}

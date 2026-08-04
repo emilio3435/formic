@@ -19,10 +19,11 @@ leaves the machine.
 - **Opens on what needs you.** Not on everything. If nothing is waiting, it says
   so and you close the tab.
 - **Acts on a session.** Jump to its terminal, type an instruction, interrupt it.
-  Needs [cmux](https://github.com/mountain-labs/cmux); without it the board still
-  watches everything, it just refuses to type into a terminal it cannot prove it
-  has identified.
-- **Says what it costs**, when a cost source is available.
+  Needs [cmux](https://github.com/manaflow-ai/cmux); without it the board still
+  watches everything and the acting controls stay off, because it will not touch
+  a terminal it cannot prove it has identified.
+- **Says what it costs**, when a cost source is available — inside a window you
+  pick, which is not the same as everything it has recorded.
 
 ## It refuses to invent numbers
 
@@ -56,6 +57,7 @@ No runtime dependencies. `bun install` only fetches TypeScript types.
 
 | Document | For |
 |---|---|
+| [TODAY.md](./TODAY.md) | **What changed on 2 August**, and which of it you can lean on. Two minutes. |
 | [ANT-GUIDE.md](./ANT-GUIDE.md) | **Using the board.** Written for someone who has never seen it. |
 | [QUICKSTART.md](./QUICKSTART.md) | Installing on a fresh Mac, about ten minutes |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | How a transcript on disk becomes a controllable row |

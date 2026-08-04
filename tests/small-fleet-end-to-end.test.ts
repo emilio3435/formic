@@ -136,16 +136,27 @@ beforeAll(async () => {
   M = (globalThis as unknown as { TheAntHill: unknown }).TheAntHill;
 });
 
-/** Everything the summary band would paint, as the operator would read it. */
+/* Everything the summary band would paint, as the operator would read it.
+
+   THE `?? ""` USED TO BE HERE, AND IT DISARMED THE WHOLE FILE. Four assertions
+   below check this string against BROKEN_NUMBER, which looks for "undefined"
+   among other escaped computations — and `String(value ?? "")` turns an
+   undefined value into an empty string BEFORE the regex ever sees it. The
+   helper defended the product against the exact fault the assertions were
+   hunting. Verified by mutation: making a rendered cell value undefined
+   survived this file untouched.
+
+   Stringifying without the fallback is the fix. `String(undefined)` is
+   "undefined", which is what an operator would actually read on the band. */
 function bandText(snapshot: HubSnapshot): string {
   const model = M.pulseStripModel(snapshot, "live", [], "percent", "");
   const parts: string[] = [];
   for (const cell of model.cells) {
-    parts.push(String(cell.data.value ?? ""), String(cell.data.unit ?? ""), String(cell.data.sublabel ?? ""));
+    parts.push(String(cell.data.value), String(cell.data.unit ?? ""), String(cell.data.sublabel ?? ""));
   }
   for (const id of ["health", "needs-you", "momentum", "burn", "context-peak"]) {
     const data = M.summaryWidgetData(id, snapshot, "live");
-    parts.push(String(data.value ?? ""), String(data.unit ?? ""), String(data.sublabel ?? ""));
+    parts.push(String(data.value), String(data.unit ?? ""), String(data.sublabel ?? ""));
   }
   return parts.join(" ");
 }
@@ -193,6 +204,18 @@ describe("the board a new operator meets, rendered", () => {
       expect(Number.isFinite(Number(String(burn.value).replace(/[^\d.-]/g, "")))).toBe(true);
     }
     expect(String(burn.sublabel)).not.toMatch(BROKEN_NUMBER);
+  });
+
+  test("the band renders something, so a blank one cannot pass the broken-number check", () => {
+    /* The companion the BROKEN_NUMBER assertions always needed. A negative
+       assertion is satisfied by an empty string, so a band that painted nothing
+       at all would clear every one of them. Asserting the band has content is
+       what makes those four negatives mean something. */
+    for (const size of [0, 1, 3]) {
+      const text = bandText(fleetOf(size));
+      expect(text.trim().length, `the band painted nothing at ${size} agents`).toBeGreaterThan(0);
+      expect(text, `the band painted nothing readable at ${size} agents`).toMatch(/[A-Za-z0-9]/);
+    }
   });
 
   test("an empty board says it is empty, in words, and claims nothing else", () => {

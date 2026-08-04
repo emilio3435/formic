@@ -7,11 +7,16 @@ that tells you which one needs you.**
 
 Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
-**Your board will be quieter than these pictures.** They are taken from a machine
-running dozens of sessions at once, because a crowded board shows more of the
-tool. On your first run you will have one row, or none — and `Needs you 0` with
-nothing under it is the tool working, not the tool failing to find anything. If
-it is completely empty, see *The board is empty* at the end.
+**What you are looking at above is the ordinary case, not a demo.** Taken at
+23:11 on 2 August from a machine with 28 live sessions, 4 of them working — and
+`Needs you` still reads **0**, because none of them was waiting on a person.
+That is the product's whole claim in one picture: a busy fleet and an empty
+to-do list are not a contradiction, and the board says so rather than listing
+everything it can find.
+
+Your first run will have fewer rows than this, possibly one or none. `Needs you
+0` with nothing under it is the tool working, not the tool failing to find
+anything. If it is completely empty, see *The board is empty* at the end.
 
 This guide is about *using* a dashboard that is already running. To install one
 on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
@@ -20,13 +25,27 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 > something, it says so instead of showing a plausible number. A blank is
 > usually honest, not broken.
 
-> **And the one caveat.** That rule is about *missing* numbers. A few of the
-> counters on the board are being reworked right now because they had the
-> opposite problem: arithmetically correct, but labelled as something they do
-> not measure — a total that counts the same thing twice, or a span that calls
-> dormant time working time. **Trust the verdicts and the lists; treat the
-> aggregate counters as rough until this note goes away.** The current list of
-> which ones is in `docs/` alongside the audit that found them.
+> **And three things that are still open.** The counters that were
+> arithmetically correct but mislabelled — a total that counted the same tokens
+> twice, a span that called dormant time working time — are now either corrected
+> or named for what they measure, so the board's numbers are no longer
+> wholesale "rough". These remain:
+>
+> - **Cost figures do not yet say what falls outside your window.** The server
+>   knows; the card does not print it. See *Usage has its own windows* below.
+> - **Cost totals were double-counting, and the correction went downward.** The
+>   cost source records some sessions as running *snapshots* — each one a fresh
+>   total for that session, not a fresh call — so a later snapshot already
+>   contains the earlier one and adding them counts the same tokens twice. The
+>   board now counts each session's running total **once**, which is why a
+>   figure you saw earlier may have gone **down**: the correction removes
+>   double-counting, it never adds spend. Both halves are de-duplicated now, so
+>   a window and the spend before it add up to the same whole record whichever
+>   window you pick.
+> - **Archive keeps things for less time than it says.** See *Archive does not
+>   keep things as long as it claims* at the end.
+>
+> Everything else on the board is either measured or blank.
 
 ---
 
@@ -42,9 +61,13 @@ Four steps. Do these in order and you have used the tool correctly.
 nothing to report is absent, not empty — so the shape of the band is itself the
 signal. Above, two cards: work in flight, and one session near its context limit.
 
-**When nothing at all needs you it collapses to a single line** — what is
-shipping, what it is burning, and `All clear`. No cards, no numbers to read past.
-That line is the answer, and you can close the tab.
+**When nothing needs you it collapses to a single line** — what is shipping,
+what it is burning, and a one-word verdict. No cards, no numbers to read past.
+That word is `All clear` only when nothing is being watched either; if any
+session has gone quiet it reads **`Watch`** instead, with the count beside it.
+Observed live: `4 shipping · 31k tok/min · $4.81 last hour · 6 quiet 15m+ ·
+Watch`. Both are answers you can close the tab on — `Watch` means nothing is
+asking for you, not that something is wrong.
 
 When cards are showing, **only `Findings` is a to-do list** — it names both what
 is wrong and what to do about it. The rest are context, not tasks: how much is
@@ -85,16 +108,19 @@ it launched.
 > included — on a real board, about a third of it came from sessions that are
 > already finished.
 >
-> They are not the same unit and **the program is not the sum of its rows.**
-> Measured here: `1.58B` on a program bar against `682k` on a row — roughly five
-> hundred times apart. If you want to know what a session has used in total,
+> They are not the same unit and **the program is not the sum of its rows.** The
+> gap runs to three or four orders of magnitude — a program bar in the hundreds
+> of millions above a row in the hundreds of thousands — and the multiplier moves
+> daily, so treat any specific ratio you have been told as out of date. What does
+> not move is the rule: if you want to know what a session has used in total,
 > open its drawer and read *used this session*; do not add up the column.
 >
 > One exception, in `History` only: a handful of sessions archived before this
-> distinction existed carry no unit at all, and their Tokens cell shows a
-> whole-session total instead — a few rows out of hundreds, each reading around
-> ten times its neighbours. If a History row looks wildly heavier than the rest,
-> that is why: check its drawer rather than the cell.
+> distinction existed carry no token unit at all. Their Tokens cell is **blank**
+> — measured on the live board, 18 rows out of 534 finished ones, reporting
+> neither a turn nor a session figure. A blank there is the honest answer rather
+> than a fault: the record predates the distinction, so no number can be labelled
+> correctly. Read its drawer if you need the total.
 
 ### 4. Click it, deal with it, press `Escape`
 
@@ -108,7 +134,7 @@ its process is still alive, and the four buttons that act on it.
 | **Focus** | Jumps you to that session's terminal window |
 | **Send** | Types an instruction into it |
 | **Interrupt** | Stops what it is doing |
-| **Archive** | Removes a finished session from the board |
+| **Archive** | Removes a finished session from the board — but see the retention warning at the end before relying on it to *keep* anything |
 
 The first three need cmux (see the glossary). Without it they grey out with a
 reason, and the board still watches everything perfectly well.
@@ -123,16 +149,36 @@ So the two are gated differently:
 
 | The row's link to a terminal | Focus | Send / Interrupt |
 |---|---|---|
-| cmux names the session on that pane, and its process is alive | on | **on** |
-| matched only by its folder | on | **off** |
-| the session's process is gone | on | **off** |
-| ambiguous, or no pane found | off | off |
+| cmux names the session on that pane, and its process is alive | on | **accepted** |
+| matched only by its folder | on | **greyed out** |
+| the session's process is gone | on | **greyed out** |
+| ambiguous, or no pane found | off | greyed out |
+
+All of them look the same in the window: if a write cannot be honoured, the
+button is not offered. That used to be untrue of one row — a dead process kept a
+lit Send and refused only once you pressed it — which was safe but dishonest,
+and the button and the server are now decided by the same rule rather than by
+two places agreeing. Hover any greyed control and it tells you which of these
+applies and what would bring it back.
+
+*How much of this has been seen rather than reasoned:* the first and last rows
+are ordinary and visible on any busy board. The middle two are not — a healthy
+fleet spends almost no time in either, and the live board has held **none** of
+them all day across 556 sessions.
+
+Both have now been produced deliberately and watched, on a probe agent in an
+isolated instance pointed at a real cmux pane. A folder-matched row came back
+with **Focus enabled, Send disabled**, carrying exactly the reason quoted below;
+a row whose process was known dead came back the same way. So these rows are
+observed behaviour rather than inference — though produced on demand rather than
+met in the wild, which is a weaker thing than seeing a real fleet do it and is
+worth saying.
 
 ### The promise behind that table
 
-Every greyed-out Send in it is the cockpit declining to do something on your
-behalf that it cannot prove is safe. Read the rows as guarantees, because that
-is what they are:
+Every Send that table withholds is the cockpit declining to do something on your
+behalf that it cannot prove is safe.
+Read the rows as guarantees, because that is what they are:
 
 **It will not type into a terminal it cannot name.** Not "probably the right
 one" — cmux has to say *this session is on this pane*. A pane merely sitting in
@@ -145,8 +191,9 @@ folder match may move your view and never your keystrokes.
 crashed agent leaves its pane behind, and that pane usually belongs to your
 shell by the time you get there. An instruction addressed to a dead agent does
 not vanish — it lands in whatever is sitting on that terminal now. So once the
-board knows a process is gone, the write controls close, even though the row is
-still there to read.
+board has checked and found the process gone, a Send is refused rather than
+delivered, and says the pane may now belong to someone else. The row stays
+readable; only the writing stops.
 
 **It will not act on stale evidence.** Which terminal an agent is on is a fact
 with a short shelf life. If the board's picture is too old to trust, a write is
@@ -196,6 +243,122 @@ you, so `Needs you` leads.
 
 `Idle` and `History` also apply a *lookback* window (6 hours by default) that you
 can widen from the filter bar.
+
+**Usage has its own windows, and the widest one you can ask for is narrower
+than what has been kept.** Two ceilings, and neither is the end of the data:
+
+| What you can ask for | Limit |
+|---|---|
+| The preset buttons | `1h`, `24h`, `7d`, **`30d`** |
+| **Custom**, typed in **hours** | 90 days (`2160`) — also the most the server will answer |
+
+The cost database keeps going after that. So `30d` is not "everything", it is
+the widest *button*; `90d` is not "everything" either, it is the widest
+*question*. On a machine that has been running for months, both are a recent
+slice of the record, and **nothing on the card says so** — a window always looks
+complete, which is what makes this a limit you meet by being surprised rather
+than by reading.
+
+The gap only widens. On day 30 the `30d` view was the whole record; every day
+since, it has hidden more, silently, while reading exactly the same.
+
+Treat any figure here as *spend inside the window you chose*, never as total
+spend. "Our 30-day cost" and "what this has cost us" are different questions,
+and only one of them has a button.
+
+**The same figure has a second boundary, and it is the one worth building a
+habit around.** The window narrows it in *time*; this narrows it in *which
+tools*. The board reads Claude Code, Codex, Cursor and OMP. Anything else you
+run that costs money — a scheduled job, a CLI added since, a provider someone
+set up on a Friday — spends real money and appears on the board nowhere: no row,
+no session, and **no gap where one should be**.
+
+**So read the provider list.** On the **Usage** tab, under the cost, is a
+breakdown by provider. That list comes from your billing source rather than from
+the board's collectors, so it names everything you are billed for whether or not
+the board can see it. **Any name there you cannot find as a row is a tool the
+board is not watching.** It takes five seconds and it is the only check that
+finds this.
+
+![The by-provider breakdown](docs/guide-shots/shot-6-providers.png)
+
+That is the list on the machine these screenshots came from, at `30d`. Four of
+the five names are collectors; **Hermes** and **Factory** are not, and their
+spend appears there and nowhere else on the board.
+
+Health will not find it for you, and this is the part to understand rather than
+worry about. `4 of 4 collectors healthy` is counting the collectors the board
+*has*, and they are genuinely fine. A tool it was never taught to watch has no
+collector, so there is nothing to report as unhealthy — the green line is
+accurate and simply does not cover the question. On the machine these
+screenshots came from, two billed providers sit outside it, one of them a daily
+cron job.
+
+That is not a fault to report; it is the shape of the instrument. **The board
+tells you about what it watches. The provider list tells you what you pay for.
+Comparing them is your job, and it is a five-second one.**
+
+### Finding out what *your* board cannot see
+
+The four collectors are the same everywhere. What differs from machine to
+machine is what else you are billed for, so this is a check you run on your own
+board rather than a list anyone can hand you.
+
+1. Open **Usage** and set the range to **`30d`**, or Custom with `2160` for
+   ninety days. **Do this first.** The breakdown only lists providers with spend
+   *inside the window*, so a job that runs weekly is invisible at `24h` — on the
+   machine these screenshots came from, one provider appears at `30d` and not at
+   `24h`.
+2. Read the **by provider** list under the cost.
+3. Compare it against the four the board collects: **Claude Code, Codex, Cursor,
+   OMP**.
+4. Anything in the list that is not one of those four is **billed and
+   unwatched** — real money, no row, no session, and nothing on the board
+   indicating it exists.
+
+**And this check has its own boundary, which is the same habit applied once
+more.** The list comes from your cost source, so it finds tools your cost source
+prices and the board does not collect. A tool that *neither* knows about is
+invisible to both — and if you have no cost source installed, there is no list
+and this check cannot run at all.
+
+So the last backstop is not on this board and never was: **it is your actual
+bill.** Compare that against the Usage total once, when you first set this up.
+If they agree, these two lists are the whole picture and you can stop checking.
+If they do not, the gap is the size of what nobody here can see.
+
+**The guarantee being built here: this product will tell you when a view cannot
+show you everything.** Not "show you less and look complete" — say so, and say
+how much is outside. The measurement already exists: ask the server for a window
+and it answers with that window's spend *and* what sits before it, back to the
+earliest record it holds. On a machine that has been running for months, most of
+the record is outside the default view. A window that hides the majority of the
+record while looking whole is the same defect as a cost of `$0` that means
+*unknown*, and it gets the same treatment.
+
+**What that buys you is one number that means something.** Add a window to the
+spend before it and you get the whole recorded history — and the same whole
+whichever window you ask through. Measured on this machine at 23:21 on
+2026-08-02: **about $33,677 of total measured spend across the entire record**,
+identical to the cent from seven different windows between one day and 399, on
+both of the figures the payload reports.
+
+**It is still a reading, not a fact.** It grows as the fleet works and it counts
+only what a cost source priced. Quote it with its date or do not quote it — that
+rule applies to every number in this product whose inputs are still moving, and
+it is why the figure above carries a timestamp rather than standing alone.
+
+What makes it worth quoting at all is not any single measurement. That total has
+now survived four separate corrections — de-duplicating cumulative session
+snapshots, disclosing what sits outside the window, a row cap, and a range clamp
+— and seven windows agree on it afterwards. A number that survives having its
+inputs rebuilt underneath it and lands in the same place is a different kind of
+claim from a number someone read once.
+
+*Where this stands today:* the server computes and returns it — the number above
+is a live reading, not a plan. The Usage card does not print it yet, so for now
+you get the honest answer by asking, not by looking. When the card carries it,
+this paragraph loses its last sentence and nothing else changes.
 
 </details>
 
@@ -318,8 +481,11 @@ want, and a bar appears letting you send one instruction to all of them (a
 purpose, so on a quiet board you may find nothing to tick.
 
 **Collector**
-: The part that reads each tool's log files — one per provider. When a collector
-cannot read its files, that provider's data goes stale and Health reports it.
+: The part that reads each tool's log files — one per provider **the board was
+taught about**. When a collector cannot read its files, that provider's data goes
+stale and Health reports it. A tool the board was never taught about has no
+collector at all, so it cannot go stale and cannot be reported — see *read the
+provider list*, above.
 
 **Snapshot**
 : One complete picture of every agent, rebuilt every few seconds and pushed to
@@ -328,10 +494,10 @@ your browser. "The board is stale" means the snapshot stopped updating.
 **cmux**
 : A separate terminal manager. With it, the Ant Hill knows which terminal window
 each session lives in, which is what makes **Focus** and **Send** possible.
-Without it the dashboard still watches everything; it just refuses to type into a
-terminal it cannot positively identify.
+Without it the dashboard still watches everything, and the write controls stay
+off — see *The promise behind that table*.
 
-**Positively identify** *(what that phrase costs you)*
+**Name a session** *(what the phrase costs you)*
 : Not "found a likely pane" — *cmux names this session on this pane*, evidenced
 by the session's transcript file being held open there or its ID appearing in the
 command that started it. A pane merely sitting in the right folder is a guess,
@@ -377,9 +543,9 @@ card already names an action no re-pull can perform — closing a pane, say —
 there is no button, because the only one available would be the one that cannot
 help.
 
-**By far the most common is a cmux-related `Blocking` on a machine where cmux was
-never set up.** That is expected, not a fault — the Ant Hill deliberately refuses
-to type into a terminal it cannot prove it has identified. If you only want to
+**By far the most common is a cmux-related `Blocked` on a machine where cmux was
+never set up.** That is expected, not a fault — it is the first guarantee in
+*The promise behind that table* above, doing its job. If you only want to
 watch, ignore it forever. If you want Focus and Send, install cmux and run
 `bun run setup:cmux` once.
 
@@ -391,8 +557,9 @@ watch, ignore it forever. If you want Focus and Send, install cmux and run
 <details>
 <summary><b>Send is greyed out but Focus still works</b></summary>
 
-**Hover the greyed button — it tells you which of these it is.** All of them are
-the cockpit refusing to guess on your behalf, not a fault to repair.
+**The reason is always on the control — hover a greyed button, or read the
+message a refused Send returns.** All of them are the cockpit declining to guess
+on your behalf, not a fault to repair.
 
 **"matched by its working directory, not attested by cmux."** The row is linked
 to a terminal by folder, not by name. The board would rather refuse a Send than
@@ -406,7 +573,8 @@ that launched it.
 **The session's process is gone.** The pane outlives the agent, and by the time
 you get there it usually belongs to your shell again. An instruction to a dead
 agent is not discarded — it lands in whatever is on that terminal now. The row
-stays readable so you can see what happened; only the writes close.
+shows a `died` chip and Send is greyed out to match it; hovering says the process
+was checked and is gone.
 → *Fix:* none needed. The session is over. Read it, then `Archive` it.
 
 **The board's picture is too old to act on.** Which terminal an agent is on goes
@@ -422,7 +590,7 @@ answer again.
 </details>
 
 <details>
-<summary><b>An agent says "Awaiting first check"</b></summary>
+<summary><b>An agent says "No matching process"</b></summary>
 
 That is the **process liveness** chip in the drawer. It answers what status alone
 cannot: *is this session's process actually still alive?* A crashed agent and a
@@ -433,12 +601,19 @@ cleanly finished one both just stop, and otherwise look identical.
 | **Process live** (green) | Still running. |
 | **Exited cleanly** (grey) | Finished properly. Done. |
 | **Died** (red) | The process is gone and nothing ended cleanly. **This is the one worth looking at.** |
-| **Awaiting first check** (grey, dashed) | Not checked yet. Ordinary and temporary. |
+| **No matching process** (grey, dashed) | The session is still on the board, but the scan has matched no process to it, so its liveness is unproven. It may match later or never — the board does not promise either. |
 | **No process evidence** (grey, dashed) | The session ended and no evidence was captured, so whether it finished or crashed can no longer be recovered. |
 
 No chip at all means the session predates process checking. Absence of evidence
 is never displayed as evidence of death, and most finished sessions on a busy
 board read **No process evidence**. That is normal.
+
+**No matching process** is normal too, and it is not a fault in the session: on a
+live board it tracks whether the board could route to the session's terminal at
+all. Every live agent wearing it in two measured snapshots was **Observed only**
+or **Quarantined**; every live agent reading **Process live** was **Linked**. If
+you want the process answer for one of them, fix the routing — the drawer's
+routing evidence says what the scan saw.
 
 </details>
 
@@ -507,6 +682,52 @@ box**, and remember `Idle` and `History` apply their own lookback window.
 That is the loading skeleton, shown while the first data is fetched. It should be
 replaced within a second or two. If it persists, the page is waiting on a server
 that is not answering — restart it.
+
+</details>
+
+<details>
+<summary><b>Archive does not keep things as long as it claims</b></summary>
+
+**Known, being fixed. If you archive something because you want to keep it,
+read this first.**
+
+The board advertises **30 days** of archive retention. What you actually get is
+30 days *from the session's last activity*, not from the moment you archived it
+— the clock was already running before you pressed the button, and nothing
+records when you pressed it.
+
+So the retention you receive is 30 days **minus however stale the session
+already was**:
+
+| You archive a session last active… | You keep it for about |
+|---|---|
+| today | 30 days |
+| 20 days ago | 10 days |
+| 31+ days ago | **it is pruned on the next save — possibly before you look again** |
+
+The last row is the one that costs you something. `Archive` returns success and
+the record can already be gone. Meanwhile the number the board reports is a
+fixed constant, so it will keep saying 30 regardless of what was delivered.
+
+**Until this is fixed:** if a finished session matters, copy what you need out
+of its drawer rather than trusting `Archive` to hold it. Archiving a *recently
+active* session behaves as advertised; it is old sessions that evaporate.
+
+**The repair has landed, and it is forward-only.** It works by recording the
+moment you archive, so it can only help records stamped after it shipped.
+Anything archived before that has no stamp and keeps running on the old clock.
+
+Measured on this machine at 17:25 on 2026-08-02: **360 of 578 archived records
+now carry an archive time, and 218 do not.** The board reports both, rather than
+averaging them into one reassuring figure — a record it cannot measure is
+counted as *unmeasurable*, never as zero.
+
+**What has not been demonstrated yet is the outcome.** The oldest stamped record
+is less than a day old, because the stamping only began when the fix shipped. So
+the mechanism is verifiable today and the promise is not: nothing has yet been
+held for thirty days *and observed to still be there*. That takes thirty days
+and cannot be hurried. Until then, the honest reading is that the clock now
+starts in the right place, not that the full term has been proven.
 
 </details>
 

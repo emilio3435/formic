@@ -10,6 +10,22 @@ import type {
 export const MAX_TRANSCRIPT_TAIL_CHARS = 800;
 
 export interface CollectedAgent {
+  /* Per-call PROCESSED sizes, in transcript order, deduplicated per message —
+     the series whose sum is `tokens.sessionProcessed`. It is derived once, by
+     the parser, and the total is computed FROM it, so the two cannot drift.
+
+     Deliberately NOT published in the snapshot: it is stripped where a
+     CollectedAgent becomes an AgentSnapshot, and served on demand from
+     /api/debug/session-calls instead. A live snapshot is already 2.23MB against
+     a 2MB SSE backlog budget, and the median session has 7 calls while the
+     largest on this machine has 1,575 — putting the tail on the wire for every
+     agent on every update would spend the board's freshness on a series nothing
+     renders.
+
+     Absent, never empty, where a provider does not report per call: Codex
+     publishes session-cumulative totals only, so there are no call boundaries
+     to report and claiming an empty series would assert there were no calls. */
+  callSizes?: readonly number[];
   id: string;
   provider: Provider;
   sourceSessionId: string;
@@ -39,6 +55,12 @@ export interface CollectedAgent {
      front window, so a question asked after an explanation never survived it. */
   lastAgentClosing?: string | null;
   transcriptTail?: string;
+  /* When the archive took custody of this record — set by the archive store,
+     absent on a live agent. Retention runs from here, not from `updatedAt`:
+     archiving a session that went quiet a month ago is still an archive made
+     today, and measuring from the agent's last activity pruned it on the very
+     next commit while reporting success. */
+  archivedAt?: string;
   /* Time the agent was actually working: the sum of gaps between consecutive
      recorded turns, counting only gaps short enough to be one stretch. Bounded
      by construction — it can never exceed updatedAt − startedAt, and on a

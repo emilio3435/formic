@@ -517,6 +517,77 @@ describe("summary status and widgets", () => {
     expect(sig(fault("ALPHA"), 3)).toBe(sig(fault("ALPHA"), 3));
   });
 
+  /* The calm line's bullet is punctuation, and punctuation does not outlive its
+     sentence.
+
+     Suppressing "0 shipping" at zero tracked (day-one review, 70ed00b) left the
+     mark rendering alone. Measured in the browser on a rebuilt n=0 fixture at
+     aba5551: mark "●", copy "", chip "All clear" — an orphaned dot before the
+     verdict, on the one screen whose whole job is to look deliberate rather than
+     broken. */
+  test("the calm line drops its bullet when it has nothing to say", () => {
+    /* A shape assertion over the renderer's source, and deliberately not a
+       behavioural one: renderPulseCalm is not exported, and exporting a renderer
+       purely to test it would widen this patch past the defect it fixes. The
+       trade is stated so the next reader knows what this does and does not
+       prove — it binds to the GATE, not to the pixels, and a rename of `copy`
+       will fail it even though behaviour is intact.
+
+       Mutation-checked: reverting the two spans to their unconditional form
+       fails this test, so it cannot pass over the bug it was written for. */
+    const src = readFileSync(join(import.meta.dir, "../src/web/app.js"), "utf8");
+    const fn = src.slice(src.indexOf("function renderPulseCalm"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+
+    // BOTH spans gate on the copy. A mark surviving an empty copy is the bug.
+    expect(body).toMatch(/copy \? el\("span", \{ class: "pulse-calm-mark"/);
+    expect(body).toMatch(/copy \? el\("span", \{ class: "pulse-calm-copy"/);
+    expect(body).not.toMatch(/\n\s*el\("span", \{ class: "pulse-calm-mark"/);
+  });
+
+  /* Seen whole rather than one change at a time.
+
+     A cmux pane title is a LIVE terminal title, so it carries whatever frame the
+     agent inside was drawing when the scan ran. Measured on main's board:
+     agentName() returned "⠐ Swarm audit backend investigation with codex" — one
+     frame of Claude Code's braille spinner, frozen into the session's NAME and
+     rendered everywhere that name goes: roster row, the finding title in the
+     summary band, the drawer head, the notification. displayName was clean
+     throughout, which is why no single surface looked broken. */
+  test("a spinner frame in a pane title never becomes the session's name", () => {
+    for (const [raw, want] of [
+      ["⠐ Swarm audit backend investigation", "Swarm audit backend investigation"],
+      ["⠂ Deploy backend fixes via Codex", "Deploy backend fixes via Codex"],
+      ["✻ Working on it", "Working on it"],
+      ["✽ ✻ Two frames", "Two frames"],
+    ]) {
+      expect(M.stripSpinnerFrame(raw)).toBe(want);
+    }
+
+    /* Only leading spinners, and only spinner families. Names legitimately
+       carry emoji and punctuation, and a rule broad enough to eat those would
+       trade a cosmetic bug for a naming one. */
+    expect(M.stripSpinnerFrame("🚀 ship it")).toBe("🚀 ship it");
+    expect(M.stripSpinnerFrame("the-mountain ⠐ main")).toBe("the-mountain ⠐ main");
+    expect(M.stripSpinnerFrame("Claude · the-mountain-main")).toBe("Claude · the-mountain-main");
+    expect(M.stripSpinnerFrame("")).toBe("");
+  });
+
+  /* Two fixes, each correct, composing into a crossed sentence. The rate's
+     window was appended AFTER the cost clause, so with the cost restored the
+     cell read "36k/min · $4.20 last hour · 10m average" — the rate's qualifier
+     separated from the rate by a differently-windowed number, and therefore
+     reading as the cost's. It was unambiguous only while the cost was null. */
+  test("each burn figure keeps its own window beside it", () => {
+    const data = M.summaryWidgetData("burn", snapshot({
+      pulse: { burn: { tokensPerMin: 35_519, windowMs: 600_000, costLastHourUsd: 4.2 } },
+    }), "live", "percent", [], false);
+
+    expect(data.sublabel).toBe("10m average · $4.20 last hour");
+    // The window is adjacent to the rate it describes, not trailing the cost.
+    expect(data.sublabel.indexOf("10m average")).toBeLessThan(data.sublabel.indexOf("last hour"));
+  });
+
   /* Three refusals, three answers to "can I do anything about this?"
 
      They all end in the same disabled button, and archived and dead both
@@ -747,7 +818,11 @@ describe("summary status and widgets", () => {
     });
     expect(freshMachine.degraded).toBe(false);
     expect(freshMachine.message).toBe("Watching. No sessions running yet.");
-    expect(freshMachine.sources).toBe("1 of 1 collectors healthy");
+    /* The absences are now NAMED rather than merely excluded from the
+       denominator. Excluding them alone left a machine with none of the four
+       showing no line at all — silence at the one moment a newcomer needs a
+       signal — so the count says what is watched and what simply is not there. */
+    expect(freshMachine.sources).toBe("1 of 1 collectors healthy · 3 not installed");
     expect(freshMachine.sources).not.toMatch(/degraded|of 4/);
 
     /* No byProvider on the wire means the old counting stands, so a real
@@ -1514,6 +1589,25 @@ describe("modelShort — Cursor-native short forms within the 18-char bound", ()
     expect(M.modelShort("gpt-5-codex")).toBe("gpt-5-codex");
     expect(M.modelShort(null)).toBeNull();
   });
+
+  /* A placeholder is not a model name. The collector writes `<synthetic>` when it
+     manufactures a session and absence words like "unknown" when it has no model,
+     and both used to pass through unchanged into a slot whose fallback reads "not
+     reported" — a gap filled with something that reads like an answer, which is
+     the one thing this board must not do. Null here, so every caller's own
+     absence wording applies. Measured on the wire 2026-08-03: 3 agents carried
+     "<synthetic>", 7 carried no model field at all. */
+  test("collector placeholders are not model names", () => {
+    expect(M.modelShort("<synthetic>")).toBeNull();
+    expect(M.modelShort("<unknown>")).toBeNull();
+    expect(M.modelShort("unknown")).toBeNull();
+    expect(M.modelShort("Unknown")).toBeNull();
+    expect(M.modelShort("none")).toBeNull();
+    expect(M.modelShort("n/a")).toBeNull();
+    expect(M.modelShort("  ")).toBeNull();
+    // A real name that merely contains an absence word is still a real name.
+    expect(M.modelShort("unknown-forge-2")).toBe("unknown-forge-2");
+  });
 });
 
 describe("issues", () => {
@@ -1996,9 +2090,12 @@ describe("calm program and agent list rendering", () => {
        message". That panel is gone; the message now lives exactly once, as a
        Thread turn, which is what this test should be guarding. */
     expect(byClass(drawer, "last-human-message")).toBeNull();
-    const turn = byClass(drawer, "chat-turn-body");
-    expect(turn).not.toBeNull();
-    expect(textOf(turn)).toBe(message);
+    /* Asserted as PRESENCE among the turns, not as the first one. The check read
+       `byClass(...)[0]` and so quietly also asserted reading order, which the
+       comment above says was never the point — and it failed the moment the
+       agent's reply was promoted to lead the thread. Exactly once, still. */
+    const bodies = allByClass(drawer, "chat-turn-body").map((node: any) => textOf(node));
+    expect(bodies.filter((body: string) => body === message)).toHaveLength(1);
     expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
     expect(styles).toContain("min-height: 44px");
@@ -2108,6 +2205,30 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     const text = textOf(instruments);
     expect(text).not.toContain("%");            // no invented percentage
     expect(text).not.toContain("not reported"); // cell omitted, never faked as text
+  });
+
+  /* The head guard (0f9c643) covered one surface out of two: the drawer omitted
+     the model for an agent carrying "<synthetic>" while the row behind it printed
+     the placeholder in the very slot a model name goes (evidence: e024422, two
+     screenshots of one archived Claude session). The row's own precedent for an
+     absent model is the words "not reported"; a placeholder is absence, so it
+     takes that path rather than being echoed back as a name. */
+  test("(b2) a collector placeholder reads as an absent model, not as a model name", () => {
+    for (const placeholder of ["<synthetic>", "unknown"]) {
+      const masked = agent({
+        provider: "claude",
+        model: placeholder,
+        tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row: any = withDom(() => M.renderAgentRow(masked, program));
+      const modelCell = findByClass(row, "ri-model");
+      expect(modelCell).not.toBeNull();
+      expect(textOf(modelCell)).not.toContain(placeholder);
+      expect(textOf(modelCell)).toContain("not reported");
+      // The measured context percentage is real and survives the guard.
+      expect(textOf(modelCell)).toContain("20%");
+    }
   });
 
   test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
@@ -5824,6 +5945,34 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(textOf(quiet)).toContain("No invocations in this range.");
   });
 
+  /* The second instance of the same leak as the roster row (evidence e024422):
+     the Model column echoed whatever the collector wrote, so "<synthetic>" landed
+     in a column of model names while a genuinely absent model read "—". The
+     invocation is real either way; only the name is unknown, and the column's own
+     em dash already says that. */
+  test("the invocation table's Model column says nothing rather than a placeholder", () => {
+    const table = withDom(() => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: {
+          available: true,
+          invocations: [
+            { sessionId: "a1", provider: "claude", model: "<synthetic>", tokens: 10, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" },
+            { sessionId: "b2", provider: "codex", model: "gpt-5-codex", tokens: 20, costUsd: null, startTime: "2026-07-28T01:00:00.000Z" },
+          ],
+        },
+      });
+      return domById.get("usage-panel");
+    });
+    const text = textOf(table);
+    expect(text).not.toContain("<synthetic>");
+    // The row itself is still reported, and a known model is still named.
+    expect(text).toContain("gpt-5-codex");
+    expect(text).toContain("—");
+  });
+
   /* -------- finding 2: one agent's tick rebuilt the whole list -------------
      The list guard was all-or-nothing: any visible agent's status, tokens or
      summary moving invalidated one signature for the WHOLE list, and the next
@@ -6702,6 +6851,60 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(M.feedFrozen({ conn: "connecting", snap: null }, FROZEN_NOW)).toBe(false);
   });
 
+  test("(1) a Send that cannot send does not render as the primary action", () => {
+    /* The panel used to say "you cannot act" and show a primary action in the
+       same breath. `.btn.primary` is declared after `.btn:disabled` at equal
+       specificity, so the primary fill won the cascade and a disabled Send
+       rendered solid ink — the highest-emphasis element on the drawer, beside
+       a composer reading "Instruction unavailable" and two dock tools the
+       server had already refused.
+
+       Measured when written: `controlsFor` gates instruct on `transmitRefusal`
+       and 724 of 731 live agents came back instruct:false, so this was the
+       normal rendering rather than an edge case.
+
+       Asserted on the CLASS rather than on a colour, because the class is what
+       the cascade reads and a test that could only see computed style would
+       need a browser this suite does not have. */
+    const refused = agent({
+      controls: [
+        { action: "focus", enabled: false },
+        { action: "instruct", enabled: false },
+        { action: "interrupt", enabled: false },
+        { action: "archive", enabled: true },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dock: any = withDom(() => M.renderCommandDock(refused, "observed-only", null, []));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send: any = buttonsOf(dock).find((b: any) => String(b.className).includes("command-send"));
+
+    expect(send).toBeDefined();
+    expect(send.hasAttribute("disabled")).toBe(true);
+    expect(String(send.className)).not.toContain("primary");
+  });
+
+  test("(1) a Send that CAN send keeps its emphasis", () => {
+    /* The control, and the reason the assertion above is not satisfied by
+       deleting the class outright: on a linked session Send is the primary
+       action and must look like one. */
+    const live = agent({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+        { action: "archive", enabled: true },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dock: any = withDom(() => M.renderCommandDock(live, "linked", null, []));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send: any = buttonsOf(dock).find((b: any) => String(b.className).includes("command-send"));
+
+    expect(send.hasAttribute("disabled")).toBe(false);
+    expect(String(send.className)).toContain("primary");
+  });
+
   test("(1) every control in the dock is held — and says so — on a frozen board", () => {
     const live = agent({
       controls: [
@@ -6806,6 +7009,46 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(M.nextTranscriptLimit(200)).toBe(500);
     expect(M.nextTranscriptLimit(500)).toBe(1000);
     expect(M.nextTranscriptLimit(1000)).toBeNull();
+  });
+
+  test("controlOutcome believes success only when the body says so in a boolean", () => {
+    // The invariant that matters: HTTP completion alone is never success. This
+    // used to be reachable only by driving sendControl through a fake DOM and a
+    // fake fetch; it is now a value in, a sentence out.
+    expect(M.controlOutcome("instruct", "Claude · main", { status: 200, body: { ok: true } }))
+      .toEqual({ ok: true, message: "Send succeeded (Claude · main)" });
+
+    // A 200 with an empty body, and a 200 whose body never parsed, are failures.
+    for (const body of [{}, null, undefined, { ok: "yes" }]) {
+      const out = M.controlOutcome("instruct", "A", { status: 200, body });
+      expect(out.ok, JSON.stringify(body)).toBe(false);
+      expect(out.message).toContain("unexpected response");
+      expect(out.message).toContain("HTTP 200");
+    }
+  });
+
+  test("controlOutcome reports every part of a refusal the server gave it", () => {
+    const out = M.controlOutcome("interrupt", "A", {
+      status: 200,
+      body: { ok: false, error: { code: "CMUX_FAILED", message: "no pane", exitCode: 3, stderr: "  boom  " } },
+    });
+    expect(out.ok).toBe(false);
+    // Code, message, exit code and stderr each survive — a refusal the operator
+    // cannot act on is the reason this control plane logs exit codes at all.
+    expect(out.message).toBe("Interrupt failed [CMUX_FAILED]: no pane (exit 3)\nboom");
+
+    // exitCode 0 is a real value and must not be dropped by a falsy check.
+    expect(M.controlOutcome("focus", "A", { status: 200, body: { ok: false, error: { exitCode: 0 } } }).message)
+      .toContain("(exit 0)");
+
+    // A transport failure names itself; an error with no message still says something.
+    expect(M.controlOutcome("archive", "A", { error: new Error("socket hang up") }).message)
+      .toBe("Archive failed: socket hang up");
+    expect(M.controlOutcome("archive", "A", { error: {} }).message).toContain("network error");
+
+    // An unknown action degrades to its own name rather than "undefined".
+    expect(M.controlOutcome("teleport", "A", { status: 200, body: { ok: true } }).message)
+      .toBe("teleport succeeded (A)");
   });
 
   test("(2) a build without the route says so — it never claims the agent is silent", () => {
@@ -7389,8 +7632,8 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // Unknown is never marked as death, but it is still stated to a reader.
     expect(byClass(unclear, "row-died")).toBeNull();
     expect(unclear.className.split(/\s+/)).not.toContain("is-died");
-    // agent() is `running`, so its unknown is the still-to-be-probed reading.
-    expect(unclear.attributes["aria-label"]).toContain("Process: Awaiting first check");
+    // agent() is `running`, so its unknown is the live reading — see (3b).
+    expect(unclear.attributes["aria-label"]).toContain("Process: No matching process");
   });
 
   test("(3) the drawer states all four verdicts, so unknown reads as unknown", () => {
@@ -7399,7 +7642,7 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
       ["running", "Process live", "liveness-running"],
       ["exited", "Exited cleanly", "liveness-exited"],
       ["died", "Died", "liveness-died"],
-      ["unknown", "Awaiting first check", "liveness-unknown"],
+      ["unknown", "No matching process", "liveness-unknown"],
     ];
     for (const [word, label, cls] of cases) {
       const chip = withDom(() => M.verdictLiveness(agent({ processLiveness: word })));
@@ -7411,24 +7654,39 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     expect(new Set(labels).size).toBe(4);
   });
 
-  /* One wire value, two different facts. On the live board 135 of the 140
-     `unknown` agents are ended sessions: nothing will ever probe them again, so
-     "Awaiting first check" would send the operator off to wait for a check that
-     is never coming. Only a session still on the board is actually awaiting one. */
-  test("(3b) unknown liveness distinguishes a pending check from one that will never come", () => {
-    const pending = M.livenessView(agent({ processState: "unknown", status: "running", activity: "working" }));
-    expect(pending.label).toBe("Awaiting first check");
-    expect(pending.detail).toContain("No process check has reported");
+  /* One wire value, two different facts — but NOT the two this test first
+     asserted. It used to read the live case as "Awaiting first check" and the
+     ended one as "No process evidence", on the theory that a live session is
+     genuinely waiting for a probe. Watched on the live board for 16 minutes
+     (2026-08-03 22:12–22:28 UTC), that theory holds for some sessions and fails
+     for others: of 6 live agents wearing the chip, 2 cleared within ~6 minutes
+     because a check arrived and bound a process, and 4 aged 7 to 40 minutes
+     never cleared. A label that promises a check is wrong for the second group
+     and a label that denies one is wrong for the first, so the live wording
+     states the fact and says nothing about timing.
+
+     The split still earns its keep, on the fact that DOES separate them: an
+     ended session will never be matched, so how it finished is closed
+     unanswered. 627 of the 631 unknowns on the board are ended sessions. */
+  test("(3b) unknown liveness separates a session that may still match from one that never will", () => {
+    const live = M.livenessView(agent({ processState: "unknown", status: "running", activity: "working" }));
+    expect(live.label).toBe("No matching process");
+    expect(live.detail).toContain("cannot say whether its process is alive");
+    // Never promise, and never deny, a check the board does not schedule.
+    expect(live.label).not.toContain("Awaiting");
+    expect(live.detail).not.toMatch(/yet|never|will/i);
 
     const finished = M.livenessView(agent({ processState: "unknown", status: "archived", activity: "ended" }));
     expect(finished.label).toBe("No process evidence");
+    // The ended chip carries the extra fact, and it is the one an operator acts
+    // on: the outcome is unrecoverable, not merely unobserved.
     expect(finished.detail).toContain("cannot be recovered");
-    expect(finished.label).not.toContain("Awaiting"); // never promise a check
+    expect(finished.label).not.toBe(live.label);
 
     // Same key either way, so the chip's styling and every selector still match.
-    expect(pending.key).toBe("unknown");
+    expect(live.key).toBe("unknown");
     expect(finished.key).toBe("unknown");
-    expect(pending.tone).toBe(finished.tone);
+    expect(live.tone).toBe(finished.tone);
 
     // The three states that ARE evidence are unaffected by activity.
     for (const [word, label] of [["running", "Process live"], ["exited", "Exited cleanly"], ["died", "Died"]]) {
@@ -7676,9 +7934,9 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
       ["running", "Process live"],
       ["exited", "Exited cleanly"],
       ["died", "Died"],
-      // agent() is `running`, so unknown reads as the pending-probe case; the
-      // ended reading is covered by (3b).
-      ["unknown", "Awaiting first check"],
+      // agent() is `running`, so unknown reads as the live case; the ended
+      // reading is covered by (3b).
+      ["unknown", "No matching process"],
     ];
     for (const [word, label] of wire) {
       expect(M.livenessState(agent({ processState: word })), word).toBe(word);
@@ -7734,7 +7992,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     const unclear = agent({ processState: "unknown" });
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: unclear, program: { id: "p", name: "P", agents: [unclear] } }));
-    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Awaiting first check");
+    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("No matching process");
   });
 
   /* The route that used to 403 every browser now answers. This is a verbatim
