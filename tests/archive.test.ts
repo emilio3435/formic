@@ -412,3 +412,106 @@ describe("durable archive state", () => {
     expect(store.archivedAgents().some(({ id }) => id === `codex:${MAX_ARCHIVE_RECORDS}`)).toBeFalse();
   });
 });
+
+describe("retention and the record cap are operator settings, not constants", () => {
+  /* They were `ARCHIVE_RETENTION_MS` and `MAX_ARCHIVE_RECORDS`, compiled in, so
+     an operator who wanted a week of history or a smaller file had no way to say
+     so. The store now reads both through an injected reader, which also means a
+     change takes effect on the NEXT COMMIT rather than at the next restart —
+     these tests move the numbers under a live store to prove that. */
+  function virtualFiles() {
+    const contents = new Map<string, string>();
+    const files: ArchiveFileOperations = {
+      readText: async (path) => {
+        const value = contents.get(path);
+        if (value === undefined) throw missingFile();
+        return value;
+      },
+      makeDirectory: async () => {},
+      writeText: async (path, value) => { contents.set(path, value); },
+      rename: async (from, to) => { contents.set(to, contents.get(from) ?? "[]"); },
+    };
+    return { contents, files };
+  }
+
+  function session(id: string, updatedAt: string): CollectedAgent {
+    return {
+      id,
+      provider: "codex",
+      sourceSessionId: id,
+      displayName: id,
+      status: "running",
+      statusReason: "Observed.",
+      updatedAt,
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+    };
+  }
+
+  const DAY_MS = 24 * 60 * 60 * 1_000;
+
+  test("a shortened retention window prunes records the default would have kept", async () => {
+    const { contents, files } = virtualFiles();
+    let nowMs = Date.parse("2026-08-04T00:00:00.000Z");
+    let retentionMs = 30 * DAY_MS;
+    const store = await JsonArchiveStore.open(
+      "/virtual/limits.json",
+      files,
+      () => nowMs,
+      () => ({ retentionMs, recordLimit: MAX_ARCHIVE_RECORDS }),
+    );
+
+    await store.record([session("codex:old", new Date(nowMs).toISOString())]);
+    nowMs += 10 * DAY_MS;
+    await store.record([session("codex:new", new Date(nowMs).toISOString())]);
+    expect(store.archivedAgents()).toHaveLength(2);
+
+    // The operator drops retention to a week. Ten days old is now out of range.
+    retentionMs = 7 * DAY_MS;
+    await store.record([session("codex:newer", new Date(nowMs).toISOString())]);
+    expect(store.archivedAgents().map(({ id }) => id).sort()).toEqual(["codex:new", "codex:newer"]);
+    expect(JSON.parse(contents.get("/virtual/limits.json") ?? "[]")).toHaveLength(2);
+  });
+
+  test("a lowered record cap is enforced on the next commit, keeping the newest", async () => {
+    const { files } = virtualFiles();
+    const nowMs = Date.parse("2026-08-04T00:00:00.000Z");
+    let recordLimit = 5;
+    const store = await JsonArchiveStore.open(
+      "/virtual/cap.json",
+      files,
+      () => nowMs,
+      () => ({ retentionMs: 30 * DAY_MS, recordLimit }),
+    );
+
+    await store.record(
+      Array.from({ length: 5 }, (_, index) =>
+        session(`codex:${index}`, new Date(nowMs - index * 1_000).toISOString())),
+    );
+    expect(store.archivedAgents()).toHaveLength(5);
+
+    recordLimit = 2;
+    await store.record([session("codex:fresh", new Date(nowMs + 1_000).toISOString())]);
+    expect(store.archivedAgents().map(({ id }) => id)).toEqual(["codex:fresh", "codex:0"]);
+  });
+
+  test("a store opened without limits keeps the shipped default window, to the millisecond", async () => {
+    /* Asserted from custody time, which is what retention actually measures —
+       archiving a session that went quiet a month ago is still an archive made
+       today, and measuring from its last activity pruned it on the very next
+       commit while reporting success. */
+    const { files } = virtualFiles();
+    let nowMs = Date.parse("2026-08-04T00:00:00.000Z");
+    const store = await JsonArchiveStore.open("/virtual/defaults.json", files, () => nowMs);
+    await store.record([session("codex:kept", new Date(nowMs).toISOString())]);
+
+    nowMs += ARCHIVE_RETENTION_MS;
+    await store.record([session("codex:companion", new Date(nowMs).toISOString())]);
+    expect(store.archivedAgents().map(({ id }) => id)).toContain("codex:kept");
+
+    nowMs += 1;
+    await store.record([session("codex:trigger", new Date(nowMs).toISOString())]);
+    expect(store.archivedAgents().map(({ id }) => id)).not.toContain("codex:kept");
+  });
+});

@@ -3,8 +3,23 @@ import { dirname } from "node:path";
 import { readableTask } from "./collectors";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
+/* The defaults, not the law. Retention and the record cap are operator settings
+   now (`historyRetentionDays`, `historyRecordLimit`), and the store reads them
+   through an injected reader so a change takes effect on the next commit
+   instead of at the next restart. These stay as the values used when nothing
+   injects anything — tests, and any caller that has no settings store. */
 export const ARCHIVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 export const MAX_ARCHIVE_RECORDS = 5_000;
+
+export interface ArchiveLimits {
+  retentionMs: number;
+  recordLimit: number;
+}
+
+const DEFAULT_ARCHIVE_LIMITS: ArchiveLimits = {
+  retentionMs: ARCHIVE_RETENTION_MS,
+  recordLimit: MAX_ARCHIVE_RECORDS,
+};
 
 type ArchiveKind = "operator" | "history";
 /* `archivedAt` is when WE stored the record, which is not `updatedAt`, when the
@@ -44,14 +59,16 @@ export class JsonArchiveStore implements ArchiveStore {
     private readonly path: string,
     private readonly files: ArchiveFileOperations,
     private readonly now: () => number,
+    private readonly limits: () => ArchiveLimits,
   ) {}
 
   static async open(
     path: string,
     files: ArchiveFileOperations = nodeFileOperations,
     now: () => number = Date.now,
+    limits: () => ArchiveLimits = () => DEFAULT_ARCHIVE_LIMITS,
   ): Promise<JsonArchiveStore> {
-    const store = new JsonArchiveStore(path, files, now);
+    const store = new JsonArchiveStore(path, files, now, limits);
     try {
       const parsed = JSON.parse(await files.readText(path));
       if (Array.isArray(parsed)) {
@@ -63,7 +80,7 @@ export class JsonArchiveStore implements ArchiveStore {
             if (stored.archiveKind && stored.archiveKind !== "operator" && stored.archiveKind !== "history") {
               throw new Error("archive file contains an invalid archive kind");
             }
-            if (!isFresh(value, now())) continue;
+            if (!isFresh(value, now(), limits().retentionMs)) continue;
             if (stored.archiveKind !== "history") store.#agentIds.add(value.id);
             store.#agents.set(value.id, stored);
           } else {
@@ -153,23 +170,25 @@ export class JsonArchiveStore implements ArchiveStore {
       nextAgents.set(agent.id, copy);
       changed = true;
     }
+    const { retentionMs, recordLimit } = this.limits();
     const needsPrune = nextAgents.size + [...nextAgentIds].filter((id) => !nextAgents.has(id)).length >
-      MAX_ARCHIVE_RECORDS || [...nextAgents.values()].some((agent) => !isFresh(agent, this.now()));
+      recordLimit || [...nextAgents.values()].some((agent) => !isFresh(agent, this.now(), retentionMs));
     if (!changed && !needsPrune) return;
     await this.#commit(nextAgentIds, nextAgents);
   }
 
   async #commit(agentIds: Set<string>, agents: Map<string, StoredAgent>): Promise<void> {
+    const { retentionMs, recordLimit } = this.limits();
     const retainedAgents = [...agents.values()]
-      .filter((agent) => isFresh(agent, this.now()))
+      .filter((agent) => isFresh(agent, this.now(), retentionMs))
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
-      .slice(0, MAX_ARCHIVE_RECORDS);
+      .slice(0, recordLimit);
     const retainedAgentIds = new Set(
       retainedAgents
         .filter((agent) => agent.archiveKind !== "history")
         .map((agent) => agent.id),
     );
-    const remaining = MAX_ARCHIVE_RECORDS - retainedAgents.length;
+    const remaining = recordLimit - retainedAgents.length;
     const plainIds = [...agentIds]
       .filter((id) => !agents.has(id))
       .sort()
@@ -283,9 +302,9 @@ function sameAgent(left: StoredAgent, right: StoredAgent): boolean {
    Records written before archivedAt existed have none; they fall back to
    updatedAt, which is the old behaviour and the only honest option - inventing
    an archive time for them would be fabricating the very evidence this adds. */
-function isFresh(agent: StoredAgent, nowMs: number): boolean {
+function isFresh(agent: StoredAgent, nowMs: number, retentionMs = ARCHIVE_RETENTION_MS): boolean {
   const retentionStart = Date.parse(agent.archivedAt ?? agent.updatedAt);
-  return Number.isFinite(retentionStart) && nowMs - retentionStart <= ARCHIVE_RETENTION_MS;
+  return Number.isFinite(retentionStart) && nowMs - retentionStart <= retentionMs;
 }
 
 function isCollectedAgent(value: unknown): value is CollectedAgent {

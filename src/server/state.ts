@@ -8,7 +8,7 @@ import { PulseTracker } from "./pulse";
 import type { ArchiveStore, CmuxNotification, CmuxSurface, CommandRunner } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
-import { DEFAULT_SCAN_WINDOW_HOURS, type HubSettings } from "./settings";
+import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
 import type { UsageSummary } from "./burnbar";
 
 export interface HubCollectors {
@@ -186,8 +186,14 @@ export class HubState {
   async #performRefresh(options: { cmux?: boolean }): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     const providers: Provider[] = ["omp", "codex", "claude", "cursor"];
-    this.#scanWindowHours = this.settingsReader?.().scanWindowHours ?? this.#scanWindowHours;
+    const settings = this.settingsReader?.();
+    this.#scanWindowHours = settings?.scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
+    /* Read every refresh, not at construction: a settings POST triggers a
+       refresh, and an operator who just widened their quiet threshold should
+       see the board reclassify on that refresh rather than at the next
+       restart. */
+    const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
@@ -210,7 +216,7 @@ export class HubState {
     };
     let aggregateSettled = false;
     const aggregate = Promise.all([
-      capture("session collection failed", this.collectors.sessions(homedir(), windowMs), (value) => {
+      capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
         sessionsResult = value;
       }),
       ...(options.cmux

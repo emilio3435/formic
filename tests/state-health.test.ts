@@ -424,3 +424,71 @@ describe("cmux collection time truth", () => {
     expect((await refresh).pulse).toBeDefined();
   });
 });
+
+describe("operator thresholds reach the collectors", () => {
+  /* The settings the board classifies by are useless if they stop at the store.
+     This asserts the whole path — settingsReader -> HubState -> collectSessions
+     -> ParseMetadata -> the comparison — by watching what the collector is
+     handed, and asserts it is re-read per refresh rather than captured once at
+     construction, because a settings POST triggers a refresh and the operator
+     expects that refresh to use their new numbers. */
+  test("a refresh hands the collector the operator's freshness and quiet bands", async () => {
+    const seen: Array<{ freshMs: number; quietMs: number } | undefined> = [];
+    const collectors: HubCollectors = {
+      sessions: async (_home, _windowMs, thresholds) => {
+        seen.push(thresholds);
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    let activityQuietMinutes = 45;
+    const state = new HubState(
+      runner,
+      archiveStore,
+      [],
+      collectors,
+      () => ({
+        version: 2,
+        activityFreshMinutes: 3,
+        activityQuietMinutes,
+        scanWindowHours: 36,
+        historyRetentionDays: 30,
+        historyRecordLimit: 5000,
+        defaultView: "needs-you",
+      }),
+    );
+
+    await state.refresh({});
+    expect(seen.at(-1)).toEqual({ freshMs: 3 * 60_000, quietMs: 45 * 60_000 });
+
+    activityQuietMinutes = 180;
+    await state.refresh({});
+    expect(seen.at(-1)).toEqual({ freshMs: 3 * 60_000, quietMs: 180 * 60_000 });
+  });
+
+  test("a hub with no settings store leaves the collector on its own defaults", async () => {
+    const seen: Array<unknown> = [];
+    const collectors: HubCollectors = {
+      sessions: async (_home, _windowMs, thresholds) => {
+        seen.push(thresholds);
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const state = new HubState(runner, { has: () => false, archive: async () => {} }, [], collectors);
+
+    await state.refresh({});
+    expect(seen).toEqual([undefined]);
+  });
+});

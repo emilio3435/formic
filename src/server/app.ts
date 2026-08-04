@@ -18,7 +18,7 @@ import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
-import { handleSettingsRequest, type JsonSettingsStore } from "./settings";
+import { DEFAULT_SCAN_WINDOW_HOURS, handleSettingsRequest, type JsonSettingsStore } from "./settings";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
@@ -1063,8 +1063,8 @@ export function emptySnapshot(): HubSnapshot {
   return {
     schemaVersion: 1,
     generatedAt: now,
-    scanWindowHours: 36,
-    lookbackHours: 36,
+    scanWindowHours: DEFAULT_SCAN_WINDOW_HOURS,
+    lookbackHours: DEFAULT_SCAN_WINDOW_HOURS,
     controlHealth: { cmuxReachable: false, lastCheckedAt: now, errors: [], staleSources: [] },
     totals: {
       live: 0,

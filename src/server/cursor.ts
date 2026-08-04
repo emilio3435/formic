@@ -11,7 +11,7 @@ import {
   type HumanMessageCandidate,
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
-import { DEFAULT_FRESH_MS, DEFAULT_QUIET_MS } from "./lifecycle";
+import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -65,6 +65,7 @@ export interface CursorSessionInput {
   archived?: boolean;
   allowCwdFallback?: boolean;
   nowMs?: number;
+  thresholds?: LifecycleThresholds;
 }
 
 export interface CursorChildSessionInput {
@@ -77,6 +78,7 @@ export interface CursorChildSessionInput {
   model?: string;
   updatedAtMs: number;
   nowMs?: number;
+  thresholds?: LifecycleThresholds;
 }
 
 interface CursorConversationRow {
@@ -198,18 +200,19 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const validUpdatedAtMs = freshSignals.length ? Math.max(...freshSignals) : nowMs;
   const ageMs = Math.max(0, nowMs - validUpdatedAtMs);
+  const { freshMs, quietMs } = input.thresholds ?? DEFAULT_LIFECYCLE_THRESHOLDS;
   let status: CollectedAgent["status"];
   let statusReason: string;
   if (input.archived) {
     status = "archived";
     statusReason = "Cursor marked this GUI agent archived.";
-  } else if (ageMs >= DEFAULT_QUIET_MS) {
+  } else if (ageMs >= quietMs) {
     status = "stale";
     statusReason = "Cursor session metadata has not changed in 45 minutes.";
   } else if (turnStatus && turnStatus !== "success") {
     status = "attention";
     statusReason = `Cursor recorded the last turn as ${turnStatus}.`;
-  } else if (ageMs < DEFAULT_FRESH_MS) {
+  } else if (ageMs < freshMs) {
     // Freshness wins over a stale turn_ended:"success" record. That record is the
     // last completed turn in the cumulative transcript and persists forever, so a
     // newly streaming turn (no new turn_ended yet) must not force the session idle.
@@ -277,22 +280,23 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
 
   const nowMs = input.nowMs ?? Date.now();
   const ageMs = Math.max(0, nowMs - input.updatedAtMs);
+  const { freshMs, quietMs } = input.thresholds ?? DEFAULT_LIFECYCLE_THRESHOLDS;
   // A non-success turn (aborted/error) stays terminal regardless of freshness, but a
   // fresh transcript (mtime advances mid-turn) wins over a stale turn_ended:"success"
   // so a newly streaming child is not forced idle the instant its first turn ends.
   const failed = Boolean(turnStatus) && turnStatus !== "success";
   const status: CollectedAgent["status"] =
     failed ? "stale"
-    : ageMs >= DEFAULT_QUIET_MS ? "stale"
-    : ageMs < DEFAULT_FRESH_MS ? "running"
+    : ageMs >= quietMs ? "stale"
+    : ageMs < freshMs ? "running"
     : turnStatus === "success" ? "stale"
     : "waiting";
   const statusReason =
     failed
       ? `Cursor child recorded the last turn as ${turnStatus}.`
-    : ageMs >= DEFAULT_QUIET_MS
+    : ageMs >= quietMs
       ? "Cursor child transcript has not changed in 45 minutes."
-    : ageMs < DEFAULT_FRESH_MS
+    : ageMs < freshMs
       ? "Cursor child transcript changed within the last 3 minutes."
     : turnStatus === "success"
       ? `Cursor child recorded the last turn as ${turnStatus}.`
@@ -683,6 +687,7 @@ async function cursorChildAgents(
   nowMs: number,
   windowMs: number,
   errors: string[] = [],
+  thresholds?: LifecycleThresholds,
 ): Promise<CollectedAgent[]> {
   if (!transcriptPath) return [];
   const directory = join(dirname(transcriptPath), "subagents");
@@ -718,6 +723,7 @@ async function cursorChildAgents(
       model: trackingModels.get(sessionId),
       updatedAtMs: file.mtimeMs,
       nowMs,
+      thresholds,
     });
   }));
   return agents.filter((agent): agent is CollectedAgent => Boolean(agent));
@@ -788,6 +794,7 @@ async function collectCursorGuiSessions(
   nowMs: number,
   windowMs: number,
   state: NonNullable<typeof cursorStateCache> | undefined,
+  thresholds?: LifecycleThresholds,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -851,10 +858,11 @@ async function collectCursorGuiSessions(
           archived: row.is_archived === 1,
           allowCwdFallback: false,
           nowMs,
+          thresholds,
         });
         if (parsed) {
           agents.push(parsed);
-          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs, errors));
+          agents.push(...await cursorChildAgents(parsed, transcriptPath, trackingModels, nowMs, windowMs, errors, thresholds));
         }
       } catch (error) {
         errors.push(`cursor GUI ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -899,6 +907,7 @@ export async function collectCursorSessions(
   home = homedir(),
   nowMs = Date.now(),
   windowMs = DEFAULT_CURSOR_SESSION_WINDOW_MS,
+  thresholds?: LifecycleThresholds,
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
@@ -985,12 +994,13 @@ export async function collectCursorSessions(
         subagentCount,
         store,
         nowMs,
+        thresholds,
       });
       if (parsed) agents.push(parsed);
     }),
   );
   const state = await cursorStateEvidence(home, errors);
-  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs, state);
+  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs, state, thresholds);
   errors.push(...gui.errors);
   const knownIds = new Set(agents.map((agent) => agent.id));
   for (const agent of gui.value) {

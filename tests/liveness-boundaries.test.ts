@@ -115,3 +115,34 @@ describe("collector activity bands", () => {
     expect(agent?.statusReason).toMatch(/session exit/i);
   });
 });
+
+describe("the bands are the operator's, not the compiler's", () => {
+  /* Until settings v2 these were `3 * 60_000` and `45 * 60_000` written inline
+     in two collectors. An operator running overnight swarms had no way to say
+     "45 minutes of silence is normal here" — the board simply told them their
+     sessions had gone stale. These assert the numbers now travel from the
+     settings store all the way to the comparison, through ParseMetadata. */
+  const withThresholds = (msAgo: number, freshMs: number, quietMs: number) =>
+    parseClaudeJsonl(transcript(msAgo), { ...at(msAgo), thresholds: { freshMs, quietMs } })?.status;
+
+  test("a widened freshness window keeps a session running that the default calls waiting", () => {
+    expect(statusAfter(10 * MINUTE).status).toBe("waiting");
+    expect(withThresholds(10 * MINUTE, 30 * MINUTE, 180 * MINUTE)).toBe("running");
+  });
+
+  test("a widened quiet threshold keeps a session waiting that the default calls stale", () => {
+    expect(statusAfter(90 * MINUTE).status).toBe("stale");
+    expect(withThresholds(90 * MINUTE, 10 * MINUTE, 180 * MINUTE)).toBe("waiting");
+  });
+
+  test("a tightened quiet threshold goes stale sooner, and still at its own boundary", () => {
+    expect(withThresholds(15 * MINUTE - 1, 2 * MINUTE, 15 * MINUTE)).toBe("waiting");
+    expect(withThresholds(15 * MINUTE, 2 * MINUTE, 15 * MINUTE)).toBe("stale");
+  });
+
+  test("omitting thresholds keeps the shipped defaults, so every existing caller is unaffected", () => {
+    expect(parseClaudeJsonl(transcript(MINUTE), at(MINUTE))?.status).toBe("running");
+    expect(parseClaudeJsonl(transcript(10 * MINUTE), at(10 * MINUTE))?.status).toBe("waiting");
+    expect(parseClaudeJsonl(transcript(90 * MINUTE), at(90 * MINUTE))?.status).toBe("stale");
+  });
+});
