@@ -54,6 +54,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | Module | Decides |
 |---|---|
 | `lifecycle.ts` | The one place a session's lifecycle is decided (`classifyLifecycle`): Working, Waiting, Unverified, or Finished, plus the provenance saying why. Its governing rule is that absence of evidence is not evidence of an ending — a quiet session with no process to check is `unverified`, never finished. The rules live outside the code, in `tests/fixtures/lifecycle-truth-table.json`, so every implementation of them can be executed against the same table |
+| `process-witness.ts` | What the board has witnessed about a session's process, persisted to `data/process-witness.json` so a restart stops erasing it. Process ids are only observable while a process is running, and they used to live in memory alone — so every kickstart destroyed the evidence that made a session's ending provable, and the board read 36 hours of transcripts having been up for minutes. Records carry the boot they were observed in, which is also what makes them safe: pids from an earlier boot cannot be live, so a witness from a previous boot *proves* the process is gone rather than merely dating it |
 | `snapshot-agent.ts` | Per-agent view: capabilities (`controlsFor`), activity, outcome, `contextPct` |
 | `snapshot-issues.ts`, `snapshot-operator-issues.ts` | What counts as a finding, and how identity conflicts split into live faults vs debris |
 | `snapshot-programs.ts` | Grouping agents into programs and their rollups |

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, uptime } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
 import { collectCmux, collectCmuxNotifications, DEFAULT_CMUX_EXECUTABLE } from "./cmux";
@@ -10,6 +10,12 @@ import type { ArchiveStore, CmuxNotification, CmuxSurface, CollectedAgent, Comma
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
+import {
+  applyProcessWitness,
+  currentBootId,
+  witnessesFromScan,
+  type ProcessWitnessStore,
+} from "./process-witness";
 import type { UsageSummary } from "./burnbar";
 import {
   candidateFor,
@@ -46,6 +52,11 @@ export class HubState {
   #sourceAbsent: Partial<Record<Provider, boolean>> = {};
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #liveAgentProcessIds?: number[];
+  /* Whether the last completed scan enumerated everything it needed to. Held
+     like #surfaces rather than recomputed per refresh, because a refresh that
+     skips cmux has not learned anything new about the process table either. */
+  #rosterComplete = false;
+  readonly #bootId: string;
   #refreshing?: Promise<HubSnapshot>;
   /* One naming pass at a time; a second refresh while one runs simply skips. */
   #naming?: Promise<void>;
@@ -80,7 +91,10 @@ export class HubState {
     /* Optional so every existing construction — and the tests are full of them —
        keeps the derived names rather than requiring a naming store. */
     private readonly sessionNames?: JsonSessionNameStore,
+    private readonly witnessStore?: ProcessWitnessStore,
+    bootId = currentBootId(uptime(), Date.now()),
   ) {
+    this.#bootId = bootId;
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = settingsReader?.();
     this.#scanWindowHours = bootSettings?.scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
@@ -353,6 +367,11 @@ export class HubState {
       this.#cmuxReachable = cmux.errors.length === 0;
       let identityErrors: string[] = [];
       let bindingErrors: string[] = [];
+      /* Cleared before the attempt, restored only by a scan that completed.
+         A degraded refresh must not keep answering "nothing claims this
+         session" on the strength of a scan that already finished — that is the
+         exact shape of claim this contract exists to refuse. */
+      this.#rosterComplete = false;
       if (this.#cmuxReachable) {
         this.#cmuxLastCheckedAt = cmuxAttemptAt ?? this.#cmuxLastCheckedAt;
         if (identityResult) {
@@ -360,6 +379,7 @@ export class HubState {
           this.#liveAgentProcessIds = identityResult.liveAgentProcessIds
             ? [...identityResult.liveAgentProcessIds]
             : undefined;
+          this.#rosterComplete = identityResult.rosterComplete === true;
           identityErrors = identityResult.errors;
         } else if (cmux.errors.length === 0) {
           identityErrors = [
@@ -388,7 +408,7 @@ export class HubState {
        record captured process evidence the snapshot never published and the
        snapshot published evidence the record never saw. Two answers about the
        same session in the same refresh, and the archive kept the older one. */
-    const publishedAgents = this.bindingStore
+    const bridgedAgents = this.bindingStore
       ? bridgeAgentsWithBindings(
           this.bindingStore,
           collectedAgents,
@@ -396,6 +416,22 @@ export class HubState {
           this.#liveAgentProcessIds,
         )
       : collectedAgents;
+    /* Then the persisted witnesses, for sessions this scan found nothing about.
+       After the bridge so a live observation always wins, and before both the
+       history write and the snapshot so the record and the board agree. */
+    const publishedAgents = this.witnessStore
+      ? applyProcessWitness(bridgedAgents, this.witnessStore, this.#bootId)
+      : bridgedAgents;
+    if (this.witnessStore && this.#rosterComplete) {
+      /* Only a completed scan may write witnesses: a partial one would record
+         "nothing was running" for sessions it simply never looked at, and that
+         lie would then outlive the restart it was meant to survive. */
+      try {
+        await this.witnessStore.record(witnessesFromScan(publishedAgents, this.#bootId, collectedAt));
+      } catch (error) {
+        console.error(`[HubState] process witness persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     try {
       await this.archiveStore.record?.(publishedAgents);
     } catch (error) {
@@ -434,6 +470,7 @@ export class HubState {
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
       thresholds,
+      processRosterComplete: this.#rosterComplete,
     }));
     this.#hasSourceSnapshot = true;
     this.#recentlyResolved = [...(built.recentlyResolved ?? [])];

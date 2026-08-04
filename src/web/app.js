@@ -6981,6 +6981,7 @@ function broadcastIneligibleReason(agent) {
     const why = provenanceOf(agent);
     if (why === "operator-archive") return "archived";
     if (why === "process-died") return "process died";
+    if (why === "process-absent") return "no process";
     return "finished";
   }
   const control = deriveControlState(agent);

@@ -31,6 +31,7 @@ export const PROVENANCE_LABELS = {
   "provider-exit": "Session exit recorded",
   "operator-archive": "You archived this",
   "process-died": "Process gone without a clean end",
+  "process-absent": "No running process claims it",
   "aged-out": "No longer watched",
   "turn-complete": "Turn done — waiting on you",
   "turn-complete-aged": "Turn done, no reply since",

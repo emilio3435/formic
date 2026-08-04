@@ -219,6 +219,9 @@ export function controlUnavailableText(controlState, agent = null) {
     if (why === "process-died" || livenessState(agent) === "died") {
       return "Controls are off because this session's process is gone — there is nothing left to receive them.";
     }
+    if (why === "process-absent") {
+      return "Controls are off because no running process claims this session — there is nothing left to receive them.";
+    }
   }
   /* Three sentences, because a refusal an operator cannot act on reads as a
      fault: what is off, why, and what turns it back on. Send is OFF here, not
@@ -553,7 +556,11 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
   /* Deliberately NOT branching on process-died here: the block below already
      owns that sentence, and owns it better — it is the one refusal on this
      board that offers no repair, because none exists. */
-  if (ended && why !== "process-died") {
+  /* `process-absent` is excluded alongside `process-died` for the same reason
+     and one more: nobody archived these. They are the sessions the roster found
+     nothing running for, and telling an operator they filed it themselves is a
+     false claim about their own actions. */
+  if (ended && why !== "process-died" && why !== "process-absent") {
     return {
       title: "You archived this session.",
       summary: "Controls are off because it is archived, not because anything failed.",
@@ -567,11 +574,17 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
       steps: [],
     };
   }
-  if (ended && (why === "process-died" || livenessState(agent) === "died")) {
+  if (ended && (why === "process-died" || why === "process-absent" || livenessState(agent) === "died")) {
     return {
       title: "This session's process is gone.",
       summary: "Controls are off because there is nothing left running to receive them.",
-      why: "The process was checked and is no longer there, so its terminal pane may since have been taken by something else."
+      /* Two different observations reach this sentence and it says which. The
+         board watched one set of pids disappear; for the other it never saw a
+         process at all and is arguing from a complete scan of the machine. Both
+         mean the same thing for controls; only one is a death it witnessed. */
+      why: (why === "process-absent"
+        ? "Every running process was listed and none of them is serving this session, so its terminal pane may since have been taken by something else."
+        : "The process was checked and is no longer there, so its terminal pane may since have been taken by something else.")
         + " Typing into it would reach whatever is there now.",
       /* Deliberately offers no recovery, because there is none. Every other
          refusal on this board ends with the thing that would fix it, and

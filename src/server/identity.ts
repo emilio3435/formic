@@ -175,6 +175,17 @@ interface CommandHintResolution {
 export interface IdentityCollectionResult extends CollectionResult<CmuxSurface[]> {
   /** Present only when a completed process scan observed the live recognized-agent PID set. */
   liveAgentProcessIds?: number[];
+  /**
+   * Every attribution path this scan uses ran to completion, so "no process
+   * claims this session" is an observation rather than a gap.
+   *
+   * Deliberately stricter than "the process table was readable". Attribution
+   * runs off BOTH `ps` and the open-file lookup, and a session whose only
+   * evidence is an open transcript fd is invisible when the second one fails.
+   * Setting this on a partial scan would turn those sessions into endings, so
+   * it is set on the one path where nothing was skipped.
+   */
+  rosterComplete?: boolean;
 }
 
 function resolveCommandHint(
@@ -424,14 +435,22 @@ export async function enrichCmuxIdentity(
     if (transcriptOpen) transcriptOpenAgents.add(key);
   };
   for (const [pid, paths] of openFiles) {
-    const openIdentity = primaryOpenIdentity(
-      paths.flatMap((path) => {
-        const hint = identityFromSessionPath(path);
-        return hint ? [hint] : [];
-      }),
-      agentsByIdentity,
-    );
-    if (openIdentity) addProcessEvidence(identityKey(openIdentity), pid, true);
+    /* EVERY session whose transcript this pid holds open, not the "primary"
+       one.
+
+       `primaryOpenIdentity` answers a different question — which session OWNS a
+       terminal pane — and returns undefined when several could, which is
+       correct for attributing a surface and wrong for liveness. An open file
+       descriptor is not a claim about ownership; it is proof that this process
+       is serving that session, and it is proof about each of them separately.
+       One Codex process holds every conversation in the desktop app open at
+       once: measured on this machine, 24 sessions had open transcripts and
+       picking a primary credited liveness to 7 of them. The other 17 read as
+       having no process at all. */
+    for (const path of paths) {
+      const hint = identityFromSessionPath(path);
+      if (hint) addProcessEvidence(identityKey(hint), pid, true);
+    }
   }
   for (const process of allProcesses) {
     for (const hint of identitiesFromCommand(process.command)) {
@@ -597,5 +616,9 @@ export async function enrichCmuxIdentity(
     }),
     errors,
     liveAgentProcessIds,
+    /* The only return that reaches here has read the process table AND the open
+       files without error; every earlier exit is a failure path that leaves
+       this undefined. */
+    rosterComplete: true,
   };
 }

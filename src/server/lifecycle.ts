@@ -42,11 +42,27 @@ export const DEFAULT_LIFECYCLE_THRESHOLDS: LifecycleThresholds = {
 
 /* What the process probe found — evidence, never a verdict.
 
-   "unavailable" is the value that matters. It covers three different failures
-   that all mean the same thing to a classifier: nothing checked, the check
-   failed, or the check ran and matched no process. Every one of them is "we do
-   not know", and none of them is "it died". */
-export type ProcessEvidence = "alive" | "dead" | "unavailable";
+   The four values are ranked by how much the board actually witnessed:
+
+   `alive`  — a running process claims this session right now.
+   `dead`   — we knew its pids and they are gone. The strongest ending evidence
+              there is, because it is about THIS session's processes.
+   `absent` — a COMPLETE process enumeration ran and nothing claims this
+              session. Weaker than `dead`: it is an argument from a roster
+              rather than from the session's own pids, so a session whose
+              process wears a name our attribution heuristics do not recognise
+              would land here wrongly. It only ends a session in the quiet band.
+   `unavailable` — nothing checked, or the check failed. The honest unknown.
+
+   THE DISTINCTION THIS SPLIT EXISTS FOR. `absent` and `unavailable` were one
+   value, and collapsing them cost the board most of its usefulness: pids are
+   only ever observed for processes running AT SCAN TIME, so a session that
+   exited before the board started could never be proven dead. The board reads
+   36 hours of transcripts while having been up for minutes, so 200 of 245
+   sessions sat permanently in `unverified` — a true statement that told an
+   operator nothing. A scan that ran and found nothing is an OBSERVATION. Only a
+   scan that could not run is a gap. */
+export type ProcessEvidence = "alive" | "dead" | "absent" | "unavailable";
 
 /* Which band the silence falls in. Bands are closed-open: age < fresh is
    "fresh", fresh <= age < quiet is "recent", age >= quiet is "quiet". */
@@ -66,6 +82,13 @@ export interface LifecycleEvidence {
   processAlive?: boolean;
   /** Process ids retained from a confirmed identity scan. */
   processIds?: readonly number[];
+  /**
+   * The scan enumerated every process on the machine and this session was not
+   * among the claimants. Set only when the enumeration itself succeeded — a
+   * timed-out or non-zero `ps` leaves it undefined, which is what keeps a failed
+   * probe reading as `unverified` instead of as an ending.
+   */
+  processRosterComplete?: boolean;
   /** Whether the session is still inside the collector's scan window. */
   scope?: CollectionScope;
   /**
@@ -96,9 +119,13 @@ export interface LifecycleVerdict {
 export function processEvidenceOf(evidence: {
   processAlive?: boolean;
   processIds?: readonly number[];
+  processRosterComplete?: boolean;
 }): ProcessEvidence {
   if (evidence.processAlive === true) return "alive";
   if (evidence.processAlive === false && (evidence.processIds?.length ?? 0) > 0) return "dead";
+  /* A complete enumeration that matched nothing. Ranked below `dead` on
+     purpose and read only in the quiet band — see the type comment. */
+  if (evidence.processRosterComplete === true) return "absent";
   return "unavailable";
 }
 
@@ -160,6 +187,8 @@ function finishedReason(provenance: LifecycleProvenance): string {
       return "Source recorded a session exit.";
     case "process-died":
       return "Process checked and gone; nothing ended cleanly.";
+    case "process-absent":
+      return "No running process claims this session.";
     default:
       return "Left the scan window without an ending — no longer watched.";
   }
@@ -262,6 +291,24 @@ export function classifyLifecycle(
       lifecycle: "waiting",
       provenance: "process-live-quiet",
       reason: `Quiet ${spokenAge(evidence.ageMs)} · process live.`,
+    };
+  }
+
+  /* Row 8b — quiet, and a complete process enumeration found nothing claiming
+     this session.
+
+     Reached only in the quiet band: rows 5-7 have already returned for anything
+     fresh or recent, which is exactly the protection this weaker evidence
+     needs. A session whose process our attribution heuristics fail to recognise
+     keeps writing its transcript, so it never gets here — it reads working or
+     waiting on recency alone. To be wrongly finished by this row a session must
+     be silent past the quiet threshold AND unrecognised by every attribution
+     path, and even then the next transcript write reverses it. */
+  if (proc === "absent") {
+    return {
+      lifecycle: "finished",
+      provenance: "process-absent",
+      reason: `Quiet ${spokenAge(evidence.ageMs)} and no running process claims this session.`,
     };
   }
 

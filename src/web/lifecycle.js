@@ -31,6 +31,10 @@ export const DEFAULT_LIFECYCLE_THRESHOLDS = {
 export function processEvidenceOf(evidence) {
   if (evidence.processAlive === true) return "alive";
   if (evidence.processAlive === false && (evidence.processIds?.length ?? 0) > 0) return "dead";
+  /* A COMPLETE enumeration that matched nothing is an observation, not a gap —
+     ranked below `dead` because it argues from a roster rather than from this
+     session's own pids, and read only in the quiet band. */
+  if (evidence.processRosterComplete === true) return "absent";
   return "unavailable";
 }
 
@@ -156,6 +160,17 @@ export function classifyLifecycle(evidence, thresholds = DEFAULT_LIFECYCLE_THRES
     };
   }
 
+  /* Row 8b — quiet, and a complete enumeration found nothing claiming it.
+     Reached only in the quiet band; rows 5-7 have already answered for anything
+     fresh or recent, which is the protection this weaker evidence needs. */
+  if (proc === "absent") {
+    return {
+      lifecycle: "finished",
+      provenance: "process-absent",
+      reason: `Quiet ${spokenAge(evidence.ageMs)} and no running process claims this session.`,
+    };
+  }
+
   // Row 9 — the turn ended long ago and nothing has answered since.
   if (turnComplete) {
     return {
@@ -209,6 +224,7 @@ export function evidenceFromAgent(agent, nowMs = Date.now()) {
     endEvidence: agent.endEvidence ?? (agent.status === "archived" ? "session-exit" : undefined),
     processAlive: agent.processAlive,
     processIds: agent.processIds,
+    processRosterComplete: agent.processRosterComplete,
     persisted: agent.scope === "retained"
       ? { lifecycle: agent.lifecycle, provenance: agent.provenance }
       : undefined,

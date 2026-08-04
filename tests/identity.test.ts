@@ -391,10 +391,22 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [parent, child], runner);
 
     expect(enriched.errors).toEqual([]);
+    /* The SURFACE still resolves to the root alone — that is what this test is
+       named for, and it is unchanged. One pane, one owner. */
     expect(enriched.value[0]?.sourceSessionIds).toEqual([parent.sourceSessionId]);
     expect(enriched.value[0]?.identityConflict).toBeUndefined();
     expect(parent).toMatchObject({ processIds: [202], processAlive: true });
-    expect(child.processIds).toBeUndefined();
+
+    /* LIVENESS, deliberately rewritten: this asserted the child had no process.
+       Pid 202 holds the child's transcript open, so the child is being served
+       right now, and "no process evidence" was never true of it — the old
+       expectation was reading a pane-ownership answer as a liveness one.
+
+       Harmless while nothing could end a session without pids; not harmless
+       once a completed scan can. The child was quiet and processless, which is
+       precisely the shape that now files as finished. Measured on this machine
+       before the fix: 17 sessions running at that moment, called finished. */
+    expect(child).toMatchObject({ processIds: [202], processAlive: true });
   });
 
   test("cmux process attribution recovers exact identity when terminal discovery omits the tty", async () => {

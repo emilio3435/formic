@@ -6,6 +6,7 @@ import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { runtimeCmuxExecutable } from "./cmux";
 import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
+import { JsonProcessWitnessStore } from "./process-witness";
 import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { archiveLimits, JsonSettingsStore } from "./settings";
@@ -34,6 +35,10 @@ const archiveStore = await JsonArchiveStore.open(
 const triageStore = await JsonTriageQueueStore.open(join(PROJECT_ROOT, "data/triage-queue.json"));
 const programAliasStore = await JsonProgramAliasStore.open(join(PROJECT_ROOT, "data/program-aliases.json"));
 const identityBindingStore = await JsonIdentityBindingStore.open(join(PROJECT_ROOT, "data/identity-bindings.json"));
+/* Process liveness the board has witnessed, kept across restarts. Without it a
+   kickstart erases every observation of a running session, and sessions the
+   board watched for hours become permanently unprovable. */
+const processWitnessStore = await JsonProcessWitnessStore.open(join(PROJECT_ROOT, "data/process-witness.json"));
 const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJECT_ROOT, "data/investigations"));
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
 /* Opened before the board so the very first snapshot already carries whatever
@@ -53,6 +58,7 @@ const state = new HubState(
   identityBindingStore,
   undefined,
   sessionNameStore,
+  processWitnessStore,
 );
 await state.refresh({ cmux: true });
 

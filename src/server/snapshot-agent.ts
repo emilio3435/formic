@@ -100,6 +100,8 @@ export function lifecycleFor(
     nowMs: number;
     thresholds?: LifecycleThresholds;
     persisted?: { lifecycle?: LifecycleState; provenance?: LifecycleProvenance };
+    /** The scan enumerated everything; see LifecycleEvidence. */
+    processRosterComplete?: boolean;
   },
 ): LifecycleVerdict {
   const updatedAtMs = Date.parse(agent.updatedAt);
@@ -110,6 +112,7 @@ export function lifecycleFor(
       endEvidence: agent.endEvidence,
       processAlive: agent.processAlive,
       processIds: agent.processIds,
+      processRosterComplete: input.processRosterComplete,
       scope: input.scope,
       persisted: input.persisted,
     },

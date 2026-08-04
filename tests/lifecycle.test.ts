@@ -55,11 +55,16 @@ describe("the truth table covers the contract it claims to", () => {
      buildSnapshot, rows 14-15 are the attention overlay — both are asserted
      where they live, because a classifier that never sees a notification cannot
      demonstrate that a notification leaves it alone. */
-  const CLASSIFIER_ROWS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  /* "8b" is a letter rather than a renumber on purpose: the rows are quoted by
+     number in ARCHITECTURE.md, in the plan, and in the comments of both
+     classifiers, and shifting nine of them to insert one would invalidate every
+     one of those references to buy nothing. */
+  const CLASSIFIER_ROWS: (number | string)[] = [1, 2, 3, 4, 5, 6, 7, 8, "8b", 9, 10, 11, 12];
 
   test("every classifier row in the contract has at least one case", () => {
+    const asText = (rows: (number | string)[]) => rows.map(String).sort();
     const covered = new Set(table.cases.map((entry) => entry.row));
-    expect([...covered].sort((a, b) => a - b)).toEqual(CLASSIFIER_ROWS);
+    expect(asText([...covered])).toEqual(asText(CLASSIFIER_ROWS));
   });
 
   test("no two cases share a name, so a failure names exactly one rule", () => {

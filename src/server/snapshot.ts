@@ -91,6 +91,13 @@ export interface SnapshotInput {
   scanWindowHours?: number;
   /** The operator's freshness and quiet bands; defaults when absent. */
   thresholds?: LifecycleThresholds;
+  /**
+   * The identity scan enumerated every process without error, so a session no
+   * process claims has been observed to be gone rather than merely unchecked.
+   * Absent on a degraded or skipped scan, which is what keeps those refreshes
+   * reporting `unverified` instead of inventing endings.
+   */
+  processRosterComplete?: boolean;
 }
 
 type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
@@ -251,6 +258,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       scope,
       nowMs,
       thresholds: input.thresholds,
+      /* Only the sessions this scan actually read. A retained record left the
+         scan window, so the live process table says nothing about it — offering
+         the roster as evidence there would re-end the whole filing cabinet on
+         grounds that never applied to it. */
+      processRosterComplete: scope === "observed" ? input.processRosterComplete : undefined,
       /* Records written before this contract carry no verdict of their own. The
          one thing still knowable about them is whether a human filed them, so
          that is what a legacy operator archive freezes as; everything else
@@ -336,6 +348,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,
       scope,
+      /* Published so the client's fallback classifier reaches the same verdict
+         from the same evidence. Only where it is true and only on observed
+         rows, so it costs nothing on the ~660 retained records it can never
+         apply to. */
+      ...(scope === "observed" && input.processRosterComplete ? { processRosterComplete: true } : {}),
       ...(notification ? { attention: true } : {}),
       processState,
       outcome,

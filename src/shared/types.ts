@@ -66,6 +66,11 @@ export type LifecycleProvenance =
   | "provider-exit"
   | "operator-archive"
   | "process-died"
+  /* A complete process enumeration ran and nothing claimed the session. Kept
+     distinct from `process-died` because the board never watched this one die:
+     it observed that nothing is running it now. Both are endings; only one of
+     them is a death the board witnessed, and History says which. */
+  | "process-absent"
   | "aged-out"
   | "recency"
   | "turn-complete"
@@ -322,6 +327,12 @@ export interface AgentSnapshot {
   attention?: boolean;
   /** Process/transcript lifecycle evidence; unknown means the sources cannot distinguish it safely. */
   processState?: ProcessState;
+  /* The scan that produced this row enumerated every process without error, so
+     a session nothing claims has been observed gone rather than left unchecked.
+     Published only where true and only on observed rows — the client's fallback
+     classifier needs the same evidence the server used, or the two disagree
+     about exactly the sessions this field exists to resolve. */
+  processRosterComplete?: boolean;
   outcome?: OutcomeState;
   controlState?: OperatorControlState;
   role?: AgentRole;
