@@ -5,10 +5,30 @@ import type {
   SurfaceOpenFileEvidence,
   SurfaceProcessEvidence,
 } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
 import { cmuxCommand, runtimeCmuxExecutable } from "./cmux";
 import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } from "./types";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/* The process name each provider runs under, spelled out as a total map so the
+   build fails when a Provider is added without saying what to look for.
+
+   This list going stale is worse than the collector list that went stale in
+   `state.ts`, because it fails in the opposite direction — silently, and toward
+   a confident wrong answer. A provider missing here gets NO process evidence,
+   and `processEvidenceOf` reads "the roster scan completed and nothing claims
+   this session" as `absent`, which the classifier treats as proof the session
+   ended. Factory shipped in exactly that state: three live-capable sessions
+   classified `finished / process-absent` because nothing here could see droid. */
+const PROVIDER_BINARIES: Record<Provider, string> = {
+  omp: "omp",
+  codex: "codex",
+  claude: "claude",
+  cursor: "cursor-agent",
+  factory: "droid",
+};
+const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
+const RESUME_PROVIDERS = PROVIDERS.join("|");
 /* Two attempts on a short deadline rather than one long one. The probe is
    almost the entire identity system on a fleet whose surfaces report no tty, so
    a single transient failure costs every write control until the next scan. */
@@ -58,6 +78,10 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
     ["omp", new RegExp(`\\/.omp\\/agent\\/sessions\\/.+?(?:_|\\/)(${UUID})\\.jsonl$`, "i")],
     ["codex", new RegExp(`\\/.codex\\/sessions\\/.+?rollout-.+?-(${UUID})\\.jsonl$`, "i")],
     ["claude", new RegExp(`\\/.claude\\/projects\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
+    /* Factory splits a session across <uuid>.jsonl and <uuid>.settings.json;
+       only the transcript is held open, and the `$` anchor keeps the settings
+       sibling from matching as a second identity for the same session. */
+    ["factory", new RegExp(`\\/.factory\\/sessions\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
@@ -73,12 +97,17 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     ["omp", new RegExp(`(?:^|[\\s/])omp\\b[^\\n]{0,160}?\\s(?:-r|--resume)\\s+(${UUID})(?:\\s|$)`, "i")],
     ["claude", new RegExp(`(?:^|[\\s/])claude\\b[^\\n]{0,160}?\\s(?:-r|--resume|--session-id)\\s+(${UUID})(?:\\s|$)`, "i")],
     ["cursor", new RegExp(`(?:^|[\\s/])cursor-agent\\b[^\\n]{0,160}?\\s--resume\\s+(${UUID})(?:\\s|$)`, "i")],
+    /* `--fork` resumes into a NEW session id, so it is a hint about the id that
+       follows it, exactly like the other two. */
+    ["factory", new RegExp(`(?:^|[\\s/])droid\\b[^\\n]{0,160}?\\s(?:-r|--resume|--fork)\\s+(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);
     if (match) hints.push({ provider, value: match[1].toLowerCase(), full: true });
   }
-  const resume = command.match(/\/cmux-agent-resume\/(omp|codex|claude|cursor)-([0-9a-f-]{8,36})(?:\.zsh)?(?:\s|$)/i);
+  const resume = command.match(
+    new RegExp(`\\/cmux-agent-resume\\/(${RESUME_PROVIDERS})-([0-9a-f-]{8,36})(?:\\.zsh)?(?:\\s|$)`, "i"),
+  );
   if (resume) {
     const value = resume[2].toLowerCase();
     hints.push({ provider: resume[1].toLowerCase() as Provider, value, full: new RegExp(`^${UUID}$`, "i").test(value) });
@@ -87,8 +116,14 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
 }
 
 export function isRecognizedAgentProcess(command: string): boolean {
-  return /(?:^|\s)(?:\S*\/)?(?:omp|codex|claude|cursor-agent)(?:\.(?:js|mjs|cjs))?(?:\s|$)/i.test(command) ||
-    /\/cmux-agent-resume\/(omp|codex|claude|cursor)-[0-9a-f-]{8,36}(?:\.zsh)?(?:\s|$)/i.test(command);
+  return new RegExp(
+    `(?:^|\\s)(?:\\S*\\/)?(?:${AGENT_BINARIES})(?:\\.(?:js|mjs|cjs))?(?:\\s|$)`,
+    "i",
+  ).test(command) ||
+    new RegExp(
+      `\\/cmux-agent-resume\\/(?:${RESUME_PROVIDERS})-[0-9a-f-]{8,36}(?:\\.zsh)?(?:\\s|$)`,
+      "i",
+    ).test(command);
 }
 
 function parseOpenFiles(output: string): Map<number, string[]> {
