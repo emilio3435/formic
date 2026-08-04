@@ -86,6 +86,32 @@ function configuredProgram(
   );
 }
 
+/* A disposable checkout an automation made, not a project a human works in.
+
+   `codex` with worktree isolation mints ~/.codex/worktrees/<hash>/<repo> per
+   run, and the board grouped by the FULL path while naming by the last folder —
+   so 270 automated runs became 179 program groups, 93 of them displaying the
+   single word "elio-intelligence-suite" and 86 displaying "LaHormigaDormida".
+   The History tab was mostly this, one identical row repeated.
+
+   The path is the signal, deliberately: nobody navigates to a directory named
+   after a random hash, so this needs no guess about intent and no matching
+   against task prose (which would have caught the runs whose first line happens
+   to say "autopilot" and missed the rest). Everything under one repo's
+   ephemeral tree collapses into one program, however deep the session sat
+   inside it — `<hash>/<repo>/desktop` is the same run as `<hash>/<repo>`. */
+const EPHEMERAL_WORKTREE = /\/\.codex\/worktrees\/[^/]+\/([^/]+)/;
+
+function ephemeralProgram(cwd: string): Omit<ProgramSnapshot, "agents"> | undefined {
+  const repo = EPHEMERAL_WORKTREE.exec(cwd)?.[1];
+  if (!repo) return undefined;
+  return {
+    id: `codex-worktrees-${slug(repo)}`,
+    name: `${repo} · automation`,
+    purpose: "Disposable Codex worktrees. One row per repository, not per run.",
+  };
+}
+
 export function programFor(
   agent: CollectedAgent,
   hints: readonly ProgramHint[],
@@ -101,6 +127,10 @@ export function programFor(
   }
   const cwd = exactSurface && surface?.cwd ? surface.cwd : agent.cwd;
   if (!cwd) return { id: `${agent.provider}-unassigned`, name: `${agent.provider.toUpperCase()} · No project` };
+  /* After the configured hints, so an explicit program hint still wins — an
+     operator who has named a program means it, whatever directory it ran in. */
+  const ephemeral = ephemeralProgram(cwd);
+  if (ephemeral) return ephemeral;
   const normalizedCwd = cwd.replace(/\/+$/, "");
   if (normalizedCwd === homedir().replace(/\/+$/, "")) {
     // cwd is literally ~ — not "unassigned", just not a project checkout.

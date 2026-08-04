@@ -334,3 +334,60 @@ describe("no provider path escapes the contract", () => {
     expect(new Set(names).size).toBe(2);
   });
 });
+
+describe("disposable automation checkouts collapse into one program", () => {
+  /* Measured on the live board 2026-08-04: 270 sessions living under
+     ~/.codex/worktrees/<hash>/<repo>, grouped into 179 programs — 93 of them
+     displaying the single word "elio-intelligence-suite" and 86 displaying
+     "LaHormigaDormida". The History tab was mostly one identical row repeated,
+     because grouping keyed on the full path while the name came from the last
+     folder. */
+  const run = (id: string, cwd: string): CollectedAgent =>
+    collected({ id: `codex:${id}`, sourceSessionId: id, cwd, originCwd: cwd });
+
+  const programsOf = (agents: CollectedAgent[]) =>
+    buildSnapshot({ agents, surfaces: [], archiveStore, now: new Date(NOW) }).programs;
+
+  test("many runs of one repo become one program, not one program per run", () => {
+    const programs = programsOf([
+      run("a", "/Users/ant/.codex/worktrees/5481/elio-intelligence-suite"),
+      run("b", "/Users/ant/.codex/worktrees/4af8/elio-intelligence-suite"),
+      run("c", "/Users/ant/.codex/worktrees/1644/elio-intelligence-suite"),
+    ]);
+    expect(programs).toHaveLength(1);
+    expect(programs[0]!.agents).toHaveLength(3);
+    expect(programs[0]!.name).toBe("elio-intelligence-suite · automation");
+  });
+
+  test("a session deeper inside the checkout is the same run, not a new program", () => {
+    /* `<hash>/<repo>/desktop` appears on the live board and would otherwise
+       split one repo's automation into a second group named "desktop". */
+    const programs = programsOf([
+      run("a", "/Users/ant/.codex/worktrees/bea9/LaHormigaDormida"),
+      run("b", "/Users/ant/.codex/worktrees/bea9/LaHormigaDormida/desktop"),
+    ]);
+    expect(programs).toHaveLength(1);
+  });
+
+  test("two different repos stay two programs", () => {
+    /* The collapse must not go so far that unrelated automation merges. */
+    const programs = programsOf([
+      run("a", "/Users/ant/.codex/worktrees/5481/elio-intelligence-suite"),
+      run("b", "/Users/ant/.codex/worktrees/bea9/LaHormigaDormida"),
+    ]);
+    expect(programs).toHaveLength(2);
+  });
+
+  test("a real checkout of the same repo is NOT folded into the automation row", () => {
+    /* The property that keeps this honest: the operator's own working copy is
+       where they actually work, and burying it in a pile of throwaway runs
+       would be worse than the duplication being removed. */
+    const programs = programsOf([
+      run("a", "/Users/ant/.codex/worktrees/5481/elio-intelligence-suite"),
+      run("b", "/Users/ant/Developer/elio-intelligence-suite"),
+    ]);
+    expect(programs).toHaveLength(2);
+    expect(programs.map((p) => p.name).sort())
+      .toEqual(["elio-intelligence-suite", "elio-intelligence-suite · automation"]);
+  });
+});
