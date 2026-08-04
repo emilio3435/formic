@@ -100,11 +100,27 @@ export function icon(name, opts = {}) {
   return svg;
 }
 
+/* How full is too full, in one place.
+
+   These numbers were written twice inside svgMeter and once more in the summary
+   card's tone, so a row could be painted calm while the dial above it read hot.
+   Everything that colours a context reading — the bar, the dial, and the row
+   highlight — asks this. */
+export const CONTEXT_PRESSURE = Object.freeze({ warn: 75, hot: 92 });
+
+export function contextPressureOf(pct) {
+  if (!Number.isFinite(pct)) return "";
+  if (pct >= CONTEXT_PRESSURE.hot) return "hot";
+  if (pct >= CONTEXT_PRESSURE.warn) return "warn";
+  return "";
+}
+
 /* SVG bar meter — width via geometry attributes, never inline style, so the
    strict CSP (style-src 'self') permits it. */
 export function svgMeter(pct, cls, opts = {}) {
   const clamped = Math.max(0, Math.min(100, pct));
-  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
+  const pressure = contextPressureOf(clamped);
+  const tone = pressure ? " " + pressure : "";
   const svg = document.createElementNS(SVGNS, "svg");
   svg.setAttribute("viewBox", "0 0 100 8");
   svg.setAttribute("preserveAspectRatio", "none");
@@ -117,6 +133,79 @@ export function svgMeter(pct, cls, opts = {}) {
   const track = svgChild(["rect", { x: 0, y: 0, width: 100, height: 8, rx: 4, class: opts.trackClass || "tm-track" }]);
   const fill = svgChild(["rect", { x: 0, y: 0, width: clamped, height: 8, rx: 4, class: (opts.fillClass || "tm-fill") + tone }]);
   svg.append(track, fill);
+  return svg;
+}
+
+/* Where a percentage sits on a half-circle dial, as a point on its arc.
+   Separated from the drawing so the geometry is testable without a DOM: 0% is
+   the left end, 100% the right, and the arc sweeps over the top. */
+export function gaugePoint(pct, radius = 42, cx = 50, cy = 50) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const angle = Math.PI * (1 - clamped / 100);
+  return {
+    x: Number((cx + radius * Math.cos(angle)).toFixed(3)),
+    y: Number((cy - radius * Math.sin(angle)).toFixed(3)),
+  };
+}
+
+/* The arc path for a half-circle dial from 0% to `pct`.
+   `large-arc` stays 0 because a semicircle never exceeds 180 degrees, and the
+   sweep is 1 because the arc runs clockwise over the top. */
+export function gaugeArc(pct, radius = 42, cx = 50, cy = 50) {
+  const start = gaugePoint(0, radius, cx, cy);
+  const end = gaugePoint(pct, radius, cx, cy);
+  /* A dial at exactly 0 must draw nothing. Emitting a zero-length arc leaves a
+     round cap sitting on the track, which reads as a small non-zero value. */
+  if (Math.max(0, Math.min(100, pct)) <= 0) return "";
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`;
+}
+
+/* SVG half-circle gauge — geometry attributes only, never inline style, so the
+   strict CSP (style-src 'self') permits it.
+
+   `marks` are secondary readings (median, average) drawn as ticks on the same
+   arc. They are ticks rather than second needles on purpose: the dial answers
+   "how full is the fullest window", and a second needle would read as a second
+   fleet rather than as context for the first. */
+export function svgGauge(pct, cls, opts = {}) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const pressure = contextPressureOf(clamped);
+  const tone = pressure ? " " + pressure : "";
+  const svg = document.createElementNS(SVGNS, "svg");
+  // 8 units of headroom below the dial so stroke caps are not clipped.
+  svg.setAttribute("viewBox", "0 0 100 58");
+  svg.setAttribute("class", cls);
+  svg.setAttribute("role", "progressbar");
+  svg.setAttribute("aria-valuemin", "0");
+  svg.setAttribute("aria-valuemax", "100");
+  svg.setAttribute("aria-valuenow", String(Math.round(clamped)));
+  if (opts.label) svg.setAttribute("aria-label", opts.label);
+
+  svg.append(svgChild(["path", {
+    d: gaugeArc(100, 42), fill: "none",
+    class: opts.trackClass || "gauge-track",
+  }]));
+  const arc = gaugeArc(clamped, 42);
+  if (arc) {
+    svg.append(svgChild(["path", {
+      d: arc, fill: "none",
+      class: (opts.fillClass || "gauge-fill") + tone,
+    }]));
+  }
+  for (const mark of opts.marks ?? []) {
+    if (!Number.isFinite(mark.pct)) continue;
+    const inner = gaugePoint(mark.pct, 34);
+    const outer = gaugePoint(mark.pct, 48);
+    const tick = svgChild(["line", {
+      x1: inner.x, y1: inner.y, x2: outer.x, y2: outer.y,
+      class: "gauge-mark" + (mark.cls ? " " + mark.cls : ""),
+    }]);
+    /* Named in the markup, not only in a legend: the tick is the thing a
+       pointer lands on, and a legend two lines down cannot answer "which one is
+       this". */
+    if (mark.label) tick.append(svgTitle(mark.label));
+    svg.append(tick);
+  }
   return svg;
 }
 

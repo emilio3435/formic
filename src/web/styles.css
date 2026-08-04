@@ -488,11 +488,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .reading-value.is-ok { color: var(--moss); }
 
 /* context meter reading */
-.ctx-meter { width: 100%; height: 8px; margin-top: 0.35rem; display: block; }
-.ctx-track { fill: var(--line); }
-.ctx-fill { fill: var(--moss); }
-.ctx-fill.warn { fill: var(--amber); }
-.ctx-fill.hot { fill: var(--ember); }
 
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
@@ -1080,27 +1075,52 @@ body.feed-frozen .programs { opacity: 0.62; }
 .filter-bar:empty { display: none; }
 .filter-bar > * { flex: none; }
 .filter-lead { position: sticky; left: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.15rem; background: var(--canvas); padding-right: 0.2rem; }
+/* A segmented control, not a row of loose chips.
+
+   These were dashed outlines, and a dashed border already means something
+   specific on this board — "not established fact", which is what the unverified
+   scan chip below still uses it for. Spending the same signal on an ordinary
+   time filter made the whole strip read as provisional and made the one chip
+   that IS provisional invisible. Solid, grouped, and the selected one filled. */
+.filter-group {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.filter-group .filter-chip { border: 0; border-radius: 0; min-height: 28px; }
+.filter-group .filter-chip + .filter-chip { border-left: 1px solid var(--line); }
 .filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.6rem;
+  padding: 0.25rem 0.65rem;
   min-height: 30px;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--muted);
-  border: 1px dashed var(--line-strong);
-  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
   background: var(--surface);
 }
-.filter-chip:hover { border-color: var(--muted); color: var(--ink); }
+.filter-chip:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
 .filter-chip .ico { width: 0.85rem; height: 0.85rem; opacity: 0.6; }
+/* Filled, not merely outlined. In a segmented control the selected item has to
+   win at a glance from across the desk; an 8% tint and a darker border did not. */
 .filter-chip.is-active {
-  color: var(--ink);
-  border-style: solid;
+  color: var(--surface);
   border-color: var(--ink);
-  background: color-mix(in srgb, var(--ink) 8%, var(--surface));
+  background: var(--ink);
 }
+.filter-chip.is-active:hover { background: var(--ink); color: var(--surface); }
+/* The scan-window control is not a filter — it opens an editor and changes a
+   server setting. Given its own affordance so it stops reading as the sixth
+   option in a group of five. */
+.filter-setting { gap: 0.4rem; font-weight: 600; }
+.filter-setting .ico { width: 0.8rem; height: 0.8rem; opacity: 0.75; }
+.filter-note { font-size: 11.5px; color: var(--faint); }
 /* A value the server never confirmed. Dashed border reuses the same "this is not
    established fact" language the unknown-liveness chip already speaks, and amber
    keeps it advisory — an unverified default is not an intervention. */
@@ -3086,13 +3106,58 @@ body.feed-frozen .programs { opacity: 0.62; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ---------- settings panel ---------- */
+/* ---------- settings ---------- */
 /* The board's timing thresholds, which decide what every session on it is
-   called. Styled as a disclosure rather than a modal: it is read beside the
-   board it changes, and the live preview line is only useful next to the
-   numbers it is predicting. */
-.settings-panel { border-bottom: 1px solid var(--rule); background: var(--surface-2); }
-.settings-inner { max-width: 62rem; margin: 0 auto; padding: 1rem 1.25rem 1.25rem; display: grid; gap: 0.75rem; }
+   called.
+
+   Now a modal. As a disclosure it pushed the entire board down the page when it
+   opened, so the numbers you were reasoning about moved the instant you went to
+   change them — and the preview line, which is the point of the panel, sat
+   below the fold on a laptop. A dialog holds still, dims what it is not about,
+   and gives Save somewhere to be that is not the bottom of a growing column. */
+.settings-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: start center;
+  padding: 4vh 1rem 1rem;
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+  overflow-y: auto;
+}
+.settings-panel[hidden] { display: none; }
+.settings-inner {
+  width: min(42rem, 100%);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 28%, transparent);
+  padding: 1.15rem 1.35rem 1.35rem;
+  display: grid;
+  gap: 0.75rem;
+}
+.settings-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.settings-close { border: 0; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0.2rem 0.4rem; border-radius: 5px; }
+.settings-close:hover { background: var(--surface-2); color: var(--ink); }
+/* The confirmation a successful save never had. Every save posted, persisted
+   and re-classified the board in silence, so the only way to tell it had worked
+   was to go looking for a number that had moved — which reads exactly like a
+   button that does nothing. */
+.settings-saved {
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border-left: var(--signal-rail) solid var(--moss);
+  background: var(--moss-soft);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.settings-error {
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border-left: var(--signal-rail) solid var(--ember);
+  background: color-mix(in srgb, var(--ember) 10%, transparent);
+  font-size: 0.85rem;
+}
 .settings-inner h2 { font-size: 1rem; margin: 0; }
 .settings-lede { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .settings-presets { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
@@ -3105,7 +3170,50 @@ body.feed-frozen .programs { opacity: 0.62; }
 .settings-preview { margin: 0; padding: 0.5rem 0.65rem; border-left: var(--signal-rail) solid var(--working); background: var(--moss-soft); font-size: 0.85rem; }
 .settings-advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 .settings-advanced[open] { display: grid; gap: 0.75rem; }
-.settings-actions { display: flex; gap: 0.5rem; }
+.settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
+.settings-actions .settings-spacer { flex: 1; }
+/* The half-circle context dial and its median/average ticks. */
+/* Sized to sit in a dense strip, not to be the hero of it. At 8.5rem the dial
+   was taller than the number it annotates and pushed the card past its
+   neighbours; the band's job is five readings at a glance. */
+.ctx-gauge { width: 100%; max-width: 5rem; height: auto; display: block; }
+.reading-sub:has(.ctx-gauge) { display: flex; align-items: center; gap: 0.15rem; }
+.gauge-track { stroke: var(--line); stroke-width: 10; stroke-linecap: round; }
+.gauge-fill { stroke: var(--moss); stroke-width: 10; stroke-linecap: round; }
+.gauge-fill.warn { stroke: var(--amber); }
+.gauge-fill.hot { stroke: var(--ember); }
+/* Ticks, not needles: the dial answers "how full is the fullest window", and a
+   second needle would read as a second fleet rather than as context for it. */
+.gauge-mark { stroke: var(--muted); stroke-width: 2; }
+.gauge-mark.is-average { stroke: var(--faint); stroke-dasharray: 3 2; }
+.spread-toggle {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 5px;
+  padding: 0.1rem 0.35rem;
+  margin-left: 0.4rem;
+}
+.spread-toggle:hover { color: var(--ink); border-color: var(--muted); }
+/* Context pressure on a row, from the same thresholds the dial paints with.
+   A left rail rather than a background wash: the row backgrounds are already
+   spoken for by outcome (needs-you, blocked, failed), and a second wash would
+   mix into a colour that means neither. */
+.agent-row.ctx-warn { box-shadow: inset 3px 0 var(--amber); }
+.agent-row.ctx-hot { box-shadow: inset 3px 0 var(--ember); }
+/* Attention still owns the rail when both apply — a session asking for a human
+   outranks one that is merely filling its window. */
+.agent-row.is-needs-you.ctx-warn, .agent-row.is-needs-you.ctx-hot { box-shadow: inset 4px 0 var(--needs); }
+/* Which is why the reading itself is coloured too. The rail is one channel and
+   attention already owns it, so on exactly the busiest rows — the ones both
+   asking for a human AND close to full — a rail-only highlight is invisible.
+   The number carries it independently and is where the eye goes to check. */
+.agent-row.ctx-warn .ri-model .ri-value { color: var(--amber); font-weight: 700; }
+.agent-row.ctx-hot .ri-model .ri-value { color: var(--ember); font-weight: 700; }
 /* The Unverified group inside Waiting: quiet and set apart, never styled as
    finished work. */
 .unverified-group { border-top: 1px dashed var(--unverified); margin-top: 0.5rem; padding-top: 0.5rem; }

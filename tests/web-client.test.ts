@@ -5933,14 +5933,14 @@ describe("FE-B: harness-backed client behavior", () => {
 
     // Settings answered: the number is reported, so state it plainly.
     const ok = textOfChip({ scanWindowHours: 12, settingsError: "" });
-    expect(textOf(ok)).toContain("12h window");
+    expect(textOf(ok)).toContain("Collecting last 12h");
     expect(ok.className).not.toContain("is-unverified");
 
     // Settings failed and no snapshot corroborates it: say so instead of
     // passing the built-in default off as the server's answer.
     const bad = textOfChip({ scanWindowHours: 36, settingsError: "settings 500" });
-    expect(textOf(bad)).toContain("window unverified");
-    expect(textOf(bad)).not.toContain("36h window");
+    expect(textOf(bad)).toContain("Collecting: unverified");
+    expect(textOf(bad)).not.toContain("Collecting last 36h");
     expect(bad.className).toContain("is-unverified");
     expect(bad.attributes.title).toContain("settings 500"); // the reason is reachable
     expect(bad.attributes.title).toContain("36h");          // and so is the fallback used
@@ -5952,7 +5952,7 @@ describe("FE-B: harness-backed client behavior", () => {
       settingsError: "settings 500",
       snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
     });
-    expect(textOf(rescued)).toContain("24h window");
+    expect(textOf(rescued)).toContain("Collecting last 24h");
     expect(rescued.className).not.toContain("is-unverified");
   });
 
@@ -8599,6 +8599,84 @@ describe("the lifecycle contract on the board itself", () => {
     expect(M.settingsPreview(snap, 2, 15, now)).toMatchObject({ working: 1, waiting: 1, unverified: 1 });
     // Long-running keeps ten minutes of silence inside Working.
     expect(M.settingsPreview(snap, 10, 180, now)).toMatchObject({ working: 2, waiting: 1, unverified: 0 });
+  });
+
+  /* THE REPORTED BUG, in the operator's words: "the settings don't stick, the
+     save button doesn't work."
+
+     It did work. It posted, the server persisted, and the board reclassified —
+     all of it in total silence. A write that changes what every session on the
+     board is called and then says nothing is indistinguishable from a dead
+     button, and it was reported as one. The panel now answers either way. */
+  test("a save that worked says so, and one that failed says why", async () => {
+    /* The verdict is written into a stable node in place, rather than appended
+       as a child, so that it can appear, change and expire without rebuilding
+       the form around it — see renderSettingsVerdict. */
+    const verdictText = () => {
+      const node = domById.get("settings-verdict");
+      return node ? String(node.textContent ?? "") : "";
+    };
+
+    await withState({
+      settingsPanelOpen: true,
+      settings: { version: 2, activityFreshMinutes: 3, activityQuietMinutes: 45 },
+      settingsSavedAt: Date.now(),
+      settingsSaveError: "",
+      snap: null,
+    }, () => withDom(() => {
+      M.renderSettingsPanel();
+      expect(verdictText()).toContain("Saved");
+      // And it says what the save actually did, not merely that a request went.
+      expect(verdictText()).toContain("using these numbers now");
+    }));
+
+    /* The server rejects rather than clamping, so its sentence IS the answer.
+       A toast alone would fade and leave an operator staring at a value they
+       believe they saved. */
+    await withState({
+      settingsPanelOpen: true,
+      settings: { version: 2, activityFreshMinutes: 3, activityQuietMinutes: 45 },
+      settingsSavedAt: Date.now(),
+      settingsSaveError: "activityQuietMinutes must be greater than activityFreshMinutes",
+      snap: null,
+    }, () => withDom(() => {
+      M.renderSettingsPanel();
+      expect(verdictText()).toContain("Not saved");
+      expect(verdictText()).toContain("must be greater than");
+      // The two verdicts must never render together — an error outranks a
+      // stale success stamp, or the panel contradicts itself.
+      expect(verdictText()).not.toContain("using these numbers now");
+    }));
+
+    // Nothing saved this session: no verdict at all, rather than a hopeful one.
+    await withState({
+      settingsPanelOpen: true,
+      settings: { version: 2, activityFreshMinutes: 3, activityQuietMinutes: 45 },
+      settingsSavedAt: 0,
+      settingsSaveError: "",
+      snap: null,
+    }, () => withDom(() => {
+      M.renderSettingsPanel();
+      expect(verdictText()).not.toContain("Saved");
+      expect(verdictText()).not.toContain("Not saved");
+    }));
+  });
+
+  /* A confirmation that outlives the thing it confirms is a lie in waiting:
+     reopening to "Saved" from ten minutes ago confirms a write the operator has
+     stopped thinking about. */
+  test("the saved confirmation expires rather than persisting", async () => {
+    await withState({
+      settingsPanelOpen: true,
+      settings: { version: 2, activityFreshMinutes: 3, activityQuietMinutes: 45 },
+      settingsSavedAt: Date.now() - 60_000,
+      settingsSaveError: "",
+      snap: null,
+    }, () => withDom(() => {
+      M.renderSettingsPanel();
+      const node = domById.get("settings-verdict");
+      expect(node ? String(node.textContent ?? "") : "").not.toContain("Saved");
+    }));
   });
 
   test("the preview sentence names all four states in the operator's words", () => {

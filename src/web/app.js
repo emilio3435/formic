@@ -4,7 +4,7 @@
    Pure helpers are exposed on globalThis.TheAntHill so tests can import this
    file directly; DOM wiring only runs when a document exists. */
 
-import { $, el, icon, SVGNS, svgChild, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
+import { $, contextPressureOf, el, icon, SVGNS, svgChild, svgGauge, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
 import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
@@ -143,6 +143,7 @@ import {
   DEFAULT_LOOKBACK_HOURS,
   DEFAULT_WIDGET_IDS,
   LOOKBACK_PRESETS,
+  CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
   MODEL_POLICY_LABELS,
   OPS_VIEWS,
@@ -1057,13 +1058,30 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        drawer's context tile had, whose fix never reached the band. Peak alone
        hides the shape of the fleet, so the median stays: one agent at 90% and
        every agent at 90% are the same headline and very different situations. */
-    const spread = median != null ? `Median ${median}%` : "Highest observed";
+    const average = Number.isFinite(snap.contextAverage) ? snap.contextAverage : null;
+    /* Which secondary reading the sublabel spells out. Both are always drawn on
+       the dial; this only decides which one gets words, because the pair
+       disagreeing is the informative case and two sentences would bury it. */
+    const spreadMode = state.contextSpread === "average" ? "average" : "median";
+    const chosen = spreadMode === "average" ? average : median;
+    const spread = chosen != null
+      ? `${spreadMode === "average" ? "Average" : "Median"} ${chosen}%`
+      : "Highest observed";
     return {
       value: peak && display === "tokens" ? contextDisplayValue(peak.agent.tokens, display) : pct + "%",
       unit: display === "tokens" && peak ? "" : "peak window",
       sublabel: spread + coverage,
       tone: pct >= 85 ? "hot" : "ok",
       meterPct: pct,
+      /* Drawn as ticks on the same arc as the peak. Kept separate from
+         `meterPct` so the dial can show the fleet's shape without any of them
+         competing to be the headline. */
+      gaugeMarks: [
+        median != null ? { pct: median, cls: "is-median", label: `Median ${median}%` } : null,
+        average != null ? { pct: average, cls: "is-average", label: `Average ${average}%` } : null,
+      ].filter(Boolean),
+      spreadMode,
+      spreadToggleable: median != null && average != null,
     };
   }
   return noDataWidget("Widget evidence is not available.");
@@ -1191,6 +1209,17 @@ function elapsedTickText(base, fromIso, now, frozen) {
 }
 
 
+function loadContextSpread() {
+  try {
+    const raw = localStorage.getItem(CONTEXT_SPREAD_KEY);
+    // Anything else falls to the documented default rather than trusting a
+    // stored value the product may no longer speak.
+    state.contextSpread = raw === "average" ? "average" : "median";
+  } catch {
+    state.contextSpread = "median";
+  }
+}
+
 function loadLookback() {
   try {
     const raw = localStorage.getItem(LOOKBACK_STORAGE_KEY);
@@ -1261,6 +1290,7 @@ async function postScanWindow(hours) {
    verbatim rather than replaced with a generic failure. */
 async function postSettings(patch) {
   state.settingsPending = true;
+  state.settingsSaveError = "";
   renderFilterBar();
   try {
     const res = await apiFetch("/api/settings", {
@@ -1273,12 +1303,24 @@ async function postSettings(patch) {
     state.settings = body.settings || state.settings;
     const hours = Number(body.scanWindowHours);
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    /* Say so. A save that posted, persisted and re-classified the whole board in
+       silence is indistinguishable from a button that does nothing, which is
+       exactly how it was reported. The stamp is what the panel confirms
+       against, so it survives the re-render that follows. */
+    state.settingsSavedAt = Date.now();
+    state.settingsError = "";
     /* A settings change re-classifies the board, so the numbers an operator is
        looking at have to be the ones their new thresholds produced. */
     await fetchSnapshot();
     return true;
   } catch (error) {
-    toast(error instanceof Error ? error.message : String(error), "err");
+    const message = error instanceof Error ? error.message : String(error);
+    /* Kept on the panel as well as in the toast. The server rejects rather than
+       clamps, so the message IS the answer — and a toast that has faded leaves
+       an operator staring at a value they think they saved. */
+    state.settingsSaveError = message;
+    state.settingsSavedAt = 0;
+    toast(message, "err");
     return false;
   } finally {
     state.settingsPending = false;
@@ -1798,6 +1840,8 @@ function render() {
   renderNotifyToggle();
   renderTabs();
   renderFilterBar();
+  // Its own step, not a tail of the widget paint — see renderPulseStrip.
+  renderSettingsPanel();
   renderPrograms();
   renderActionsPanel();
   renderInspector();
@@ -1951,9 +1995,32 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   }
   const subNode = el("span", { class: "reading-sub" });
   if (data.meterPct != null) {
-    subNode.append(svgMeter(data.meterPct, "ctx-meter", {
-      fillClass: "ctx-fill", trackClass: "ctx-track", label: `Peak context ${data.meterPct}%`,
+    subNode.append(svgGauge(data.meterPct, "ctx-gauge", {
+      fillClass: "gauge-fill",
+      trackClass: "gauge-track",
+      marks: data.gaugeMarks,
+      /* The accessible name carries every reading the dial draws. A gauge whose
+         label names only the needle hides the two ticks from anyone not looking
+         at it, which is most of the point of drawing them. */
+      label: [`Peak context ${data.meterPct}%`, ...(data.gaugeMarks ?? []).map((mark) => mark.label)].join(", "),
     }));
+    /* The toggle only appears when there are two readings to choose between —
+       offering it with one is a control that does nothing, which this codebase
+       treats as a lie about capability everywhere else. */
+    if (data.spreadToggleable) {
+      subNode.append(el("button", {
+        type: "button",
+        class: "spread-toggle",
+        dataset: { fkey: "context-spread" },
+        title: "Switch the reading below between the median and the average",
+        "aria-label": `Showing the ${data.spreadMode}. Switch to the ${data.spreadMode === "average" ? "median" : "average"}.`,
+        onclick: () => {
+          state.contextSpread = state.contextSpread === "average" ? "median" : "average";
+          try { localStorage.setItem(CONTEXT_SPREAD_KEY, state.contextSpread); } catch { /* private mode */ }
+          render();
+        },
+      }, data.spreadMode === "average" ? "avg" : "med"));
+    }
   }
   // A Degraded verdict names its reason (the top live finding) beside the chip
   // and exposes the existing refresh control right there.
@@ -2108,12 +2175,85 @@ function renderSettingsPreview() {
     : settingsPreviewText(settingsPreview(state.snap, fresh, quiet));
 }
 
+/* Closing clears both verdicts. Reopening to a stale "Saved" from ten minutes
+   ago would confirm a save the operator is no longer thinking about, and a
+   stale error would report a failure they already fixed. */
+function closeSettingsPanel() {
+  state.settingsPanelOpen = false;
+  state.settingsSavedAt = 0;
+  state.settingsSaveError = "";
+  render();
+  $("settings-toggle")?.focus();
+}
+
+/* The save verdict, written into a node that already exists.
+
+   Confirmation is time-boxed: leaving "Saved" up while an operator types the
+   next value would confirm the wrong thing. A rejection is NOT time-boxed and
+   outranks a stale success — the server rejects rather than clamping, so its
+   sentence is the answer, and the value that earned it is still in the field
+   waiting to be corrected. */
+function renderSettingsVerdict() {
+  const node = $("settings-verdict");
+  if (!node) return;
+  const savedRecently = Boolean(state.settingsSavedAt) && Date.now() - state.settingsSavedAt < 20_000;
+  if (state.settingsSaveError) {
+    node.hidden = false;
+    node.className = "settings-error";
+    node.setAttribute("role", "alert");
+    node.textContent = "Not saved. " + state.settingsSaveError;
+    return;
+  }
+  if (savedRecently) {
+    node.hidden = false;
+    node.className = "settings-saved";
+    node.setAttribute("role", "status");
+    node.textContent = "Saved. The board is using these numbers now.";
+    return;
+  }
+  node.hidden = true;
+  node.className = "";
+  node.textContent = "";
+}
+
 function renderSettingsPanel() {
   const panel = $("settings-panel");
   const toggle = $("settings-toggle");
   if (!panel || !toggle) return;
   panel.hidden = !state.settingsPanelOpen;
   toggle.setAttribute("aria-expanded", String(state.settingsPanelOpen));
+  // A dialog, so assistive tech treats the board behind it as inert rather than
+  // as a region the reader can wander into while a modal is up.
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-modal", "true");
+  /* Clicking the dimmed area closes. Guarded on the target being the backdrop
+     itself, or a click that merely started inside the dialog and drifted out
+     would dismiss the form mid-edit. */
+  panel.onclick = (event) => { if (event.target === panel) closeSettingsPanel(); };
+
+  /* Rebuild only when something about the SETTINGS changed — deliberately not
+     on every snapshot.
+
+     This panel is a form. It repaints with the board now (it has to, or a save
+     never confirms), and a form rebuilt every four seconds discards whatever
+     the operator was halfway through typing. The signature covers the server's
+     values and the save verdicts; the live preview below is refreshed on every
+     paint regardless, because it is the one part that must follow the board and
+     the one part that can be updated without touching an input. */
+  const sig = [
+    state.settingsPanelOpen ? "1" : "0",
+    JSON.stringify(state.settings ?? null),
+    state.settingsPending ? "1" : "0",
+  ].join("\u001f");
+  if (paintUnchanged("settings", sig)) {
+    /* The two things that must follow the board without disturbing the form:
+       the preview, which predicts what these numbers do, and the save verdict,
+       which is time-boxed and would otherwise expire by rebuilding the panel
+       out from under whatever is being typed. */
+    renderSettingsPreview();
+    renderSettingsVerdict();
+    return;
+  }
   // textContent = "" is this client's clear idiom; replaceChildren is not part
   // of the minimal DOM the headless harness implements.
   panel.textContent = "";
@@ -2122,7 +2262,13 @@ function renderSettingsPanel() {
   const fresh = s.activityFreshMinutes ?? 3;
   const quiet = s.activityQuietMinutes ?? 45;
   panel.append(el("div", { class: "settings-inner" },
-    el("h2", { id: "settings-panel-title", text: "Settings" }),
+    el("div", { class: "settings-head" },
+      el("h2", { id: "settings-panel-title", text: "Settings" }),
+      el("button", {
+        type: "button", class: "settings-close", "aria-label": "Close settings",
+        dataset: { fkey: "settings-close" },
+        onclick: closeSettingsPanel,
+      }, "×")),
     el("p", { class: "settings-lede", text: "How long silence has to last before this board changes what it calls a session." }),
     el("div", { class: "settings-presets" },
       el("span", { class: "settings-help", text: "Presets fill the fields below:" }),
@@ -2153,6 +2299,10 @@ function renderSettingsPanel() {
       settingsField("historyRecordLimit", "History record cap",
         "At most this many History records are kept. 100–50000.",
         s.historyRecordLimit ?? 5000, 100, 50000)),
+    /* The two answers a save can give, said where the save happened. A stable
+       node rather than a conditional child, so it can appear, change and expire
+       without rebuilding the form around it. */
+    el("p", { id: "settings-verdict", hidden: "" }),
     el("div", { class: "settings-actions" },
       el("button", {
         type: "button", class: "btn btn-primary", dataset: { fkey: "settings-save" },
@@ -2174,8 +2324,14 @@ function renderSettingsPanel() {
             historyRetentionDays: 30, historyRecordLimit: 5000,
           });
         },
-      }, "Reset all"))));
+      }, "Reset all"),
+      el("span", { class: "settings-spacer" }),
+      el("button", {
+        type: "button", class: "btn", dataset: { fkey: "settings-done" },
+        onclick: closeSettingsPanel,
+      }, "Done"))));
   renderSettingsPreview();
+  renderSettingsVerdict();
 }
 
 function renderWidgetCustomizer() {
@@ -2382,7 +2538,16 @@ function renderHealthRail() {
   }
   renderPulseFindings(model);
   renderWidgetCustomizer();
-  renderSettingsPanel();
+  /* renderSettingsPanel used to be called here, and it was the "settings do not
+     stick" bug. This function returns early whenever the WIDGET paint signature
+     is unchanged — a quiet fleet, most of the time — and the settings panel sat
+     downstream of that guard. So a save posted, the server persisted it, the
+     board reclassified, and the panel never repainted: no confirmation, and the
+     fields still showing the values from before the save. Both symptoms of one
+     cause, and neither reproducible on a board whose numbers happened to move.
+
+     It is a sibling of the widgets now, not a tail of them, and it keeps its own
+     signature below. */
 }
 
 /* ---------- issues ---------- */
@@ -3459,13 +3624,17 @@ function filterChip(label, active, onclick, opts = {}) {
     type: "button",
     // is-unverified marks a chip whose value the server never confirmed, so a
     // built-in default cannot pass for a reported one.
-    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : ""),
-    "aria-pressed": String(Boolean(active)),
+    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : "")
+      + (opts.className ? " " + opts.className : ""),
+    /* aria-pressed only where there is a pressed state to report. The scan
+       control opens an editor rather than toggling, and announcing it as an
+       unpressed toggle told a screen reader the opposite of what it does. */
+    ...(opts.className === "filter-setting" ? {} : { "aria-pressed": String(Boolean(active)) }),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
     dataset: opts.fkey ? { fkey: opts.fkey } : null,
     onclick,
-  }, label);
+  }, opts.icon ? icon(opts.icon) : null, label);
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
@@ -3510,28 +3679,40 @@ function renderFilterBar(ui = state) {
   }
   bar.hidden = false;
   bar.setAttribute("aria-hidden", "false");
-  bar.append(el("span", { class: "filter-lead", text: "Lookback" }));
+  /* "Lookback" named the mechanism, not the question. Both controls here are
+     about time and neither said whose time, so the pair read as one setting
+     with two halves — which is exactly the confusion, because they act on
+     different things: this one hides rows in the browser, the next one changes
+     what the server collects. */
+  bar.append(el("span", { class: "filter-lead", text: "Show sessions from" }));
+  const lookbackGroup = el("div", {
+    class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
+  });
   for (const hours of LOOKBACK_PRESETS) {
-    bar.append(filterChip(hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours), {
-      fkey: "lookback:" + hours,
-    }));
+    lookbackGroup.append(filterChip(
+      "Last " + hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours),
+      { fkey: "lookback:" + hours, title: `Hide sessions with no activity in the last ${hours} hours` },
+    ));
   }
-  bar.append(filterChip("All", ui.lookbackHours == null, () => setLookbackHours(null), {
-    title: "Show every session inside the collector scan window",
+  lookbackGroup.append(filterChip("Everything", ui.lookbackHours == null, () => setLookbackHours(null), {
+    title: "Show every session the collectors hold, however old",
     fkey: "lookback:all",
   }));
   const customActive = ui.lookbackHours != null && !LOOKBACK_PRESETS.includes(ui.lookbackHours);
-  bar.append(filterChip(
-    customActive ? ("Custom " + ui.lookbackHours + "h") : "Custom",
+  lookbackGroup.append(filterChip(
+    customActive ? ("Last " + ui.lookbackHours + "h") : "Custom…",
     customActive,
     () => {
-      const raw = window.prompt("Lookback hours", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
+      const raw = window.prompt("Show sessions active in the last how many hours?", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
       if (raw == null) return;
       setLookbackHours(raw);
     },
-    { fkey: "lookback:custom" },
+    { fkey: "lookback:custom", title: "Choose your own number of hours" },
   ));
-  bar.append(el("span", { class: "filter-lead", text: "Scan" }));
+  bar.append(lookbackGroup);
+  /* Says who it affects, because it is the one control on this bar that is not
+     about your browser. */
+  bar.append(el("span", { class: "filter-note", text: "· your view only" }));
   /* The snapshot is the authoritative carrier; /api/settings is the boot path
      that fills this in before one arrives. When neither answered, the number is
      a hard-coded default, and printing "36h window" claims the server confirmed
@@ -3540,19 +3721,28 @@ function renderFilterBar(ui = state) {
   const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
   const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
   const unverified = !confirmed && !!ui.settingsError;
+  /* Reads as a setting you are about to change, not as a filter you might
+     select. It was styled identically to the lookback chips beside it while
+     doing something entirely different — clicking it writes to the server and
+     changes what every browser sees. */
   bar.append(filterChip(
-    unverified ? "window unverified" : scanHours + "h window",
+    unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
     false,
     () => {
-      const raw = window.prompt("Collector scan window hours (1–168)", String(scanHours));
+      const raw = window.prompt(
+        "How far back should collectors read transcripts? Hours, 1-168.\n\nThis changes what the server harvests for everyone, not just this browser.",
+        String(scanHours),
+      );
       if (raw == null) return;
       void postScanWindow(raw);
     },
     {
       disabled: ui.settingsPending,
+      className: "filter-setting",
+      icon: "settings",
       title: unverified
-        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h."
-        : "How far back collectors harvest sessions",
+        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Click to set it."
+        : "How far back collectors read transcripts. Sessions older than this leave the board. Click to change — affects everyone.",
       fkey: "scan-window",
       alert: unverified,
     },
@@ -4524,6 +4714,19 @@ function renderAgentRow(agent, program, opts = {}) {
     (activity === "ended" ? " is-ended" : "") +
     (state.selecting ? " is-selecting" : "") +
     (checked ? " is-checked" : "") +
+    /* Context pressure, from the same thresholds the summary dial paints with,
+       so a row can never read calm under a dial reading hot. Only on rows still
+       doing something: a finished session at 96% is a fact about a window
+       nobody is going to fill, and colouring it would spend the operator's
+       attention on work that already stopped. */
+    /* Spelled out rather than built from the pressure word, so the class names
+       exist as literals in this file — the styles.css orphan guard reads the
+       source, and a concatenated name is invisible to it in both directions. */
+    ((() => {
+      if (isTerminal(agent)) return "";
+      const pressure = contextPressureOf(ctxPct);
+      return pressure === "hot" ? " ctx-hot" : pressure === "warn" ? " ctx-warn" : "";
+    })()) +
     (editing ? " is-renaming" : "");
 
   const children = [];
@@ -7859,6 +8062,7 @@ function boot() {
   loadOverrides();
   loadWidgetPreferences();
   loadLookback();
+  loadContextSpread();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
   renderNotifyToggle();
@@ -7917,6 +8121,12 @@ function boot() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
+    /* Ahead of the rest: it is a modal, and a modal that ignores Escape is the
+       one dismissal every operator tries first. */
+    if (state.settingsPanelOpen) {
+      closeSettingsPanel();
+      return;
+    }
     if (state.confirming) {
       // state.confirming holds the full instance fkey ("[head:]act:<id>:<action>"),
       // so Escape restores focus to the exact instance that opened the strip.

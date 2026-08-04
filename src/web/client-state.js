@@ -39,6 +39,8 @@ export const state = {
      this 36 as though the server had confirmed it. */
   settingsError: "",
   settingsPending: false,
+  settingsSavedAt: 0,        // when the last save succeeded; drives the confirmation
+  settingsSaveError: "",     // the server's own rejection message, kept on the panel
   /* The whole v2 settings object as the server last served it, so the panel can
      render current values rather than guessing at defaults. */
   settings: null,
@@ -54,6 +56,7 @@ export const state = {
   usageInvocations: null,
   usageFetchedAt: 0,
   contextDisplay: "percent", // percent | tokens
+  contextSpread: "median",     // median | average — which one the gauge spells out
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
   labelsLoading: false,

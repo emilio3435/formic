@@ -475,6 +475,14 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     : contextValues.length % 2 === 1
       ? contextValues[(contextValues.length - 1) / 2]
       : Math.round((contextValues[contextValues.length / 2 - 1]! + contextValues[contextValues.length / 2]!) / 2);
+  /* Derived from the same array as the peak and the median, for the same reason
+     the coverage figure is: three readings of one fleet that came from three
+     populations would disagree in public. Mean and median differ on purpose —
+     one session at 90% pulls the mean and leaves the median alone, and that gap
+     is the shape an operator is looking for. */
+  const contextAverage = contextValues.length === 0
+    ? undefined
+    : Math.round(contextValues.reduce((total, value) => total + value, 0) / contextValues.length);
   const sourceErrors = Object.values(input.sourceErrors ?? {}).flat();
   const cmuxErrors = [...(input.cmuxErrors ?? [])];
   const staleSources = (Object.entries(input.sourceErrors ?? {}) as [Provider, readonly string[]][])
@@ -554,6 +562,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     lookbackHours: scanWindowHours,
     contextPeak,
     contextMedian,
+    contextAverage,
     contextReporting,
     contextEligible,
     attentionCoverage,

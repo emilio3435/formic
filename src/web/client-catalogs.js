@@ -83,6 +83,11 @@ export const MODEL_POLICY_LABELS = {
   unverified: "Model unreported",
 };
 
+/* Which secondary context reading the gauge spells out. Per-browser like the
+   lookback, because it is a display preference rather than a fact about the
+   fleet — nothing on the server changes when it flips. */
+export const CONTEXT_SPREAD_KEY = "mtn3-contextSpread";
+
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
   "needs-you", "momentum", "burn", "context-peak", "health",

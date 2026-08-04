@@ -647,6 +647,11 @@ export interface HubSnapshot {
   /** Live agents contextPeak was taken over, reporting or not. */
   contextEligible?: number;
   contextMedian?: number;
+  /* The mean of the same readings the peak and median come from. Published
+     rather than derived client-side so all three answers about one fleet come
+     from one population — the coverage figure above exists because that went
+     wrong once already. */
+  contextAverage?: number;
   controlHealth: ControlHealth;
   attentionCoverage?: AttentionCoverageSummary;
   totals: {
