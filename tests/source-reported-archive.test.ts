@@ -3,27 +3,30 @@ import { buildSnapshot } from "../src/server/snapshot";
 import { activityFor } from "../src/server/snapshot-agent";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
-/* An agent the SOURCE reports as archived, which nothing exercised.
+/* An agent the SOURCE reports as finished, which nothing exercised.
 
-   `activityFor` opens with `if (archived || agent.status === "archived")`. Two
-   conditions, one outcome — and every fixture in the suite reached it through
-   the FIRST one, the flag the archive store supplies. Dropping the second arm
-   entirely passes 121 tests across snapshot, snapshot-edges, archive,
-   liveness-boundaries and collectors.
+   `activityFor` used to open with `if (archived || agent.status === "archived")`.
+   Two conditions, one outcome — and every fixture in the suite reached it
+   through the FIRST one, the flag the archive store supplies. Dropping the
+   second arm entirely passed 121 tests.
 
    That is the overlapping-mechanism shape: when two conditions produce the same
    answer and every fixture satisfies the one you are not testing, the other is
-   dead code as far as the suite is concerned. It is invisible to mutation
-   sweeps aimed at either condition individually, because each looks covered.
+   dead code as far as the suite is concerned.
 
-   WHAT IT COSTS. The two conditions are not redundant. `archived` means THIS
-   BOARD archived the row; `status === "archived"` means the SOURCE — the
-   provider's own session file — reported the session finished. An agent can be
-   the second without being the first: any session a provider closed that
-   nobody has tidied here yet. Without the arm it falls past every branch of
-   activityFor and lands on `unknown`, so a session the source has explicitly
-   declared over renders as unreadable, leaves `ended` and `history`, and stays
-   in the live population it should have left. */
+   WHAT THE PROPERTY IS, and it has not changed: a session the PROVIDER closed is
+   finished even though this board never archived it. Any session a source ended
+   that nobody has tidied here yet. Without it, such a session renders as
+   unreadable and stays in the live population it should have left.
+
+   WHAT CHANGED IS THE CARRIER. The source's word used to be a status string, and
+   that string was minted for two incompatible events: OMP's `session_exit`, a
+   real session ending, and a Claude or Codex TURN completing. One word, so the
+   board could not tell "the provider closed this" from "the agent finished
+   speaking", and it treated both as the end. `endEvidence: "session-exit"` is
+   the source's word now, and a completed turn cannot impersonate it. The pair
+   below is therefore sharper than it was: source-exit and operator-archive are
+   still independently sufficient, and turn-complete is now proven to be neither. */
 
 const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
 const NOW = new Date("2026-08-02T12:00:00.000Z");
@@ -52,61 +55,64 @@ const board = (agents: readonly CollectedAgent[]): any =>
 const only = (snapshot: { programs: { agents: unknown[] }[] }) =>
   snapshot.programs.flatMap(({ agents }) => agents)[0] as { activity: string };
 
-describe("a session the source reports as archived is ended, without this board archiving it", () => {
+describe("a session the source reports as finished is finished, without this board archiving it", () => {
   test("activityFor ends it on the source's word alone, with the archive flag false", () => {
     /* THE PROPERTY, at the function. `archived` is FALSE here — this board has
-       not archived anything — so only the second arm can produce "ended". Every
-       existing fixture passed `archived: true` and never reached it. */
-    expect(activityFor(collected({ status: "archived" }), false)).toBe("ended");
+       not archived anything — so only the source's own record can end it. */
+    expect(activityFor(collected({ endEvidence: "session-exit" }), false, NOW.getTime())).toBe("ended");
   });
 
-  test("the two conditions are independently sufficient, which is why both exist", () => {
-    /* Asserted as a pair so neither arm can be removed. A build keeping only
-       the flag fails the first line; a build keeping only the status fails the
-       second. Nothing in the suite previously distinguished them. */
-    expect(activityFor(collected({ status: "archived" }), false)).toBe("ended");
-    expect(activityFor(collected({ status: "running" }), true)).toBe("ended");
-    // And neither on its own is enough to end a plainly running session.
-    expect(activityFor(collected({ status: "running" }), false)).toBe("working");
+  test("the two conditions are independently sufficient, and a finished turn is neither", () => {
+    /* Asserted as a set so no arm can be removed silently. A build keeping only
+       the operator flag fails the first line; one keeping only the source
+       evidence fails the second; and one that lets a completed turn stand in for
+       a session exit — which is what the old status word did — fails the third. */
+    expect(activityFor(collected({ endEvidence: "session-exit" }), false, NOW.getTime())).toBe("ended");
+    expect(activityFor(collected(), true, NOW.getTime())).toBe("ended");
+    expect(activityFor(collected({ endEvidence: "turn-complete" }), false, NOW.getTime())).toBe("idle");
+    // And nothing on its own ends a plainly running session.
+    expect(activityFor(collected(), false, NOW.getTime())).toBe("working");
   });
 
   test("it leaves the live population and joins the ended count", () => {
-    /* The operator-visible half. Without the arm this agent falls past every
-       branch of activityFor onto `unknown`: a session the source declared over,
-       rendered unreadable, still counted among the living.
-
-       Asserted against a running agent in the same board so the counts are
-       attributable to status and not to the fleet size. */
+    /* The operator-visible half, asserted against a running agent in the same
+       board so the counts are attributable to the evidence and not the fleet
+       size. */
     const snapshot = board([
-      collected({ id: "codex:done", sourceSessionId: "done", status: "archived" }),
-      collected({ id: "codex:busy", sourceSessionId: "busy", status: "running" }),
+      collected({ id: "codex:done", sourceSessionId: "done", endEvidence: "session-exit" }),
+      collected({ id: "codex:busy", sourceSessionId: "busy" }),
     ]);
 
     expect(snapshot.totals.tracked).toBe(2);
     expect(snapshot.totals.ended).toBe(1);
     expect(snapshot.totals.history).toBe(1);
     expect(snapshot.totals.working).toBe(1);
+    expect(snapshot.totals.byLifecycle).toEqual({ working: 1, waiting: 0, unverified: 0, finished: 1 });
     // The specific agent, so the counts cannot be satisfied by the wrong one.
-    expect(only(board([collected({ status: "archived" })])).activity).toBe("ended");
+    expect(only(board([collected({ endEvidence: "session-exit" })])).activity).toBe("ended");
   });
 
-  test("it is not merely stale, which reaches the same verdict by another route", () => {
-    /* The route-3 guard on this very test. `stale` also produces "ended" when
-       no process evidence exists, so a fixture that was BOTH archived-by-source
-       and stale would satisfy every assertion above through the stale branch
-       while the arm under test stayed dead.
+  test("it is not merely quiet, which used to reach the same verdict by another route", () => {
+    /* The route-3 guard on this very test, and it matters more than it did.
 
-       This agent is `archived` with a fresh updatedAt and a LIVE process, which
-       is the one combination the stale branch cannot end. */
-    const liveButSourceArchived = collected({
-      status: "archived",
+       Long silence with no process evidence USED to produce "ended" as well, so
+       a fixture that was both source-finished and quiet satisfied every
+       assertion above through the wrong branch while the arm under test stayed
+       dead. Silence no longer ends anything, which closes that route outright —
+       and this fixture keeps the sharper shape anyway: fresh, with a live
+       process, the one combination nothing but a recorded exit can end. */
+    const liveButSourceFinished = collected({
+      endEvidence: "session-exit",
       updatedAt: NOW.toISOString(),
       processAlive: true,
       processIds: [4_242],
     });
 
-    expect(activityFor(liveButSourceArchived, false)).toBe("ended");
-    // Same agent with a status the stale branch would not end either.
-    expect(activityFor(collected({ ...liveButSourceArchived, status: "running" }), false)).toBe("working");
+    expect(activityFor(liveButSourceFinished, false, NOW.getTime())).toBe("ended");
+    expect(activityFor(collected({ ...liveButSourceFinished, endEvidence: undefined }), false, NOW.getTime()))
+      .toBe("working");
+    // The route that used to overlap, now proven closed.
+    const quiet = collected({ updatedAt: "2026-08-02T06:00:00.000Z" });
+    expect(activityFor(quiet, false, NOW.getTime())).toBe("unknown");
   });
 });

@@ -16,8 +16,8 @@ import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
    The mechanism here is a REGISTER, not a cleverer assertion.
 
-     Every scalar the board publishes is driven across thirteen fleet states. A
-     field that takes the same value in all thirteen must be named in
+     Every scalar the board publishes is driven across fourteen fleet states. A
+     field that takes the same value in all fourteen must be named in
      DELIBERATELY_CONSTANT, with a reason and a pointer to what still covers it.
 
    So collapsing a field to a constant turns this test red at the moment of the
@@ -32,7 +32,7 @@ import type { ArchiveStore, CollectedAgent } from "../src/server/types";
 
    WHAT IT CANNOT DO, stated plainly because the limit is real and load-bearing:
 
-     Its power is exactly the breadth of the thirteen states below. A field that is
+     Its power is exactly the breadth of the fourteen states below. A field that is
      constant across these but varies in production will be registered wrongly,
      and the register entry will look like a considered decision when it is an
      artefact of my fixtures. So a new entry is only as good as the person
@@ -130,7 +130,7 @@ function published(agents: readonly CollectedAgent[], extra: Record<string, unkn
   return { ...snapshot, pulse: tracker.report(T0) };
 }
 
-/* Thirteen states an operator actually sees. The test is exactly as strong as
+/* Fourteen states an operator actually sees. The test is exactly as strong as
    this list, so adding a state is the cheapest way to strengthen it. */
 const STATES: readonly { label: string; snapshot: unknown }[] = [
   { label: "empty fleet", snapshot: published([]) },
@@ -195,6 +195,16 @@ const STATES: readonly { label: string; snapshot: unknown }[] = [
         provenance: "turn-complete",
       } as Partial<CollectedAgent>)],
     } as ArchiveStore,
+  }) },
+  /* An unread cmux notification, which is the ONLY thing that sets
+     totals.attention now. It used to be reachable by writing status:"attention"
+     onto a fixture, and this file duly reported the field as varying — off a
+     state no real board could produce. The notification has to be real. */
+  { label: "an agent with an unread notification", snapshot: published([agent({
+    id: "codex:notified", sourceSessionId: "notified", cwd: "/Users/me/notified",
+  } as Partial<CollectedAgent>)], {
+    surfaces: [{ surfaceId: "SURFACE-NOTIFY", cwd: "/Users/me/notified", sourceSessionIds: ["notified"], runtimeSurfaceReady: true }],
+    notifications: [{ surfaceId: "SURFACE-NOTIFY", body: "May I push this branch?" }],
   }) },
   { label: "an agent near its context limit", snapshot: published([agent({
     tokens: { sessionTotal: 120_000, total: 985_000, provenance: "observed", contextWindow: 1_000_000 },
@@ -269,7 +279,7 @@ describe("a field that stops varying announces itself", () => {
 
     expect(
       constant,
-      "These published fields took the same value in all thirteen fleet states. If that is "
+      "These published fields took the same value in all fourteen fleet states. If that is "
       + "deliberate, add each to DELIBERATELY_CONSTANT with a reason and a pointer to what "
       + "still tests it. If it is not, a fix has just made every assertion about them unfalsifiable.",
     ).toEqual([]);
@@ -306,9 +316,9 @@ describe("a field that stops varying announces itself", () => {
     const seen = observedValues();
     const varying = [...seen.values()].filter((values) => values.size > 1).length;
 
-    expect(STATES.length).toBe(13);
+    expect(STATES.length).toBe(14);
     expect(seen.size, "no published scalars were collected at all").toBeGreaterThan(10);
-    expect(varying, "not one published field varied across thirteen states").toBeGreaterThan(5);
+    expect(varying, "not one published field varied across fourteen states").toBeGreaterThan(5);
   });
 
   test("the states differ from each other, not just from the empty one", () => {

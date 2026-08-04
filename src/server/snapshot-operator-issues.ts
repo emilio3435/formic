@@ -188,9 +188,20 @@ export function buildOperatorIssues(
     });
   }
 
+  /* "Active" means a session that is demonstrably still going: working or
+     waiting. It used to mean "not ended", which now sweeps in every unverified
+     session — and an alarm titled "active Cursor sessions" that counts sessions
+     nothing has confirmed are running is the same overclaim this contract is
+     removing everywhere else. The split is still exhaustive: whatever is not
+     active is reported on the quieter surface below. */
   const cursorMismatches = agents.filter((agent) => agent.modelPolicy?.state === "mismatch");
-  const activeCursorMismatches = cursorMismatches.filter((agent) => agent.activity !== "ended");
-  const endedCursorMismatches = cursorMismatches.filter((agent) => agent.activity === "ended");
+  const isActive = (agent: AgentSnapshot): boolean =>
+    agent.scope !== "retained"
+    && (agent.lifecycle
+      ? agent.lifecycle === "working" || agent.lifecycle === "waiting"
+      : agent.activity !== "ended");
+  const activeCursorMismatches = cursorMismatches.filter(isActive);
+  const endedCursorMismatches = cursorMismatches.filter((agent) => !isActive(agent));
   if (activeCursorMismatches.length > 0) {
     issues.push({
       id: "system:cursor-model-policy-active",

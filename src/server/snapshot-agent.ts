@@ -11,6 +11,7 @@ import type {
   ActivityState,
   AgentRole,
   AgentSnapshot,
+  AgentStatus,
   CollectionScope,
   ControlCapability,
   IdentityTrace,
@@ -96,36 +97,58 @@ export function lifecycleFor(
   );
 }
 
-export function activityFor(agent: CollectedAgent, archived: boolean): ActivityState {
-  if (archived || agent.status === "archived") return "ended";
-  /* `stale` is not an ending. It is `statusFrom()` observing that the transcript
-     has not been written for 45 minutes, decided at parse time, before any
-     process evidence exists on the record. A session that is waiting at a
-     prompt, blocked on a long build, or wedged writes nothing for 45 minutes
-     and is alive in all three cases.
+/* The legacy activity word, now a TRANSLATION of the lifecycle verdict rather
+   than a second opinion about it.
 
-     Calling that "ended" is not a cosmetic mislabel — it costs the operator the
-     controls. `operatorControlState(target, activity === "ended")` downgrades
-     the agent to `observed-only` while its own `controls[]` array still reports
-     focus/instruct as ENABLED, and `nextActionFor` sends the operator to
-     "Review this session in history." Measured on a live fleet: 6 agents in
-     that contradiction, 3 of them holding an unread cmux notification — asking
-     for a human from a session the board had filed as finished.
+   What used to be here decided the question independently, and the answer it
+   gave for `stale` with no process evidence was "ended" — absence of evidence
+   published as evidence of an ending, for 85 sessions on this machine. The
+   comment that stood here argued the case for one rescue (`processAlive === true`
+   keeps a quiet session alive) and it was right; the contract simply carries
+   that argument to its conclusion and gives the unprovable case its own word.
 
-     So silence plus a PROVABLY live process is idle, not ended. Absent-first is
-     preserved exactly: `processAlive` undefined still reads "ended", which is
-     every agent whose terminal has gone. Only positive evidence moves the
-     verdict, and only `archived` — a session exit the source actually recorded
-     — can still end a session outright. */
-  if (agent.status === "stale") return agent.processAlive === true ? "idle" : "ended";
-  if (agent.status === "running") return "working";
-  if (agent.status === "waiting" || agent.status === "attention") return "idle";
-  return "unknown";
+   The mapping is deliberately lossy in the honest direction. `unverified`
+   becomes "unknown", which is the legacy vocabulary's closest true word: it is
+   excluded from legacy `live` AND from legacy `ended`, so an old client
+   under-counts rather than mis-claims. One classifier, two vocabularies. */
+export function activityForLifecycle(lifecycle: LifecycleState, scope: CollectionScope = "observed"): ActivityState {
+  if (scope === "retained") return "ended";
+  switch (lifecycle) {
+    case "working": return "working";
+    case "waiting": return "idle";
+    case "unverified": return "unknown";
+    case "finished": return "ended";
+  }
+}
+
+/* The legacy status word, same translation, the other vocabulary. Notification
+   no longer overwrites it: attention is an overlay and rides its own field. */
+export function statusForLifecycle(lifecycle: LifecycleState, scope: CollectionScope = "observed"): AgentStatus {
+  if (scope === "retained") return "archived";
+  switch (lifecycle) {
+    case "working": return "running";
+    case "waiting": return "waiting";
+    case "unverified": return "stale";
+    case "finished": return "archived";
+  }
+}
+
+/* Kept for callers holding a CollectedAgent and no verdict — the archive's own
+   records, and tests that predate the contract. It routes through the same
+   classifier, so there is still exactly one place the question is answered. */
+export function activityFor(agent: CollectedAgent, archived: boolean, nowMs = Date.now()): ActivityState {
+  const verdict = lifecycleFor(agent, { operatorArchived: archived, scope: "observed", nowMs });
+  return activityForLifecycle(verdict.lifecycle);
 }
 
 export function processStateFor(agent: CollectedAgent): ProcessState {
   if (agent.processAlive === true) return "running";
-  if (agent.transcriptEndedCleanly === true) return "exited";
+  /* "Exited cleanly — this one is done" is a claim about the SESSION, so only a
+     session exit may make it. It used to fire on `transcriptEndedCleanly`,
+     which Claude and Codex mint from a completed turn, so a session waiting on
+     its operator advertised its process as cleanly finished — a false statement
+     printed beside a Waiting row. A turn ending says nothing about a process. */
+  if (agent.endEvidence === "session-exit") return "exited";
   if (agent.processAlive === false && agent.processIds?.length) return "died";
   return "unknown";
 }

@@ -267,7 +267,7 @@ describe("Cursor Agent persisted session truth", () => {
     });
   });
 
-  test("keeps an aborted Cursor child in history instead of inflating the active attention queue", () => {
+  test("an aborted Cursor child reports the failure without being declared over", () => {
     const child = parseCursorChildSession({
       sessionId: "ad80121f-6444-41e4-8a37-0ce548223649",
       parentSessionId: SESSION_ID,
@@ -282,11 +282,45 @@ describe("Cursor Agent persisted session truth", () => {
       nowMs: 1784689180000,
     });
 
+    /* The failure is an OUTCOME, and it travels as one. It used to also decide
+       the lifecycle: an aborted turn sent a child straight to the terminal band,
+       and so did a SUCCESSFUL turn — two opposite results, one verdict, and the
+       verdict was "over". A child that failed a turn one second ago read as
+       forty-five minutes silent, and nearly every Cursor child on this board was
+       filed as ended within moments of starting work.
+
+       `gates` is what reaches the operator, through outcome and the attention
+       overlay. The clock decides whether the session is still going. */
     expect(child).toMatchObject({
-      status: "stale",
+      status: "running",
       statusReason: "Cursor child recorded the last turn as aborted.",
       gates: ["Cursor child turn: aborted"],
     });
+    // And an aborted turn is not an ending, so it mints no end evidence at all.
+    expect(child?.endEvidence).toBeUndefined();
+  });
+
+  test("a Cursor child that just finished a turn is waiting, not ended", () => {
+    /* The other half of the same bug, and the larger population: SUCCESS also
+       sent a child to the terminal band. A completed turn is the child yielding
+       to its operator, and it is carried as turn evidence for the classifier to
+       weigh against the clock — exactly as Claude and Codex are. */
+    const child = parseCursorChildSession({
+      sessionId: "ad80121f-6444-41e4-8a37-0ce548223649",
+      parentSessionId: SESSION_ID,
+      cwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      transcriptJsonl: [
+        JSON.stringify({ role: "user", message: { content: "Goal: Check the renderer." } }),
+        JSON.stringify({ type: "turn_ended", status: "success" }),
+      ].join("\n"),
+      transcriptPath: "/tmp/ad80121f.jsonl",
+      updatedAtMs: 1784689180000 - 10 * 60_000,
+      nowMs: 1784689180000,
+    });
+
+    expect(child?.status).toBe("waiting");
+    expect(child?.endEvidence).toBe("turn-complete");
+    expect(child?.gates).toEqual([]);
   });
 
   test("marks an old unended Cursor child stale instead of keeping it live for 36 hours", () => {

@@ -507,7 +507,14 @@ function createOmpParser(): IncrementalParser {
         endEvidence: "session-exit",
         meta,
       });
-      return { ...agent, status: "archived" };
+      /* No unconditional archive. This line used to read
+         `return { ...agent, status: "archived" }`, which filed EVERY OMP
+         session as ended whether or not one had ever ended — the reason 724 of
+         815 sessions on this machine read as archived while eleven live
+         processes hid among them. OMP does record a real ending, `session_exit`,
+         and `exited` above carries it; that is the only thing that finishes an
+         OMP session now. */
+      return agent;
     },
   };
 }

@@ -136,7 +136,8 @@ describe("control refusal wire shape", () => {
 
   test("ended history rows do not repeat live routing evidence", () => {
     const snapshot = buildSnapshot({
-      agents: [{ ...cursor, status: "archived" }],
+      // The source recorded the ending; a status word is no longer evidence of one.
+      agents: [{ ...cursor, endEvidence: "session-exit" as const }],
       surfaces: [],
       archiveStore,
       now: new Date("2026-08-03T17:09:30.000Z"),

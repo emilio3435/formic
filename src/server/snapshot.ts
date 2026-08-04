@@ -40,7 +40,7 @@ export {
   withIssueDecoration,
 } from "./snapshot-issues";
 import {
-  activityFor,
+  activityForLifecycle,
   contextPctFor,
   controlsFor,
   cursorModelPolicy,
@@ -50,6 +50,7 @@ import {
   outcomeFor,
   processStateFor,
   roleFor,
+  statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
 import {
@@ -180,39 +181,55 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           ? { lifecycle: "finished", provenance: "operator-archive" }
           : undefined,
     });
-    const activity = activityFor(source, archived);
-    const processState = processStateFor(source);
-    const initialRefusal = transmitRefusal({ target, processState, archived });
+    /* Every word below is now a reading of ONE verdict. `activity` and `status`
+       are translations of it into the two older vocabularies, not second
+       opinions about it — which is what they were, and why the board could call
+       the same session live in its totals and finished in its rows. */
+    const finished = verdict.lifecycle === "finished";
+    const retained = scope === "retained";
+    const terminal = finished || retained;
+    const activity = activityForLifecycle(verdict.lifecycle, scope);
+    const processState = retained ? undefined : processStateFor(source);
+    const initialRefusal = transmitRefusal({ target, processState, archived: terminal });
     const refusal = initialRefusal?.code === "UNSAFE_TARGET"
       ? transmitRefusal({
           target,
           processState,
-          archived,
+          archived: terminal,
           identityTrace: readIdentityTrace(),
           routingObservationsUrl: `/api/debug/identity?agent=${encodeURIComponent(source.id)}`,
         })
       : initialRefusal;
-    /* Ended rows already explain their terminal state and have no action to
-       recover. Active refusals keep the actionable summary and point to their
-       on-demand pane observations; the shared surface inventory no longer rides
-       the snapshot once per refused agent. */
-    const controlRefusal: SnapshotControlRefusal | undefined = activity !== "ended" && refusal
-      ? (({ message: _message, ...published }) => published)(refusal)
-      : undefined;
-    // Freeze the elapsed clock only for a session that really ended. This used
-    // to re-derive `archived || status === "stale"` independently of
-    // activityFor, so a live-but-quiet session had its clock frozen by the same
-    // inference that mislabelled it — one verdict, read in two places.
-    const ended = activity === "ended";
-    const elapsedEndMs = ended && Number.isFinite(updatedAtMs) ? Math.min(nowMs, updatedAtMs) : nowMs;
-    const outcome = outcomeFor(source, archived, Boolean(notification));
-    const controlState = operatorControlState(target, archived || activity === "ended");
+    /* Suppressed for terminal rows, which already explain themselves and have
+       no action to recover — and for unverified rows, which are the largest
+       population on this board and would otherwise each attach a refusal
+       payload AND force an eager identity trace. That is roughly 190 traces and
+       100-150 KB per snapshot spent saying "we could not verify this", which
+       the row's own word already says. */
+    const controlRefusal: SnapshotControlRefusal | undefined =
+      !terminal && verdict.lifecycle !== "unverified" && refusal
+        ? (({ message: _message, ...published }) => published)(refusal)
+        : undefined;
+    /* The clock freezes only where something is known to have stopped.
+
+       Unverified deliberately keeps running. Freezing it would be the old ghost
+       claim restated in a subtler place: a frozen clock asserts a moment the
+       session ended, and the entire point of that state is that no such moment
+       was ever observed. A running clock on a silent row reads as "it has been
+       this long since we heard anything", which is exactly true. */
+    const elapsedEndMs = terminal && Number.isFinite(updatedAtMs)
+      ? Math.min(nowMs, updatedAtMs)
+      : nowMs;
+    const outcome = outcomeFor(source, terminal, Boolean(notification));
+    const controlState = operatorControlState(target, terminal);
     const contextPct = contextPctFor(source);
-    const snapshotStatusReason = archived
-      ? "Archived by source or operator."
+    const snapshotStatusReason = retained
+      ? verdict.reason
       : notificationSummary
         ? `Unread cmux notification: ${notificationSummary}`
-        : source.statusReason;
+        : finished
+          ? verdict.reason
+          : source.statusReason;
     /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
        the one point a CollectedAgent becomes an AgentSnapshot, so there is a
        single boundary to test rather than a rule to remember: the snapshot is
@@ -224,12 +241,18 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
       programId: program.id,
-      status: archived ? "archived" : notification ? "attention" : source.status,
+      /* An unread notification no longer overwrites the status. It used to,
+         which is how a working session came to publish `status: "attention"` —
+         one field answering two different questions, and losing the first. What
+         the notification means rides `attention`, its own field, where it can be
+         an overlay instead of a replacement. */
+      status: statusForLifecycle(verdict.lifecycle, scope),
       statusReason: snapshotStatusReason,
       activity,
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,
       scope,
+      ...(notification ? { attention: true } : {}),
       processState,
       outcome,
       controlState,
@@ -446,7 +469,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     totals: {
       live: liveAgents.length,
       tracked: allAgents.length,
-      attention: allAgents.filter((agent) => agent.status === "attention").length,
+      attention: observedAgents.filter((agent) => agent.attention === true).length,
       tokens: tokenValues.length ? tokenValues.reduce((total, value) => total + value, 0) : undefined,
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,
@@ -457,7 +480,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          title badge, the notifier and the program rollup all read. This was
          issues.length — system findings — which meant the rollup cell and the
          totals disagreed about what the word meant while sharing it. */
-      needsYou: allAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
+      needsYou: observedAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
       /* System findings keep their own vocabulary. A degraded collector and an
          agent that asked a question are both worth surfacing and neither is the
          other; folding them into one word is what made "needs you" unreadable. */

@@ -79,7 +79,13 @@ export async function executeControl(
       ? transmitRefusal({
           target: agent.target,
           processState: agent.processState,
-          archived: agent.status === "archived",
+          /* Read from the lifecycle, which is what controlsFor consulted when
+             it decided whether to offer this button. Reading `status` here and
+             the verdict there is how the two sides of one seam drift: the board
+             offers a control the endpoint then refuses, or worse, the reverse. */
+          archived: agent.lifecycle
+            ? agent.lifecycle === "finished" || agent.scope === "retained"
+            : agent.status === "archived",
           identityTrace: agent.identityTrace,
         })
       : null;

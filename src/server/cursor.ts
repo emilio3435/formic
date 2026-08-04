@@ -210,7 +210,13 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     status = "stale";
     statusReason = "Cursor session metadata has not changed in 45 minutes.";
   } else if (turnStatus && turnStatus !== "success") {
-    status = "attention";
+    /* A failed turn is an OUTCOME, not a lifecycle. This branch used to mint
+       status "attention" — the only collector anywhere that did — which meant a
+       Cursor error decided what the session WAS rather than how it was doing.
+       The failure still reaches the operator, through `gates` below and the
+       outcome/attention overlay it drives; what it no longer does is overwrite
+       the answer to a different question. The clock decides the lifecycle. */
+    status = ageMs < freshMs ? "running" : "waiting";
     statusReason = `Cursor recorded the last turn as ${turnStatus}.`;
   } else if (ageMs < freshMs) {
     // Freshness wins over a stale turn_ended:"success" record. That record is the
@@ -284,12 +290,21 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
   // A non-success turn (aborted/error) stays terminal regardless of freshness, but a
   // fresh transcript (mtime advances mid-turn) wins over a stale turn_ended:"success"
   // so a newly streaming child is not forced idle the instant its first turn ends.
+  /* Children now follow the same rules as their parents.
+
+     They did not. A FAILED turn sent a child straight to "stale", and so did a
+     SUCCESSFUL one — the two opposite outcomes, one verdict, and the verdict was
+     the terminal band. A child that finished its first turn one second ago read
+     as forty-five minutes silent. Nearly every Cursor child on this board was
+     filed as ended within moments of starting work.
+
+     A turn ending is a turn ending. It rides `endEvidence` below, where the
+     classifier can weigh it against the clock and the process, exactly as it
+     does for Claude and Codex. */
   const failed = Boolean(turnStatus) && turnStatus !== "success";
   const status: CollectedAgent["status"] =
-    failed ? "stale"
-    : ageMs >= quietMs ? "stale"
+    ageMs >= quietMs ? "stale"
     : ageMs < freshMs ? "running"
-    : turnStatus === "success" ? "stale"
     : "waiting";
   const statusReason =
     failed

@@ -274,6 +274,11 @@ export interface AgentSnapshot {
   scope?: CollectionScope;
   /** Which clean completion a source recorded, when it recorded one. */
   endEvidence?: EndEvidence;
+  /* An unread cmux notification is waiting on this session. An OVERLAY: it adds
+     a row word, a tab membership and a badge, and it never changes what the
+     session is doing. It used to be published by overwriting `status` with
+     "attention", so one field answered two questions and lost the first. */
+  attention?: boolean;
   /** Process/transcript lifecycle evidence; unknown means the sources cannot distinguish it safely. */
   processState?: ProcessState;
   outcome?: OutcomeState;

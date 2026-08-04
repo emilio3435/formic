@@ -160,7 +160,9 @@ describe("elapsed itself stays honest", () => {
     /* PIN B. An agent that stopped writing a month ago must not keep accruing
        elapsed forever — that is how a finished session grows into an 87-day
        number nobody worked. Already true; pinned so it stays true. */
-    const ended = source({ status: "archived" });
+    // Ended because the source said so. Silence alone no longer freezes a clock:
+    // a frozen clock names a moment of death, and silence witnesses none.
+    const ended = source({ endEvidence: "session-exit" });
     const nowMs = START + 90 * DAY;
 
     expect(elapsedOf(ended, nowMs)).toBe(30 * DAY);
