@@ -94,7 +94,7 @@ Every row is **one AI session**. Left to right:
 |---|---|
 | Name | Who it is, and the folder it is working in |
 | Message | The last thing it said |
-| Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Working`, `Idle` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Idle` on a mixed tab, or `Alert`, `Blocked`, `Failed`. Hover for the full state. |
+| Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Waiting` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Waiting` on a mixed tab, or `Alert`, `Blocked`, `Failed`. A session asking for you always says so. Hover for the full state. |
 | Model · ctx | Which model, and how full **this session's** context window is right now |
 | Tokens | **The latest model call only** — not the session, not the day. See the warning below. |
 | Span | First activity to last activity — **including every hour it sat dormant.** Not time spent working. A session showing `3d` may have worked for ten minutes of it. |
@@ -231,8 +231,7 @@ In board order, which is deliberate — attention first:
 |---|---|
 | **Needs you** | Only sessions waiting on a human. Your to-do list, and the tab the board opens on. |
 | **Now** | Anything working *or* asking for you. The whole live board. |
-| **Working** | Currently producing output. |
-| **Idle** | Alive but not doing anything right now. |
+| **Waiting** | Open but not producing — plus a collapsed **Unverified** group at the bottom. |
 | **History** | Finished sessions. Collapsed by default — there are usually a lot. |
 | **Usage** | Token and cost charts over time, rather than a list. |
 
@@ -241,8 +240,39 @@ attention count sitting at zero beside it. A cockpit whose landing state is
 "show me everything" cannot also claim to stay quiet about what does not need
 you, so `Needs you` leads.
 
-`Idle` and `History` also apply a *lookback* window (6 hours by default) that you
-can widen from the filter bar.
+There used to be a sixth tab, `Working`. It was `Now` minus the alerts, which is
+a subtraction you can do by eye, and every tab costs a glance on every visit.
+
+## The four states a session can be in
+
+One word per session, and only one. This is the vocabulary everything else on
+the board is written in.
+
+| State | What it means |
+|---|---|
+| **Working** | Actively producing — source activity in the last few minutes. |
+| **Waiting** | Open but not producing: it finished a turn and is waiting on you, or it has gone quiet while its process is still live. |
+| **Unverified** | Silent for a while, and no matching process was found. Ant Hill cannot tell whether it is still alive — so it says that, instead of guessing. |
+| **Finished** | Ended with evidence: the source recorded a session exit, you archived it, or its process is confirmed gone. |
+
+**Unverified is the one worth understanding.** It is not a broken session and it
+is not a finished one — it is a gap in what the board can see. A session whose
+terminal was closed, whose machine slept, or that simply went quiet with nothing
+left to probe all land here. They live in a collapsed group at the bottom of
+`Waiting`, and that group **ignores the lookback**: it is a disclosure of what
+cannot be accounted for, not a list of recent things, and most of them are older
+than six hours by definition.
+
+Sessions used to be filed as finished in this situation. Nothing had observed
+them ending — the board simply could not see them and said "ended" anyway, which
+is how a running session became impossible to find.
+
+A finished session also says *why* it finished: a recorded session exit, your own
+archive, a process confirmed gone, or "no longer watched" for one that drifted
+out of the scan window. Those are four different facts and used to be one word.
+
+`Waiting` and `History` also apply a *lookback* window (6 hours by default) that
+you can widen from the filter bar. The Unverified group is exempt, as above.
 
 **Usage has its own windows, and the widest one you can ask for is narrower
 than what has been kept.** Two ceilings, and neither is the end of the data:
@@ -381,7 +411,7 @@ about this band, so it is stated for each:
 | **Findings** | Everything open that a human should know about — collector faults, policy drift, and sessions waiting on you. | Findings, not agents: one finding can implicate many sessions. This card and the `Needs you` tab beside it are **deliberately different numbers now**, and they say so in different words. The card counts all findings; the tab counts only sessions waiting on a person. The card reading `1` while the tab reads `0` means *something is open, but no session is waiting on you* — which is why the board says exactly that instead of "Nothing needs you". |
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
 | **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
-| **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or idle) that report a window. Ended sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
+| **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or waiting) that report a window. Finished and unverified sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
 | **Health** | One verdict for the whole system. | Not a count. See the health section below. |
 
 Hide, show, and reorder these with **Customize summary**.
@@ -672,7 +702,8 @@ Start a session (`claude` or `codex` in any project folder) and a row should
 appear within about five seconds, no refresh needed.
 
 Also check you have not filtered yourself into an empty room: clear the **search
-box**, and remember `Idle` and `History` apply their own lookback window.
+box**, and remember `Waiting` and `History` apply their own lookback window
+(the Unverified group inside `Waiting` does not).
 
 </details>
 

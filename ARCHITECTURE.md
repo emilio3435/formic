@@ -90,6 +90,13 @@ itself — snapshot age, collector state — on a slower clock than the board's.
 `app.js`, which imports the rest. There is no build step — the server serves the
 files as they are on disk.
 
+The board's five ops views are `needs-you`, `now`, `waiting`, `history` and
+`usage` (`client-catalogs.js`). Membership is decided by `viewMatches` from the
+lifecycle and scope the server publishes, never from a provider status word.
+`waiting` also carries the collapsed Unverified group, which is deliberately
+exempt from the display lookback — the lookback is a recency filter, and a
+coverage disclosure that hides most of the gap is worse than none.
+
 `app.js` holds the render tree and the board's own state machine. Around it:
 `presentation.js` (pure derivations from a snapshot — the layer tests exercise
 directly), `agent-model.js`, `client-state.js`, `dom-primitives.js` (`el`, icons,

@@ -319,7 +319,23 @@ export function withinLookback(agent, lookbackHours, nowMs = Date.now()) {
 }
 
 export function lookbackApplies(view) {
-  return view === "idle" || view === "history";
+  return view === "waiting" || view === "history";
+}
+
+/* The Unverified group is EXEMPT from the lookback, and that exemption is what
+   makes the state visible at all.
+
+   The lookback is a recency filter, and unverified sessions are by definition
+   not recent — on this machine 181 of the 205 in-window ones are more than six
+   hours quiet, so at the default lookback of 6h the group would be empty on
+   almost every load and the flagship state of this contract would ship
+   invisible. It is not a recency list; it is a disclosure of what the board
+   cannot account for, and a coverage disclosure that hides most of the gap is
+   worse than none. Ordinary Waiting rows keep the lookback. */
+export function passesLookback(agent, view, lookbackHours, nowMs = Date.now()) {
+  if (!lookbackApplies(view)) return true;
+  if (isUnverified(agent)) return true;
+  return withinLookback(agent, lookbackHours, nowMs);
 }
 
 

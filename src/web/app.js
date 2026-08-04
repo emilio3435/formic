@@ -107,6 +107,7 @@ import {
   TRANSCRIPT_LIMIT_STEPS,
   TRANSCRIPT_MAX_LIMIT,
 } from "./api-client.js";
+import { classifyLifecycle, evidenceFromAgent } from "./lifecycle.js";
 import {
   alerting,
   buildClusters,
@@ -129,6 +130,7 @@ import {
   livenessView,
   lookbackApplies,
   parseLookbackHours,
+  passesLookback,
   programRollup,
   tokenSummary,
   viewMatches,
@@ -1192,6 +1194,13 @@ async function fetchSettings() {
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    state.settings = body.settings || null;
+    /* The operator's landing tab, applied only on the FIRST read — after that
+       they have navigated and moving them would be the board overriding a
+       choice they just made. */
+    const landing = body.settings && body.settings.defaultView;
+    if (!state.settingsLoaded && VIEWS.includes(landing)) state.view = landing;
+    state.settingsLoaded = true;
     state.settingsError = "";
   } catch (err) {
     /* The scan window falls back to a hard-coded 36, and the filter chip printed
@@ -1206,20 +1215,36 @@ async function fetchSettings() {
 async function postScanWindow(hours) {
   const clamped = Math.max(1, Math.min(168, Math.round(Number(hours))));
   if (!Number.isFinite(clamped)) return;
+  await postSettings({ scanWindowHours: clamped });
+}
+
+/* One writer for every server-side setting.
+
+   The server validates by rejecting rather than clamping — telling an operator
+   their setting took effect when a different one did is the failure this whole
+   contract is about — so the message it returns IS the answer, and it is shown
+   verbatim rather than replaced with a generic failure. */
+async function postSettings(patch) {
   state.settingsPending = true;
   renderFilterBar();
   try {
     const res = await apiFetch("/api/settings", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ scanWindowHours: clamped }),
+      body: JSON.stringify(patch),
     }, API_WRITE_TIMEOUT_MS);
     const body = await res.json().catch(() => ({}));
     if (!res.ok || !body.ok) throw new Error((body.error && body.error.message) || ("settings " + res.status));
-    state.scanWindowHours = Number(body.scanWindowHours) || clamped;
+    state.settings = body.settings || state.settings;
+    const hours = Number(body.scanWindowHours);
+    if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    /* A settings change re-classifies the board, so the numbers an operator is
+       looking at have to be the ones their new thresholds produced. */
     await fetchSnapshot();
+    return true;
   } catch (error) {
     toast(error instanceof Error ? error.message : String(error), "err");
+    return false;
   } finally {
     state.settingsPending = false;
     render();
@@ -1984,6 +2009,140 @@ function moveWidget(id, direction) {
   renderHealthRail();
 }
 
+
+/* ---------- settings panel ---------- */
+
+/* Three presets that FILL THE FIELDS below them rather than storing a mode.
+
+   A stored mode is a fourth thing to reason about — "am I in Focused, and what
+   does that change?" — and it hides the numbers it sets. Filling the inputs
+   teaches the thresholds by example and leaves the operator holding two plain
+   numbers they can then adjust. Long-running exists because overnight swarms
+   are a real shape on this machine and the defaults call them unverified. */
+export const SETTINGS_PRESETS = [
+  { id: "focused", label: "Focused", fresh: 2, quiet: 15, lookback: 3 },
+  { id: "balanced", label: "Balanced", fresh: 3, quiet: 45, lookback: 6 },
+  { id: "long-running", label: "Long-running", fresh: 10, quiet: 180, lookback: 24 },
+];
+
+/* What the board would say RIGHT NOW at the numbers in the fields — computed
+   client-side with the same classifier the server runs, over the snapshot
+   already in hand. Without it an operator changes a threshold, waits for a
+   refresh, and infers the effect from a board that also moved on its own. */
+export function settingsPreview(snap, freshMinutes, quietMinutes, nowMs = Date.now()) {
+  const agents = snapshotAgents(snap).map((x) => x.agent);
+  const thresholds = { freshMs: freshMinutes * 60_000, quietMs: quietMinutes * 60_000 };
+  const counts = { working: 0, waiting: 0, unverified: 0, finished: 0, retained: 0 };
+  for (const agent of agents) {
+    if (scopeOf(agent) === "retained") { counts.retained += 1; continue; }
+    const verdict = classifyLifecycle(evidenceFromAgent(agent, nowMs), thresholds);
+    counts[verdict.lifecycle] += 1;
+  }
+  return counts;
+}
+
+export function settingsPreviewText(counts) {
+  return `With these numbers right now: ${counts.working} Working · ${counts.waiting} Waiting`
+    + ` · ${counts.unverified} Unverified · ${counts.finished + counts.retained} History.`;
+}
+
+function settingsField(key, label, help, value, min, max) {
+  return el("label", { class: "settings-field" },
+    el("span", { class: "settings-field-label", text: label }),
+    el("input", {
+      type: "number", class: "settings-input", id: "setting-" + key,
+      dataset: { setting: key }, value: String(value), min: String(min), max: String(max),
+      oninput: () => renderSettingsPreview(),
+    }),
+    el("span", { class: "settings-help", text: help }));
+}
+
+function settingsValue(key, fallback) {
+  const node = $("setting-" + key);
+  const raw = node ? Number(node.value) : Number.NaN;
+  return Number.isFinite(raw) ? raw : fallback;
+}
+
+function renderSettingsPreview() {
+  const node = $("settings-preview");
+  if (!node || !state.snap) return;
+  const fresh = settingsValue("activityFreshMinutes", 3);
+  const quiet = settingsValue("activityQuietMinutes", 45);
+  node.textContent = quiet <= fresh
+    ? "Quiet must be longer than the working window."
+    : settingsPreviewText(settingsPreview(state.snap, fresh, quiet));
+}
+
+function renderSettingsPanel() {
+  const panel = $("settings-panel");
+  const toggle = $("settings-toggle");
+  if (!panel || !toggle) return;
+  panel.hidden = !state.settingsPanelOpen;
+  toggle.setAttribute("aria-expanded", String(state.settingsPanelOpen));
+  // textContent = "" is this client's clear idiom; replaceChildren is not part
+  // of the minimal DOM the headless harness implements.
+  panel.textContent = "";
+  if (!state.settingsPanelOpen) return;
+  const s = state.settings || {};
+  const fresh = s.activityFreshMinutes ?? 3;
+  const quiet = s.activityQuietMinutes ?? 45;
+  panel.append(el("div", { class: "settings-inner" },
+    el("h2", { id: "settings-panel-title", text: "Settings" }),
+    el("p", { class: "settings-lede", text: "How long silence has to last before this board changes what it calls a session." }),
+    el("div", { class: "settings-presets" },
+      el("span", { class: "settings-help", text: "Presets fill the fields below:" }),
+      ...SETTINGS_PRESETS.map((preset) => el("button", {
+        type: "button", class: "btn", dataset: { fkey: "preset-" + preset.id },
+        onclick: () => {
+          const freshNode = $("setting-activityFreshMinutes");
+          const quietNode = $("setting-activityQuietMinutes");
+          if (freshNode) freshNode.value = String(preset.fresh);
+          if (quietNode) quietNode.value = String(preset.quiet);
+          renderSettingsPreview();
+        },
+      }, preset.label))),
+    settingsField("activityFreshMinutes", "Working means activity in the last…",
+      "Sessions with activity newer than this read as Working. Minutes, 1–30.", fresh, 1, 30),
+    settingsField("activityQuietMinutes", "Quiet after…",
+      "After this much silence a session stops reading as recent: Waiting if its process is live, Unverified if unknown. Minutes, 5–480.",
+      quiet, 5, 480),
+    el("p", { class: "settings-preview", id: "settings-preview" }),
+    el("details", { class: "settings-advanced" },
+      el("summary", { text: "Advanced" }),
+      settingsField("scanWindowHours", "Scan window",
+        "How far back collectors read transcripts. Sessions older than this move to History as 'no longer watched'. Hours, 1–168.",
+        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168),
+      settingsField("historyRetentionDays", "Keep history for",
+        "Finished sessions are kept this long. Lowering it permanently forgets older records. Days, 7–365.",
+        s.historyRetentionDays ?? 30, 7, 365),
+      settingsField("historyRecordLimit", "History record cap",
+        "At most this many History records are kept. 100–50000.",
+        s.historyRecordLimit ?? 5000, 100, 50000)),
+    el("div", { class: "settings-actions" },
+      el("button", {
+        type: "button", class: "btn btn-primary", dataset: { fkey: "settings-save" },
+        onclick: () => {
+          void postSettings({
+            activityFreshMinutes: settingsValue("activityFreshMinutes", fresh),
+            activityQuietMinutes: settingsValue("activityQuietMinutes", quiet),
+            scanWindowHours: settingsValue("scanWindowHours", s.scanWindowHours ?? 36),
+            historyRetentionDays: settingsValue("historyRetentionDays", s.historyRetentionDays ?? 30),
+            historyRecordLimit: settingsValue("historyRecordLimit", s.historyRecordLimit ?? 5000),
+          });
+        },
+      }, state.settingsPending ? "Saving…" : "Save"),
+      el("button", {
+        type: "button", class: "btn", dataset: { fkey: "settings-reset" },
+        onclick: () => {
+          void postSettings({
+            activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36,
+            historyRetentionDays: 30, historyRecordLimit: 5000,
+          });
+        },
+      }, "Reset all"))));
+  renderSettingsPreview();
+}
+
 function renderWidgetCustomizer() {
   const panel = $("widget-customizer");
   const toggle = $("customize-summary");
@@ -2188,6 +2347,7 @@ function renderHealthRail() {
   }
   renderPulseFindings(model);
   renderWidgetCustomizer();
+  renderSettingsPanel();
 }
 
 /* ---------- issues ---------- */
@@ -3117,7 +3277,7 @@ function renderPulseFindings(model) {
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
-    (!lookbackApplies(state.view) || withinLookback(agent, state.lookbackHours)) &&
+    passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
@@ -3176,7 +3336,7 @@ function renderTabs() {
     if (!countNode) continue;
     const count = state.snap
       ? agents.filter((a) =>
-          viewMatches(view, a) && (!lookbackApplies(view) || withinLookback(a, state.lookbackHours)),
+          viewMatches(view, a) && passesLookback(a, view, state.lookbackHours),
         ).length
       : null;
     /* The lookback rides the tab it filters. History reads 37 while 388 ended
@@ -3193,7 +3353,15 @@ function renderTabs() {
     const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
       ? " · " + lookbackLabel(state.lookbackHours)
       : "";
-    countNode.textContent = count == null ? "" : String(count) + window;
+    /* The Waiting tab says how much of itself it cannot vouch for. These
+       sessions are the largest population on the board and the whole reason the
+       contract exists; folding them silently into a Waiting count would hide the
+       disclosure inside the number it is about. */
+    const unverified = count != null && view === "waiting"
+      ? agents.filter((a) => isUnverified(a)).length
+      : 0;
+    const unverifiedNote = unverified > 0 ? " · " + unverified + " unverified" : "";
+    countNode.textContent = count == null ? "" : String(count) + window + unverifiedNote;
     /* Zero counts go quiet rather than disappearing.
 
        At n=3 the navigation reads "Needs you 0 | Now 3 | Working 3 | Idle 0 |
@@ -3678,12 +3846,16 @@ function renderPrograms() {
       text: "Nothing matches the current " + parts.join(" and ") + " in this view.",
     }));
   } else {
+    /* Every empty state names the constraints that produced it, including the
+       scan window — which nothing used to mention anywhere, so an operator
+       looking at an empty History had no way to learn that collectors only read
+       36 hours back and their session was outside it. */
+    const scanNote = " · collectors scan " + (state.scanWindowHours ?? 36) + "h";
     const emptyByView = {
-      "now": `No active work right now — idle sessions remain available in Idle.`,
+      "now": "No active work right now — waiting sessions remain available in Waiting.",
       "needs-you": "Nothing needs you",
-      "working": "No agents are working right now.",
-      "idle": "No idle agents.",
-      "history": "No ended sessions recorded yet.",
+      "waiting": "Nothing is waiting" + scanNote + " — widen the scan window in Settings to reach older sessions.",
+      "history": "Nothing has finished in the window shown" + scanNote + " — widen the lookback or the scan window in Settings.",
     };
     /* An operator glancing at an empty cockpit must be able to tell "nothing is
        wrong" from "nothing has loaded". Those look identical when the only
@@ -3713,7 +3885,10 @@ function renderPrograms() {
         el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check")),
         el("p", { class: "all-clear-head", text: emptyByView["needs-you"] }),
         el("p", { class: "all-clear-vitals" },
-          el("span", { text: `${t.live} live · ${t.working} working · ${t.idle} idle` }),
+          el("span", {
+            text: `${t.live} live · ${t.working} working · ${t.idle} waiting`
+              + (t.unverified ? ` · ${t.unverified} unverified` : ""),
+          }),
           /* A stalled session is neither working nor done — it is the third
              state, and pulse.ts computes it while nothing rendered it. The
              earlier copy here went further and asserted "every tracked session is
@@ -3727,7 +3902,25 @@ function renderPrograms() {
           el("span", {
             dataset: { ago: state.snap.generatedAt },
             text: "checked " + agoText(state.snap.generatedAt),
-          })));
+          })),
+        /* THE ONE-GLANCE RULE. A working session must be NAMED on the landing
+           screen, not merely counted there.
+
+           The incident this closes: an operator could not find a session they
+           knew was running. The board opens on Needs you, Needs you was clear,
+           and "3 working" is a number you have to act on to resolve. Three names
+           and the session is found without a click; past three the count and the
+           Now tab take over, because a roster that scrolls is not a glance. */
+        ...(() => {
+          const working = snapshotAgents(state.snap)
+            .map((x) => x.agent)
+            .filter((a) => lifecycleOf(a) === "working" && scopeOf(a) === "observed");
+          if (!working.length) return [];
+          const named = working.slice(0, 3).map((a) => agentName(a));
+          const rest = working.length - named.length;
+          return [el("p", { class: "all-clear-roster" },
+            el("span", { text: named.join(" · ") + (rest > 0 ? ` · +${rest} more` : "") }))];
+        })());
     } else if (state.view === "needs-you") {
       /* Not an all-clear and not a blank: no agent is waiting, AND something is
          open. Both sentences, in that order, because the operator's next move is
@@ -3929,7 +4122,27 @@ function agentRowPlan(program, agents, ui = state) {
     }
     for (const child of children.get(agent.id) || []) appendTree(child, depth + 1);
   };
-  for (const agent of roots) appendTree(agent, 0);
+  /* The Unverified group: same rows, set apart under a heading that says what
+     they have in common. Grouping them is what keeps the Waiting tab readable —
+     they are the largest population on the board — and NOT hiding them is what
+     keeps the tab honest. A count with no rows behind it is the state the board
+     used to be in. */
+  const unverifiedRoots = roots.filter((agent) => isUnverified(agent));
+  const plainRoots = roots.filter((agent) => !isUnverified(agent));
+  for (const agent of plainRoots) appendTree(agent, 0);
+  if (unverifiedRoots.length) {
+    plan.push({
+      key: "unverified-head",
+      sig: "unverified:" + unverifiedRoots.length,
+      build: () => el("p", { class: "unverified-group unverified-group-head" },
+        el("span", {
+          text: unverifiedRoots.length === 1
+            ? "1 unverified — quiet, with no process found to check"
+            : unverifiedRoots.length + " unverified — quiet, with no process found to check",
+        })),
+    });
+    for (const agent of unverifiedRoots) appendTree(agent, 0);
+  }
   return plan;
 }
 
@@ -4020,7 +4233,7 @@ const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-o
    The cell speaks what the tab does NOT guarantee: an exceptional outcome
    always, and the activity only where a view genuinely mixes them and the row is
    not the dominant case. Healthy working rows in Now say nothing. */
-const ACTIVITY_PINNED_VIEWS = new Set(["working", "idle", "history"]);
+const ACTIVITY_PINNED_VIEWS = new Set(["waiting", "history"]);
 
 function rowStateWords(activity, outcome, view, agent) {
   const words = [];
@@ -7608,6 +7821,11 @@ function boot() {
     else render();
   });
 
+  $("settings-toggle").addEventListener("click", () => {
+    state.settingsPanelOpen = !state.settingsPanelOpen;
+    renderSettingsPanel();
+  });
+
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
     // Exclusive with the findings ledger (both are chrome expansions) — opening
@@ -7694,6 +7912,10 @@ function boot() {
    NOT a general escape hatch, and `boot()` / `render()` never read it. Tests
    that write `state` are responsible for restoring what they touched. */
 Object.assign(globalThis.TheAntHill, {
+  // Declared below the first export block, so they would be a TDZ error there —
+  // same reason CONN_LABELS and the transcript limits live down here.
+  settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
+  passesLookback, isUnverified,
   // The module's real state object. Exported because the confirmation strip,
   // the pending set, the feedback map and the attention/triage records are all
   // written by the request functions and read by the render functions — there
