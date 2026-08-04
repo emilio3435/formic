@@ -273,7 +273,15 @@ function archiveCopy(
     provider: agent.provider,
     sourceSessionId: agent.sourceSessionId,
     displayName: agent.displayName,
+    /* Written down for the same reason the lifecycle verdict below is: this is
+       an allow-list, and a record that has left the scan window can never be
+       re-derived. The transcript that held its first working directory may be
+       gone, so an identity dropped here is not recoverable — History would fall
+       back to naming a thirty-day-old record after whatever `displayName`
+       happened to be when it was filed. */
+    identity: agent.identity,
     cwd: agent.cwd,
+    originCwd: agent.originCwd,
     model: agent.model,
     effort: agent.effort,
     task: agent.task,

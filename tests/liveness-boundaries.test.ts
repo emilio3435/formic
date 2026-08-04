@@ -69,6 +69,17 @@ describe("collector activity bands", () => {
     expect(statusAfter(45 * MINUTE + 1_000).status).toBe("stale");
   });
 
+  /* Pinned to the millisecond, because a second of slack is enough room for the
+     comparison to flip from `<` to `<=` and the suite to stay green. Both edges
+     are half-open — the boundary instant belongs to the LATER band — and that is
+     the property a refactor is most likely to invert without noticing. */
+  test("each band boundary is exact to the millisecond, and belongs to the later band", () => {
+    expect(statusAfter(3 * MINUTE - 1).status).toBe("running");
+    expect(statusAfter(3 * MINUTE).status).toBe("waiting");
+    expect(statusAfter(45 * MINUTE - 1).status).toBe("waiting");
+    expect(statusAfter(45 * MINUTE).status).toBe("stale");
+  });
+
   test("long silence reads as stale", () => {
     expect(statusAfter(3 * 60 * MINUTE).status).toBe("stale");
   });
@@ -144,5 +155,36 @@ describe("the bands are the operator's, not the compiler's", () => {
     expect(parseClaudeJsonl(transcript(MINUTE), at(MINUTE))?.status).toBe("running");
     expect(parseClaudeJsonl(transcript(10 * MINUTE), at(10 * MINUTE))?.status).toBe("waiting");
     expect(parseClaudeJsonl(transcript(90 * MINUTE), at(90 * MINUTE))?.status).toBe("stale");
+  });
+
+  /* The sentence is what the operator actually reads, and it used to be a
+     literal: "within 3 minutes" / "in the last 45 minutes", written when both
+     numbers were constants. Settings v2 made them settable and left the prose
+     behind, so a board configured for a 90-minute quiet band went on saying 45 —
+     and snapshot.ts publishes this string verbatim on ordinary Working and
+     Waiting rows, so it was wrong on screen rather than merely wrong in a log.
+     The status assertions above cannot catch it: they only read `.status`. */
+  const reasonWith = (msAgo: number, freshMs: number, quietMs: number) =>
+    parseClaudeJsonl(transcript(msAgo), { ...at(msAgo), thresholds: { freshMs, quietMs } })?.statusReason;
+
+  test("the reason sentence quotes the operator's freshness window, not the shipped one", () => {
+    expect(reasonWith(MINUTE, 30 * MINUTE, 180 * MINUTE)).toMatch(/within 30 minutes/i);
+    expect(reasonWith(MINUTE, 30 * MINUTE, 180 * MINUTE)).not.toMatch(/3 minutes/i);
+  });
+
+  test("the reason sentence quotes the operator's quiet window when the session goes stale", () => {
+    expect(reasonWith(200 * MINUTE, 30 * MINUTE, 180 * MINUTE)).toMatch(/last 180 minutes/i);
+    expect(reasonWith(200 * MINUTE, 30 * MINUTE, 180 * MINUTE)).not.toMatch(/45 minutes/i);
+  });
+
+  test("a waiting session names the window it fell out of, not the one it has not reached", () => {
+    /* Waiting begins when freshness lapses, so the number that explains it is
+       freshMs. Quoting quietMs here would tell the operator a session had been
+       silent for a window it is still inside. */
+    expect(reasonWith(60 * MINUTE, 30 * MINUTE, 180 * MINUTE)).toMatch(/last 30 minutes/i);
+  });
+
+  test("one minute is spoken in the singular", () => {
+    expect(reasonWith(10_000, MINUTE, 180 * MINUTE)).toMatch(/within 1 minute\b/i);
   });
 });

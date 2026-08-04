@@ -120,7 +120,9 @@ function spokenAge(ageMs: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function spokenMinutes(ms: number): string {
+/* Exported so collectors.ts phrases a threshold the same way this module does.
+   Two copies of this sentence is how "45 minutes" survived becoming settable. */
+export function spokenMinutes(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }

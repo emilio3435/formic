@@ -1738,6 +1738,23 @@ describe("search", () => {
     expect(M.matchesQuery(a, program, "zzz-nope")).toBe(false);
   });
 
+  test("you can search for the name you can actually see", () => {
+    /* Search indexed `displayName`, which after the naming contract is no
+       longer what the row shows. The gap is exactly the case the contract
+       exists for: an authored name beats the derived one on screen, so
+       "Lifecycle Mapper" was visible on the board and unfindable in the box —
+       while the string search DID match was nowhere on screen. */
+    const authored = agent({
+      displayName: "Claude · the-mountain-main",
+      identity: { name: "Lifecycle Mapper", base: "Lifecycle Mapper", source: "authored" },
+    });
+    const program = { id: "p", name: "The Mountain" };
+
+    expect(M.matchesQuery(authored, program, "lifecycle mapper")).toBe(true);
+    // The old string stays findable — thirty days of archived rows still carry it.
+    expect(M.matchesQuery(authored, program, "the-mountain-main")).toBe(true);
+  });
+
   test("the search affordance advertises exactly the fields matchesQuery covers", () => {
     const input = html.match(/<input id="search"[^>]*>/)?.[0];
     expect(input).toBeDefined();
@@ -3287,6 +3304,30 @@ describe("agent drawer — Thread · Evidence", () => {
     const evidence = withDom(() => M.renderEvidence(named));
     expect(byClass(evidence, "names-disclosure")).not.toBeNull();
     expect(withDom(() => M.renderNamesDisclosure(named))).not.toBeNull();
+  });
+
+  test("the rename list offers the agent first, ahead of the terminal it shares", () => {
+    /* Order is priority here — the first row is the one an operator reaches for.
+       The agent target was last purely because it was the last `if` written, so
+       the default reach was the WORKSPACE label, which names a cmux pane.
+       Sibling panes share a workspace, so that rename silently renamed every
+       sibling at once — the opposite of "give this agent a name". */
+    const linked = agent({
+      cwd: "/repos/x",
+      target: { workspaceId: "WS-1", surfaceId: "SF-1", workspaceTitle: "wave6", resolution: "exact" },
+    });
+    const kinds = withDom(() =>
+      allByClass(M.renderNamesDisclosure(linked), "label-action")
+        .map((button: any) => String(button.attributes?.["aria-label"] ?? "")),
+    );
+
+    expect(kinds[0]).toContain("agent");
+    /* Proof the row order is what is being asserted, not merely that an agent
+       row exists somewhere: all three targets must be present for "first" to
+       mean anything. */
+    expect(kinds).toHaveLength(3);
+    expect(kinds.join(" ")).toContain("workspace");
+    expect(kinds.join(" ")).toContain("room");
   });
 
   test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {

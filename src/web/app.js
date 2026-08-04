@@ -466,6 +466,12 @@ function lookbackLabel(hours) {
 function matchesQuery(agent, program, query) {
   if (!query) return true;
   const hay = [
+    /* The name ON THE ROW, first. Search matched `displayName` only, which
+       after the naming contract is no longer what the operator is reading —
+       typing the name you can see returned nothing whenever the two differed,
+       which is precisely the authored-name case the contract exists to fix.
+       `displayName` stays in the list so the old string is still findable. */
+    agentName(agent),
     agent.displayName, agent.nickname, agent.task, agent.cwd, agent.model,
     agent.provider, agent.role, agent.sourceSessionId, agent.statusReason,
     agent.transcriptTail, agent.status,
@@ -682,7 +688,10 @@ function healthRemedy(snap) {
     const existing = byPane.get(surfaceId);
     if (!existing || (agent.updatedAt || "") > (existing.updatedAt || "")) {
       byPane.set(surfaceId, {
-        name: (agent.target && agent.target.workspaceTitle) || agent.displayName || surfaceId,
+        /* The pane's own title still wins — this row names a TERMINAL the
+           operator is about to close, not the session inside it. Only the
+           fallback changes, from the derived string to the resolved name. */
+        name: (agent.target && agent.target.workspaceTitle) || agentName(agent) || surfaceId,
         updatedAt: agent.updatedAt,
       });
     }
@@ -694,7 +703,10 @@ function healthRemedy(snap) {
     const affected = new Set(issue.affectedAgentIds || []);
     panes = entries
       .filter((entry) => affected.has(entry.agent.id) && entry.agent.activity === "ended")
-      .map((entry) => ({ name: entry.agent.displayName || entry.agent.id, updatedAt: entry.agent.updatedAt }));
+      /* Ended sessions are the worst case for the derived name: they are the
+         population most likely to share one, so a list of them read as the same
+         row repeated. */
+      .map((entry) => ({ name: agentName(entry.agent) || entry.agent.id, updatedAt: entry.agent.updatedAt }));
   }
 
   const blocked = issue
@@ -6152,6 +6164,20 @@ function sourceRoomLabel(target) {
 
 function presentationLabelTargets(agent) {
   const targets = [];
+  /* The agent goes FIRST because it is the only one of the three that names
+     this session and nothing else. A workspace label names a cmux pane, and
+     sibling panes share one — so renaming by workspace silently renames every
+     sibling at once, which is the opposite of what an operator reaching for
+     "give this agent a name" is asking for. It led the list purely because it
+     was the first `if` written. */
+  if (agentLabelEligible(agent)) {
+    targets.push({
+      target: agentLabelTarget(agent),
+      kind: "agent",
+      source: sourceAgentName(agent),
+      sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
+    });
+  }
   if (agent.target && agent.target.workspaceId) {
     const terminal = terminalSourceName(agent) || sourceWorkspaceLabel(agent.target);
     targets.push({
@@ -6167,14 +6193,6 @@ function presentationLabelTargets(agent) {
       kind: "room",
       source: sourceRoomLabel(agent.target),
       sourceEvidence: "Terminal surface id stays " + agent.target.surfaceId,
-    });
-  }
-  if (agentLabelEligible(agent)) {
-    targets.push({
-      target: agentLabelTarget(agent),
-      kind: "agent",
-      source: sourceAgentName(agent),
-      sourceEvidence: "Source agent: " + sourceAgentName(agent) + " · id stays " + agent.id,
     });
   }
   return targets;

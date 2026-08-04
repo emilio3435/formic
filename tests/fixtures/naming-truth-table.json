@@ -1,0 +1,347 @@
+{
+  "purpose": "The naming contract, written once and executed twice. tests/naming.test.ts runs these through the server resolver; tests/naming-parity.test.ts runs the same rows through the web client's mirror. A rule that lives in one implementation and not the other cannot survive both files.",
+  "homeDir": "/Users/ant",
+  "cases": [
+    {
+      "name": "an operator alias outranks an authored name, a directory and a task",
+      "tier": 1,
+      "claim": "A human who renamed a session gets the name they chose, whatever the machine thinks it knows.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
+        "operatorAlias": { "agent": "Lifecycle Rules Lead" },
+        "authored": { "name": "Explore", "by": "claude-subagent" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main",
+        "taskName": "Trace server-side agent naming"
+      },
+      "expect": { "name": "Lifecycle Rules Lead", "base": "Lifecycle Rules Lead", "source": "operator-alias" }
+    },
+    {
+      "name": "a workspace alias names the session when no agent alias exists",
+      "tier": 1,
+      "claim": "The operator labelled the pane and nothing else; that is still a human naming this session.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "operatorAlias": { "workspace": "Forecast lane" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": { "name": "Forecast lane", "base": "Forecast lane", "source": "operator-alias" }
+    },
+    {
+      "name": "an agent alias outranks a workspace alias",
+      "tier": 1,
+      "claim": "A workspace label names a cmux pane and sibling panes share one, so the agent-specific label is the more precise intent.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "operatorAlias": { "agent": "BE integrator", "workspace": "Forecast lane" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": { "name": "BE integrator", "base": "BE integrator", "source": "operator-alias" }
+    },
+    {
+      "name": "a whitespace-only alias is not an alias",
+      "tier": 1,
+      "claim": "An operator who cleared the rename box did not name the session; the chain must carry on past it.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
+        "operatorAlias": { "agent": "   " },
+        "authored": { "name": "Identity Name Tracer", "by": "claude-subagent" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "Identity Name Tracer",
+        "base": "Identity Name Tracer",
+        "source": "authored",
+        "authoredBy": "claude-subagent"
+      }
+    },
+    {
+      "name": "an authored name outranks the directory it happens to run in",
+      "tier": 2,
+      "claim": "This is the flip. Today 'Lifecycle Mapper' loses to 'Claude · the-mountain-main' because the client cannot tell an authored name from a guessed one, so the folder wins and 360 sessions share a name.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "authored": { "name": "Lifecycle Mapper", "by": "claude-subagent" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main",
+        "taskName": "Map every lifecycle call site"
+      },
+      "expect": {
+        "name": "Lifecycle Mapper",
+        "base": "Lifecycle Mapper",
+        "source": "authored",
+        "authoredBy": "claude-subagent"
+      }
+    },
+    {
+      "name": "an authored name outranks a task line",
+      "tier": 2,
+      "claim": "The task says what the agent was asked to do; the authored name says what it is called.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "authored": { "name": "BE-3 forecast auth", "by": "codex-nickname" },
+        "taskName": "Harden the forecast service bearer auth"
+      },
+      "expect": {
+        "name": "BE-3 forecast auth",
+        "base": "BE-3 forecast auth",
+        "source": "authored",
+        "authoredBy": "codex-nickname"
+      }
+    },
+    {
+      "name": "a launcher-supplied environment name is an authored name",
+      "tier": 2,
+      "claim": "Claude root sessions pass no explicit name anywhere else, so ANT_HILL_AGENT_NAME is their only authored path.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "7c1974e0-9999-8888-7777-666655554444",
+        "authored": { "name": "Naming Contract Planner", "by": "launch-env" },
+        "originCwd": "/Users/ant/Developer/the-mountain-lanes/naming-contract-20260804"
+      },
+      "expect": {
+        "name": "Naming Contract Planner",
+        "base": "Naming Contract Planner",
+        "source": "authored",
+        "authoredBy": "launch-env"
+      }
+    },
+    {
+      "name": "Cursor's untitled-composer placeholder is not an authored name",
+      "tier": 2,
+      "claim": "'new agent' is Cursor's own boilerplate for a composer nobody has titled. Accepting it would give every untitled Cursor session the same authored name.",
+      "evidence": {
+        "provider": "cursor",
+        "sourceSessionId": "cur-0000-1111-2222-33334444abcd",
+        "authored": { "name": "New Agent", "by": "cursor-composer" },
+        "originCwd": "/Users/ant/Developer/LaHormigaDormida"
+      },
+      "expect": { "name": "Cursor · LaHormigaDormida", "base": "Cursor · LaHormigaDormida", "source": "origin-cwd" }
+    },
+    {
+      "name": "an OMP status row is not an authored name",
+      "tier": 2,
+      "claim": "'Session update' is periodic boilerplate that arrives in a name-shaped field.",
+      "evidence": {
+        "provider": "omp",
+        "sourceSessionId": "omp-5555-6666-7777-88889999beef",
+        "authored": { "name": "Session update [2026-08-04]", "by": "omp-title" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": { "name": "OMP · the-mountain-main", "base": "OMP · the-mountain-main", "source": "origin-cwd" }
+    },
+    {
+      "name": "the directory a session began in names it, not the one it wandered to",
+      "tier": 3,
+      "claim": "Freezing at origin is the whole point: this session recorded six cwd changes in four minutes and was published under another lane's name.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": { "name": "Claude · the-mountain-main", "base": "Claude · the-mountain-main", "source": "origin-cwd" }
+    },
+    {
+      "name": "a session started in the home directory is named Home, not after the operator",
+      "tier": 3,
+      "claim": "The basename of $HOME is a username; naming every session after the operator tells nobody anything.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "originCwd": "/Users/ant"
+      },
+      "expect": { "name": "Claude · Home", "base": "Claude · Home", "source": "origin-cwd" }
+    },
+    {
+      "name": "a trailing slash does not make a different directory",
+      "tier": 3,
+      "claim": "Two spellings of one path must not produce two names, or the freeze is worthless.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "originCwd": "/Users/ant/"
+      },
+      "expect": { "name": "Claude · Home", "base": "Claude · Home", "source": "origin-cwd" }
+    },
+    {
+      "name": "the origin directory outranks the task line",
+      "tier": 3,
+      "claim": "A prompt blob is not a name. The board learned this the hard way when prompts became terminal titles operators had to hunt through.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "originCwd": "/Users/ant/repos/hormiga/x-cb-fe",
+        "taskName": "Build the X campaign builder wizard"
+      },
+      "expect": { "name": "Codex · x-cb-fe", "base": "Codex · x-cb-fe", "source": "origin-cwd" }
+    },
+    {
+      "name": "the task line names a session that recorded no directory",
+      "tier": 4,
+      "claim": "Last thing left that carries meaning.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "taskName": "Harden the forecast service bearer auth"
+      },
+      "expect": {
+        "name": "Harden the forecast service bearer auth",
+        "base": "Harden the forecast service bearer auth",
+        "source": "task"
+      }
+    },
+    {
+      "name": "an attachment header is not a task name",
+      "tier": 4,
+      "claim": "A transcript whose first content is a file attachment has told us nothing about what the agent is.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "taskName": "<file name=\"report.md\">"
+      },
+      "expect": { "name": "Claude session", "base": "Claude session", "source": "provider-fallback" }
+    },
+    {
+      "name": "a session with no evidence at all still gets its provider's name",
+      "tier": 5,
+      "claim": "Never blank. A row with no name is a row an operator cannot refer to.",
+      "evidence": { "provider": "omp", "sourceSessionId": "omp-5555-6666-7777-88889999beef" },
+      "expect": { "name": "OMP session", "base": "OMP session", "source": "provider-fallback" }
+    },
+    {
+      "name": "a name of exactly the operator cap is left alone",
+      "tier": 2,
+      "claim": "80 characters is what program-aliases.ts already accepts by hand, so it must survive here untouched.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "authored": {
+          "name": "Reconcile the lifecycle contract against the in-flight implementation and report",
+          "by": "launch-env"
+        }
+      },
+      "expect": {
+        "name": "Reconcile the lifecycle contract against the in-flight implementation and report",
+        "base": "Reconcile the lifecycle contract against the in-flight implementation and report",
+        "source": "authored",
+        "authoredBy": "launch-env"
+      }
+    },
+    {
+      "name": "a name longer than the operator cap is truncated to it",
+      "tier": 2,
+      "claim": "A derived name an operator is forbidden to retype by hand is a name they cannot search for.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+        "authored": {
+          "name": "Reconcile the lifecycle contract against the in-flight implementation and report deviations",
+          "by": "launch-env"
+        }
+      },
+      "expect": {
+        "name": "Reconcile the lifecycle contract against the in-flight implementation and repor…",
+        "base": "Reconcile the lifecycle contract against the in-flight implementation and repor…",
+        "source": "authored",
+        "authoredBy": "launch-env"
+      }
+    }
+  ],
+  "fleets": [
+    {
+      "name": "two sessions in one worktree stop sharing a name",
+      "claim": "The live board's headline failure: 360 sessions named 'Claude · the-mountain-main'. The base survives so the name still reads; the tail of the session id separates them.",
+      "agents": [
+        {
+          "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+          "evidence": { "provider": "claude", "sourceSessionId": "dad9736f-1111-2222-3333-444455556666", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
+          "evidence": { "provider": "claude", "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        }
+      ],
+      "expect": ["Claude · the-mountain-main #55556666", "Claude · the-mountain-main #deadbeef"]
+    },
+    {
+      "name": "a name nobody else has is left alone",
+      "claim": "A tag on every row would be noise on a board where most names should end up distinct once operators and launchers name things.",
+      "agents": [
+        {
+          "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
+          "evidence": { "provider": "claude", "sourceSessionId": "dad9736f-1111-2222-3333-444455556666", "authored": { "name": "Lifecycle Rules Lead", "by": "launch-env" } }
+        },
+        {
+          "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
+          "evidence": { "provider": "claude", "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef", "authored": { "name": "Identity Name Tracer", "by": "launch-env" } }
+        }
+      ],
+      "expect": ["Lifecycle Rules Lead", "Identity Name Tracer"]
+    },
+    {
+      "name": "three sessions sharing a name all get separated, and a fourth is untouched",
+      "claim": "Disambiguation is per name, not per board: one crowded folder must not put a tag on an unrelated row.",
+      "agents": [
+        {
+          "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1",
+          "evidence": { "provider": "codex", "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2",
+          "evidence": { "provider": "codex", "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "cccc3333-0000-0000-0000-00000000ccc3",
+          "evidence": { "provider": "codex", "sourceSessionId": "cccc3333-0000-0000-0000-00000000ccc3", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "dddd4444-0000-0000-0000-00000000ddd4",
+          "evidence": { "provider": "cursor", "sourceSessionId": "dddd4444-0000-0000-0000-00000000ddd4", "originCwd": "/Users/ant/Developer/LaHormigaDormida" }
+        }
+      ],
+      "expect": [
+        "Codex · the-mountain-main #0000aaa1",
+        "Codex · the-mountain-main #0000bbb2",
+        "Codex · the-mountain-main #0000ccc3",
+        "Cursor · LaHormigaDormida"
+      ]
+    },
+    {
+      "name": "a disambiguator that is itself shared escalates to the whole session id",
+      "claim": "A tag that settles nothing is worse than no tag, because it looks like it settled something. Acceptance turns on no two sessions sharing a name.",
+      "agents": [
+        {
+          "sourceSessionId": "1111-shared99",
+          "evidence": { "provider": "claude", "sourceSessionId": "1111-shared99", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "2222-shared99",
+          "evidence": { "provider": "claude", "sourceSessionId": "2222-shared99", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        }
+      ],
+      "expect": [
+        "Claude · the-mountain-main #1111-shared99",
+        "Claude · the-mountain-main #2222-shared99"
+      ]
+    },
+    {
+      "name": "an operator alias survives disambiguation untagged when it is already unique",
+      "claim": "Naming a session by hand is the operator's escape hatch out of a crowded folder, and it has to actually work.",
+      "agents": [
+        {
+          "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1",
+          "evidence": { "provider": "claude", "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1", "operatorAlias": { "agent": "Naming lane" }, "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2",
+          "evidence": { "provider": "claude", "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        }
+      ],
+      "expect": ["Naming lane", "Claude · the-mountain-main"]
+    }
+  ]
+}

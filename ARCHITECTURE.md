@@ -64,6 +64,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |
 | `burnbar.ts`, `burnbar-query.ts` | Cost, read from an external encrypted OpenBurnBar database in an isolated subprocess |
 | `model-config.ts` | Model families, context windows, and Cursor-native policy from `config/models.json` |
+| `naming.ts` | What an agent is called. One ordered chain, first match wins: an operator alias outranks a name the launcher authored, which outranks the directory the session **began** in, which outranks its task line. Names freeze at origin because a transcript records cwd per entry — reading the latest let a name follow the shell, so one session renamed itself four times in four minutes and was published under a neighbouring lane's name. Uniqueness is a property of the fleet rather than of any session, so `disambiguate` is handed every agent at once and is the only thing permitted to append a session tag |
 | `program-aliases.ts`, `settings.ts` | Operator-set names and the scan window, persisted under `data/` |
 | `command.ts` | The child-process runner every shell probe goes through; its timeout always settles |
 
@@ -114,6 +115,17 @@ the hazard; two *unverified* implementations were. Both are executed against
 `tests/fixtures/lifecycle-truth-table.json` by `tests/lifecycle.test.ts` and
 `tests/lifecycle-parity.test.ts`, so a rule that lands in one and not the other
 fails immediately, by name.
+
+`naming.js` is the same arrangement for a different question: a mirror of
+`src/server/naming.ts`, not a second opinion. The server publishes each agent's
+resolved identity, so on a current snapshot this file decides nothing — it
+exists for archived rows written before that field did. Naming had already been
+forked this way once and the fork was invisible: the server built a name from
+the working directory while the client rebuilt a different one behind a
+"contains · and is under 56 characters" heuristic, and an agent deliberately
+named "Lifecycle Mapper" lost to the derived "Claude · the-mountain-main". So
+the rules live in `tests/fixtures/naming-truth-table.json` and
+`tests/naming-parity.test.ts` executes both copies against it.
 
 `repaint.js` is small and load-bearing: it holds an indirection to `render()`
 (`setRepaint` / `repaint`) so modules can ask for a repaint without importing

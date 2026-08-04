@@ -4,6 +4,7 @@ import { open, readdir, stat } from "node:fs/promises";
 import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
+  spokenMinutes,
   type LifecycleThresholds,
 } from "./lifecycle";
 import {
@@ -16,6 +17,7 @@ import {
 import { AGENT_IDLE_GAP_MS, MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
+import { resolveAgentName, type AuthoredNameSource } from "./naming";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const fileCache = new Map<string, {
@@ -265,6 +267,16 @@ function taskDisplayName(task?: string): string | undefined {
   return firstLine.length > 100 ? `${firstLine.slice(0, 99).trimEnd()}…` : firstLine;
 }
 
+/* Which launcher a provider's explicit name came from. Each provider has
+   exactly one place an authored name can originate, so this is a lookup rather
+   than a per-call-site argument. */
+const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
+  codex: "codex-nickname",
+  omp: "omp-title",
+  claude: "claude-subagent",
+  cursor: "cursor-composer",
+};
+
 function statusFrom(
   updatedAt: string,
   exited: boolean,
@@ -276,9 +288,21 @@ function statusFrom(
 } {
   if (exited) return { status: "archived", reason: "Source recorded a session exit." };
   const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
-  if (ageMs < thresholds.freshMs) return { status: "running", reason: "Source activity within 3 minutes." };
-  if (ageMs < thresholds.quietMs) return { status: "waiting", reason: "No source activity in the last 3 minutes." };
-  return { status: "stale", reason: "No source activity in the last 45 minutes." };
+  /* The minutes are SPOKEN from the thresholds, not written into the sentence.
+     They used to be literals — "within 3 minutes" / "in the last 45 minutes" —
+     which was true only while the defaults were. Slice 3 of the lifecycle
+     contract made both numbers operator-settable, and snapshot.ts publishes this
+     string verbatim on every ordinary Working and Waiting row, so an operator who
+     widened the quiet band to 90 minutes got a row that still said 45. Reuses
+     lifecycle.ts's helper rather than a second copy, so the two paths cannot come
+     to phrase the same threshold differently. */
+  if (ageMs < thresholds.freshMs) {
+    return { status: "running", reason: `Source activity within ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  if (ageMs < thresholds.quietMs) {
+    return { status: "waiting", reason: `No source activity in the last ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  return { status: "stale", reason: `No source activity in the last ${spokenMinutes(thresholds.quietMs)}.` };
 }
 
 function withCurrentStatus(
@@ -306,6 +330,12 @@ function makeAgent(input: {
   sourceSessionId: string;
   displayName?: string;
   cwd?: string;
+  /* The FIRST working directory this session recorded. Separate from `cwd`,
+     which stays current because routing and cmux matching need where the
+     session is NOW; only the name reads this one, because a name that moves is
+     not an identity. Defaults to `cwd` for the providers whose session file
+     records a single directory and therefore cannot drift. */
+  originCwd?: string;
   model?: string;
   effort?: string;
   task?: string;
@@ -348,7 +378,24 @@ function makeAgent(input: {
     !/^<file name=/i.test(explicitName)
     ? explicitName
     : undefined;
+  /* Resolved here because this is where every provider's session becomes one
+     shape, so there is a single call site rather than four. ADDITIVE for now:
+     `displayName` below is untouched and still carries the derived string every
+     surface renders today. The two disagree on purpose until the client cuts
+     over — that disagreement is what the wire has to expose in order to be
+     testable before anything depends on it. */
+  const identity = resolveAgentName({
+    provider: input.provider,
+    sourceSessionId: input.sourceSessionId,
+    authored: usefulExplicitName
+      ? { name: usefulExplicitName, by: AUTHORED_BY[input.provider] }
+      : undefined,
+    originCwd: input.originCwd ?? input.cwd,
+    taskName: taskDisplayName(input.task),
+  });
   return {
+    identity,
+    originCwd: input.originCwd ?? input.cwd,
     id: `${input.provider}:${input.sourceSessionId}`,
     callSizes: input.callSizes,
     provider: input.provider,
@@ -676,6 +723,14 @@ export function claudeContextWindow(
 function createClaudeParser(): IncrementalParser {
   let identity: JsonRecord | undefined;
   let cwd: string | undefined;
+  /* Assigned once and never reassigned — that is the whole mechanism. A Claude
+     transcript records cwd per entry, so `cwd` below tracks the shell; the name
+     must not. Reproduced on the session that wrote this file: six cwd changes
+     in four minutes from read-only `git` and `ls`, four renames, and one
+     interval published under a different lane's name entirely. Because the
+     transcript is append-only, the first recorded cwd is the same on a cold
+     parse and on every incremental one. */
+  let originCwd: string | undefined;
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
   const activeTime = new ActiveTime();
@@ -704,7 +759,10 @@ function createClaudeParser(): IncrementalParser {
           (typeof row.cwd === "string" || row.type === "last-prompt")) {
           identity = row;
         }
-        if (typeof row.cwd === "string") cwd = row.cwd;
+        if (typeof row.cwd === "string") {
+          cwd = row.cwd;
+          originCwd ??= row.cwd;
+        }
         if (
           typeof row.session_id === "string" &&
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.session_id)
@@ -787,6 +845,7 @@ function createClaudeParser(): IncrementalParser {
         sourceSessionId: identity.sessionId,
         runtimeSessionId,
         cwd,
+        originCwd,
         model,
         effort,
         task,

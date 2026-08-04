@@ -11,6 +11,7 @@ import {
   type HumanMessageCandidate,
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import { resolveAgentName } from "./naming";
 import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
@@ -249,7 +250,24 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     provider: "cursor",
     sourceSessionId: input.sessionId,
     displayName,
+    /* Cursor builds its agents here rather than through `makeAgent`, so the
+       resolver has to be called here too — an agent with no `identity` is simply
+       skipped by the fleet-wide uniqueness pass, which would quietly leave every
+       Cursor session out of the contract. A composer the operator titled is an
+       AUTHORED name; `genericCursorName` is what recognises Cursor's own
+       placeholder for one nobody titled. Cursor records a single directory per
+       session, so there is no drift to freeze against and `cwd` is the origin. */
+    identity: resolveAgentName({
+      provider: "cursor",
+      sourceSessionId: input.sessionId,
+      authored: genericCursorName(input.store?.name)
+        ? undefined
+        : { name: input.store!.name!.trim(), by: "cursor-composer" },
+      originCwd: meta.cwd,
+      taskName,
+    }),
     cwd: meta.cwd,
+    originCwd: meta.cwd,
     model: input.store?.model,
     effort: input.store?.effort,
     task,
