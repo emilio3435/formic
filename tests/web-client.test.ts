@@ -25,7 +25,34 @@ beforeAll(async () => {
   styles = readFileSync(join(import.meta.dir, "../src/web/styles.css"), "utf8");
 });
 
+/* The legacy status word a fixture asks for, translated into the lifecycle the
+   server would actually publish beside it. Fixtures here are hand-written wire
+   payloads, and the server puts `lifecycle` on every agent now — one without it
+   is a snapshot from an older server, which is a real case but not the one most
+   of these tests are about. Overriding `lifecycle` explicitly still works, and
+   omitting BOTH is how the legacy-fallback tests exercise the fallback. */
+const LIFECYCLE_FOR_STATUS: Record<string, string> = {
+  running: "working",
+  waiting: "waiting",
+  // The old activityFor mapped `waiting|attention -> idle`, and idle is Waiting.
+  attention: "waiting",
+  stale: "unverified",
+  archived: "finished",
+};
+
+/* Some fixtures state the older ACTIVITY word instead. Same translation, other
+   vocabulary — and it is the vocabulary the server derives from the lifecycle
+   now, so reading it back the other way is exactly right. */
+const LIFECYCLE_FOR_ACTIVITY: Record<string, string> = {
+  working: "working",
+  idle: "waiting",
+  unknown: "unverified",
+  ended: "finished",
+};
+
 function agent(overrides: Record<string, unknown> = {}) {
+  const status = typeof overrides.status === "string" ? overrides.status : "running";
+  const activity = typeof overrides.activity === "string" ? overrides.activity : undefined;
   return {
     id: "codex:a1",
     provider: "codex",
@@ -35,6 +62,8 @@ function agent(overrides: Record<string, unknown> = {}) {
     status: "running",
     statusReason: "Streaming output.",
     updatedAt: "2026-07-22T03:00:00.000Z",
+    lifecycle: (activity ? LIFECYCLE_FOR_ACTIVITY[activity] : LIFECYCLE_FOR_STATUS[status]) ?? "working",
+    scope: "observed",
     tokens: { provenance: "observed", total: 1200 },
     artifacts: [],
     gates: [],
@@ -605,10 +634,12 @@ describe("summary status and widgets", () => {
       target: { surfaceId: "s1", resolution: "unique-cwd", workspaceTitle: "cmux: alpha" },
     }));
     const dead = brief(agent({
-      activity: "ended", status: "stale", processState: "died", processAlive: false,
-      processIds: [123], target: routed,
+      activity: "ended", lifecycle: "finished", provenance: "process-died",
+      processState: "died", processAlive: false, processIds: [123], target: routed,
     }));
-    const archived = brief(agent({ activity: "ended", status: "archived", target: routed }));
+    const archived = brief(agent({
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive", target: routed,
+    }));
 
     // Three different sentences, not one message wearing three hats.
     const titles = [pane.title, dead.title, archived.title];
@@ -638,17 +669,25 @@ describe("summary status and widgets", () => {
        problem for a session that has ENDED sends the operator to fix something
        that no longer matters. */
     const both = brief(agent({
-      activity: "ended", status: "archived", processState: "died",
-      processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive",
+      processState: "died", processAlive: false, processIds: [1], target: { resolution: "ambiguous" },
     }));
     expect(both.cause).toBe("archived");
 
     // And the short form the dock's accessible text uses splits the same way.
-    expect(M.controlUnavailableText("observed-only", agent({ activity: "ended", status: "archived" })))
-      .toMatch(/archived/);
     expect(M.controlUnavailableText("observed-only", agent({
-      activity: "ended", status: "stale", processState: "died", processAlive: false, processIds: [1],
+      activity: "ended", lifecycle: "finished", provenance: "operator-archive",
+    }))).toMatch(/you archived/i);
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", lifecycle: "finished", provenance: "process-died",
+      processState: "died", processAlive: false, processIds: [1],
     }))).toMatch(/process is gone/);
+    /* The ending a human did NOT make now says so. It used to read "this
+       session is archived" for a provider exit, which credits the operator with
+       a decision they never took. */
+    expect(M.controlUnavailableText("observed-only", agent({
+      activity: "ended", lifecycle: "finished", provenance: "provider-exit",
+    }))).toMatch(/session exit/i);
     // With no agent it still answers, rather than throwing on the old signature.
     expect(M.controlUnavailableText("quarantined")).toMatch(/ambiguous/);
   });
@@ -1805,17 +1844,26 @@ describe("broadcast recipient eligibility", () => {
   });
 
   test("ineligible recipients name their reason from the same state the gate reads", () => {
-    // Ended splits archived (explicit) vs ended (stale / other non-live).
-    expect(M.broadcastIneligibleReason(agent({ status: "archived" }))).toBe("archived");
-    expect(M.broadcastIneligibleReason(agent({ status: "stale" }))).toBe("ended");
-    expect(M.broadcastIneligibleReason(agent({ activity: "ended", status: "running" }))).toBe("ended");
+    /* Four reasons where there used to be one word for four facts. "Archived"
+       covered a provider exit, an operator's decision, a dead process and a
+       record that simply aged out, so the chip explaining why a recipient was
+       unavailable told the operator nothing they could act on. */
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "operator-archive" }))).toBe("archived");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "provider-exit" }))).toBe("finished");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "process-died" }))).toBe("process died");
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "waiting", scope: "retained" }))).toBe("in history");
+    /* And an unverified session is NOT one of them. Nothing ended it, so the
+       reason it cannot be sent to — if it cannot — is about its target, not
+       about it being over. */
+    expect(M.broadcastIneligibleReason(agent({ lifecycle: "unverified", target: { resolution: "missing" } })))
+      .toBe("view only");
     // Live-but-locked reads its control state: ambiguous target → quarantined,
     // everything else → view only. Same fields deriveControlState consumes.
     expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
     expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
     expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
     // Never the bare "unavailable" placeholder.
-    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } })]) {
+    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } }), agent({ lifecycle: "unverified" })]) {
       expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
     }
   });

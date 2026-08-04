@@ -15,6 +15,7 @@
 
 import { fmtTok } from "./text-formatters.js";
 import { DEFAULT_LOOKBACK_HOURS } from "./client-catalogs.js";
+import { deriveLifecycle } from "./lifecycle.js";
 
 /* ---------- derivations (narrow fallbacks for the transitional schema) ----------
    The server now emits activity/outcome/controlState directly; when a snapshot
@@ -30,6 +31,47 @@ export function deriveActivity(agent) {
     case "archived": return "ended";
     default: return "unknown";
   }
+}
+
+/* The preferred reader. `lifecycle` is what the server publishes and what every
+   surface below is keyed to; when a snapshot arrives without it — an older
+   server, a cached response — src/web/lifecycle.js classifies from the fields
+   that predate the contract, against the same truth table the server runs.
+
+   `deriveActivity` above is deliberately untouched and no longer feeds any of
+   this. It maps a quiet session straight to "ended" with none of the server's
+   rescue for a live process, which is the divergence the contract exists to
+   remove; it survives only as the legacy activity word for callers that still
+   want one. */
+export function lifecycleOf(agent) {
+  return deriveLifecycle(agent || {}).lifecycle;
+}
+
+export function provenanceOf(agent) {
+  return deriveLifecycle(agent || {}).provenance;
+}
+
+/* Whether the board is still watching this session, or only holds a record of
+   it. Not part of the lifecycle: leaving the scan window is a fact about the
+   board's reach, not about the session's ending. */
+export function scopeOf(agent) {
+  return agent && agent.scope === "retained" ? "retained" : "observed";
+}
+
+/* One predicate for "nothing more will happen here", which is what History
+   contains and what strips a row's controls. Finished OR retained — the two are
+   different facts and both are terminal. */
+export function isTerminal(agent) {
+  return lifecycleOf(agent) === "finished" || scopeOf(agent) === "retained";
+}
+
+/* And its opposite, which is what "live" means everywhere on this board.
+   Unverified is in NEITHER: it is not live, because nothing can vouch for it,
+   and it is not terminal, because nothing ended it. */
+export function isLive(agent) {
+  if (scopeOf(agent) === "retained") return false;
+  const state = lifecycleOf(agent);
+  return state === "working" || state === "waiting";
 }
 
 export function deriveOutcome(agent) {
@@ -156,7 +198,7 @@ export function livenessView(agent) {
   if (!key) return null;
   // Same wire value, two different facts — see LIVENESS_ENDED_UNKNOWN. The key
   // is untouched, so the chip's styling and every existing selector still match.
-  if (key === "unknown" && deriveActivity(agent) === "ended") {
+  if (key === "unknown" && isTerminal(agent)) {
     return { key, ...LIVENESS_ENDED_UNKNOWN };
   }
   return { key, ...LIVENESS_VIEW[key] };
@@ -194,25 +236,35 @@ export function livenessView(agent) {
    so wiring those in would have swapped a false negative for six false
    positives. */
 export function wantsHuman(agent) {
-  return Boolean(agent && agent.attentionSignal) && deriveActivity(agent) !== "ended";
+  return Boolean(agent && agent.attentionSignal) && !isTerminal(agent);
 }
 
 export function alerting(agent) {
   if (wantsHuman(agent)) return true;
   if (deriveOutcome(agent) === "healthy") return false;
-  if (deriveActivity(agent) !== "ended") return true;
+  if (!isTerminal(agent)) return true;
+  /* The rescue arm, kept for legacy snapshots. A terminal row alerts only on
+     POSITIVE evidence its process is still there — which under the contract is
+     a contradiction the server now discloses on the row itself, but an older
+     snapshot has no lifecycle for this client to read and this is what caught
+     the ghost then. It retires with schemaVersion 2. */
   return livenessState(agent) === "running";
 }
 
 export function deriveRollup(agents) {
-  const act = (a) => deriveActivity(a);
+  const state = (a) => lifecycleOf(a);
   const out = (a) => deriveOutcome(a);
+  const observed = agents.filter((a) => scopeOf(a) === "observed");
   return {
     total: agents.length,
-    live: agents.filter((a) => act(a) === "working" || act(a) === "idle").length,
-    working: agents.filter((a) => act(a) === "working").length,
-    idle: agents.filter((a) => act(a) === "idle").length,
-    ended: agents.filter((a) => act(a) === "ended").length,
+    live: agents.filter(isLive).length,
+    working: observed.filter((a) => state(a) === "working").length,
+    /* `idle` keeps its wire name and means Waiting. The rollup is read by name
+       in several places and by the server's own rollupFor; renaming it is a
+       schema-2 job, not a rendering one. */
+    idle: observed.filter((a) => state(a) === "waiting").length,
+    unverified: observed.filter((a) => state(a) === "unverified").length,
+    ended: agents.filter(isTerminal).length,
     /* The one verdict, not a second opinion about it. This re-derived "wants a
        human" from outcome and activity, so the program rollup counted a
        different population than the tab beside it — it missed every attention
@@ -228,19 +280,28 @@ export function deriveRollup(agents) {
 export const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
 export function viewMatches(view, agent) {
-  const act = deriveActivity(agent);
-  const out = deriveOutcome(agent);
+  const state = lifecycleOf(agent);
+  const observed = scopeOf(agent) === "observed";
   switch (view) {
-    // Both read the shared alerting() verdict, so Now and Alerts can never
+    // Both read the shared alerting() verdict, so Now and Needs you can never
     // disagree about whether a given agent is waiting on a person.
-    case "now": return act === "working" || alerting(agent);
+    case "now": return (observed && state === "working") || alerting(agent);
     case "needs-you": return alerting(agent);
-    case "working": return act === "working";
-    case "idle": return act === "idle";
-    case "history": return act === "ended";
+    case "working": return observed && state === "working";
+    /* Waiting holds the unverified sessions too, grouped and counted apart in
+       the render. They have to live somewhere findable: History is where the
+       original missing-session incident sent them, and a tab of their own taxes
+       every glance for a distinction about evidence quality. */
+    case "idle": return observed && (state === "waiting" || state === "unverified");
+    case "history": return isTerminal(agent);
     case "usage": return false;
     default: return true;
   }
+}
+
+/* The Unverified group inside Waiting, which the render draws collapsed. */
+export function isUnverified(agent) {
+  return scopeOf(agent) === "observed" && lifecycleOf(agent) === "unverified";
 }
 
 export function parseLookbackHours(raw) {

@@ -93,16 +93,25 @@ describe("9493126 — three disabled buttons give three different answers", () =
        could not be proven, and the second is recoverable while the first is
        not. */
     const archived = presentation.controlUnavailableText("observed-only",
-      agent({ activity: "ended", status: "archived" }));
+      agent({ lifecycle: "finished", provenance: "operator-archive" } as Partial<AgentSnapshot>));
+    const exited = presentation.controlUnavailableText("observed-only",
+      agent({ lifecycle: "finished", provenance: "provider-exit" } as Partial<AgentSnapshot>));
+    const agedOut = presentation.controlUnavailableText("observed-only",
+      agent({ lifecycle: "waiting", scope: "retained", provenance: "aged-out" } as Partial<AgentSnapshot>));
     const dead = presentation.controlUnavailableText("observed-only",
-      agent({ activity: "ended", processState: "died", processIds: [4242] } as Partial<AgentSnapshot>));
+      agent({ lifecycle: "finished", provenance: "process-died", processState: "died", processIds: [4242] } as Partial<AgentSnapshot>));
     const unproven = presentation.controlUnavailableText("unproven", agent({ target: FOLDER_MATCHED }));
 
-    expect(archived).toMatch(/archived/i);
+    expect(archived).toMatch(/you archived/i);
+    expect(exited).toMatch(/session exit/i);
+    expect(agedOut).toMatch(/scan window/i);
     expect(dead).toMatch(/process is gone/i);
     expect(unproven).toMatch(/cannot confirm which session/i);
-    // Three causes, three sentences — the property, not the wording.
-    expect(new Set([archived, dead, unproven]).size).toBe(3);
+    /* FIVE causes, five sentences. It was three, and one of them — "archived" —
+       was doing the work of four: a provider exit, an operator's decision, a
+       record that aged out, all told the operator they had archived something
+       they may never have touched. */
+    expect(new Set([archived, exited, agedOut, dead, unproven]).size).toBe(5);
   });
 
   test("the unproven refusal says what is off rather than that something broke", () => {

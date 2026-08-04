@@ -115,6 +115,13 @@ import {
   deriveControlState,
   deriveOutcome,
   deriveRollup,
+  isLive,
+  isTerminal,
+  isUnverified,
+  lifecycleOf,
+  provenanceOf,
+  scopeOf,
+  wantsHuman,
   LIVENESS_ENDED_UNKNOWN,
   LIVENESS_VIEW,
   LIVENESS_WORDS,
@@ -386,11 +393,18 @@ function totalsOf(snap) {
   const t = (snap && snap.totals) || {};
   const agents = snapshotAgents(snap).map((x) => x.agent);
   const count = (pred) => agents.filter(pred).length;
+  /* Prefer the lifecycle census, which is what the server actually counts now,
+     and fall back through the legacy totals to a client recount. The fallback
+     re-derives from `lifecycleOf`, not `deriveActivity`, so a recount cannot
+     produce a different answer from the one the tabs are showing. */
+  const byLifecycle = t.byLifecycle || {};
   return {
-    working: t.working ?? count((a) => deriveActivity(a) === "working"),
-    idle: t.idle ?? count((a) => deriveActivity(a) === "idle"),
-    history: t.history ?? count((a) => deriveActivity(a) === "ended"),
-    live: t.live ?? count((a) => deriveActivity(a) === "working" || deriveActivity(a) === "idle"),
+    working: byLifecycle.working ?? t.working ?? count((a) => lifecycleOf(a) === "working" && scopeOf(a) === "observed"),
+    idle: byLifecycle.waiting ?? t.idle ?? count((a) => lifecycleOf(a) === "waiting" && scopeOf(a) === "observed"),
+    unverified: byLifecycle.unverified ?? count(isUnverified),
+    history: t.history ?? count(isTerminal),
+    retained: t.retained ?? count((a) => scopeOf(a) === "retained"),
+    live: t.live ?? count(isLive),
     tracked: t.tracked ?? agents.length,
     tokens: t.tokens,
     tokenMedian: t.tokenMedian,
@@ -1072,6 +1086,7 @@ const FINDING_VISUAL = {
 
 globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
+  lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isUnverified, wantsHuman,
   controlUnavailableText,
   totalsOf, issuesOf, alerting, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
@@ -4007,12 +4022,17 @@ const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-o
    not the dominant case. Healthy working rows in Now say nothing. */
 const ACTIVITY_PINNED_VIEWS = new Set(["working", "idle", "history"]);
 
-function rowStateWords(activity, outcome, view) {
+function rowStateWords(activity, outcome, view, agent) {
   const words = [];
   if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
     words.push(ACTIVITY_LABELS[activity] || activity);
   }
   if (outcome !== "healthy") words.push(OUTCOME_LABELS[outcome] || outcome);
+  /* An alerting row always says so. A healthy-outcome session carrying only an
+     attentionSignal reached the Needs you tab, the title badge and the notifier,
+     and its own row printed nothing — the one surface an operator is actually
+     looking at when they scan. */
+  if (!words.length && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
   return words;
 }
 
@@ -4193,7 +4213,7 @@ function renderAgentRow(agent, program, opts = {}) {
        the title and the row's aria-label, so nothing is lost to a reader who
        asks — it just stops being printed 275 times. */
     (() => {
-      const words = rowStateWords(activity, outcome, state.view);
+      const words = rowStateWords(activity, outcome, state.view, agent);
       if (!words.length) return null;
       return el("span", {
         class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
@@ -6667,7 +6687,7 @@ async function submitRename(target) {
    is shown as unavailable and never counted as sent. */
 function broadcastEligible(agent) {
   const cap = (agent.controls || []).find((c) => c.action === "instruct");
-  return deriveActivity(agent) !== "ended" && !!cap && cap.enabled === true;
+  return !isTerminal(agent) && !!cap && cap.enabled === true;
 }
 
 /* Why an ineligible recipient can't receive a broadcast, in one operator word —
@@ -6675,8 +6695,16 @@ function broadcastEligible(agent) {
    eligibility gate never disagree. Ended sessions split archived vs ended;
    live-but-locked sessions read their control state (quarantined vs view only). */
 function broadcastIneligibleReason(agent) {
-  if (deriveActivity(agent) === "ended") {
-    return (agent.status === "archived" || agent.activity === "archived") ? "archived" : "ended";
+  /* Four reasons, not one word for four facts. "Archived" used to cover a
+     provider exit, an operator's decision, a dead process and a record that
+     simply aged out — so the chip explaining why a recipient is unavailable told
+     the operator nothing they could act on. The provenance names which it is. */
+  if (scopeOf(agent) === "retained") return "in history";
+  if (lifecycleOf(agent) === "finished") {
+    const why = provenanceOf(agent);
+    if (why === "operator-archive") return "archived";
+    if (why === "process-died") return "process died";
+    return "finished";
   }
   const control = deriveControlState(agent);
   if (control === "quarantined") return "quarantined";

@@ -17,7 +17,7 @@
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome, livenessState } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
 import { state } from "./client-state.js";
 
 /* Plain words for provider-native enums that used to render raw. */
@@ -211,11 +211,12 @@ export function controlUnavailableText(controlState, agent = null) {
      facts and the summary line must not flatten them into a routing complaint.
      (quarantineBrief owns the long form; this is the short one the dock's
      accessible text uses.) */
-  if (agent && deriveActivity(agent) === "ended") {
-    if (agent.status === "archived" || agent.activity === "archived") {
-      return "Controls are off because this session is archived.";
-    }
-    if (livenessState(agent) === "died") {
+  if (agent && isTerminal(agent)) {
+    const why = provenanceOf(agent);
+    if (why === "operator-archive") return "Controls are off because you archived this session.";
+    if (why === "provider-exit") return "Controls are off because the source recorded a session exit.";
+    if (why === "aged-out") return "Controls are off because this session left the scan window; only its record is kept.";
+    if (why === "process-died" || livenessState(agent) === "died") {
       return "Controls are off because this session's process is gone — there is nothing left to receive them.";
     }
   }
@@ -502,8 +503,36 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
      process cannot be typed into however cleanly it resolves. Naming the
      routing problem of a session that has ENDED sends the operator to fix a
      terminal binding that no longer matters. */
-  const ended = deriveActivity(agent) === "ended";
-  if (ended && (agent.status === "archived" || agent.activity === "archived")) {
+  const ended = isTerminal(agent);
+  const why = provenanceOf(agent);
+  /* Four endings, four explanations. They all read "You archived this session"
+     before, including the ones no human had touched — so an operator was told
+     they had made a decision they had not made, about a session a provider
+     closed or that simply drifted out of the scan window. */
+  if (ended && why === "provider-exit") {
+    return {
+      title: "This session ended.",
+      summary: "The source recorded a session exit, so there is nothing left to control.",
+      why: "A provider writes a session exit when the session itself closes — not when a turn finishes. Its transcript stays readable in History.",
+      nextStep: "Read it in History, or start a new session if there is more work.",
+      cause: "archived",
+      steps: [],
+    };
+  }
+  if (ended && why === "aged-out") {
+    return {
+      title: "This session left the scan window.",
+      summary: "Nothing ended it — the board simply stopped watching, and kept the record.",
+      why: "Collectors read transcripts inside the scan window. Past it a session is no longer observed, so no current evidence about it exists to control on.",
+      nextStep: "Widen the scan window in Settings if you need sessions this old back on the board.",
+      cause: "archived",
+      steps: [],
+    };
+  }
+  /* Deliberately NOT branching on process-died here: the block below already
+     owns that sentence, and owns it better — it is the one refusal on this
+     board that offers no repair, because none exists. */
+  if (ended && why !== "process-died") {
     return {
       title: "You archived this session.",
       summary: "Controls are off because it is archived, not because anything failed.",
@@ -515,7 +544,7 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
       steps: [],
     };
   }
-  if (ended && livenessState(agent) === "died") {
+  if (ended && (why === "process-died" || livenessState(agent) === "died")) {
     return {
       title: "This session's process is gone.",
       summary: "Controls are off because there is nothing left running to receive them.",
