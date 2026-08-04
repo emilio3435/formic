@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { parseClaudeJsonl, type ParseMetadata } from "../src/server/collectors";
-import { parseCursorSession } from "../src/server/cursor";
+import { parseCursorSession, parseCursorChildSession } from "../src/server/cursor";
 import { JsonArchiveStore, type ArchiveFileOperations } from "../src/server/archive";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CollectedAgent } from "../src/server/types";
@@ -277,5 +277,60 @@ describe("the client renders the name it was given", () => {
       provider: "claude",
       displayName: "Claude · the-mountain-main",
     })).toBe("Claude · the-mountain-main");
+  });
+});
+
+describe("no provider path escapes the contract", () => {
+  /* Found by measuring the live board after deploy rather than by reading the
+     code: 211 sessions carried an identity and 34 did not, and all 34 were
+     Cursor CHILDREN — built by `parseCursorChildSession`, a fourth construction
+     site nobody had wired. They were publishing one shared name between them,
+     which is exactly the defect the contract removes. An unwired path does not
+     throw; it is silently skipped by the fleet-wide pass. */
+  test("a Cursor child session resolves an identity", () => {
+    const child = parseCursorChildSession({
+      sessionId: "33333333-4444-4555-8666-777777777777",
+      parentSessionId: "11111111-2222-4333-8444-555555555555",
+      cwd: "/Users/ant/Developer/hd-master-dev-20260723",
+      transcriptJsonl: JSON.stringify({ role: "user", message: { content: "check the diff" } }),
+      transcriptPath: "/tmp/child.jsonl",
+      updatedAtMs: NOW,
+      nowMs: NOW,
+    });
+
+    expect(child?.identity?.name).toBe("Cursor · hd-master-dev-20260723");
+    expect(child?.identity?.source).toBe("origin-cwd");
+  });
+
+  test("siblings of one parent are separated, because a folder cannot tell them apart", () => {
+    /* Children of one parent share a working directory by definition, so the
+       origin-cwd tier CANNOT distinguish them and the session tag is the only
+       thing that can. This is the case that proves disambiguation is load
+       bearing rather than decorative. */
+    const sibling = (id: string) =>
+      parseCursorChildSession({
+        sessionId: id,
+        parentSessionId: "11111111-2222-4333-8444-555555555555",
+        cwd: "/Users/ant/Developer/hd-master-dev-20260723",
+        transcriptJsonl: JSON.stringify({ role: "user", message: { content: "go" } }),
+        transcriptPath: "/tmp/child.jsonl",
+        updatedAtMs: NOW,
+        nowMs: NOW,
+      })!;
+
+    const kids = [
+      sibling("33333333-4444-4555-8666-aaaaaaaaaaaa"),
+      sibling("44444444-5555-4666-8777-bbbbbbbbbbbb"),
+    ];
+    expect(kids[0]!.identity!.base).toBe(kids[1]!.identity!.base);
+
+    const snapshot = buildSnapshot({
+      agents: kids,
+      surfaces: [],
+      archiveStore,
+      now: new Date(NOW),
+    });
+    const names = snapshot.programs.flatMap((p) => p.agents).map((a) => a.identity?.name);
+    expect(new Set(names).size).toBe(2);
   });
 });

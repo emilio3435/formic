@@ -347,7 +347,22 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     provider: "cursor",
     sourceSessionId: input.sessionId,
     displayName: childIdentity || taskName || "Cursor child agent",
+    /* Cursor CHILDREN are built here, not by `parseCursorSession` above, and
+       were the one population the naming wire missed: 34 of them on the live
+       board, every one publishing "Cursor · hd-master-dev-20260723", which is
+       precisely the collision the contract exists to remove. They carry no
+       authored name, so they resolve to their origin directory and are then
+       separated by `disambiguate` — siblings of one parent share a folder by
+       definition, so the session tag is the only thing that can tell them
+       apart. */
+    identity: resolveAgentName({
+      provider: "cursor",
+      sourceSessionId: input.sessionId,
+      originCwd: input.cwd,
+      taskName,
+    }),
     cwd: input.cwd,
+    originCwd: input.cwd,
     model: input.model,
     task,
     status,
