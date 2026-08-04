@@ -21,6 +21,37 @@ const _providersAreExhaustive: ProvidersAreExhaustive = true;
 void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
+/* Where an agent's name came from, in precedence order. Published so a surface
+   can tell an AUTHORED name from a DERIVED one — the distinction the client had
+   no way to make, which is how an agent deliberately named "Lifecycle Mapper"
+   came to display as "Claude · the-mountain-main". */
+export type NameSource =
+  | "operator-alias"
+  | "authored"
+  | "origin-cwd"
+  | "task"
+  | "provider-fallback";
+/** Which launcher authored the name, when one did. */
+export type AuthoredNameSource =
+  | "codex-nickname"
+  | "claude-subagent"
+  | "omp-title"
+  | "cursor-composer"
+  | "launch-env";
+/* What a session is called, decided once by src/server/naming.ts.
+
+   `base` is the name before fleet-wide uniqueness is applied and `name` is what
+   a surface renders; they differ only when two sessions resolved to the same
+   base and a `disambiguator` had to separate them. Both are published because a
+   roster wants the base (grouping) while a row wants the name (identification). */
+export interface AgentIdentity {
+  name: string;
+  base: string;
+  source: NameSource;
+  authoredBy?: AuthoredNameSource;
+  disambiguator?: string;
+}
+
 /* The one bucket every session occupies. Four states, and the fourth is the
    point: `unverified` is the answer for a session that has gone quiet with no
    process to check, which the board used to file as ended. Absence of evidence
@@ -257,6 +288,11 @@ export interface AgentSnapshot {
   provider: Provider;
   sourceSessionId: string;
   displayName: string;
+  /* What this session is called and why, resolved server-side across the whole
+     fleet so uniqueness is decided once. Published ALONGSIDE `displayName`
+     during the transition: nothing renders it yet, and `displayName` still
+     carries the old derived string until the client cuts over. */
+  identity?: AgentIdentity;
   programId: string;
   cwd?: string;
   model?: string;

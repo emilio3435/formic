@@ -1,4 +1,5 @@
 import type {
+  AgentIdentity,
   AgentSnapshot,
   CollectionScope,
   HubPulse,
@@ -53,6 +54,7 @@ import {
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
+import { disambiguate } from "./naming";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -115,6 +117,21 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  /* Uniqueness is decided ONCE, here, because it is the only place the whole
+     fleet is in hand. A collector sees one session at a time and so cannot know
+     whether its name is shared; if it guessed, the guess would change every time
+     an unrelated session started or ended, and a name that moves is the bug this
+     contract exists to remove. Measured on the live board 2026-08-04: 805 of 821
+     sessions shared a name with at least one other, so this pass is the
+     difference between a board of 51 names and a board of 821. */
+  const named = sources.filter(
+    (source): source is CollectedAgent & { identity: AgentIdentity } => Boolean(source.identity),
+  );
+  const identitiesById = new Map(
+    disambiguate(
+      named.map((source) => ({ sourceSessionId: source.sourceSessionId, identity: source.identity })),
+    ).map((identity, index) => [named[index]!.id, identity] as const),
+  );
   const childCounts = new Map<string, number>();
   for (const source of sources) {
     if (!source.parentSourceSessionId) continue;
@@ -248,6 +265,10 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          an overlay instead of a replacement. */
       status: statusForLifecycle(verdict.lifecycle, scope),
       statusReason: snapshotStatusReason,
+      /* Post-uniqueness, so this is the first point `identity.name` is safe to
+         render. `displayName` above is deliberately left alone until the client
+         cuts over. */
+      ...(identitiesById.get(source.id) ? { identity: identitiesById.get(source.id) } : {}),
       activity,
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,

@@ -1,4 +1,5 @@
 import type {
+  AgentIdentity,
   AgentStatus,
   Artifact,
   CostUsage,
@@ -35,7 +36,14 @@ export interface CollectedAgent {
   /** Provider runtime identity when it differs from the transcript's source identity. */
   runtimeSessionId?: string;
   displayName: string;
+  /* Resolved by src/server/naming.ts at the one point every provider's session
+     becomes this shape. Still pre-uniqueness here: `disambiguate` needs the whole
+     fleet and only snapshot.ts has it, so `name` may equal another agent's until
+     that pass runs. */
+  identity?: AgentIdentity;
   cwd?: string;
+  /** The first working directory recorded, never the latest. Only naming reads it. */
+  originCwd?: string;
   model?: string;
   effort?: string;
   task?: string;

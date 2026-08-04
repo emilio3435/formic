@@ -1,6 +1,11 @@
 import { basename } from "node:path";
 import { homedir } from "node:os";
-import type { Provider } from "../shared/types";
+import type { AgentIdentity, AuthoredNameSource, NameSource, Provider } from "../shared/types";
+
+/* Re-exported so this module reads as the home of naming even though the types
+   themselves live in shared/: they travel on the wire, and the client cannot
+   import from src/server/. */
+export type { AgentIdentity, AuthoredNameSource, NameSource };
 
 /* The one place an agent's name is decided.
 
@@ -41,29 +46,6 @@ import type { Provider } from "../shared/types";
    operator is forbidden to reproduce by hand. */
 export const MAX_NAME_LENGTH = 80;
 
-/* Which tier of the precedence chain produced the name. Published on the wire
-   so a surface can style an authored name differently from a guessed one
-   WITHOUT re-deriving the guess — the client heuristic this replaces
-   ("contains · and is under 56 chars") existed only because the client could
-   not tell those two apart, and it got the answer backwards: a real authored
-   name like "Lifecycle Mapper" lost to the derived "Claude · the-mountain-main". */
-export type NameSource =
-  | "operator-alias"
-  | "authored"
-  | "origin-cwd"
-  | "task"
-  | "provider-fallback";
-
-/* Who authored the name, when one was authored. Kept distinct from the tier
-   because "a human typed this into the rename box" and "the launcher passed
-   --name" are both authored, and the board should be able to say which. */
-export type AuthoredNameSource =
-  | "codex-nickname"
-  | "claude-subagent"
-  | "omp-title"
-  | "cursor-composer"
-  | "launch-env";
-
 export interface NameEvidence {
   provider: Provider;
   /** The provider's own session id. Only ever read to build a disambiguator. */
@@ -87,17 +69,6 @@ export interface NameEvidence {
    * handoff markers and markdown, and that logic stays where it lives.
    */
   taskName?: string;
-}
-
-export interface AgentIdentity {
-  /** What every surface shows. `base`, plus a disambiguator when one was needed. */
-  name: string;
-  /** The name before any uniqueness tag. Stable regardless of who else exists. */
-  base: string;
-  /** Present only when another session shares `base`. */
-  disambiguator?: string;
-  source: NameSource;
-  authoredBy?: AuthoredNameSource;
 }
 
 /* The provider's name as an operator says it out loud. collectors.ts holds a
