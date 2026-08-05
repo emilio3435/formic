@@ -229,12 +229,12 @@ Parent chain already renders via `buildClusters`/lineage spine — now populated
 ### Task F3: liveness truth + finished shelf
 
 Map `hookLifecycle` (B1) into row activity (a `needsInput` agent shows "waiting on you" even when hibernated-dark); retired/ended rows collapse into a per-worktree "Finished" shelf (collapsed by default, count in header) instead of interleaving with live rows.
-- [ ] TDD; **commit** `feat(board): hook-store liveness and finished shelf`.
+- [x] TDD; **commit** `feat(board): hook-store liveness and finished shelf`. **[DONE e506bd1, merged]**
 
 ### Task F4: docs parity + polish
 
 ANT-GUIDE.md + ARCHITECTURE.md updated for the new hierarchy/roles/links; `?v=` bump verified; keyboard focus survives a 4s repaint under the new keys (manual check + existing focus tests).
-- [ ] **Commit** `docs(guide): agent-atlas hierarchy, roles, and links`.
+- [x] **Commit** `docs(guide): agent-atlas hierarchy, roles, and links`. **[DONE 335505f, merged]**
 
 ---
 
