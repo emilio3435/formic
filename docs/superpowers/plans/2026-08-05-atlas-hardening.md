@@ -44,7 +44,7 @@ As specced in the atlas plan (stretch B7): `cmux events --cursor-file ~/.anthill
 
 The `[from <agent.id> run <runId>]` header is spoof-visible, not spoof-proof. For each parsed sender: confirm the claimed sender's own transcript contains the send (tail-scan its session file for the message head, bounded). Wire: `senderVerified?: boolean`. Unverifiable (no transcript access) ⇒ absent, never false. A header whose claimed sender's transcript provably lacks the message ⇒ `senderVerified: false` (fe styles it as forged). No crypto until this cheap check proves insufficient.
 
-### T6 — The parked / blocked / done contract (first free SOL lane) ⭐ the "what's actually cooking" fix
+### T6 — The parked / blocked / done contract (first free SOL lane) ⭐ the "what's actually cooking" fix ✅ **[DONE 7baf93b, merged]**
 
 Today `hookLifecycle:needsInput` ⇒ wantsHuman — correct mid-task, wrong for a lane whose assignment is complete and is idling at its prompt. Declared task-state joins the manifest: lane gains `status?: "active" | "parked" | "done"` (+ `statusAt`), written by the orchestrator (stand-down = parked, DONE ALL = done) or by T9 self-registration. Precedence: declared status > hook lifecycle for the *attention* verdict only (a parked lane that later ASKS something re-alerts — hook needsInput NEWER than statusAt wins). Wire: `taskState?: "active"|"parked"|"done"` + source. ANT-GUIDE/parity/docs in the same commits. This is the plan's one serialization point — its wire shape gates T7.
 
