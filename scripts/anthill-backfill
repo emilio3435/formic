@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Retroactive lane adoption: anthill-backfill <runId> <laneId> <provider:sessionId>
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUN_BIN="${BUN_BIN:-bun}"
+exec "$BUN_BIN" "$ROOT/scripts/anthill-manifest.ts" backfill "$@"
