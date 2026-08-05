@@ -78,6 +78,12 @@ import {
   type CollectedAgent,
 } from "./types";
 
+function pathIsWithin(path: string, root: string): boolean {
+  const normalizedPath = path.replaceAll("\\", "/").replace(/\/+$/, "");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/+$/, "");
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
 export interface SnapshotInput {
   agents: readonly CollectedAgent[];
   /* An authored title for an agent id, when one has been written down.
@@ -295,10 +301,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const sidebar = target.workspaceId
       ? sidebarByWorkspace.get(target.workspaceId)
       : undefined;
-    const repoCwd = sidebar?.projectRootPath ?? source.cwd ?? surface?.cwd;
+    const liveRepoCwd = sidebar?.projectRootPath ?? source.cwd ?? surface?.cwd;
+    const repoCwd = declared?.repoRoot ?? liveRepoCwd;
+    /* A manifest describes the repository the lane is working FOR. When the
+       process itself lives in an orchestrator or scratch checkout, its sidebar
+       branch, dirty bit, head and PR links belong to that other checkout and
+       must not overwrite target-repository truth. */
+    const liveRepoMatchesTarget = !declared?.repoRoot
+      || Boolean(liveRepoCwd && pathIsWithin(liveRepoCwd, declared.repoRoot));
     const resolvedRepo = repoCwd ? resolveRepoIdentity(repoCwd) : null;
     const repo = resolvedRepo
-      ? { ...resolvedRepo, ...(sidebar?.branch ? { branch: sidebar.branch } : {}) }
+      ? {
+          ...resolvedRepo,
+          ...(liveRepoMatchesTarget && sidebar?.branch ? { branch: sidebar.branch } : {}),
+        }
       : undefined;
     const notification = target.surfaceId
       ? [...(input.notifications ?? [])]
@@ -484,7 +500,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...(repo ? { repo } : {}),
-      ...(sidebar?.pullRequestUrls.length ? { pullRequestUrls: sidebar.pullRequestUrls } : {}),
+      ...(liveRepoMatchesTarget && sidebar?.pullRequestUrls.length
+        ? { pullRequestUrls: sidebar.pullRequestUrls }
+        : {}),
       ...recordAttention(attentionCoverage, {
         transcriptTail: source.transcriptTail,
         // Straight from cmux, never recovered from the rendered marker: an agent
@@ -520,13 +538,17 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : source.transcriptTail,
       elapsedMs: source.startedAt ? Math.max(0, elapsedEndMs - Date.parse(source.startedAt)) : undefined,
       ...(source.activeMs === undefined ? {} : { activeMs: source.activeMs }),
-      git: sidebar || surface || repo?.branch
-        ? {
-            branch: sidebar?.branch ?? surface?.branch ?? repo?.branch,
-            dirty: sidebar?.dirty ?? surface?.dirty,
-            head: surface?.head,
-          }
-        : undefined,
+      git: liveRepoMatchesTarget
+        ? sidebar || surface || repo?.branch
+          ? {
+              branch: sidebar?.branch ?? surface?.branch ?? repo?.branch,
+              dirty: sidebar?.dirty ?? surface?.dirty,
+              head: surface?.head,
+            }
+          : undefined
+        : repo?.branch
+          ? { branch: repo.branch }
+          : undefined,
       target,
       /* Un-archive is offered only where it is HONOURED: the store must be able
          to do it, and the ending must be one a human made. */

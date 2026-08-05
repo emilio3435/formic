@@ -105,8 +105,10 @@ repository, then by what is happening inside it**:
     ▸ disposable checkouts          ← every throwaway worktree, folded into one
 ```
 
-The band is the **repository** — one line per project, however many checkouts
-of it are running. Under it sits one leaf per **worktree**, named
+The band is the **repository** — one line per project, however many worktrees or
+independent clones of the same origin are running. A declared lane is filed
+under the repository it targets even when its process runs from an orchestrator
+or scratch checkout. Under the band sits one leaf per **worktree**, named
 `branch@folder`, *except* when something better is known: a swarm that declared
 a **run** is named by its run id (a run spans several worktrees, so no single
 branch would be honest), and every undeclared throwaway checkout of a repository

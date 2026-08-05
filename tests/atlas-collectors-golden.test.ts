@@ -120,6 +120,7 @@ describe("collector goldens — hook store, manifests, sidebar snapshot", () => 
       laneId: "fe1-geometry",
       role: "worker",
       parentAgentId: "claude:orch-atlas-20260805",
+      repoRoot: "/Users/ant/Developer/LaHormigaDormida",
     });
   });
 

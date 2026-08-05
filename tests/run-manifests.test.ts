@@ -33,12 +33,14 @@ test("a valid run manifest binds its lane and orchestrator to declared lineage",
     laneId: "fe1-geometry",
     role: "worker",
     parentAgentId: "claude:orch-atlas-20260805",
+    repoRoot: "/Users/ant/Developer/LaHormigaDormida",
   });
   expect(manifestFactsFor("claude:orch-atlas-20260805", manifests)).toEqual({
     runId: "inbox-ux-overhaul-2026-08-05",
     laneId: "inbox-ux-overhaul-2026-08-05",
     role: "orchestrator",
     parentAgentId: undefined,
+    repoRoot: "/Users/ant/Developer/LaHormigaDormida",
   });
 });
 
@@ -376,13 +378,31 @@ test("workspace env supplies lineage when no manifest binds the session", () => 
   expect(program?.groupPath).toEqual([repo.repoKey, "run:env-run"]);
 });
 
-test("a declared run groups a non-git session instead of falling back to its cwd", async () => {
+test("a declared lane groups under its target repository instead of its non-git cwd", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "anthill-declared-non-git-"));
   try {
+    const targetRepo = resolveRepoIdentity(process.cwd());
+    expect(targetRepo).not.toBeNull();
+    if (!targetRepo) throw new Error("test checkout must be a git repository");
     const source = collected({ cwd, originCwd: cwd });
     const snapshot = buildSnapshot({
       agents: [source],
-      surfaces: [],
+      surfaces: [{
+        workspaceId: "WORKSPACE-B3-TARGET-REPO",
+        surfaceId: "SURFACE-B3-TARGET-REPO",
+        cwd,
+        branch: "wrong/live-branch",
+        dirty: true,
+        head: "wrong-live-head",
+        sourceSessionIds: [source.sourceSessionId],
+      }],
+      sidebarWorkspaces: [{
+        workspaceId: "WORKSPACE-B3-TARGET-REPO",
+        projectRootPath: cwd,
+        branch: "wrong/sidebar-branch",
+        dirty: true,
+        pullRequestUrls: ["https://example.invalid/wrong-repo/pull/1"],
+      }],
       runManifests: [manifest()],
       archiveStore,
       now: new Date("2026-08-05T12:01:30.000Z"),
@@ -391,9 +411,13 @@ test("a declared run groups a non-git session instead of falling back to its cwd
     const agent = program?.agents[0];
 
     expect(agent?.programId).toBe("run:manifest-run");
-    expect(program?.id).toBe("run:manifest-run");
-    expect(program?.name).toBe("manifest-run");
-    expect(program?.groupPath).toBeUndefined();
+    expect(agent?.repo).toEqual(targetRepo);
+    expect(program?.id).toBe(`repo:${targetRepo.repoKey}:run:manifest-run`);
+    expect(program?.groupPath).toEqual([targetRepo.repoKey, "run:manifest-run"]);
+    expect(agent?.git?.branch).toBe(targetRepo.branch);
+    expect(agent?.git?.dirty).toBeUndefined();
+    expect(agent?.git?.head).toBeUndefined();
+    expect(agent?.pullRequestUrls).toBeUndefined();
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
