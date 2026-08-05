@@ -45,6 +45,15 @@ export function activityBandOf(ageMs, thresholds = DEFAULT_LIFECYCLE_THRESHOLDS)
   return "quiet";
 }
 
+export function retirementEndEvidence(evidence) {
+  if (evidence.endEvidence === "session-exit" || evidence.endEvidence === "worktree-deleted") {
+    return evidence.endEvidence;
+  }
+  if (evidence.hookLifecycle === "ended") return "session-exit";
+  if (evidence.processAlive === false && evidence.cwdExists === false) return "worktree-deleted";
+  return evidence.endEvidence;
+}
+
 /* Coarsest unit that still reads as a fact: "quiet 2880m" is true and useless. */
 function spokenAge(ageMs) {
   const minutes = Math.max(0, Math.floor(ageMs / 60_000));
@@ -98,7 +107,8 @@ export function classifyLifecycle(evidence, thresholds = DEFAULT_LIFECYCLE_THRES
 
   const proc = processEvidenceOf(evidence);
   const band = activityBandOf(evidence.ageMs, thresholds);
-  const turnComplete = evidence.endEvidence === "turn-complete";
+  const endEvidence = retirementEndEvidence(evidence);
+  const turnComplete = endEvidence === "turn-complete";
 
   // Row 1 — human intent outranks every machine fact, including a live process.
   if (evidence.operatorArchived) {
@@ -106,8 +116,17 @@ export function classifyLifecycle(evidence, thresholds = DEFAULT_LIFECYCLE_THRES
   }
 
   // Row 2 — the only end-of-session fact a provider emits. A turn is not one.
-  if (evidence.endEvidence === "session-exit") {
+  if (endEvidence === "session-exit") {
     return { lifecycle: "finished", provenance: "provider-exit", reason: finishedReason("provider-exit") };
+  }
+
+  // Row 3 — a negative process check plus a deleted cwd is retirement evidence.
+  if (endEvidence === "worktree-deleted") {
+    return {
+      lifecycle: "finished",
+      provenance: "process-died",
+      reason: "Process checked and gone after its worktree was deleted.",
+    };
   }
 
   // Row 4 — a dead-process probe loses to writes happening right now.
@@ -222,6 +241,8 @@ export function evidenceFromAgent(agent, nowMs = Date.now()) {
     ageMs,
     scope: agent.scope,
     endEvidence: agent.endEvidence ?? (agent.status === "archived" ? "session-exit" : undefined),
+    hookLifecycle: agent.hookLifecycle,
+    cwdExists: agent.cwdExists,
     processAlive: agent.processAlive,
     processIds: agent.processIds,
     processRosterComplete: agent.processRosterComplete,

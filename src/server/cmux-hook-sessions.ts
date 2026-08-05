@@ -36,7 +36,7 @@ function finiteNumber(value: unknown): value is number {
 }
 
 function lifecycle(value: unknown): HookLifecycle | undefined {
-  return value === "idle" || value === "running" || value === "needsInput" || value === "unknown"
+  return value === "idle" || value === "running" || value === "needsInput" || value === "ended" || value === "unknown"
     ? value
     : undefined;
 }

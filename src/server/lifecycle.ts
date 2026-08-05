@@ -1,6 +1,7 @@
 import type {
   CollectionScope,
   EndEvidence,
+  HookLifecycle,
   LifecycleProvenance,
   LifecycleState,
 } from "../shared/types";
@@ -74,10 +75,14 @@ export interface LifecycleEvidence {
   /** An operator pressed Archive. Human intent, and it outranks everything. */
   operatorArchived?: boolean;
   /**
-   * What the source actually recorded. `session-exit` is a session fact;
+   * What ended. `session-exit` and `worktree-deleted` are session facts;
    * `turn-complete` is a turn boundary and says nothing about the session.
    */
   endEvidence?: EndEvidence;
+  /** Direct lifecycle fact from the cmux hook-session store. */
+  hookLifecycle?: HookLifecycle;
+  /** Whether the recorded cwd still exists; undefined when it was not checked. */
+  cwdExists?: boolean;
   /** Liveness of the retained process ids; undefined when nothing trustworthy checked. */
   processAlive?: boolean;
   /** Process ids retained from a confirmed identity scan. */
@@ -108,6 +113,18 @@ export interface LifecycleVerdict {
   provenance: LifecycleProvenance;
   /** User-facing sentence explaining the verdict; ships as `statusReason`. */
   reason: string;
+}
+
+export function retirementEndEvidence(evidence: Pick<
+  LifecycleEvidence,
+  "endEvidence" | "hookLifecycle" | "processAlive" | "cwdExists"
+>): EndEvidence | undefined {
+  if (evidence.endEvidence === "session-exit" || evidence.endEvidence === "worktree-deleted") {
+    return evidence.endEvidence;
+  }
+  if (evidence.hookLifecycle === "ended") return "session-exit";
+  if (evidence.processAlive === false && evidence.cwdExists === false) return "worktree-deleted";
+  return evidence.endEvidence;
 }
 
 /* `processAlive === false` alone is not death. The identity scan sets it false
@@ -208,7 +225,8 @@ export function classifyLifecycle(
 
   const proc = processEvidenceOf(evidence);
   const band = activityBandOf(evidence.ageMs, thresholds);
-  const turnComplete = evidence.endEvidence === "turn-complete";
+  const endEvidence = retirementEndEvidence(evidence);
+  const turnComplete = endEvidence === "turn-complete";
 
   // Row 1 — an operator archived it. Human intent outranks every machine fact,
   // including a process that is demonstrably still running; the contradiction is
@@ -221,13 +239,22 @@ export function classifyLifecycle(
     };
   }
 
-  // Row 2 — the source recorded a session exit. This is the only end-of-session
-  // fact a provider emits; a completed turn is not one.
-  if (evidence.endEvidence === "session-exit") {
+  // Row 2 — the source or hook recorded a session exit. A completed turn is not one.
+  if (endEvidence === "session-exit") {
     return {
       lifecycle: "finished",
       provenance: "provider-exit",
       reason: finishedReason("provider-exit"),
+    };
+  }
+
+  // Row 3 — the process is gone and its worktree no longer exists. The deleted
+  // cwd is the corroboration that lets a pid-less negative probe retire the row.
+  if (endEvidence === "worktree-deleted") {
+    return {
+      lifecycle: "finished",
+      provenance: "process-died",
+      reason: "Process checked and gone after its worktree was deleted.",
     };
   }
 

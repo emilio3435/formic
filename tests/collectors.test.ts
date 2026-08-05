@@ -742,6 +742,7 @@ describe("collector identity and usage truth", () => {
     const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-"));
     const sessions = join(home, ".codex", "sessions");
     const hookRoot = join(home, ".cmuxterm");
+    const deletedCwd = join(home, "deleted-worktree");
     const sessionId = "11111111-2222-4333-8444-555555555555";
     mkdirSync(sessions, { recursive: true });
     mkdirSync(hookRoot, { recursive: true });
@@ -757,7 +758,7 @@ describe("collector identity and usage truth", () => {
           sessionId,
           surfaceId: "HOOK-SURFACE",
           workspaceId: "HOOK-WORKSPACE",
-          cwd: "/tmp/hook-project",
+          cwd: deletedCwd,
           pid: 4242,
           pidStartSeconds: 1_785_933_001,
           agentLifecycle: "needsInput",
@@ -770,11 +771,12 @@ describe("collector identity and usage truth", () => {
       hookProcessStarts: () => new Map([[4242, 1_785_933_001]]),
     });
     expect(matching.codex.value[0]).toMatchObject({
-      cwd: "/tmp/hook-project",
+      cwd: deletedCwd,
       hookLifecycle: "needsInput",
       processIds: [4242],
       processAlive: true,
     });
+    expect(matching.codex.value[0]?.endEvidence).toBeUndefined();
 
     const reused = await collectSessions(home, DEFAULT_SESSION_WINDOW_MS, undefined, {
       hookProcessStarts: () => new Map([[4242, 1_785_933_000]]),
@@ -782,6 +784,7 @@ describe("collector identity and usage truth", () => {
     expect(reused.codex.value[0]).toMatchObject({
       processIds: [4242],
       processAlive: false,
+      endEvidence: "worktree-deleted",
     });
   });
 

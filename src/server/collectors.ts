@@ -1,9 +1,11 @@
+import { existsSync } from "node:fs";
+import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { open, readdir, stat } from "node:fs/promises";
 import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
+  retirementEndEvidence,
   spokenMinutes,
   type LifecycleThresholds,
 } from "./lifecycle";
@@ -1126,12 +1128,21 @@ function attachHookFacts(
       if (!record) return agent;
       const observedAlive = hookProcessAlive(record, starts);
       const retainedAlive = agent.processIds?.includes(record.pid) ? agent.processAlive : undefined;
+      const cwd = agent.cwd ?? record.cwd;
+      const processAlive = observedAlive ?? retainedAlive;
+      const endEvidence = retirementEndEvidence({
+        endEvidence: agent.endEvidence,
+        hookLifecycle: record.agentLifecycle,
+        processAlive,
+        cwdExists: existsSync(cwd),
+      });
       return {
         ...agent,
-        cwd: agent.cwd ?? record.cwd,
+        cwd,
         hookLifecycle: record.agentLifecycle,
         processIds: [record.pid],
-        processAlive: observedAlive ?? retainedAlive,
+        processAlive,
+        ...(endEvidence ? { endEvidence } : {}),
       };
     }),
   };
