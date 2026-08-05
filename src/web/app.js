@@ -474,6 +474,45 @@ function sharedRowNames(agents) {
   return repeated;
 }
 
+/* The disambiguator a surface prints beside a name, or "" for none.
+
+   The server's tag is DURABLE by design: once a session has one it keeps it, so
+   its name cannot churn when the twin that earned the tag goes away. That is
+   right for `identity.name`, which has to stay unique for search, logs and
+   aria — and wrong for the words on screen. Measured on the live board:
+   `fe-regroup #8da7e056` was the only session carrying that base anywhere in an
+   1186-agent snapshot, so eight characters of hex separated it from nothing.
+   The fleet assigns the tag; the VIEW decides whether to print it.
+
+   `collisions` is the pair boardIndex builds. Two questions, because there are
+   two kinds of name here: the PRINTED name another session is using
+   (sharedNames, which is what the operator is looking at) and the resolved
+   identity another session is using (ambiguousNames, which catches archived
+   records written before `identity` existed and which the client still has to
+   tell apart itself).
+
+   One function rather than one per surface, because "one session, one name" is
+   only true if the row and the drawer it opens reach the answer through the
+   same code. */
+function visibleSessionTag(agent, collisions = {}) {
+  const twinned = Boolean(
+    (collisions.sharedNames && collisions.sharedNames.has(rowDisplayName(agent)))
+    || (collisions.ambiguousNames && collisions.ambiguousNames.has(agentName(agent))),
+  );
+  if (!twinned) return "";
+  /* A name the operator chose is theirs, and the server's hex never rides it —
+     the disambiguator goes with the derived name it disambiguates. */
+  return (operatorName(agent) ? "" : (agent.identity && agent.identity.disambiguator)) || sessionTag(agent);
+}
+
+/* The full name for a surface that prints it as ONE string — the drawer head,
+   the swarm anchor, the roster, the lineage spine. The row builds the same two
+   parts separately so it can style the hex quietly beside the loud words. */
+function displayNameWithTag(agent, collisions) {
+  const tag = visibleSessionTag(agent, collisions);
+  return rowDisplayName(agent) + (tag ? " #" + tag : "");
+}
+
 /* `fallback` is what a program is called in the ONE place its own name would be
    a repetition: a worktree subsection under a repo band, where `program.name`
    is the repository name the band above it already prints. The operator's own
@@ -4423,10 +4462,13 @@ function agentRowSig(agent, ui, opts = {}) {
   ].join("\u001f");
 }
 
-function swarmAnchorSig(agent, depth, activeChildren, ui, pinned = false) {
+function swarmAnchorSig(agent, depth, activeChildren, ui, pinned = false, board = {}) {
   return [
     agent.id,
-    agentName(agent),
+    /* The name the anchor PRINTS, not the resolved identity — the tag beside it
+       comes and goes as a twin arrives on or leaves the board, and a signature
+       that carried only the unique identity would keep the stale cached node. */
+    displayNameWithTag(agent, board),
     agent.provider,
     agent.model || "",
     String(depth),
@@ -5075,8 +5117,8 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
          behind a control that is not on screen would strand them. */
       plan.push({
         key: "anchor:" + agent.id,
-        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui, pinned),
-        build: () => renderSwarmAnchor(agent, depth, visibleDescendants, pinned),
+        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui, pinned, board),
+        build: () => renderSwarmAnchor(agent, depth, visibleDescendants, pinned, board),
       });
     } else {
       // Pinned, with nothing underneath it to hold together: the count above
@@ -5277,7 +5319,7 @@ function renderAgentColumnHeader() {
     }));
 }
 
-function renderSwarmAnchor(agent, depth, activeChildren, pinned = false) {
+function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board = {}) {
   /* A pinned parent already owns `agent:<id>` on its strip row. Two nodes
      answering to one focus key means render()'s restore-by-fkey lands on
      whichever the document happens to hold first, so the anchor takes its own. */
@@ -5293,7 +5335,11 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false) {
     "aria-label": `${agentName(agent)} parent session. ${where} ${activeChildren} visible child sessions. Open parent details.`,
   },
     providerMark(agent),
-    el("strong", { text: agentName(agent) }),
+    /* The name its own row would print. The anchor stands in for a parent that
+       is off screen, so it is frequently the ONLY place that name appears — and
+       it was printing `identity.name`, hex and all, beside rows that print the
+       words alone. */
+    el("strong", { text: displayNameWithTag(agent, board) }),
     el("span", { text: `${activeChildren} active ${activeChildren === 1 ? "branch" : "branches"}` }),
     el("span", { class: "swarm-anchor-arrow", "aria-hidden": "true", text: "⌄" }));
 }
@@ -5479,44 +5525,22 @@ function renderAgentRow(agent, program, opts = {}) {
   const nameKey = presentationLabelKey(nameTarget);
   const editing = state.renaming === nameKey;
   const displayName = agentName(agent);
-  /* Empty unless another visible row carries this exact name — see sessionTag.
-     opts.ambiguousNames is absent on the drawer/preview call paths, which is
-     why this defaults to no tag rather than to computing one. */
   /* The server publishes `base` and `disambiguator` as separate fields, and the
      row is the reason they are separate. `identity.name` is the two already
      joined — correct as one unique string for search, logs and aria, and a wall
      of hex when 30 automation rows print it: "PR Automation Review & Fix
      #e5eba703". Split back apart here so the words stay loud and the hex goes
-     quiet, in the muted style the tag already had. */
-  /* ...but only when the name on the row IS the server's. A label the operator
-     typed — in Ant Hill, or onto the cmux pane — outranks a derived one, and a
-     row that read `identity.base` unconditionally showed a rename that saved,
-     round-tripped and then appeared to do nothing. The disambiguator goes with
-     the derived name it disambiguates: thirty identical "PR Automation Review &
-     Fix" rows need the hex, one "Nightly release check" does not, and printing
-     it there is the same text wall the split removed. */
-  const operatorLabel = operatorName(agent);
-  const identityBase = agent.identity && agent.identity.base;
-  const serverTag = operatorLabel ? "" : (agent.identity && agent.identity.disambiguator);
-  const visibleName = operatorLabel || identityBase || displayName;
-  /* ...and only while it is actually disambiguating something.
-     (Row diet.) The disambiguator used to print on every server-named row, so
-     the majority of rows — whose printed name nobody else on the board is using
-     — carried eight characters of hex that separated them from nothing. It now
-     appears exactly where two visible rows would otherwise read identically,
-     which is the case the split was built for; the full session id, and the
-     name evidence behind it, are in the drawer for every row either way.
+     quiet, in the muted style the tag already had.
 
-     Two collision tests, because there are two kinds of name here: the printed
-     name shared with another session (sharedNames, which is what the operator
-     sees), and the resolved identity shared with another session
-     (ambiguousNames, which catches archived records written before `identity`
-     existed and which the client still has to tell apart itself). */
-  const twinned = Boolean(
-    (opts.sharedNames && opts.sharedNames.has(visibleName))
-    || (opts.ambiguousNames && opts.ambiguousNames.has(displayName)),
-  );
-  const nameTag = twinned ? (serverTag || sessionTag(agent)) : "";
+     Both halves are decided by rowDisplayName / visibleSessionTag rather than
+     here, because the drawer, the swarm anchor, the roster and the lineage
+     spine all have to reach the same two answers — a session that reads one way
+     on its row and another way in the drawer it opens is the defect, not the
+     styling. `opts` carries boardIndex's collision sets; it is absent on the
+     preview call paths, which is why no tag is the default there rather than
+     one computed against nothing. */
+  const visibleName = rowDisplayName(agent);
+  const nameTag = visibleSessionTag(agent, opts);
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
@@ -6477,7 +6501,7 @@ function specialtyChip(agent) {
   return label ? el("span", { class: "specialty-chip", text: label }) : null;
 }
 
-function programRosterRow(agent) {
+function programRosterRow(agent, board) {
   const rv = roleView(agent.role);
   const act = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -6498,7 +6522,7 @@ function programRosterRow(agent) {
   },
     roleChip(agent, rv),
     specialtyChip(agent),
-    el("span", { class: "dw-roster-name", text: agentName(agent) }),
+    el("span", { class: "dw-roster-name", text: displayNameWithTag(agent, board) }),
     el("span", { class: "dw-roster-state" }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), stateText));
 }
 
@@ -6537,6 +6561,9 @@ function renderProgramDrawer(pane, view) {
       onclick: () => { enterSelectMode(true); selectProgramEligible(program); },
     }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients")));
 
+  // Once for the whole roster, not once per row: every name on it asks the same
+  // fleet-wide question, and a program drawer can list thirty of them.
+  const board = boardIndex(state);
   const roster = el("div", { class: "dw-roster" });
   const grouped = new Map();
   for (const a of agents) {
@@ -6545,7 +6572,7 @@ function renderProgramDrawer(pane, view) {
     grouped.get(key).push(a);
   }
   for (const key of ROSTER_ROLE_ORDER) {
-    for (const a of grouped.get(key) || []) roster.append(programRosterRow(a));
+    for (const a of grouped.get(key) || []) roster.append(programRosterRow(a, board));
   }
   pane.append(el("div", {},
     el("h3", { class: "section-title", text: "Roster" }),
@@ -6729,13 +6756,18 @@ function renderAttentionBlock(agent, ui = state, now = Date.now()) {
 
 // Agent drawer — status line + scroll body + sticky command dock (Focus/Send/
 // Interrupt/Archive). No status pills, no Danger footer.
-/* The disambiguator for a drawer whose title is shared with other agents. Reuses
-   the row's ambiguousNames/sessionTag pair so both surfaces name a session the
-   same way — an operator who reads "#f263450b" on a row finds the same token at
-   the top of the drawer it opens. Silent when the name is already unique. */
+/* The disambiguator for a drawer whose title is shared with other agents. The
+   row's rule, run over the same fleet-wide index the row uses, so an operator
+   who reads "#f263450b" on a row finds the same token at the top of the drawer
+   it opens — and reads no token at all where the row shows none.
+
+   It used to ask ambiguousNames alone, which counts RESOLVED identities. Those
+   are unique by construction for a server-named session, so the question could
+   only ever answer "no" and the hex an operator saw in the head was the one
+   baked into `identity.name` — printed whether or not anything on the board
+   needed separating. */
 function drawerSessionTag(agent, ui = state) {
-  const all = snapshotAgents(ui.snap).map((x) => x.agent);
-  return ambiguousNames(all).has(agentName(agent)) ? sessionTag(agent) : "";
+  return visibleSessionTag(agent, boardIndex(ui));
 }
 
 /* Two texts that begin the same way are the same text to a reader, even when
@@ -6837,7 +6869,11 @@ function renderAgentDrawer(pane, view) {
   const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   const tag = drawerSessionTag(agent);
   const objective = drawerObjective(agent);
-  const title = agentName(agent);
+  /* The words only. The hex beside them is the `tag` above, printed under the
+     row's rule — `agentName` here would have carried the server's durable
+     disambiguator into the head whether or not the board had a twin to
+     separate it from. */
+  const title = rowDisplayName(agent);
   const sub = headSubParts(agent, program, title);
   const subParts = {
     program: sub.program,
@@ -7881,7 +7917,7 @@ function lineageMeta(text) {
   return el("span", { class: "dw-lin-meta", text: " " + text });
 }
 
-function lineageNode(a, depthCls) {
+function lineageNode(a, depthCls, board) {
   const rv = roleView(a.role);
   return el("div", { class: "dw-node " + depthCls },
     el("span", { class: "dw-rail" }, el("span", { class: "dw-glyph", "aria-hidden": "true" })),
@@ -7889,7 +7925,7 @@ function lineageNode(a, depthCls) {
       type: "button", class: "dw-lin-name",
       dataset: { fkey: "lineage:" + a.id },
       onclick: () => selectEntity({ kind: "agent", id: a.id }),
-    }, agentName(a), rv.key !== "agent" ? lineageMeta("· " + rv.label) : null));
+    }, displayNameWithTag(a, board), rv.key !== "agent" ? lineageMeta("· " + rv.label) : null));
 }
 
 function lineageCrumb(text) {
@@ -7898,7 +7934,7 @@ function lineageCrumb(text) {
     el("span", { class: "dw-lin-crumb", text }));
 }
 
-function lineageKid(child) {
+function lineageKid(child, board) {
   const act = deriveActivity(child);
   const outcome = deriveOutcome(child);
   const needs = outcome !== "healthy" && act !== "ended";
@@ -7908,10 +7944,14 @@ function lineageKid(child) {
     type: "button", class: "dw-kid",
     dataset: { fkey: "lineage-kid:" + child.id },
     onclick: () => selectEntity({ kind: "agent", id: child.id }),
-  }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), agentName(child) + " — " + stateText);
+  }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), displayNameWithTag(child, board) + " — " + stateText);
 }
 
 function renderLineageSpine(agent) {
+  /* Once for the whole spine, not once per node: every name on it asks the same
+     fleet-wide question, and a chain plus a five-child fan would otherwise
+     rebuild the board index seven times per drawer paint. */
+  const board = boardIndex(state);
   const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
   const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
   const ancestors = [];
@@ -7929,13 +7969,13 @@ function renderLineageSpine(agent) {
   } else if (ancestors.length > 4) {
     // Collapse the middle; keep the nearest ancestor next to the current node.
     lin.append(lineageCrumb("⋯ " + (ancestors.length - 1) + " earlier ancestors"));
-    lin.append(lineageNode(ancestors[ancestors.length - 1], "dw-d2"));
+    lin.append(lineageNode(ancestors[ancestors.length - 1], "dw-d2", board));
   } else {
-    ancestors.forEach((a, i) => lin.append(lineageNode(a, "dw-d" + Math.min(i, 2))));
+    ancestors.forEach((a, i) => lin.append(lineageNode(a, "dw-d" + Math.min(i, 2), board)));
   }
   lin.append(el("div", { class: "dw-node dw-cur" },
     el("span", { class: "dw-rail" }, el("span", { class: "dw-glyph", "aria-hidden": "true" })),
-    el("span", { class: "dw-lin-name dw-cur-name" }, agentName(agent), lineageMeta("· this"))));
+    el("span", { class: "dw-lin-name dw-cur-name" }, displayNameWithTag(agent, board), lineageMeta("· this"))));
 
   const spine = el("div", { class: "dw-spine", "aria-label": "Lineage" },
     el("div", { class: "dw-spine-label", text: "Lineage" }),
@@ -7943,7 +7983,7 @@ function renderLineageSpine(agent) {
 
   if (children.length) {
     const fan = el("div", { class: "dw-child-fan" });
-    for (const child of children.slice(0, 5)) fan.append(lineageKid(child));
+    for (const child of children.slice(0, 5)) fan.append(lineageKid(child, board));
     if (children.length > 5) fan.append(el("span", { class: "dw-more", text: "+" + (children.length - 5) + " more subagents" }));
     spine.append(fan);
   }

@@ -121,6 +121,22 @@ export const agentLabelTarget = (agent) => ({ kind: "agent", agentId: agent.id }
 /* Every live agent can take a presentation label. Prefer editing the linked
    cmux workspace when present so Ant Hill names stay hunt-able in the wild. */
 
+/* Did the FLEET declare this name, or derive it? The run manifest is where an
+   orchestrator writes what a lane IS — `fe-states`, `be-live` — and that id is
+   what the operator types to address it, what every sibling lane calls it, and
+   what the lane signs its own DONE line with.
+
+   The distinction is load-bearing directly below, because cmux titles its own
+   panes. `surfaceTitle` is routinely a sentence cmux distilled from the
+   session's opening prompt and `workspaceTitle` is the workspace path; neither
+   is a human deciding what a session is called. Counting them as renames put
+   "Unify lane fe-states and audit tags with TDD" on the Needs-you strip for a
+   lane the API named `fe-states`, and a workspace path on a swarm child the API
+   named `be-live` — one session reading three ways across three surfaces. */
+export function declaredIdentity(agent) {
+  return Boolean(agent && agent.identity && agent.identity.source === "manifest");
+}
+
 /* The name a HUMAN typed for this row, or "" when nobody did: a label entered
    in Ant Hill, then one typed onto the cmux pane itself. Split out from
    agentName so a caller can tell "the operator named this" from "the fleet
@@ -141,8 +157,12 @@ export function operatorName(agent) {
      anomaly. A WORKSPACE title is broader context, so it stays suppressed on
      that mismatch: otherwise the same home-cwd orchestrator borrows the name of
      whichever project it happens to sit beside. */
+  /* ...and a DECLARED name outranks both, because cmux wrote both of them. The
+     title is not lost: quietSourceLine still prints it as "Terminal: …", which
+     is how an operator finds the pane, and which went silent here only while
+     the name and the title were the same string. */
   const renamed = typeof agent.surfaceTitle === "string" && agent.surfaceTitle.trim() !== "";
-  if (terminal && (renamed || !agent.target?.cwdMismatch)) return terminal;
+  if (terminal && !declaredIdentity(agent) && (renamed || !agent.target?.cwdMismatch)) return terminal;
   return "";
 }
 

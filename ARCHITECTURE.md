@@ -181,6 +181,28 @@ named "Lifecycle Mapper" lost to the derived "Claude · the-mountain-main". So
 the rules live in `tests/fixtures/naming-truth-table.json` and
 `tests/naming-parity.test.ts` executes both copies against it.
 
+Which of the server's name fields a surface PRINTS is the client's own decision,
+and one decision shared by all of them. `rowDisplayName` returns the words —
+an operator's label, else `identity.base` — and `visibleSessionTag` returns the
+`#` tag beside them, only while another session currently on the board is
+printing those same words. The split exists because the server's tag is durable
+on purpose: a session keeps it once assigned, so a name cannot churn when the
+twin that earned it ends. That makes `identity.name` — the two already joined —
+the right unique string for search, aria and logs, and the wrong thing to print;
+live, `fe-regroup #8da7e056` was the only session carrying that base anywhere in
+an 1186-agent snapshot. The row, the Needs-you strip, the drawer head, the swarm
+anchor, the program roster and the lineage spine all read the split through
+those two functions, so one session cannot read one way on a row and another way
+in the drawer that row opens.
+
+The same pair refuses a cmux-authored title as a name. `surfaceTitle` is
+routinely a sentence cmux distilled from a session's opening prompt and
+`workspaceTitle` is the workspace path, so `declaredIdentity` (presentation.js)
+marks a `source: "manifest"` identity and `operatorName` suppresses both titles
+against it — a label the operator typed in Ant Hill still outranks everything.
+The title is not lost: `quietSourceLine` keeps it as the drawer's `Terminal:`
+line, which is how an operator finds the pane.
+
 `repaint.js` is small and load-bearing: it holds an indirection to `render()`
 (`setRepaint` / `repaint`) so modules can ask for a repaint without importing
 the render tree. `render()` was the dependency hub that made this client

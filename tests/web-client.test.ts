@@ -6052,6 +6052,232 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(sig(new Set(["PR Automation Review & Fix"]))).not.toBe(sig(new Set()));
   });
 
+  /* ---------- T7a: one session wears one name ------------------------------
+
+     Every fixture in this block is a reading taken off the live board on
+     2026-08-05, paired with what /api/snapshot said about the same session in
+     the same second. Three names for one session were on screen at once. */
+  describe("T7a — one session wears one name", () => {
+    /* cmux names its own panes. `surfaceTitle` is routinely a sentence cmux
+       distilled from the session's opening prompt, and `workspaceTitle` is the
+       workspace path. The client counted both as operator renames, so both
+       outranked the name the run manifest declared: the Needs-you strip printed
+       "Unify lane fe-states and audit tags with TDD" over a lane the API called
+       `fe-states`, and a swarm child printed its workspace path over one the API
+       called `be-live`.
+
+       A manifest name is not a guess. It is the id the orchestrator spawned the
+       lane under, the id the operator types to address it, and the id the lane
+       signs its own DONE line with — so it outranks any title cmux reports. A
+       label the operator typed HERE still beats both; that is what renaming is
+       for, and the three tests above pin it. */
+    const lane = (over: Record<string, unknown> = {}) => agent({
+      id: "claude:bb6fe728", sourceSessionId: "bb6fe728-5aca-4c61-a38b-7fcc797ae746",
+      provider: "claude", programId: "p",
+      identity: { name: "fe-states", base: "fe-states", source: "manifest", authoredBy: "manifest" },
+      ...over,
+    });
+    const groupOf = (...agents: Array<Record<string, unknown>>) =>
+      ({ id: "p", name: "disposable checkouts", agents });
+    const noLabels = () => {
+      const empty = new Map<string, string>();
+      return { aliases: empty, labels: empty };
+    };
+
+    test("a pane title cmux distilled never replaces a declared lane name", async () => {
+      const a = lane({ surfaceTitle: "Unify lane fe-states and audit tags with TDD" });
+      await withState(noLabels(), () => {
+        const row = withDom(() => M.renderAgentRow(a, groupOf(a)));
+        expect(textOf(byClass(row, "agent-name"))).toBe("fe-states");
+      });
+    });
+
+    test("a cmux workspace title never replaces a declared lane name", async () => {
+      const a = lane({
+        id: "codex:019fd291", sourceSessionId: "019fd291-62e4-7152-a9b4-6d781396802c", provider: "codex",
+        identity: { name: "be-live", base: "be-live", source: "manifest", authoredBy: "manifest" },
+        target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "hardening/be-live" },
+      });
+      await withState(noLabels(), () => {
+        const row = withDom(() => M.renderAgentRow(a, groupOf(a)));
+        expect(textOf(byClass(row, "agent-name"))).toBe("be-live");
+      });
+    });
+
+    test("the title cmux wrote survives as the terminal line, not as the name", async () => {
+      /* Refusing it as a NAME must not lose it. The pane title is how an
+         operator finds the session in cmux, and the drawer's quiet source line
+         is where that has always belonged — it went silent only because the
+         name and the title were the same string. */
+      const a = lane({ surfaceTitle: "Unify lane fe-states and audit tags with TDD" });
+      await withState(noLabels(), () => {
+        expect(M.quietSourceLine(a)).toBe("Terminal: Unify lane fe-states and audit tags with TDD");
+      });
+    });
+
+    test("a session the operator renamed in Ant Hill still outranks its declared name", async () => {
+      // The contrast that keeps the rule honest: without it the two tests above
+      // would pass on a client that had simply stopped listening to humans.
+      const a = lane({ surfaceTitle: "Unify lane fe-states and audit tags with TDD" });
+      await withState({ aliases: new Map([["agent:claude:bb6fe728", "Tag audit"]]) }, () => {
+        const row = withDom(() => M.renderAgentRow(a, groupOf(a)));
+        expect(textOf(byClass(row, "agent-name"))).toBe("Tag audit");
+      });
+    });
+
+    /* The server's disambiguator is DURABLE by design: once a session has a tag
+       it keeps it, so its name cannot churn when the twin that caused the tag
+       goes away (`disambiguate` in src/server/naming.ts). What that produced on
+       screen is the observed defect — `fe-regroup #8da7e056` was the ONLY
+       session carrying that base anywhere in an 1186-agent snapshot, and eight
+       characters of hex separated it from nothing.
+
+       The tag is the fleet's to assign and the VIEW's to print. The row already
+       decided it that way; every other surface printed `identity.name`, which is
+       the two already joined. */
+    const soloTagged = (over: Record<string, unknown> = {}) => agent({
+      id: "claude:d02c6e5e", sourceSessionId: "d02c6e5e-0a8e-489e-8c8c-b9c48da7e056",
+      provider: "claude", programId: "p", status: "archived", lifecycle: "finished",
+      identity: {
+        name: "fe-regroup #8da7e056", base: "fe-regroup",
+        source: "manifest", authoredBy: "manifest", disambiguator: "8da7e056",
+      },
+      ...over,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const drawerFor = (a: any, prog: any) => withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program: prog });
+      return pane;
+    });
+
+    test("the drawer drops a hex tag that separates this session from nothing", async () => {
+      const a = soloTagged();
+      const prog = groupOf(a);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        const title = byClass(drawerFor(a, prog), "inspector-title");
+        expect(textOf(title)).toBe("fe-regroup");
+        expect(textOf(title)).not.toContain("8da7e056");
+      });
+    });
+
+    test("the drawer prints the tag again the moment a twin shares the words", async () => {
+      // The contrast case. Without it "drop the tag" passes by deleting it.
+      const a = soloTagged();
+      const twin = soloTagged({
+        id: "claude:aaaa1111", sourceSessionId: "aaaa1111-0000-4000-8000-0000aaaa1111",
+        identity: {
+          name: "fe-regroup #aaaa1111", base: "fe-regroup",
+          source: "manifest", authoredBy: "manifest", disambiguator: "aaaa1111",
+        },
+      });
+      const prog = groupOf(a, twin);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        expect(textOf(byClass(drawerFor(a, prog), "inspector-title"))).toContain("8da7e056");
+      });
+    });
+
+    test("the row and the drawer print one name for one session", async () => {
+      /* The whole point of T7a, stated as an equality rather than as two
+         separate expectations: whatever the rule turns out to be, the two
+         surfaces have to reach it through the same code. */
+      const a = soloTagged();
+      const prog = groupOf(a);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        const board = M.boardIndex(M.state);
+        const opts = { ambiguousNames: board.ambiguous, sharedNames: board.sharedNames };
+        const row = withDom(() => M.renderAgentRow(a, prog, opts));
+        expect(textOf(byClass(drawerFor(a, prog), "inspector-title")))
+          .toBe(textOf(byClass(row, "agent-name-wrap")));
+      });
+    });
+
+    test("the drawer's lineage spine names a session the way its own row does", async () => {
+      /* Live: every lane's spine printed its orchestrator as
+         "atlas-hardening-2026-08-05 #23dd6c82" while the orchestrator's own row
+         two inches away printed "atlas-hardening-2026-08-05". */
+      const boss = agent({
+        id: "claude:8c052fe9", sourceSessionId: "8c052fe9-db5c-47c4-9e21-e9b623dd6c82",
+        provider: "claude", programId: "p",
+        identity: {
+          name: "atlas-hardening-2026-08-05 #23dd6c82", base: "atlas-hardening-2026-08-05",
+          source: "manifest", authoredBy: "manifest", disambiguator: "23dd6c82",
+        },
+      });
+      const child = soloTagged({ parentAgentId: "claude:8c052fe9" });
+      const prog = groupOf(boss, child);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        const pane = drawerFor(child, prog);
+        // The ancestor node above the current one, and the current node itself.
+        expect(textOf(byClass(pane, "dw-lin-name"))).toContain("atlas-hardening-2026-08-05");
+        expect(textOf(byClass(pane, "dw-lin-name"))).not.toContain("23dd6c82");
+        expect(textOf(byClass(pane, "dw-cur-name"))).not.toContain("8da7e056");
+      });
+    });
+
+    test("a swarm anchor names the parent the way the parent's own row does", async () => {
+      /* The anchor stands in for a parent that is off screen — pinned into the
+         strip, or filtered out — so it is the only place that name appears, and
+         it printed `identity.name` complete with a durable hex the board had
+         nothing to separate. Driven through agentRowPlan, the path the board
+         actually builds anchors from. */
+      const boss = soloTagged({ id: "claude:d02c6e5e", status: "running", lifecycle: "working" });
+      const child = agent({
+        id: "claude:kid", sourceSessionId: "kid-0000-0000-0000-000000000001",
+        provider: "claude", programId: "p", parentAgentId: "claude:d02c6e5e",
+        identity: { name: "security-review", base: "security-review", source: "manifest", authoredBy: "manifest" },
+      });
+      const prog = groupOf(boss, child);
+      await withState(noLabels(), () => {
+        const ui = listUi({ view: "board", lookbackHours: null, snap: { schemaVersion: 1, programs: [prog] } });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anchor = M.agentRowPlan(prog, [child], ui)
+          .find((item: { key: string }) => item.key === "anchor:claude:d02c6e5e") as any;
+        expect(anchor).toBeDefined();
+        const text = textOf(withDom(() => anchor.build()));
+        expect(text).toContain("fe-regroup");
+        expect(text).not.toContain("8da7e056");
+      });
+    });
+
+    test("the program roster names each session the way its row does", async () => {
+      // Same drift, one drawer over: the roster is where an operator reads a
+      // whole swarm's names at once, so a stray hex on one of them is loudest.
+      const a = soloTagged();
+      const prog = groupOf(a);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        const pane = withDom(() => {
+          const p = newNode("div");
+          M.renderProgramDrawer(p, { program: prog });
+          return p;
+        });
+        expect(textOf(byClass(pane, "dw-roster-name"))).toBe("fe-regroup");
+      });
+    });
+
+    test("the Needs-you strip pins the row under its declared name", async () => {
+      /* The strip already reuses renderAgentRow, which is what should have made
+         it immune — but the row was reading the pane title too, so the one
+         surface an operator cannot ignore carried the distilled sentence. Driven
+         through syncProgramList, the path renderPrograms actually runs. */
+      const asking = lane({
+        surfaceTitle: "Unify lane fe-states and audit tags with TDD",
+        status: "attention", outcome: "needs-you", lifecycle: "waiting",
+      });
+      const prog = groupOf(asking);
+      const root = newNode("div");
+      await withState(noLabels(), () => {
+        withDom(() => M.syncProgramList(root, [{ program: prog, agents: [asking] }], listUi({
+          view: "board", lookbackHours: null, snap: { schemaVersion: 1, programs: [prog] },
+        })));
+        const strip = byClass(root, "needs-strip-agents");
+        expect(strip).not.toBeNull();
+        expect(textOf(byClass(strip, "agent-name"))).toBe("fe-states");
+      });
+    });
+  });
+
   /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
      Two live sessions share one cmux pane" beside "Advisory · 1 degraded source"
      — the second in a full-width row. attentionSummary and topSourceIssue read
@@ -10250,6 +10476,44 @@ describe("Atlas F4: the guide and the architecture map describe this board", () 
     // key the next grouping axis on programId and rebuild every row every 4s.
     expect(architecture).toContain("groupPath");
     expect(architecture.toLowerCase()).toContain("paint key");
+  });
+
+  test("the guide says a cmux pane title is not a rename", () => {
+    /* T7a. The guide's naming paragraph already claimed "an operator rename
+       wins first; a run manifest wins next" — and the client was inserting a
+       third thing between them that the operator never typed. The behavior now
+       matches the sentence, so the sentence has to say which titles it is
+       refusing, or the next reader re-introduces the same shortcut. */
+    const chain = guide.slice(guide.indexOf("Names follow one precedence chain"));
+    expect(chain.slice(0, 1400)).toContain("cmux");
+    expect(chain.slice(0, 1400)).toContain("Terminal:");
+    // And the client really does keep it, rather than dropping it on the floor.
+    expect(source).toContain('"Terminal: " + terminal');
+  });
+
+  test("the guide explains the session tag an operator sees beside a name", () => {
+    // The tag is the one part of a name an operator cannot re-derive, and its
+    // rule is counter-intuitive: the fleet keeps it, the view decides to print.
+    expect(guide).toContain("session tag");
+    /* From the start of the sentence, not from the phrase: the example the
+       operator is matching against ("#8da7e056") comes BEFORE the words that
+       name it, which is the order the eye reads a row in. */
+    const tag = guide.slice(guide.indexOf("session tag") - 200, guide.indexOf("session tag") + 700);
+    expect(tag).toMatch(/#[0-9a-f]{8}/);
+    // Why a unique-looking row shows none — the half a reader gets wrong.
+    expect(tag.toLowerCase()).toContain("same words");
+  });
+
+  test("ARCHITECTURE names the one place the client decides a printed name", () => {
+    for (const symbol of ["visibleSessionTag", "rowDisplayName"]) {
+      expect(architecture, `ARCHITECTURE stopped naming ${symbol}`).toContain(symbol);
+      expect(source, `${symbol} is not a function this client defines`).toContain("function " + symbol);
+    }
+    /* The other half of the rule lives in presentation.js. `source` is every
+       src/web/*.js concatenated for exactly this reason: a symbol the docs
+       quote can move between client modules without a reader seeing a change. */
+    expect(architecture).toContain("declaredIdentity");
+    expect(source).toContain("function declaredIdentity");
   });
 
   test("the two assets ship under one cache-buster token", () => {
