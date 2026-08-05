@@ -56,6 +56,7 @@ const state = new HubState(runner, archiveStore, programHints, {
   witnessStore: processWitnessStore,
 });
 await state.refresh({ cmux: true });
+state.startCmuxEvents();
 
 const mountainFetch = createMountainFetch({
   state,
@@ -95,6 +96,7 @@ function stop(): void {
   if (stopping) return;
   stopping = true;
   clearInterval(refreshTimer);
+  state.stopCmuxEvents();
   mountainFetch.dispose();
   server.stop();
 }
