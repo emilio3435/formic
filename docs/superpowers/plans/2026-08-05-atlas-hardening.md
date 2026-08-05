@@ -32,7 +32,7 @@ Walk pid→ppid chains (`ps -axo pid,ppid,lstart,command`, cached per collect) f
 
 A manifest lane whose sessionId is REPLACED (orchestrator edits manifest, or T9 self-registration re-registers) leaves a predecessor: same lane, older session. Bind `succeededBy`/`supersedes` between them; the predecessor flows to the finished shelf with endEvidence `"superseded"` (union + docs + parity). Live case: be-spine session-1. Manifest schema gains nothing — succession is derived from lane sessionId history (keep `~/.anthill/runs/<runId>.history.jsonl` appended on backfill; additive).
 
-### T3 — Repo identity by origin remote (be-truth)
+### T3 — Repo identity by origin remote (be-truth) ✅ **[DONE db38c0d, merged]**
 
 `repoKey` = FNV of normalized `origin` URL when one exists (fallback: today's common-dir realpath). Two clones of one repo become one band; a lane whose declared `repoRoot` differs from cwd renders under the TARGET repo. Migration: repoKey change breaks collapse-state localStorage keys and paint keys — ship a client-side key migration (fe-states does the 5-line read-through in T7; coordinate the one shared commit like B4 did).
 
