@@ -67,7 +67,7 @@ A tiny boot script each lane's launch command sources: reads `ANTHILL_RUN`/`ANTH
 
 Truth-table + golden coverage for everything above: lineageAgreement cases, succession retirement, origin-vs-path repoKeys, parked/blocked/done matrix (esp. parked-then-asks re-alert), forged-sender fixture, shim goldens. Hook-store compaction: dead `activeSessionsBySurface` entries pruned after N days (the file only grows today).
 
-### T12 — Stalled-active detection (be-live, follow-up; ratified 2026-08-05 PM)
+### T12 — Stalled-active detection (be-live, follow-up; ratified 2026-08-05 PM) ✅ **[DONE 63b7ada, merged]**
 
 The gap that let be-truth hide for 82 minutes: a lane declared `active` whose
 hook has gone quiet asks for nothing, so no door into Needs-You opens. Detect
