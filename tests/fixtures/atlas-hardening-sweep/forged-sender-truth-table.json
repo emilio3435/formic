@@ -1,0 +1,41 @@
+{
+  "rules": "T5 + T5.1: unverifiable ⇒ absent (never false); complete lack ⇒ false; truncated wire head can verify but never prove forgery",
+  "cases": [
+    {
+      "name": "claimed sender's transcript contains the send",
+      "claim": "headed",
+      "senderTail": { "containsBody": true, "complete": true },
+      "expected": true
+    },
+    {
+      "name": "complete sender transcript lacks the send — forged",
+      "claim": "headed",
+      "senderTail": { "containsBody": false, "complete": true },
+      "expected": false
+    },
+    {
+      "name": "no sender transcript access — unavailable, not forged (T5.1)",
+      "claim": "headed",
+      "senderTail": null,
+      "expected": null
+    },
+    {
+      "name": "empty complete sender transcript is a negative check, not unavailable",
+      "claim": "headed",
+      "senderTail": { "empty": true, "complete": true },
+      "expected": false
+    },
+    {
+      "name": "wire-truncated head can verify a long prefix but cannot prove forgery",
+      "claim": "truncated-headed",
+      "senderTail": { "containsBody": false, "complete": true },
+      "expected": null
+    },
+    {
+      "name": "unheaded current request does not inherit a stale headed task",
+      "claim": "unheaded-current",
+      "senderTail": { "containsBody": true, "complete": true },
+      "expected": null
+    }
+  ]
+}
