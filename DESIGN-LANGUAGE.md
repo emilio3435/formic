@@ -259,9 +259,11 @@ both files, so the assessments hold for both.
   Caret transform transition guarded (R6).
 - **agent rows** — provider/role identity via left border rails; alert rows use
   6–7% background washes plus rails — judged pass, but see open question 2.
-  `.policy-chip` is a small solid `--failed` chip (deliberate top-severity mark,
-  not a banner). Mono on `.ri-value` (model/tokens), `.swarm-chip` (workflow
-  id), `.agent-column-label` (micro-label idiom) (R2). `--tree-depth`/`--tree-color`
+  The row diet deleted `.policy-chip`, the one solid `--failed` chip a row used
+  to carry: a model-policy mismatch is now a `model policy` term in the drawer's
+  Evidence shelf (`renderRowFacts`), so no status fill survives on the row at all.
+  Mono on `.ri-value` (model/tokens), `.swarm-chip` (workflow id),
+  `.agent-column-label` (micro-label idiom) (R2). `--tree-depth`/`--tree-color`
   and `.token-meter` fills are class-set (R4). One-line summary expands on
   hover/selection (R5 exemplar). Rename-button opacity transition guarded (R6).
 - **inspector: layered drawer** — width `min(var(--inspector-w), 100%)`; internal
@@ -330,9 +332,13 @@ experiments (inspector workstream territory).
    `.control-banner`, `.usage-unavailable`). Recommend codifying: tint ≤10% mixed
    into `--surface`/transparent, always paired with an edge mark, never
    standalone — that is the line between indicator ink and flood fill.
-3. **Filled action buttons.** `.btn.primary`, `.btn.confirm-yes`, `.triage-mode`,
-   `.policy-chip` are solid fills. Judged action/identity affordances outside Rule
-   1 (which governs *status* surfaces); audit should confirm.
+3. **Filled action buttons.** `.btn.primary`, `.btn.confirm-yes` and
+   `.triage-mode` are solid fills. Judged action/identity affordances outside Rule
+   1 (which governs *status* surfaces); audit should confirm. `.policy-chip` was
+   listed here too and was the awkward one — a *status* fill defended as an
+   affordance. The row diet settled it by deletion: the model-policy fact moved
+   to the drawer's Evidence shelf (`renderRowFacts`), where it reads as a
+   `model policy` row in the `.detail-grid` rather than as a chip.
 4. **Usage-tab numerals — resolved (split implemented, Task A5).** Verdict: token/
    cost *values* in the invocation table move to `--font-mono` via `.usage-table
    td.usage-val` (the `.ri-value` counterpart for the usage surface), while the
