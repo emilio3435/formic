@@ -244,7 +244,7 @@ Fenced to `tests/**`, `scripts/**`, fixtures. **No `src/web/app.js`. No `src/ser
 
 - **G1:** Extend both truth tables (`naming-truth-table.json`, `lifecycle-truth-table.json`) for: manifest names, sticky tags, new roles, retirement states. Parity tests green on both sides.
 - **G2:** Golden-file fixtures for the three new collectors (hook store, manifests, sidebar snapshot) including hostile inputs: `<timestamp>` markup in titles (assert the findings-lane stripper is applied at ALL FOUR ingress points — regression-guards Hormiga's P2, does not reimplement it), 81-char names, NUL-free guarantee.
-- **G3:** `scripts/check-nul-files.ts` + test: exactly one NUL-carrying source file allowed (`src/server/naming.ts`); anything else fails CI.
+- **G3:** `scripts/check-nul-files.ts` + test: exactly one NUL-carrying source file allowed (`src/server/naming.ts`); anything else fails CI. **[DONE 517da98, merged]**
 - **G4:** Zombie/service sweeps: fixture a cmux tree with a deleted-cwd workspace and a bare `npm run dev` surface; assert `service` classification and retirement.
 - [ ] Each is its own TDD commit: `test(atlas): …`.
 
