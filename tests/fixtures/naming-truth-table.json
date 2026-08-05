@@ -10,7 +10,7 @@
         "provider": "claude",
         "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
         "operatorAlias": { "agent": "Lifecycle Rules Lead" },
-        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "backend" },
+        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "worker" },
         "authored": { "name": "Explore", "by": "claude-subagent" },
         "originCwd": "/Users/ant/Developer/the-mountain-main",
         "taskName": "Trace server-side agent naming"
@@ -66,7 +66,7 @@
       "evidence": {
         "provider": "codex",
         "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
-        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "backend" },
+        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "worker" },
         "authored": { "name": "Explore", "by": "codex-nickname" },
         "originCwd": "/Users/ant/Developer/the-mountain-main",
         "taskName": "Trace the backend identity spine"
@@ -95,6 +95,93 @@
         "authoredBy": "manifest"
       }
     },
+    {
+      "name": "a manifest verifier lane uses its lane id",
+      "tier": 2,
+      "claim": "Non-orchestrator declared roles share the lane-id naming rule; the role does not become the name.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-vvvv-7000-8000-abcdef123456",
+        "manifest": { "runId": "atlas-run", "laneId": "gate-review", "role": "verifier" },
+        "authored": { "name": "Review pass", "by": "codex-nickname" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "gate-review",
+        "base": "gate-review",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "a manifest tester lane uses its lane id",
+      "tier": 2,
+      "claim": "A declared tester is still a lane in the run, so the lane id is the stable board name.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "tester-atlas-20260805",
+        "manifest": { "runId": "atlas-run", "laneId": "suite-green", "role": "tester" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "suite-green",
+        "base": "suite-green",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "a manifest monitor lane uses its lane id",
+      "tier": 2,
+      "claim": "Monitor is a first-class declared role and still names from the lane, not from the role word.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "monitor-atlas-20260805",
+        "manifest": { "runId": "atlas-run", "laneId": "board-watch", "role": "monitor" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "board-watch",
+        "base": "board-watch",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "a manifest automation lane uses its lane id",
+      "tier": 2,
+      "claim": "Automation lanes are declared the same way as workers — the run's lane id is the name.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "auto-atlas-20260805",
+        "manifest": { "runId": "atlas-run", "laneId": "nightly-hygiene", "role": "automation" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "nightly-hygiene",
+        "base": "nightly-hygiene",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "a manifest human lane uses its lane id",
+      "tier": 2,
+      "claim": "A human seat declared in the run is still a lane; the operator's alias tier is what overrides it, not the role itself.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "human-atlas-20260805",
+        "manifest": { "runId": "atlas-run", "laneId": "emilio", "role": "human" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "emilio",
+        "base": "emilio",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+
     {
       "name": "an authored name outranks the directory it happens to run in",
       "tier": 3,
@@ -383,6 +470,35 @@
         }
       ],
       "expect": ["Naming lane", "Claude · the-mountain-main"]
+    },
+    {
+      "name": "a sticky tag survives when a third collision joins later",
+      "claim": "Once a session has been tagged, a later peer must not rewrite that tag — stickiness is write-once per agent id, not recomputed from the current fleet.",
+      "agents": [
+        {
+          "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1",
+          "evidence": { "provider": "codex", "sourceSessionId": "aaaa1111-0000-0000-0000-00000000aaa1", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        },
+        {
+          "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2",
+          "evidence": { "provider": "codex", "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        }
+      ],
+      "expect": [
+        "Codex · the-mountain-main #0000aaa1",
+        "Codex · the-mountain-main #0000bbb2"
+      ],
+      "joinAgents": [
+        {
+          "sourceSessionId": "cccc3333-0000-0000-0000-00000000ccc3",
+          "evidence": { "provider": "codex", "sourceSessionId": "cccc3333-0000-0000-0000-00000000ccc3", "originCwd": "/Users/ant/Developer/the-mountain-main" }
+        }
+      ],
+      "expectAfterJoin": [
+        "Codex · the-mountain-main #0000aaa1",
+        "Codex · the-mountain-main #0000bbb2",
+        "Codex · the-mountain-main #0000ccc3"
+      ]
     }
   ]
 }

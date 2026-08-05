@@ -103,6 +103,21 @@
       }
     },
     {
+      "name": "an ended hook is a recorded provider exit",
+      "row": 2,
+      "claim": "The cmux hook store saying the session ended is the same fact as a provider exit, even while a harness process is still up.",
+      "evidence": {
+        "ageMs": 1000,
+        "hookLifecycle": "ended",
+        "processAlive": true
+      },
+      "expect": {
+        "lifecycle": "finished",
+        "provenance": "provider-exit",
+        "reason": "Source recorded a session exit."
+      }
+    },
+    {
       "name": "fresh transcript writes outrank a dead-process probe",
       "row": 4,
       "claim": "Probes lie more often than a file being written to right now does — codex renamed to codex-next cost this board a wave of false deaths.",
@@ -151,6 +166,64 @@
         "lifecycle": "finished",
         "provenance": "process-died",
         "reason": "Process checked and gone; nothing ended cleanly."
+      }
+    },
+    {
+      "name": "a gone process in a deleted worktree retires without retained process ids",
+      "row": 3,
+      "claim": "A pid-less negative probe is not death on its own; the missing cwd is the corroboration that lets retirement fire.",
+      "evidence": {
+        "ageMs": 1000,
+        "processAlive": false,
+        "cwdExists": false
+      },
+      "expect": {
+        "lifecycle": "finished",
+        "provenance": "process-died",
+        "reason": "Process checked and gone after its worktree was deleted."
+      }
+    },
+    {
+      "name": "explicit worktree-deleted endEvidence finishes the session",
+      "row": 3,
+      "claim": "Collectors may pre-synthesize the retirement fact; the classifier must honour it the same way it honours session-exit.",
+      "evidence": {
+        "ageMs": 1000,
+        "endEvidence": "worktree-deleted"
+      },
+      "expect": {
+        "lifecycle": "finished",
+        "provenance": "process-died",
+        "reason": "Process checked and gone after its worktree was deleted."
+      }
+    },
+    {
+      "name": "a missing cwd alone does not retire a fresh session",
+      "row": 6,
+      "claim": "A deleted checkout without a gone-process probe is not an ending — the row stays working on recency.",
+      "evidence": {
+        "ageMs": 1000,
+        "cwdExists": false
+      },
+      "expect": {
+        "lifecycle": "working",
+        "provenance": "recency",
+        "reason": "Source activity within the last 3 minutes."
+      }
+    },
+    {
+      "name": "a negative probe against an existing cwd does not retire without process ids",
+      "row": 6,
+      "claim": "processAlive:false with a living worktree and no retained pids is unanswered, not retired — fresh activity still wins.",
+      "evidence": {
+        "ageMs": 1000,
+        "processAlive": false,
+        "cwdExists": true
+      },
+      "expect": {
+        "lifecycle": "working",
+        "provenance": "recency",
+        "reason": "Source activity within the last 3 minutes."
       }
     },
     {

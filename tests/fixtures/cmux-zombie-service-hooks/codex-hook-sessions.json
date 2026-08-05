@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "sessions": {
+    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee": {
+      "sessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "surfaceId": "SURFACE-ZOMBIE",
+      "workspaceId": "WORKSPACE-DELETED",
+      "cwd": "/tmp/anthill-g4-deleted-worktree",
+      "pid": 4242,
+      "pidStartSeconds": 1785933001,
+      "transcriptPath": "/Users/example/.codex/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl",
+      "agentLifecycle": "needsInput",
+      "updatedAt": 1785933010.5
+    }
+  },
+  "activeSessionsBySurface": {
+    "SURFACE-ZOMBIE": {
+      "sessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "updatedAt": 1785933010.5
+    }
+  }
+}

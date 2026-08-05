@@ -1,0 +1,22 @@
+{
+  "count": 2,
+  "terminals": [
+    {
+      "current_directory": "/tmp/anthill-g4-live-project",
+      "pane_id": "PANE-SERVICE-DEV",
+      "surface_id": "SURFACE-SERVICE-DEV",
+      "workspace_id": "WORKSPACE-LIVE",
+      "workspace_title": "live-project",
+      "surface_title": "npm run dev"
+    },
+    {
+      "current_directory": "/tmp/anthill-g4-deleted-worktree",
+      "pane_id": "PANE-ZOMBIE",
+      "surface_id": "SURFACE-ZOMBIE",
+      "workspace_id": "WORKSPACE-DELETED",
+      "workspace_title": "deleted-worktree",
+      "surface_title": "zombie lane",
+      "source_session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    }
+  ]
+}
