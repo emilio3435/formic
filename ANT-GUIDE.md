@@ -150,6 +150,23 @@ contradiction never moves a declared or provider-native chain. An undeclared
 session can adopt an exact observed parent, while missing or ambiguous process
 evidence remains unobserved rather than becoming a guessed relationship.
 
+**A title cmux gave the pane is not a rename.** cmux distils its own pane
+titles from a session's opening prompt and names workspaces after their path,
+so a lane declared as `fe-states` is not renamed by a pane reading
+`Unify lane fe-states and audit tags with TDD`, and a lane declared as
+`be-live` is not renamed by a workspace reading `hardening/be-live`. Neither
+outranks a declared name anywhere on the board. The title is still how you find
+the pane, so it stays: open the session's drawer and read the `Terminal:` line
+under the heading.
+
+**The `#8da7e056` after a name is a session tag,** and it appears only while
+another session currently on the board is printing the same words. The fleet
+keeps a session's tag for good once it has been given one — a name that changed
+back when its twin ended would be worse than a redundant one — so a session can
+carry a tag the board has nothing to spend it on, and in that case the board
+prints the words alone. The full session id is in the drawer for every row
+either way.
+
 > **The one number that will mislead you.** A row's **Tokens** is that agent's
 > *latest model call*. The **session tokens** figure on the grey program bar above
 > it is the *cumulative* total for every agent in that program, ended ones
