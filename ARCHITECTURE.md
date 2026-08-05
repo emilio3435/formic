@@ -108,6 +108,50 @@ lifecycle and scope the server publishes, never from a provider status word.
 exempt from the display lookback — the lookback is a recency filter, and a
 coverage disclosure that hides most of the gap is worse than none.
 
+**The board's three levels.** `repoGroups` (`app.js`) turns the server's flat
+program list into sections: a program carrying `groupPath: [repoKey,
+worktreeKey]` joins a repository band, and everything without one keeps the
+older flat program section, drawn by the same renderer through the same caches.
+`worktreeLabel` names each leaf by precedence — a declared `run:<runId>` first,
+then the collapsed `ephemeral` leaf's server-given name, then
+`branch@checkout`, reaching one directory up when the checkout folder merely
+repeats the repository name. Every rule there exists because a leaf that spans
+checkouts must not wear one checkout's name. Inside a leaf, roots sort by
+`ROSTER_ROLE_ORDER` within their lifecycle section — a stable sort by role
+alone, so ties keep the `agentSortRank` order the server already applied. The
+flat fallback keeps that server order untouched, which is what makes it a
+regression gate rather than a second implementation.
+
+Each level ships its own **paint key** into the two existing cache maps —
+`repo<US><repoKey>`, `+<US><worktreeKey>`, `+<US><rowKey>`, where `<US>` is
+`\u001f`. This matters more than it reads: `programId` used to key every cache,
+so a new grouping axis without its own key serves one repository's rows out of
+another's entry and rebuilds every row on the 4 s tick, taking the operator's
+text selection, hover and keyboard focus with it. Two repositories routinely
+hold a worktree of the same name, which is why the row key carries both.
+
+Four collapse controls persist independently, each on the `programOverrides`
+pattern with its own storage key: programs (`mtn3-programs`), repository bands
+(`mtn3-repos`), swarms (`mtn3-swarms`) and Finished shelves (`mtn3-shelves`).
+All four are carried in `programsPaintSig`, because each is a control that
+mutates nothing else — a paint signature that does not watch them renders a
+dead caret.
+
+`shelfFilter` decides the Finished shelf: sessions the *view* excluded for being
+terminal, still subject to every other filter the board is wearing. The lookback
+clause is the governor — one live worktree holds 448 sessions, whose shelf reads
+15 at the default 24 h and 446 with the lookback off — and History is exempt
+entirely, because there finished is the population and a shelf holding every row
+is a collapsed view.
+
+`parseSenderHeader` (`presentation.js`) reads the producer envelope
+`[from <agent.id> run <runId>]` off a message, anchored at the start so an agent
+quoting an instruction back is never attributed to whoever it quoted. It feeds
+two things: the drawer attributes an agent-sent instruction to its real sender
+instead of labelling it "You", and row prose is printed without the envelope.
+`roleSourceView` styles `declared`/`observed`/`inferred` as border style rather
+than color, since color on that chip already means *which* role.
+
 `app.js` holds the render tree and the board's own state machine. Around it:
 `presentation.js` (pure derivations from a snapshot — the layer tests exercise
 directly), `agent-model.js`, `client-state.js`, `dom-primitives.js` (`el`, icons,

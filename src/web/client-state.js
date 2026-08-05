@@ -91,6 +91,10 @@ export const state = {
      it is stored per agent id so the choice survives a reload the same way
      programOverrides does (localStorage, mtn3-swarms). */
   swarmOverrides: new Map(), // parent agentId -> "open"
+  /* Which worktrees' Finished shelves the operator has opened. Same shape and
+     same default as swarmOverrides — collapsed is the default, so only "open"
+     is ever stored — keyed by programId, its own key (mtn3-shelves). */
+  shelfOverrides: new Map(), // programId -> "open"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   /* data-fkey of whatever the operator was standing on when they opened the

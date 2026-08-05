@@ -449,6 +449,8 @@ function listUi(overrides: Record<string, unknown> = {}) {
     // Absent means collapsed, so the default fixture is a board whose swarms
     // are all folded — which is what a first load actually looks like.
     swarmOverrides: new Map<string, string>(),
+    // Same default as swarms: collapsed unless the operator opened it.
+    shelfOverrides: new Map<string, string>(),
     labels: new Map<string, string>(),
     renaming: null,
     renameDraft: "",
@@ -5249,6 +5251,8 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       selection: new Set<string>(),
       programOverrides: new Map<string, string>(),
       swarmOverrides: new Map<string, string>(),
+      // Same default as swarms: collapsed unless the operator opened it.
+      shelfOverrides: new Map<string, string>(),
       labels: new Map<string, string>(),
       broadcastResults: null,
       broadcastConfirming: false,
@@ -9760,6 +9764,45 @@ describe("Atlas F1: repo sections, worktree subsections, role order", () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
+  /* B2.1 collapsed every undeclared disposable checkout of one repo into a
+     single `ephemeral` leaf and named it "disposable checkouts" — ARCHITECTURE
+     says so in those words. The client was overriding that name with
+     branch@checkout read off whichever agent sorted first, so a leaf spanning
+     NINE worktrees wore one of them: the-mountain's ephemeral leaf (4 distinct
+     worktrees) was labelled `ant-hill/atlas-fe-20260805@ah-atlas-fe-20260805`.
+
+     Same rule as the declared run, one leaf over: a subsection that spans
+     checkouts cannot wear one checkout's name. */
+  test("the collapsed ephemeral leaf keeps the name the server gave it", () => {
+    const eph = {
+      id: "repo:k-eph2:ephemeral",
+      name: "disposable checkouts",
+      groupPath: ["k-eph2", "ephemeral"],
+      agents: [
+        repoAgent("codex:e1", {
+          repo: {
+            repoKey: "k-eph2", repoName: "the-mountain", ephemeral: true,
+            branch: "ant-hill/atlas-fe-20260805",
+            worktreePath: "/Users/e/Developer/.worktrees/ah-atlas-fe-20260805",
+          },
+        }),
+        repoAgent("codex:e2", {
+          repo: {
+            repoKey: "k-eph2", repoName: "the-mountain", ephemeral: true,
+            worktreePath: "/Users/e/.codex/worktrees/9a01/the-mountain",
+          },
+        }),
+      ],
+    };
+    const root = newNode("div");
+    paint(root, [{ program: eph, agents: eph.agents, finished: [] }]);
+
+    const label = byClass(root, "program-name").textContent;
+    expect(label).toBe("disposable checkouts");
+    expect(label).not.toContain("atlas-fe");
+    expect(label).not.toContain("@");
+  });
+
   test("the repo band ships its own rules rather than borrowing the program card", () => {
     for (const rule of [".repo-section", ".repo-head", ".repo-caret", ".repo-name", ".repo-worktrees"]) {
       expect(styles.includes(rule), rule).toBe(true);
@@ -9922,5 +9965,405 @@ describe("Atlas F2: role confidence and message provenance", () => {
     }
     expect(styles).toContain(".chat-turn-sender");
     expect(styles).toContain(".specialty-chip");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Atlas F3 — liveness truth and the finished shelf.
+
+   The plan asks for `hookLifecycle: "needsInput"` to reach the row "even when
+   hibernated-dark". Driven against the live board first, that instruction taken
+   literally would have put 45 GHOSTS on it: of the 46 sessions whose cmux hook
+   record says needsInput, 45 carry processState "died", processAlive false and
+   a COMPLETE process roster — the hook froze at needsInput because the process
+   died without a clean exit, hours to a day ago. Exactly one is genuinely live,
+   and it was already reaching the operator.
+
+   So the rule is not "the hook says needsInput". It is "the hook says needsInput
+   AND nothing has since proven the session gone" — which is what the codebase's
+   existing scar (alerting()'s rescue arm) has been saying about ghost rows all
+   along.
+   ------------------------------------------------------------------------ */
+describe("Atlas F3: hook-store liveness and the finished shelf", () => {
+  // A session cmux says is blocked on a human, quiet for two hours, whose
+  // process still answers. This is "hibernated-dark": nothing has been written
+  // to the transcript, so recency alone reads it as merely quiet.
+  const darkAsker = (over: Record<string, unknown> = {}): Record<string, unknown> => agent({
+    id: "claude:dark",
+    hookLifecycle: "needsInput",
+    lifecycle: "waiting",
+    processState: "running",
+    processAlive: true,
+    attentionSignal: undefined,
+    updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    ...over,
+  });
+
+  test("a hook that says needsInput reaches the operator without a text signal", () => {
+    /* The provider hook is a DECLARED fact — the agent told cmux it is blocked.
+       Every other route to the strip reads prose and guesses. Declared beats
+       inferred is this whole program's thesis; it has to hold here too. */
+    const dark = darkAsker();
+    expect(dark.attentionSignal).toBeUndefined();
+    expect(M.wantsHuman(dark)).toBe(true);
+    expect(M.alerting(dark)).toBe(true);
+    expect(M.viewMatches("board", dark)).toBe(true);
+    expect(M.needsYouStrip([{ program: { id: "p", name: "P", agents: [dark] }, agents: [dark] }]))
+      .toHaveLength(1);
+  });
+
+  test("a frozen hook record never resurrects a session proven gone", () => {
+    /* The live shape of all 45: checked by id, complete roster, nothing claims
+       it — with the hook still reading needsInput from before it died. */
+    const ghost = darkAsker({
+      id: "claude:ghost",
+      lifecycle: "finished",
+      processState: "died",
+      processAlive: false,
+      processRosterComplete: true,
+      endEvidence: "turn-complete",
+    });
+    expect(ghost.hookLifecycle).toBe("needsInput");
+    expect(M.wantsHuman(ghost)).toBe(false);
+    expect(M.alerting(ghost)).toBe(false);
+    expect(M.viewMatches("board", ghost)).toBe(false);
+
+    // Same for a retained record whose hook happened to freeze mid-question.
+    const retained = darkAsker({ id: "claude:retained", scope: "retained" });
+    expect(M.wantsHuman(retained)).toBe(false);
+  });
+
+  test("an idle or running hook is not a request for a person", () => {
+    // Only needsInput is a claim about wanting a human. The others say what the
+    // session is DOING, which the lifecycle already answers.
+    for (const hook of ["idle", "running", "unknown"]) {
+      expect(M.wantsHuman(darkAsker({ hookLifecycle: hook }))).toBe(false);
+    }
+  });
+
+  /* ---- the finished shelf ---------------------------------------------- */
+
+  const liveOne = (id: string) => agent({ id, status: "running", lifecycle: "working" });
+  const doneOne = (id: string) => agent({ id, lifecycle: "finished", scope: "observed", endEvidence: "session-exit" });
+
+  function shelfBoard(over: Record<string, unknown> = {}) {
+    const program = {
+      id: "shelf-prog", name: "shelf", path: "/x/shelf",
+      groupPath: ["k-shelf", "wt-shelf"],
+      agents: [liveOne("codex:live-1"), doneOne("codex:done-1"), liveOne("codex:live-2"), doneOne("codex:done-2")],
+    };
+    // What the board view admits: the two live sessions. The finished pair is
+    // what renderPrograms hands over as the shelf population.
+    const live = [program.agents[0]!, program.agents[2]!];
+    const finished = [program.agents[1]!, program.agents[3]!];
+    const visible = [{ program, agents: live, finished }];
+    const root = newNode("div");
+    const shown = withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "board",
+      snap: { schemaVersion: 1, programs: [program] },
+      ...over,
+    })));
+    return { root, shown, program };
+  }
+
+  test("finished sessions are a counted shelf, not rows interleaved with live work", () => {
+    const { root, shown } = shelfBoard();
+
+    // The live rows, and only the live rows.
+    const ids = allByClass(root, "agent-row").map((n: { dataset: { fkey: string } }) => n.dataset.fkey);
+    expect(ids).toEqual(["agent:codex:live-1", "agent:codex:live-2"]);
+
+    const shelf = byClass(root, "finished-shelf");
+    expect(shelf).not.toBeNull();
+    expect(textOf(shelf)).toContain("Finished");
+    expect(textOf(shelf)).toContain("2");
+    expect(shelf.attributes["aria-expanded"]).toBe("false");
+
+    /* The count the shelf carries is the one that made the header confusing:
+       the rollup counts the whole program (4) while the body drew 2. `shown`
+       still reports what the FILTER admitted, so the shelf cannot inflate it. */
+    expect(shown).toBe(2);
+  });
+
+  test("opening the shelf draws the finished rows and still does not count them", () => {
+    const { root, shown } = shelfBoard({ shelfOverrides: new Map([["shelf-prog", "open"]]) });
+    const ids = allByClass(root, "agent-row").map((n: { dataset: { fkey: string } }) => n.dataset.fkey);
+    expect(ids).toEqual([
+      "agent:codex:live-1", "agent:codex:live-2",
+      "agent:codex:done-1", "agent:codex:done-2",
+    ]);
+    expect(byClass(root, "finished-shelf").attributes["aria-expanded"]).toBe("true");
+    expect(shown).toBe(2);
+  });
+
+  test("History grows no shelf — there, finished IS the population", () => {
+    /* A shelf holding 100% of the rows is not a shelf, it is a collapsed view.
+       History opens to look at finished sessions; hiding them all behind one
+       caret would be the single worst thing this feature could do. */
+    const program = {
+      id: "hist-prog", name: "hist",
+      agents: [doneOne("codex:h1"), doneOne("codex:h2")],
+    };
+    const visible = [{ program, agents: program.agents, finished: [] }];
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "history",
+      programOverrides: new Map([["hist-prog", "open"]]),
+      snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(byClass(root, "finished-shelf")).toBeNull();
+    expect(allByClass(root, "agent-row")).toHaveLength(2);
+  });
+
+  test("a worktree with nothing finished grows no shelf at all", () => {
+    const program = {
+      id: "clean-prog", name: "clean", groupPath: ["k-clean", "wt-clean"],
+      agents: [liveOne("codex:c1")],
+    };
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, [{ program, agents: program.agents, finished: [] }], listUi({
+      view: "board", snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(byClass(root, "finished-shelf")).toBeNull();
+  });
+
+  test("the shelf's collapse persists per program and reaches the paint signature", () => {
+    const fn = source.match(/function loadShelfOverrides\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('localStorage.getItem("mtn3-shelves")');
+    expect(fn).toContain('mode === "open"');       // collapsed is the default
+    expect(source).toContain('localStorage.setItem("mtn3-shelves"');
+    expect(source).toContain("loadShelfOverrides();");
+
+    const program = {
+      id: "sig-shelf", name: "s", groupPath: ["k", "w"],
+      agents: [liveOne("codex:s1"), doneOne("codex:s2")],
+    };
+    const visible = [{ program, agents: [program.agents[0]!], finished: [program.agents[1]!] }];
+    const ui = (over: Record<string, unknown> = {}) =>
+      listUi({ view: "board", snap: { schemaVersion: 1, programs: [program] }, ...over });
+    expect(M.programsPaintSig(visible, ui({ shelfOverrides: new Map([["sig-shelf", "open"]]) })))
+      .not.toBe(M.programsPaintSig(visible, ui()));
+  });
+
+  /* The lookback clause is the shelf's only governor, and it is doing more work
+     than it looks. Measured on the live board, one worktree holds 448 sessions:
+     at the default 24h lookback its shelf reads 15, at 72h it reads 131, and
+     with the lookback off entirely it reads 446. The shelf answers "where did
+     the rows that were just here go?" — not "show me the archive", which is
+     what History is for. Remove this clause and a live view grows a 446-row
+     shelf with no test to notice. */
+  test("the shelf holds recent finishes, not the archive", async () => {
+    const old = doneOne("codex:ancient");
+    old.updatedAt = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+    const recent = doneOne("codex:recent");
+    recent.updatedAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    const program = { id: "look-prog", name: "look", agents: [old, recent] };
+
+    await withState({ view: "board", lookbackHours: 24, query: "", facetProgram: "", facetProvider: "" }, () => {
+      const keep = M.shelfFilter();
+      expect(keep(recent, program)).toBe(true);
+      expect(keep(old, program)).toBe(false);
+    });
+
+    // An operator who turns the lookback off has asked for everything, and the
+    // shelf is collapsed by default — so that costs them one line until they say
+    // otherwise, which is their call to make.
+    await withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProvider: "" }, () => {
+      expect(M.shelfFilter()(old, program)).toBe(true);
+    });
+
+    // A search narrows the shelf exactly as it narrows the rows: a filtered
+    // board must not grow a shelf of sessions that do not match it.
+    await withState({ view: "board", lookbackHours: 24, query: "nothing-matches-this", facetProgram: "", facetProvider: "" }, () => {
+      expect(M.shelfFilter()(recent, program)).toBe(false);
+    });
+  });
+
+  test("the shelf ships its own rules", () => {
+    expect(styles).toContain(".finished-shelf");
+    expect(styles).toContain(".finished-shelf-count");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Atlas F4 — the prose has to describe the board that shipped.
+
+   ANT-GUIDE said the fleet was "grouped by workstream" and ARCHITECTURE's
+   Client section named every module without ever saying how the board is
+   arranged. Both were true before this program and neither survived it. These
+   assert the same way tests/ant-guide.test.ts does — the doc must contain the
+   vocabulary the client actually renders — so the next change to the hierarchy
+   fails here by name instead of drifting silently.
+   ------------------------------------------------------------------------ */
+describe("Atlas F4: the guide and the architecture map describe this board", () => {
+  let guide = "";
+  let architecture = "";
+  beforeAll(() => {
+    guide = readFileSync(join(import.meta.dir, "../ANT-GUIDE.md"), "utf8");
+    architecture = readFileSync(join(import.meta.dir, "../ARCHITECTURE.md"), "utf8");
+  });
+
+  test("the guide names the three levels an operator actually sees", () => {
+    // The words on screen, not a paraphrase of them.
+    for (const phrase of ["repository", "worktree", "run"]) {
+      expect(guide.toLowerCase(), `guide never mentions ${phrase} grouping`).toContain(phrase);
+    }
+    // The stale claim this program invalidated.
+    expect(guide).not.toContain("grouped by workstream");
+  });
+
+  test("the guide explains the Finished shelf, including why it is not the archive", () => {
+    /* Named, not merely mentioned: "Finished" is already a lifecycle word in
+       this guide, so asserting the bare word passes on prose that never
+       describes the control. */
+    expect(guide).toContain("Finished shelf");
+    // The governor is the part an operator has to know, or the shelf reads as
+    // broken the first time a session they remember is not in it.
+    const shelf = guide.slice(guide.indexOf("Finished shelf"));
+    expect(shelf.slice(0, 1200).toLowerCase()).toContain("lookback");
+    expect(shelf.slice(0, 1200)).toContain("History");
+  });
+
+  test("the guide explains role confidence in the words the chip uses", () => {
+    // The guide's own convention for a value the client renders, matching how
+    // tests/ant-guide.test.ts pins every other chip vocabulary.
+    for (const word of ["declared", "observed", "inferred"]) {
+      expect(guide, `guide omits the ${word} role source`).toContain(`**${word}**`);
+      expect(source, `${word} is not a roleSource the client renders`).toContain(`role-src-${word}`);
+    }
+  });
+
+  test("the guide says who a message came from when it was not the operator", () => {
+    /* The single most misleading thing the drawer used to do. An operator
+       reading "You" over an instruction they never sent needs the guide to have
+       told them what changed. */
+    expect(guide).toContain("[from ");
+    expect(guide.toLowerCase()).toContain("sent in run");
+  });
+
+  test("ARCHITECTURE maps the board's grouping and its paint keys", () => {
+    for (const symbol of ["repoGroups", "worktreeLabel", "shelfFilter", "parseSenderHeader"]) {
+      expect(architecture, `ARCHITECTURE stopped naming ${symbol}`).toContain(symbol);
+      expect(source, `${symbol} is not a function this client defines`).toContain("function " + symbol);
+    }
+    // The reason the keys exist at all — a reader who does not know this will
+    // key the next grouping axis on programId and rebuild every row every 4s.
+    expect(architecture).toContain("groupPath");
+    expect(architecture.toLowerCase()).toContain("paint key");
+  });
+
+  test("the two assets ship under one cache-buster token", () => {
+    /* Not a pin on the value — that would need editing on every bump, which is
+       the one thing a cache-buster must not make annoying. The invariant is
+       that they AGREE: a stylesheet left on the previous token against a fresh
+       app.js is a stale-CSS bug that reproduces only on machines that happened
+       to cache the old file, which is the worst kind to be handed. */
+    const tokens = [...html.matchAll(/(?:styles\.css|app\.js)\?v=([\w.-]+)/g)].map((m) => m[1]);
+    expect(tokens).toHaveLength(2);
+    expect(new Set(tokens).size, `index.html ships mismatched cache-busters: ${tokens.join(" vs ")}`).toBe(1);
+  });
+
+  test("ARCHITECTURE names the storage keys the board persists collapse under", () => {
+    // Four collapse controls now, each with its own key; a fifth added without
+    // a line here is the drift this catches.
+    for (const key of ["mtn3-programs", "mtn3-repos", "mtn3-swarms", "mtn3-shelves"]) {
+      expect(architecture, `ARCHITECTURE omits ${key}`).toContain(key);
+      expect(source, `${key} is not a key the client writes`).toContain(`"${key}"`);
+    }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Atlas F4 — focus survives the 4 s tick under the new keys.
+
+   The plan lists this as a manual check. It should not be: `programId` used to
+   key every paint cache, and this program added three grouping axes and a
+   shelf on top of it. If any of them rebuilds a node that did not change, the
+   operator loses their place every four seconds — and if any two nodes answer
+   to one `data-fkey`, render()'s restore-by-key lands on whichever the document
+   happens to hold first, which is the scar the swarm anchor already carries.
+   ------------------------------------------------------------------------ */
+describe("Atlas F4: the board keeps the operator's place across a repaint", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fkeysOf = (node: any) =>
+    findAll(node, (n: any) => n.dataset && typeof n.dataset.fkey === "string").map((n: any) => n.dataset.fkey);
+
+  function fullBoard() {
+    const live = (id: string) => agent({ id, status: "running", lifecycle: "working" });
+    const done = (id: string) => agent({ id, lifecycle: "finished", scope: "observed", endEvidence: "session-exit" });
+    const repoOf = (branch: string, path: string) => ({
+      repoKey: "k-focus", repoName: "the-mountain", worktreePath: path, branch, ephemeral: false,
+    });
+    const leafA = {
+      id: "repo:k-focus:worktree:wa", name: "the-mountain", groupPath: ["k-focus", "wa"],
+      agents: [
+        { ...live("codex:f-a1"), repo: repoOf("main", "/x/main") },
+        { ...live("codex:f-a2"), repo: repoOf("main", "/x/main") },
+        { ...done("codex:f-a3"), repo: repoOf("main", "/x/main") },
+      ],
+    };
+    const leafB = {
+      id: "repo:k-focus:run:atlas", name: "the-mountain", groupPath: ["k-focus", "run:atlas"],
+      agents: [{ ...live("codex:f-b1"), repo: repoOf("lane", "/x/lane") }],
+    };
+    const loose = { id: "cwd-focus-loose", name: "loose", agents: [live("codex:f-c1")] };
+    return [
+      { program: leafA, agents: leafA.agents.slice(0, 2), finished: [leafA.agents[2]!] },
+      { program: leafB, agents: leafB.agents, finished: [] },
+      { program: loose, agents: loose.agents, finished: [] },
+    ];
+  }
+
+  test("every focus key on the board is unique across all four surfaces", () => {
+    /* Repo bands, worktree leaves, a run leaf, the flat fallback, live rows and
+       an open shelf, all at once. Two nodes sharing a key is not a cosmetic
+       clash: it sends focus restore to the wrong session. */
+    const visible = fullBoard();
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "board",
+      shelfOverrides: new Map([["repo:k-focus:worktree:wa", "open"]]),
+      snap: { schemaVersion: 1, programs: visible.map((v) => v.program) },
+    })));
+
+    const keys = fkeysOf(root);
+    expect(keys.length).toBeGreaterThan(8); // the surfaces really did render
+    expect(new Set(keys).size).toBe(keys.length);
+    // The shelved session is drawn exactly once, under its own agent key.
+    expect(keys.filter((k: string) => k === "agent:codex:f-a3")).toHaveLength(1);
+    // And the new controls each carry their own key rather than borrowing one.
+    expect(keys).toContain("repo:k-focus");
+    expect(keys).toContain("shelf:repo:k-focus:worktree:wa");
+  });
+
+  test("a quiet 4s tick rebuilds nothing the operator could be standing on", () => {
+    const visible = fullBoard();
+    const root = newNode("div");
+    const ui = () => listUi({
+      view: "board",
+      shelfOverrides: new Map([["repo:k-focus:worktree:wa", "open"]]),
+      snap: { schemaVersion: 1, programs: visible.map((v) => v.program) },
+    });
+
+    withDom(() => M.syncProgramList(root, visible, ui()));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const before = new Map<string, any>(
+      findAll(root, (n: any) => n.dataset && typeof n.dataset.fkey === "string")
+        .map((n: any) => [n.dataset.fkey, n]),
+    );
+    expect(before.size).toBeGreaterThan(8);
+
+    // The tick: same data, same everything.
+    withDom(() => M.syncProgramList(root, visible, ui()));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const after = new Map<string, any>(
+      findAll(root, (n: any) => n.dataset && typeof n.dataset.fkey === "string")
+        .map((n: any) => [n.dataset.fkey, n]),
+    );
+    expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+    for (const [key, node] of before) {
+      expect(after.get(key), `${key} was rebuilt by a no-op repaint`).toBe(node);
+    }
   });
 });

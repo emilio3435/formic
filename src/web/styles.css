@@ -1252,6 +1252,32 @@ body.feed-frozen .programs { opacity: 0.62; }
 .program-agents { border-top: 1px solid var(--line); }
 .program:not(.open) .program-agents { display: none; border-top: 0; }
 
+/* ---------- the finished shelf ----------
+
+   Deliberately the quietest control on the board. It holds work that is OVER,
+   so it earns a line and no color: no rail, no surface, no count in ember. It
+   sits at the foot of its worktree, folded, and the only thing it competes with
+   is the whitespace under the last live row. */
+
+.finished-shelf {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.3rem 0.9rem;
+  border-top: 1px solid var(--line);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--faint);
+  font-size: 11px;
+}
+.finished-shelf:hover { color: var(--ink); background: var(--sand); }
+.finished-shelf-caret { display: inline-grid; place-items: center; font-size: 10px; transition: transform 150ms ease; }
+.finished-shelf.is-open .finished-shelf-caret { transform: rotate(90deg); }
+.finished-shelf-label { font-weight: 650; letter-spacing: 0.01em; }
+.finished-shelf-count { font-variant-numeric: tabular-nums; }
+
 /* ---------- repo bands ----------
 
    The repository is the section and its worktrees are the subsections inside
