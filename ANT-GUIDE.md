@@ -84,7 +84,38 @@ the system itself is healthy.
 across every program. When nothing is asking it says so on that line — *No
 session is asking for you* — rather than vanishing, so you can tell "I checked"
 from "I have not looked". Everything else on the machine is directly underneath
-it, grouped by workstream, so the shortlist never costs you sight of the fleet.
+it, so the shortlist never costs you sight of the fleet.
+
+Underneath, the fleet is grouped the way you actually think about it — **by
+repository, then by what is happening inside it**:
+
+```
+▾ the-mountain                                    6 worktrees
+    ▸ agent-atlas-2026-08-05        ← a declared run, spanning four checkouts
+    ▸ main@the-mountain-main        ← a branch in a checkout
+    ▸ disposable checkouts          ← every throwaway worktree, folded into one
+```
+
+The band is the **repository** — one line per project, however many checkouts
+of it are running. Under it sits one leaf per **worktree**, named
+`branch@folder`, *except* when something better is known: a swarm that declared
+a **run** is named by its run id (a run spans several worktrees, so no single
+branch would be honest), and every undeclared throwaway checkout of a repository
+folds into one *disposable checkouts* leaf instead of one leaf each. Inside a
+leaf, rows lead with whoever owns the work — orchestrators first, then the rest.
+
+Both levels collapse, and both remember. Folding up a repository you are not
+working in today survives a reload.
+
+**The Finished shelf.** When a session finishes it leaves the live rows, and at
+the foot of its leaf a folded line appears: `Finished 3`. That is where the rows
+went — it exists so you never have to wonder whether a session ended or is just
+hidden behind your search. Click it to see them.
+
+The shelf holds *recent* finishes only, inside the same lookback the rest of the
+board is using — it answers "where did the rows that were just here go", not
+"show me everything that ever ran". For the whole record, use **History**, which
+grows no shelf at all, because there finished work *is* the list.
 
 ### 3. Read the row
 
@@ -138,6 +169,14 @@ the orchestrator that owns its run.
 
 The drawer holds everything about that one session: what it last said, whether
 its process is still alive, and the four buttons that act on it.
+
+**Who sent the instruction it is working from.** A message in the drawer used to
+be labelled *You* whether or not you wrote it — and on any swarm you did not,
+because the orchestrator sent it. Messages between agents carry a header,
+`[from <agent id> run <run id>]`, so the drawer now names the sender and prints
+*sent in run …* underneath, with the header itself taken off the text. A turn
+still labelled **You** really is one of yours. That is the useful half: an
+instruction you did not write can no longer wear your name.
 
 | Button | Does |
 |---|---|

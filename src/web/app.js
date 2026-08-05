@@ -3981,9 +3981,16 @@ function parentName(path) {
    declared one, so the second axis is either a worktree hash or a named run.
    Empty after the marker is not a run — that would name a subsection "". */
 const RUN_GROUP_PREFIX = "run:";
+/* B2.1's collapsed leaf: every undeclared disposable checkout of one repo,
+   gathered under one key so 179 automation runs stop being 179 sections. */
+const EPHEMERAL_GROUP_KEY = "ephemeral";
+
+function worktreeGroupKey(program) {
+  return program && Array.isArray(program.groupPath) ? String(program.groupPath[1] || "") : "";
+}
 
 function declaredRunId(program) {
-  const key = program && Array.isArray(program.groupPath) ? String(program.groupPath[1] || "") : "";
+  const key = worktreeGroupKey(program);
   return key.startsWith(RUN_GROUP_PREFIX) ? key.slice(RUN_GROUP_PREFIX.length) : "";
 }
 
@@ -4000,6 +4007,15 @@ function declaredRunId(program) {
 function worktreeLabel(program) {
   const runId = declaredRunId(program);
   if (runId) return runId;
+  /* The collapsed ephemeral leaf spans checkouts — 4, 8 and 9 distinct
+     worktrees in the three live ones — so reading a path off whichever agent
+     sorted first names it after one of nine. The server already gave it the
+     only true name it has ("disposable checkouts", the words ARCHITECTURE
+     uses), so take that instead of deriving a wrong one.
+
+     Same rule as the declared run above, one leaf over: a subsection that spans
+     checkouts cannot wear one checkout's name. */
+  if (worktreeGroupKey(program) === EPHEMERAL_GROUP_KEY) return program.name || "";
   const repo = repoOf(program);
   const path = (repo && repo.worktreePath) || (program && program.path) || "";
   const branch = (repo && repo.branch) || "";
