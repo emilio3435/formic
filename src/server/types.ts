@@ -136,6 +136,14 @@ export interface CmuxSurface {
   identityTrace?: SurfaceIdentityTrace;
 }
 
+export interface CmuxWorkspaceSnapshot {
+  workspaceId: string;
+  projectRootPath?: string;
+  branch?: string;
+  dirty?: boolean;
+  pullRequestUrls: string[];
+}
+
 export interface CmuxNotification {
   id?: string;
   surfaceId: string;

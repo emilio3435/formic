@@ -1,7 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { cmuxCommand } from "./cmux-auth";
-import type { CmuxNotification, CollectionResult, CmuxSurface, CommandResult, CommandRunner } from "./types";
+import type {
+  CmuxNotification,
+  CmuxSurface,
+  CmuxWorkspaceSnapshot,
+  CollectionResult,
+  CommandResult,
+  CommandRunner,
+} from "./types";
 
 export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
@@ -310,6 +317,98 @@ export async function collectCmux(
     return {
       value: [],
       errors: [`cmux terminal discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+}
+
+function sidebarWorkspaces(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter((workspace): workspace is Record<string, unknown> =>
+      Boolean(workspace) && typeof workspace === "object" && !Array.isArray(workspace));
+  }
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const direct = sidebarWorkspaces(record.workspaces);
+  const windows = Array.isArray(record.windows)
+    ? record.windows.flatMap((window) => sidebarWorkspaces(window))
+    : [];
+  return [...direct, ...windows];
+}
+
+export function parseCmuxSidebarSnapshot(output: string): CmuxWorkspaceSnapshot[] {
+  const parsed = JSON.parse(output) as unknown;
+  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? ((parsed as Record<string, unknown>).result ?? parsed)
+    : parsed;
+  const workspaces = sidebarWorkspaces(root);
+  if (!workspaces.length) {
+    const hasWorkspaceCollection = Array.isArray(root)
+      || (Boolean(root) && typeof root === "object" && (
+        Array.isArray((root as Record<string, unknown>).workspaces)
+        || Array.isArray((root as Record<string, unknown>).windows)
+      ));
+    if (!hasWorkspaceCollection) throw new Error("cmux response did not contain a workspace snapshot");
+  }
+  const byWorkspace = new Map<string, CmuxWorkspaceSnapshot>();
+  for (const workspace of workspaces) {
+    const workspaceId = stringValue(workspace.id, workspace.workspace_id, workspace.workspaceId);
+    if (!workspaceId) continue;
+    const branches = Array.isArray(workspace.git_branches)
+      ? workspace.git_branches
+      : Array.isArray(workspace.gitBranches)
+        ? workspace.gitBranches
+        : [];
+    const git = branches.find((value): value is Record<string, unknown> =>
+      Boolean(value) && typeof value === "object" && !Array.isArray(value)
+        && Boolean(stringValue((value as Record<string, unknown>).branch)));
+    const dirty = git
+      ? [git.dirty, git.is_dirty, git.isDirty].find((value): value is boolean => typeof value === "boolean")
+      : undefined;
+    const pullRequestValues = Array.isArray(workspace.pull_request_urls)
+      ? workspace.pull_request_urls
+      : Array.isArray(workspace.pullRequestURLs)
+        ? workspace.pullRequestURLs
+        : Array.isArray(workspace.pullRequestUrls)
+          ? workspace.pullRequestUrls
+          : [];
+    byWorkspace.set(workspaceId, {
+      workspaceId,
+      ...(stringValue(workspace.project_root_path, workspace.projectRootPath)
+        ? { projectRootPath: stringValue(workspace.project_root_path, workspace.projectRootPath) }
+        : {}),
+      ...(git ? { branch: stringValue(git.branch) } : {}),
+      ...(dirty === undefined ? {} : { dirty }),
+      pullRequestUrls: [...new Set(pullRequestValues.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      ))],
+    });
+  }
+  return [...byWorkspace.values()];
+}
+
+export async function collectCmuxSidebar(
+  runner: CommandRunner,
+  executable = DEFAULT_CMUX_EXECUTABLE,
+): Promise<CollectionResult<CmuxWorkspaceSnapshot[]>> {
+  const result = await runner.run(cmuxCommand(executable, [
+    "rpc",
+    "extension.sidebar.snapshot",
+    '{"all_windows":true}',
+  ]), 10_000);
+  if (executableMissing(result)) return { value: [], errors: [], absent: true };
+  if (result.timedOut) return { value: [], errors: ["cmux sidebar discovery timed out"] };
+  if (result.exitCode !== 0) {
+    return {
+      value: [],
+      errors: [`cmux sidebar discovery exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`],
+    };
+  }
+  try {
+    return { value: parseCmuxSidebarSnapshot(result.stdout), errors: [] };
+  } catch (error) {
+    return {
+      value: [],
+      errors: [`cmux sidebar discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
     };
   }
 }

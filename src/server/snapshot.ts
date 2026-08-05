@@ -54,12 +54,14 @@ import {
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
 import { disambiguate, paneRename } from "./naming";
+import { resolveRepoIdentity } from "./repo-identity";
 import type { SessionNameRecord } from "./session-names";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
   type CmuxNotification,
   type CmuxSurface,
+  type CmuxWorkspaceSnapshot,
   type CollectedAgent,
 } from "./types";
 
@@ -71,6 +73,7 @@ export interface SnapshotInput {
      pass completes. */
   sessionNames?: (agentId: string) => SessionNameRecord | undefined;
   surfaces: readonly CmuxSurface[];
+  sidebarWorkspaces?: readonly CmuxWorkspaceSnapshot[];
   notifications?: readonly CmuxNotification[];
   programHints?: readonly ProgramHint[];
   sourceErrors?: Partial<Record<Provider, readonly string[]>>;
@@ -195,6 +198,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const parentId = `${source.provider}:${source.parentSourceSessionId}`;
     childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
   }
+  const sidebarByWorkspace = new Map(
+    (input.sidebarWorkspaces ?? []).map((workspace) => [workspace.workspaceId, workspace]),
+  );
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
     const target = resolveAgentTarget(source, input.surfaces, sources);
@@ -205,6 +211,14 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     };
     const surface = target.surfaceId
       ? input.surfaces.find((candidate) => candidate.surfaceId === target.surfaceId)
+      : undefined;
+    const sidebar = target.workspaceId
+      ? sidebarByWorkspace.get(target.workspaceId)
+      : undefined;
+    const repoCwd = sidebar?.projectRootPath ?? source.cwd ?? surface?.cwd;
+    const resolvedRepo = repoCwd ? resolveRepoIdentity(repoCwd) : null;
+    const repo = resolvedRepo
+      ? { ...resolvedRepo, ...(sidebar?.branch ? { branch: sidebar.branch } : {}) }
       : undefined;
     const notification = target.surfaceId
       ? [...(input.notifications ?? [])]
@@ -233,6 +247,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       input.programHints ?? [],
       surface,
       target.resolution === "exact" && !target.cwdMismatch,
+      repo,
     );
     /* The status line is a STATE, not a paste.
        This joined title, subtitle and body and cut the result at 500
@@ -331,7 +346,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const { callSizes: _callSizes, ...publishable } = source;
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
-      programId: program.id,
+      programId: program.groupPath ? `repo:${program.groupPath[0]}` : program.id,
       /* An unread notification no longer overwrites the status. It used to,
          which is how a working session came to publish `status: "attention"` —
          one field answering two different questions, and losing the first. What
@@ -359,6 +374,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
+      ...(repo ? { repo } : {}),
+      ...(sidebar?.pullRequestUrls.length ? { pullRequestUrls: sidebar.pullRequestUrls } : {}),
       ...recordAttention(attentionCoverage, {
         transcriptTail: source.transcriptTail,
         // Straight from cmux, never recovered from the rendered marker: an agent
@@ -392,8 +409,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : source.transcriptTail,
       elapsedMs: source.startedAt ? Math.max(0, elapsedEndMs - Date.parse(source.startedAt)) : undefined,
       ...(source.activeMs === undefined ? {} : { activeMs: source.activeMs }),
-      git: surface
-        ? { branch: surface.branch, dirty: surface.dirty, head: surface.head }
+      git: sidebar || surface || repo?.branch
+        ? {
+            branch: sidebar?.branch ?? surface?.branch ?? repo?.branch,
+            dirty: sidebar?.dirty ?? surface?.dirty,
+            head: surface?.head,
+          }
         : undefined,
       target,
       /* Un-archive is offered only where it is HONOURED: the store must be able
