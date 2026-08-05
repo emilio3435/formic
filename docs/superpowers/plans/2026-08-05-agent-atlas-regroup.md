@@ -160,11 +160,11 @@ export function manifestFactsFor(agentId: string): { runId; laneId; role; parent
 - Env channel (same facts, per-workspace): `ANTHILL_RUN`, `ANTHILL_LANE`, `ANTHILL_ROLE`, `ANTHILL_PARENT` (= `provider:sessionId` of the orchestrator) read via `cmux workspace env --json`, joined to sessions through the B1 workspace binding. Manifest wins over env on conflict; both win over every heuristic.
 
 **Steps:**
-- [ ] **Step 1: Failing tests** — valid manifest parses; lane with `sessionId` yields `manifestFactsFor("claude:<sid>")` with `parentAgentId = "claude:<orch-sid>"`; malformed JSON skipped without throw; duplicate runId → newest `createdAt` wins; env-only lane (no manifest) still yields facts via the env reader (fixture the env map).
-- [ ] **Step 2: FAIL. Step 3: Implement. Step 4: PASS.**
-- [ ] **Step 5: Wire precedence in `snapshot.ts`:** `parentAgentId` = manifest/env > existing thread_spawn/Cursor (`snapshot.ts:376-378`); `programId`/`groupPath[1]` = `run:<runId>` when declared (outranks worktreeKey from B2).
-- [ ] **Step 6: Naming.** In `naming.ts` (Read tool!), insert source `manifest` between `operator-alias` and `authored` in `resolveAgentName`: base name = `laneId` (or `runId` for the orchestrator). Update `tests/naming.test.ts` + `tests/fixtures/naming-truth-table.json` + `tests/naming-parity.test.ts` client mirror. Sticky note: `AUTHORED_BY` union gains `"manifest"`.
-- [ ] **Step 7: `bun run check`; update ANT-GUIDE naming precedence list; commit** `feat(server): declared lineage via run manifests and ANTHILL_ env vars`.
+- [x] **Step 1: Failing tests** — valid manifest parses; lane with `sessionId` yields `manifestFactsFor("claude:<sid>")` with `parentAgentId = "claude:<orch-sid>"`; malformed JSON skipped without throw; duplicate runId → newest `createdAt` wins; env-only lane (no manifest) still yields facts via the env reader (fixture the env map).
+- [x] **Step 2: FAIL. Step 3: Implement. Step 4: PASS.**
+- [x] **Step 5: Wire precedence in `snapshot.ts`:** `parentAgentId` = manifest/env > existing thread_spawn/Cursor (`snapshot.ts:376-378`); `programId`/`groupPath[1]` = `run:<runId>` when declared (outranks worktreeKey from B2).
+- [x] **Step 6: Naming.** In `naming.ts` (Read tool!), insert source `manifest` between `operator-alias` and `authored` in `resolveAgentName`: base name = `laneId` (or `runId` for the orchestrator). Update `tests/naming.test.ts` + `tests/fixtures/naming-truth-table.json` + `tests/naming-parity.test.ts` client mirror. Sticky note: `AUTHORED_BY` union gains `"manifest"`.
+- [x] **Step 7: `bun run check`; update ANT-GUIDE naming precedence list; commit** `feat(server): declared lineage via run manifests and ANTHILL_ env vars`.
 
 ### Task B4: role taxonomy v2 (what an orchestrator IS)
 
