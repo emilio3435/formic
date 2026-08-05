@@ -129,6 +129,13 @@ export function programFor(
     return { id: configured.id, name: configured.name, purpose: configured.purpose, path: configured.path };
   }
   if (repo) {
+    if (repo.ephemeral) {
+      return {
+        id: `repo:${repo.repoKey}:ephemeral`,
+        name: "disposable checkouts",
+        groupPath: [repo.repoKey, "ephemeral"],
+      };
+    }
     const worktreeKey = fnvKey(repo.worktreePath);
     return {
       id: `repo:${repo.repoKey}:worktree:${worktreeKey}`,
