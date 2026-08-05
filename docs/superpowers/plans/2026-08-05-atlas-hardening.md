@@ -51,7 +51,7 @@ Today `hookLifecycle:needsInput` ⇒ wantsHuman — correct mid-task, wrong for 
 ### T7 — Render the truth (fe-states)
 
 - **Needs-You admits only genuine blocks**: `needsInput` AND NOT (parked/done with older hook signal). Parked rows show a quiet "parked" chip in their lifecycle section; done rows go to the Finished shelf. The live litmus: a board where fe-regroup post-DONE-ALL does NOT sit in Needs-You.
-- **T7a — one session, one name (no new wire needed, start immediately)**: every surface (row, Needs-You strip, swarm child, drawer, History) renders `identity.name` — the strip's stale distilled title and the swarm-child's workspace-title variant both die. Tag audit: `#hex` renders ONLY when the same base name appears twice in the current view (fe-regroup#8da7e056-on-a-unique-name is the red test).
+- ✅ **[DONE 0b6b581, merged]** **T7a — one session, one name (no new wire needed, start immediately)**: every surface (row, Needs-You strip, swarm child, drawer, History) renders `identity.name` — the strip's stale distilled title and the swarm-child's workspace-title variant both die. Tag audit: `#hex` renders ONLY when the same base name appears twice in the current view (fe-regroup#8da7e056-on-a-unique-name is the red test).
 - lineageAgreement styling (T1): contradicted = hostile red outline + tooltip; senderVerified:false (T5) = forged-mark on the chip.
 - repoKey migration read-through (T3).
 
