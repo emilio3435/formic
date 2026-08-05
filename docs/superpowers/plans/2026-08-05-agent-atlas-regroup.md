@@ -117,13 +117,13 @@ export function resolveRepoIdentity(cwd: string): RepoIdentity | null  // cached
 - Consumes: `git -C <cwd> rev-parse --git-common-dir --show-toplevel --abbrev-ref HEAD` (one spawn, parsed together); `cmux rpc extension.sidebar.snapshot` fields `project_root_path`, `git_branches[{branch,dirty}]`, `pull_request_urls` — snapshot wins over spawned git when both exist (it's cheaper and live).
 
 **Steps:**
-- [ ] **Step 1: Failing tests** — temp-dir git repo with two worktrees: same `repoKey`, different `worktreePath`; non-git cwd → `null`; `~/.codex/worktrees/x/Repo` → `ephemeral: true`; cache hit does not respawn git (spy on the exec seam).
-- [ ] **Step 2: FAIL.**
-- [ ] **Step 3: Implement** with an injectable exec function (repo pattern: collectors take roots as params for tests).
-- [ ] **Step 4: PASS.**
-- [ ] **Step 5: Ingest sidebar snapshot in `cmux.ts`** alongside `parseCmuxTerminals`: one `extension.sidebar.snapshot` RPC per cmux discovery tick (every 5th collect); map workspace → `{project_root_path, branch, dirty, pull_request_urls}`; expose to `snapshot.ts` so sessions bound via B1 get `repo`/`git` even when spawned-git would be too slow. Keep the existing per-surface `git:{branch,dirty,head}`.
-- [ ] **Step 6: Grouping.** In `snapshot-programs.ts`: when `repo` resolves, `programId = "repo:" + repoKey` and section identity becomes the repo; `groupPath[1] = worktreeKey` = FNV of `worktreePath` (or the run's `runId` once B3 lands — runId wins). Sessions without repo keep today's `programFor` behavior unchanged (fallback path already exists at `snapshot-programs.ts:115-141`). Preserve `ProgramHint.match` operator overrides — hints outrank derivation.
-- [ ] **Step 7: Update `ARCHITECTURE.md` grouping paragraph (reference-docs test). `bun run check` green; commit** `feat(server): first-class repo and worktree identity for grouping`.
+- [x] **Step 1: Failing tests** — temp-dir git repo with two worktrees: same `repoKey`, different `worktreePath`; non-git cwd → `null`; `~/.codex/worktrees/x/Repo` → `ephemeral: true`; cache hit does not respawn git (spy on the exec seam).
+- [x] **Step 2: FAIL.**
+- [x] **Step 3: Implement** with an injectable exec function (repo pattern: collectors take roots as params for tests).
+- [x] **Step 4: PASS.**
+- [x] **Step 5: Ingest sidebar snapshot in `cmux.ts`** alongside `parseCmuxTerminals`: one `extension.sidebar.snapshot` RPC per cmux discovery tick (every 5th collect); map workspace → `{project_root_path, branch, dirty, pull_request_urls}`; expose to `snapshot.ts` so sessions bound via B1 get `repo`/`git` even when spawned-git would be too slow. Keep the existing per-surface `git:{branch,dirty,head}`.
+- [x] **Step 6: Grouping.** In `snapshot-programs.ts`: when `repo` resolves, `programId = "repo:" + repoKey` and section identity becomes the repo; `groupPath[1] = worktreeKey` = FNV of `worktreePath` (or the run's `runId` once B3 lands — runId wins). Sessions without repo keep today's `programFor` behavior unchanged (fallback path already exists at `snapshot-programs.ts:115-141`). Preserve `ProgramHint.match` operator overrides — hints outrank derivation.
+- [x] **Step 7: Update `ARCHITECTURE.md` grouping paragraph (reference-docs test). `bun run check` green; commit** `feat(server): first-class repo and worktree identity for grouping`.
 
 ### Task B3: run manifests + ANTHILL_* env lineage
 
