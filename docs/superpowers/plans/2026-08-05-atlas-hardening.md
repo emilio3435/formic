@@ -40,7 +40,7 @@ A manifest lane whose sessionId is REPLACED (orchestrator edits manifest, or T9 
 
 As specced in the atlas plan (stretch B7): `cmux events --cursor-file ~/.anthill/events.cursor --reconnect --category agent --category workspace` as a supervised child; `boot_id` change ⇒ full re-snapshot; deltas feed between polls; polling stays the reconciler. Latency polish, not correctness — land LAST in its lane if T5 runs long.
 
-### T5 — Provenance verification (be-live)
+### T5 — Provenance verification (be-live) ✅ **[DONE 25447b9, merged]**
 
 The `[from <agent.id> run <runId>]` header is spoof-visible, not spoof-proof. For each parsed sender: confirm the claimed sender's own transcript contains the send (tail-scan its session file for the message head, bounded). Wire: `senderVerified?: boolean`. Unverifiable (no transcript access) ⇒ absent, never false. A header whose claimed sender's transcript provably lacks the message ⇒ `senderVerified: false` (fe styles it as forged). No crypto until this cheap check proves insufficient.
 
@@ -55,7 +55,7 @@ Today `hookLifecycle:needsInput` ⇒ wantsHuman — correct mid-task, wrong for 
 - lineageAgreement styling (T1): contradicted = hostile red outline + tooltip; senderVerified:false (T5) = forged-mark on the chip.
 - repoKey migration read-through (T3).
 
-### T8 — Cursor + Factory hook-store shims (harden2)
+### T8 — Cursor + Factory hook-store shims (harden2) ✅ **[DONE 1db31c1, merged]**
 
 Wrapper launchers (`cursor-agent` / `droid` wrapped) that emit the same `~/.cmuxterm/<provider>-hook-sessions.json` records the other three providers get (sessionId, surface from $CMUX_* env, cwd, pid, lifecycle heartbeat). Fenced to `scripts/**` + shim files + fixtures; server reader already accepts any provider file present (B1 tolerates absence). If lifecycle can't be derived cheaply, ship binding-only records — binding is the valuable half.
 
