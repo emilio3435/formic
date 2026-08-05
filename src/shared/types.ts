@@ -412,6 +412,12 @@ export interface AgentSnapshot {
   lastHumanMessage: string | null;
   /** Latest sanitized human-legible USER request; null when none survived cleaning. */
   lastUserMessage?: string | null;
+  /**
+   * Whether the sender claimed by the leading message envelope was found in
+   * that sender's own transcript. Absent when no sender is claimed or its
+   * transcript could not be read; false is affirmative contrary evidence.
+   */
+  senderVerified?: boolean;
   /** Latest sanitized human-legible AGENT reply; null when none survived cleaning. */
   lastAgentMessage?: string | null;
   /* The closing words of the agent's last message, attributed by construction
