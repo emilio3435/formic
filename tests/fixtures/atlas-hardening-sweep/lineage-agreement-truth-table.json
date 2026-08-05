@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "name": "declared parent matches kernel ancestor",
+      "declaredParentAgentId": "codex:declared-parent",
+      "observedParentAgentId": "codex:declared-parent",
+      "expectedAgreement": "corroborated",
+      "expectedPublishedParent": "codex:declared-parent"
+    },
+    {
+      "name": "declared parent contradicts kernel ancestor — keep declared, flag hostile",
+      "declaredParentAgentId": "codex:declared-parent",
+      "observedParentAgentId": "codex:other-parent",
+      "expectedAgreement": "contradicted",
+      "expectedPublishedParent": "codex:declared-parent"
+    },
+    {
+      "name": "declared parent with no kernel observation stays unobserved",
+      "declaredParentAgentId": "codex:declared-parent",
+      "observedParentAgentId": null,
+      "expectedAgreement": "unobserved",
+      "expectedPublishedParent": "codex:declared-parent"
+    },
+    {
+      "name": "undeclared child adopts observed parent (subagent binding)",
+      "declaredParentAgentId": null,
+      "observedParentAgentId": "codex:observed-parent",
+      "expectedAgreement": "corroborated",
+      "expectedPublishedParent": "codex:observed-parent",
+      "expectedParentRoleSource": "observed"
+    }
+  ]
+}
