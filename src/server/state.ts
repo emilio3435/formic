@@ -6,6 +6,7 @@ import {
   collectCmux,
   collectCmuxNotifications,
   collectCmuxSidebar,
+  collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
 } from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
@@ -15,6 +16,7 @@ import type {
   ArchiveStore,
   CmuxNotification,
   CmuxSurface,
+  CmuxWorkspaceEnv,
   CmuxWorkspaceSnapshot,
   CollectedAgent,
   CommandRunner,
@@ -35,11 +37,14 @@ import {
   type JsonSessionNameStore,
   type NameCandidate,
 } from "./session-names";
+import { readRunManifests, type RunManifest } from "./run-manifests";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
   cmux: typeof collectCmux;
   sidebar?: typeof collectCmuxSidebar;
+  workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
+  manifests?: typeof readRunManifests;
   notifications: typeof collectCmuxNotifications;
   enrichIdentity: typeof enrichCmuxIdentity;
 }
@@ -48,6 +53,8 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   sessions: collectSessions,
   cmux: collectCmux,
   sidebar: collectCmuxSidebar,
+  workspaceEnv: collectCmuxWorkspaceEnvs,
+  manifests: readRunManifests,
   notifications: collectCmuxNotifications,
   enrichIdentity: enrichCmuxIdentity,
 };
@@ -83,6 +90,8 @@ export class HubState {
   #pulse: PulseTracker;
   #surfaces: CmuxSurface[] = [];
   #sidebarWorkspaces: CmuxWorkspaceSnapshot[] = [];
+  #workspaceEnvs: CmuxWorkspaceEnv[] = [];
+  #runManifests: RunManifest[] = [];
   #notifications: CmuxNotification[] = [];
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
   #cmuxReachable = false;
@@ -319,11 +328,14 @@ export class HubState {
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
     type SidebarResult = Awaited<ReturnType<typeof collectCmuxSidebar>>;
+    type WorkspaceEnvResult = Awaited<ReturnType<typeof collectCmuxWorkspaceEnvs>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
     let cmuxResult: CmuxResult | undefined;
     let sidebarResult: SidebarResult | undefined;
+    let workspaceEnvResult: WorkspaceEnvResult | undefined;
+    let runManifestsResult: RunManifest[] | undefined;
     let notificationsResult: NotificationsResult | undefined;
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
@@ -357,6 +369,15 @@ export class HubState {
                   },
                 )]
               : []),
+            ...(this.collectors.manifests
+              ? [capture(
+                  "run manifest discovery failed",
+                  Promise.resolve().then(() => this.collectors.manifests!()),
+                  (value) => {
+                    runManifestsResult = value;
+                  },
+                )]
+              : []),
             capture(
               "cmux notification collection failed",
               this.collectors.notifications(this.runner, this.cmuxExecutable),
@@ -371,13 +392,26 @@ export class HubState {
         ? providers.flatMap((provider) => sessionsResult![provider].value)
         : [];
       if (options.cmux && cmuxResult?.errors.length === 0) {
-        await capture(
-          "cmux identity enrichment failed",
-          this.collectors.enrichIdentity(cmuxResult.value, agents, this.runner),
-          (value) => {
-            identityResult = value;
-          },
-        );
+        const workspaceIds = [...new Set(cmuxResult.value.flatMap((surface) =>
+          surface.workspaceId ? [surface.workspaceId] : []))];
+        await Promise.all([
+          capture(
+            "cmux identity enrichment failed",
+            this.collectors.enrichIdentity(cmuxResult.value, agents, this.runner),
+            (value) => {
+              identityResult = value;
+            },
+          ),
+          ...(this.collectors.workspaceEnv
+            ? [capture(
+                "cmux workspace env discovery failed",
+                this.collectors.workspaceEnv(this.runner, workspaceIds, this.cmuxExecutable),
+                (value) => {
+                  workspaceEnvResult = value;
+                },
+              )]
+            : []),
+        ]);
       }
       aggregateSettled = true;
     });
@@ -428,6 +462,9 @@ export class HubState {
       : undefined;
     const sidebar = options.cmux && this.collectors.sidebar
       ? sidebarResult ?? { value: [], errors: [reasonFor("cmux sidebar discovery failed")] }
+      : undefined;
+    const workspaceEnv = options.cmux && this.collectors.workspaceEnv
+      ? workspaceEnvResult ?? { value: [], errors: [reasonFor("cmux workspace env discovery failed")] }
       : undefined;
     const notifications = options.cmux
       ? notificationsResult ?? { value: [], errors: [reasonFor("cmux notification collection failed")] }
@@ -481,9 +518,16 @@ export class HubState {
       if (sidebar && sidebar.errors.length === 0) {
         this.#sidebarWorkspaces = sidebar.value;
       }
+      if (workspaceEnv && workspaceEnv.errors.length === 0) {
+        this.#workspaceEnvs = workspaceEnv.value;
+      }
+      if (runManifestsResult) {
+        this.#runManifests = runManifestsResult;
+      }
       this.#cmuxErrors = [...new Set([
         ...cmux.errors,
         ...(sidebar?.errors ?? []),
+        ...(workspaceEnv?.errors ?? []),
         ...(notifications?.errors ?? []),
         ...identityErrors,
         ...bindingErrors,
@@ -545,7 +589,9 @@ export class HubState {
     const built = this.#withSourceHealth(buildSnapshot({
       agents: publishedAgents,
       surfaces: this.#surfaces,
+      workspaceEnvs: this.#workspaceEnvs,
       sidebarWorkspaces: this.#sidebarWorkspaces,
+      runManifests: this.#runManifests,
       notifications: this.#notifications,
       programHints: this.programHints,
       sourceErrors,

@@ -3,13 +3,14 @@
   "homeDir": "/Users/ant",
   "cases": [
     {
-      "name": "an operator alias outranks an authored name, a directory and a task",
+      "name": "an operator alias outranks a manifest, an authored name, a directory and a task",
       "tier": 1,
       "claim": "A human who renamed a session gets the name they chose, whatever the machine thinks it knows.",
       "evidence": {
         "provider": "claude",
         "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef",
         "operatorAlias": { "agent": "Lifecycle Rules Lead" },
+        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "backend" },
         "authored": { "name": "Explore", "by": "claude-subagent" },
         "originCwd": "/Users/ant/Developer/the-mountain-main",
         "taskName": "Trace server-side agent naming"
@@ -59,8 +60,44 @@
       }
     },
     {
-      "name": "an authored name outranks the directory it happens to run in",
+      "name": "a manifest lane name outranks an authored name, a directory and a task",
       "tier": 2,
+      "claim": "The run declaration names the lane before it starts, so provider titles and filesystem guesses cannot replace that stable identity.",
+      "evidence": {
+        "provider": "codex",
+        "sourceSessionId": "019fb496-0000-7000-8000-abcdef123456",
+        "manifest": { "runId": "atlas-run", "laneId": "be-spine", "role": "backend" },
+        "authored": { "name": "Explore", "by": "codex-nickname" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main",
+        "taskName": "Trace the backend identity spine"
+      },
+      "expect": {
+        "name": "be-spine",
+        "base": "be-spine",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "a manifest names its orchestrator after the run rather than a lane",
+      "tier": 2,
+      "claim": "The orchestrator owns the declared run, so its stable name is the run id while workers use their lane ids.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "orch-atlas-20260805",
+        "manifest": { "runId": "atlas-run", "laneId": "orchestrator", "role": "orchestrator" },
+        "originCwd": "/Users/ant/Developer/the-mountain-main"
+      },
+      "expect": {
+        "name": "atlas-run",
+        "base": "atlas-run",
+        "source": "manifest",
+        "authoredBy": "manifest"
+      }
+    },
+    {
+      "name": "an authored name outranks the directory it happens to run in",
+      "tier": 3,
       "claim": "This is the flip. Today 'Lifecycle Mapper' loses to 'Claude · the-mountain-main' because the client cannot tell an authored name from a guessed one, so the folder wins and 360 sessions share a name.",
       "evidence": {
         "provider": "claude",
@@ -78,7 +115,7 @@
     },
     {
       "name": "an authored name outranks a task line",
-      "tier": 2,
+      "tier": 3,
       "claim": "The task says what the agent was asked to do; the authored name says what it is called.",
       "evidence": {
         "provider": "codex",
@@ -95,7 +132,7 @@
     },
     {
       "name": "a launcher-supplied environment name is an authored name",
-      "tier": 2,
+      "tier": 3,
       "claim": "Claude root sessions pass no explicit name anywhere else, so ANT_HILL_AGENT_NAME is their only authored path.",
       "evidence": {
         "provider": "claude",
@@ -112,7 +149,7 @@
     },
     {
       "name": "Cursor's untitled-composer placeholder is not an authored name",
-      "tier": 2,
+      "tier": 3,
       "claim": "'new agent' is Cursor's own boilerplate for a composer nobody has titled. Accepting it would give every untitled Cursor session the same authored name.",
       "evidence": {
         "provider": "cursor",
@@ -124,7 +161,7 @@
     },
     {
       "name": "an OMP status row is not an authored name",
-      "tier": 2,
+      "tier": 3,
       "claim": "'Session update' is periodic boilerplate that arrives in a name-shaped field.",
       "evidence": {
         "provider": "omp",
@@ -136,7 +173,7 @@
     },
     {
       "name": "the directory a session began in names it, not the one it wandered to",
-      "tier": 3,
+      "tier": 4,
       "claim": "Freezing at origin is the whole point: this session recorded six cwd changes in four minutes and was published under another lane's name.",
       "evidence": {
         "provider": "claude",
@@ -147,7 +184,7 @@
     },
     {
       "name": "a session started in the home directory is named Home, not after the operator",
-      "tier": 3,
+      "tier": 4,
       "claim": "The basename of $HOME is a username; naming every session after the operator tells nobody anything.",
       "evidence": {
         "provider": "claude",
@@ -158,7 +195,7 @@
     },
     {
       "name": "a trailing slash does not make a different directory",
-      "tier": 3,
+      "tier": 4,
       "claim": "Two spellings of one path must not produce two names, or the freeze is worthless.",
       "evidence": {
         "provider": "claude",
@@ -169,7 +206,7 @@
     },
     {
       "name": "the origin directory outranks the task line",
-      "tier": 3,
+      "tier": 4,
       "claim": "A prompt blob is not a name. The board learned this the hard way when prompts became terminal titles operators had to hunt through.",
       "evidence": {
         "provider": "codex",
@@ -181,7 +218,7 @@
     },
     {
       "name": "the task line names a session that recorded no directory",
-      "tier": 4,
+      "tier": 5,
       "claim": "Last thing left that carries meaning.",
       "evidence": {
         "provider": "codex",
@@ -196,7 +233,7 @@
     },
     {
       "name": "an attachment header is not a task name",
-      "tier": 4,
+      "tier": 5,
       "claim": "A transcript whose first content is a file attachment has told us nothing about what the agent is.",
       "evidence": {
         "provider": "claude",
@@ -207,14 +244,14 @@
     },
     {
       "name": "a session with no evidence at all still gets its provider's name",
-      "tier": 5,
+      "tier": 6,
       "claim": "Never blank. A row with no name is a row an operator cannot refer to.",
       "evidence": { "provider": "omp", "sourceSessionId": "omp-5555-6666-7777-88889999beef" },
       "expect": { "name": "OMP session", "base": "OMP session", "source": "provider-fallback" }
     },
     {
       "name": "a name of exactly the operator cap is left alone",
-      "tier": 2,
+      "tier": 3,
       "claim": "80 characters is what program-aliases.ts already accepts by hand, so it must survive here untouched.",
       "evidence": {
         "provider": "claude",
@@ -233,7 +270,7 @@
     },
     {
       "name": "a name longer than the operator cap is truncated to it",
-      "tier": 2,
+      "tier": 3,
       "claim": "A derived name an operator is forbidden to retype by hand is a name they cannot search for.",
       "evidence": {
         "provider": "claude",

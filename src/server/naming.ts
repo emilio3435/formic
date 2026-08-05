@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { homedir } from "node:os";
-import type { AgentIdentity, AuthoredNameSource, NameSource, Provider } from "../shared/types";
+import type { AgentIdentity, AgentRole, AuthoredNameSource, NameSource, Provider } from "../shared/types";
 
 /* Re-exported so this module reads as the home of naming even though the types
    themselves live in shared/: they travel on the wire, and the client cannot
@@ -56,6 +56,8 @@ export interface NameEvidence {
    * renaming by workspace renames every sibling at once.
    */
   operatorAlias?: { agent?: string; workspace?: string };
+  /** A lane/run name declared before the session started. */
+  manifest?: { runId: string; laneId: string; role: AgentRole };
   /** A name somebody chose when launching this agent. */
   authored?: { name: string; by: AuthoredNameSource };
   /**
@@ -179,7 +181,23 @@ export function resolveAgentName(
     return { name: capped(alias), base: capped(alias), source: "operator-alias" };
   }
 
-  // Tier 2 — whoever launched the agent named it. An orchestrator that assigns
+  // Tier 2 — the run declaration named the lane before it started. The run id
+  // names its orchestrator; workers use the narrower lane id.
+  const manifest = usableName(
+    evidence.manifest?.role === "orchestrator"
+      ? evidence.manifest.runId
+      : evidence.manifest?.laneId,
+  );
+  if (manifest) {
+    return {
+      name: capped(manifest),
+      base: capped(manifest),
+      source: "manifest",
+      authoredBy: "manifest",
+    };
+  }
+
+  // Tier 3 — whoever launched the agent named it. An orchestrator that assigns
   // "Identity Name Tracer" has stated a fact about the agent; a folder has not.
   const authored = usableName(evidence.authored?.name);
   if (authored && evidence.authored) {
@@ -191,20 +209,20 @@ export function resolveAgentName(
     };
   }
 
-  // Tier 3 — nobody named it, so say what it is and where it began.
+  // Tier 4 — nobody named it, so say what it is and where it began.
   const origin = originCwdName(evidence.provider, evidence.originCwd, homeDir);
   if (origin) {
     return { name: capped(origin), base: capped(origin), source: "origin-cwd" };
   }
 
-  // Tier 4 — no name and no directory; the task line is the last thing that
+  // Tier 5 — no name and no directory; the task line is the last thing that
   // carries meaning.
   const task = usableName(evidence.taskName);
   if (task) {
     return { name: capped(task), base: capped(task), source: "task" };
   }
 
-  // Tier 5 — nothing at all is known but which provider it is.
+  // Tier 6 — nothing at all is known but which provider it is.
   const fallback = `${PROVIDER_DISPLAY_NAMES[evidence.provider]} session`;
   return { name: fallback, base: fallback, source: "provider-fallback" };
 }

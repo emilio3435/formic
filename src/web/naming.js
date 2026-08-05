@@ -91,7 +91,22 @@ export function resolveAgentName(evidence, homeDir) {
     || usableName(evidence.operatorAlias && evidence.operatorAlias.workspace);
   if (alias) return { name: capped(alias), base: capped(alias), source: "operator-alias" };
 
-  // Tier 2 — whoever launched the agent named it.
+  // Tier 2 — a declared orchestrator uses the run id; workers use the lane id.
+  const manifest = usableName(evidence.manifest && (
+    evidence.manifest.role === "orchestrator"
+      ? evidence.manifest.runId
+      : evidence.manifest.laneId
+  ));
+  if (manifest) {
+    return {
+      name: capped(manifest),
+      base: capped(manifest),
+      source: "manifest",
+      authoredBy: "manifest",
+    };
+  }
+
+  // Tier 3 — whoever launched the agent named it.
   const authored = usableName(evidence.authored && evidence.authored.name);
   if (authored) {
     return {
@@ -102,15 +117,15 @@ export function resolveAgentName(evidence, homeDir) {
     };
   }
 
-  // Tier 3 — nobody named it, so say what it is and where it began.
+  // Tier 4 — nobody named it, so say what it is and where it began.
   const origin = originCwdName(provider, evidence.originCwd, homeDir);
   if (origin) return { name: capped(origin), base: capped(origin), source: "origin-cwd" };
 
-  // Tier 4 — the task line is the last thing that carries meaning.
+  // Tier 5 — the task line is the last thing that carries meaning.
   const task = usableName(evidence.taskName);
   if (task) return { name: capped(task), base: capped(task), source: "task" };
 
-  // Tier 5 — nothing is known but which provider it is.
+  // Tier 6 — nothing is known but which provider it is.
   const fallback = (PROVIDER_DISPLAY_NAMES[provider] || provider) + " session";
   return { name: fallback, base: fallback, source: "provider-fallback" };
 }

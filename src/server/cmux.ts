@@ -4,6 +4,8 @@ import { cmuxCommand } from "./cmux-auth";
 import type {
   CmuxNotification,
   CmuxSurface,
+  CmuxWorkspaceEnv,
+  CmuxWorkspaceEnvVariables,
   CmuxWorkspaceSnapshot,
   CollectionResult,
   CommandResult,
@@ -319,6 +321,94 @@ export async function collectCmux(
       errors: [`cmux terminal discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
     };
   }
+}
+
+const WORKSPACE_ENV_CACHE_TTL_MS = 60_000;
+const workspaceEnvCache = new Map<string, {
+  expiresAt: number;
+  variables: CmuxWorkspaceEnvVariables;
+}>();
+const ANTHILL_ENV_KEYS = [
+  "ANTHILL_RUN",
+  "ANTHILL_LANE",
+  "ANTHILL_ROLE",
+  "ANTHILL_PARENT",
+] as const;
+
+function envRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+export function parseCmuxWorkspaceEnv(output: string): CmuxWorkspaceEnvVariables {
+  const parsed = JSON.parse(output) as unknown;
+  const root = envRecord(parsed)?.result ?? parsed;
+  const rootRecord = envRecord(root);
+  const nested = rootRecord?.variables ?? rootRecord?.environment ?? rootRecord?.env;
+  const source = envRecord(nested) ?? rootRecord;
+  const entries = Array.isArray(nested)
+    ? nested.flatMap((value): [string, unknown][] => {
+        const item = envRecord(value);
+        const key = stringValue(item?.name, item?.key);
+        return key ? [[key, item?.value]] : [];
+      })
+    : Object.entries(source ?? {});
+  const values = new Map(entries);
+  return Object.fromEntries(ANTHILL_ENV_KEYS.flatMap((key) => {
+    const value = values.get(key);
+    return typeof value === "string" && value.trim().length > 0
+      ? [[key, value.trim()]]
+      : [];
+  })) as CmuxWorkspaceEnvVariables;
+}
+
+export async function collectCmuxWorkspaceEnvs(
+  runner: CommandRunner,
+  workspaceIds: readonly string[],
+  executable = DEFAULT_CMUX_EXECUTABLE,
+  now: () => number = Date.now,
+): Promise<CollectionResult<CmuxWorkspaceEnv[]>> {
+  const errors: string[] = [];
+  const uniqueWorkspaceIds = [...new Set(workspaceIds.filter(Boolean))];
+  const values = await Promise.all(uniqueWorkspaceIds.map(async (workspaceId): Promise<CmuxWorkspaceEnv | undefined> => {
+    const cacheKey = `${executable}\u001f${workspaceId}`;
+    const cached = workspaceEnvCache.get(cacheKey);
+    const nowMs = now();
+    if (cached && cached.expiresAt > nowMs) {
+      return { workspaceId, variables: cached.variables };
+    }
+    const result = await runner.run(cmuxCommand(executable, [
+      "workspace",
+      "env",
+      workspaceId,
+      "--json",
+    ]), 10_000);
+    if (result.timedOut) {
+      errors.push(`cmux workspace env ${workspaceId} timed out`);
+      return undefined;
+    }
+    if (result.exitCode !== 0) {
+      errors.push(
+        `cmux workspace env ${workspaceId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
+      );
+      return undefined;
+    }
+    try {
+      const variables = parseCmuxWorkspaceEnv(result.stdout);
+      workspaceEnvCache.set(cacheKey, {
+        expiresAt: nowMs + WORKSPACE_ENV_CACHE_TTL_MS,
+        variables,
+      });
+      return { workspaceId, variables };
+    } catch (error) {
+      errors.push(
+        `cmux workspace env ${workspaceId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }));
+  return { value: values.filter((value): value is CmuxWorkspaceEnv => Boolean(value)), errors };
 }
 
 function sidebarWorkspaces(value: unknown): Record<string, unknown>[] {

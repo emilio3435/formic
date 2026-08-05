@@ -1,0 +1,21 @@
+{
+  "runId": "inbox-ux-overhaul-2026-08-05",
+  "createdAt": "2026-08-05T14:00:00.000Z",
+  "repoRoot": "/Users/ant/Developer/LaHormigaDormida",
+  "orchestrator": {
+    "provider": "claude",
+    "sessionId": "orch-atlas-20260805"
+  },
+  "lanes": [
+    {
+      "laneId": "fe1-geometry",
+      "role": "frontend",
+      "provider": "claude",
+      "sessionId": "lane-geometry-20260805",
+      "worktree": "/Users/ant/Developer/.worktrees/inbox-fe1",
+      "branch": "feat/inbox-fe1",
+      "model": "claude-opus-4-1",
+      "brief": "/Users/ant/.anthill/runs/inbox-ux-overhaul-2026-08-05/lane-fe1-geometry-brief.md"
+    }
+  ]
+}

@@ -94,7 +94,7 @@ Every row is **one AI session**. Left to right:
 
 | Part | What it is |
 |---|---|
-| Name | Who it is, and the folder it is working in |
+| Name | Who it is: a declared lane/run name when available, otherwise its authored name or starting folder |
 | Message | The last thing it said |
 | Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on `History` the column stays quiet entirely. A word here means something you would not have assumed: `Waiting`, `Alert`, `Blocked`, `Failed`. A session asking for you always says so. Hover for the full state. |
 | Model · ctx | Which model, and how full **this session's** context window is right now |
@@ -103,6 +103,14 @@ Every row is **one AI session**. Left to right:
 
 A row indented under another with `↳` is a **subagent** — something the row above
 it launched.
+
+Names follow one precedence chain: an operator rename wins first; a run
+manifest wins next (or the workspace's `ANTHILL_*` declaration when no manifest
+binds the session); then come a provider-authored name, the folder where the
+session began, its task line, and finally the provider fallback. Workers use
+their declared lane id, while a declared orchestrator uses the run id. Manifest
+parentage also wins over transcript inference, so a declared lane stays under
+the orchestrator that owns its run.
 
 > **The one number that will mislead you.** A row's **Tokens** is that agent's
 > *latest model call*. The **session tokens** figure on the grey program bar above
