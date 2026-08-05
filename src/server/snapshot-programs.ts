@@ -18,7 +18,9 @@ import type {
   OutcomeState,
   ProgramRollup,
   ProgramSnapshot,
+  RepoIdentity,
 } from "../shared/types";
+import { fnvKey } from "./repo-identity";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 export interface ProgramHint {
@@ -117,6 +119,7 @@ export function programFor(
   hints: readonly ProgramHint[],
   surface?: CmuxSurface,
   exactSurface = false,
+  repo?: RepoIdentity,
 ): Omit<ProgramSnapshot, "agents"> {
   const configured =
     configuredProgram(hints, [agent.cwd, agent.id]) ??
@@ -124,6 +127,15 @@ export function programFor(
     configuredProgram(hints, [agent.task, agent.displayName]);
   if (configured) {
     return { id: configured.id, name: configured.name, purpose: configured.purpose, path: configured.path };
+  }
+  if (repo) {
+    const worktreeKey = fnvKey(repo.worktreePath);
+    return {
+      id: `repo:${repo.repoKey}:worktree:${worktreeKey}`,
+      name: repo.repoName,
+      path: repo.worktreePath,
+      groupPath: [repo.repoKey, worktreeKey],
+    };
   }
   const cwd = exactSurface && surface?.cwd ? surface.cwd : agent.cwd;
   if (!cwd) return { id: `${agent.provider}-unassigned`, name: `${agent.provider.toUpperCase()} · No project` };

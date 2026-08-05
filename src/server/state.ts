@@ -2,11 +2,23 @@ import { readFile } from "node:fs/promises";
 import { homedir, uptime } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
-import { collectCmux, collectCmuxNotifications, DEFAULT_CMUX_EXECUTABLE } from "./cmux";
+import {
+  collectCmux,
+  collectCmuxNotifications,
+  collectCmuxSidebar,
+  DEFAULT_CMUX_EXECUTABLE,
+} from "./cmux";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
-import type { ArchiveStore, CmuxNotification, CmuxSurface, CollectedAgent, CommandRunner } from "./types";
+import type {
+  ArchiveStore,
+  CmuxNotification,
+  CmuxSurface,
+  CmuxWorkspaceSnapshot,
+  CollectedAgent,
+  CommandRunner,
+} from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
@@ -27,6 +39,7 @@ import {
 export interface HubCollectors {
   sessions: typeof collectSessions;
   cmux: typeof collectCmux;
+  sidebar?: typeof collectCmuxSidebar;
   notifications: typeof collectCmuxNotifications;
   enrichIdentity: typeof enrichCmuxIdentity;
 }
@@ -34,6 +47,7 @@ export interface HubCollectors {
 const DEFAULT_COLLECTORS: HubCollectors = {
   sessions: collectSessions,
   cmux: collectCmux,
+  sidebar: collectCmuxSidebar,
   notifications: collectCmuxNotifications,
   enrichIdentity: enrichCmuxIdentity,
 };
@@ -68,6 +82,7 @@ export class HubState {
   #snapshot: HubSnapshot;
   #pulse: PulseTracker;
   #surfaces: CmuxSurface[] = [];
+  #sidebarWorkspaces: CmuxWorkspaceSnapshot[] = [];
   #notifications: CmuxNotification[] = [];
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
   #cmuxReachable = false;
@@ -303,10 +318,12 @@ export class HubState {
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
+    type SidebarResult = Awaited<ReturnType<typeof collectCmuxSidebar>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
     let cmuxResult: CmuxResult | undefined;
+    let sidebarResult: SidebarResult | undefined;
     let notificationsResult: NotificationsResult | undefined;
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
@@ -331,6 +348,15 @@ export class HubState {
             capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable), (value) => {
               cmuxResult = value;
             }),
+            ...(this.collectors.sidebar
+              ? [capture(
+                  "cmux sidebar discovery failed",
+                  this.collectors.sidebar(this.runner, this.cmuxExecutable),
+                  (value) => {
+                    sidebarResult = value;
+                  },
+                )]
+              : []),
             capture(
               "cmux notification collection failed",
               this.collectors.notifications(this.runner, this.cmuxExecutable),
@@ -400,6 +426,9 @@ export class HubState {
     const cmux = options.cmux
       ? cmuxResult ?? { value: [], errors: [reasonFor("cmux discovery failed")] }
       : undefined;
+    const sidebar = options.cmux && this.collectors.sidebar
+      ? sidebarResult ?? { value: [], errors: [reasonFor("cmux sidebar discovery failed")] }
+      : undefined;
     const notifications = options.cmux
       ? notificationsResult ?? { value: [], errors: [reasonFor("cmux notification collection failed")] }
       : undefined;
@@ -449,8 +478,12 @@ export class HubState {
       if (notifications && notifications.errors.length === 0) {
         this.#notifications = notifications.value;
       }
+      if (sidebar && sidebar.errors.length === 0) {
+        this.#sidebarWorkspaces = sidebar.value;
+      }
       this.#cmuxErrors = [...new Set([
         ...cmux.errors,
+        ...(sidebar?.errors ?? []),
         ...(notifications?.errors ?? []),
         ...identityErrors,
         ...bindingErrors,
@@ -512,6 +545,7 @@ export class HubState {
     const built = this.#withSourceHealth(buildSnapshot({
       agents: publishedAgents,
       surfaces: this.#surfaces,
+      sidebarWorkspaces: this.#sidebarWorkspaces,
       notifications: this.#notifications,
       programHints: this.programHints,
       sourceErrors,

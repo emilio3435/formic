@@ -284,6 +284,14 @@ export interface Artifact {
   kind?: string;
 }
 
+export interface RepoIdentity {
+  repoKey: string;
+  repoName: string;
+  worktreePath: string;
+  branch?: string;
+  ephemeral: boolean;
+}
+
 export interface AgentSnapshot {
   id: string;
   provider: Provider;
@@ -387,6 +395,8 @@ export interface AgentSnapshot {
   /** Observed session token occupancy as a percentage of the reported context window. */
   contextPct?: number;
   cost?: CostUsage | null;
+  repo?: RepoIdentity;
+  pullRequestUrls?: string[];
   subagentCount?: number;
   transcriptTail?: string;
   artifacts: Artifact[];
@@ -416,6 +426,7 @@ export interface ProgramSnapshot {
   name: string;
   purpose?: string;
   path?: string;
+  groupPath?: [repoKey: string, worktreeKey: string];
   agents: AgentSnapshot[];
   rollup?: ProgramRollup;
 }

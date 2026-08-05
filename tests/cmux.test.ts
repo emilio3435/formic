@@ -5,9 +5,11 @@ import { describe, expect, spyOn, test } from "bun:test";
 import {
   collectCmux,
   collectCmuxNotifications,
+  collectCmuxSidebar,
   DEFAULT_CMUX_EXECUTABLE,
   JsonAttentionStore,
   MemoryAttentionStore,
+  parseCmuxSidebarSnapshot,
   parseCmuxTerminals,
   runtimeCmuxExecutable,
 } from "../src/server/cmux";
@@ -247,5 +249,53 @@ describe("cmux terminal discovery outcomes", () => {
       command: ["cmux", "rpc", "debug.terminals", "{}"],
       timeoutMs: 10_000,
     }]);
+  });
+});
+
+describe("cmux sidebar repository facts", () => {
+  const sidebarSnapshot = JSON.stringify({
+    workspaces: [{
+      id: "WORKSPACE-1",
+      project_root_path: "/Users/example/Developer/ProjectAtlas",
+      git_branches: [{ branch: "feature/atlas", dirty: true }],
+      pull_request_urls: ["https://github.com/example/atlas/pull/42"],
+    }],
+  });
+
+  test("maps the installed sidebar snapshot shape to live repository facts", () => {
+    expect(parseCmuxSidebarSnapshot(sidebarSnapshot)).toEqual([{
+      workspaceId: "WORKSPACE-1",
+      projectRootPath: "/Users/example/Developer/ProjectAtlas",
+      branch: "feature/atlas",
+      dirty: true,
+      pullRequestUrls: ["https://github.com/example/atlas/pull/42"],
+    }]);
+  });
+
+  test("runs exactly one all-window sidebar RPC per collection", async () => {
+    const commands: readonly string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        (commands as string[][]).push([...command]);
+        return { exitCode: 0, stdout: sidebarSnapshot, stderr: "", timedOut: false };
+      },
+    };
+
+    await expect(collectCmuxSidebar(runner, "cmux")).resolves.toEqual({
+      value: [{
+        workspaceId: "WORKSPACE-1",
+        projectRootPath: "/Users/example/Developer/ProjectAtlas",
+        branch: "feature/atlas",
+        dirty: true,
+        pullRequestUrls: ["https://github.com/example/atlas/pull/42"],
+      }],
+      errors: [],
+    });
+    expect(commands).toEqual([[
+      "cmux",
+      "rpc",
+      "extension.sidebar.snapshot",
+      "{\"all_windows\":true}",
+    ]]);
   });
 });
