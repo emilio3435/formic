@@ -245,8 +245,20 @@ export function sessionTag(sourceSessionId: string): string {
 }
 
 export interface NameEntry {
+  /** Full durable id (`provider:sourceSessionId`) used only for sticky tags. */
+  agentId?: string;
   sourceSessionId: string;
   identity: AgentIdentity;
+}
+
+export interface NameTagAssignment {
+  agentId: string;
+  tag: string;
+}
+
+export interface NameTagStore {
+  getNameTag?(agentId: string): string | undefined;
+  rememberNameTags?(assignments: readonly NameTagAssignment[]): Promise<void>;
 }
 
 /**
@@ -263,7 +275,7 @@ export interface NameEntry {
  * answer once, where every agent is already in one array, is also the only way
  * an archived row can carry its tag frozen into History.
  */
-export function disambiguate(entries: readonly NameEntry[]): AgentIdentity[] {
+function fleetDisambiguate(entries: readonly NameEntry[]): AgentIdentity[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
     counts.set(entry.identity.base, (counts.get(entry.identity.base) ?? 0) + 1);
@@ -299,4 +311,36 @@ export function disambiguate(entries: readonly NameEntry[]): AgentIdentity[] {
     if (!unique) return identity;
     return { ...identity, name: `${identity.base} #${unique}`, disambiguator: unique };
   });
+}
+
+/* The fleet calculation remains the source of a first tag. Once an agent has
+   one, the durable store wins even if later snapshots contain fewer peers or
+   would choose the longer collision fallback. */
+export function disambiguate(
+  entries: readonly NameEntry[],
+  store?: NameTagStore,
+): AgentIdentity[] {
+  const computed = fleetDisambiguate(entries);
+  const assignments: NameTagAssignment[] = [];
+  const identities = computed.map((identity, index) => {
+    const entry = entries[index]!;
+    const remembered = entry.agentId ? store?.getNameTag?.(entry.agentId)?.trim() : undefined;
+    if (remembered) {
+      return {
+        ...entry.identity,
+        name: `${entry.identity.base} #${remembered}`,
+        disambiguator: remembered,
+      };
+    }
+    if (entry.agentId && identity.disambiguator) {
+      assignments.push({ agentId: entry.agentId, tag: identity.disambiguator });
+    }
+    return identity;
+  });
+  if (assignments.length && store?.rememberNameTags) {
+    void store.rememberNameTags(assignments).catch((error) => {
+      console.error(`[Names] could not persist disambiguators: ${String(error)}`);
+    });
+  }
+  return identities;
 }

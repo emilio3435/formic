@@ -302,7 +302,9 @@
           "evidence": { "provider": "claude", "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef", "originCwd": "/Users/ant/Developer/the-mountain-main" }
         }
       ],
-      "expect": ["Claude · the-mountain-main #55556666", "Claude · the-mountain-main #deadbeef"]
+      "expect": ["Claude · the-mountain-main #55556666", "Claude · the-mountain-main #deadbeef"],
+      "removeAgentIds": ["claude:9a1e0224-aaaa-bbbb-cccc-1111deadbeef"],
+      "expectAfterRemoval": ["Claude · the-mountain-main #55556666"]
     },
     {
       "name": "a name nobody else has is left alone",
@@ -363,7 +365,9 @@
       "expect": [
         "Claude · the-mountain-main #1111-shared99",
         "Claude · the-mountain-main #2222-shared99"
-      ]
+      ],
+      "removeAgentIds": ["claude:2222-shared99"],
+      "expectAfterRemoval": ["Claude · the-mountain-main #1111-shared99"]
     },
     {
       "name": "an operator alias survives disambiguation untagged when it is already unique",

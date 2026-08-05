@@ -366,6 +366,26 @@ describe("durable binding store", () => {
     expect(reopened.get(SESSION_ID)).toEqual(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
   });
 
+  test("a session's first disambiguator survives binding rewrites and reopen", async () => {
+    const { files } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    const now = () => Date.parse("2026-07-23T06:00:00.000Z");
+    const agentId = `omp:${SESSION_ID}`;
+    const store = await JsonIdentityBindingStore.open(path, files, now);
+
+    await store.put(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
+    await store.rememberNameTags([{ agentId, tag: "cfd0e8ec" }]);
+    await store.rememberNameTags([{ agentId, tag: SESSION_ID }]);
+
+    const reopened = await JsonIdentityBindingStore.open(path, files, now);
+    expect(reopened.getNameTag(agentId)).toBe("cfd0e8ec");
+    await reopened.put(binding("22222222-2222-4222-8222-222222222222", "2026-07-23T06:00:00.000Z"));
+
+    const afterBindingRewrite = await JsonIdentityBindingStore.open(path, files, now);
+    expect(afterBindingRewrite.getNameTag(agentId)).toBe("cfd0e8ec");
+    expect(afterBindingRewrite.list()).toHaveLength(2);
+  });
+
   test("one scan persists all confirmed bindings with one atomic file write", async () => {
     const { files, contents } = virtualFiles();
     let writeCount = 0;

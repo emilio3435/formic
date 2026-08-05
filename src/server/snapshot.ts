@@ -53,7 +53,7 @@ import {
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
-import { disambiguate, paneRename, resolveAgentName } from "./naming";
+import { disambiguate, paneRename, resolveAgentName, type NameTagStore } from "./naming";
 import { resolveRepoIdentity } from "./repo-identity";
 import {
   envFactsFor,
@@ -79,6 +79,8 @@ export interface SnapshotInput {
      derived names, which is also what the board shows before the first naming
      pass completes. */
   sessionNames?: (agentId: string) => SessionNameRecord | undefined;
+  /** Write-once disambiguators shared with the durable identity-binding store. */
+  nameTagStore?: NameTagStore;
   surfaces: readonly CmuxSurface[];
   workspaceEnvs?: readonly CmuxWorkspaceEnv[];
   sidebarWorkspaces?: readonly CmuxWorkspaceSnapshot[];
@@ -232,7 +234,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   });
   const identitiesById = new Map(
     disambiguate(
-      titled.map((source) => ({ sourceSessionId: source.sourceSessionId, identity: source.identity })),
+      titled.map((source) => ({
+        agentId: source.id,
+        sourceSessionId: source.sourceSessionId,
+        identity: source.identity,
+      })),
+      input.nameTagStore,
     ).map((identity, index) => [named[index]!.id, identity] as const),
   );
   const childCounts = new Map<string, number>();
