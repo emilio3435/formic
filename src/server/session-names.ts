@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { MAX_NAME_LENGTH } from "./naming";
+import { stripTimestampMarkup } from "./human-message";
 import type { AuthoredNameSource } from "../shared/types";
 
 /* What a session is CALLED, as opposed to what it can be derived to be.
@@ -59,7 +60,9 @@ const nodeFiles: SessionNameFileOperations = {
 };
 
 function capped(name: string): string {
-  const trimmed = name.trim();
+  /* The store boundary: open(), remember() and every namer output pass here,
+     so a clock can neither be frozen as a name nor survive a reload. */
+  const trimmed = stripTimestampMarkup(name).replace(/\s+/g, " ").trim();
   if (trimmed.length <= MAX_NAME_LENGTH) return trimmed;
   return `${trimmed.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}…`;
 }
@@ -92,9 +95,10 @@ export class JsonSessionNameStore {
       if (entries && typeof entries === "object") {
         for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
           const record = value as Partial<SessionNameRecord>;
-          if (typeof record?.name === "string" && record.name.trim()) {
+          const loaded = typeof record?.name === "string" ? capped(record.name) : "";
+          if (loaded) {
             store.#names.set(key, {
-              name: capped(record.name),
+              name: loaded,
               by: (record.by as AuthoredNameSource) ?? "launch-env",
               at: typeof record.at === "string" ? record.at : new Date(0).toISOString(),
             });
@@ -225,7 +229,8 @@ function cleanLine(line: string): string | undefined {
    let the derived name stand than publish a line of harness boilerplate as the
    title of somebody's work. */
 export function distillName(messages: readonly string[]): string | undefined {
-  for (const message of messages) {
+  for (const rawMessage of messages) {
+    const message = rawMessage ? stripTimestampMarkup(rawMessage) : rawMessage;
     if (!message?.trim() || INJECTED_BLOCK.test(message.trimStart())) continue;
     const lines = message.split("\n").map(cleanLine).filter((line): line is string => Boolean(line));
     if (!lines.length) continue;
@@ -291,6 +296,7 @@ export const ollamaNamer: NamerModel = {
 
 export function namingPrompt(messages: readonly string[]): string {
   const body = messages
+    .map((message) => (message ? stripTimestampMarkup(message) : message))
     .filter((message) => message?.trim() && !INJECTED_BLOCK.test(message.trimStart()))
     .slice(0, 3)
     .join("\n---\n")
@@ -312,7 +318,7 @@ export function namingPrompt(messages: readonly string[]): string {
    session name if it were taken at face value. */
 export function cleanModelTitle(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  let title = raw.trim().split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "";
+  let title = stripTimestampMarkup(raw).trim().split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "";
   title = title.replace(/^["'`]+|["'`]+$/g, "").replace(/[.\s]+$/, "").trim();
   title = title.replace(/^(?:title|name|label)\s*:\s*/i, "").trim();
   if (!title || /^unknown$/i.test(title)) return undefined;

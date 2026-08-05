@@ -31,6 +31,7 @@ import type {
   OutcomeState,
   ProcessState,
 } from "../shared/types";
+import { stripTimestampMarkup } from "./human-message";
 
 export type AttentionSignalKind =
   /** cmux says the agent is blocked on an explicit permission prompt. */
@@ -187,7 +188,7 @@ const HANDOFF_PATTERNS: readonly RegExp[] = [
 ];
 
 function clean(value: string | null | undefined): string {
-  return (value ?? "").replace(/\r/g, "").trim();
+  return stripTimestampMarkup(value ?? "").replace(/\r/g, "").trim();
 }
 
 /* Clips at a word boundary. Measured on the live probe, the old form cut

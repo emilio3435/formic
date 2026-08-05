@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Database } from "bun:sqlite";
 import {
+  stripTimestampMarkup,
   extractLastHumanMessage,
   extractLastMessageByRole,
   readableHumanMessage,
@@ -131,7 +132,7 @@ function genericCursorName(name?: string): boolean {
 
 function cursorUserTask(text: string): string {
   const wrappedQuery = text.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i)?.[1];
-  return (wrappedQuery ?? text).replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "").trim();
+  return stripTimestampMarkup(wrappedQuery ?? text).trim();
 }
 
 function cursorTranscript(jsonl: string): CursorTranscript {
