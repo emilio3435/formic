@@ -184,10 +184,10 @@ export type RoleSource = "declared" | "observed" | "inferred"
 **Definition (the canonical answer):** a session is an **orchestrator** iff (a) a run manifest names it `orchestrator` / it owns a manifest, or (b) `ANTHILL_ROLE=orchestrator`, or (c) it has ≥1 observed child (`childCounts` — now fed by manifests AND thread_spawn AND `agent.hook.SubagentStop` parentage). Title regex (`orchestrat|coordinat|deploy swarm|swarm owner`) survives only as `roleSource:"inferred"`. **monitor** = declared watcher (manifest/env only — never inferred). **service** = a cmux terminal surface with no agent session bound to it (dev servers, tails) — excluded from agent counts and "Needs you". **human** = declared via env `ANTHILL_ROLE=human` or operator alias flag; never inferred.
 
 **Steps:**
-- [ ] **Step 1: Failing tests** — manifest-declared orchestrator without children ⇒ `("orchestrator","declared")`; Claude session with SubagentStop-observed child ⇒ `("orchestrator","observed")`; title "coordinate the swarm" alone ⇒ `("orchestrator","inferred")`; surface with no agent session ⇒ `("service", "observed")`; old "frontend" title ⇒ `role:"worker"` + `specialty:"frontend"`.
-- [ ] **Step 2: FAIL. Step 3: Implement. Step 4: PASS.**
-- [ ] **Step 5:** Update `ROLE_LABELS`/`ROLE_ALIASES`/`roleView` + `ROSTER_ROLE_ORDER` minimally (human, orchestrator, monitor, verifier, worker, tester, automation, service, agent); ANT-GUIDE role section; parity + reference-docs tests green.
-- [ ] **Step 6: Commit** `feat(server): declared role taxonomy with confidence source`.
+- [x] **Step 1: Failing tests** — manifest-declared orchestrator without children ⇒ `("orchestrator","declared")`; Claude session with SubagentStop-observed child ⇒ `("orchestrator","observed")`; title "coordinate the swarm" alone ⇒ `("orchestrator","inferred")`; surface with no agent session ⇒ `("service", "observed")`; old "frontend" title ⇒ `role:"worker"` + `specialty:"frontend"`.
+- [x] **Step 2: FAIL. Step 3: Implement. Step 4: PASS.**
+- [x] **Step 5:** Update `ROLE_LABELS`/`ROLE_ALIASES`/`roleView` + `ROSTER_ROLE_ORDER` minimally (human, orchestrator, monitor, verifier, worker, tester, automation, service, agent); ANT-GUIDE role section; parity + reference-docs tests green.
+- [x] **Step 6: Commit** `feat(server): declared role taxonomy with confidence source`.
   *(Sequencing: rebase on the findings lane's `snapshot-agent.ts` slice — modelPolicy deletion — before starting.)*
 
 ### Task B5: sticky disambiguator
