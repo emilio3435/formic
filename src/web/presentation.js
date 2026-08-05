@@ -660,13 +660,27 @@ export function parseSenderHeader(text) {
    reply. It is left out on purpose as well as on evidence: filling an
    attribution from the one field the server documents as "assistant OR user
    prose" is precisely how the "You" mislabel got in. */
+/* WHICH field the sender claim is read from — the mirror of `senderClaimFor` in
+   src/server/sender-verification.ts, and it has to stay a mirror, because the
+   server verifies the claim it reads and the client attributes the claim it
+   reads. Two different answers means the board says "confirmed" about a message
+   nobody checked.
+
+   A present `lastUserMessage` IS the current request and is authoritative even
+   with no header: an unheaded user turn really was the human, and that absence
+   is the whole signal that makes an injected instruction visible. `task` is only
+   the fallback, because it stays headed forever — the kickoff envelope is still
+   sitting on it hours later. Falling through to it attributed a human's own
+   follow-up to the orchestrator that opened the lane, on a row whose current
+   request had no sender at all. */
+export function senderClaimText(agent) {
+  if (!agent) return undefined;
+  return typeof agent.lastUserMessage === "string" ? agent.lastUserMessage : agent.task;
+}
+
 export function senderOf(agent) {
-  if (!agent) return null;
-  for (const field of [agent.lastUserMessage, agent.task]) {
-    const parsed = parseSenderHeader(field);
-    if (parsed) return { agentId: parsed.agentId, runId: parsed.runId };
-  }
-  return null;
+  const parsed = parseSenderHeader(senderClaimText(agent));
+  return parsed ? { agentId: parsed.agentId, runId: parsed.runId } : null;
 }
 
 /* The prose without its addressing. A row gets ~120 characters and the envelope

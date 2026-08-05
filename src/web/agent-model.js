@@ -259,8 +259,41 @@ export function wantsHuman(agent) {
   return taskStateWantsHuman(agent) && !isTerminal(agent);
 }
 
+/* A lane that declared itself parked or done has said its ASSIGNMENT is not
+   waiting on anyone. `wantsHuman` already applies that to the hook signal, via
+   the mirror in task-state.js that the server executes against the same truth
+   table — but the hook is not the only door into the strip.
+
+   `outcome` is the other one, and it carries exactly the same staleness: the
+   server derives it from an `attentionSignal` read off prose, and prose written
+   before the stand-down does not stop being prose afterwards. Measured on the
+   live board, be-live: taskState `parked` at 16:52:04, last hook `idle` at
+   16:51:21, `wantsHuman` correctly false — and `alerting` true anyway, because
+   the server was still publishing `outcome: "needs-you"` from before. The lane
+   was standing in the Needs-you strip having been explicitly stood down.
+
+   Deliberately not a general mute. The one thing that reopens it is the one
+   thing the truth table already recognises: a needsInput hook STRICTLY NEWER
+   than the declaration, which is a lane asking a question now. */
+export function declaredQuiet(agent) {
+  if (!agent) return false;
+  if (agent.taskState !== "parked" && agent.taskState !== "done") return false;
+  return !hookInputWantsHuman(agent);
+}
+
+/* Finished WORK, which is not the same claim as a finished session and must
+   never be confused with one — `lifecycle.ts` is untouched by this, so a done
+   lane whose process is still sitting at its prompt is still `waiting` and
+   still has live controls. It is the BOARD that stops listing it as work in
+   flight. Same re-alert escape as declaredQuiet: a done lane that asks a
+   question is asking, and comes back. */
+export function declaredDone(agent) {
+  return Boolean(agent) && agent.taskState === "done" && !hookInputWantsHuman(agent);
+}
+
 export function alerting(agent) {
   if (wantsHuman(agent)) return true;
+  if (declaredQuiet(agent)) return false;
   if (deriveOutcome(agent) === "healthy") return false;
   if (!isTerminal(agent)) return true;
   /* The rescue arm, kept for legacy snapshots. A terminal row alerts only on
@@ -308,7 +341,13 @@ export const programRollup = (program) => program.rollup || deriveRollup(program
    answer the same question differently. */
 export function viewMatches(view, agent) {
   const state = lifecycleOf(agent);
-  const observed = scopeOf(agent) === "observed";
+  /* Two different questions, and every live view needs both to be yes. `scope`
+     is about EVIDENCE — are we actually watching this session — and lifecycle is
+     about the PROCESS. Neither one knows whether the work is over: a lane that
+     reported DONE and stayed at its prompt is observed, is `waiting`, and is not
+     live work. It leaves the rows for the Finished shelf, which is the surface
+     that exists to answer "where did the row I was just looking at go". */
+  const observed = scopeOf(agent) === "observed" && !declaredDone(agent);
   switch (view) {
     /* One scroll over the whole live fleet: working, waiting and unverified,
        plus anything alerting() rescues (an ended transcript whose process is

@@ -202,6 +202,21 @@ anchor, the program roster and the lineage spine all read the split through
 those two functions, so one session cannot read one way on a row and another way
 in the drawer that row opens.
 
+**Declared task state on the board.** `src/web/task-state.js` is the mirror the
+server executes against the same truth table, and `wantsHuman` consumes it
+directly. The board adds one thing the mirror deliberately does not decide: the
+hook is not the only route into the Needs-you strip. `alerting` also admits any
+row whose `outcome` is not healthy, and that outcome is derived from an
+`attentionSignal` read off prose — prose written before a stand-down does not
+stop existing afterwards. Measured live: be-live declared `parked` at 16:52:04
+with its last hook `idle` at 16:51:21 sat in the strip with `wantsHuman` already
+correctly false. `declaredQuiet` closes that second door, and `declaredDone`
+takes finished WORK out of the live views into the Finished shelf
+(`shelfFilter`) without touching `lifecycle.ts` — a done lane still at its
+prompt is still `waiting`, still controllable, and still able to re-alert. Both
+predicates share the mirror's one escape: a `needsInput` hook strictly newer
+than the declaration.
+
 The same pair refuses a cmux-authored title as a name. `surfaceTitle` is
 routinely a sentence cmux distilled from a session's opening prompt and
 `workspaceTitle` is the workspace path, so `declaredIdentity` (presentation.js)

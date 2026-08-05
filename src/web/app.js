@@ -73,6 +73,7 @@ import {
   roleSourceView,
   parseSenderHeader,
   senderOf,
+  senderClaimText,
   withoutSenderHeader,
   specialtyLabel,
   roomLabelTarget,
@@ -130,6 +131,8 @@ import {
   provenanceOf,
   scopeOf,
   wantsHuman,
+  declaredQuiet,
+  declaredDone,
   LIVENESS_ENDED_UNKNOWN,
   LIVENESS_VIEW,
   LIVENESS_WORDS,
@@ -1228,6 +1231,7 @@ const FINDING_VISUAL = {
 globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
   lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isUnverified, wantsHuman,
+  declaredQuiet, declaredDone,
   controlUnavailableText,
   totalsOf, issuesOf, alerting, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
@@ -1236,7 +1240,7 @@ globalThis.TheAntHill = {
   // Message provenance and role confidence: the parser is pure and lives in
   // presentation.js; these are re-exported here so the client's own test
   // surface can drive parser and renderer through one handle.
-  parseSenderHeader, senderOf, withoutSenderHeader, roleSourceView, specialtyLabel,
+  parseSenderHeader, senderOf, senderClaimText, withoutSenderHeader, roleSourceView, specialtyLabel,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
@@ -3666,7 +3670,14 @@ function currentFilter() {
 function shelfFilter() {
   if (state.view === "history") return () => false;
   return (agent, program) =>
-    isTerminal(agent) &&
+    /* Two ways to be finished, and the shelf holds both. `isTerminal` is the
+       PROCESS ending. `declaredDone` is the WORK ending — a lane that reported
+       DONE and stayed at its prompt, which is the normal shape of a lane
+       waiting to be told what is next. Its controls are still live and its
+       lifecycle still says `waiting`; what changed is that it is no longer work
+       in flight, and the shelf is the surface that answers "where did the row I
+       was looking at go". */
+    (isTerminal(agent) || declaredDone(agent)) &&
     !viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
@@ -5494,6 +5505,44 @@ function historyProvenance(agent) {
    than leaving a null in the child list. Dashed for retained (the board is not
    asserting an ending, only recording that it stopped watching), solid for the
    ending an operator actually chose. */
+/* The declared task state, said on the row.
+
+   Parking is a statement about the ASSIGNMENT, and deliberately not about the
+   process — the contract keeps it out of lifecycle.ts entirely, so a parked lane
+   is still `waiting`, still has live controls, and still reads "Waiting" in its
+   status column. That leaves an operator looking at a row that went quiet with
+   nothing on screen saying why, which is the same missing sentence the Finished
+   shelf exists to supply one level up.
+
+   Quiet on purpose: this is context, not a call to action. A parked lane is the
+   one thing on this board that is quiet BECAUSE someone decided it should be.
+
+   `done` is here too even though a done lane normally leaves for the shelf — it
+   comes back the moment it asks a question, and a row returning from the shelf
+   with no explanation is worse than one that says what it is.
+
+   Whole class-name string literals, for the reason historyProvenance gives. */
+const TASK_STATE_CHIPS = {
+  parked: {
+    label: "Parked",
+    title: "This lane was stood down by whoever is running it. Its session is still live — parking is about the work, not the process — and it returns here the moment it asks a question.",
+  },
+  done: {
+    label: "Done",
+    title: "This lane reported its assignment complete. Its session is still live, so it can be given more work; it is off the live rows because it is not waiting on anything.",
+  },
+};
+
+function taskStateChips(agent) {
+  const chip = agent && agent.taskStateSource ? TASK_STATE_CHIPS[agent.taskState] : null;
+  if (!chip) return [];
+  return [el("span", {
+    class: "task-state-chip",
+    title: chip.title,
+    text: chip.label,
+  })];
+}
+
 function historyChips(agent) {
   const provenance = historyProvenance(agent);
   if (!provenance) return [];
@@ -5551,6 +5600,11 @@ function renderAgentRow(agent, program, opts = {}) {
   // sentence into the row tooltip + aria-label; the drawer still carries it too.
   const sourceDetail = fullSourceDetail(agent);
   const liveness = livenessView(agent);
+  /* T1's disagreement flag. Only `contradicted` is loud: `corroborated` is
+     the kernel agreeing, and `unobserved` is the kernel not having looked —
+     which on the live board is every row, so marking it would mark the whole
+     fleet with a fact about the observer rather than about the session. */
+  const lineageContradicted = agent.lineageAgreement === "contradicted";
   const history = historyProvenance(agent);
   const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
@@ -5639,6 +5693,9 @@ function renderAgentRow(agent, program, opts = {}) {
          facts ABOUT the session, true and worth reading, and none of them
          changes whether an instruction is safe to send. All four are still in
          the row's aria-label, so nothing left the row for a screen reader. */
+      // What its own operator declared this lane's work to be. Absent on every
+      // undeclared session, which is nearly all of them.
+      ...taskStateChips(agent),
       // History provenance: which of the two different endings this record has.
       // Only ever true of a terminal row, so a live board never sees them.
       ...historyChips(agent),
@@ -5649,6 +5706,23 @@ function renderAgentRow(agent, program, opts = {}) {
       // full four-state fact, so `unknown` still reads as unknown somewhere.
       liveness && liveness.key === "died"
         ? el("span", { class: "row-died", title: liveness.detail }, icon("warning"), liveness.label)
+        : null,
+      /* Lineage the kernel contradicts. T1 walks pid→ppid from each hook-store
+         process up to its cmux surface and, when the chain it observes conflicts
+         with the one that was DECLARED, keeps the declared chain and says so
+         rather than silently re-parenting. This is where it gets said.
+
+         Loud, and on the row rather than only in the drawer, because a wrong
+         parent is not a cosmetic error: the swarm tree is how an operator
+         decides which session a piece of work belongs to, and a row nested under
+         the wrong orchestrator is how an instruction reaches the wrong session.
+         It passes the row's own test for what earns pixels — it changes what is
+         safe to DO here. */
+      lineageContradicted
+        ? el("span", {
+          class: "lineage-contradicted",
+          title: "The parent this session declares is not the parent its process actually has. The declared chain is what the board is showing; treat this row's place in the tree as unproven.",
+        }, icon("warning"), "Parent disputed")
         : null,
       /* The swarm chip became the caret. It was already the one element on the
          row that names the subtree, so putting the control on it costs no new
@@ -5740,6 +5814,7 @@ function renderAgentRow(agent, program, opts = {}) {
     (selected ? " is-selected" : "") +
     (outcome !== "healthy" ? " is-" + outcome : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
+    (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
     (state.selecting ? " is-selecting" : "") +
     (checked ? " is-checked" : "") +
@@ -5783,7 +5858,7 @@ function renderAgentRow(agent, program, opts = {}) {
        to LOOK at, not quieter to listen to. Program, role,
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
@@ -7782,6 +7857,23 @@ function renderChatTurn(role, text, sender = null) {
   return el("div", { class: "chat-turn chat-turn--" + role },
     el("div", { class: "chat-turn-role", text: sender ? sender.name : (TURN_ROLE_LABELS[role] || role) }),
     sender ? el("div", { class: "chat-turn-sender", text: "sent in run " + sender.runId }) : null,
+    /* T5's verdict, said as the evidence it is and not as the conclusion it is
+       not. The server reports whether the claimed sender's own transcript
+       contains this message; whether a mismatch is a forgery or a scan that
+       could not see far enough is not something this client can know, and a
+       board that prints "forged" is making an accusation out of a search
+       result. So the mark states the finding and names the action.
+
+       Same rule the rest of this file already follows for server-derived
+       verdicts — actionOutcomeView reads an unknown outcome as "the server's own
+       word rather than a confident wrong label". An ABSENT verdict marks
+       nothing at all: unverifiable evidence must never become an accusation. */
+    sender && sender.unconfirmed
+      ? el("div", {
+        class: "sender-unconfirmed",
+        title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
+      }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
+      : null,
     el("p", { class: "chat-turn-body", tabindex: "0", text }));
 }
 
@@ -7893,7 +7985,17 @@ function renderChat(agent, ui = state) {
     { role: "task", text: drawerObjective(agent) ? "" : agent.task },
   ].map((turn) => {
     const sender = senderView(turn.text, ui);
-    return sender ? { ...turn, text: withoutSenderHeader(turn.text), sender } : turn;
+    if (!sender) return turn;
+    /* The verdict belongs to ONE turn: the field the server actually checked.
+       `senderClaimText` is the mirror of the server's own candidate choice, so
+       marking any other headed turn — `task`, which keeps its kickoff envelope
+       forever — would flag a message nobody verified. */
+    const unconfirmed = agent.senderVerified === false && turn.text === senderClaimText(agent);
+    return {
+      ...turn,
+      text: withoutSenderHeader(turn.text),
+      sender: unconfirmed ? { ...sender, unconfirmed: true } : sender,
+    };
   });
   const turns = dedupeTurns(candidates);
   for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text, turn.sender));

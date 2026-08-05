@@ -10516,6 +10516,56 @@ describe("Atlas F4: the guide and the architecture map describe this board", () 
     expect(source).toContain("function declaredIdentity");
   });
 
+  test("the guide explains parked and done without claiming the session ended", () => {
+    /* T7. The distinction the whole contract turns on, and the one an operator
+       will get wrong first: parking is about the WORK. A guide that let a reader
+       believe a parked row had ended would undo the reason the rule was kept out
+       of lifecycle.ts. */
+    const chips = "`Parked` and `Done` are about the work";
+    expect(guide).toContain(chips);
+    const parked = guide.slice(guide.indexOf(chips), guide.indexOf(chips) + 1400);
+    expect(parked.toLowerCase()).toContain("still");   // the session is still live
+    expect(parked).toContain("Finished shelf");        // where a done lane goes
+    // Both words the chip can print are explained, not just the one.
+    expect(parked).toContain("Done");
+    // And the client really does render exactly these two.
+    expect(source).toContain("task-state-chip");
+    expect(Object.keys(M.state).length).toBeGreaterThan(0);
+  });
+
+  test("the guide says what Needs-you admits, including the way back in", () => {
+    /* The re-alert is the half a reader has to be told, because it is what makes
+       parking safe to use: standing a lane down does not gag it. */
+    const admits = "What the strip admits";
+    expect(guide).toContain(admits);
+    const strip = guide.slice(guide.indexOf(admits), guide.indexOf(admits) + 900).toLowerCase();
+    expect(strip).toContain("parked");
+    expect(strip).toContain("asks");
+  });
+
+  test("ARCHITECTURE maps the client half of the task-state contract", () => {
+    for (const symbol of ["declaredQuiet", "declaredDone"]) {
+      expect(architecture, `ARCHITECTURE stopped naming ${symbol}`).toContain(symbol);
+      expect(source, `${symbol} is not a function this client defines`).toContain("function " + symbol);
+    }
+    // The mirror is the whole reason the two sides agree; naming it is the point.
+    expect(architecture).toContain("task-state.js");
+    // And the reason `alerting` needed its own gate: outcome is the second door.
+    expect(architecture.toLowerCase()).toContain("attention");
+  });
+
+  test("the guide describes the sender mark as evidence, never as a verdict", () => {
+    /* Pinned because it was a judgement call under pressure and the reasoning has
+       to survive it: the board reports that a claimed sender's transcript does
+       not contain a message. Whether that is a forgery is not something the
+       client can see. */
+    expect(guide).toContain("Sender unconfirmed");
+    const mark = guide.slice(guide.indexOf("Sender unconfirmed"), guide.indexOf("Sender unconfirmed") + 900);
+    expect(mark.toLowerCase()).toContain("transcript");
+    expect(mark.toLowerCase()).not.toContain("forged");
+    expect(source).toContain("sender-unconfirmed");
+  });
+
   test("the two assets ship under one cache-buster token", () => {
     /* Not a pin on the value — that would need editing on every bump, which is
        the one thing a cache-buster must not make annoying. The invariant is
@@ -10629,5 +10679,203 @@ describe("Atlas F4: the board keeps the operator's place across a repaint", () =
     for (const [key, node] of before) {
       expect(after.get(key), `${key} was rebuilt by a no-op repaint`).toBe(node);
     }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   T7 — the parked / blocked / done contract, rendered.
+
+   T6 put `taskState` / `taskStateSource` / `taskStateAt` on the wire beside the
+   hook's own `hookLifecycleAt`, and `src/web/task-state.js` is the mirror both
+   sides execute against one truth table. This file is about what the BOARD does
+   with that verdict, which is a separate question the mirror deliberately does
+   not answer: `wantsHuman` already consumes it, and every fixture below was read
+   off the live board at 11:5x with /api/snapshot open beside it.
+   ------------------------------------------------------------------------- */
+describe("T7: a declared task state reaches the board", () => {
+  /* be-live, exactly as the wire had it: the orchestrator stood the lane down at
+     16:52:04, its last hook was `idle` at 16:51:21, and the server still
+     published `outcome: "needs-you"` from an attentionSignal raised before the
+     stand-down. */
+  const parkedLane = (over: Record<string, unknown> = {}) => agent({
+    id: "codex:019fd291", sourceSessionId: "019fd291-62e4-7152-a9b4-6d781396802c",
+    provider: "codex", programId: "p",
+    identity: { name: "be-live", base: "be-live", source: "manifest", authoredBy: "manifest" },
+    status: "attention", lifecycle: "waiting", outcome: "needs-you", attentionSignal: true,
+    taskState: "parked", taskStateSource: "manifest", taskStateAt: "2026-08-05T16:52:04.000Z",
+    hookLifecycle: "idle", hookLifecycleAt: "2026-08-05T16:51:21.000Z",
+    ...over,
+  });
+
+  test("a parked lane leaves Needs-you even while its outcome still says needs-you", () => {
+    /* The live gap this closes. `wantsHuman` already went quiet — the mirror
+       suppressed the stale hook — but `alerting()` has a second door: any row
+       whose OUTCOME is not healthy and which has not ended. The server's outcome
+       was computed from the same pre-stand-down signal, so the lane walked
+       straight back into the strip through it.
+
+       Measured before the fix: wantsHuman=false, alerting=true. */
+    const parked = parkedLane();
+    expect(M.wantsHuman(parked)).toBe(false);
+    expect(M.alerting(parked)).toBe(false);
+    // And it really is off the pinned strip, through the board's own builder.
+    const program = { id: "p", name: "disposable checkouts", agents: [parked] };
+    expect(M.needsYouStrip([{ program, agents: [parked] }])).toEqual([]);
+  });
+
+  test("a parked lane that asks again is back in Needs-you", () => {
+    /* The re-alert path, and the reason parking cannot simply mute a row: a
+       lane stood down at 16:52:04 that asks a question at 16:53 is asking NOW.
+       Strictly newer, per the truth table both sides execute. */
+    const asking = parkedLane({
+      hookLifecycle: "needsInput", hookLifecycleAt: "2026-08-05T16:53:00.000Z",
+    });
+    expect(M.wantsHuman(asking)).toBe(true);
+    expect(M.alerting(asking)).toBe(true);
+    // A hook at the same instant is not newer, so it stays quiet.
+    expect(M.alerting(parkedLane({
+      hookLifecycle: "needsInput", hookLifecycleAt: "2026-08-05T16:52:04.000Z",
+    }))).toBe(false);
+  });
+
+  test("a parked row says so on the row, without claiming the session ended", () => {
+    /* The plan is explicit that this rule never enters lifecycle.ts: parking is
+       a statement about the ASSIGNMENT, not about the process. So the row keeps
+       its lifecycle word and gains a quiet chip beside it — a parked lane that
+       rendered as "Finished" would be the same lie in the other direction. */
+    const parked = parkedLane();
+    const program = { id: "p", name: "disposable checkouts", agents: [parked] };
+    const row = withDom(() => M.renderAgentRow(parked, program));
+    const chip = byClass(row, "task-state-chip");
+    expect(chip).not.toBeNull();
+    expect(textOf(chip).toLowerCase()).toContain("parked");
+    // Still a waiting session, not an ended one.
+    expect(M.lifecycleOf(parked)).toBe("waiting");
+    expect(M.isTerminal(parked)).toBe(false);
+    // A lane that never declared anything grows no chip at all.
+    expect(byClass(withDom(() => M.renderAgentRow(agent(), program)), "task-state-chip")).toBeNull();
+  });
+
+  test("a lane that declared itself done leaves the live rows for the Finished shelf", async () => {
+    /* The case the live board has not produced yet and the plan names anyway: a
+       lane whose assignment is complete but whose process is still sitting at
+       its prompt. Its lifecycle is `waiting` — the process really is up — so
+       nothing about isTerminal moves. The BOARD is what has to stop listing it
+       as live work. */
+    const done = parkedLane({
+      id: "codex:019fd20d",
+      identity: { name: "be-spine", base: "be-spine", source: "manifest", authoredBy: "manifest" },
+      status: "waiting", lifecycle: "waiting", outcome: "healthy", attentionSignal: false,
+      taskState: "done", taskStateAt: "2026-08-05T16:51:12.000Z",
+      hookLifecycle: "idle", hookLifecycleAt: "2026-08-05T14:28:35.000Z",
+    });
+    expect(M.isTerminal(done)).toBe(false);       // the process is still there
+    expect(M.viewMatches("board", done)).toBe(false); // ...and it is not live work
+    expect(M.viewMatches("now", done)).toBe(false);
+
+    /* ...and the shelf is where it goes. Driven through shelfFilter, which is
+       the production path: renderPrograms builds each leaf's shelf population
+       with exactly this predicate. */
+    const program = {
+      id: "p", name: "disposable checkouts", path: "/x/p", groupPath: ["k-p", "wt-p"],
+      agents: [done],
+    };
+    const shelved = withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProvider: "" },
+      () => M.shelfFilter()(done, program));
+    expect(await shelved).toBe(true);
+
+    /* A leaf with one lane still working beside it — the real shape of a run,
+       and the shape that matters: a board that drops the whole section once its
+       last live row leaves would never show the shelf at all. */
+    const working = agent({ id: "codex:still", status: "running", lifecycle: "working" });
+    const leaf = { ...program, agents: [working, done] };
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, [{ program: leaf, agents: [working], finished: [done] }], listUi({
+      view: "board", lookbackHours: null,
+      shelfOverrides: new Map([["p", "open"]]),
+      snap: { schemaVersion: 1, programs: [leaf] },
+    })));
+    expect(byClass(root, "finished-shelf")).not.toBeNull();
+    expect(textOf(root)).toContain("be-spine");
+
+    // A parked lane is NOT done: it is still live work and stays in the rows.
+    expect(M.viewMatches("board", parkedLane({ outcome: "healthy", attentionSignal: false }))).toBe(true);
+  });
+});
+
+describe("T7: lineage the kernel contradicts, and a sender the server could not confirm", () => {
+  const contradicted = (over: Record<string, unknown> = {}) => agent({
+    id: "claude:kid", provider: "claude", programId: "p", parentAgentId: "claude:claimed",
+    lineageAgreement: "contradicted",
+    lineage: { observedParentAgentId: "claude:actual" },
+    ...over,
+  });
+
+  test("a parent chain the kernel contradicts is marked hostile, and says why", () => {
+    /* T1 keeps the DECLARED chain and flags it rather than silently re-parenting
+       — so the row is the only place an operator can learn that the two
+       disagree. Hostile, because a wrong parent is how an instruction reaches
+       the wrong session. */
+    const row = withDom(() => M.renderAgentRow(contradicted(), { id: "p", name: "P", agents: [] }));
+    const mark = byClass(row, "lineage-contradicted");
+    expect(mark).not.toBeNull();
+    // The reason, in words, where the operator is looking — not a bare colour.
+    expect(String(mark.attributes.title || "").toLowerCase()).toContain("parent");
+    expect(row.attributes["aria-label"].toLowerCase()).toContain("contradict");
+    // Corroborated and unobserved are ordinary rows; only disagreement is loud.
+    for (const agreement of ["corroborated", "unobserved", undefined]) {
+      const calm = withDom(() => M.renderAgentRow(
+        contradicted({ lineageAgreement: agreement }), { id: "p", name: "P", agents: [] }));
+      expect(byClass(calm, "lineage-contradicted"), String(agreement)).toBeNull();
+    }
+  });
+
+  test("an unconfirmed sender is marked with the server's evidence, not a verdict", () => {
+    /* T5 publishes `senderVerified: false` when the claimed sender's own
+       transcript does not contain the message. The mark says exactly that and
+       stops there. It does not say "forged": the client cannot see the scan, and
+       measured on the live board every one of the nine `false` rows was a real
+       message the bounded scan had missed. An absent verdict marks nothing —
+       unreadable evidence is not an accusation. */
+    const HEAD = "[from claude:8c052fe9 run atlas-hardening-2026-08-05]";
+    const forged = agent({
+      id: "claude:recv", provider: "claude", programId: "p",
+      lastUserMessage: `${HEAD} ship the thing`, senderVerified: false,
+    });
+    const pane = withDom(() => M.renderChat(forged, listUi({
+      snap: { schemaVersion: 1, programs: [{ id: "p", name: "P", agents: [forged] }] },
+    })));
+    const mark = byClass(pane, "sender-unconfirmed");
+    expect(mark).not.toBeNull();
+    const said = (textOf(mark) + " " + String(mark.attributes.title || "")).toLowerCase();
+    expect(said).toContain("transcript");
+    expect(said).not.toContain("forged");
+
+    // senderVerified:true and an absent verdict both leave the attribution alone.
+    for (const verdict of [true, undefined]) {
+      const a = agent({ id: "claude:recv", provider: "claude", programId: "p", lastUserMessage: `${HEAD} ship the thing`, senderVerified: verdict });
+      const calm = withDom(() => M.renderChat(a, listUi({
+        snap: { schemaVersion: 1, programs: [{ id: "p", name: "P", agents: [a] }] },
+      })));
+      expect(byClass(calm, "sender-unconfirmed"), String(verdict)).toBeNull();
+    }
+  });
+
+  test("an unheaded current request does not inherit the kickoff's sender", () => {
+    /* be-live's T5 handoff, and the server's rule (`senderClaimFor`): a present
+       `lastUserMessage` IS the current request and is authoritative even with no
+       header. `task` stays headed forever, so falling through to it attributes a
+       human's later follow-up to the orchestrator that opened the lane — and
+       then "verifies" that attribution against the wrong message. */
+    const HEAD = "[from claude:8c052fe9 run atlas-hardening-2026-08-05]";
+    expect(M.senderOf(agent({ lastUserMessage: "now try it with the flag", task: `${HEAD} you are lane fe-states` })))
+      .toBeNull();
+    // The fallback survives for the case it was built for: no current request.
+    expect(M.senderOf(agent({ lastUserMessage: null, task: `${HEAD} you are lane fe-states` })))
+      .toEqual({ agentId: "claude:8c052fe9", runId: "atlas-hardening-2026-08-05" });
+    expect(M.senderOf(agent({ lastUserMessage: undefined, task: `${HEAD} you are lane fe-states` })))
+      .toEqual({ agentId: "claude:8c052fe9", runId: "atlas-hardening-2026-08-05" });
+    // An empty string is a present request that is simply empty, not an absence.
+    expect(M.senderOf(agent({ lastUserMessage: "", task: `${HEAD} you are lane fe-states` }))).toBeNull();
   });
 });
