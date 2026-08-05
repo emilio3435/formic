@@ -144,6 +144,16 @@ export interface CmuxWorkspaceSnapshot {
   pullRequestUrls: string[];
 }
 
+export type CmuxWorkspaceEnvVariables = Partial<Record<
+  "ANTHILL_RUN" | "ANTHILL_LANE" | "ANTHILL_ROLE" | "ANTHILL_PARENT",
+  string
+>>;
+
+export interface CmuxWorkspaceEnv {
+  workspaceId: string;
+  variables: CmuxWorkspaceEnvVariables;
+}
+
 export interface CmuxNotification {
   id?: string;
   surfaceId: string;

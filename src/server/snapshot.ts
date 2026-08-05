@@ -53,14 +53,21 @@ import {
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
-import { disambiguate, paneRename } from "./naming";
+import { disambiguate, paneRename, resolveAgentName } from "./naming";
 import { resolveRepoIdentity } from "./repo-identity";
+import {
+  envFactsFor,
+  manifestFactsFor,
+  type DeclaredLineage,
+  type RunManifest,
+} from "./run-manifests";
 import type { SessionNameRecord } from "./session-names";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
   type CmuxNotification,
   type CmuxSurface,
+  type CmuxWorkspaceEnv,
   type CmuxWorkspaceSnapshot,
   type CollectedAgent,
 } from "./types";
@@ -73,7 +80,9 @@ export interface SnapshotInput {
      pass completes. */
   sessionNames?: (agentId: string) => SessionNameRecord | undefined;
   surfaces: readonly CmuxSurface[];
+  workspaceEnvs?: readonly CmuxWorkspaceEnv[];
   sidebarWorkspaces?: readonly CmuxWorkspaceSnapshot[];
+  runManifests?: readonly RunManifest[];
   notifications?: readonly CmuxNotification[];
   programHints?: readonly ProgramHint[];
   sourceErrors?: Partial<Record<Provider, readonly string[]>>;
@@ -158,6 +167,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  const targetsById = new Map(
+    sources.map((source) => [source.id, resolveAgentTarget(source, input.surfaces, sources)]),
+  );
+  const envByWorkspace = new Map(
+    (input.workspaceEnvs ?? []).map((workspace) => [workspace.workspaceId, workspace.variables]),
+  );
+  const declaredById = new Map<string, DeclaredLineage>();
+  for (const source of sources) {
+    const manifestFacts = manifestFactsFor(source.id, input.runManifests ?? []);
+    const workspaceId = targetsById.get(source.id)?.workspaceId;
+    const envFacts = workspaceId ? envFactsFor(envByWorkspace.get(workspaceId) ?? {}) : undefined;
+    const declared = manifestFacts ?? envFacts;
+    if (declared) declaredById.set(source.id, declared);
+  }
   /* Uniqueness is decided ONCE, here, because it is the only place the whole
      fleet is in hand. A collector sees one session at a time and so cannot know
      whether its name is shared; if it guessed, the guess would change every time
@@ -176,6 +199,26 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      derived name immediately and picks the authored one up on a later pass. */
   const titled = named.map((source) => {
     const remembered = input.sessionNames?.(source.id);
+    const declared = declaredById.get(source.id);
+    if (source.identity.source === "operator-alias") return source;
+    if (declared) {
+      const authored = remembered
+        ? { name: remembered.name, by: remembered.by }
+        : source.identity.source === "authored" && source.identity.authoredBy
+          ? { name: source.identity.base, by: source.identity.authoredBy }
+          : undefined;
+      return {
+        ...source,
+        identity: resolveAgentName({
+          provider: source.provider,
+          sourceSessionId: source.sourceSessionId,
+          manifest: declared,
+          authored,
+          originCwd: source.originCwd,
+          taskName: source.task,
+        }),
+      };
+    }
     if (!remembered) return source;
     return {
       ...source,
@@ -194,8 +237,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   );
   const childCounts = new Map<string, number>();
   for (const source of sources) {
-    if (!source.parentSourceSessionId) continue;
-    const parentId = `${source.provider}:${source.parentSourceSessionId}`;
+    const declared = declaredById.get(source.id);
+    const parentId = declared
+      ? declared.parentAgentId
+      : source.parentSourceSessionId
+        ? `${source.provider}:${source.parentSourceSessionId}`
+        : undefined;
+    if (!parentId) continue;
     childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
   }
   const sidebarByWorkspace = new Map(
@@ -203,7 +251,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   );
   for (const source of sources) {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
-    const target = resolveAgentTarget(source, input.surfaces, sources);
+    const target = targetsById.get(source.id)!;
+    const declared = declaredById.get(source.id);
     let identityTrace: IdentityTrace | undefined;
     const readIdentityTrace = (): IdentityTrace => {
       identityTrace ??= resolveAgentTargetWithTrace(source, input.surfaces, sources).trace;
@@ -242,13 +291,26 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     // Only let the cmux pane own program grouping when the session cwd agrees.
     // Otherwise a home-cwd orchestrator in a project-titled workspace gets filed
     // under the wrong program (the bug that made "Settings UX" look like Home).
-    const program = programFor(
+    const inferredProgram = programFor(
       source,
       input.programHints ?? [],
       surface,
       target.resolution === "exact" && !target.cwdMismatch,
       repo,
     );
+    const operatorProgram = (input.programHints ?? []).some((hint) => hint.id === inferredProgram.id);
+    const runKey = declared && !operatorProgram
+      ? `run:${declared.runId}`
+      : undefined;
+    const program = runKey && inferredProgram.groupPath
+      ? {
+          ...inferredProgram,
+          id: `repo:${inferredProgram.groupPath[0]}:${runKey}`,
+          groupPath: [inferredProgram.groupPath[0], runKey] as [string, string],
+        }
+      : runKey && declared
+        ? { ...inferredProgram, id: runKey, name: declared.runId }
+      : inferredProgram;
     /* The status line is a STATE, not a paste.
        This joined title, subtitle and body and cut the result at 500
        characters, which put things like "Codex — Completed in LaHormigaDormida
@@ -346,7 +408,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const { callSizes: _callSizes, ...publishable } = source;
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
-      programId: program.groupPath ? `repo:${program.groupPath[0]}` : program.id,
+      programId: runKey ?? (program.groupPath ? `repo:${program.groupPath[0]}` : program.id),
       /* An unread notification no longer overwrites the status. It used to,
          which is how a working session came to publish `status: "attention"` —
          one field answering two different questions, and losing the first. What
@@ -371,7 +433,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       processState,
       outcome,
       controlState,
-      role: roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
+      role: declared?.role ?? roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...(repo ? { repo } : {}),
@@ -388,9 +450,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
-      parentAgentId: source.parentSourceSessionId
-        ? `${source.provider}:${source.parentSourceSessionId}`
-        : undefined,
+      parentAgentId: declared
+        ? declared.parentAgentId
+        : source.parentSourceSessionId
+          ? `${source.provider}:${source.parentSourceSessionId}`
+          : undefined,
       threadDepth: source.threadDepth,
       nickname: source.nickname,
       /* Only when a human plausibly typed it — cmux titles every pane, and its

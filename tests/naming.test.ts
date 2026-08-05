@@ -80,7 +80,7 @@ describe("the naming truth table, executed fleet-wide", () => {
 });
 
 describe("the truth table covers the contract it claims to", () => {
-  const TIERS = [1, 2, 3, 4, 5];
+  const TIERS = [1, 2, 3, 4, 5, 6];
 
   test("every tier in the precedence chain has at least one case", () => {
     const covered = new Set(table.cases.map((testCase) => testCase.tier));

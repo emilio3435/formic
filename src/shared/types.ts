@@ -28,6 +28,7 @@ export type HookLifecycle = "idle" | "running" | "needsInput" | "unknown";
    came to display as "Claude · the-mountain-main". */
 export type NameSource =
   | "operator-alias"
+  | "manifest"
   | "authored"
   | "origin-cwd"
   | "task"
@@ -39,7 +40,8 @@ export type AuthoredNameSource =
   | "omp-title"
   | "cursor-composer"
   | "factory-title"
-  | "launch-env";
+  | "launch-env"
+  | "manifest";
 /* What a session is called, decided once by src/server/naming.ts.
 
    `base` is the name before fleet-wide uniqueness is applied and `name` is what
