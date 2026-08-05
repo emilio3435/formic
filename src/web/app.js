@@ -121,6 +121,8 @@ import {
   isTerminal,
   isUnverified,
   lifecycleOf,
+  lifecycleSection,
+  LIFECYCLE_SECTIONS,
   provenanceOf,
   scopeOf,
   wantsHuman,
@@ -143,6 +145,7 @@ import {
   CONTROL_LABELS,
   DEFAULT_LOOKBACK_HOURS,
   DEFAULT_WIDGET_IDS,
+  LEGACY_VIEW_ALIASES,
   LOOKBACK_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
@@ -377,9 +380,18 @@ function sessionTag(agent) {
    are exactly as confusing as two in the same one. */
 /* The names the landing screen offers for working sessions, at most three.
 
-   Split out of the all-clear block so the one-glance rule can be asserted
-   without the module's state plumbing — the same reason syncProgramList is its
-   own function.
+   NOTHING RENDERS THIS ANY MORE, and that is a result rather than a leak. It
+   existed for THE ONE-GLANCE RULE — a working session must be NAMED on the
+   landing screen, not merely counted there — which mattered because the board
+   landed on the Needs-you tab, and a clear Needs you could hide three running
+   sessions behind the number "3 working". Board cannot do that: a working
+   session is a row on the view the operator lands on, so the layout keeps the
+   rule and the roster it needed has no state left to render over.
+
+   It survives as the executable statement of the rule, which the single-board
+   layout has to keep satisfying and which is asserted directly in
+   tests/sibling-panes-end-to-end.test.ts. If a future layout ever hides working
+   sessions behind a count again, this is what it owes the operator.
 
    Siblings in one checkout collide here and nowhere else on that screen:
    agentName falls back to provider plus project basename, so two Claude
@@ -402,6 +414,48 @@ function ambiguousNames(agents) {
   const seen = new Map();
   for (const agent of agents || []) {
     const name = agentName(agent);
+    if (!name) continue;
+    seen.set(name, (seen.get(name) || 0) + 1);
+  }
+  const repeated = new Set();
+  for (const [name, count] of seen) if (count > 1) repeated.add(name);
+  return repeated;
+}
+
+/* The two fleet-wide answers every row needs: who its parent is, and whether
+   another session on the board is already using its name. Both are computed
+   over the WHOLE snapshot rather than one program — a twin in another program
+   is exactly as confusing as a twin in this one, and a swarm can straddle two
+   programs — so they are built once per paint and handed down.
+
+   Not memoised on the snapshot: `agentName` reads the operator's alias table,
+   so a rename that lands between snapshots has to be visible in the next paint,
+   not four seconds later. */
+function boardIndex(ui = state) {
+  const byId = new Map(snapshotAgents(ui && ui.snap).map(({ agent }) => [agent.id, agent]));
+  const agents = [...byId.values()];
+  return {
+    byId,
+    ambiguous: ambiguousNames(agents),
+    sharedNames: sharedRowNames(agents),
+  };
+}
+
+/* The name a row actually PRINTS: the operator's label if they typed one, else
+   the server's base — `identity.name` with the disambiguator taken back off.
+   Kept beside sharedRowNames because the two only mean anything together. */
+function rowDisplayName(agent) {
+  return operatorName(agent) || (agent.identity && agent.identity.base) || agentName(agent);
+}
+
+/* Printed names more than one session on the board is using. Distinct from
+   ambiguousNames, which counts the full resolved identity — that one is unique
+   by construction for a server-named session, so it can never see the collision
+   the operator is looking at. This is the collision on screen. */
+function sharedRowNames(agents) {
+  const seen = new Map();
+  for (const agent of agents || []) {
+    const name = rowDisplayName(agent);
     if (!name) continue;
     seen.set(name, (seen.get(name) || 0) + 1);
   }
@@ -1186,6 +1240,11 @@ globalThis.TheAntHill = {
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
+  // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
+  // collapse, the history provenance chips, and the fleet index all three read.
+  lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
+  swarmOpen, toggleSwarm, historyProvenance, historyChips, renderRowFacts,
+  boardIndex, sharedRowNames, rowDisplayName, landingView, LEGACY_VIEW_ALIASES,
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
   // block, exactly the TDZ hazard the comment above describes. The behavior it
   // gates is asserted through handleRowNavigation instead.
@@ -1252,6 +1311,14 @@ function setLookbackHours(hours) {
 }
 
 
+/* The tab a stored `defaultView` should land on, or null when it names nothing
+   this client can show. Pure so the alias table is assertable without a fetch. */
+function landingView(stored) {
+  if (VIEWS.includes(stored)) return stored;
+  const aliased = LEGACY_VIEW_ALIASES[stored];
+  return VIEWS.includes(aliased) ? aliased : null;
+}
+
 async function fetchSettings() {
   try {
     const res = await apiFetch("/api/settings", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
@@ -1263,8 +1330,12 @@ async function fetchSettings() {
     /* The operator's landing tab, applied only on the FIRST read — after that
        they have navigated and moving them would be the board overriding a
        choice they just made. */
-    const landing = body.settings && body.settings.defaultView;
-    if (!state.settingsLoaded && VIEWS.includes(landing)) state.view = landing;
+    /* Through the alias table: the server still stores the pre-Board vocabulary
+       ("needs-you", "now", "waiting"), and a saved landing view that no longer
+       names a tab must land on the view that absorbed it rather than be
+       silently discarded. */
+    const landing = landingView(body.settings && body.settings.defaultView);
+    if (!state.settingsLoaded && landing) state.view = landing;
     state.settingsLoaded = true;
     state.settingsError = "";
   } catch (err) {
@@ -1339,6 +1410,24 @@ function loadOverrides() {
 function saveOverrides() {
   try {
     localStorage.setItem("mtn3-programs", JSON.stringify(Object.fromEntries(state.programOverrides)));
+  } catch { /* storage unavailable */ }
+}
+
+/* Swarm expansion, on the programOverrides pattern exactly — same shape, same
+   failure handling, its own key. Only "open" is ever written: collapsed is the
+   default, so storing it would be storing the absence of a choice. */
+function loadSwarmOverrides() {
+  try {
+    const raw = localStorage.getItem("mtn3-swarms");
+    if (!raw) return;
+    const entries = Object.entries(JSON.parse(raw)).filter(([, mode]) => mode === "open");
+    state.swarmOverrides = new Map(entries);
+  } catch { /* first run or blocked storage */ }
+}
+
+function saveSwarmOverrides() {
+  try {
+    localStorage.setItem("mtn3-swarms", JSON.stringify(Object.fromEntries(state.swarmOverrides)));
   } catch { /* storage unavailable */ }
 }
 
@@ -3554,11 +3643,13 @@ function renderTabs() {
     const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
       ? " · " + lookbackLabel(state.lookbackHours)
       : "";
-    /* The Waiting tab says how much of itself it cannot vouch for. These
-       sessions are the largest population on the board and the whole reason the
-       contract exists; folding them silently into a Waiting count would hide the
-       disclosure inside the number it is about. */
-    const unverified = count != null && view === "waiting"
+    /* The Board tab says how much of itself it cannot vouch for. These sessions
+       are the largest population on the board and the whole reason the contract
+       exists; folding them silently into the count would hide the disclosure
+       inside the number it is about. The Unverified divider inside each program
+       group says the same thing row-by-row — this is the whole-fleet total, and
+       it is what an operator sees before they scroll. */
+    const unverified = count != null && view === "board"
       ? agents.filter((a) => isUnverified(a)).length
       : 0;
     const unverifiedNote = unverified > 0 ? " · " + unverified + " unverified" : "";
@@ -3581,9 +3672,16 @@ function renderTabs() {
        lane at the time: the tab keeps its place and its label, the zero recedes.
        Nothing is hidden and nothing shouts. */
     countNode.classList.toggle("is-zero", count === 0);
-    // The Alerts (needs-you) tab count takes ember ink when there is anything to
-    // act on; a zero count and every other tab stay quiet (C2's is-alerting modifier).
-    if (view === "needs-you") countNode.classList.toggle("is-alerting", count > 0);
+    /* Ember ink on the Board count when something on it is asking for a person.
+       It used to ride the Needs-you tab, whose count WAS the alert count; Board
+       counts the whole live fleet, so the ink has to key on the alerting
+       population rather than on the number beside it — otherwise every board
+       with a single working agent would glow. The strip below carries the
+       names; this is the mark you can see from another tab.
+       (C2's is-alerting modifier: ember ink, never a fill.) */
+    if (view === "board") {
+      countNode.classList.toggle("is-alerting", agents.some((a) => alerting(a)));
+    }
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
     const isCurrent = btn.dataset.view === state.view;
@@ -3801,12 +3899,18 @@ function programOpen(program, ui = state) {
      program then dropped rows that had already cleared the filter — so Now paints
      one row on a fleet with ten.
 
-     So ask the filter's own question, not a second opinion about it: a program is
-     open when it holds an agent the Now view would admit. The gate is now
+     So ask the filter's own question, not a second opinion about it: a program
+     is open when it holds an agent THE ACTIVE VIEW would admit. The gate is now
      incapable of contradicting the filter, which is the invariant that was
      actually broken. History stays collapsed above; ended-and-healthy programs
-     still fail this predicate, so a board of 60 finished programs stays quiet. */
-  return program.agents.some((agent) => viewMatches("now", agent));
+     still fail this predicate, so a board of 60 finished programs stays quiet.
+
+     It used to ask viewMatches("now", …) — the right question while Now was the
+     only live tab, and the wrong one the moment Board absorbed Waiting: a
+     program holding nothing but waiting sessions would have rendered as a
+     header with no rows under it, on the single view that exists so nothing
+     live is a click away. */
+  return program.agents.some((agent) => viewMatches(ui.view, agent));
 }
 
 function toggleProgram(program) {
@@ -3853,6 +3957,120 @@ function reconcileKeyed(parent, plan, cache) {
 const programSectionCache = new Map(); // programId -> { sig, node }
 const programBodies = new Map();       // programId -> the .program-agents node
 const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, node }
+
+/* ---------- the pinned Needs-you strip ----------
+
+   Everything alerting(), across every program, in one block at the top of the
+   board — the population the Needs-you TAB used to hold, kept as a place rather
+   than a destination so it is on screen while the operator reads the rest of
+   the fleet.
+
+   It lives inside #programs, as the first section, and that is load-bearing in
+   two ways: keyboard row navigation walks `.agent-row[tabindex="0"]` inside
+   #programs in DOM order (so strip rows have to be in there to be reachable by
+   arrow keys, and have to be FIRST to match what the eye sees), and the same
+   two-level keyed reconciliation that owns program sections then owns this one
+   — no second render path to keep in step.
+
+   Its id starts with \u0000 so it can never collide with a real program id, and
+   sorts nowhere near one in any accidental comparison. */
+const STRIP_ID = "\u0000needs-you";
+
+/* Who is in the strip, and which program each of them came from.
+
+   Built from the ALREADY-FILTERED list, so a search or a facet narrows the
+   strip exactly as it narrows the groups. An operator who filtered to one
+   program is not shown another program's alert and told it needs them. */
+function needsYouStrip(visible) {
+  const rows = [];
+  for (const { program, agents } of visible) {
+    for (const agent of agents) if (alerting(agent)) rows.push({ agent, program });
+  }
+  return rows;
+}
+
+/* The strip's membership as a signature fragment. It has to reach
+   programsPaintSig: alerting() reads attentionSignal / outcome / lifecycle, and
+   the per-agent projection in that signature carries none of them — so without
+   this an agent could start or stop asking for a human and the strip would
+   never repaint. That exact class of bug (state a list CONTROL writes, missing
+   from the list's signature) is what the comment above programsPaintSig is
+   about. */
+function stripSig(rows) {
+  return rows.map(({ agent, program }) => agent.id + "@" + program.id).join(",");
+}
+
+function renderNeedsYouStrip(rows) {
+  /* The strip is here even when it is empty, and that is the point. The board
+     used to LAND on an attention tab, so "nothing needs you" was said by the
+     view being empty; one scrolling board has no such moment, and an operator
+     scanning past a busy fleet has no way to tell "I checked and nothing is
+     asking" from "I have not looked yet".
+
+     It says it about SESSIONS and nothing else. "Nothing needs you" over an
+     open collector fault is the false all-clear this codebase has a scar for —
+     the rail beside it was counting the fault at the time — so the sentence
+     names its own population and leaves the verdict on the fleet's health to
+     the surface that computes it. */
+  if (!rows.length) {
+    // No body to reconcile rows into. Drop the stale one or the next paint
+    // would reconcile strip rows into a node that is no longer in the document.
+    programBodies.delete(STRIP_ID);
+    return el("section", { class: "needs-strip is-clear", "aria-label": "Needs you" },
+      el("div", { class: "needs-strip-head" },
+        el("span", { class: "needs-strip-mark", "aria-hidden": "true" }, icon("check")),
+        el("span", { class: "needs-strip-title", text: "No session is asking for you" }),
+        el("span", { class: "needs-strip-note", text: "the whole live fleet is below" })));
+  }
+  const section = el("section", {
+    class: "needs-strip",
+    "aria-label": "Needs you",
+  },
+    el("div", { class: "needs-strip-head" },
+      el("span", { class: "needs-strip-title", text: "Needs you" }),
+      el("span", { class: "needs-strip-count mono", text: String(rows.length) }),
+      /* Says why these rows are not in their program group below, so the two
+         places an operator might look for the same session agree with each
+         other instead of one of them silently omitting it. */
+      el("span", {
+        class: "needs-strip-note",
+        text: rows.length === 1
+          ? "pinned here instead of its program group"
+          : "pinned here instead of their program groups",
+      })));
+  /* No caret, by design. This is the one block on the board that must be
+     readable without a decision, so there is nothing to collapse it with and
+     nothing to persist — a strip an operator can close is a strip that is
+     closed on the morning it matters. */
+  const body = el("div", { class: "needs-strip-agents" });
+  programBodies.set(STRIP_ID, body);
+  section.append(body);
+  return section;
+}
+
+/* ---------- swarm collapse ----------
+
+   Children are collapsed by default: a ten-child verifier fan is one
+   workstream, and printing all eleven rows buries the nine other programs under
+   it. `swarmOverrides` holds only the swarms the operator opened, on the exact
+   programOverrides pattern (localStorage, an override map, a paint signature
+   that carries it).
+
+   There is deliberately no auto-expand. A collapsed child that starts alerting
+   reaches the operator through the strip above — which is flat and
+   cross-program precisely so nothing can hide inside a collapsed parent — and
+   the parent's own swarm chip takes ember ink. Opening the swarm under them
+   while they read it would move the rows they were looking at. */
+function swarmOpen(agent, ui = state) {
+  return ui.swarmOverrides.get(agent.id) === "open";
+}
+
+function toggleSwarm(agent) {
+  if (swarmOpen(agent)) state.swarmOverrides.delete(agent.id);
+  else state.swarmOverrides.set(agent.id, "open");
+  saveSwarmOverrides();
+  render();
+}
 
 /* Everything the program SHELL paints — head label, caret state, rollup cells,
    the selection row and the rename form. Deliberately NOT the rows: a rollup
@@ -3901,13 +4119,23 @@ function agentRowSig(agent, ui, opts = {}) {
     String(opts.childCount || 0),
     // Whether this row is showing a session tag. Without it the row keeps its
     // cached node when a twin arrives or leaves, so the tag would never appear
-    // and never go away.
+    // and never go away. Both collision tests, matching renderAgentRow: the
+    // resolved identity, and the name the row actually prints.
     opts.ambiguousNames && opts.ambiguousNames.has(agentName(agent)) ? "amb" : "",
+    opts.sharedNames && opts.sharedNames.has(rowDisplayName(agent)) ? "twin" : "",
+    // The swarm caret's own state, and the ember it takes when something folded
+    // up under it is asking for a person. Both are painted on this row and
+    // neither is derivable from the agent record, so both have to be in here or
+    // the caret renders dead — the same failure programOverrides had.
+    opts.swarmOpen ? "swarm-open" : "swarm-shut",
+    opts.swarmAlerting ? "swarm-alert" : "",
+    // The strip's copy of a row carries a program chip its group copy does not.
+    opts.programChip ? "chip:" + programName(opts.programChip) : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
 
-function swarmAnchorSig(agent, depth, activeChildren, ui) {
+function swarmAnchorSig(agent, depth, activeChildren, ui, pinned = false) {
   return [
     agent.id,
     agentName(agent),
@@ -3915,6 +4143,10 @@ function swarmAnchorSig(agent, depth, activeChildren, ui) {
     agent.model || "",
     String(depth),
     String(activeChildren),
+    // Why the parent is absent, which changes both the anchor's sentence and
+    // its focus key. Without it a parent moving into or out of the strip keeps
+    // its cached anchor node and the sentence goes stale.
+    pinned ? "pinned" : "filtered",
     ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
   ].join("\u001f");
 }
@@ -3937,6 +4169,15 @@ function programsPaintSig(visible, ui) {
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.selection].join(","),
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
+    /* Same reason programOverrides is here: toggleSwarm mutates nothing else,
+       so on a quiet fleet the early return would swallow the click and the
+       caret would sit there dead. Documented failure class, second instance. */
+    [...ui.swarmOverrides].map(([id, mode]) => id + "=" + mode).join(","),
+    /* Strip membership. It decides which rows are pinned at the top AND which
+       rows are therefore missing from their program group, so a change to it
+       repaints two things at once — and neither of them is derivable from the
+       per-agent projection below. */
+    stripSig(needsYouStrip(visible)),
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -3946,6 +4187,13 @@ function programsPaintSig(visible, ui) {
       + ">" + agents.map((a) => [
         a.id,
         a.status,
+        /* The lifecycle and the scope, not just the legacy status word: they
+           are what puts a row under Active rather than Waiting, and what makes
+           it read "Retained history". `status` tracks them closely enough that
+           they usually move together, and "usually" is how a section head goes
+           stale for the one row that matters. */
+        lifecycleOf(a),
+        scopeOf(a),
         a.statusReason || "",
         a.model || "",
         contextDisplayValue(a.tokens) || "",
@@ -3984,16 +4232,40 @@ function emptyStateSig(visible, ui) {
   ].join(":");
 }
 
-/* Two levels of keyed reconciliation instead of one wholesale rebuild: program
-   sections by program id, then rows by agent id inside each section body. Split
-   out of renderPrograms so the whole path can be driven directly in a test
-   without the module's state plumbing. Returns the visible agent count. */
+/* Two levels of keyed reconciliation instead of one wholesale rebuild: sections
+   by id — the pinned Needs-you strip first, then programs — and rows by agent
+   id inside each section body. Split out of renderPrograms so the whole path
+   can be driven directly in a test without the module's state plumbing. Returns
+   the visible agent count.
+
+   `shown` counts what the FILTER admitted, not what was drawn. The strip moves
+   rows between sections and a collapsed swarm hides them; neither changes how
+   many sessions matched, which is the number the scope note reports. */
 function syncProgramList(root, visible, ui = state) {
-  const keptSections = reconcileKeyed(root, visible.map(({ program, agents }) => ({
-    key: program.id,
-    sig: programShellSig(program, agents, ui),
-    build: () => renderProgram(program, agents),
-  })), programSectionCache);
+  // Once per paint, for the whole board: the strip and every program group ask
+  // the same two questions (who is this agent's parent, is this name shared),
+  // and both answers are fleet-wide rather than per-program.
+  const board = boardIndex(ui);
+  const strip = needsYouStrip(visible);
+  const sections = [];
+  /* Board only, and only over a board that has something on it: History is a
+     record rather than a request, and an empty board says its own sentence
+     below rather than pinning "no session is asking" over nothing. */
+  if (ui.view === "board" && visible.length) {
+    sections.push({
+      key: STRIP_ID,
+      sig: "strip\u001f" + (strip.length ? stripSig(strip) : "clear"),
+      build: () => renderNeedsYouStrip(strip),
+    });
+  }
+  for (const { program, agents } of visible) {
+    sections.push({
+      key: program.id,
+      sig: programShellSig(program, agents, ui),
+      build: () => renderProgram(program, agents),
+    });
+  }
+  const keptSections = reconcileKeyed(root, sections, programSectionCache);
   for (const key of [...programSectionCache.keys()]) {
     if (keptSections.has(key)) continue;
     programSectionCache.delete(key);
@@ -4002,6 +4274,18 @@ function syncProgramList(root, visible, ui = state) {
 
   let shown = 0;
   const keptRows = new Set();
+  const stripBody = strip.length ? programBodies.get(STRIP_ID) : null;
+  if (stripBody) {
+    const plan = strip.map(({ agent, program }) => {
+      const opts = stripRowOpts(program, board);
+      return {
+        key: STRIP_ID + "\u001frow:" + agent.id,
+        sig: agentRowSig(agent, ui, opts),
+        build: () => renderAgentRow(agent, program, opts),
+      };
+    });
+    for (const key of reconcileKeyed(stripBody, plan, agentRowCache)) keptRows.add(key);
+  }
   for (const { program, agents } of visible) {
     shown += agents.length;
     const body = programBodies.get(program.id);
@@ -4009,12 +4293,32 @@ function syncProgramList(root, visible, ui = state) {
     // A collapsed program keeps its section but drops its rows; the row cache
     // still holds them, so re-expanding costs a move rather than a rebuild.
     const plan = programOpen(program, ui)
-      ? agentRowPlan(program, agents, ui).map((item) => ({ ...item, key: program.id + "\u001f" + item.key }))
+      ? agentRowPlan(program, agents, ui, board).map((item) => ({ ...item, key: program.id + "\u001f" + item.key }))
       : [];
     for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
   }
   for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
   return shown;
+}
+
+/* A strip row is the same row renderAgentRow draws in a program group — same
+   name, same aria-label, same controls — plus the one fact its group heading
+   was carrying for it: which program it belongs to. Reusing the renderer is
+   what stops the strip from becoming a second, quietly divergent copy of a row.
+
+   Depth is flat and the swarm tree is not drawn here: the strip is a list of
+   sessions asking for a person, and a child that is asking is asking whether or
+   not its parent is on screen. Its nesting is still true, and still shown, in
+   the group below and in the drawer's lineage spine. */
+function stripRowOpts(program, board) {
+  return {
+    depth: 0,
+    childCount: 0,
+    programChip: program,
+    fullById: board.byId,
+    ambiguousNames: board.ambiguous,
+    sharedNames: board.sharedNames,
+  };
 }
 
 function renderPrograms() {
@@ -4078,43 +4382,55 @@ function renderPrograms() {
        36 hours back and their session was outside it. */
     const scanNote = " · collectors scan " + (state.scanWindowHours ?? 36) + "h";
     const emptyByView = {
-      "now": "No active work right now — waiting sessions remain available in Waiting.",
-      "needs-you": "Nothing needs you",
-      "waiting": "Nothing is waiting" + scanNote + " — widen the scan window in Settings to reach older sessions.",
-      "history": "Nothing has finished in the window shown" + scanNote + " — widen the lookback or the scan window in Settings.",
+      /* One board means one empty state, and it has to say the whole thing an
+         empty board means: not "nothing needs you" (true, but the smaller
+         claim), and not "nothing is waiting" — nothing is LIVE, which the three
+         tabs could each only say a third of. */
+      board: "Nothing is live" + scanNote + " — every session the board can see has finished. Widen the scan window in Settings to reach older ones.",
+      history: "Nothing has finished in the window shown" + scanNote + " — widen the lookback or the scan window in Settings.",
     };
     /* An operator glancing at an empty cockpit must be able to tell "nothing is
        wrong" from "nothing has loaded". Those look identical when the only
-       difference is small grey text on a large white field — and on the
-       attention view, empty is the GOOD state and the one they will see most.
+       difference is small grey text on a large white field — and on the board,
+       empty is the GOOD state and the one they will see most.
 
        So the all-clear reads as a finding in its own right: a verdict mark, the
        headline at weight, and underneath it the fleet's vital signs with a
        ticking age. The numbers are the proof of life — a board that is still
        loading cannot say "18 live · 6 working" or count seconds since its last
-       snapshot. Every other empty view stays muted prose, because absence there
-       is a filter result rather than an answer. */
+       snapshot. History stays muted prose, because absence there is a filter
+       result rather than an answer. */
     /* The all-clear may only render over an EMPTY findings collection, not over
-       an empty row list. This view filters by alerting(), so a board carrying a
-       collector fault and no waiting agent rendered a check mark and the words
-       "Nothing needs you" while the rail beside it counted the fault. Each
-       surface was correct; the composition told the operator to go home.
+       an empty row list. A board carrying a collector fault and no waiting
+       agent rendered a check mark and the words "Nothing needs you" while the
+       rail beside it counted the fault. Each surface was correct; the
+       composition told the operator to go home.
 
-       Zero waiting agents is now said in those words, and the findings that do
+       Zero live sessions is now said in those words, and the findings that do
        exist are named and pointed at rather than papered over. */
-    const openFindings = state.view === "needs-you" ? issuesOf(state.snap) : [];
-    const allClear = state.view === "needs-you" && openFindings.length === 0;
+    const openFindings = state.view === "board" ? issuesOf(state.snap) : [];
+    const allClear = state.view === "board" && openFindings.length === 0;
     const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
-    if (allClear) {
+    if (state.view === "board") {
       const t = totalsOf(state.snap);
+      /* "Nothing is live", not "nothing needs you". An empty Board is a bigger
+         claim than an empty Needs-you tab was: this view holds working, waiting
+         AND unverified sessions, so reaching it empty means the board can see
+         nothing running at all — and saying only the attention half of that
+         would leave the operator wondering where the fleet went.
+
+         THE ONE-GLANCE RULE — a working session must be NAMED on the landing
+         screen, not merely counted — used to need a roster of names here,
+         because the board landed on Needs you and a clear Needs you hid three
+         running sessions behind a number. Board cannot do that: a working
+         session is a row on the view the operator lands on. The rule is kept by
+         the layout now, so the roster it needed is gone rather than rendered
+         over a state that by construction has no working sessions in it. */
       wrap.append(
-        el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check")),
-        el("p", { class: "all-clear-head", text: emptyByView["needs-you"] }),
+        ...(allClear ? [el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check"))] : []),
+        el("p", { class: "all-clear-head", text: "Nothing is live" }),
         el("p", { class: "all-clear-vitals" },
-          el("span", {
-            text: `${t.live} live · ${t.working} working · ${t.idle} waiting`
-              + (t.unverified ? ` · ${t.unverified} unverified` : ""),
-          }),
+          el("span", { text: `${t.tracked} tracked · ${t.live} live` }),
           /* A stalled session is neither working nor done — it is the third
              state, and pulse.ts computes it while nothing rendered it. The
              earlier copy here went further and asserted "every tracked session is
@@ -4129,51 +4445,29 @@ function renderPrograms() {
             dataset: { ago: state.snap.generatedAt },
             text: "checked " + agoText(state.snap.generatedAt),
           })),
-        /* THE ONE-GLANCE RULE. A working session must be NAMED on the landing
-           screen, not merely counted there.
-
-           The incident this closes: an operator could not find a session they
-           knew was running. The board opens on Needs you, Needs you was clear,
-           and "3 working" is a number you have to act on to resolve. Three names
-           and the session is found without a click; past three the count and the
-           Now tab take over, because a roster that scrolls is not a glance. */
-        ...(() => {
-          const working = snapshotAgents(state.snap)
-            .map((x) => x.agent)
-            .filter((a) => lifecycleOf(a) === "working" && scopeOf(a) === "observed");
-          if (!working.length) return [];
-          const named = landingRosterNames(working);
-          const rest = working.length - named.length;
-          return [el("p", { class: "all-clear-roster" },
-            el("span", { text: named.join(" · ") + (rest > 0 ? ` · +${rest} more` : "") }))];
-        })());
-    } else if (state.view === "needs-you") {
-      /* Not an all-clear and not a blank: no agent is waiting, AND something is
-         open. Both sentences, in that order, because the operator's next move is
-         the Summary rail rather than this list. */
-      wrap.append(
-        el("p", { class: "all-clear-head", text: "No agents are waiting on you" }),
-        el("p", { class: "empty-findings" },
+        /* An all-clear may only render over an EMPTY findings collection, never
+           over an empty row list alone. A board carrying a collector fault and
+           no live agent used to render a check mark and the words "Nothing
+           needs you" while the rail beside it counted the fault: each surface
+           was correct, and the composition told the operator to go home. So the
+           findings that do exist are named and pointed at instead. */
+        ...(allClear ? [] : [el("p", { class: "empty-findings" },
           el("strong", {
-            text: openFindings.length === 1
-              ? "1 open finding"
-              : `${openFindings.length} open findings`,
+            text: openFindings.length === 1 ? "1 open finding" : `${openFindings.length} open findings`,
           }),
-          el("span", { text: " in Summary — " + openFindings.slice(0, 2).map((f) => f.title).join(" · ") })));
+          el("span", { text: " in Summary — " + openFindings.slice(0, 2).map((f) => f.title).join(" · ") }))]),
+        el("p", { class: "all-clear-note", text: emptyByView.board }));
     } else {
       wrap.append(el("p", { text: emptyByView[state.view] || "Nothing here." }));
     }
-    /* The escape hatch has to agree with the sentence above it. On the attention
-       view the answer to "nothing needs you" is the whole board, not the
-       archive — offering History there sent the operator to finished work while
-       the copy told them to open Now. */
-    const exitView = state.view === "needs-you" ? "now" : "history";
+    /* The escape hatch has to agree with the sentence above it: with nothing
+       live, the only place left holding this operator's work is History. */
     if (state.view !== "history" && tracked) {
       wrap.append(el("button", {
         type: "button", class: "btn",
-        dataset: { fkey: "goto-" + exitView },
-        onclick: () => setView(exitView),
-      }, exitView === "now" ? "Open Now" : "Open history"));
+        dataset: { fkey: "goto-history" },
+        onclick: () => setView("history"),
+      }, "Open history"));
     }
     root.append(wrap);
   }
@@ -4297,11 +4591,36 @@ function renderLabelForm(target, opts) {
     state.renameError ? el("p", { class: "rename-error", role: "alert", text: state.renameError }) : null);
 }
 
-/* The ordered row PLAN for one program: the column header, then the swarm tree
-   with a descriptor per node. Each descriptor is keyed by agent id and carries
-   its own signature, so reconcileKeyed can rebuild exactly the rows that moved.
-   `build` is a closure — nothing is constructed for a row that has not changed. */
-function agentRowPlan(program, agents, ui = state) {
+/* What each lifecycle divider says, and what it is called.
+
+   Two short labels and one sentence: Active and Waiting name a state the
+   operator already knows, while Unverified names a gap in what the board can
+   SEE, and a bare word there would read as a claim about the sessions rather
+   than about the evidence. That sentence is not new copy — it is verbatim what
+   the standalone Unverified group shipped with, because it is the honest half
+   of the disclosure and the group is now simply one of three sections.
+
+   Class names are whole literal strings rather than a prefix plus the key, so
+   the styles.css orphan lint can see them: it reads this file as text, and a
+   name assembled at runtime is invisible to it in both directions. */
+const SECTION_HEADS = {
+  active: { className: "lifecycle-section lifecycle-section--active", label: () => "Active" },
+  waiting: { className: "lifecycle-section lifecycle-section--waiting", label: () => "Waiting" },
+  unverified: {
+    className: "lifecycle-section lifecycle-section--unverified",
+    label: (n) => n + " unverified — quiet, with no process found to check",
+  },
+};
+
+/* The ordered row PLAN for one program: the column header, an optional note for
+   the rows that were pinned into the Needs-you strip, then the lifecycle
+   sections, each holding its swarm trees. Each descriptor is keyed and carries
+   its own signature, so reconcileKeyed rebuilds exactly the rows that moved.
+   `build` is a closure — nothing is constructed for a row that has not changed.
+
+   `board` is the once-per-paint fleet index; it is optional so the plan can be
+   driven directly in a test with nothing but a program and a ui. */
+function agentRowPlan(program, agents, ui = state, board = boardIndex(ui)) {
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -4315,10 +4634,10 @@ function agentRowPlan(program, agents, ui = state) {
     }
   }
   const { roots, children } = buildClusters(program.agents.filter((agent) => relevantIds.has(agent.id)));
-  const fullById = new Map(snapshotAgents(ui.snap).map(({ agent }) => [agent.id, agent]));
+  const fullById = board.byId;
   // Computed from the WHOLE board, not this program: two twins in different
   // programs are exactly as confusing as two in the same one.
-  const ambiguous = ambiguousNames([...fullById.values()]);
+  const ambiguous = board.ambiguous;
   const fullChildren = new Map();
   for (const a of fullById.values()) {
     if (a.parentAgentId) fullChildren.set(a.parentAgentId, [...(fullChildren.get(a.parentAgentId) || []), a.id]);
@@ -4329,47 +4648,152 @@ function agentRowPlan(program, agents, ui = state) {
     return (fullChildren.get(id) || []).reduce((total, childId) => total + 1 + descendantCount(childId, seen), 0);
   };
 
+  /* Rows that went to the strip. They are drawn there and NOT here: one row per
+     session, so `agent:<id>` stays a unique focus key, arrow navigation visits
+     each session once, and the operator can never act on the row they think is
+     the other one. What stays behind is a count, below.
+
+     Board only, and that is not a stylistic choice: the strip renders on Board,
+     so on any other view this would remove a row from the only place it is
+     drawn. A finished session whose process is somehow still running satisfies
+     alerting(), and it would have silently disappeared out of History. */
+  const pinnedIds = ui.view === "board"
+    ? new Set(agents.filter((agent) => alerting(agent)).map((agent) => agent.id))
+    : new Set();
+
   const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
+  if (pinnedIds.size) {
+    const n = pinnedIds.size;
+    plan.push({
+      key: "pinned-note",
+      sig: "pinned:" + n,
+      build: () => el("p", { class: "pinned-note" },
+        el("span", {
+          text: n === 1
+            ? "1 session from this program is in Needs you, above"
+            : n + " sessions from this program are in Needs you, above",
+        })),
+    });
+  }
+
   const appendTree = (agent, depth) => {
-    const visibleDescendants = (fullChildren.get(agent.id) || []).filter((id) => relevantIds.has(id)).length;
-    if (visibleIds.has(agent.id)) {
-      const opts = { depth, childCount: descendantCount(agent.id), fullById, ambiguousNames: ambiguous };
+    const visibleDescendants = (fullChildren.get(agent.id) || [])
+      .filter((id) => relevantIds.has(id) && !pinnedIds.has(id)).length;
+    const pinned = pinnedIds.has(agent.id);
+    if (visibleIds.has(agent.id) && !pinned) {
+      /* A swarm parent draws its own children only when the operator has opened
+         it. `swarmOpen` is the whole gate: the plan simply does not walk the
+         subtree otherwise, so collapsed children are absent from the DOM rather
+         than hidden in it — which is what takes them out of `navigableRows` and
+         out of Tab order at the same time, with no second rule to keep in step. */
+      const childCount = descendantCount(agent.id);
+      const open = childCount > 0 && swarmOpen(agent, ui);
+      const opts = {
+        depth,
+        childCount,
+        fullById,
+        ambiguousNames: ambiguous,
+        sharedNames: board.sharedNames,
+        swarmOpen: open,
+        // Ember on the chip when something folded up inside is asking for a
+        // person. The row itself is calm; the swarm it is holding is not.
+        swarmAlerting: !open && hasAlertingDescendant(agent.id, fullChildren, fullById),
+      };
       plan.push({
         key: "row:" + agent.id,
         sig: agentRowSig(agent, ui, opts),
         build: () => renderAgentRow(agent, program, opts),
       });
-    } else {
+      if (!open) return;
+    } else if (visibleDescendants > 0) {
+      /* The parent is not drawn as a row — it is pinned into the strip, or the
+         filter never admitted it — but its children are. The anchor keeps the
+         workstream attached to a name instead of leaving orphans indented under
+         nothing. Its focus key is distinct from the row's, so a pinned parent
+         with an anchor here does not give one session two `agent:<id>` keys and
+         send focus restore to the wrong one.
+
+         Children under an anchor are always drawn, collapsed or not, and that
+         is not the auto-expand Stage 2 forbids: the caret lives on the parent's
+         ROW, and there is no parent row in this group to carry one. Hiding them
+         behind a control that is not on screen would strand them. */
       plan.push({
         key: "anchor:" + agent.id,
-        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui),
-        build: () => renderSwarmAnchor(agent, depth, visibleDescendants),
+        sig: swarmAnchorSig(agent, depth, visibleDescendants, ui, pinned),
+        build: () => renderSwarmAnchor(agent, depth, visibleDescendants, pinned),
       });
+    } else {
+      // Pinned, with nothing underneath it to hold together: the count above
+      // already says it is in the strip, so it leaves no residue here.
+      return;
     }
     for (const child of children.get(agent.id) || []) appendTree(child, depth + 1);
   };
-  /* The Unverified group: same rows, set apart under a heading that says what
-     they have in common. Grouping them is what keeps the Waiting tab readable —
-     they are the largest population on the board — and NOT hiding them is what
-     keeps the tab honest. A count with no rows behind it is the state the board
-     used to be in. */
-  const unverifiedRoots = roots.filter((agent) => isUnverified(agent));
-  const plainRoots = roots.filter((agent) => !isUnverified(agent));
-  for (const agent of plainRoots) appendTree(agent, 0);
-  if (unverifiedRoots.length) {
+
+  /* Stable lifecycle sections: Active, then Waiting, then Unverified, in that
+     order every paint whether or not each one has rows. Empty sections are
+     elided — a divider over nothing is a divider that teaches the operator to
+     stop reading dividers — and the heads are labels, not controls: they add no
+     focus stop and nothing about them can be toggled into a state that hides a
+     session.
+
+     Sections are assigned by a ROOT's own state, and its children stay under it
+     wherever it lands. A swarm whose parent is working and whose verifier has
+     gone quiet is one workstream, and splitting it across two headings to keep
+     the headings pure tells the operator a story that is not happening.
+
+     Roots that match no section — an ancestor the filter did not admit, pulled
+     in to hold a tree together — lead, unlabelled. There is no honest heading
+     for "not one of these three", so none is printed. */
+  const buckets = new Map(LIFECYCLE_SECTIONS.map((key) => [key, []]));
+  const unsectioned = [];
+  for (const agent of roots) {
+    const bucket = buckets.get(lifecycleSection(agent));
+    if (bucket) bucket.push(agent);
+    else unsectioned.push(agent);
+  }
+
+  /* Exactly what appendTree will put on screen for this root: its own row, or
+     an anchor holding children that are still drawn. Mirroring the walk rather
+     than approximating it is what stops a heading rendering over nothing — a
+     section whose only member was pinned into the strip, or whose only relevant
+     descendant was, draws no rows and therefore prints no heading. */
+  const draws = (agent) =>
+    (visibleIds.has(agent.id) && !pinnedIds.has(agent.id))
+    || (fullChildren.get(agent.id) || []).some((id) => relevantIds.has(id) && !pinnedIds.has(id));
+
+  for (const agent of unsectioned) appendTree(agent, 0);
+  for (const key of LIFECYCLE_SECTIONS) {
+    const drawn = buckets.get(key).filter(draws);
+    if (!drawn.length) continue;
     plan.push({
-      key: "unverified-head",
-      sig: "unverified:" + unverifiedRoots.length,
-      build: () => el("p", { class: "unverified-group unverified-group-head" },
-        el("span", {
-          text: unverifiedRoots.length === 1
-            ? "1 unverified — quiet, with no process found to check"
-            : unverifiedRoots.length + " unverified — quiet, with no process found to check",
-        })),
+      key: "section:" + key,
+      sig: "section:" + key + ":" + drawn.length,
+      build: () => el("p", {
+        class: SECTION_HEADS[key].className,
+        // A label, not a heading: the rows below already carry their whole
+        // state in their own aria-label, and a heading level here would put a
+        // second, coarser navigation tree over the one the operator uses.
+        role: "presentation",
+      }, el("span", { text: SECTION_HEADS[key].label(drawn.length) })),
     });
-    for (const agent of unverifiedRoots) appendTree(agent, 0);
+    for (const agent of drawn) appendTree(agent, 0);
   }
   return plan;
+}
+
+/* Is anything folded up under this parent asking for a person? Walks the whole
+   subtree, not just direct children: an alerting grandchild is exactly as
+   invisible behind a closed caret as an alerting child. */
+function hasAlertingDescendant(id, fullChildren, fullById, seen = new Set()) {
+  if (seen.has(id)) return false;
+  seen.add(id);
+  for (const childId of fullChildren.get(id) || []) {
+    const child = fullById.get(childId);
+    if (child && alerting(child)) return true;
+    if (hasAlertingDescendant(childId, fullChildren, fullById, seen)) return true;
+  }
+  return false;
 }
 
 function renderAgentColumnHeader() {
@@ -4401,13 +4825,20 @@ function renderAgentColumnHeader() {
     }));
 }
 
-function renderSwarmAnchor(agent, depth, activeChildren) {
+function renderSwarmAnchor(agent, depth, activeChildren, pinned = false) {
+  /* A pinned parent already owns `agent:<id>` on its strip row. Two nodes
+     answering to one focus key means render()'s restore-by-fkey lands on
+     whichever the document happens to hold first, so the anchor takes its own. */
+  const fkey = (pinned ? "swarm-anchor:" : "agent:") + agent.id;
+  const where = pinned
+    ? "This session is pinned in Needs you, above."
+    : "This session is outside the current filter.";
   return el("button", {
     type: "button",
     class: "swarm-anchor" + (depth > 0 ? " is-child depth-" + Math.min(depth, 4) : ""),
-    dataset: { fkey: "agent:" + agent.id, depth: String(depth) },
+    dataset: { fkey, depth: String(depth) },
     onclick: () => selectAgent(agent.id),
-    "aria-label": `${agentName(agent)} parent session. ${activeChildren} visible child sessions. Open parent details.`,
+    "aria-label": `${agentName(agent)} parent session. ${where} ${activeChildren} visible child sessions. Open parent details.`,
   },
     providerMark(agent),
     el("strong", { text: agentName(agent) }),
@@ -4516,6 +4947,62 @@ function agentContextPct(agent) {
   return walked ? walked.pct : null;
 }
 
+/* ---------- history provenance ----------
+
+   Two different endings, and the board already knew the difference: `scope`
+   says whether the board is still watching a session, and `provenance` says
+   what ended it. broadcastIneligibleReason has been reading exactly these two
+   fields to say "in history" vs "archived" since the naming contract landed —
+   in a chip nobody sees unless they enter select mode. This is the same model,
+   same two facts, said on the row.
+
+     Archived by you   — you made this decision. It is undoable (Un-archive in
+                         the dock) and the record is complete.
+     Retained history  — nobody decided anything. The source record aged out of
+                         the scan window, so the board is holding a read-only
+                         copy and will learn nothing more about it.
+
+   Rendered wherever the fact is true rather than only on the History tab: an
+   alerting session that alerting() rescues onto the board is still a retained
+   record, and printing it there is how the operator learns why its controls are
+   dead. Returns null on every live row, which is nearly all of them. */
+/* Class names spelled out rather than composed, for the same reason the context
+   pressure classes are: the styles.css orphan lint reads this file as text, and
+   a name built by concatenation is invisible to it in both directions. */
+function historyProvenance(agent) {
+  if (scopeOf(agent) === "retained") {
+    return {
+      key: "retained",
+      className: "history-chip history-chip--retained",
+      label: "Retained history",
+      title: "The source record for this session left the scan window, so the board holds a read-only copy of it. Nobody archived it, and nothing more will be learned about it.",
+    };
+  }
+  if (lifecycleOf(agent) === "finished" && provenanceOf(agent) === "operator-archive") {
+    return {
+      key: "archived",
+      className: "history-chip history-chip--archived",
+      label: "Archived by you",
+      title: "You archived this session. Un-archive in the command dock puts it back on the board.",
+    };
+  }
+  return null;
+}
+
+/* Spread into the row's tag line — an array so "no chip" costs nothing rather
+   than leaving a null in the child list. Dashed for retained (the board is not
+   asserting an ending, only recording that it stopped watching), solid for the
+   ending an operator actually chose. */
+function historyChips(agent) {
+  const provenance = historyProvenance(agent);
+  if (!provenance) return [];
+  return [el("span", {
+    class: provenance.className,
+    title: provenance.title,
+    text: provenance.label,
+  })];
+}
+
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -4558,12 +5045,24 @@ function renderAgentRow(agent, program, opts = {}) {
   const identityBase = agent.identity && agent.identity.base;
   const serverTag = operatorLabel ? "" : (agent.identity && agent.identity.disambiguator);
   const visibleName = operatorLabel || identityBase || displayName;
-  /* Only for rows the server did not name — archived records written before
-     `identity` existed, which the client still has to tell apart itself. */
-  const clientTag = !serverTag && opts.ambiguousNames && opts.ambiguousNames.has(displayName)
-    ? sessionTag(agent)
-    : "";
-  const nameTag = serverTag || clientTag;
+  /* ...and only while it is actually disambiguating something.
+     (Row diet.) The disambiguator used to print on every server-named row, so
+     the majority of rows — whose printed name nobody else on the board is using
+     — carried eight characters of hex that separated them from nothing. It now
+     appears exactly where two visible rows would otherwise read identically,
+     which is the case the split was built for; the full session id, and the
+     name evidence behind it, are in the drawer for every row either way.
+
+     Two collision tests, because there are two kinds of name here: the printed
+     name shared with another session (sharedNames, which is what the operator
+     sees), and the resolved identity shared with another session
+     (ambiguousNames, which catches archived records written before `identity`
+     existed and which the client still has to tell apart itself). */
+  const twinned = Boolean(
+    (opts.sharedNames && opts.sharedNames.has(visibleName))
+    || (opts.ambiguousNames && opts.ambiguousNames.has(displayName)),
+  );
+  const nameTag = twinned ? (serverTag || sessionTag(agent)) : "";
   const terminal = terminalSourceName(agent);
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
@@ -4574,6 +5073,7 @@ function renderAgentRow(agent, program, opts = {}) {
   // sentence into the row tooltip + aria-label; the drawer still carries it too.
   const sourceDetail = fullSourceDetail(agent);
   const liveness = livenessView(agent);
+  const history = historyProvenance(agent);
   const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
   const activate = () => {
@@ -4610,7 +5110,18 @@ function renderAgentRow(agent, program, opts = {}) {
           e.stopPropagation();
           startRename(nameTarget, { draft: displayName });
         },
-      }, icon("rename"))),
+      }, icon("rename")),
+      /* Only in the Needs-you strip. The strip is flat and cross-program, so
+         the program header that would otherwise say where a row came from is
+         not above it — the chip is that header, per row. In a program group the
+         header IS above it and the chip would restate it on every line. */
+      opts.programChip
+        ? el("span", {
+          class: "row-program-chip",
+          title: "Program: " + programName(opts.programChip),
+          text: programName(opts.programChip),
+        })
+        : null),
     el("span", { class: "row-identity-tags" },
       /* Session tag, only when this row's name is not unique on the board. It
          rides the existing identity-tags line rather than adding a row, and it
@@ -4637,15 +5148,22 @@ function renderAgentRow(agent, program, opts = {}) {
           title: watchOnly.label + " — " + watchOnly.hint,
         })
         : null,
-      role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
-      policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
-      // Terminal breadcrumb: which linked pane this row routes to, deduped
-      // against the display name. Identity info (distinct from control state) —
-      // an operator can read the destination without opening the drawer.
-      terminalCrumb ? el("span", { class: "row-terminal", title: focusDestinationHint(agent), text: terminalCrumb }) : null,
-      // A live-looking row that has gone quiet for >10min names how long — a dim
-      // fact, never an alert (staleness is a nudge, not a status change).
-      staleFact ? el("span", { class: "row-stale", title: "Last update " + agoText(agent.updatedAt), text: staleFact }) : null,
+      /* ROW DIET. The role chip, the model-policy chip, the terminal breadcrumb
+         and the staleness note used to sit here and are now in the drawer's
+         Evidence shelf (renderRowFacts), reachable in one click from the row
+         that owns them.
+
+         What stayed is the test: does this pixel change what the operator can
+         safely DO with this session? The two dots above pass — a cwd mismatch
+         means Focus opens a folder that is not the session's, and watch-only
+         means Send is off — so they are control-safety marks rather than
+         metadata, and GOAL.md keeps those on the row. The four that left are
+         facts ABOUT the session, true and worth reading, and none of them
+         changes whether an instruction is safe to send. All four are still in
+         the row's aria-label, so nothing left the row for a screen reader. */
+      // History provenance: which of the two different endings this record has.
+      // Only ever true of a terminal row, so a live board never sees them.
+      ...historyChips(agent),
       // Process liveness. The ROW only marks the one state that changes what the
       // operator must do — a dead process — because a "Process live" chip on
       // every working row is noise that would bury it. Every other state (and
@@ -4654,7 +5172,31 @@ function renderAgentRow(agent, program, opts = {}) {
       liveness && liveness.key === "died"
         ? el("span", { class: "row-died", title: liveness.detail }, icon("warning"), liveness.label)
         : null,
-      opts.childCount ? el("span", { class: "swarm-chip", title: opts.childCount + " subagents in this swarm", text: "swarm " + opts.childCount }) : null),
+      /* The swarm chip became the caret. It was already the one element on the
+         row that names the subtree, so putting the control on it costs no new
+         pixels and puts the affordance on the thing it acts on.
+
+         Its own fkey, because render() restores focus by fkey and the row's own
+         `agent:<id>` belongs to the row: a keyboard operator who opened a swarm
+         would otherwise be dropped onto the row underneath the caret they just
+         pressed, on the very repaint their press caused. */
+      opts.childCount
+        ? el("button", {
+          type: "button",
+          class: "swarm-chip" + (opts.swarmOpen ? " is-open" : "") + (opts.swarmAlerting ? " is-alerting" : ""),
+          "aria-expanded": String(Boolean(opts.swarmOpen)),
+          "aria-label": (opts.swarmOpen ? "Collapse " : "Expand ") + opts.childCount
+            + " subagents under " + displayName
+            + (opts.swarmAlerting ? ". One of them is asking for you." : ""),
+          title: opts.swarmAlerting
+            ? opts.childCount + " subagents in this swarm — one of them is asking for you"
+            : opts.childCount + " subagents in this swarm",
+          dataset: { fkey: "swarm:" + agent.id },
+          onclick: (e) => { e.stopPropagation(); toggleSwarm(agent); },
+        },
+          el("span", { class: "swarm-caret", "aria-hidden": "true", text: opts.swarmOpen ? "▾" : "▸" }),
+          "swarm " + opts.childCount)
+        : null),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
@@ -4758,10 +5300,15 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-current": selected ? "true" : null,
     "aria-pressed": state.selecting ? String(checked) : null,
     "aria-disabled": state.selecting && !eligible ? "true" : null,
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}. ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    /* Everything the row diet took off the visible line is still spoken here,
+       and that is the condition the diet was allowed under: the row got quieter
+       to LOOK at, not quieter to listen to. Program, role, model policy,
+       terminal destination, staleness and the history provenance each get a
+       clause, in the order a sighted operator would have read them. */
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${policy && policy.state === "mismatch" ? ` Model mismatch: ${policy.summary}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
-      if (e.target.closest(".agent-rename, .rename-form")) return;
+      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
       if (state.selecting && !eligible) return;
       activate();
     },
@@ -6548,6 +7095,45 @@ function dtdd(grid, label, value, opts = {}) {
   grid.append(dd);
 }
 
+/* The four facts the row stopped printing, plus the one it never had room for.
+   Null when the session has none of them, so a clean row's drawer gains nothing
+   — the omit-empty rule the rest of Evidence follows.
+
+   Every value here comes from the same helper the row used to call
+   (`roleView`, `modelPolicyView`, `terminalBreadcrumb`, `rowStalenessText`,
+   `historyProvenance`). Re-deriving any of them here is how two surfaces start
+   disagreeing about one session, which is the failure this file has a comment
+   about roughly every two hundred lines. */
+function renderRowFacts(agent) {
+  const role = roleView(agent.role);
+  const policy = modelPolicyView(agent);
+  const provenance = historyProvenance(agent);
+  const rows = [
+    role.key !== "agent" ? ["role", role.label, {}] : null,
+    policy && policy.state === "mismatch" ? ["model policy", policy.summary, {}] : null,
+    (() => {
+      const crumb = terminalBreadcrumb(agent, agentName(agent));
+      return crumb ? ["terminal", crumb, { hint: focusDestinationHint(agent) }] : null;
+    })(),
+    /* A live-looking session that has gone quiet for more than ten minutes. Dim
+       on the row and dim here: staleness is a nudge, not a status change, and
+       the lifecycle contract owns what the silence MEANS. */
+    (() => {
+      const stale = rowStalenessText(agent);
+      return stale ? ["quiet since", stale, {}] : null;
+    })(),
+    provenance ? ["history record", provenance.label, { hint: provenance.title }] : null,
+  ].filter(Boolean);
+
+  // Counted before building rather than read back off the node: `dtdd` skips an
+  // absent value silently, and asking the built <dl> how many children it has
+  // is a DOM question this helper does not need to ask to answer it.
+  if (!rows.length) return null;
+  const grid = el("dl", { class: "detail-grid" });
+  for (const [label, value, opts] of rows) dtdd(grid, label, value, opts);
+  return grid;
+}
+
 function normalizeCompareText(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -7077,6 +7663,18 @@ function renderEvidence(agent, ui = state) {
   if (grid.childNodes.length) {
     grid.dataset.evidenceSection = "paths & usage";
     panel.append(grid);
+  }
+
+  /* Where the row diet's four chips went. They were on every row, and on a
+     board of 275 rows four chips of true-but-not-actionable detail is the wall
+     the roster was supposed to stop being — but each one is genuinely worth
+     reading about the ONE session an operator has opened, which is what a
+     drawer is. Same values, same helpers (never re-derived here), one click
+     away from the row that owns them. */
+  const facts = renderRowFacts(agent);
+  if (facts) {
+    facts.dataset.evidenceSection = "row facts";
+    panel.append(facts);
   }
 
   const identity = renderIdentityBlock(agent);
@@ -8123,6 +8721,7 @@ function boot() {
   // Register the painter for every module that was extracted off the render hub.
   setRepaint(render);
   loadOverrides();
+  loadSwarmOverrides();
   loadWidgetPreferences();
   loadLookback();
   loadContextSpread();
@@ -8254,6 +8853,8 @@ Object.assign(globalThis.TheAntHill, {
   // same reason CONN_LABELS and the transcript limits live down here.
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
   passesLookback, isUnverified,
+  // `const`s, so they would be a TDZ error in the hoisted block above.
+  STRIP_ID, SECTION_HEADS,
   // The module's real state object. Exported because the confirmation strip,
   // the pending set, the feedback map and the attention/triage records are all
   // written by the request functions and read by the render functions — there

@@ -32,10 +32,11 @@ cannot.** Five minutes — it was two when written at 18:00, and the evening
 added a section that changes what you should believe. If you have only two,
 read **Start here** and **What the last five hours changed**.
 
-**Start here:** open <http://127.0.0.1:4701> and read `Needs you`. It is the
-shortlist of sessions actually waiting on a human, it is what the board opens
-on, and if it says nothing needs you then nothing does and you can close the
-tab. Everything below is context for when it does.
+**Start here:** open <http://127.0.0.1:4701> and read the **Needs you** strip
+pinned to the top of `Board`. It is the shortlist of sessions actually waiting
+on a human, it is the first thing on the tab the board opens on, and if it says
+no session is asking for you then none is and you can close the tab. Everything
+below is context for when one does.
 
 ---
 

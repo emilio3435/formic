@@ -27,7 +27,10 @@ export const state = {
   // in any environment without fetch, so the mark simply never speaks.
   serverHealth: null,
   lastEventAt: 0,
-  view: "needs-you", // the board opens on what needs a human, not on all work
+  /* One board, opened attention-first: the Needs-you strip is pinned at the top
+     of it, so landing here is not "show me all routine work" — it is "show me
+     what needs a human, with the rest of the fleet underneath it". */
+  view: "board",
   query: "",
   facetProgram: "",
   facetProvider: "",
@@ -76,6 +79,12 @@ export const state = {
   broadcastError: "",
   broadcastResults: null,      // Map agentId -> { ok, error }
   programOverrides: new Map(), // programId -> "open" | "closed"
+  /* Which swarms the operator has opened. Absent means CLOSED — a swarm's
+     children are collapsed by default, so a ten-child verifier fan does not
+     bury the nine other workstreams under it. Only "open" is ever stored, and
+     it is stored per agent id so the choice survives a reload the same way
+     programOverrides does (localStorage, mtn3-swarms). */
+  swarmOverrides: new Map(), // parent agentId -> "open"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   /* data-fkey of whatever the operator was standing on when they opened the

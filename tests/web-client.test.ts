@@ -442,6 +442,9 @@ function listUi(overrides: Record<string, unknown> = {}) {
     selected: null,
     selectedId: null,
     programOverrides: new Map<string, string>(),
+    // Absent means collapsed, so the default fixture is a board whose swarms
+    // are all folded — which is what a first load actually looks like.
+    swarmOverrides: new Map<string, string>(),
     labels: new Map<string, string>(),
     renaming: null,
     renameDraft: "",
@@ -2123,7 +2126,11 @@ describe("calm program and agent list rendering", () => {
        list actually produces — the column header still leads it. */
     const program = { id: "p1", name: "P", agents: [agent({ id: "codex:a1" }), agent({ id: "codex:a2" })] };
     const plan = M.agentRowPlan(program, program.agents, listUi({ snap: { schemaVersion: 1, programs: [program] } }));
-    expect(plan.map((item: { key: string }) => item.key)).toEqual(["columns", "row:codex:a1", "row:codex:a2"]);
+    /* Two working roots, so one Active divider leads them. The dividers are plan
+       items exactly like the rows are — keyed and signed — which is what lets
+       reconcileKeyed leave a section head alone while a row under it repaints. */
+    expect(plan.map((item: { key: string }) => item.key))
+      .toEqual(["columns", "section:active", "row:codex:a1", "row:codex:a2"]);
     // C1: the header names the identity column plus the promoted instrument
     // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
@@ -2476,44 +2483,99 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     }
   });
 
-  test("(h) linked rows carry a terminal breadcrumb in the identity tags, deduped against the name", () => {
-    // exact / unique-cwd links resolve a destination; the breadcrumb rides the
-    // existing .row-identity-tags row, not a new line, and never repeats the name.
-    const linked = agent({
+  /* ROW DIET. The terminal breadcrumb used to ride .row-identity-tags on every
+     linked row. It is a true fact and a useful one, and it is not a control-
+     safety signal — knowing which pane Focus opens does not change whether an
+     instruction is safe to send, which the cwd-mismatch dot beside it does. So
+     it moved into the drawer, and these assert BOTH halves of that move: gone
+     from the row, present in Evidence, and still spoken to a screen reader. */
+
+  /* dtdd appends a <dd>'s value as a bare string, and this block's fake `append`
+     stores it verbatim rather than wrapping it in a text node — so the shared
+     textOf, which only walks nodes, cannot see it. Read both. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deepText = (node: any): string => {
+    if (node == null) return "";
+    if (typeof node === "string") return node;
+    if (node.nodeType === 3) return String(node.textContent ?? "");
+    let out = typeof node.textContent === "string" ? node.textContent : "";
+    for (const kid of node.children ?? []) out += deepText(kid);
+    return out;
+  };
+  // A session with nothing to declare: fresh, unnamed role, no policy, no pane.
+  const clean = (over: Record<string, unknown> = {}) =>
+    agent({ role: "agent", updatedAt: new Date().toISOString(), ...over });
+  test("(h) the terminal breadcrumb is off the row and in the drawer, deduped against the name", () => {
+    const linked = clean({
       displayName: "ridge-term",
       target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-term", surfaceCwd: "/Users/emilio/Developer/deep-ridge" },
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(linked, program));
-    const crumb = findByClass(row, "row-terminal");
-    expect(crumb).not.toBeNull();
-    // The breadcrumb lives inside the identity tag row (not a fabricated line).
-    expect(findByClass(findByClass(row, "row-identity-tags"), "row-terminal")).not.toBeNull();
-    // Workspace title equals the display name, so it is deduped OUT; the pane
-    // folder is the surviving, non-redundant segment.
-    expect(textOf(crumb)).toBe("deep-ridge");
-    // The breadcrumb tag previews the same destination the Focus button does.
-    expect(crumb.attributes["title"]).toContain("/Users/emilio/Developer/deep-ridge");
+    expect(findByClass(row, "row-terminal")).toBeNull();
+    // Not deleted — spoken. A quieter row must not be a row that tells a screen
+    // reader less than it used to.
+    expect(row.attributes["aria-label"]).toContain("Terminal: deep-ridge");
+
+    // Same value, same dedupe rule, now in the Evidence shelf.
+    const facts = deepText(withDom(() => M.renderRowFacts(linked)));
+    expect(facts).toContain("deep-ridge");
+    expect(facts).toContain("terminal");
 
     // When the shown name is NOT the terminal title (here a home-cwd orch parked
     // in a project-titled pane, so agentName keeps its own identity), both the
     // workspace title and the pane folder survive as distinct destination info.
-    const twoPart = agent({
+    const twoPart = clean({
       nickname: "Scout",
       cwd: "/Users/emilio",
       target: { resolution: "unique-cwd", surfaceId: "s2", workspaceId: "w2", workspaceTitle: "CODEX · platform", surfaceCwd: "/srv/app/web", cwdMismatch: true },
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const two: any = withDom(() => M.renderAgentRow(twoPart, program));
-    expect(textOf(findByClass(two, "row-terminal"))).toBe("CODEX · platform · web");
+    expect(deepText(withDom(() => M.renderRowFacts(twoPart)))).toContain("CODEX · platform · web");
 
-    // Ambiguous / missing targets resolve no safe destination — no breadcrumb.
+    // Ambiguous / missing targets resolve no safe destination — nothing to say,
+    // so nothing is said, on the row or in the drawer.
     for (const res of ["ambiguous", "missing"]) {
-      const unlinked = agent({ target: { resolution: res, workspaceTitle: "ghost", surfaceCwd: "/x/y" } });
+      const unlinked = clean({ target: { resolution: res, workspaceTitle: "ghost", surfaceCwd: "/x/y" } });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const r: any = withDom(() => M.renderAgentRow(unlinked, program));
       expect(findByClass(r, "row-terminal")).toBeNull();
+      expect(r.attributes["aria-label"]).not.toContain("Terminal:");
     }
+  });
+
+  test("(h2) the role chip and the model-policy chip left the row for the same reason", () => {
+    const off = clean({
+      role: "verifier",
+      modelPolicy: { state: "violation", summary: "Running opus where the policy says grok" },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(off, program));
+    expect(findByClass(row, "policy-chip")).toBeNull();
+    expect(findByClass(findByClass(row, "row-identity-tags"), "role-chip")).toBeNull();
+    // Both still reach a screen reader from the row itself…
+    expect(row.attributes["aria-label"]).toContain("Role:");
+    expect(row.attributes["aria-label"]).toContain("Model mismatch: Running opus where the policy says grok");
+    // …and both are one click away, from the same helpers the row used to call.
+    const facts = deepText(withDom(() => M.renderRowFacts(off)));
+    expect(facts).toContain("Running opus where the policy says grok");
+    expect(facts).toContain("role");
+
+    // The two safety-critical dots are exactly what STAYED: they change what the
+    // operator can safely do, which is the test the four departures failed.
+    const risky = clean({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", cwdMismatch: true },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const riskyRow: any = withDom(() => M.renderAgentRow(risky, program));
+    expect(findByClass(riskyRow, "source-mismatch-dot")).not.toBeNull();
+    expect(findByClass(riskyRow, "control-dot")).not.toBeNull();
+  });
+
+  test("(h3) a clean session's drawer gains nothing from the diet", () => {
+    // Omit-empty, the same rule the rest of Evidence follows: a row with none of
+    // these facts must not grow an empty block explaining that it has none.
+    expect(withDom(() => M.renderRowFacts(clean()))).toBeNull();
   });
 
   test("(i) the Focus dock button title previews the destination (terminal + pane cwd)", () => {
@@ -2528,20 +2590,12 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(toolSrc).toContain('action === "focus" ? focusDestinationHint(agent) : label');
   });
 
-  test("(j) the terminal breadcrumb stays compact and mono to protect row density", () => {
-    const rule = styles.match(/\.row-terminal\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rule).not.toBe("");
-    expect(rule).toContain("var(--font-mono)"); // Rule 2 — identifiers/paths in mono
-    expect(rule).toContain("var(--faint)");     // dim quiet fact, not a status chip
-    expect(rule).toContain("white-space: nowrap");
-    expect(rule).toContain("text-overflow: ellipsis"); // truncates, never wraps a new line
-  });
-
-  test("(k) a live row gone quiet >10min shows a dim staleness fact; fresh rows don't", () => {
+  test("(k) the staleness fact keeps its exact threshold, and reports it from the drawer", () => {
     // Threshold is exact: 10 min. Only running/waiting (working/idle) rows qualify.
     const now = Date.parse("2026-07-22T03:00:00.000Z");
     const at = (min: number) => new Date(now - min * 60_000).toISOString();
-    // Pure-function contract (nowMs injected so no wall-clock flake).
+    // Pure-function contract (nowMs injected so no wall-clock flake). Unchanged
+    // by the diet: what moved is where it is printed, not when it is true.
     expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(9) }), now)).toBe("");
     expect(M.rowStalenessText(agent({ status: "running", updatedAt: at(15) }), now)).toBe("updated 15m ago");
     expect(M.rowStalenessText(agent({ status: "waiting", updatedAt: at(42) }), now)).toBe("updated 42m ago");
@@ -2550,28 +2604,33 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // Missing timestamp is honestly silent, never a fabricated age.
     expect(M.rowStalenessText(agent({ status: "running", updatedAt: undefined }), now)).toBe("");
 
-    // Executed: a stale running row renders a .row-stale fact inside the tag row,
-    // and it is NOT an ember/alert element (staleness is a nudge, not a status).
     const stale = agent({ status: "running", updatedAt: new Date(Date.now() - 20 * 60_000).toISOString() });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(stale, program));
-    const fact = findByClass(row, "row-stale");
-    expect(fact).not.toBeNull();
-    expect(textOf(fact)).toContain("ago");
-    expect(findByClass(findByClass(row, "row-identity-tags"), "row-stale")).not.toBeNull();
-    // A fresh running row renders exactly as today — no staleness fact.
-    const fresh = agent({ status: "running", updatedAt: new Date().toISOString() });
+    expect(findByClass(row, "row-stale")).toBeNull();
+    // Still spoken, and still in the drawer under words that say what it means.
+    expect(row.attributes["aria-label"]).toContain("Quiet: updated");
+    expect(deepText(withDom(() => M.renderRowFacts(stale)))).toContain("quiet since");
+
+    // A fresh running row says nothing anywhere — silence is still earned.
+    const fresh = clean({ status: "running" });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const freshRow: any = withDom(() => M.renderAgentRow(fresh, program));
-    expect(findByClass(freshRow, "row-stale")).toBeNull();
+    expect(freshRow.attributes["aria-label"]).not.toContain("Quiet:");
+    expect(withDom(() => M.renderRowFacts(fresh))).toBeNull();
   });
 
-  test("(l) the staleness fact is dim, not an alert ink", () => {
-    const rule = styles.match(/\.row-stale\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rule).not.toBe("");
-    expect(rule).toContain("var(--faint)");        // dim
-    expect(rule).toContain("var(--font-mono)");    // relative timestamp → mono (Rule 2)
-    expect(rule).not.toContain("--ember");         // never an alert
+  test("(l) the four chips the diet removed leave no dead rules behind", () => {
+    /* A rule with no emitter poisons grep: the next reader edits .row-terminal,
+       finds something authoritative-looking, and changes nothing. The general
+       orphan lint below catches this too; naming the four here says which
+       removal it is about. */
+    for (const gone of [".row-terminal", ".row-stale", ".policy-chip"]) {
+      expect(styles.includes(gone), gone).toBe(false);
+    }
+    // .role-chip survives — the drawer's roster still emits it.
+    expect(styles).toContain(".role-chip");
+    expect(source).toContain('class: "role-chip role-"');
   });
 });
 
@@ -2740,7 +2799,7 @@ describe("source hygiene", () => {
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
-    expect(html).toContain(">Needs you<span");
+    expect(html).toContain(">Board<span");
     expect(source).toContain("function renderWidgetCustomizer()");
     expect(source).toContain("onchange: (event) => setWidgetEnabled");
     expect(source).toContain('aria-label": `Move ${widget.label} up`');
@@ -4404,13 +4463,17 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(countRule).toContain("font-family: var(--font-mono)");
   });
 
-  test("the Alerts tab count takes ember ink only when alerting (>0), quiet at zero (converges on C2's is-alerting)", () => {
-    // Reviewer Minor 3 drift, toolbar direction: renderTabs marks the Alerts
-    // (needs-you) count with the SAME is-alerting modifier the program rollup alert
-    // cell uses — driven by class, never inline (strict CSP). Zero keeps the default.
+  test("the Board tab count takes ember ink from the alerting population, not from its own number", () => {
+    /* The modifier is the same one the program rollup's alert cell uses, driven
+       by class and never inline (strict CSP). What changed with the single
+       board is what it keys on: the Needs-you tab's count WAS the alert count,
+       so `count > 0` was the right test there — Board counts the whole live
+       fleet, and reusing that test would glow ember for a board with one
+       perfectly happy working session on it. */
     const fn = source.match(/function renderTabs\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fn).toContain('view === "needs-you"');
-    expect(fn).toContain('classList.toggle("is-alerting", count > 0)');
+    expect(fn).toContain('view === "board"');
+    expect(fn).toContain('classList.toggle("is-alerting", agents.some((a) => alerting(a)))');
+    expect(fn).not.toContain('classList.toggle("is-alerting", count > 0)');
     // CSS gives that class ember ink only — no fill (Rule 1: indicator ink, not flood).
     const rule = styles.match(/\.view-tab \.count\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).toContain("color: var(--ember)");
@@ -4426,17 +4489,38 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background: var(--ink)");
   });
 
-  test("index.html seeds is-current on the default tab, and that tab is the attention one", () => {
+  test("index.html seeds is-current on the default tab, and that tab is the board", () => {
     /* renderTabs re-derives the active marker on every render, but the first
-       paint before JS runs must already present a current tab. The seeded tab is
-       now needs-you: a cockpit whose landing state is "show me all routine work"
-       cannot also claim to stay silent about what does not need a human. */
-    expect(html).toContain('class="view-tab is-current" data-view="needs-you" aria-pressed="true"');
-    expect(html).not.toContain('class="view-tab is-current" data-view="now"');
+       paint before JS runs must already present a current tab.
+
+       The seeded tab is Board, and attention-first survives the merge: the
+       Needs-you strip is pinned to the top of Board, so landing here is still
+       "what needs a human, with the fleet underneath it" rather than the
+       "show me all routine work" landing this seeding was moved off. */
+    expect(html).toContain('class="view-tab is-current" data-view="board" aria-pressed="true"');
     // …and the markup order matches the model, so the first tab is the seeded one.
-    expect(html.indexOf('data-view="needs-you"')).toBeLessThan(html.indexOf('data-view="now"'));
-    expect(M.OPS_VIEWS[0]).toBe("needs-you");
-    expect(M.state.view).toBe("needs-you");
+    expect(html.indexOf('data-view="board"')).toBeLessThan(html.indexOf('data-view="history"'));
+    expect(M.OPS_VIEWS[0]).toBe("board");
+    expect(M.state.view).toBe("board");
+    // The three tabs the merge replaced are gone from the markup entirely, so a
+    // stale destination cannot be clicked into a view that no longer filters.
+    for (const gone of ["needs-you", "now", "waiting"]) {
+      expect(html).not.toContain(`data-view="${gone}"`);
+    }
+  });
+
+  test("a landing view saved under the old vocabulary still lands somewhere", () => {
+    // The server stores defaultView and still speaks the pre-Board words. An
+    // operator's saved choice must not be silently dropped because the tab it
+    // named was absorbed.
+    expect(M.landingView("needs-you")).toBe("board");
+    expect(M.landingView("now")).toBe("board");
+    expect(M.landingView("waiting")).toBe("board");
+    expect(M.landingView("history")).toBe("history");
+    expect(M.landingView("usage")).toBe("usage");
+    // A word neither vocabulary knows resolves to nothing rather than guessing.
+    expect(M.landingView("nonsense")).toBeNull();
+    expect(M.landingView(undefined)).toBeNull();
   });
 });
 
@@ -5164,6 +5248,7 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       selected: null,
       selection: new Set<string>(),
       programOverrides: new Map<string, string>(),
+      swarmOverrides: new Map<string, string>(),
       labels: new Map<string, string>(),
       broadcastResults: null,
       broadcastConfirming: false,
@@ -5288,6 +5373,29 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     // The fields the signature already covered still work.
     expect(M.programsPaintSig(visible, ui({ query: "ridge" }))).not.toBe(base);
     expect(M.programsPaintSig([{ program, agents: [agent({ status: "attention" })] }], ui())).not.toBe(base);
+  });
+
+  /* The same finding, one surface later. toggleSwarm writes swarmOverrides and
+     nothing else, and strip membership is a function of alerting() — which the
+     per-agent projection in this signature does not carry. Either omission
+     leaves a control that visibly does nothing on a quiet fleet. */
+  test("(4b) the list signature moves for swarm collapse and for strip membership", () => {
+    const visible = [{ program, agents: [agent()] }];
+    const base = M.programsPaintSig(visible, ui());
+    expect(M.programsPaintSig(visible, ui({ swarmOverrides: new Map([["codex:a1", "open"]]) }))).not.toBe(base);
+
+    /* An agent that starts asking for a human moves in and out of the strip
+       without its `status` word changing — an attentionSignal alone is enough,
+       and that is exactly the field the projection does not have. */
+    const asking = [{ program, agents: [agent({ attentionSignal: { kind: "question", quote: "which branch?" } })] }];
+    expect(M.programsPaintSig(asking, ui({ view: "board" }))).not.toBe(M.programsPaintSig(visible, ui({ view: "board" })));
+    expect(M.stripSig(M.needsYouStrip(asking))).toBe("codex:a1@p");
+    expect(M.stripSig(M.needsYouStrip(visible))).toBe("");
+
+    // And the lifecycle, which decides which divider a row sits under, moves it
+    // too — `status` and `lifecycle` are separate fields and can disagree.
+    const reclassified = [{ program, agents: [agent({ lifecycle: "unverified" })] }];
+    expect(M.programsPaintSig(reclassified, ui())).not.toBe(base);
   });
 
   /* Finding 3. <textarea> has no `value` content attribute, so el()'s
@@ -5585,9 +5693,9 @@ describe("FE-B: harness-backed client behavior", () => {
      on the wire, and the note renders only once you are already in that view. */
   test("(3.2) a lookback-filtered tab count discloses its window", () => {
     expect(M.lookbackApplies("history")).toBe(true);
-    expect(M.lookbackApplies("waiting")).toBe(true);
-    expect(M.lookbackApplies("now")).toBe(false);
-    expect(M.lookbackApplies("needs-you")).toBe(false);
+    // Board inherited the lookback along with the Waiting population it filters.
+    expect(M.lookbackApplies("board")).toBe(true);
+    expect(M.lookbackApplies("usage")).toBe(false);
     // The suffix is built from the same label the filter bar uses, so the tab and
     // the control that changes it can never name different windows.
     expect(M.lookbackLabel(6)).toBe("6h");
@@ -5888,19 +5996,56 @@ describe("FE-B: harness-backed client behavior", () => {
     });
   });
 
-  test("the server's hex tag stays behind the fleet's name, and off the operator's", async () => {
-    /* The tag disambiguates one derived name from thirty identical ones. A name
-       the operator chose needs no such help, and printing "#cccc3333" after it
-       is the text wall the split was introduced to remove. */
+  test("the server's hex tag prints only where it separates two rows", async () => {
+    /* ROW DIET, and a deliberate narrowing of what "print the disambiguator"
+       means. The plan asked for the #disambiguator to leave the row outright.
+       Taken literally that trades one wall of text for a worse defect: thirty
+       rows reading "PR Automation Review & Fix" and nothing to tell them apart,
+       on a board whose first doctrine is that names are honest.
+
+       So the tag is printed when — and only when — another session on the board
+       is using the same PRINTED name. That removes it from the large majority of
+       rows, which is the density the diet was after, and keeps it on exactly the
+       rows that would otherwise be indistinguishable. The full session id is in
+       the drawer for every row either way. */
     const a = named();
     const program = { id: "p", name: "the-mountain-main", agents: [a] };
+    const nameOf = (over: Record<string, unknown> = {}) =>
+      textOf(byClass(withDom(() => M.renderAgentRow(a, program, over)), "agent-name-wrap"));
 
     await withState({ aliases: new Map() }, () => {
-      expect(textOf(byClass(withDom(() => M.renderAgentRow(a, program)), "agent-name-wrap"))).toContain("#cccc3333");
+      // Unique on the board: the words are the whole name, hex included nowhere.
+      expect(nameOf()).toBe("PR Automation Review & Fix");
+      expect(nameOf()).not.toContain("#cccc3333");
+      // Shared with another session: the hex is what separates them, so it prints.
+      expect(nameOf({ sharedNames: new Set(["PR Automation Review & Fix"]) }))
+        .toContain("#cccc3333");
     });
+    // A name the operator chose is theirs; the server's hex never rides it.
     await withState({ aliases: new Map([["agent:claude:named", "Nightly release check"]]) }, () => {
-      expect(textOf(byClass(withDom(() => M.renderAgentRow(a, program)), "agent-name-wrap"))).not.toContain("#cccc3333");
+      expect(nameOf({ sharedNames: new Set(["Nightly release check"]) })).not.toContain("#cccc3333");
     });
+  });
+
+  test("sharedRowNames sees the collision the operator sees, which ambiguousNames cannot", () => {
+    /* Two sessions the server named apart: identity.name is unique by
+       construction ("... #cccc3333" / "... #dddd4444"), so ambiguousNames — which
+       counts resolved identities — reports no collision at all. What is on
+       screen is two rows reading the same words. */
+    const one = named();
+    const two = named({
+      id: "claude:named-2",
+      sourceSessionId: "aaaa-dddd4444",
+      identity: { name: "PR Automation Review & Fix #dddd4444", base: "PR Automation Review & Fix", disambiguator: "dddd4444" },
+    });
+    expect(M.ambiguousNames([one, two]).size).toBe(0);
+    expect(M.sharedRowNames([one, two]).has("PR Automation Review & Fix")).toBe(true);
+    // One session alone shares nothing.
+    expect(M.sharedRowNames([one]).size).toBe(0);
+    // And the row signature carries the collision, so the tag can appear and
+    // vanish as a twin arrives or leaves.
+    const sig = (shared: Set<string>) => M.agentRowSig(one, listUi(), { sharedNames: shared });
+    expect(sig(new Set(["PR Automation Review & Fix"]))).not.toBe(sig(new Set()));
   });
 
   /* Cockpit audit §6. NEEDS YOU and HEALTH narrated one fault twice — "1 finding ·
@@ -6139,7 +6284,7 @@ describe("FE-B: harness-backed client behavior", () => {
      server reported. */
   test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
     const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
-      M.renderFilterBar(listUi({ view: "waiting", ...ui }));
+      M.renderFilterBar(listUi({ view: "board", ...ui }));
       const bar = domById.get("filter-bar");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
@@ -6173,9 +6318,9 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
-    // Idle/History: Lookback presets + All + Custom, then the Scan window.
+    // Board/History: Lookback presets + All + Custom, then the Scan window.
     withDom(() => {
-      M.renderFilterBar(listUi({ view: "waiting", lookbackHours: 6, scanWindowHours: 36 }));
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
       expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
       expect(keys.every(Boolean)).toBe(true);
@@ -6317,6 +6462,12 @@ describe("FE-B: harness-backed client behavior", () => {
     const program = listProgram(agents);
     return M.agentRowPlan(program, agents, listUi({ snap: { schemaVersion: 1, programs: [program] }, ...over }));
   }
+  /* The plan now leads with the column header AND a lifecycle divider, so these
+     index by key rather than by position — a test that counted from zero would
+     have to be rewritten again the next time a section is added, and would say
+     nothing about the property it is actually guarding. */
+  const sigOf = (plan: Array<{ key: string; sig: string }>, key: string) =>
+    plan.find((item) => item.key === key)?.sig;
 
   test("(2) reconcileKeyed keeps the DOM node of every key whose signature held", () => {
     const parent = newNode("div");
@@ -6361,9 +6512,10 @@ describe("FE-B: harness-backed client behavior", () => {
     // The exact production tick the finding describes: one agent's token count
     // advances on the 4s snapshot.
     const after = planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b]);
-    expect(after[0].sig).toBe(before[0].sig); // column header
-    expect(after[1].sig).not.toBe(before[1].sig); // the agent that moved
-    expect(after[2].sig).toBe(before[2].sig); // …and nothing else
+    expect(sigOf(after, "columns")).toBe(sigOf(before, "columns"));
+    expect(sigOf(after, "section:active")).toBe(sigOf(before, "section:active"));
+    expect(sigOf(after, "row:codex:a1")).not.toBe(sigOf(before, "row:codex:a1")); // the agent that moved
+    expect(sigOf(after, "row:codex:a2")).toBe(sigOf(before, "row:codex:a2"));     // …and nothing else
     expect(after.map((i: { key: string }) => i.key)).toEqual(before.map((i: { key: string }) => i.key));
   });
 
@@ -6428,31 +6580,36 @@ describe("FE-B: harness-backed client behavior", () => {
     const cache = new Map();
 
     withDom(() => M.reconcileKeyed(body, planFor([a, b, c]), cache));
-    expect(body.children.length).toBe(4); // header + 3 rows
-    const [header, rowA, rowB, rowC] = body.children;
+    // column header + Active divider + 3 rows.
+    expect(body.children.length).toBe(5);
+    const [header, activeHead, rowA, rowB, rowC] = body.children;
 
     withDom(() => M.reconcileKeyed(
       body,
       planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]),
       cache,
     ));
-    expect(body.children.length).toBe(4);
+    expect(body.children.length).toBe(5);
     expect(body.children[0]).toBe(header);
-    expect(body.children[1]).not.toBe(rowA);
-    expect(body.children[2]).toBe(rowB);
-    expect(body.children[3]).toBe(rowC);
+    // The divider is a keyed plan item like everything else, so a row ticking
+    // underneath it leaves its node exactly where it was.
+    expect(body.children[1]).toBe(activeHead);
+    expect(body.children[2]).not.toBe(rowA);
+    expect(body.children[3]).toBe(rowB);
+    expect(body.children[4]).toBe(rowC);
     // The rebuilt row really is the one that moved, and it shows the new number.
-    expect(textOf(body.children[1])).toContain("40k");
+    expect(textOf(body.children[2])).toContain("40k");
 
     // A repaint with nothing changed touches no node at all.
     const settled = [...body.children];
     withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]), cache));
     expect(body.children).toEqual(settled);
 
-    // An agent leaving the view removes exactly its row.
+    // An agent leaving the view removes exactly its row — and the divider above
+    // it repaints, because its own signature carries the section's population.
     withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, c]), cache));
-    expect(body.children.length).toBe(3);
-    expect(body.children[2]).toBe(rowC);
+    expect(body.children.length).toBe(4);
+    expect(body.children[3]).toBe(rowC);
   });
 
   test("(2) the whole list path: a live tick repaints one row, not the list", () => {
@@ -6472,36 +6629,43 @@ describe("FE-B: harness-backed client behavior", () => {
     let visible = build(1200);
     const shown = withDom(() => M.syncProgramList(root, visible, ui(visible)));
     expect(shown).toBe(3);
+    // Two program sections and no strip: the strip is Board's, and this drives
+    // the Now lens on purpose so the assertions stay about reconciliation.
     expect(root.children.length).toBe(2);
     const [alphaSection, betaSection] = root.children;
     const alphaBody = alphaSection.children[alphaSection.children.length - 1];
     const betaBody = betaSection.children[betaSection.children.length - 1];
-    expect(alphaBody.children.length).toBe(3); // header + 2 rows
-    const [, rowS1, rowS2] = alphaBody.children;
-    const rowS3 = betaBody.children[1];
+    expect(alphaBody.children.length).toBe(4); // column header + Active divider + 2 rows
+    const [, activeHead, rowS1, rowS2] = alphaBody.children;
+    const rowS3 = betaBody.children[2];
 
     // A token tick on codex:s1 — the production case. Everything else must be
-    // the same node object it was, including both program sections.
+    // the same node object it was, including both program sections and the
+    // divider directly above the row that moved.
     visible = build(40_000);
     withDom(() => M.syncProgramList(root, visible, ui(visible)));
     expect(root.children[0]).toBe(alphaSection);
     expect(root.children[1]).toBe(betaSection);
-    expect(alphaBody.children[1]).not.toBe(rowS1);
-    expect(alphaBody.children[2]).toBe(rowS2);
-    expect(betaBody.children[1]).toBe(rowS3);
-    expect(textOf(alphaBody.children[1])).toContain("40k");
+    expect(alphaBody.children[1]).toBe(activeHead);
+    expect(alphaBody.children[2]).not.toBe(rowS1);
+    expect(alphaBody.children[3]).toBe(rowS2);
+    expect(betaBody.children[2]).toBe(rowS3);
+    expect(textOf(alphaBody.children[2])).toContain("40k");
 
     // A status flip DOES move the program rollup, so Beta's shell is rebuilt —
-    // but its row node is re-adopted rather than reconstructed.
+    // but its row node is re-adopted rather than reconstructed. It also moves
+    // the row out of Active and into Waiting, so the divider above it is a
+    // different section entirely.
     visible = build(40_000, "attention");
     withDom(() => M.syncProgramList(root, visible, ui(visible)));
     expect(root.children[0]).toBe(alphaSection);
     expect(root.children[1]).not.toBe(betaSection);
     const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
-    expect(newBetaBody.children.length).toBe(2);
-    expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
+    expect(newBetaBody.children.length).toBe(3);
+    expect(textOf(newBetaBody.children[1])).toContain("Waiting");
+    expect(newBetaBody.children[2]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
-    expect(alphaBody.children[2]).toBe(rowS2);
+    expect(alphaBody.children[3]).toBe(rowS2);
   });
 
   /* A filter is a lens on the board, not a change to what a program contains.
@@ -6715,7 +6879,12 @@ describe("FE-B: harness-backed client behavior", () => {
     })));
     expect(shown).toBe(1);
     const body = root.children[0].children[root.children[0].children.length - 1];
-    expect(body.children.length).toBe(2); // column header + the rescued row
+    /* Column header, then the row. No lifecycle divider: this session's own
+       lifecycle is `finished` — alerting() rescued it onto the view, and the
+       sections are stable Active/Waiting/Unverified bands rather than a catch-
+       all, so a row that is none of the three leads the group unlabelled rather
+       than being filed under a heading that would misdescribe it. */
+    expect(body.children.length).toBe(2);
     const rowText = textOf(body.children[1]);
     /* The roster drops the " · <program>" suffix (audit §9) — the program header
        two rows up already carries it — so the rescued row identifies itself as
@@ -6767,8 +6936,345 @@ describe("FE-B: harness-backed client behavior", () => {
     })));
     expect(shown).toBe(1);
     const body = root.children[0].children[root.children[0].children.length - 1];
-    expect(body.children.length).toBe(2); // column header + the rescued row
-    expect(textOf(body.children[1])).toContain("Claude · live worker");
+    expect(body.children.length).toBe(3); // column header + Active divider + the rescued row
+    expect(textOf(body.children[2])).toContain("Claude · live worker");
+  });
+
+  /* ------------------------------------------------------------------------
+     The single board: the pinned Needs-you strip, the lifecycle dividers, and
+     swarm collapse. Driven through syncProgramList and agentRowPlan — the exact
+     two-level path renderPrograms runs — rather than through the source text,
+     because every one of these is a claim about what the operator SEES.
+     --------------------------------------------------------------------- */
+  // First node whose className carries the given token (whitespace-separated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function nodeByClass(node: any, token: string): any {
+    if (!node || typeof node !== "object") return null;
+    if (typeof node.className === "string" && node.className.split(/\s+/).includes(token)) return node;
+    for (const kid of node.children || []) {
+      const hit = nodeByClass(kid, token);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  describe("the single board", () => {
+    const boardUi = (over: Record<string, unknown> = {}) =>
+      listUi({ view: "board", lookbackHours: null, ...over });
+    const asking = (over: Record<string, unknown> = {}) =>
+      agent({ status: "attention", outcome: "needs-you", lifecycle: "waiting", ...over });
+
+    /* Two programs, one alerting session in each, plus a calm working row —
+       the shape the dedupe has to get right, because the strip is flat and
+       cross-program while the groups below it are not. */
+    function twoPrograms() {
+      const alpha = {
+        id: "alpha",
+        name: "Alpha",
+        agents: [
+          agent({ id: "codex:a-work", status: "running" }),
+          asking({ id: "codex:a-alert" }),
+        ],
+      };
+      const beta = { id: "beta", name: "Beta", agents: [asking({ id: "codex:b-alert" })] };
+      return [
+        { program: alpha, agents: alpha.agents },
+        { program: beta, agents: beta.agents },
+      ];
+    }
+
+    test("an alerting row is pinned in the strip and drawn NOWHERE else", () => {
+      const root = newNode("div");
+      const visible = twoPrograms();
+      const ui = boardUi({ snap: { schemaVersion: 1, programs: visible.map((v) => v.program) } });
+      const shown = withDom(() => M.syncProgramList(root, visible, ui));
+
+      // The scope note reports what the FILTER admitted; moving a row between
+      // sections is not a change to how many sessions matched.
+      expect(shown).toBe(3);
+
+      // Strip first, then the programs in server order.
+      expect(root.children.length).toBe(3);
+      const [strip, alphaSection, betaSection] = root.children;
+      expect(strip.className).toContain("needs-strip");
+      expect(textOf(strip)).toContain("Needs you");
+
+      // Both alerting rows, from both programs, and each carrying the program
+      // its group header would otherwise have said for it.
+      const stripBody = strip.children[strip.children.length - 1];
+      expect(stripBody.children.length).toBe(2);
+      expect(textOf(stripBody)).toContain("Alpha");
+      expect(textOf(stripBody)).toContain("Beta");
+
+      /* The dedupe, which is the whole point: one row per session. A session
+         rendered twice would carry `agent:<id>` on two nodes, so focus restore
+         would land on whichever the document held first and arrow navigation
+         would visit the same session twice. */
+      const ids = (node: FakeNode, out: string[] = []): string[] => {
+        if (node.dataset?.fkey?.startsWith("agent:")) out.push(node.dataset.fkey);
+        for (const kid of node.children ?? []) ids(kid as FakeNode, out);
+        return out;
+      };
+      const keys = ids(root);
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys.filter((k) => k === "agent:codex:a-alert")).toHaveLength(1);
+
+      // Alpha keeps a note saying where its missing session went, so the two
+      // places an operator might look for it agree instead of one omitting it.
+      const alphaBody = alphaSection.children[alphaSection.children.length - 1];
+      expect(textOf(alphaBody)).toContain("1 session from this program is in Needs you");
+      expect(textOf(alphaBody)).not.toContain("Alert");
+      // Beta had nothing but the alerting row, so its group is note-only.
+      const betaBody = betaSection.children[betaSection.children.length - 1];
+      expect(textOf(betaBody)).toContain("in Needs you");
+    });
+
+    test("acknowledging an alert returns the row to its lifecycle section", () => {
+      // The plan's open question, answered: ack means "I have seen it", so the
+      // row leaves the strip and rejoins the fleet rather than vanishing.
+      const acked = agent({ id: "codex:a-alert", status: "waiting", lifecycle: "waiting" });
+      const program = { id: "alpha", name: "Alpha", agents: [acked] };
+      const visible = [{ program, agents: [acked] }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      // Strip is present but clear; the row is under Waiting in its own group.
+      expect(root.children.length).toBe(2);
+      expect(root.children[0].className).toContain("is-clear");
+      expect(textOf(root.children[0])).toContain("No session is asking for you");
+      const body = root.children[1].children[root.children[1].children.length - 1];
+      expect(textOf(body)).toContain("Waiting");
+      expect(textOf(body)).not.toContain("in Needs you");
+    });
+
+    test("sections are drawn Active → Waiting → Unverified, and an empty one is not drawn", () => {
+      const rows = [
+        agent({ id: "codex:u", lifecycle: "unverified", status: "stale" }),
+        agent({ id: "codex:w", lifecycle: "waiting", status: "waiting" }),
+        agent({ id: "codex:a", lifecycle: "working", status: "running" }),
+      ];
+      const program = { id: "p", name: "P", agents: rows };
+      const keys = (list: typeof rows) =>
+        M.agentRowPlan({ ...program, agents: list }, list, boardUi({
+          snap: { schemaVersion: 1, programs: [{ ...program, agents: list }] },
+        })).map((item: { key: string }) => item.key);
+
+      /* Stable order regardless of the order the rows arrive in — the server
+         sorts within a program, and the dividers must not re-sort it into a
+         different story on the next paint. */
+      expect(keys(rows)).toEqual([
+        "columns",
+        "section:active", "row:codex:a",
+        "section:waiting", "row:codex:w",
+        "section:unverified", "row:codex:u",
+      ]);
+
+      // A section with no members prints no heading at all: a divider over
+      // nothing teaches the operator to stop reading dividers.
+      expect(keys([rows[2]!])).toEqual(["columns", "section:active", "row:codex:a"]);
+      expect(keys([rows[0]!])).toEqual(["columns", "section:unverified", "row:codex:u"]);
+    });
+
+    test("the Unverified divider keeps the sentence the standalone group shipped with", () => {
+      // A bare word would read as a claim about the sessions. It is a claim
+      // about the evidence, and the copy is unchanged for that reason.
+      expect(M.SECTION_HEADS.unverified.label(1)).toBe("1 unverified — quiet, with no process found to check");
+      expect(M.SECTION_HEADS.unverified.label(4)).toBe("4 unverified — quiet, with no process found to check");
+      // The heads are labels, not controls — nothing here takes a focus key.
+      for (const key of M.LIFECYCLE_SECTIONS) {
+        expect(M.SECTION_HEADS[key].className).toContain("lifecycle-section");
+      }
+    });
+
+    test("History draws no dividers and never pins a row away from its group", () => {
+      /* Two ways this could have gone wrong. A finished row matches no section,
+         so a divider over it would be a lie; and a finished row whose process
+         is somehow still running satisfies alerting(), so a board-only dedupe
+         applied here would have silently deleted it from the only view that
+         shows it. */
+      const ghost = agent({
+        id: "codex:ghost", status: "attention", outcome: "needs-you",
+        lifecycle: "finished", activity: "ended", processState: "running",
+      });
+      const done = agent({ id: "codex:done", lifecycle: "finished", status: "archived" });
+      const program = { id: "p", name: "P", agents: [ghost, done] };
+      const plan = M.agentRowPlan(program, program.agents, listUi({
+        view: "history", snap: { schemaVersion: 1, programs: [program] },
+      }));
+      expect(plan.map((i: { key: string }) => i.key))
+        .toEqual(["columns", "row:codex:ghost", "row:codex:done"]);
+    });
+
+    test("swarm children are collapsed until the operator opens that swarm", () => {
+      const parent = agent({ id: "codex:parent", status: "running" });
+      const child = agent({ id: "codex:child", status: "running", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, child] };
+      const plan = (over: Record<string, unknown> = {}) =>
+        M.agentRowPlan(program, program.agents, boardUi({
+          snap: { schemaVersion: 1, programs: [program] }, ...over,
+        })).map((item: { key: string }) => item.key);
+
+      // Closed by default: absent from the plan, so absent from the DOM — which
+      // is what takes it out of navigableRows and Tab order in one move, with
+      // no second rule to keep in step.
+      expect(plan()).toEqual(["columns", "section:active", "row:codex:parent"]);
+      expect(plan({ swarmOverrides: new Map([["codex:parent", "open"]]) }))
+        .toEqual(["columns", "section:active", "row:codex:parent", "row:codex:child"]);
+
+      // The caret is a real control with its own focus key, because render()
+      // restores focus by fkey and the row already owns `agent:<id>`.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row: any = withDom(() => M.renderAgentRow(parent, program, { childCount: 1, swarmOpen: false }));
+      const chip = nodeByClass(row, "swarm-chip");
+      expect(chip.tagName).toBe("button");
+      expect(chip.dataset.fkey).toBe("swarm:codex:parent");
+      expect(chip.attributes["aria-expanded"]).toBe("false");
+      expect(textOf(chip)).toContain("swarm 1");
+    });
+
+    test("an alerting child cannot hide inside a collapsed swarm", () => {
+      const parent = agent({ id: "codex:parent", status: "running" });
+      const child = asking({ id: "codex:child", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, child] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+
+      // It is in the strip even though its parent is folded — the strip is flat
+      // and cross-program precisely so a collapsed swarm cannot swallow one.
+      const strip = root.children[0];
+      expect(strip.className).toContain("needs-strip");
+      const stripBody = strip.children[strip.children.length - 1];
+      expect(stripBody.children.length).toBe(1);
+      expect(stripBody.children[0].dataset.fkey).toBe("agent:codex:child");
+
+      // …and the parent's own chip takes ember ink, so the fold itself reports
+      // what is inside it. No auto-expand: the child stays collapsed below.
+      const body = root.children[1].children[root.children[1].children.length - 1];
+      const chip = nodeByClass(body, "swarm-chip");
+      expect(chip.className).toContain("is-alerting");
+      expect(chip.attributes["aria-expanded"]).toBe("false");
+    });
+
+    test("swarm expansion persists exactly the way program expansion does", () => {
+      // Same storage shape, same failure handling, its own key — and only the
+      // opened swarms are written, because collapsed is the absence of a choice.
+      const fn = source.match(/function loadSwarmOverrides\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+      expect(fn).toContain('localStorage.getItem("mtn3-swarms")');
+      expect(fn).toContain('mode === "open"');
+      expect(source).toContain('localStorage.setItem("mtn3-swarms"');
+      expect(source).toContain("loadSwarmOverrides();");
+      // toggleSwarm deletes rather than storing "closed", and saves every time.
+      const toggle = source.match(/function toggleSwarm\(agent\)[\s\S]*?\n\}/)?.[0] ?? "";
+      expect(toggle).toContain("state.swarmOverrides.delete(agent.id)");
+      expect(toggle).toContain('state.swarmOverrides.set(agent.id, "open")');
+      expect(toggle).toContain("saveSwarmOverrides()");
+    });
+
+    test("a pinned parent leaves an anchor whose focus key is not its row's", () => {
+      /* Its children are still in the group, so they need a name to hang under.
+         Both nodes describe the same session, so they cannot share `agent:<id>`
+         — render()'s restore-by-fkey would land on whichever came first. */
+      const parent = asking({ id: "codex:parent" });
+      const child = agent({ id: "codex:child", status: "running", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, child] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const body = root.children[1].children[root.children[1].children.length - 1];
+      const anchor = nodeByClass(body, "swarm-anchor");
+      expect(anchor.dataset.fkey).toBe("swarm-anchor:codex:parent");
+      expect(anchor.attributes["aria-label"]).toContain("pinned in Needs you");
+      // And the strip row keeps the ordinary key.
+      const stripRow = root.children[0].children[root.children[0].children.length - 1].children[0];
+      expect(stripRow.dataset.fkey).toBe("agent:codex:parent");
+    });
+  });
+
+  /* ------------------------------------------------------------------------
+     Honest history: two different endings, said in two different words.
+     --------------------------------------------------------------------- */
+  describe("history provenance", () => {
+    const chipProgram = { id: "p", name: "P", agents: [] as unknown[] };
+
+    test("an operator archive and a retained record are different chips", () => {
+      const archived = agent({ id: "codex:arch", lifecycle: "finished", provenance: "operator-archive" });
+      const retained = agent({ id: "codex:ret", lifecycle: "waiting", scope: "retained", provenance: "aged-out" });
+
+      expect(M.historyProvenance(archived).label).toBe("Archived by you");
+      expect(M.historyProvenance(retained).label).toBe("Retained history");
+      // Two facts, two treatments: solid for the ending you chose, dashed for
+      // the one nobody chose.
+      expect(M.historyProvenance(archived).className).toContain("history-chip--archived");
+      expect(M.historyProvenance(retained).className).toContain("history-chip--retained");
+
+      /* Derived from the SAME two fields broadcastIneligibleReason has been
+         reading since the naming contract landed. One model, two surfaces —
+         a second derivation here is how they would start disagreeing. */
+      expect(M.broadcastIneligibleReason(retained)).toBe("in history");
+      expect(M.broadcastIneligibleReason(archived)).toBe("archived");
+    });
+
+    test("a session that ended some other way claims neither", () => {
+      // The board must not call a provider exit "archived by you": four
+      // different endings used to share that one word, which is the defect.
+      for (const why of ["provider-exit", "process-died", "process-absent"]) {
+        expect(M.historyProvenance(agent({ lifecycle: "finished", provenance: why }))).toBeNull();
+      }
+      // And a live session has no history record at all.
+      expect(M.historyProvenance(agent({ status: "running" }))).toBeNull();
+    });
+
+    test("the chips render on the row, and reach a screen reader too", () => {
+      const retained = agent({ id: "codex:ret", lifecycle: "waiting", scope: "retained", provenance: "aged-out" });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row: any = withDom(() => M.renderAgentRow(retained, chipProgram));
+      expect(nodeByClass(row, "history-chip")).not.toBeNull();
+      expect(textOf(row)).toContain("Retained history");
+      expect(row.attributes["aria-label"]).toContain("Retained history");
+      // A live row stays byte-quiet.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const live: any = withDom(() => M.renderAgentRow(agent({ status: "running" }), chipProgram));
+      expect(nodeByClass(live, "history-chip")).toBeNull();
+    });
+
+    test("names and program grouping survive into History", () => {
+      /* The claim the plan asked to be pinned rather than assumed: History uses
+         the same renderAgentRow and the same program sections, so a session's
+         name and its workstream are the same there as they were on the board.
+         An archived record is exactly where an operator is least able to
+         re-derive either one. */
+      const renamed = agent({
+        id: "claude:done", provider: "claude", lifecycle: "finished",
+        provenance: "operator-archive", status: "archived",
+        identity: { name: "Nightly release check", base: "Nightly release check", disambiguator: "" },
+      });
+      const p = { id: "cwd-releases", name: "releases", agents: [renamed] };
+      const root = newNode("div");
+      const shown = withDom(() => M.syncProgramList(root, [{ program: p, agents: [renamed] }], listUi({
+        view: "history",
+        // History collapses its programs by default — there are usually a lot —
+        // so this opens the one under test rather than asserting into a
+        // deliberately empty body.
+        programOverrides: new Map([["cwd-releases", "open"]]),
+        snap: { schemaVersion: 1, programs: [p] },
+      })));
+      expect(shown).toBe(1);
+      // The program section is still the program section, named for the program.
+      expect(root.children.length).toBe(1);
+      expect(textOf(root.children[0].children[1])).toContain("releases");
+      // …and the row inside it still carries the session's own name.
+      const body = root.children[0].children[root.children[0].children.length - 1];
+      expect(textOf(body)).toContain("Nightly release check");
+      expect(textOf(body)).toContain("Archived by you");
+      // No strip on History: it is a record, not a request.
+      expect(nodeByClass(root, "needs-strip")).toBeNull();
+    });
   });
 
   /* The invariant behind both (3) and (3b), stated once so it cannot silently
@@ -8754,26 +9260,45 @@ describe("the lifecycle contract on the board itself", () => {
     ...overrides,
   });
 
-  test("five tabs, and Waiting is where an unverified session is findable", () => {
-    expect(M.OPS_VIEWS).toEqual(["needs-you", "now", "waiting", "history"]);
-    expect(M.viewMatches("waiting", quiet())).toBe(true);
+  test("three tabs, and the Board is where an unverified session is findable", () => {
+    expect(M.OPS_VIEWS).toEqual(["board", "history"]);
+    expect(M.viewMatches("board", quiet())).toBe(true);
     // Not History: that is where the original missing-session incident sent it.
     expect(M.viewMatches("history", quiet())).toBe(false);
-    // And not Now, which is active work.
-    expect(M.viewMatches("now", quiet())).toBe(false);
+    // Its own divider inside each program group, so merging the tabs did not
+    // merge the distinction — the state is still called out by name on screen.
+    expect(M.lifecycleSection(quiet())).toBe("unverified");
   });
 
-  test("the Unverified group ignores the lookback, and ordinary Waiting rows do not", () => {
+  test("Board is the union of the three live tabs it replaced, and nothing more", () => {
+    /* The property that makes collapsing the tabs safe: every agent that was
+       reachable under Now, Needs you or Waiting is reachable here, and no
+       finished record leaks in behind them. */
+    const working = agent({ lifecycle: "working", status: "running" });
+    const waiting = agent({ id: "codex:w", lifecycle: "waiting", status: "waiting" });
+    const alertingRow = agent({ id: "codex:x", status: "attention", outcome: "needs-you", lifecycle: "waiting" });
+    const done = agent({ id: "codex:d", lifecycle: "finished", status: "archived" });
+    for (const live of [working, waiting, alertingRow, quiet()]) {
+      expect(M.viewMatches("board", live)).toBe(true);
+    }
+    expect(M.viewMatches("board", done)).toBe(false);
+    expect(M.viewMatches("history", done)).toBe(true);
+  });
+
+  test("the Unverified section ignores the lookback, and ordinary Waiting rows do not", () => {
     /* Without this exemption the flagship state of the contract ships invisible:
        these sessions are quiet BY DEFINITION, so at the default six-hour
-       lookback almost every one of them would be filtered out of the only tab
-       that shows them. */
+       lookback almost every one of them would be filtered out of the only view
+       that shows them. The lookback moved from Waiting to Board with the
+       population it filters; the exemption moved with it. */
     const now = Date.parse("2026-07-22T03:00:00.000Z");
     const old = { updatedAt: "2026-07-20T03:00:00.000Z" };
-    expect(M.passesLookback(quiet(old), "waiting", 6, now)).toBe(true);
-    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "waiting", 6, now)).toBe(false);
+    expect(M.lookbackApplies("board")).toBe(true);
+    expect(M.passesLookback(quiet(old), "board", 6, now)).toBe(true);
+    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "board", 6, now)).toBe(false);
     // The exemption is scoped to the views that filter at all.
-    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "now", 6, now)).toBe(true);
+    expect(M.lookbackApplies("usage")).toBe(false);
+    expect(M.passesLookback(agent({ lifecycle: "waiting", ...old }), "usage", 6, now)).toBe(true);
   });
 
   test("an unverified session is in neither the live count nor the finished one", () => {

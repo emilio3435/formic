@@ -9,7 +9,7 @@ Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
 **What you are looking at above is the ordinary case, not a demo.** Taken at
 23:11 on 2 August from a machine with 28 live sessions, 4 of them working — and
-`Needs you` still reads **0**, because none of them was waiting on a person.
+the Needs-you strip still reads **0**, because none of them was waiting on a person.
 That is the product's whole claim in one picture: a busy fleet and an empty
 to-do list are not a contradiction, and the board says so rather than listing
 everything it can find.
@@ -53,7 +53,7 @@ on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 
 Four steps. Do these in order and you have used the tool correctly.
 
-### 1. Check `Needs you`
+### 1. Check the Needs-you strip
 
 ![The summary band](docs/guide-shots/shot-1-summary.png)
 
@@ -75,15 +75,16 @@ is wrong and what to do about it. The rest are context, not tasks: how much is
 shipping, what it is costing, how full the fullest context window is, and whether
 the system itself is healthy.
 
-### 2. The board opens on `Needs you`
+### 2. The board opens on `Board`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)
 
-`Needs you` is the default and is deliberately the shortlist — only sessions
-actually waiting on a human. When it is empty it says so outright — **Nothing
-needs you**, with a count of what is alive behind it — rather than showing you a
-blank. That screen is the answer, not a failure to load. `Open Now` is there when
-you want the whole board: everything working *or* asking for you.
+`Board` is the default, and its first block is the shortlist: a pinned
+**Needs you** strip holding only the sessions actually waiting on a human,
+across every program. When nothing is asking it says so on that line — *No
+session is asking for you* — rather than vanishing, so you can tell "I checked"
+from "I have not looked". Everything else on the machine is directly underneath
+it, grouped by workstream, so the shortlist never costs you sight of the fleet.
 
 ### 3. Read the row
 
@@ -95,7 +96,7 @@ Every row is **one AI session**. Left to right:
 |---|---|
 | Name | Who it is, and the folder it is working in |
 | Message | The last thing it said |
-| Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on the `Waiting` and `History` tabs the column stays quiet entirely. A word here means something you would not have assumed: `Waiting` on a mixed tab, or `Alert`, `Blocked`, `Failed`. A session asking for you always says so. Hover for the full state. |
+| Status | Often blank, on purpose. It prints only what the tab does not already guarantee — so `Working` never appears, and on `History` the column stays quiet entirely. A word here means something you would not have assumed: `Waiting`, `Alert`, `Blocked`, `Failed`. A session asking for you always says so. Hover for the full state. |
 | Model · ctx | Which model, and how full **this session's** context window is right now |
 | Tokens | **The latest model call only** — not the session, not the day. See the warning below. |
 | Span | First activity to last activity — **including every hour it sat dormant.** Not time spent working. A session showing `3d` may have worked for ten minutes of it. |
@@ -216,7 +217,7 @@ watched but not typed into. No setting turns any of this off; the controls come
 back on their own within a few seconds of the board being able to prove the
 answer again.
 
-**That is the whole loop:** `Needs you` → click the row → deal with it →
+**That is the whole loop:** read the Needs-you strip → click the row → deal with it →
 `Escape`.
 
 ---
@@ -224,25 +225,37 @@ answer again.
 ## Reference
 
 <details>
-<summary><b>The six tabs</b></summary>
-
-In board order, which is deliberate — attention first:
+<summary><b>The three tabs</b></summary>
 
 | Tab | Shows |
 |---|---|
-| **Needs you** | Only sessions waiting on a human. Your to-do list, and the tab the board opens on. |
-| **Now** | Anything working *or* asking for you. The whole live board. |
-| **Waiting** | Open but not producing — plus a collapsed **Unverified** group at the bottom. |
+| **Board** | Every live session, in one scroll. The tab it opens on. |
 | **History** | Finished sessions. Collapsed by default — there are usually a lot. |
 | **Usage** | Token and cost charts over time, rather than a list. |
 
-The board used to open on `Now` — every routine working agent — with the
-attention count sitting at zero beside it. A cockpit whose landing state is
-"show me everything" cannot also claim to stay quiet about what does not need
-you, so `Needs you` leads.
+Board reads top to bottom in one pass:
 
-There used to be a sixth tab, `Working`. It was `Now` minus the alerts, which is
-a subtraction you can do by eye, and every tab costs a glance on every visit.
+1. **Needs you** — a pinned strip of every session asking for a human, across
+   every program, each row carrying the program it came from. It is never
+   collapsible, and when nothing is asking it says so rather than disappearing.
+   Those rows appear *only* here; their program group below leaves a note saying
+   how many of its sessions are in the strip.
+2. **Program groups** — your workstreams, in the order the server ranks them.
+3. Inside each group, **Active → Waiting → Unverified** dividers. An empty
+   section is not drawn. The dividers are labels, not buttons — nothing about
+   them can be clicked into a state that hides a session.
+
+There used to be five tabs: `Needs you`, `Now`, `Waiting`, `History`, `Usage`.
+The first three were three lenses on one live fleet, and the split cost you the
+thing the board is for — reaching a waiting session meant leaving the tab
+showing the working ones. Attention still comes first; it is a strip you can
+read while you look at everything else, rather than a tab you have to select.
+
+A swarm's children start **collapsed**, behind the `swarm N` chip on the parent
+row — click it to open, and the board remembers. A collapsed child that starts
+asking for you still appears in the Needs-you strip, and the parent's chip turns
+ember: nothing can hide inside a folded swarm. The board never opens one for
+you.
 
 ## The four states a session can be in
 
@@ -259,10 +272,10 @@ the board is written in.
 **Unverified is the one worth understanding.** It is not a broken session and it
 is not a finished one — it is a gap in what the board can see. A session whose
 terminal was closed, whose machine slept, or that simply went quiet with nothing
-left to probe all land here. They live in a collapsed group at the bottom of
-`Waiting`, and that group **ignores the lookback**: it is a disclosure of what
-cannot be accounted for, not a list of recent things, and most of them are older
-than six hours by definition.
+left to probe all land here. They sit under the **Unverified** divider at the
+bottom of each program group, and that section **ignores the lookback**: it is a
+disclosure of what cannot be accounted for, not a list of recent things, and most
+of them are older than six hours by definition.
 
 Sessions used to be filed as finished in this situation. Nothing had observed
 them ending — the board simply could not see them and said "ended" anyway, which
@@ -272,7 +285,7 @@ A finished session also says *why* it finished: a recorded session exit, your ow
 archive, a process confirmed gone, or "no longer watched" for one that drifted
 out of the scan window. Those are four different facts and used to be one word.
 
-`Waiting` and `History` also apply a *lookback* window (6 hours by default) that
+`Board` and `History` also apply a *lookback* window (6 hours by default) that
 you can widen from the filter bar. The Unverified group is exempt, as above.
 
 **Usage has its own windows, and the widest one you can ask for is narrower
@@ -402,7 +415,7 @@ finished-this-hour, burn and `All clear` figures survive. They expand into cards
 when something needs you — and **each cell renders only if it has something to
 report.** A band that always renders cannot signal by rendering, so a card with
 no data is absent rather than showing you an empty one. Health also stays quiet
-when `Needs you` has already told you the same thing.
+when the Needs-you strip has already told you the same thing.
 
 Each one counts a **different set of agents** over a **different stretch of time**,
 and none of them says so on its face. That is the single most useful thing to know
@@ -410,7 +423,7 @@ about this band, so it is stated for each:
 
 | Card | What it tells you | Counts what, over what |
 |---|---|---|
-| **Findings** | Everything open that a human should know about — collector faults, policy drift, and sessions waiting on you. | Findings, not agents: one finding can implicate many sessions. This card and the `Needs you` tab beside it are **deliberately different numbers now**, and they say so in different words. The card counts all findings; the tab counts only sessions waiting on a person. The card reading `1` while the tab reads `0` means *something is open, but no session is waiting on you* — which is why the board says exactly that instead of "Nothing needs you". |
+| **Findings** | Everything open that a human should know about — collector faults, policy drift, and sessions waiting on you. | Findings, not agents: one finding can implicate many sessions. This card and the Needs-you strip below it are **deliberately different numbers**, and they say so in different words. The card counts all findings; the strip counts only sessions waiting on a person. The card reading `1` while the strip is clear means *something is open, but no session is waiting on you* — which is why the board says exactly that instead of "Nothing needs you". |
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
 | **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
 | **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or waiting) that report a window. Finished and unverified sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
@@ -704,8 +717,8 @@ Start a session (`claude` or `codex` in any project folder) and a row should
 appear within about five seconds, no refresh needed.
 
 Also check you have not filtered yourself into an empty room: clear the **search
-box**, and remember `Waiting` and `History` apply their own lookback window
-(the Unverified group inside `Waiting` does not).
+box**, and remember `Board` and `History` apply their own lookback window
+(the Unverified section does not).
 
 </details>
 

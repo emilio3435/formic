@@ -1574,29 +1574,56 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--role-surface, var(--surface));
   white-space: nowrap;
 }
-.swarm-chip { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 999px; padding: 0.02rem 0.4rem; white-space: nowrap; }
-/* Terminal breadcrumb: the linked pane this row routes to. Mono because it
-   carries identifiers/paths (Rule 2 — mono for values); dim and borderless so
-   it reads as a quiet fact, not a status chip. Truncates to protect density. */
-.row-terminal {
-  min-width: 0;
-  max-width: 18rem;
-  overflow: hidden;
-  font: 500 10px/1.4 var(--font-mono);
-  color: var(--faint);
+/* The swarm chip is the caret. It was already the one element naming the
+   subtree, so the control rides it rather than adding a glyph beside it — the
+   row diet removed four chips from this line and immediately adding a fifth
+   would have spent the space it just bought. Quiet by default; ember-inked only
+   when something folded up inside is asking for a person, which is the one
+   state a collapsed swarm can hide (Rule 1: indicator ink, never a fill). */
+.swarm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  padding: 0.02rem 0.4rem;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  cursor: pointer;
+  background: transparent;
 }
-/* Staleness fact: a live-looking row that has gone quiet. Dim mono (it carries a
-   relative timestamp — Rule 2), deliberately NOT ember; staleness is a nudge,
-   not an alert, so it never competes with the status rails. */
-.row-stale {
-  font: 500 10px/1.4 var(--font-mono);
+.swarm-chip:hover { color: var(--ink); border-color: var(--ink); }
+.swarm-chip.is-open { border-style: solid; }
+.swarm-chip.is-alerting { color: var(--ember); border-color: var(--ember); }
+.swarm-caret { font-size: 8.5px; line-height: 1; }
+/* Which program a strip row came from. The strip is flat and cross-program, so
+   this carries the one fact the missing program header would have. */
+.row-program-chip {
+  flex: none;
+  font-size: 10.5px;
   color: var(--faint);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0 0.3rem;
   white-space: nowrap;
 }
-.policy-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.45rem; border-radius: 4px; font-size: 10px; font-weight: 700; white-space: nowrap; color: #fff; background: var(--failed); }
-.policy-chip .ico { width: 0.75rem; height: 0.75rem; }
+/* The two endings a history record can have, and they are typeset apart because
+   they are different facts. Solid outline for the one an operator chose; dashed
+   for the one nobody chose — the board simply stopped watching, and a dashed
+   edge is the same "this is not asserted" convention the Unverified divider and
+   the collapsed swarm chip already use. */
+.history-chip {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--faint);
+  border-radius: 3px;
+  padding: 0.02rem 0.35rem;
+  white-space: nowrap;
+}
+.history-chip--archived { border: 1px solid var(--line-strong); background: var(--sand); }
+.history-chip--retained { border: 1px dashed var(--line-strong); }
 /* A dead process. The ONE row mark that gets alert ink rather than the dim
    mono every other row fact uses (Rule 1: indicator ink, not a flood fill) —
    "this stopped without finishing" is the difference between needs-me and done,
@@ -2860,7 +2887,11 @@ body.feed-frozen .programs { opacity: 0.62; }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
   .view-tab, .btn, #search, .inspector-close, .swarm-anchor,
-  .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
+  /* .swarm-chip joined the sweep when it became the swarm caret: it is the one
+     control that decides whether ten rows are on screen, and a 16px pill is not
+     a target on a phone. The row already tolerates a 44px inline control here —
+     .agent-rename has been one since this sweep was written. */
+  .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename, .swarm-chip,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
   .reading-repair, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
@@ -3232,8 +3263,77 @@ body.feed-frozen .programs { opacity: 0.62; }
    The number carries it independently and is where the eye goes to check. */
 .agent-row.ctx-warn .ri-model .ri-value { color: var(--amber); font-weight: 700; }
 .agent-row.ctx-hot .ri-model .ri-value { color: var(--ember); font-weight: 700; }
-/* The Unverified group inside Waiting: quiet and set apart, never styled as
-   finished work. */
-.unverified-group { border-top: 1px dashed var(--unverified); margin-top: 0.5rem; padding-top: 0.5rem; }
-.unverified-group-head { color: var(--unverified); font-size: 0.82rem; }
-.all-clear-roster { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.85rem; }
+/* ---------- the pinned Needs-you strip ----------
+   Ember rail and nothing else: no fill, no border box (Rule 1 — indicator ink).
+   It is the first thing inside #programs, so it reads before any program header
+   without needing weight to win that fight. */
+.needs-strip {
+  margin: 0 0 0.6rem;
+  border-left: 3px solid var(--ember);
+  background: color-mix(in srgb, var(--ember) 4%, var(--surface));
+}
+.needs-strip-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.4rem 0.85rem 0.35rem 0.7rem;
+}
+.needs-strip-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ember);
+}
+.needs-strip-count { font-size: 12px; font-weight: 700; color: var(--ember); }
+.needs-strip-note { font-size: 11.5px; color: var(--faint); }
+/* The empty state is the same block, calm. An operator who scrolls past a busy
+   board has to be able to tell "checked, nothing is asking" from "not looked
+   yet", and an absent strip says neither. */
+.needs-strip.is-clear { border-left-color: var(--moss); background: transparent; }
+.needs-strip.is-clear .needs-strip-title { color: var(--moss); text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+.needs-strip-mark { display: inline-flex; color: var(--moss); }
+.needs-strip-mark .ico { width: 0.9rem; height: 0.9rem; }
+.needs-strip-agents { border-top: 1px solid color-mix(in srgb, var(--ember) 18%, var(--line)); }
+
+/* ---------- lifecycle dividers inside a program group ----------
+   Labels, not controls: no hover, no focus ring, nothing to click. One dashed
+   rule and one restrained treatment for all three; only the ink changes, so
+   they read as one family rather than three competing headings. The Unverified
+   divider is the standalone Unverified group's rule, absorbed — same dashed
+   --unverified edge, same ink, same size, now one section among three. */
+.lifecycle-section {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.85rem 0 0.8rem;
+  border-top: 1px dashed var(--line-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.lifecycle-section--active { color: var(--moss); }
+.lifecycle-section--waiting { color: var(--faint); }
+/* The unverified divider keeps its whole sentence, so it is not tracked caps —
+   it is prose, and prose in uppercase at 0.09em tracking is unreadable. */
+.lifecycle-section--unverified {
+  border-top-color: var(--unverified);
+  color: var(--unverified);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* What a program group says about the rows the strip took. Dim, because it is
+   an explanation of an absence rather than a thing to act on — but present,
+   because a group that silently omitted a session would make the two places an
+   operator looks for it disagree. */
+.pinned-note {
+  margin: 0.3rem 0 0;
+  padding: 0 0.85rem 0 0.8rem;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+/* The empty board's closing line: the constraint that produced the emptiness,
+   under the verdict rather than inside it. */
+.all-clear-note { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }

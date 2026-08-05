@@ -279,10 +279,25 @@ export function deriveRollup(agents) {
 
 export const programRollup = (program) => program.rollup || deriveRollup(program.agents);
 
+/* Does this agent belong in this lens?
+
+   Only `board`, `history` and `usage` are tabs (OPS_VIEWS/VIEWS). The rest are
+   named lenses the board still asks for by hand — `needs-you` is the strip's
+   population and the notifier's, `working` is the landing roster's — and each
+   one is a single expression over the same lifecycle so no two surfaces can
+   answer the same question differently. */
 export function viewMatches(view, agent) {
   const state = lifecycleOf(agent);
   const observed = scopeOf(agent) === "observed";
   switch (view) {
+    /* One scroll over the whole live fleet: working, waiting and unverified,
+       plus anything alerting() rescues (an ended transcript whose process is
+       still up and still asking for a person). It is the union of the three
+       tabs it replaced, so no agent that was reachable before is unreachable
+       now — which is the property that makes collapsing the tabs safe. */
+    case "board":
+      return (observed && (state === "working" || state === "waiting" || state === "unverified"))
+        || alerting(agent);
     // Both read the shared alerting() verdict, so Now and Needs you can never
     // disagree about whether a given agent is waiting on a person.
     case "now": return (observed && state === "working") || alerting(agent);
@@ -299,7 +314,29 @@ export function viewMatches(view, agent) {
   }
 }
 
-/* The Unverified group inside Waiting, which the render draws collapsed. */
+/* Which lifecycle band a row sits in inside its program group, and the order
+   the bands are drawn in. Board only: History is one band by definition, and a
+   divider that says "Waiting" over a finished session would be a lie.
+
+   Read off the SAME lifecycle the sections claim to be about, rather than a
+   second derivation from status — that seam is what let the program rollup
+   count a different population than the tab beside it. A row whose state
+   matches none of the three (an ancestor pulled in to hold a swarm together)
+   returns null and renders above the first divider, unlabelled, because there
+   is no honest label for it. */
+export const LIFECYCLE_SECTIONS = ["active", "waiting", "unverified"];
+
+export function lifecycleSection(agent) {
+  if (scopeOf(agent) !== "observed") return null;
+  switch (lifecycleOf(agent)) {
+    case "working": return "active";
+    case "waiting": return "waiting";
+    case "unverified": return "unverified";
+    default: return null;
+  }
+}
+
+/* The Unverified section at the bottom of each program group on the board. */
 export function isUnverified(agent) {
   return scopeOf(agent) === "observed" && lifecycleOf(agent) === "unverified";
 }
@@ -318,8 +355,12 @@ export function withinLookback(agent, lookbackHours, nowMs = Date.now()) {
   return nowMs - updated <= lookbackHours * 3_600_000;
 }
 
+/* The lookback rides Board because Board now holds what the Waiting tab held —
+   the largest population on the machine, most of it hours old. Working rows are
+   by definition minutes old and never feel it, and the Unverified group is
+   exempt below, so in practice it hides exactly what it hid before. */
 export function lookbackApplies(view) {
-  return view === "waiting" || view === "history";
+  return view === "board" || view === "history";
 }
 
 /* The Unverified group is EXEMPT from the lookback, and that exemption is what
