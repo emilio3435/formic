@@ -224,7 +224,7 @@ export type RoleSource = "declared" | "observed" | "inferred"
 ### Task F2: lineage + provenance chips
 
 Parent chain already renders via `buildClusters`/lineage spine — now populated for Claude swarms by B3; add `roleSource` styling (declared = solid chip, observed = outline, inferred = dashed + tooltip "inferred from title") and a sender chip on `lastHumanMessage` when it parses the producer header `[from <agent.id> run <runId>]` (parser in `src/web/presentation.js`, pure + tested).
-- [ ] TDD in web-client.test.ts; **commit** `feat(board): lineage confidence and message provenance chips`.
+- [x] TDD in web-client.test.ts; **commit** `feat(board): lineage confidence and message provenance chips`. **[DONE 767bd6f, merged]**
 
 ### Task F3: liveness truth + finished shelf
 
