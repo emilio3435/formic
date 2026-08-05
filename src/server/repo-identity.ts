@@ -41,6 +41,40 @@ export function fnvKey(value: string): string {
   return (result >>> 0).toString(36);
 }
 
+function normalizedRemotePath(value: string): string | undefined {
+  const path = value
+    .replaceAll("\\", "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\.git$/i, "");
+  return path || undefined;
+}
+
+/* One logical repository can have HTTPS and SSH clones in unrelated folders.
+   Keep only the stable host/path identity: schemes and credentials describe
+   transport, while a final .git is optional spelling. The normalized value is
+   hashed immediately and is never published. */
+function normalizedOrigin(value: string): string | undefined {
+  const remote = value.split(/\r?\n/, 1)[0]?.trim();
+  if (!remote) return undefined;
+  if (remote.includes("://")) {
+    try {
+      const url = new URL(remote);
+      const path = normalizedRemotePath(url.pathname);
+      if (!path) return undefined;
+      if (url.protocol === "file:") return `file:/${path}`;
+      if (!url.hostname) return undefined;
+      const host = url.hostname.toLowerCase();
+      return `${host}${url.port ? `:${url.port}` : ""}/${path}`;
+    } catch {
+      return undefined;
+    }
+  }
+  const scp = /^(?:[^@\s/:]+@)?([^:/\s]+):(.+)$/.exec(remote);
+  const path = scp ? normalizedRemotePath(scp[2] ?? "") : undefined;
+  return scp && path ? `${scp[1]!.toLowerCase()}/${path}` : undefined;
+}
+
 function isWithin(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
@@ -77,9 +111,11 @@ function readIdentity(
     const commonDir = canonicalPath(resolve(cwd, commonDirRaw.trim()));
     const worktreePath = canonicalPath(resolve(cwd, worktreeRaw.trim()));
     const branch = branchRaw?.trim();
+    const remote = exec(["git", "-C", cwd, "remote", "get-url", "origin"]);
+    const origin = remote.exitCode === 0 ? normalizedOrigin(remote.stdout) : undefined;
     return {
-      repoKey: fnvKey(commonDir),
-      repoName: basename(dirname(commonDir)),
+      repoKey: fnvKey(origin ?? commonDir),
+      repoName: origin ? basename(origin) : basename(dirname(commonDir)),
       worktreePath,
       ...(branch && branch !== "HEAD" ? { branch } : {}),
       ephemeral: isEphemeralWorktree(worktreePath),

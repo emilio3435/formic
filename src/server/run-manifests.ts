@@ -50,6 +50,7 @@ export interface DeclaredLineage {
   laneId: string;
   role: AgentRole;
   parentAgentId?: string;
+  repoRoot?: string;
   succeededBy?: string;
   supersedes?: string;
   taskState?: TaskState;
@@ -320,6 +321,7 @@ export function manifestFactsFor(
         laneId: manifest.runId,
         role: "orchestrator",
         parentAgentId: undefined,
+        repoRoot: manifest.repoRoot,
       };
     }
     for (const lane of manifest.lanes) {
@@ -336,6 +338,7 @@ export function manifestFactsFor(
         laneId: lane.laneId,
         role: lane.role,
         parentAgentId: `${manifest.orchestrator.provider}:${manifest.orchestrator.sessionId}`,
+        repoRoot: manifest.repoRoot,
         ...(bindingAgentId(bindings[bindingIndex + 1])
           ? { succeededBy: bindingAgentId(bindings[bindingIndex + 1]) }
           : {}),
