@@ -2869,7 +2869,11 @@ body.feed-frozen .programs { opacity: 0.62; }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
   .view-tab, .btn, #search, .inspector-close, .swarm-anchor,
-  .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename,
+  /* .swarm-chip joined the sweep when it became the swarm caret: it is the one
+     control that decides whether ten rows are on screen, and a 16px pill is not
+     a target on a phone. The row already tolerates a 44px inline control here —
+     .agent-rename has been one since this sweep was written. */
+  .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename, .swarm-chip,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
   .reading-repair, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
