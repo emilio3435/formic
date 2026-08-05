@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Anthill PATH shim for Factory `droid`.
+#
+# When launched inside cmux with a resumable/fork session id, writes a
+# binding-only (plus cheap start/end lifecycle) record to
+# `$ANTHILL_CMUXTERM_ROOT/factory-hook-sessions.json` (default `~/.cmuxterm`).
+# Existing droid launch paths are unchanged unless this script is placed ahead
+# of the real binary on PATH.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/anthill-hook-shim-common.sh
+source "$SCRIPT_DIR/lib/anthill-hook-shim-common.sh"
+
+PROVIDER="factory"
+REAL_BIN="$(anthill_hook_shim_resolve_bin droid ANTHILL_DROID_BIN || true)"
+if [[ -z "${REAL_BIN:-}" ]]; then
+  echo "anthill-droid: could not resolve real droid binary" >&2
+  exit 127
+fi
+
+SESSION_ID=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  arg="${args[$i]}"
+  if [[ "$arg" == "-r" || "$arg" == "--resume" || "$arg" == "--fork" ]]; then
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+      if [[ "$next" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+        SESSION_ID="$next"
+        break
+      fi
+    fi
+  elif [[ "$arg" =~ ^--resume=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$ ]]; then
+    SESSION_ID="${BASH_REMATCH[1]}"
+    break
+  elif [[ "$arg" =~ ^--fork=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$ ]]; then
+    SESSION_ID="${BASH_REMATCH[1]}"
+    break
+  fi
+done
+
+if ! anthill_hook_shim_should_bind || [[ -z "$SESSION_ID" ]]; then
+  exec "$REAL_BIN" "$@"
+fi
+
+"$REAL_BIN" "$@" &
+CHILD_PID=$!
+anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "running" "$CHILD_PID" "$REAL_BIN" "$@"
+code=0
+wait "$CHILD_PID" || code=$?
+anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "ended" "$CHILD_PID" "$REAL_BIN" "$@"
+exit "$code"
