@@ -60,6 +60,44 @@ describe("server and client answer identically, case by case", () => {
   }
 });
 
+describe("zombie retirement evidence stays identical on both sides", () => {
+  test.each([
+    {
+      name: "an ended hook session is a recorded provider exit",
+      evidence: { ageMs: 1_000, hookLifecycle: "ended", processAlive: true } satisfies LifecycleEvidence,
+      expected: {
+        lifecycle: "finished",
+        provenance: "provider-exit",
+        reason: "Source recorded a session exit.",
+      },
+    },
+    {
+      name: "a gone process in a deleted worktree retires even without retained process ids",
+      evidence: { ageMs: 1_000, processAlive: false, cwdExists: false } satisfies LifecycleEvidence,
+      expected: {
+        lifecycle: "finished",
+        provenance: "process-died",
+        reason: "Process checked and gone after its worktree was deleted.",
+      },
+    },
+  ])("$name", ({ evidence, expected }) => {
+    expect(classifyOnServer(evidence)).toEqual(expected);
+    expect(client.classifyLifecycle(evidence)).toEqual(expected);
+  });
+
+  test("a missing cwd alone and a negative probe against an existing cwd do not retire a session", () => {
+    const cases: LifecycleEvidence[] = [
+      { ageMs: 1_000, cwdExists: false },
+      { ageMs: 1_000, processAlive: false, cwdExists: true },
+    ];
+
+    for (const evidence of cases) {
+      expect(classifyOnServer(evidence).lifecycle).toBe("working");
+      expect(client.classifyLifecycle(evidence)).toEqual(classifyOnServer(evidence));
+    }
+  });
+});
+
 describe("the mirror agrees away from the fixture too", () => {
   /* The fixture pins the rules that were written down. This sweeps the space
      between them, because a divergence in an unwritten corner is still a
@@ -70,7 +108,7 @@ describe("the mirror agrees away from the fixture too", () => {
     10 * 60_000, 44 * 60_000, DEFAULT_QUIET_MS - 1, DEFAULT_QUIET_MS, DEFAULT_QUIET_MS + 1,
     90 * 60_000, 5 * 3_600_000, 47 * 3_600_000, 49 * 3_600_000, 30 * 86_400_000,
   ];
-  const END_EVIDENCE = [undefined, "session-exit", "turn-complete"] as const;
+  const END_EVIDENCE = [undefined, "session-exit", "turn-complete", "worktree-deleted"] as const;
   const PROCESS = [
     {},
     { processAlive: true, processIds: [4242] },

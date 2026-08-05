@@ -213,8 +213,9 @@ leave it there, and keep the session running. Identification works first from
 cmux's hook-session record when its stable surface still exists; otherwise it
 falls back to finding the session's transcript held open by a process on that
 pane, or the session ID in the command that started it. Hook records also report
-`running`, `idle`, `needsInput`, or `unknown`, and their PID is accepted as live
-only when its recorded process start still matches. An agent started in an
+`running`, `idle`, `needsInput`, `ended`, or `unknown`, and their PID is accepted
+as live only when its recorded process start still matches. An `ended` hook is
+an ending, not another quiet session. An agent started in an
 ordinary terminal, or in a pane that has since moved elsewhere, has none of
 these, so it can be watched but not typed into. No setting turns any of this
 off; the controls come back on their own within a few seconds of the board being
@@ -270,7 +271,7 @@ the board is written in.
 | **Working** | Actively producing — source activity in the last few minutes. |
 | **Waiting** | Open but not producing: it finished a turn and is waiting on you, or it has gone quiet while its process is still live. |
 | **Unverified** | Silent for a while, and no matching process was found. Ant Hill cannot tell whether it is still alive — so it says that, instead of guessing. |
-| **Finished** | Ended with evidence: the source recorded a session exit, you archived it, or its process is confirmed gone. |
+| **Finished** | Ended with evidence: the source or hook recorded a session exit, you archived it, its process is confirmed gone, or its process is gone and its worktree was deleted. |
 
 **Unverified is the one worth understanding.** It is not a broken session and it
 is not a finished one — it is a gap in what the board can see. A session whose
@@ -285,8 +286,9 @@ them ending — the board simply could not see them and said "ended" anyway, whi
 is how a running session became impossible to find.
 
 A finished session also says *why* it finished: a recorded session exit, your own
-archive, a process confirmed gone, or "no longer watched" for one that drifted
-out of the scan window. Those are four different facts and used to be one word.
+archive, a process confirmed gone (including a deleted-worktree retirement), or
+"no longer watched" for one that drifted out of the scan window. Those are four
+different facts and used to be one word.
 
 `Board` and `History` also apply a *lookback* window (6 hours by default) that
 you can widen from the filter bar. The Unverified group is exempt, as above.

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { JsonArchiveStore } from "./archive";
+import { createAgentLinkFetch } from "./agent-links";
 import { createMountainFetch } from "./app";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
@@ -67,11 +68,18 @@ const mountainFetch = createMountainFetch({
   cmuxExecutable,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });
+const fetchWithAgentLinks = createAgentLinkFetch(mountainFetch, {
+  getSnapshot: () => state.get(),
+  surfaces: () => state.surfaces(),
+  runner,
+  archiveStore,
+  cmuxExecutable,
+});
 const server = Bun.serve({
   hostname: HOSTNAME,
   port: configuredPort,
   idleTimeout: 120,
-  fetch: mountainFetch,
+  fetch: fetchWithAgentLinks,
 });
 
 let refreshNumber = 0;
