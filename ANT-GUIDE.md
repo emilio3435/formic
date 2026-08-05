@@ -181,9 +181,12 @@ its process is still alive, and the four buttons that act on it.
 be labelled *You* whether or not you wrote it — and on any swarm you did not,
 because the orchestrator sent it. Messages between agents carry a header,
 `[from <agent id> run <run id>]`, so the drawer now names the sender and prints
-*sent in run …* underneath, with the header itself taken off the text. A turn
-still labelled **You** really is one of yours. That is the useful half: an
-instruction you did not write can no longer wear your name.
+*sent in run …* underneath, with the header itself taken off the text. The
+server checks that claim against the named sender's own bounded transcript tail:
+a readable tail without the message carries `senderVerified: false`, while an
+unreadable transcript carries no verdict. A turn still labelled **You** has no
+agent header and is treated as direct operator input; this is provenance
+checking, not cryptographic authentication.
 
 | Button | Does |
 |---|---|

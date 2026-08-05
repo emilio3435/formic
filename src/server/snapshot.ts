@@ -63,6 +63,7 @@ import {
   type RunManifest,
 } from "./run-manifests";
 import type { SessionNameRecord } from "./session-names";
+import { senderVerificationFor } from "./sender-verification";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -105,6 +106,8 @@ export interface SnapshotInput {
   scanWindowHours?: number;
   /** The operator's freshness and quiet bands; defaults when absent. */
   thresholds?: LifecycleThresholds;
+  /** Readable bounded transcript tails keyed by the sender identity they attest. */
+  senderTranscriptTails?: ReadonlyMap<string, string>;
   /**
    * The identity scan enumerated every process without error, so a session no
    * process claims has been observed to be gone rather than merely unchecked.
@@ -274,6 +277,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const archived = input.archiveStore.has(source.id) || source.status === "archived";
     const target = targetsById.get(source.id)!;
     const declared = declaredById.get(source.id);
+    const senderVerified = input.senderTranscriptTails
+      ? senderVerificationFor(source, input.senderTranscriptTails)
+      : undefined;
     let identityTrace: IdentityTrace | undefined;
     const readIdentityTrace = (): IdentityTrace => {
       identityTrace ??= resolveAgentTargetWithTrace(source, input.surfaces, sources).trace;
@@ -483,6 +489,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          own defaults must not arrive on the board wearing a rename's authority. */
       surfaceTitle: paneRename(surface?.title, surface?.cwd),
       lastUserMessage: source.lastUserMessage,
+      ...(senderVerified === undefined ? {} : { senderVerified }),
       lastAgentMessage: source.lastAgentMessage,
       lastAgentClosing: source.lastAgentClosing,
       lastHumanMessage: source.lastHumanMessage !== undefined

@@ -257,7 +257,7 @@ describe("ARCHITECTURE.md carries the contract detail README no longer does", ()
      document is a claim nothing protects. */
 
   test("the snapshot fields it names are fields the snapshot carries", () => {
-    for (const field of ["contextPct", "attentionSignal", "lastHumanMessage"]) {
+    for (const field of ["contextPct", "attentionSignal", "lastHumanMessage", "senderVerified"]) {
       expect(architecture, `ARCHITECTURE.md stopped documenting ${field}`).toContain(field);
       expect(read("src/shared/types.ts"), `${field} left the snapshot contract`).toContain(field);
     }

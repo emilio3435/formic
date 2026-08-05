@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { homedir, uptime } from "node:os";
 import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
@@ -38,6 +38,7 @@ import {
   type NameCandidate,
 } from "./session-names";
 import { readRunManifests, type RunManifest } from "./run-manifests";
+import { senderTranscriptTailsFor } from "./sender-verification";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -61,6 +62,27 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 
 const REFRESH_WATCHDOG_MS = 12_000;
 export const REFRESH_AGGREGATE_TIMEOUT_MS = 10_000;
+
+async function readBoundedTranscriptTail(path: string, maxBytes: number): Promise<string | undefined> {
+  const handle = await open(path, "r");
+  try {
+    const before = await handle.stat();
+    const length = Math.min(before.size, Math.max(0, Math.floor(maxBytes)));
+    const buffer = Buffer.alloc(length);
+    const offset = before.size - length;
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const read = await handle.read(buffer, bytesRead, length - bytesRead, offset + bytesRead);
+      if (read.bytesRead === 0) break;
+      bytesRead += read.bytesRead;
+    }
+    const after = await handle.stat();
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return undefined;
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
 
 /* Everything optional about a HubState, as one bag rather than a positional
    tail.
@@ -554,6 +576,10 @@ export class HubState {
     const publishedAgents = this.witnessStore
       ? applyProcessWitness(bridgedAgents, this.witnessStore, this.#bootId)
       : bridgedAgents;
+    const senderTranscriptTailsPromise = senderTranscriptTailsFor(
+      [...(this.archiveStore.archivedAgents?.() ?? []), ...publishedAgents],
+      readBoundedTranscriptTail,
+    );
     if (this.witnessStore && this.#rosterComplete) {
       /* Only a completed scan may write witnesses: a partial one would record
          "nothing was running" for sessions it simply never looked at, and that
@@ -570,6 +596,7 @@ export class HubState {
       historyError = `session history persistence failed: ${error instanceof Error ? error.message : String(error)}`;
       console.error(`[HubState] ${historyError}`);
     }
+    const senderTranscriptTails = await senderTranscriptTailsPromise;
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [
         provider,
@@ -580,9 +607,9 @@ export class HubState {
         ])],
       ]),
     ) as Record<Provider, string[]>;
-    /* The witness and archive writes above are the last awaits before this
-       pass publishes. A pass superseded during them would otherwise replace a
-       newer board with readings taken before it. */
+    /* The witness, archive and bounded transcript reads above are the last
+       awaits before this pass publishes. A pass superseded during them would
+       otherwise replace a newer board with readings taken before it. */
     if (this.#superseded(generation)) return this.#snapshot;
     this.#sourceAbsent = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].absent === true]),
@@ -611,6 +638,7 @@ export class HubState {
       scanWindowHours: this.#scanWindowHours,
       thresholds,
       processRosterComplete: this.#rosterComplete,
+      senderTranscriptTails,
     }));
     this.#hasSourceSnapshot = true;
     this.#recentlyResolved = [...(built.recentlyResolved ?? [])];
