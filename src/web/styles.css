@@ -1251,6 +1251,38 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 .program-agents { border-top: 1px solid var(--line); }
 .program:not(.open) .program-agents { display: none; border-top: 0; }
+
+/* ---------- repo bands ----------
+
+   The repository is the section and its worktrees are the subsections inside
+   it, so this layer must NOT read as a second card: two stacked bordered
+   headers over one row of work is chrome, not hierarchy. It is a titled rule —
+   name, worktree count, PR links — and the worktree cards keep the card
+   treatment they already had, indented under it. */
+
+.repo-section { margin-bottom: 1.2rem; }
+.repo-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.15rem 0.35rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.65rem;
+}
+.repo-caret { flex: none; color: var(--faint); font-size: 11px; transition: transform 150ms ease; display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: var(--radius-sm); }
+.repo-caret:hover { color: var(--ink); background: var(--raise); }
+.repo-section.open .repo-caret { transform: rotate(90deg); }
+/* Truncates for the same reason the program name does: one line, any width. */
+.repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: 0.95rem; letter-spacing: -0.005em; }
+.repo-worktree-count { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.repo-pr { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 0.32rem; }
+.repo-pr:hover { color: var(--ember); border-color: var(--line-strong); }
+.repo-worktrees { padding-left: 0.55rem; border-left: 1px solid var(--line); }
+.repo-worktrees .program:last-child { margin-bottom: 0; }
+/* A collapsed band plans no subsections, so without this its indent rule would
+   still draw — a 1px stub hanging under a folded-up repository. */
+.repo-section:not(.open) .repo-worktrees { display: none; }
+
 /* ---------- agent rows ---------- */
 
 .agent-row {
