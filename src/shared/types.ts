@@ -410,7 +410,8 @@ export interface AgentSnapshot {
       | "fork-unresolved"
       | "handoff-stated"
       | "question-pending"
-      | "assumption-stated";
+      | "assumption-stated"
+      | "stalled-active";
     evidence?: string;
   };
   parentAgentId?: string;

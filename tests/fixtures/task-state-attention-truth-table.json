@@ -122,6 +122,48 @@
         }
       },
       "expected": true
+    },
+    {
+      "name": "a stalled-active signal opens the existing door for an active lane",
+      "evidence": {
+        "taskState": "active",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T11:29:00.000Z",
+        "attentionSignal": {
+          "kind": "stalled-active"
+        }
+      },
+      "expectedHook": false,
+      "expected": true
+    },
+    {
+      "name": "a stalled-active signal never reopens a parked lane",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T11:29:00.000Z",
+        "attentionSignal": {
+          "kind": "stalled-active"
+        }
+      },
+      "expectedHook": false,
+      "expected": false
+    },
+    {
+      "name": "a stalled-active signal never reopens a done lane",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T11:29:00.000Z",
+        "attentionSignal": {
+          "kind": "stalled-active"
+        }
+      },
+      "expectedHook": false,
+      "expected": false
     }
   ]
 }

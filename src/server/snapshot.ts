@@ -116,6 +116,8 @@ export interface SnapshotInput {
   scanWindowHours?: number;
   /** The operator's freshness and quiet bands; defaults when absent. */
   thresholds?: LifecycleThresholds;
+  /** Idle-hook threshold for a manifest-active lane; defaults to 30 minutes. */
+  stalledActiveMinutes?: number;
   /** Readable transcript evidence keyed by sender, including whether the read was complete. */
   senderTranscriptTails?: ReadonlyMap<string, SenderTranscriptEvidence>;
   /**
@@ -514,6 +516,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         activity,
         processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
+        taskState: declared?.taskState,
+        taskStateSource: declared?.taskState && declared.taskStateAt ? "manifest" : undefined,
+        hookLifecycle: source.hookLifecycle,
+        hookLifecycleAt: source.hookLifecycleAt,
+        nowMs,
+        stalledActiveMinutes: input.stalledActiveMinutes,
       }, outcome, controlState),
       parentAgentId: parentById.get(source.id),
       succeededBy: declared?.succeededBy,

@@ -199,6 +199,14 @@ as before. For `parked` and `done`, a hook recorded at or before `statusAt` goes
 quiet, while a strictly newer `needsInput` re-alerts — a parked lane that asks a
 new question is therefore reachable again.
 
+An `active` lane also gets a **stalled-active** attention signal when its hook
+has remained `idle` for strictly more than 30 minutes. The row says how long it
+has been idle and offers one action: “Nudge it or park it.” Set
+`stalledActiveMinutes` in `data/settings.json` (5–480) to change that threshold.
+No hook record or no valid `hookLifecycleAt` means no staleness claim;
+`running`, `needsInput`, `parked`, and `done` lanes never qualify. This is an
+attention signal only and does not change the session lifecycle.
+
 Changing the lane's bound `sessionId` is different. When the run's additive
 history records an older binding, the board links the sessions as `succeededBy`
 and `supersedes`, then files the predecessor as **Finished** with

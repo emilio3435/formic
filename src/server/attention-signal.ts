@@ -27,9 +27,12 @@
 import type {
   ActivityState,
   AgentSnapshot,
+  HookLifecycle,
   OperatorControlState,
   OutcomeState,
   ProcessState,
+  TaskState,
+  TaskStateSource,
 } from "../shared/types";
 import { stripTimestampMarkup } from "./human-message";
 
@@ -46,6 +49,8 @@ export type AttentionSignalKind =
   | "question-pending"
   /** The agent proceeded on a stated assumption and invited correction. */
   | "assumption-stated"
+  /** A manifest says work is active, but its hook has stayed idle too long. */
+  | "stalled-active"
   /* The agent's closing words were readable and say nothing that wants a human.
      Silence here is a finding: we looked. */
   | "nothing-wanted"
@@ -64,7 +69,7 @@ export interface AttentionSignal {
   kind: AttentionSignalKind;
   /** One thing the operator can do. Absent for nothing-wanted and not-readable. */
   nextAction?: string;
-  /** The agent's own words behind the reading, so the row can quote, not paraphrase. */
+  /** The source evidence behind the reading, so the row can show why it fired. */
   evidence?: string;
 }
 
@@ -91,9 +96,18 @@ export interface AttentionSignalInput {
      one. Retained records are out of scope here anyway; the type says so. */
   processState?: ProcessState;
   transcriptEndedCleanly?: boolean;
+  taskState?: TaskState;
+  taskStateSource?: TaskStateSource;
+  hookLifecycle?: HookLifecycle;
+  hookLifecycleAt?: string;
+  /** Snapshot clock, injected so threshold boundaries are deterministic in tests. */
+  nowMs?: number;
+  /** Operator setting from data/settings.json; defaults when absent. */
+  stalledActiveMinutes?: number;
 }
 
 const MAX_EVIDENCE_CHARS = 160;
+export const DEFAULT_STALLED_ACTIVE_MINUTES = 30;
 
 /* A pending question is an INTERROGATIVE clause that the message ends on — not
    merely a paragraph whose last character is "?".
@@ -333,6 +347,33 @@ function isActionable(kind: AttentionSignalKind): kind is ActionableKind {
   return kind !== "nothing-wanted" && kind !== "not-readable" && kind !== "out-of-scope";
 }
 
+function stalledActiveSignal(input: AttentionSignalInput): AttentionSignal | undefined {
+  if (
+    input.taskState !== "active"
+    || input.taskStateSource !== "manifest"
+    || input.hookLifecycle !== "idle"
+  ) return undefined;
+
+  const hookLifecycleAtMs = Date.parse(input.hookLifecycleAt ?? "");
+  const nowMs = input.nowMs;
+  const thresholdMinutes = input.stalledActiveMinutes ?? DEFAULT_STALLED_ACTIVE_MINUTES;
+  if (
+    !Number.isFinite(hookLifecycleAtMs)
+    || typeof nowMs !== "number"
+    || !Number.isFinite(nowMs)
+    || !Number.isFinite(thresholdMinutes)
+    || thresholdMinutes <= 0
+  ) return undefined;
+
+  const idleMs = nowMs - hookLifecycleAtMs;
+  if (idleMs <= thresholdMinutes * 60_000) return undefined;
+  return {
+    kind: "stalled-active",
+    nextAction: "Nudge it or park it.",
+    evidence: `Hook idle for ${Math.floor(idleMs / 60_000)} minutes; manifest declares active.`,
+  };
+}
+
 export function detectAttentionSignal(input: AttentionSignalInput): AttentionSignal {
   /* A dead session cannot be answered, so it is never asked anything.
 
@@ -429,6 +470,12 @@ export function detectAttentionSignal(input: AttentionSignalInput): AttentionSig
       evidence: truncate(sentenceAround(spoken, assumption.index)),
     };
   }
+
+  /* Structural fallback after every direct request: this opens a door only for
+     a silent manifest-active lane and never changes the priority of an ask the
+     existing detectors already understood. */
+  const stalled = stalledActiveSignal(input);
+  if (stalled) return stalled;
 
   /* Nothing wanted, or nothing to read? The board stays silent either way, but
      they are different facts and only one of them is a finding. Conflating them
