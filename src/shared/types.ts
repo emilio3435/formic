@@ -120,6 +120,12 @@ type AgentRolesAreExhaustive = Exclude<AgentRole, (typeof AGENT_ROLES)[number]> 
 const _agentRolesAreExhaustive: AgentRolesAreExhaustive = true;
 void _agentRolesAreExhaustive;
 export type RoleSource = "declared" | "observed" | "inferred";
+
+export interface AgentLineage {
+  observedParentAgentId: string;
+}
+
+export type LineageAgreement = "corroborated" | "contradicted" | "unobserved";
 export type AgentSpecialty = "frontend" | "backend";
 export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
 /* `unarchive` is net-new. The board has told operators "Un-archive it from
@@ -429,6 +435,10 @@ export interface AgentSnapshot {
   repo?: RepoIdentity;
   pullRequestUrls?: string[];
   subagentCount?: number;
+  /** Kernel-observed ancestry, kept separate from the authoritative parent chain. */
+  lineage?: AgentLineage;
+  /** Whether kernel ancestry confirms the parent chain published for this session. */
+  lineageAgreement?: LineageAgreement;
   transcriptTail?: string;
   artifacts: Artifact[];
   git?: { branch?: string; dirty?: boolean; head?: string };
