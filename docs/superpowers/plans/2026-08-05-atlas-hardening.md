@@ -1,6 +1,6 @@
 # Atlas Hardening Plan — truth, lineage, and the parked/blocked/done distinction
 
-> **Status: DRAFT for Emilio's ratification — not yet ratified, no lanes spawned.**
+> **Status: RATIFIED 2026-08-05 ("LFG") — lanes live under run `atlas-hardening-2026-08-05`.**
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development or superpowers:executing-plans, task-by-task, checkbox tracking. Same repo conventions as `2026-08-05-agent-atlas-regroup.md` (NUL file, docs parity, single-writer files, sandbox caveat, spawn contract).
 
 **Goal:** Close the gaps the atlas program's own live run exposed: sessions that are *done* or *parked* still read as needing you; lineage binds only what was declared at birth; one session wears different names on different surfaces; and trust in declarations is unverified.
