@@ -360,7 +360,11 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const updatedAtMs = Date.parse(source.updatedAt);
     const scope: CollectionScope = collectedIds.has(source.id) ? "observed" : "retained";
     const operatorArchived = input.archiveStore.has(source.id);
-    const verdict = lifecycleFor(source, {
+    const endEvidence = declared?.succeededBy ? "superseded" as const : source.endEvidence;
+    const lifecycleSource = endEvidence === source.endEvidence
+      ? source
+      : { ...source, endEvidence };
+    const verdict = lifecycleFor(lifecycleSource, {
       operatorArchived,
       scope,
       nowMs,
@@ -459,6 +463,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,
       scope,
+      endEvidence,
       ...(declared?.taskState && declared.taskStateAt
         ? {
             taskState: declared.taskState,
@@ -493,6 +498,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
       parentAgentId: parentById.get(source.id),
+      succeededBy: declared?.succeededBy,
+      supersedes: declared?.supersedes,
       lineageAgreement: lineageAgreementById.get(source.id),
       threadDepth: source.threadDepth,
       nickname: source.nickname,
@@ -526,7 +533,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       controls: controlsFor(
         source,
         target,
-        archived,
+        archived || endEvidence === "superseded",
         identityTrace,
         Boolean(input.archiveStore.unarchive) && operatorArchived,
       ),

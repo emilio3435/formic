@@ -57,6 +57,24 @@
       }
     },
     {
+      "name": "a newer lane session retires its predecessor",
+      "row": 2,
+      "claim": "A manifest replacement is an observed lane ending even when the predecessor process is still alive.",
+      "evidence": {
+        "ageMs": 1000,
+        "endEvidence": "superseded",
+        "processAlive": true,
+        "processIds": [
+          4242
+        ]
+      },
+      "expect": {
+        "lifecycle": "finished",
+        "provenance": "provider-exit",
+        "reason": "Replaced by a newer session for this lane."
+      }
+    },
+    {
       "name": "a recorded session exit outranks the clock",
       "row": 2,
       "claim": "A source that says the session is over is believed even one second after it wrote.",
@@ -493,6 +511,25 @@
       "evidence": {
         "ageMs": 604800000,
         "scope": "retained",
+        "persisted": {
+          "lifecycle": "finished",
+          "provenance": "operator-archive"
+        }
+      },
+      "expect": {
+        "lifecycle": "finished",
+        "provenance": "operator-archive",
+        "reason": "Archived by operator."
+      }
+    },
+    {
+      "name": "a retained operator archive outranks later succession evidence",
+      "row": 12,
+      "claim": "A newer lane binding cannot rewrite a human filing decision after the archive has custody.",
+      "evidence": {
+        "ageMs": 10800000,
+        "scope": "retained",
+        "endEvidence": "superseded",
         "persisted": {
           "lifecycle": "finished",
           "provenance": "operator-archive"

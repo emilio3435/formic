@@ -75,7 +75,7 @@ export interface LifecycleEvidence {
   /** An operator pressed Archive. Human intent, and it outranks everything. */
   operatorArchived?: boolean;
   /**
-   * What ended. `session-exit` and `worktree-deleted` are session facts;
+   * What ended. `session-exit`, `worktree-deleted`, and `superseded` are session facts;
    * `turn-complete` is a turn boundary and says nothing about the session.
    */
   endEvidence?: EndEvidence;
@@ -119,7 +119,11 @@ export function retirementEndEvidence(evidence: Pick<
   LifecycleEvidence,
   "endEvidence" | "hookLifecycle" | "processAlive" | "cwdExists"
 >): EndEvidence | undefined {
-  if (evidence.endEvidence === "session-exit" || evidence.endEvidence === "worktree-deleted") {
+  if (
+    evidence.endEvidence === "session-exit"
+    || evidence.endEvidence === "worktree-deleted"
+    || evidence.endEvidence === "superseded"
+  ) {
     return evidence.endEvidence;
   }
   if (evidence.hookLifecycle === "ended") return "session-exit";
@@ -182,6 +186,20 @@ export function spokenMinutes(ms: number): string {
    deliberately never used for an in-scope Finished verdict. */
 function retainedVerdict(evidence: LifecycleEvidence): LifecycleVerdict {
   const lifecycle = evidence.persisted?.lifecycle ?? "finished";
+  if (lifecycle === "finished" && evidence.persisted?.provenance === "operator-archive") {
+    return {
+      lifecycle,
+      provenance: "operator-archive",
+      reason: finishedReason("operator-archive"),
+    };
+  }
+  if (lifecycle === "finished" && evidence.endEvidence === "superseded") {
+    return {
+      lifecycle,
+      provenance: "provider-exit",
+      reason: "Replaced by a newer session for this lane.",
+    };
+  }
   if (lifecycle === "finished" && evidence.persisted?.provenance) {
     return {
       lifecycle,
@@ -236,6 +254,16 @@ export function classifyLifecycle(
       lifecycle: "finished",
       provenance: "operator-archive",
       reason: finishedReason("operator-archive"),
+    };
+  }
+
+  // Row 2 — a newer manifest binding closes the predecessor's lane cycle. Its
+  // process may still be alive, which remains separate physical evidence.
+  if (endEvidence === "superseded") {
+    return {
+      lifecycle: "finished",
+      provenance: "provider-exit",
+      reason: "Replaced by a newer session for this lane.",
     };
   }
 

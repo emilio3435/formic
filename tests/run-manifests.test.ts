@@ -181,6 +181,121 @@ function manifest(): RunManifest {
   };
 }
 
+test("lane history links every session cycle and retires each predecessor", async () => {
+  const root = await mkdtemp(join(tmpdir(), "anthill-run-succession-"));
+  try {
+    await writeFile(join(root, "manifest-run.json"), JSON.stringify({
+      runId: "manifest-run",
+      createdAt: "2026-08-05T12:00:00.000Z",
+      repoRoot: process.cwd(),
+      orchestrator: { provider: "claude", sessionId: "manifest-orchestrator" },
+      lanes: [{
+        laneId: "be-manifest-lane",
+        role: "worker",
+        provider: "codex",
+        sessionId: "cycle-3",
+        status: "active",
+        statusAt: "2026-08-05T12:01:00.000Z",
+      }],
+    }), "utf8");
+    await writeFile(join(root, "manifest-run.history.jsonl"), [
+      JSON.stringify({
+        at: "2026-08-05T11:00:00.000Z",
+        op: "boot",
+        laneId: "be-manifest-lane",
+        provider: "codex",
+        sessionId: "cycle-1",
+      }),
+      "{not-json",
+      JSON.stringify({
+        // Append order is authoritative; a caller-supplied clock can move backward.
+        at: "2026-08-05T10:30:00.000Z",
+        op: "backfill",
+        laneId: "be-manifest-lane",
+        provider: "codex",
+        sessionId: "cycle-2",
+        previousProvider: null,
+        previousSessionId: "cycle-1",
+        succession: true,
+      }),
+      JSON.stringify({
+        at: "2026-08-05T11:45:00.000Z",
+        op: "done",
+        laneId: "be-manifest-lane",
+        provider: "codex",
+        sessionId: "cycle-2",
+      }),
+    ].join("\n") + "\n", "utf8");
+
+    const manifests = readRunManifests([root]);
+
+    expect(Object.keys(manifests[0]!)).not.toContain("history");
+    expect(manifestFactsFor("codex:cycle-1", manifests)).toMatchObject({
+      runId: "manifest-run",
+      laneId: "be-manifest-lane",
+      succeededBy: "codex:cycle-2",
+    });
+    expect(manifestFactsFor("codex:cycle-2", manifests)).toMatchObject({
+      supersedes: "codex:cycle-1",
+      succeededBy: "codex:cycle-3",
+    });
+    expect(manifestFactsFor("codex:cycle-3", manifests)).toMatchObject({
+      supersedes: "codex:cycle-2",
+      taskState: "active",
+      taskStateAt: "2026-08-05T12:01:00.000Z",
+    });
+
+    const sources = ["cycle-1", "cycle-2", "cycle-3"].map((sessionId) => collected({
+      id: `codex:${sessionId}`,
+      sourceSessionId: sessionId,
+      displayName: sessionId,
+      processAlive: true,
+      processIds: [4242],
+    }));
+    const snapshot = buildSnapshot({
+      agents: sources,
+      surfaces: sources.map((source, index) => ({
+        workspaceId: `WORKSPACE-SUCCESSION-${index}`,
+        surfaceId: `SURFACE-SUCCESSION-${index}`,
+        cwd: process.cwd(),
+        sourceSessionIds: [source.sourceSessionId],
+      })),
+      runManifests: manifests,
+      archiveStore,
+      now: new Date("2026-08-05T12:01:30.000Z"),
+    });
+    const agents = snapshot.programs.flatMap((program) => program.agents);
+    const first = agents.find((agent) => agent.id === "codex:cycle-1");
+    const second = agents.find((agent) => agent.id === "codex:cycle-2");
+    const current = agents.find((agent) => agent.id === "codex:cycle-3");
+
+    expect(first).toMatchObject({
+      lifecycle: "finished",
+      provenance: "provider-exit",
+      statusReason: "Replaced by a newer session for this lane.",
+      endEvidence: "superseded",
+      processState: "running",
+      controlState: "observed-only",
+      succeededBy: "codex:cycle-2",
+    });
+    expect(first?.controls.find(({ action }) => action === "instruct")?.enabled).toBe(false);
+    expect(second).toMatchObject({
+      lifecycle: "finished",
+      endEvidence: "superseded",
+      supersedes: "codex:cycle-1",
+      succeededBy: "codex:cycle-3",
+    });
+    expect(current).toMatchObject({
+      lifecycle: "working",
+      endEvidence: undefined,
+      supersedes: "codex:cycle-2",
+      taskState: "active",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("manifest lineage outranks workspace env and transcript parentage, including run grouping", () => {
   const repo = resolveRepoIdentity(process.cwd());
   expect(repo).not.toBeNull();

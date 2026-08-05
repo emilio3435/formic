@@ -197,6 +197,13 @@ as before. For `parked` and `done`, a hook recorded at or before `statusAt` goes
 quiet, while a strictly newer `needsInput` re-alerts — a parked lane that asks a
 new question is therefore reachable again.
 
+Changing the lane's bound `sessionId` is different. When the run's additive
+history records an older binding, the board links the sessions as `succeededBy`
+and `supersedes`, then files the predecessor as **Finished** with
+`endEvidence: "superseded"`. That closes the older lane cycle without claiming
+its process exited: a lingering predecessor can still truthfully say its process
+is running while its lane belongs to the newer session.
+
 The collector checks hook-backed sessions against one kernel process table per
 scan. Exact ancestry is recorded separately as `lineage.observedParentAgentId`;
 `lineageAgreement` is `corroborated`, `contradicted`, or `unobserved`. A
@@ -394,7 +401,7 @@ the board is written in.
 | **Working** | Actively producing — source activity in the last few minutes. |
 | **Waiting** | Open but not producing: it finished a turn and is waiting on you, or it has gone quiet while its process is still live. |
 | **Unverified** | Silent for a while, and no matching process was found. Ant Hill cannot tell whether it is still alive — so it says that, instead of guessing. |
-| **Finished** | Ended with evidence: the source or hook recorded a session exit, you archived it, its process is confirmed gone, or its process is gone and its worktree was deleted. |
+| **Finished** | Ended with evidence: the source or hook recorded a session exit, a manifest lane moved to a newer session, you archived it, its process is confirmed gone, or its process is gone and its worktree was deleted. |
 
 **Unverified is the one worth understanding.** It is not a broken session and it
 is not a finished one — it is a gap in what the board can see. A session whose
@@ -408,10 +415,11 @@ Sessions used to be filed as finished in this situation. Nothing had observed
 them ending — the board simply could not see them and said "ended" anyway, which
 is how a running session became impossible to find.
 
-A finished session also says *why* it finished: a recorded session exit, your own
-archive, a process confirmed gone (including a deleted-worktree retirement), or
-"no longer watched" for one that drifted out of the scan window. Those are four
-different facts and used to be one word.
+A finished session also says *why* it finished: a recorded session exit,
+replacement by a newer session for the same lane, your own archive, a process
+confirmed gone (including a deleted-worktree retirement), or "no longer watched"
+for one that drifted out of the scan window. Those are distinct facts and used
+to be one word.
 
 `Board` and `History` also apply a *lookback* window (6 hours by default) that
 you can widen from the filter bar. The Unverified group is exempt, as above.

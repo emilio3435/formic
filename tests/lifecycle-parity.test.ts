@@ -140,7 +140,13 @@ describe("the mirror agrees away from the fixture too", () => {
     10 * 60_000, 44 * 60_000, DEFAULT_QUIET_MS - 1, DEFAULT_QUIET_MS, DEFAULT_QUIET_MS + 1,
     90 * 60_000, 5 * 3_600_000, 47 * 3_600_000, 49 * 3_600_000, 30 * 86_400_000,
   ];
-  const END_EVIDENCE = [undefined, "session-exit", "turn-complete", "worktree-deleted"] as const;
+  const END_EVIDENCE = [
+    undefined,
+    "session-exit",
+    "turn-complete",
+    "worktree-deleted",
+    "superseded",
+  ] as const;
   const PROCESS = [
     {},
     { processAlive: true, processIds: [4242] },
