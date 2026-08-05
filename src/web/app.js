@@ -1230,6 +1230,11 @@ globalThis.TheAntHill = {
   // gates is asserted through handleRowNavigation instead.
   nextRowIndex, handleRowNavigation, nextViewIndex, handleCockpitKeys, isTypingTarget, firstLoadPending, renderSkeleton, renderEmpty,
   reconcileKeyed, agentRowSig, agentRowPlan, programShellSig, syncProgramList,
+  // The repo → worktree/run grouping, as pure functions: what the board's
+  // sections ARE and what each subsection is CALLED, decidable without a DOM.
+  // (RUN_GROUP_PREFIX stays out — it is a `const` declared below this block,
+  // the TDZ hazard the note above is about.)
+  repoGroups, worktreeLabel,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
@@ -3906,16 +3911,49 @@ function baseName(path) {
   return trimmed ? trimmed.slice(trimmed.lastIndexOf("/") + 1) : "";
 }
 
+function parentName(path) {
+  const trimmed = String(path || "").replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  return cut > 0 ? baseName(trimmed.slice(0, cut)) : "";
+}
+
+/* B3 sets `groupPath[1] = "run:<runId>"` when a manifest or ANTHILL_RUN
+   declared one, so the second axis is either a worktree hash or a named run.
+   Empty after the marker is not a run — that would name a subsection "". */
+const RUN_GROUP_PREFIX = "run:";
+
+function declaredRunId(program) {
+  const key = program && Array.isArray(program.groupPath) ? String(program.groupPath[1] || "") : "";
+  return key.startsWith(RUN_GROUP_PREFIX) ? key.slice(RUN_GROUP_PREFIX.length) : "";
+}
+
 /* What a worktree subsection is CALLED. The repository name is printed by the
    band above it, so repeating it here would spend the widest line on the board
    saying nothing; what distinguishes two checkouts of one repo is the branch
-   and the directory. B3 replaces this with the declared runId when there is
-   one — a run is a better answer than a path, and it is a fact rather than a
-   derivation. */
+   and the directory.
+
+   A DECLARED RUN outranks both, because a run spans worktrees: the live atlas
+   run holds four lanes in four different checkouts, and `branch@basename` there
+   reads whichever lane's agent happened to sort first — a name that is false
+   about the other three. The runId is declared at spawn rather than derived
+   from a path, which is the entire point of the spawn contract. */
 function worktreeLabel(program) {
+  const runId = declaredRunId(program);
+  if (runId) return runId;
   const repo = repoOf(program);
-  const base = baseName((repo && repo.worktreePath) || (program && program.path) || "");
+  const path = (repo && repo.worktreePath) || (program && program.path) || "";
   const branch = (repo && repo.branch) || "";
+  const repoName = (repo && repo.repoName) || "";
+  let base = baseName(path);
+  /* A checkout whose folder is NAMED after the repository tells the operator
+     nothing the band above has not said — and `~/.codex/worktrees/<hash>/<repo>`
+     is exactly that shape, with no branch either, so eight live disposable
+     checkouts of one repo all rendered as its name. What separates them is the
+     directory above, which is the run that minted them.
+
+     Only when there is no branch: a branch already distinguishes the checkout,
+     and `main@the-mountain` must not become `main@Developer`. */
+  if (!branch && base && base === repoName) base = parentName(path) || base;
   if (branch && base) return branch + "@" + base;
   return base || branch || (program ? program.name : "");
 }

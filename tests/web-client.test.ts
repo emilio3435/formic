@@ -9659,6 +9659,107 @@ describe("Atlas F1: repo sections, worktree subsections, role order", () => {
       .not.toBe(M.programsPaintSig(visible, ui()));
   });
 
+  /* ------------------------------------------------------------------------
+     F1b — a declared run outranks the checkout it happens to have been read in.
+
+     B3 sets `groupPath[1] = "run:<runId>"` when a manifest or ANTHILL_RUN
+     declares one, and a run SPANS worktrees: the live atlas run holds four
+     lanes in four different checkouts, so `branch@basename` on that subsection
+     names one lane's branch and is simply false about the other three. The
+     declared runId is the only honest label there — and it is a fact rather
+     than a derivation, which is the whole point of the spawn contract.
+     --------------------------------------------------------------------- */
+  test("a declared run replaces the worktree label", () => {
+    // Shaped after the real wire: the run's first agent sits in ONE lane's
+    // worktree, and that lane's branch must not become the subsection's name.
+    const run = worktree({
+      repoKey: "k-run", worktreeKey: "run:agent-atlas-2026-08-05",
+      branch: "ant-hill/atlas-links-20260805",
+      path: "/Users/e/Developer/.worktrees/ah-atlas-links-20260805",
+      agents: [repoAgent("codex:run-1"), repoAgent("codex:run-2")],
+    });
+    const root = newNode("div");
+
+    paint(root, visibleOf(run));
+
+    const name = byClass(root, "program-name");
+    expect(name.textContent).toBe("agent-atlas-2026-08-05");
+    // Not the lane it was read in, and not a path shape at all.
+    expect(name.textContent).not.toContain("@");
+    expect(name.textContent).not.toContain("atlas-links");
+    expect(rowIds(root)).toEqual(["codex:run-1", "codex:run-2"]);
+  });
+
+  test("a run and a plain worktree share one band, each labelled by its own rule", () => {
+    const run = worktree({
+      repoKey: "k-mixed", worktreeKey: "run:inbox-ux-overhaul-2026-08-05",
+      branch: "feat/inbox", path: "/Users/e/Developer/.worktrees/inbox",
+      agents: [repoAgent("codex:mixed-run")],
+    });
+    const checkout = worktree({
+      repoKey: "k-mixed", worktreeKey: "1dao78j", branch: "main",
+      path: "/Users/e/Developer/the-mountain-main",
+      agents: [repoAgent("codex:mixed-wt")],
+    });
+    const root = newNode("div");
+
+    paint(root, visibleOf(run, checkout));
+
+    expect(root.children.length).toBe(1);
+    expect(allByClass(root, "program-name").map((n: { textContent: string }) => n.textContent))
+      .toEqual(["inbox-ux-overhaul-2026-08-05", "main@the-mountain-main"]);
+    // Distinct paint keys, so neither subsection is served the other's rows.
+    expect(rowIds(root)).toEqual(["codex:mixed-run", "codex:mixed-wt"]);
+  });
+
+  test("an operator's own label still outranks the declared run", async () => {
+    const run = worktree({
+      repoKey: "k-alias", worktreeKey: "run:some-run-2026-08-05", branch: "main",
+      path: "/Users/e/Developer/aliased", agents: [repoAgent("codex:alias-1")],
+    });
+    const root = newNode("div");
+
+    await withState({ aliases: new Map([[`program:${run.id}`, "Ridge"]]) }, () => {
+      paint(root, visibleOf(run));
+    });
+
+    // Renaming a subsection has to mean something, whatever the server declared.
+    expect(byClass(root, "program-name").textContent).toBe("Ridge");
+  });
+
+  /* Found by driving the helpers against the live /api/snapshot rather than a
+     fixture: eight disposable codex checkouts of one repo all rendered the
+     label "elio-intelligence-suite" — the repository name, printed eight times
+     inside a band whose header already says it once. That is the exact
+     smorgasbord this task exists to remove, one level down.
+
+     `~/.codex/worktrees/<hash>/<repo>` has no branch and a basename equal to
+     the repository name, so both of the distinguishing facts were empty and the
+     label fell all the way through to `program.name`. What actually tells those
+     checkouts apart is the directory ABOVE them. */
+  test("a checkout whose folder repeats the repo name is named by the folder above it", () => {
+    const disposable = (hash: string, id: string) => worktree({
+      repoKey: "k-eph", repoName: "elio-intelligence-suite", worktreeKey: "wt-" + hash,
+      path: `/Users/e/.codex/worktrees/${hash}/elio-intelligence-suite`,
+      agents: [repoAgent(id)],
+    });
+    // Same repo, same basename, but this one has a branch to be known by.
+    const checkout = worktree({
+      repoKey: "k-eph", repoName: "elio-intelligence-suite", worktreeKey: "wt-home",
+      branch: "fix/history-rich-detail-drawer",
+      path: "/Users/e/elio-intelligence-suite", agents: [repoAgent("codex:eph-home")],
+    });
+    const root = newNode("div");
+
+    paint(root, visibleOf(disposable("0d42", "codex:eph-a"), disposable("21a3", "codex:eph-b"), checkout));
+
+    const labels = allByClass(root, "program-name").map((n: { textContent: string }) => n.textContent);
+    expect(labels).toEqual(["0d42", "21a3", "fix/history-rich-detail-drawer@elio-intelligence-suite"]);
+    // The whole point: no subsection under a band may repeat the band's name.
+    expect(labels).not.toContain("elio-intelligence-suite");
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
   test("the repo band ships its own rules rather than borrowing the program card", () => {
     for (const rule of [".repo-section", ".repo-head", ".repo-caret", ".repo-name", ".repo-worktrees"]) {
       expect(styles.includes(rule), rule).toBe(true);
