@@ -1,13 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseCmuxTerminals } from "../src/server/cmux";
-import { resolveAgentTarget } from "../src/server/targets";
+import { readHookSessionStores } from "../src/server/cmux-hook-sessions";
+import { resolveAgentTarget, resolveAgentTargetWithTrace } from "../src/server/targets";
 import type { CollectedAgent } from "../src/server/types";
 
 const surfaces = parseCmuxTerminals(
   readFileSync(join(import.meta.dir, "fixtures", "cmux-discovery.json"), "utf8"),
 );
+
+afterEach(() => {
+  readHookSessionStores(join(import.meta.dir, "fixtures", "missing-hook-sessions"));
+});
 
 function agent(overrides: Partial<CollectedAgent>): CollectedAgent {
   return {
@@ -26,6 +31,64 @@ function agent(overrides: Partial<CollectedAgent>): CollectedAgent {
 }
 
 describe("safe cmux target resolution", () => {
+  test("a live hook-store surface outranks remembered target IDs", () => {
+    readHookSessionStores(join(import.meta.dir, "fixtures", "cmux-hook-sessions"));
+    const hookSurface = {
+      workspaceId: "LIVE-WORKSPACE",
+      surfaceId: "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+      cwd: "/Users/example/Developer/redacted-project",
+      sourceSessionIds: [],
+    };
+    const rememberedSurface = {
+      workspaceId: "REMEMBERED-WORKSPACE",
+      surfaceId: "REMEMBERED-SURFACE",
+      cwd: "/Users/example/Developer/redacted-project",
+      sourceSessionIds: [],
+    };
+    const source = agent({
+      id: "claude:11111111-2222-4333-8444-555555555555",
+      provider: "claude",
+      sourceSessionId: "11111111-2222-4333-8444-555555555555",
+      cwd: "/Users/example/Developer/redacted-project",
+      recordedTarget: {
+        surfaceId: rememberedSurface.surfaceId,
+        source: "binding",
+      },
+    });
+
+    const { target, trace } = resolveAgentTargetWithTrace(source, [hookSurface, rememberedSurface]);
+
+    expect(target).toMatchObject({
+      workspaceId: "LIVE-WORKSPACE",
+      surfaceId: hookSurface.surfaceId,
+      resolution: "exact",
+      attestation: "hook-store",
+    });
+    expect(trace.matchedTier).toBe("hook-store");
+    expect(trace.steps[0]).toMatchObject({ tier: "hook-store", outcome: "matched" });
+  });
+
+  test("a hook record whose surface is absent falls through to live session evidence", () => {
+    readHookSessionStores(join(import.meta.dir, "fixtures", "cmux-hook-sessions"));
+    const source = agent({
+      id: "claude:11111111-2222-4333-8444-555555555555",
+      provider: "claude",
+      sourceSessionId: "11111111-2222-4333-8444-555555555555",
+    });
+
+    const target = resolveAgentTarget(source, [{
+      workspaceId: "FALLBACK-WORKSPACE",
+      surfaceId: "FALLBACK-SURFACE",
+      sourceSessionIds: [source.sourceSessionId],
+    }]);
+
+    expect(target).toMatchObject({
+      surfaceId: "FALLBACK-SURFACE",
+      resolution: "exact",
+      attestation: "live",
+    });
+  });
+
   test("an exact source session ID wins even when cwd would be ambiguous", () => {
     const target = resolveAgentTarget(
       agent({

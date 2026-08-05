@@ -60,6 +60,7 @@ describe("control refusal wire shape", () => {
       remedy: "Open it in a cmux pane (or start the agent from one); the next scan binds it.",
       evidence: {
         resolutionSteps: [
+          "No cmux hook-store record exists for this source session.",
           "No recorded cmux target IDs on this source.",
           "Source session ID is not present on any ready cmux surface this scan.",
           "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",

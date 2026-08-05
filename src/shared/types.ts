@@ -21,6 +21,7 @@ const _providersAreExhaustive: ProvidersAreExhaustive = true;
 void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
+export type HookLifecycle = "idle" | "running" | "needsInput" | "unknown";
 /* Where an agent's name came from, in precedence order. Published so a surface
    can tell an AUTHORED name from a DERIVED one — the distinction the client had
    no way to make, which is how an agent deliberately named "Lifecycle Mapper"
@@ -172,6 +173,8 @@ export interface CmuxTarget {
   cwdMismatch?: boolean;
   /* HOW the surface was attested, which `resolution` alone cannot say.
 
+     "hook-store" — cmux's hook-session store binds this session to a surface
+                    that is present in the current terminal scan.
      "live"       — cmux currently lists this session on this surface, either by
                     sourceSessionIds or by recorded IDs the collector just read.
      "remembered" — a persisted identity binding minted the match. It was true
@@ -179,12 +182,12 @@ export interface CmuxTarget {
 
      Both produce `resolution: "exact"`, so the write gate could not tell "cmux
      says the session is there" from "we wrote that down some time ago". */
-  attestation?: "live" | "remembered";
+  attestation?: "hook-store" | "live" | "remembered";
   resolution: TargetResolution;
   reason?: string;
 }
 
-export type IdentityTraceTier = "recorded" | "session" | "cwd";
+export type IdentityTraceTier = "hook-store" | "recorded" | "session" | "cwd";
 
 export interface IdentityTraceStep {
   tier: IdentityTraceTier;
@@ -299,6 +302,8 @@ export interface AgentSnapshot {
   status: AgentStatus;
   statusReason: string;
   activity?: ActivityState;
+  /** Lifecycle reported directly by cmux's provider hook-session store. */
+  hookLifecycle?: HookLifecycle;
   /* The one bucket this session occupies, and why. `lifecycle` is the verdict
      every surface is meant to read; `activity` and `status` above are the older
      vocabularies, published alongside it during the transition and derived from

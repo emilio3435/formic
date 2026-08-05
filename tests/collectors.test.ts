@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   claudeContextWindow,
   collectSessions,
+  DEFAULT_SESSION_WINDOW_MS,
   parseClaudeJsonl,
   parseCodexJsonl,
   parseOmpJsonl,
@@ -734,6 +735,53 @@ describe("collector identity and usage truth", () => {
       processIds: [4242],
       processAlive: true,
       transcriptEndedCleanly: true,
+    });
+  });
+
+  test("hook facts recover missing cwd and reject a reused pid by start time", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-"));
+    const sessions = join(home, ".codex", "sessions");
+    const hookRoot = join(home, ".cmuxterm");
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    mkdirSync(sessions, { recursive: true });
+    mkdirSync(hookRoot, { recursive: true });
+    writeFileSync(join(sessions, "session.jsonl"), `${JSON.stringify({
+      type: "session_meta",
+      timestamp: new Date().toISOString(),
+      payload: { id: sessionId },
+    })}\n`);
+    writeFileSync(join(hookRoot, "codex-hook-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: {
+        [sessionId]: {
+          sessionId,
+          surfaceId: "HOOK-SURFACE",
+          workspaceId: "HOOK-WORKSPACE",
+          cwd: "/tmp/hook-project",
+          pid: 4242,
+          pidStartSeconds: 1_785_933_001,
+          agentLifecycle: "needsInput",
+          updatedAt: 1_785_933_010.5,
+        },
+      },
+    }));
+
+    const matching = await collectSessions(home, DEFAULT_SESSION_WINDOW_MS, undefined, {
+      hookProcessStarts: () => new Map([[4242, 1_785_933_001]]),
+    });
+    expect(matching.codex.value[0]).toMatchObject({
+      cwd: "/tmp/hook-project",
+      hookLifecycle: "needsInput",
+      processIds: [4242],
+      processAlive: true,
+    });
+
+    const reused = await collectSessions(home, DEFAULT_SESSION_WINDOW_MS, undefined, {
+      hookProcessStarts: () => new Map([[4242, 1_785_933_000]]),
+    });
+    expect(reused.codex.value[0]).toMatchObject({
+      processIds: [4242],
+      processAlive: false,
     });
   });
 

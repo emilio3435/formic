@@ -1,4 +1,5 @@
 import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier, ProcessState } from "../shared/types";
+import { hookRecordFor } from "./cmux-hook-sessions";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -92,7 +93,7 @@ function resolveAgentTargetInternal(
       resolution: resolved.resolution,
       reason: resolved.reason,
       surfaceId: resolved.surfaceId,
-      bindingBridge: recorded?.source === "binding" && recorded.surfaceId
+      bindingBridge: matchedTier === "recorded" && recorded?.source === "binding" && recorded.surfaceId
         ? {
             surfaceId: recorded.surfaceId,
             workspaceId: recorded.workspaceId,
@@ -104,6 +105,42 @@ function resolveAgentTargetInternal(
   });
 
   const routableSurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
+  const hookRecord = hookRecordFor(agent.provider, agent.sourceSessionId);
+  if (hookRecord) {
+    const matches = routableSurfaces.filter((surface) => surface.surfaceId === hookRecord.surfaceId);
+    const quarantine = quarantined(matches);
+    if (quarantine) {
+      steps?.push({ tier: "hook-store", outcome: "quarantined", detail: quarantine.reason ?? "Hook-store surface has an identity conflict." });
+      return finish(quarantine);
+    }
+    if (matches.length === 1) {
+      steps?.push({
+        tier: "hook-store",
+        outcome: "matched",
+        detail: `cmux hook store bound source session ${agent.sourceSessionId} to live surface ${matches[0].surfaceId}.`,
+      });
+      return finish(
+        target(
+          matches[0],
+          "exact",
+          "Matched source session to a live surface via the cmux hook-session store.",
+          agent,
+          "hook-store",
+        ),
+        "hook-store",
+      );
+    }
+    if (matches.length > 1) {
+      steps?.push({ tier: "hook-store", outcome: "ambiguous", detail: `Hook-store surface ID matched ${matches.length} live surfaces.` });
+      return finish({
+        resolution: "ambiguous",
+        reason: `Hook-store surface ID matched ${matches.length} live surfaces; controls are disabled.`,
+      });
+    }
+    steps?.push({ tier: "hook-store", outcome: "no-match", detail: "Hook-store surface is not present in the live ready-surface scan." });
+  } else {
+    steps?.push({ tier: "hook-store", outcome: "skipped", detail: "No cmux hook-store record exists for this source session." });
+  }
   if (recorded && (recorded.surfaceId || recorded.workspaceId || recorded.paneId)) {
     const matches = routableSurfaces.filter(
       (surface) =>

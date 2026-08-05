@@ -63,7 +63,7 @@ const LIVENESS = {
 type Liveness = keyof typeof LIVENESS;
 
 const RESOLUTIONS: readonly TargetResolution[] = ["exact", "unique-cwd", "ambiguous", "missing"];
-const ATTESTATIONS: readonly (AgentSnapshot["target"]["attestation"])[] = ["live", "remembered", undefined];
+const ATTESTATIONS: readonly (AgentSnapshot["target"]["attestation"])[] = ["hook-store", "live", "remembered", undefined];
 const LIVENESSES = Object.keys(LIVENESS) as Liveness[];
 const ARCHIVED = [false, true] as const;
 /* `unarchive` joins the sweep for the same reason the others are in it: a new
@@ -219,7 +219,7 @@ describe("what the button advertises is what the endpoint accepts", () => {
     expect(withheld).toBeGreaterThan(0);
     expect(accepted).toBeGreaterThan(0);
     expect(refused).toBeGreaterThan(0);
-    expect(STATES.length).toBe(96);
+    expect(STATES.length).toBe(128);
   });
 
   test("a live, attested, unarchived agent at the top tier is offered writes and takes them", async () => {

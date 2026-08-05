@@ -142,7 +142,7 @@ describe("target resolution trace", () => {
     sourceSessionIds: [agent.sourceSessionId],
   };
 
-  test("an exact session match records why the recorded tier passed and which surface matched", () => {
+  test("an exact session match records why the hook and recorded tiers passed and which surface matched", () => {
     const { target, trace } = resolveAgentTargetWithTrace(agent, [exactSurface]);
 
     expect(target.resolution).toBe("exact");
@@ -150,6 +150,7 @@ describe("target resolution trace", () => {
     expect(trace.resolution).toBe("exact");
     expect(trace.surfaceId).toBe("SURFACE-HEALTH");
     expect(trace.steps).toEqual([
+      { tier: "hook-store", outcome: "skipped", detail: "No cmux hook-store record exists for this source session." },
       { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
       {
         tier: "session",
@@ -170,11 +171,12 @@ describe("target resolution trace", () => {
     expect(target.resolution).toBe("unique-cwd");
     expect(trace.matchedTier).toBe("cwd");
     expect(trace.steps.map(({ tier, outcome }) => `${tier}:${outcome}`)).toEqual([
+      "hook-store:skipped",
       "recorded:skipped",
       "session:no-match",
       "cwd:matched",
     ]);
-    expect(trace.steps[2]?.detail).toContain("only unclaimed surface");
+    expect(trace.steps[3]?.detail).toContain("only unclaimed surface");
   });
 
   test("duplicate-cwd sources stay ambiguous and the trace says exactly why", () => {

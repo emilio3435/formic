@@ -151,7 +151,7 @@ So the two are gated differently:
 
 | The row's link to a terminal | Focus | Send / Interrupt |
 |---|---|---|
-| cmux names the session on that pane, and its process is alive | on | **accepted** |
+| cmux names the session on that pane through its live terminal scan or hook-session store, and its process is alive | on | **accepted** |
 | matched only by its folder | on | **greyed out** |
 | the session's process is gone | on | **greyed out** |
 | ambiguous, or no pane found | off | greyed out |
@@ -209,13 +209,16 @@ the wrong one.** Focus stays on throughout precisely so you always have a way in
 go and look, and type there yourself.
 
 **To get Send and Interrupt back:** start the agent *inside* a cmux pane and
-leave it there, and keep the session running. Identification works by finding
-the session's own transcript file held open by a process on that pane, or the
-session ID in the command that started it. An agent started in an ordinary
-terminal, or in a pane that has since moved elsewhere, has neither, so it can be
-watched but not typed into. No setting turns any of this off; the controls come
-back on their own within a few seconds of the board being able to prove the
-answer again.
+leave it there, and keep the session running. Identification works first from
+cmux's hook-session record when its stable surface still exists; otherwise it
+falls back to finding the session's transcript held open by a process on that
+pane, or the session ID in the command that started it. Hook records also report
+`running`, `idle`, `needsInput`, or `unknown`, and their PID is accepted as live
+only when its recorded process start still matches. An agent started in an
+ordinary terminal, or in a pane that has since moved elsewhere, has none of
+these, so it can be watched but not typed into. No setting turns any of this
+off; the controls come back on their own within a few seconds of the board being
+able to prove the answer again.
 
 **That is the whole loop:** read the Needs-you strip → click the row → deal with it →
 `Escape`.

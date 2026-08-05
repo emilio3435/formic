@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "sessions": {
+    "11111111-2222-4333-8444-555555555555": {
+      "sessionId": "11111111-2222-4333-8444-555555555555",
+      "surfaceId": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+      "workspaceId": "11111111-AAAA-4BBB-8CCC-222222222222",
+      "cwd": "/Users/example/Developer/redacted-project",
+      "pid": 4242,
+      "pidStartSeconds": 1785933001,
+      "transcriptPath": "/Users/example/.claude/projects/redacted/session-running.jsonl",
+      "agentLifecycle": "running",
+      "lastPermissionMode": "auto",
+      "launchCommand": {
+        "executablePath": "/Users/example/.local/bin/claude",
+        "arguments": ["--permission-mode", "auto"],
+        "workingDirectory": "/Users/example/Developer/redacted-project",
+        "capturedAt": 1785933001.25,
+        "launcher": "shell",
+        "source": "hook"
+      },
+      "updatedAt": 1785933010.5
+    },
+    "66666666-7777-4888-8999-AAAAAAAAAAAA": {
+      "sessionId": "66666666-7777-4888-8999-AAAAAAAAAAAA",
+      "surfaceId": "FFFFFFFF-1111-4222-8333-444444444444",
+      "workspaceId": "33333333-DDDD-4EEE-8FFF-555555555555",
+      "cwd": "/Users/example/Developer/redacted-project-worktree",
+      "pid": 4343,
+      "transcriptPath": "/Users/example/.claude/projects/redacted/session-idle.jsonl",
+      "agentLifecycle": "idle",
+      "lastPermissionMode": "default",
+      "updatedAt": 1785933020.75
+    }
+  },
+  "activeSessionsBySurface": {
+    "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE": {
+      "sessionId": "11111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933010.5
+    },
+    "FFFFFFFF-1111-4222-8333-444444444444": {
+      "sessionId": "66666666-7777-4888-8999-AAAAAAAAAAAA",
+      "updatedAt": 1785933020.75
+    }
+  },
+  "activeSessionsByWorkspace": {
+    "11111111-AAAA-4BBB-8CCC-222222222222": {
+      "sessionId": "11111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933010.5
+    },
+    "33333333-DDDD-4EEE-8FFF-555555555555": {
+      "sessionId": "66666666-7777-4888-8999-AAAAAAAAAAAA",
+      "updatedAt": 1785933020.75
+    }
+  }
+}
