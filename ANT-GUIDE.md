@@ -208,10 +208,13 @@ because the orchestrator sent it. Messages between agents carry a header,
 `[from <agent id> run <run id>]`, so the drawer now names the sender and prints
 *sent in run …* underneath, with the header itself taken off the text. The
 server checks that claim against the named sender's own bounded transcript tail:
-a readable tail without the message carries `senderVerified: false`, while an
-unreadable transcript carries no verdict. A turn still labelled **You** has no
-agent header and is treated as direct operator input; this is provenance
-checking, not cryptographic authentication.
+a matching tail carries `senderVerified: true`, but a miss is `false` only when
+that read covered the complete transcript. A partial or unreadable transcript
+carries no verdict. If the wire shortened the message with an ellipsis, a long
+matching prefix can verify it, but that shortened text can never prove the send
+absent. A turn still labelled **You** has no agent header and is treated as
+direct operator input; this is provenance checking, not cryptographic
+authentication.
 
 | Button | Does |
 |---|---|
