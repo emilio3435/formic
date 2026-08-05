@@ -63,6 +63,10 @@ bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 
 ## Every npm script, and which ones bind a port
 
+`scripts/anthill-self-register.sh` is not a deploy script: lanes source it at
+boot to bind their own sessionId into the run manifest (`status: active`) and
+mark `done` on clean exit. It never touches the server or its port.
+
 | Script | Does | Port |
 |---|---|---|
 | `bun start` | The whole workflow — reuses a running instance, else starts one | 4701, reused if taken |
