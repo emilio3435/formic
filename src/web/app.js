@@ -1251,6 +1251,10 @@ globalThis.TheAntHill = {
   // (RUN_GROUP_PREFIX stays out — it is a `const` declared below this block,
   // the TDZ hazard the note above is about.)
   repoGroups, worktreeLabel,
+  // The shelf's governor. Exported because the lookback clause inside it is the
+  // only thing standing between a 24-row shelf and a 446-row one, and a
+  // property that load-bearing has to be assertable directly.
+  shelfFilter, shelfOpen,
   filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
@@ -1446,6 +1450,23 @@ function loadSwarmOverrides() {
 function saveSwarmOverrides() {
   try {
     localStorage.setItem("mtn3-swarms", JSON.stringify(Object.fromEntries(state.swarmOverrides)));
+  } catch { /* storage unavailable */ }
+}
+
+/* Finished shelves, on the swarmOverrides pattern exactly: collapsed is the
+   default, so only "open" is ever stored — writing "closed" would be storing
+   the absence of a choice. */
+function loadShelfOverrides() {
+  try {
+    const raw = localStorage.getItem("mtn3-shelves");
+    if (!raw) return;
+    state.shelfOverrides = new Map(Object.entries(JSON.parse(raw)).filter(([, mode]) => mode === "open"));
+  } catch { /* first run or blocked storage */ }
+}
+
+function saveShelfOverrides() {
+  try {
+    localStorage.setItem("mtn3-shelves", JSON.stringify(Object.fromEntries(state.shelfOverrides)));
   } catch { /* storage unavailable */ }
 }
 
@@ -3591,6 +3612,29 @@ function currentFilter() {
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
 
+/* The finished sessions a LIVE view has excluded — the Finished shelf's
+   population. Every filter the board is currently wearing except the view's own
+   lifecycle test, which is the one this deliberately recovers.
+
+   It answers a question the board was leaving open: a worktree whose header
+   rolls up 4 agents while its body draws 2 has not said where the other two
+   went, and "they finished" is a different sentence from "they are hidden by
+   your search". So the shelf keeps the search, the facets and the lookback —
+   a filtered board must not grow a shelf of rows that do not match it.
+
+   History is exempt and that is not a detail: there, finished IS the
+   population, and a shelf holding every row would be a collapsed view. */
+function shelfFilter() {
+  if (state.view === "history") return () => false;
+  return (agent, program) =>
+    isTerminal(agent) &&
+    !viewMatches(state.view, agent) &&
+    passesLookback(agent, state.view, state.lookbackHours) &&
+    matchesQuery(agent, program, state.query) &&
+    (!state.facetProgram || program.id === state.facetProgram) &&
+    (!state.facetProvider || agent.provider === state.facetProvider);
+}
+
 /* Where an arrow key inside the tab strip lands. Pure so the wrap rules are
    testable without a browser: Left/Right WRAP (a six-item strip is small enough
    that wrapping is faster than reversing, and it is what the tablist pattern
@@ -3986,7 +4030,7 @@ function repoGroups(visible) {
     const repoKey = Array.isArray(path) ? path[0] : "";
     const worktreeKey = Array.isArray(path) ? path[1] : "";
     if (!repoKey || !worktreeKey) {
-      sections.push({ kind: "program", program: entry.program, agents: entry.agents });
+      sections.push({ kind: "program", program: entry.program, agents: entry.agents, finished: entry.finished });
       continue;
     }
     let group = byRepo.get(repoKey);
@@ -3998,6 +4042,7 @@ function repoGroups(visible) {
     group.worktrees.push({
       program: entry.program,
       agents: entry.agents,
+      finished: entry.finished,
       worktreeKey,
       label: worktreeLabel(entry.program),
     });
@@ -4404,6 +4449,8 @@ function programsPaintSig(visible, ui) {
        so on a quiet fleet the early return would swallow the click and the
        caret would sit there dead. Documented failure class, second instance. */
     [...ui.swarmOverrides].map(([id, mode]) => id + "=" + mode).join(","),
+    // Fourth instance. toggleShelf is the same shape of control as the other three.
+    [...(ui.shelfOverrides || [])].map(([id, mode]) => id + "=" + mode).join(","),
     /* Strip membership. It decides which rows are pinned at the top AND which
        rows are therefore missing from their program group, so a change to it
        repaints two things at once — and neither of them is derivable from the
@@ -4412,9 +4459,14 @@ function programsPaintSig(visible, ui) {
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
-    visible.map(({ program, agents }) =>
+    visible.map(({ program, agents, finished }) =>
       program.id + "@" + (programOpen(program, ui) ? "open" : "shut")
       + "~" + programName(program)
+      /* The shelf's population. A session finishing moves it OUT of `agents`
+         and INTO here, and the two changes cancel in a signature that watches
+         only the first — so the count on a collapsed shelf would go stale
+         exactly when it changed. */
+      + "#" + (finished || []).map((a) => a.id).join("+")
       + ">" + agents.map((a) => [
         a.id,
         a.status,
@@ -4551,13 +4603,13 @@ function syncProgramList(root, visible, ui = state) {
     });
     for (const key of reconcileKeyed(stripBody, plan, agentRowCache)) keptRows.add(key);
   }
-  const rowsInto = (sectionKey, program, agents) => {
+  const rowsInto = (sectionKey, program, agents, finished) => {
     const body = programBodies.get(sectionKey);
     if (!body) return;
     // A collapsed program keeps its section but drops its rows; the row cache
     // still holds them, so re-expanding costs a move rather than a rebuild.
     const plan = programOpen(program, ui)
-      ? agentRowPlan(program, agents, ui, board).map((item) => ({ ...item, key: sectionKey + "\u001f" + item.key }))
+      ? agentRowPlan(program, agents, ui, board, { finished }).map((item) => ({ ...item, key: sectionKey + "\u001f" + item.key }))
       : [];
     for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
   };
@@ -4567,14 +4619,14 @@ function syncProgramList(root, visible, ui = state) {
   for (const group of groups) {
     if (group.kind === "repo") {
       const open = repoOpen(group, ui);
-      for (const { program, agents, worktreeKey } of group.worktrees) {
+      for (const { program, agents, finished, worktreeKey } of group.worktrees) {
         shown += agents.length;
-        if (open) rowsInto(worktreeSectionKey(group.key, worktreeKey), program, agents);
+        if (open) rowsInto(worktreeSectionKey(group.key, worktreeKey), program, agents, finished);
       }
       continue;
     }
     shown += group.agents.length;
-    rowsInto(group.program.id, group.program, group.agents);
+    rowsInto(group.program.id, group.program, group.agents, group.finished);
   }
   for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
   return shown;
@@ -4628,11 +4680,15 @@ function renderPrograms() {
   }
 
   const filter = currentFilter();
+  const shelved = shelfFilter();
   const visible = [];
   for (const program of state.snap.programs) {
     const agents = program.agents.filter((a) => filter(a, program));
+    /* A program with nothing live is still absent from a live view — the shelf
+       explains rows that LEFT a group the operator is looking at, and it has no
+       business conjuring a section for a worktree whose work is entirely over. */
     if (!agents.length) continue;
-    visible.push({ program, agents });
+    visible.push({ program, agents, finished: program.agents.filter((a) => shelved(a, program)) });
   }
   if (paintUnchanged("programs", programsPaintSig(visible, state))) {
     renderScopeNote(visible.reduce((n, row) => n + row.agents.length, 0));
@@ -4904,7 +4960,7 @@ const SECTION_HEADS = {
 
    `board` is the once-per-paint fleet index; it is optional so the plan can be
    driven directly in a test with nothing but a program and a ui. */
-function agentRowPlan(program, agents, ui = state, board = boardIndex(ui)) {
+function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts = {}) {
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -5084,7 +5140,73 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui)) {
     });
     for (const agent of drawn) appendTree(agent, 0);
   }
+
+  /* The Finished shelf, last and folded up.
+
+     These rows are NOT in `agents` — the active view excluded them, which is
+     exactly why they need saying. A worktree header rolls up the whole program
+     (4 agents) while its body drew the two that are still live, and nothing on
+     screen distinguished "the other two finished" from "the other two are
+     hidden by your search". One collapsed line with a count does.
+
+     Collapsed by default and drawn at the bottom, because finished work is
+     context rather than a call to action, and this board's whole diet is about
+     not spending live space on it. Nothing can hide inside it that the operator
+     needs: an alerting session is pinned to the strip above, and a session
+     still asking for a person is by definition not finished. */
+  const shelved = (opts.finished || []).filter((agent) => !pinnedIds.has(agent.id));
+  if (shelved.length) {
+    const open = shelfOpen(program, ui);
+    plan.push({
+      key: "shelf",
+      sig: "shelf:" + shelved.length + ":" + (open ? "open" : "shut"),
+      build: () => renderFinishedShelf(program, shelved.length, open),
+    });
+    if (open) {
+      for (const agent of shelved) {
+        const rowOpts = {
+          depth: 0,
+          childCount: 0,
+          fullById,
+          ambiguousNames: ambiguous,
+          sharedNames: board.sharedNames,
+        };
+        plan.push({
+          key: "row:" + agent.id,
+          sig: agentRowSig(agent, ui, rowOpts),
+          build: () => renderAgentRow(agent, program, rowOpts),
+        });
+      }
+    }
+  }
   return plan;
+}
+
+function shelfOpen(program, ui = state) {
+  return Boolean(ui.shelfOverrides && ui.shelfOverrides.get(program.id) === "open");
+}
+
+function toggleShelf(program) {
+  if (shelfOpen(program)) state.shelfOverrides.delete(program.id);
+  else state.shelfOverrides.set(program.id, "open");
+  saveShelfOverrides();
+  render();
+}
+
+function renderFinishedShelf(program, count, open) {
+  return el("button", {
+    type: "button",
+    class: "finished-shelf" + (open ? " is-open" : ""),
+    "aria-expanded": String(open),
+    "aria-label": (open ? "Collapse " : "Expand ")
+      + count + (count === 1 ? " finished session in " : " finished sessions in ")
+      + programName(program),
+    dataset: { fkey: "shelf:" + program.id },
+    onclick: () => toggleShelf(program),
+  },
+    el("span", { class: "finished-shelf-caret", "aria-hidden": "true" }, icon("caret")),
+    el("span", { class: "finished-shelf-label", text: "Finished" }),
+    el("span", { class: "finished-shelf-count mono", text: String(count) }));
 }
 
 /* Where a role sits in the reading order the drawer's roster established.
@@ -9099,6 +9221,7 @@ function boot() {
   loadOverrides();
   loadRepoOverrides();
   loadSwarmOverrides();
+  loadShelfOverrides();
   loadWidgetPreferences();
   loadLookback();
   loadContextSpread();

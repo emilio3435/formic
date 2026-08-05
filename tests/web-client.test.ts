@@ -449,6 +449,8 @@ function listUi(overrides: Record<string, unknown> = {}) {
     // Absent means collapsed, so the default fixture is a board whose swarms
     // are all folded — which is what a first load actually looks like.
     swarmOverrides: new Map<string, string>(),
+    // Same default as swarms: collapsed unless the operator opened it.
+    shelfOverrides: new Map<string, string>(),
     labels: new Map<string, string>(),
     renaming: null,
     renameDraft: "",
@@ -5249,6 +5251,8 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       selection: new Set<string>(),
       programOverrides: new Map<string, string>(),
       swarmOverrides: new Map<string, string>(),
+      // Same default as swarms: collapsed unless the operator opened it.
+      shelfOverrides: new Map<string, string>(),
       labels: new Map<string, string>(),
       broadcastResults: null,
       broadcastConfirming: false,
@@ -9922,5 +9926,222 @@ describe("Atlas F2: role confidence and message provenance", () => {
     }
     expect(styles).toContain(".chat-turn-sender");
     expect(styles).toContain(".specialty-chip");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Atlas F3 — liveness truth and the finished shelf.
+
+   The plan asks for `hookLifecycle: "needsInput"` to reach the row "even when
+   hibernated-dark". Driven against the live board first, that instruction taken
+   literally would have put 45 GHOSTS on it: of the 46 sessions whose cmux hook
+   record says needsInput, 45 carry processState "died", processAlive false and
+   a COMPLETE process roster — the hook froze at needsInput because the process
+   died without a clean exit, hours to a day ago. Exactly one is genuinely live,
+   and it was already reaching the operator.
+
+   So the rule is not "the hook says needsInput". It is "the hook says needsInput
+   AND nothing has since proven the session gone" — which is what the codebase's
+   existing scar (alerting()'s rescue arm) has been saying about ghost rows all
+   along.
+   ------------------------------------------------------------------------ */
+describe("Atlas F3: hook-store liveness and the finished shelf", () => {
+  // A session cmux says is blocked on a human, quiet for two hours, whose
+  // process still answers. This is "hibernated-dark": nothing has been written
+  // to the transcript, so recency alone reads it as merely quiet.
+  const darkAsker = (over: Record<string, unknown> = {}): Record<string, unknown> => agent({
+    id: "claude:dark",
+    hookLifecycle: "needsInput",
+    lifecycle: "waiting",
+    processState: "running",
+    processAlive: true,
+    attentionSignal: undefined,
+    updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+    ...over,
+  });
+
+  test("a hook that says needsInput reaches the operator without a text signal", () => {
+    /* The provider hook is a DECLARED fact — the agent told cmux it is blocked.
+       Every other route to the strip reads prose and guesses. Declared beats
+       inferred is this whole program's thesis; it has to hold here too. */
+    const dark = darkAsker();
+    expect(dark.attentionSignal).toBeUndefined();
+    expect(M.wantsHuman(dark)).toBe(true);
+    expect(M.alerting(dark)).toBe(true);
+    expect(M.viewMatches("board", dark)).toBe(true);
+    expect(M.needsYouStrip([{ program: { id: "p", name: "P", agents: [dark] }, agents: [dark] }]))
+      .toHaveLength(1);
+  });
+
+  test("a frozen hook record never resurrects a session proven gone", () => {
+    /* The live shape of all 45: checked by id, complete roster, nothing claims
+       it — with the hook still reading needsInput from before it died. */
+    const ghost = darkAsker({
+      id: "claude:ghost",
+      lifecycle: "finished",
+      processState: "died",
+      processAlive: false,
+      processRosterComplete: true,
+      endEvidence: "turn-complete",
+    });
+    expect(ghost.hookLifecycle).toBe("needsInput");
+    expect(M.wantsHuman(ghost)).toBe(false);
+    expect(M.alerting(ghost)).toBe(false);
+    expect(M.viewMatches("board", ghost)).toBe(false);
+
+    // Same for a retained record whose hook happened to freeze mid-question.
+    const retained = darkAsker({ id: "claude:retained", scope: "retained" });
+    expect(M.wantsHuman(retained)).toBe(false);
+  });
+
+  test("an idle or running hook is not a request for a person", () => {
+    // Only needsInput is a claim about wanting a human. The others say what the
+    // session is DOING, which the lifecycle already answers.
+    for (const hook of ["idle", "running", "unknown"]) {
+      expect(M.wantsHuman(darkAsker({ hookLifecycle: hook }))).toBe(false);
+    }
+  });
+
+  /* ---- the finished shelf ---------------------------------------------- */
+
+  const liveOne = (id: string) => agent({ id, status: "running", lifecycle: "working" });
+  const doneOne = (id: string) => agent({ id, lifecycle: "finished", scope: "observed", endEvidence: "session-exit" });
+
+  function shelfBoard(over: Record<string, unknown> = {}) {
+    const program = {
+      id: "shelf-prog", name: "shelf", path: "/x/shelf",
+      groupPath: ["k-shelf", "wt-shelf"],
+      agents: [liveOne("codex:live-1"), doneOne("codex:done-1"), liveOne("codex:live-2"), doneOne("codex:done-2")],
+    };
+    // What the board view admits: the two live sessions. The finished pair is
+    // what renderPrograms hands over as the shelf population.
+    const live = [program.agents[0]!, program.agents[2]!];
+    const finished = [program.agents[1]!, program.agents[3]!];
+    const visible = [{ program, agents: live, finished }];
+    const root = newNode("div");
+    const shown = withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "board",
+      snap: { schemaVersion: 1, programs: [program] },
+      ...over,
+    })));
+    return { root, shown, program };
+  }
+
+  test("finished sessions are a counted shelf, not rows interleaved with live work", () => {
+    const { root, shown } = shelfBoard();
+
+    // The live rows, and only the live rows.
+    const ids = allByClass(root, "agent-row").map((n: { dataset: { fkey: string } }) => n.dataset.fkey);
+    expect(ids).toEqual(["agent:codex:live-1", "agent:codex:live-2"]);
+
+    const shelf = byClass(root, "finished-shelf");
+    expect(shelf).not.toBeNull();
+    expect(textOf(shelf)).toContain("Finished");
+    expect(textOf(shelf)).toContain("2");
+    expect(shelf.attributes["aria-expanded"]).toBe("false");
+
+    /* The count the shelf carries is the one that made the header confusing:
+       the rollup counts the whole program (4) while the body drew 2. `shown`
+       still reports what the FILTER admitted, so the shelf cannot inflate it. */
+    expect(shown).toBe(2);
+  });
+
+  test("opening the shelf draws the finished rows and still does not count them", () => {
+    const { root, shown } = shelfBoard({ shelfOverrides: new Map([["shelf-prog", "open"]]) });
+    const ids = allByClass(root, "agent-row").map((n: { dataset: { fkey: string } }) => n.dataset.fkey);
+    expect(ids).toEqual([
+      "agent:codex:live-1", "agent:codex:live-2",
+      "agent:codex:done-1", "agent:codex:done-2",
+    ]);
+    expect(byClass(root, "finished-shelf").attributes["aria-expanded"]).toBe("true");
+    expect(shown).toBe(2);
+  });
+
+  test("History grows no shelf — there, finished IS the population", () => {
+    /* A shelf holding 100% of the rows is not a shelf, it is a collapsed view.
+       History opens to look at finished sessions; hiding them all behind one
+       caret would be the single worst thing this feature could do. */
+    const program = {
+      id: "hist-prog", name: "hist",
+      agents: [doneOne("codex:h1"), doneOne("codex:h2")],
+    };
+    const visible = [{ program, agents: program.agents, finished: [] }];
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "history",
+      programOverrides: new Map([["hist-prog", "open"]]),
+      snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(byClass(root, "finished-shelf")).toBeNull();
+    expect(allByClass(root, "agent-row")).toHaveLength(2);
+  });
+
+  test("a worktree with nothing finished grows no shelf at all", () => {
+    const program = {
+      id: "clean-prog", name: "clean", groupPath: ["k-clean", "wt-clean"],
+      agents: [liveOne("codex:c1")],
+    };
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, [{ program, agents: program.agents, finished: [] }], listUi({
+      view: "board", snap: { schemaVersion: 1, programs: [program] },
+    })));
+    expect(byClass(root, "finished-shelf")).toBeNull();
+  });
+
+  test("the shelf's collapse persists per program and reaches the paint signature", () => {
+    const fn = source.match(/function loadShelfOverrides\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('localStorage.getItem("mtn3-shelves")');
+    expect(fn).toContain('mode === "open"');       // collapsed is the default
+    expect(source).toContain('localStorage.setItem("mtn3-shelves"');
+    expect(source).toContain("loadShelfOverrides();");
+
+    const program = {
+      id: "sig-shelf", name: "s", groupPath: ["k", "w"],
+      agents: [liveOne("codex:s1"), doneOne("codex:s2")],
+    };
+    const visible = [{ program, agents: [program.agents[0]!], finished: [program.agents[1]!] }];
+    const ui = (over: Record<string, unknown> = {}) =>
+      listUi({ view: "board", snap: { schemaVersion: 1, programs: [program] }, ...over });
+    expect(M.programsPaintSig(visible, ui({ shelfOverrides: new Map([["sig-shelf", "open"]]) })))
+      .not.toBe(M.programsPaintSig(visible, ui()));
+  });
+
+  /* The lookback clause is the shelf's only governor, and it is doing more work
+     than it looks. Measured on the live board, one worktree holds 448 sessions:
+     at the default 24h lookback its shelf reads 15, at 72h it reads 131, and
+     with the lookback off entirely it reads 446. The shelf answers "where did
+     the rows that were just here go?" — not "show me the archive", which is
+     what History is for. Remove this clause and a live view grows a 446-row
+     shelf with no test to notice. */
+  test("the shelf holds recent finishes, not the archive", async () => {
+    const old = doneOne("codex:ancient");
+    old.updatedAt = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+    const recent = doneOne("codex:recent");
+    recent.updatedAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    const program = { id: "look-prog", name: "look", agents: [old, recent] };
+
+    await withState({ view: "board", lookbackHours: 24, query: "", facetProgram: "", facetProvider: "" }, () => {
+      const keep = M.shelfFilter();
+      expect(keep(recent, program)).toBe(true);
+      expect(keep(old, program)).toBe(false);
+    });
+
+    // An operator who turns the lookback off has asked for everything, and the
+    // shelf is collapsed by default — so that costs them one line until they say
+    // otherwise, which is their call to make.
+    await withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProvider: "" }, () => {
+      expect(M.shelfFilter()(old, program)).toBe(true);
+    });
+
+    // A search narrows the shelf exactly as it narrows the rows: a filtered
+    // board must not grow a shelf of sessions that do not match it.
+    await withState({ view: "board", lookbackHours: 24, query: "nothing-matches-this", facetProgram: "", facetProvider: "" }, () => {
+      expect(M.shelfFilter()(recent, program)).toBe(false);
+    });
+  });
+
+  test("the shelf ships its own rules", () => {
+    expect(styles).toContain(".finished-shelf");
+    expect(styles).toContain(".finished-shelf-count");
   });
 });

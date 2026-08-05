@@ -235,8 +235,27 @@ export function livenessView(agent) {
    its record is a fact the board already shows in History and nobody acts on one —
    so wiring those in would have swapped a false negative for six false
    positives. */
+/* cmux's provider hook store, saying the agent is blocked on a human. This is a
+   DECLARED fact — the agent told cmux so — where `attentionSignal` is read off
+   prose and inferred. Declared outranks inferred everywhere else in this
+   program; it has to here too, and it is the only route that survives a
+   hibernated pane, whose transcript says nothing at all. */
+export function hookWantsInput(agent) {
+  return Boolean(agent) && agent.hookLifecycle === "needsInput";
+}
+
+/* The `!isTerminal` gate is load-bearing, not incidental. A hook record freezes
+   at whatever it last said, so a session that died mid-question reads
+   needsInput forever. Measured on the live board: 46 sessions said needsInput
+   and 45 of them were checked by id, against a COMPLETE process roster, and
+   found gone — dead between 1.8 and 31.7 hours. Exactly one was live, and it
+   was already reaching the operator through its attention signal.
+
+   So this gate is what separates "the agent is asking" from "the agent was
+   asking when it died". Removing it puts 45 ghosts in the Needs-you strip,
+   which is the same failure alerting()'s rescue arm below has a scar for. */
 export function wantsHuman(agent) {
-  return Boolean(agent && agent.attentionSignal) && !isTerminal(agent);
+  return Boolean(agent && (agent.attentionSignal || hookWantsInput(agent))) && !isTerminal(agent);
 }
 
 export function alerting(agent) {
