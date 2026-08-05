@@ -36,6 +36,13 @@ export interface IdentityBindingStore {
   list(): readonly IdentityBinding[];
   put(binding: IdentityBinding): Promise<void>;
   putMany(bindings: readonly IdentityBinding[]): Promise<void>;
+  getNameTag?(agentId: string): string | undefined;
+  rememberNameTags?(assignments: readonly IdentityNameTag[]): Promise<void>;
+}
+
+export interface IdentityNameTag {
+  agentId: string;
+  tag: string;
 }
 
 export interface BindingFileOperations {
@@ -96,6 +103,7 @@ function isFresh(binding: IdentityBinding, nowMs: number): boolean {
 
 export class JsonIdentityBindingStore implements IdentityBindingStore {
   readonly #bindings = new Map<string, IdentityBinding>();
+  readonly #nameTags = new Map<string, string>();
   #writeQueue: Promise<void> = Promise.resolve();
   #writeNumber = 0;
 
@@ -112,14 +120,31 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
   ): Promise<JsonIdentityBindingStore> {
     const store = new JsonIdentityBindingStore(path, files, now);
     try {
-      const parsed = JSON.parse(await files.readText(path));
-      if (Array.isArray(parsed)) {
-        for (const value of parsed) {
+      const parsed: unknown = JSON.parse(await files.readText(path));
+      const bindings = Array.isArray(parsed)
+        ? parsed
+        : (parsed as { bindings?: unknown } | null)?.bindings;
+      if (Array.isArray(bindings)) {
+        for (const value of bindings) {
           if (!isIdentityBinding(value)) {
             throw new Error("identity bindings file contains an invalid binding record");
           }
           // Prune on load: sessions that left the scan window age out here.
           if (isFresh(value, now())) store.#bindings.set(value.sessionId.toLowerCase(), value);
+        }
+      }
+      const nameTags = Array.isArray(parsed)
+        ? undefined
+        : (parsed as { nameTags?: unknown } | null)?.nameTags;
+      if (nameTags !== undefined) {
+        if (!nameTags || typeof nameTags !== "object" || Array.isArray(nameTags)) {
+          throw new Error("identity bindings file contains invalid name tags");
+        }
+        for (const [agentId, value] of Object.entries(nameTags as Record<string, unknown>)) {
+          if (!agentId.trim() || typeof value !== "string" || !value.trim()) {
+            throw new Error("identity bindings file contains an invalid name tag");
+          }
+          store.#nameTags.set(agentId, value.trim());
         }
       }
     } catch (error) {
@@ -157,6 +182,26 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
 
   putMany(bindings: readonly IdentityBinding[]): Promise<void> {
     if (bindings.length === 0) return Promise.resolve();
+    return this.#enqueuePersist(bindings);
+  }
+
+  getNameTag(agentId: string): string | undefined {
+    return this.#nameTags.get(agentId);
+  }
+
+  rememberNameTags(assignments: readonly IdentityNameTag[]): Promise<void> {
+    let changed = false;
+    for (const assignment of assignments) {
+      const agentId = assignment.agentId.trim();
+      const tag = assignment.tag.trim();
+      if (!agentId || !tag || this.#nameTags.has(agentId)) continue;
+      this.#nameTags.set(agentId, tag);
+      changed = true;
+    }
+    return changed ? this.#enqueuePersist([]) : Promise.resolve();
+  }
+
+  #enqueuePersist(bindings: readonly IdentityBinding[]): Promise<void> {
     const write = this.#writeQueue.then(() => this.#persist(bindings));
     // A failed write rejects its caller but does not poison later queued writes.
     this.#writeQueue = write.catch(() => {});
@@ -174,10 +219,14 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
       if (!isFresh(value, nowMs)) next.delete(key);
     }
     const persisted = [...next.values()].sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+    const nameTags = Object.fromEntries(
+      [...this.#nameTags].sort(([left], [right]) => left.localeCompare(right)),
+    );
+    const body = this.#nameTags.size > 0 ? { bindings: persisted, nameTags } : persisted;
     await this.files.makeDirectory(dirname(this.path));
     this.#writeNumber += 1;
     const temporaryPath = `${this.path}.${process.pid}.${this.#writeNumber}.tmp`;
-    await this.files.writeText(temporaryPath, `${JSON.stringify(persisted, null, 2)}\n`);
+    await this.files.writeText(temporaryPath, `${JSON.stringify(body, null, 2)}\n`);
     await this.files.rename(temporaryPath, this.path);
     // The in-memory state becomes visible only after the atomic rename commits.
     this.#bindings.clear();
@@ -187,6 +236,7 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
 
 export class MemoryIdentityBindingStore implements IdentityBindingStore {
   readonly #bindings = new Map<string, IdentityBinding>();
+  readonly #nameTags = new Map<string, string>();
 
   get(sessionId: string): IdentityBinding | undefined {
     return this.#bindings.get(sessionId.toLowerCase());
@@ -203,6 +253,18 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
   async putMany(bindings: readonly IdentityBinding[]): Promise<void> {
     for (const binding of bindings) {
       this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+    }
+  }
+
+  getNameTag(agentId: string): string | undefined {
+    return this.#nameTags.get(agentId);
+  }
+
+  async rememberNameTags(assignments: readonly IdentityNameTag[]): Promise<void> {
+    for (const assignment of assignments) {
+      const agentId = assignment.agentId.trim();
+      const tag = assignment.tag.trim();
+      if (agentId && tag && !this.#nameTags.has(agentId)) this.#nameTags.set(agentId, tag);
     }
   }
 }

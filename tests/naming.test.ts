@@ -43,6 +43,8 @@ interface FleetCase {
   claim: string;
   agents: { sourceSessionId: string; evidence: NameEvidence }[];
   expect: string[];
+  removeAgentIds?: string[];
+  expectAfterRemoval?: string[];
 }
 
 interface TruthTable {
@@ -75,6 +77,31 @@ describe("the naming truth table, executed fleet-wide", () => {
         identity: resolveAgentName(agent.evidence, table.homeDir),
       }));
       expect(disambiguate(entries).map((identity) => identity.name)).toEqual(fleet.expect);
+    });
+  }
+});
+
+describe("disambiguators stay with the session that first received them", () => {
+  for (const fleet of table.fleets.filter((entry) => entry.expectAfterRemoval)) {
+    test(`${fleet.name} after another session leaves`, () => {
+      const remembered = new Map<string, string>();
+      const store = {
+        getNameTag: (agentId: string) => remembered.get(agentId),
+        rememberNameTags: async (assignments: readonly { agentId: string; tag: string }[]) => {
+          for (const { agentId, tag } of assignments) {
+            if (!remembered.has(agentId)) remembered.set(agentId, tag);
+          }
+        },
+      };
+      const entries = fleet.agents.map((agent) => ({
+        agentId: `${agent.evidence.provider}:${agent.sourceSessionId}`,
+        sourceSessionId: agent.sourceSessionId,
+        identity: resolveAgentName(agent.evidence, table.homeDir),
+      }));
+      expect(disambiguate(entries, store).map(({ name }) => name)).toEqual(fleet.expect);
+      const removed = new Set(fleet.removeAgentIds ?? []);
+      const survivors = entries.filter(({ agentId }) => !removed.has(agentId));
+      expect(disambiguate(survivors, store).map(({ name }) => name)).toEqual(fleet.expectAfterRemoval!);
     });
   }
 });
