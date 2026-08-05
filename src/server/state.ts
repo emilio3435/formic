@@ -9,6 +9,12 @@ import {
   collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
 } from "./cmux";
+import {
+  CmuxEventsSupervisor,
+  cmuxEventsCommand,
+  type CmuxEventFrame,
+  type CmuxEventsRuntime,
+} from "./cmux-events";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
@@ -136,6 +142,8 @@ export class HubState {
   #refreshGeneration = 0;
   #cmuxRequested = false;
   #refreshingCmux = false;
+  #cmuxEvents?: CmuxEventsSupervisor;
+  #cmuxEventsBootId?: string;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
   #issueLifecycle = new Map<string, IssueLifecycle>();
   #recentlyResolved: OperatorIssue[] = [];
@@ -210,6 +218,38 @@ export class HubState {
   subscribe(listener: (snapshot: HubSnapshot) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  startCmuxEvents(runtime: CmuxEventsRuntime = {}): void {
+    if (this.#cmuxEvents) return;
+    const supervisor = new CmuxEventsSupervisor({
+      command: cmuxEventsCommand(this.cmuxExecutable, runtime.cursorFile),
+      spawn: runtime.spawn,
+      scheduleRestart: runtime.scheduleRestart,
+      onFrame: (frame) => this.#refreshFromCmuxEvent(frame),
+      onError: (error) => console.error(`[HubState] cmux event subscriber: ${error.message}`),
+    });
+    this.#cmuxEvents = supervisor;
+    supervisor.start();
+  }
+
+  stopCmuxEvents(): void {
+    const supervisor = this.#cmuxEvents;
+    this.#cmuxEvents = undefined;
+    supervisor?.stop();
+  }
+
+  #refreshFromCmuxEvent(frame: CmuxEventFrame): void {
+    const bootChanged = this.#cmuxEventsBootId !== undefined
+      && frame.bootId !== this.#cmuxEventsBootId;
+    this.#cmuxEventsBootId = frame.bootId;
+    const fullSnapshot = bootChanged
+      || (frame.type === "ack" && frame.resumeGap)
+      || (frame.type === "event" && frame.category !== "agent");
+    if (!fullSnapshot && frame.type !== "event") return;
+    void this.refresh(fullSnapshot ? { cmux: true } : {}).catch((error) => {
+      console.error(`[HubState] cmux event refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   markIssueVerifying(issueId: string, result?: string): void {
