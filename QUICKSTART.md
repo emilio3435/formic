@@ -78,8 +78,8 @@ concluding nothing was collected. Both numbers are yours to change — the gear 
 the masthead opens Settings, where the lookback lives beside the scan window and
 the two thresholds that decide what every session is called.
 
-One thing you will see that no other board shows: a collapsed **Unverified**
-group at the bottom of `Waiting`. Those are sessions that have gone quiet with no
+One thing you will see that no other board shows: an **Unverified** section at
+the bottom of each program group. Those are sessions that have gone quiet with no
 process left to check, which is not the same as finished. Ant Hill says so rather
 than filing them as ended, and that group deliberately ignores the lookback —
 it is a disclosure of what cannot be accounted for, not a list of recent things.

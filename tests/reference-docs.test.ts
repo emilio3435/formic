@@ -1644,11 +1644,13 @@ describe("the catch-up summary stays true to the code it summarises", () => {
       .toMatch(/Start here/i);
     expect(t, "the start-here line no longer points at the running board")
       .toContain("127.0.0.1:4701");
-    expect(t, "the start-here line stopped naming the tab that answers the question")
-      .toMatch(/`Needs you`/);
+    /* The surface that answers it is now a pinned strip at the top of `Board`
+       rather than a tab of its own — same population, same first move. */
+    expect(t, "the start-here line stopped naming the surface that answers the question")
+      .toMatch(/\*\*Needs you\*\* strip/);
     /* And it must stay honest about the empty case, which is the common one. */
     expect(t, "the summary stopped saying an empty Needs you is an answer")
-      .toMatch(/nothing needs you then nothing does/i);
+      .toMatch(/no session is asking for you then none is/i);
   });
 
   test("it keeps an open section rather than reading as a victory lap", () => {
