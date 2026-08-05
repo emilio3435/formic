@@ -143,13 +143,6 @@ their declared lane id, while a declared orchestrator uses the run id. Manifest
 parentage also wins over transcript inference, so a declared lane stays under
 the orchestrator that owns its run.
 
-The collector checks hook-backed sessions against one kernel process table per
-scan. Exact ancestry is recorded separately as `lineage.observedParentAgentId`;
-`lineageAgreement` is `corroborated`, `contradicted`, or `unobserved`. A
-contradiction never moves a declared or provider-native chain. An undeclared
-session can adopt an exact observed parent, while missing or ambiguous process
-evidence remains unobserved rather than becoming a guessed relationship.
-
 **A title cmux gave the pane is not a rename.** cmux distils its own pane
 titles from a session's opening prompt and names workspaces after their path,
 so a lane declared as `fe-states` is not renamed by a pane reading
@@ -166,6 +159,13 @@ back when its twin ended would be worse than a redundant one — so a session ca
 carry a tag the board has nothing to spend it on, and in that case the board
 prints the words alone. The full session id is in the drawer for every row
 either way.
+
+The collector checks hook-backed sessions against one kernel process table per
+scan. Exact ancestry is recorded separately as `lineage.observedParentAgentId`;
+`lineageAgreement` is `corroborated`, `contradicted`, or `unobserved`. A
+contradiction never moves a declared or provider-native chain. An undeclared
+session can adopt an exact observed parent, while missing or ambiguous process
+evidence remains unobserved rather than becoming a guessed relationship.
 
 > **The one number that will mislead you.** A row's **Tokens** is that agent's
 > *latest model call*. The **session tokens** figure on the grey program bar above
