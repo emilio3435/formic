@@ -1,0 +1,10 @@
+{
+  "workspaces": [
+    {
+      "id": "WORKSPACE-1",
+      "project_root_path": "/Users/example/Developer/ProjectAtlas",
+      "git_branches": [{ "branch": "feature/atlas", "dirty": true }],
+      "pull_request_urls": ["https://github.com/example/atlas/pull/42"]
+    }
+  ]
+}

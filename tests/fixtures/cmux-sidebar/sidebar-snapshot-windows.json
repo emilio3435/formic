@@ -1,0 +1,14 @@
+{
+  "windows": [
+    {
+      "workspaces": [
+        {
+          "workspaceId": "WORKSPACE-WIN",
+          "projectRootPath": "/Users/example/Developer/WindowsShape",
+          "gitBranches": [{ "branch": "main", "isDirty": false }],
+          "pullRequestUrls": ["https://github.com/example/windows-shape/pull/7"]
+        }
+      ]
+    }
+  ]
+}

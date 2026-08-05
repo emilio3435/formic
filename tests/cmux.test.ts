@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -253,14 +254,10 @@ describe("cmux terminal discovery outcomes", () => {
 });
 
 describe("cmux sidebar repository facts", () => {
-  const sidebarSnapshot = JSON.stringify({
-    workspaces: [{
-      id: "WORKSPACE-1",
-      project_root_path: "/Users/example/Developer/ProjectAtlas",
-      git_branches: [{ branch: "feature/atlas", dirty: true }],
-      pull_request_urls: ["https://github.com/example/atlas/pull/42"],
-    }],
-  });
+  const sidebarSnapshot = readFileSync(
+    join(import.meta.dir, "fixtures/cmux-sidebar/sidebar-snapshot.json"),
+    "utf8",
+  );
 
   test("maps the installed sidebar snapshot shape to live repository facts", () => {
     expect(parseCmuxSidebarSnapshot(sidebarSnapshot)).toEqual([{

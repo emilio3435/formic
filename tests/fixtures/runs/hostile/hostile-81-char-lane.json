@@ -1,0 +1,19 @@
+{
+  "runId": "hostile-81-char-run",
+  "createdAt": "2026-08-05T16:00:00.000Z",
+  "repoRoot": "/Users/ant/Developer/the-mountain-main",
+  "orchestrator": {
+    "provider": "claude",
+    "sessionId": "orch-hostile-81"
+  },
+  "lanes": [
+    {
+      "laneId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "role": "worker",
+      "provider": "codex",
+      "sessionId": "lane-hostile-81",
+      "worktree": "/Users/ant/Developer/.worktrees/hostile-81",
+      "branch": "test/hostile-81"
+    }
+  ]
+}
