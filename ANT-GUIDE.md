@@ -75,6 +75,15 @@ is wrong and what to do about it. The rest are context, not tasks: how much is
 shipping, what it is costing, how full the fullest context window is, and whether
 the system itself is healthy.
 
+**What the strip admits, exactly.** A session is here because it is *currently*
+blocked on a person — not because it once was. A session that asked a question
+and then died is not asking; a lane whose orchestrator has since stood it down
+or marked its work complete is not asking either. If a lane is `Parked` or
+`Done`, a request it made *before* that declaration is stale and the strip drops
+it. A question it asks *after* is a live one, and it comes straight back in.
+That is the only way back, and it is deliberate: standing a lane down silences
+its old request, never a new one.
+
 ### 2. The board opens on `Board`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)
@@ -116,6 +125,26 @@ The shelf holds *recent* finishes only, inside the same lookback the rest of the
 board is using — it answers "where did the rows that were just here go", not
 "show me everything that ever ran". For the whole record, use **History**, which
 grows no shelf at all, because there finished work *is* the list.
+
+**`Parked` and `Done` are about the work, not the session.** When something is
+orchestrating a swarm it can declare what each lane's assignment is doing, and
+two of those declarations show up on the row as a quiet dashed chip:
+
+| Chip | What it means | Where the row goes |
+|---|---|---|
+| `Parked` | Whoever runs this lane stood it down. It is not working on anything and it is not waiting on you. | Stays in the live rows — it is idle, not over |
+| `Done` | The lane reported its assignment complete. | Leaves the live rows for the **Finished shelf** |
+
+**Neither one says the session ended.** Its process is still up, its controls
+still work, and you can still send it something — which is the point: a lane
+that finished one job is exactly the thing you want to hand the next one to. A
+`Done` row on the shelf beside a genuinely ended one looks the same at a glance
+and is not the same thing; open it and the dock is live.
+
+**And neither one gags it.** A parked or done lane that asks a question is
+asking *now*, so it goes straight back into the Needs-you strip and out of the
+shelf. That is the rule that makes standing a lane down safe: you are silencing
+a stale request, never a new one.
 
 ### 3. Read the row
 
@@ -215,6 +244,15 @@ matching prefix can verify it, but that shortened text can never prove the send
 absent. A turn still labelled **You** has no agent header and is treated as
 direct operator input; this is provenance checking, not cryptographic
 authentication.
+
+When that check does not come back clean the turn is marked
+**`Sender unconfirmed`**. Read it as exactly what it says and no more: *the claimed
+sender's own transcript does not contain this message*. It is a reason to check
+the sender before acting on the instruction — not a finding that anybody faked
+anything. The board can see the result of a search, not the intent behind a
+mismatch, so it reports the search. A turn with no mark either passed the check
+or was never checkable, and those two are not the same; the drawer never turns
+"could not confirm" into an accusation.
 
 | Button | Does |
 |---|---|

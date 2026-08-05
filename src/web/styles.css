@@ -1743,6 +1743,58 @@ body.feed-frozen .programs { opacity: 0.62; }
 .row-died .ico { width: 0.75rem; height: 0.75rem; flex: none; }
 .agent-row.is-died { box-shadow: inset 3px 0 var(--failed); }
 
+/* A declared task state. Quiet by construction — this is the one mark on the
+   board that says a row is silent BECAUSE someone decided it should be, so it
+   is context rather than an alarm and takes no colour of its own. Same weight
+   and metrics as .history-chip, which is the other "what happened to this row"
+   chip on the same line, so the two read as one family. */
+.task-state-chip {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--faint);
+  border: 1px dashed var(--line-strong);
+  border-radius: 3px;
+  padding: 0.02rem 0.35rem;
+  white-space: nowrap;
+}
+/* Lineage the kernel contradicts. Alert ink and an outline on the row itself,
+   not a quiet chip: every other row fact answers "what is this session doing",
+   and this one answers "is this row even in the right place" — a session nested
+   under the wrong orchestrator is how an instruction reaches the wrong
+   terminal. Ink and a hairline, never a fill (Rule 1). */
+.lineage-contradicted {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--failed) 55%, transparent);
+  border-radius: 4px;
+  background: var(--ember-soft);
+  font: 700 10px/1.4 var(--font-mono);
+  color: var(--failed);
+  white-space: nowrap;
+}
+.lineage-contradicted .ico { width: 0.75rem; height: 0.75rem; flex: none; }
+.agent-row.is-lineage-disputed { box-shadow: inset 3px 0 var(--failed); }
+/* An attribution the server could not confirm. Amber rather than the failed
+   red the two marks above use, and that gap is deliberate: those two report
+   something that HAPPENED, while this reports a check that did not come back
+   clean. The copy states the finding, so the colour must not out-claim it. */
+.sender-unconfirmed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.3rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+  border-radius: 4px;
+  font: 700 10px/1.4 var(--font-mono);
+  color: var(--amber);
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.sender-unconfirmed .ico { width: 0.75rem; height: 0.75rem; flex: none; }
+
 .tm-track { fill: var(--line); }
 .tm-fill { fill: var(--moss); }
 .tm-fill.warn { fill: var(--amber); }
