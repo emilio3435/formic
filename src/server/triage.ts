@@ -71,18 +71,6 @@ function solutionFor(issue: OperatorIssue, mode: TriageMode): { headline: string
       ],
     };
   }
-  if (issue.id.includes("cursor-model-policy")) {
-    return {
-      headline: issue.id.endsWith("active")
-        ? "Stop the mismatched Cursor lane and relaunch it on Grok"
-        : "Trace the historical launcher and verify the Grok-only rule",
-      steps: [
-        { title: "Identify the launcher", detail: "Link each violation to its parent session, task, model evidence, and launch path." },
-        { title: "Apply the routing rule", detail: "Use Cursor Grok 4.5 Fast for Cursor work and native Claude or Codex for other model families." },
-        { title: "Verify the replacement", detail: "Confirm the new session reports Grok before clearing the policy finding." },
-      ],
-    };
-  }
   if (issue.id.includes("collector")) {
     return {
       headline: "Restore trustworthy collection before acting on incomplete data",

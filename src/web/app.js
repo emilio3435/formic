@@ -64,7 +64,6 @@ import {
   issuesOf,
   lastActionFor,
   liveElapsedText,
-  modelPolicyView,
   preferredRenameTarget,
   presentationLabelKey,
   provenanceLabel,
@@ -146,7 +145,6 @@ import {
   LOOKBACK_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
-  MODEL_POLICY_LABELS,
   OPS_VIEWS,
   OUTCOME_LABELS,
   USAGE_RANGE_PRESETS,
@@ -437,7 +435,6 @@ function totalsOf(snap) {
     tokenMedian: t.tokenMedian,
     tokenReporting: t.tokenReporting,
     tokenEligible: t.tokenEligible,
-    cursorModelHealth: t.cursorModelHealth,
     sourceHealth: t.sourceHealth,
   };
 }
@@ -525,27 +522,6 @@ function typicalRequestOf(snap) {
   const value = totals.length % 2 ? totals[mid] : Math.round((totals[mid - 1] + totals[mid]) / 2);
   return { value, source: "derived" };
 }
-
-/* ---------- Cursor model policy ----------
-   Missing evidence is neither compliant nor a mismatch — it stays unreported. */
-
-/* Fleet-level Cursor policy glance from totals.cursorModelHealth.
-   Only mismatches read as alarms; unreported stays quiet but visible. */
-function cursorPolicyParts(health) {
-  if (!health || health.total == null || !health.total) return null;
-  const n = (v) => v == null ? 0 : v;
-  const mismatch = n(health.mismatch ?? health.violation);
-  const unreported = n(health.unreported ?? health.unverified);
-  return [
-    {
-      text: mismatch + " mismatch" + (mismatch === 1 ? "" : "es"),
-      tone: mismatch > 0 ? "bad" : "ok",
-    },
-    { text: n(health.compliant) + " compliant", tone: "plain" },
-    { text: unreported + " unreported", tone: "muted" },
-  ];
-}
-
 
 /* ---------- shared elapsed-clock helpers ---------- */
 
@@ -1146,7 +1122,7 @@ globalThis.TheAntHill = {
   controlUnavailableText,
   totalsOf, issuesOf, alerting, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
-  contextUsage, contextDisplayValue, typicalRequestOf, modelPolicyView, cursorPolicyParts, MODEL_POLICY_LABELS,
+  contextUsage, contextDisplayValue, typicalRequestOf,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
@@ -4521,7 +4497,6 @@ function renderAgentRow(agent, program, opts = {}) {
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
   const watchOnly = watchOnlyMark(control, activity, state.snap);
-  const policy = modelPolicyView(agent);
   const role = roleView(agent.role);
   const selected = state.selectedId === agent.id;
   const clusterNote = swarmNote(agent, opts);
@@ -4638,7 +4613,6 @@ function renderAgentRow(agent, program, opts = {}) {
         })
         : null,
       role.key !== "agent" ? el("span", { class: "role-chip role-label role-" + role.key, text: role.label }) : null,
-      policy && policy.state === "mismatch" ? el("span", { class: "policy-chip", title: policy.summary }, icon("warning"), "Model mismatch") : null,
       // Terminal breadcrumb: which linked pane this row routes to, deduped
       // against the display name. Identity info (distinct from control state) —
       // an operator can read the destination without opening the drawer.
@@ -4941,7 +4915,7 @@ function findSelected() {
 const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "confirmedAt"]);
 
 /* The agent drawer paints very nearly the whole agent record — status, gates,
-   model policy, tokens, cwd, git, messages, artifacts, transcript tail, target
+   tokens, cwd, git, messages, artifacts, transcript tail, target
    routing and controls[] — so project the record itself rather than hand-listing
    fields that then rot. A field added to the snapshot is covered automatically. */
 function agentRecordSig(agent) {
@@ -5775,7 +5749,6 @@ function renderAgentDrawer(pane, view) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
-  const policy = modelPolicyView(agent);
 
   // Provider channel: a 1px inset rail + the lineage current-node ring both read
   // from --prov, set CSP-safely by a class (never an inline style).
@@ -5840,7 +5813,7 @@ function renderAgentDrawer(pane, view) {
             ? el("span", { class: "chip provider-" + agent.provider, text: subParts.chip })
             : null)
         : null,
-      renderStatusLine(agent, activity, outcome, control, policy),
+      renderStatusLine(agent, activity, outcome, control),
       verdictLiveness(agent),
       verdictGate(agent, outcome)),
     el("div", { class: "verdict-side" }, closeButton())));
@@ -6017,7 +5990,7 @@ function renderEvidenceShelf(agent) {
    all: "went quiet 20 minutes ago — dead, or thinking?" That is time-since-update
    plus process liveness. `statusReason` is 100% populated on the wire and was
    rendered on zero agents; it is the sentence that says which. */
-function renderStatusLine(agent, activity, outcome, control, policy) {
+function renderStatusLine(agent, activity, outcome, control) {
   /* The activity word is emitted ALWAYS and hidden by CSS only at the widths
      where the roster row that carries it is actually beside the drawer. Below
      1025px the drawer is a full-viewport sheet and the roster is completely
@@ -6058,23 +6031,14 @@ function renderStatusLine(agent, activity, outcome, control, policy) {
     line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
   }
 
-  /* Escalations only. A policy mismatch is real trouble and nothing else says it;
-     `outcome` speaks only when it stops being healthy, which is the whole point
-     of deleting it from the nominal line. */
+  /* Escalations only: `outcome` speaks when it stops being healthy, which is
+     the whole point of deleting it from the nominal line. */
   if (outcome !== "healthy") {
     line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
     line.append(el("span", {
       class: "status-line-item outcome-" + outcome,
       text: OUTCOME_LABELS[outcome] || outcome,
     }));
-  }
-
-  if (policy && policy.state === "mismatch") {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", {
-      class: "status-line-item policy-mismatch",
-      title: policy.summary || null,
-    }, icon("warning"), "Model mismatch"));
   }
 
   return line;

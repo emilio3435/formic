@@ -195,44 +195,11 @@ export function buildOperatorIssues(
     });
   }
 
-  /* "Active" means a session that is demonstrably still going: working or
-     waiting. It used to mean "not ended", which now sweeps in every unverified
-     session — and an alarm titled "active Cursor sessions" that counts sessions
-     nothing has confirmed are running is the same overclaim this contract is
-     removing everywhere else. The split is still exhaustive: whatever is not
-     active is reported on the quieter surface below. */
-  const cursorMismatches = agents.filter((agent) => agent.modelPolicy?.state === "mismatch");
-  const isActive = (agent: AgentSnapshot): boolean =>
-    agent.scope !== "retained"
-    && (agent.lifecycle
-      ? agent.lifecycle === "working" || agent.lifecycle === "waiting"
-      : agent.activity !== "ended");
-  const activeCursorMismatches = cursorMismatches.filter(isActive);
-  const endedCursorMismatches = cursorMismatches.filter((agent) => !isActive(agent));
-  if (activeCursorMismatches.length > 0) {
-    issues.push({
-      id: "system:cursor-model-policy-active",
-      kind: "system",
-      severity: "error",
-      title: "Cursor model routing mismatches",
-      summary: `${activeCursorMismatches.length} active Cursor ${activeCursorMismatches.length === 1 ? "session uses" : "sessions use"} a different model than expected.`,
-      affectedAgentIds: activeCursorMismatches.map((agent) => agent.id),
-      technicalDetails: activeCursorMismatches.map((agent) =>
-        `${agent.id}: observed ${agent.modelPolicy?.observed ?? "unreported"}; expected ${agent.modelPolicy?.expected ?? "unreported"}.`),
-    });
-  }
-  if (endedCursorMismatches.length > 0) {
-    issues.push({
-      id: "system:cursor-model-policy-recent",
-      kind: "system",
-      severity: "warning",
-      title: "Recent Cursor model routing mismatches",
-      summary: `${endedCursorMismatches.length} ended Cursor ${endedCursorMismatches.length === 1 ? "session used" : "sessions used"} a different model than expected. Ended sessions are retained as history, not presented as active.`,
-      affectedAgentIds: endedCursorMismatches.map((agent) => agent.id),
-      technicalDetails: endedCursorMismatches.map((agent) =>
-        `${agent.id}: observed ${agent.modelPolicy?.observed ?? "unreported"}; expected ${agent.modelPolicy?.expected ?? "unreported"}.`),
-    });
-  }
+  /* Two Cursor model-routing findings stood here — one for active sessions, one
+     for ended ones. Both are gone with the policy that produced them: the hub
+     has no rule about which model a Cursor session may run, so it raises no
+     finding when Cursor picks one. See snapshot-agent.ts for why the rule was
+     wrong rather than merely mis-rendered. */
 
   for (const agent of agents) {
     if (!agent.outcome || agent.outcome === "healthy" || agent.activity === "ended") continue;

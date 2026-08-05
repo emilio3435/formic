@@ -209,56 +209,15 @@ describe("snapshot edge cases", () => {
     expect(snapshot.totals.byLifecycle?.unverified).toBe(1);
   });
 
-  test("a Cursor child whose parent never reported a model is unreported, not accused", () => {
-    const parent = collected({
-      id: "cursor:parent",
-      provider: "cursor",
-      sourceSessionId: "parent",
-      displayName: "Parent",
-      model: undefined,
-    });
-    const child = collected({
-      id: "cursor:child",
-      provider: "cursor",
-      sourceSessionId: "child",
-      displayName: "Child",
-      model: "gpt-5.6-sol",
-      parentSourceSessionId: "parent",
-    });
+  /* Two Cursor model-policy edge tests stood here — an unreported parent model,
+     and a rootless session with no model at all. Both described verdicts the hub
+     no longer forms (policy removed 2026-08-05).
 
-    const snapshot = buildSnapshot({ agents: [parent, child], surfaces: [], archiveStore, now: NOW });
-    const policy = agentsOf(snapshot).find(({ id }) => id === "cursor:child")?.modelPolicy;
-
-    /* Inheritance cannot be verified against a parent model nobody reported, so
-       the verdict is "unreported" and the session is not counted as a routing
-       violation. NOTE: this fires ahead of the Cursor-native family check, so a
-       demonstrably non-native model escapes `mismatch` on this path — which the
-       comment above cursorModelPolicy says should happen "regardless of the
-       parent model". Pinned as-built; see the lane report. */
-    expect(policy?.state).toBe("unreported");
-    expect(policy?.observed).toBe("gpt-5.6-sol");
-    expect(policy?.expected).toBe("Parent model (unreported)");
-    expect(policy?.evidence).toBe("cursor-ai-tracking");
-    expect(snapshot.totals.cursorModelHealth).toMatchObject({ mismatch: 0, unreported: 2 });
-  });
-
-  test("a rootless Cursor session with no model is unreported against the configured root", () => {
-    const snapshot = buildSnapshot({
-      agents: [collected({
-        id: "cursor:solo",
-        provider: "cursor",
-        sourceSessionId: "solo",
-        displayName: "Solo",
-        model: undefined,
-      })],
-      surfaces: [],
-      archiveStore,
-      now: NOW,
-    });
-    const policy = agentsOf(snapshot)[0]!.modelPolicy;
-
-    expect(policy?.state).toBe("unreported");
-    expect(policy?.evidence).toBe("none");
-    expect(policy?.observed).toBeUndefined();
-  });
+     One of them is worth remembering: it pinned, with a NOTE calling it out, that
+     the unreported branch fired AHEAD of the native-family check, so a
+     demonstrably non-native model escaped `mismatch` — contradicting the comment
+     directly above the function that said the family rule applied "regardless of
+     the parent model". The rule disagreed with itself in code, not just on
+     screen. That is the second independent reason it was deleted rather than
+     re-rendered. */
 });

@@ -75,14 +75,6 @@ export const USAGE_RANGE_PRESETS = [
   { id: "30d", hours: 24 * 30, label: "30d" },
 ];
 
-export const MODEL_POLICY_LABELS = {
-  compliant: "Compliant",
-  mismatch: "Model mismatch",
-  violation: "Model mismatch",
-  unreported: "Model unreported",
-  unverified: "Model unreported",
-};
-
 /* Which secondary context reading the gauge spells out. Per-browser like the
    lookback, because it is a display preference rather than a fact about the
    fleet — nothing on the server changes when it flips. */

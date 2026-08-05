@@ -651,7 +651,15 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.contextMedian).toBe(45);
   });
 
-  test("Cursor model policy distinguishes Grok, non-Grok, and unreported sessions", () => {
+  /* The Cursor model policy was removed on 2026-08-05: the hub has no rule about
+     which model a Cursor session may run, so it publishes no verdict about one.
+     Two tests here asserted the compliant/mismatch/unreported verdicts and the
+     cursorModelHealth rollup; both are gone with the field.
+
+     What replaces them is the inverse claim, and it is the one worth pinning:
+     whatever model a Cursor session reports, it raises no finding. The models
+     below are exactly the ones the old rule called violations. */
+  test("no Cursor model raises a policy finding, whatever family it belongs to", () => {
     const snapshot = buildSnapshot({
       agents: [
         collected({
@@ -661,32 +669,16 @@ describe("snapshot control safety and SSE deduplication", () => {
           model: "cursor-grok-4.5-high-fast",
         }),
         collected({
-          id: "cursor:unknown",
+          id: "cursor:foreign",
           provider: "cursor",
-          sourceSessionId: "unknown",
-          model: undefined,
-          status: "waiting",
+          sourceSessionId: "foreign",
+          model: "claude-opus-5",
         }),
         collected({
-          /* The INACTIVE mismatch, which is the whole reason both exist: only
-             live sessions count toward fleet model health. The fixture used to
-             say "stale" beside a transcript written thirty seconds earlier, so
-             it was inactive by assertion rather than by evidence. */
-          id: "cursor:child-mismatch",
+          id: "cursor:also-foreign",
           provider: "cursor",
-          sourceSessionId: "child-mismatch",
-          parentSourceSessionId: "grok",
+          sourceSessionId: "also-foreign",
           model: "gpt-5.6-sol-xhigh",
-          status: "stale",
-          updatedAt: "2026-07-21T18:00:00.000Z",
-        }),
-        collected({
-          id: "cursor:active-child-mismatch",
-          provider: "cursor",
-          sourceSessionId: "active-child-mismatch",
-          parentSourceSessionId: "grok",
-          model: "claude-fable-5-thinking-high",
-          status: "running",
         }),
       ],
       surfaces: [],
@@ -695,70 +687,13 @@ describe("snapshot control safety and SSE deduplication", () => {
     });
     const agents = snapshot.programs.flatMap(({ agents }) => agents);
 
-    expect(agents.find(({ id }) => id === "cursor:grok")?.modelPolicy?.state).toBe("compliant");
-    expect(agents.find(({ id }) => id === "cursor:unknown")?.modelPolicy?.state).toBe("unreported");
-    expect(agents.find(({ id }) => id === "cursor:child-mismatch")?.modelPolicy).toMatchObject({
-      state: "mismatch",
-      expected: "cursor-grok-4.5-high-fast",
-      observed: "gpt-5.6-sol-xhigh",
-      evidence: "cursor-ai-tracking",
-    });
-    expect(agents.find(({ id }) => id === "cursor:active-child-mismatch")?.modelPolicy?.state).toBe("mismatch");
-    expect(snapshot.totals.cursorModelHealth).toEqual({
-      compliant: 1,
-      mismatch: 1,
-      unreported: 1,
-      total: 3,
-    });
-    expect(snapshot.issues).toContainEqual(expect.objectContaining({
-      id: "system:cursor-model-policy-active",
-      title: "Cursor model routing mismatches",
-      affectedAgentIds: ["cursor:active-child-mismatch"],
-    }));
-    expect(snapshot.issues).toContainEqual(expect.objectContaining({
-      id: "system:cursor-model-policy-recent",
-      title: "Recent Cursor model routing mismatches",
-      affectedAgentIds: ["cursor:child-mismatch"],
-    }));
-  });
-
-  test("Cursor Composer families count as compliant native models", () => {
-    const snapshot = buildSnapshot({
-      agents: [
-        collected({
-          id: "cursor:composer-fast",
-          provider: "cursor",
-          sourceSessionId: "composer-fast",
-          model: "composer-2.5-fast",
-        }),
-        collected({
-          id: "cursor:composer-2",
-          provider: "cursor",
-          sourceSessionId: "composer-2",
-          model: "composer-2",
-        }),
-        collected({
-          id: "cursor:composer-child",
-          provider: "cursor",
-          sourceSessionId: "composer-child",
-          parentSourceSessionId: "composer-fast",
-          model: "composer-2.5",
-        }),
-      ],
-      surfaces: [],
-      archiveStore,
-      now: new Date("2026-07-21T23:00:30.000Z"),
-    });
-    const agents = snapshot.programs.flatMap(({ agents }) => agents);
-
-    const composerFast = agents.find(({ id }) => id === "cursor:composer-fast")?.modelPolicy;
-    expect(composerFast?.state).toBe("compliant");
-    // The summary names the family that actually matched — honest about why.
-    expect(composerFast?.summary).toContain("composer-2.5");
-    expect(agents.find(({ id }) => id === "cursor:composer-2")?.modelPolicy?.state).toBe("compliant");
-    expect(agents.find(({ id }) => id === "cursor:composer-child")?.modelPolicy?.state).toBe("compliant");
-    expect(snapshot.totals.cursorModelHealth).toMatchObject({ compliant: 3, mismatch: 0 });
-    expect((snapshot.issues ?? []).some((issue) => issue.id.startsWith("system:cursor-model-policy"))).toBe(false);
+    // The observed model survives — what a session runs is still a fact worth showing.
+    expect(agents.find(({ id }) => id === "cursor:foreign")?.model).toBe("claude-opus-5");
+    // The verdict about it does not.
+    expect((snapshot.issues ?? []).some((issue) => issue.id.includes("cursor-model-policy"))).toBe(false);
+    expect(snapshot.issues ?? []).not.toContainEqual(
+      expect.objectContaining({ title: expect.stringContaining("model routing") }),
+    );
   });
 
   test("provider-native evidence becomes one operator state language", () => {
