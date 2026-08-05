@@ -3143,6 +3143,149 @@ describe("single lock narrative in the agent drawer", () => {
   });
 });
 
+describe("the command dock is grouped by what each control is for", () => {
+  /* The dock used to be one undifferentiated row, so the only way to tell the
+     destructive control from the safe ones was hue and position. It now reads as
+     four named categories. Everything asserted here is about PRESENTATION: the
+     capability list, the fkeys, the confirm gate and the enable/disable verdicts
+     are the server's and are checked to be untouched by the regrouping. */
+  const CAPS = [
+    { action: "focus", enabled: true },
+    { action: "instruct", enabled: true },
+    { action: "interrupt", enabled: true },
+    { action: "archive", enabled: true },
+  ];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dockFor = (controls: unknown[], control = "linked"): any =>
+    withDom(() => M.renderCommandDock(agent({ controls }), control, null, []));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groups = (dock: any) => allByClass(dock, "dock-group");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const labelsOf = (dock: any) => groups(dock).map((g: any) => textOf(byClass(g, "dock-group-label")));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groupNamed = (dock: any, name: string) =>
+    groups(dock).find((g: any) => g.attributes["aria-label"] === name) || null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fkeysOf = (node: any) =>
+    findAll(node, (n: any) => n.dataset && n.dataset.fkey).map((n: any) => n.dataset.fkey);
+
+  test("four clusters, each holding exactly the controls its label names", () => {
+    const dock = dockFor([...CAPS, { action: "unarchive", enabled: true }]);
+    expect(labelsOf(dock)).toEqual(["Communicate", "Navigate", "Operate", "File"]);
+    expect(fkeysOf(groupNamed(dock, "Communicate"))).toEqual(["draft:codex:a1", "act:codex:a1:instruct"]);
+    expect(fkeysOf(groupNamed(dock, "Navigate"))).toEqual(["act:codex:a1:focus"]);
+    expect(fkeysOf(groupNamed(dock, "Operate"))).toEqual(["act:codex:a1:interrupt"]);
+    expect(fkeysOf(groupNamed(dock, "File"))).toEqual(["act:codex:a1:archive", "act:codex:a1:unarchive"]);
+  });
+
+  test("the categories are heard, not merely seen — and each is announced once", () => {
+    // Visual proximity is not a grouping a screen reader can report, so the
+    // cluster carries role=group + aria-label. The visible label repeats the
+    // same word and is hidden from AT so the name is not read twice.
+    const dock = dockFor([...CAPS]);
+    expect(groups(dock).length).toBe(4);
+    for (const group of groups(dock)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const label: any = byClass(group, "dock-group-label");
+      expect(group.attributes.role).toBe("group");
+      expect(group.attributes["aria-label"]).toBe(textOf(label));
+      expect(label.attributes["aria-hidden"]).toBe("true");
+    }
+  });
+
+  test("grouping added no control, moved no focus stop, and renamed no fkey", () => {
+    /* render() restores focus by data-fkey after every SSE repaint, so a key
+       that is reordered or renamed is a drawer that silently drops focus. The
+       whole dock is asserted in paint order for that reason. */
+    const dock = dockFor([...CAPS, { action: "unarchive", enabled: true }]);
+    expect(fkeysOf(dock)).toEqual([
+      "draft:codex:a1",
+      "act:codex:a1:instruct",
+      "act:codex:a1:focus",
+      "act:codex:a1:interrupt",
+      "act:codex:a1:archive",
+      "act:codex:a1:unarchive",
+    ]);
+    // Send, Focus, Interrupt, Archive, Un-archive — the headings are headings.
+    expect(buttonsOf(dock).length).toBe(5);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(allByClass(dock, "dock-group-label").some((n: any) => n.dataset.fkey)).toBe(false);
+  });
+
+  test("a category with nothing in it renders no heading over nothing", () => {
+    expect(labelsOf(dockFor([{ action: "instruct", enabled: true }]))).toEqual(["Communicate"]);
+    expect(labelsOf(dockFor([{ action: "focus", enabled: true }]))).toEqual(["Navigate"]);
+    // An un-archive the server refuses is not rendered, so File has no members
+    // and must not advertise itself as a place where filing happens.
+    expect(labelsOf(dockFor([{ action: "focus", enabled: true }, { action: "unarchive", enabled: false }])))
+      .toEqual(["Navigate"]);
+    // And an agent the server offers nothing for is still the hidden span.
+    const none = dockFor([]);
+    expect(none.hasAttribute("hidden")).toBe(true);
+    expect(groups(none).length).toBe(0);
+  });
+
+  test("locked safe controls still isolate Archive behind the File disclosure", () => {
+    /* The rule the disclosure exists for: a destructive control must never sit
+       beside dead ones. Regrouping moved the disclosure INTO the File cluster,
+       so this asserts the isolation survived the move. */
+    const dock = dockFor([
+      { action: "focus", enabled: false },
+      { action: "instruct", enabled: false },
+      { action: "interrupt", enabled: false },
+      { action: "archive", enabled: true },
+    ], "observed-only");
+
+    const file = groupNamed(dock, "File");
+    expect(file).not.toBeNull();
+    const more = byClass(file, "command-dock-more");
+    expect(more).not.toBeNull();
+    expect(textOf(more)).toContain("Archive this session");
+
+    // Exactly one Archive in the dock, and it is behind the disclosure — never
+    // a peer of the Focus the server has already refused.
+    const archiveKey = "act:codex:a1:archive";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isArchive = (n: any) => n.dataset && n.dataset.fkey === archiveKey;
+    expect(findAll(dock, isArchive).length).toBe(1);
+    expect(findAll(more, isArchive).length).toBe(1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const focus: any = byFkey(groupNamed(dock, "Navigate"), "act:codex:a1:focus");
+    expect(focus.hasAttribute("disabled")).toBe(true);
+
+    // The control: unlocked, the same capability is a plain tool in that cluster.
+    const open = dockFor([...CAPS]);
+    expect(byClass(groupNamed(open, "File"), "command-dock-more")).toBeNull();
+    expect(byFkey(groupNamed(open, "File"), archiveKey)).not.toBeNull();
+  });
+
+  test("Interrupt still arms its confirm strip, inside the Operate cluster", async () => {
+    await withState({ confirming: "act:codex:a1:interrupt" }, () => {
+      const dock = dockFor([...CAPS]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const strip: any = byClass(groupNamed(dock, "Operate"), "command-confirm");
+      expect(strip).not.toBeNull();
+      expect(textOf(strip)).toContain("Interrupt?");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(buttonsOf(strip).map((b: any) => textOf(b))).toEqual(["Confirm", "Cancel"]);
+      // Arming Interrupt does not disturb the other categories.
+      expect(labelsOf(dock)).toEqual(["Communicate", "Navigate", "Operate", "File"]);
+    });
+  });
+
+  test("the cluster CSS binds to what the dock builds, and the old spacer is gone", () => {
+    for (const selector of [".command-dock-actions", ".dock-group-label", ".dock-group--file"]) {
+      expect(styles).toContain(selector);
+    }
+    /* The flex spacer that used to hold Archive away from Focus and Interrupt.
+       That separation now belongs to the File cluster, so neither the element
+       nor its rule may linger — a dead rule here is a rule someone will later
+       read as authoritative. */
+    expect(source).not.toContain("command-dock-spacer");
+    expect(styles).not.toContain(".command-dock-spacer");
+  });
+});
+
 describe("investigation briefings lead with one wired action", () => {
   /* W4-B: was six source substrings that could not fail if the CTA stopped
      being rendered. Driven now through renderTriage, which is how a finished

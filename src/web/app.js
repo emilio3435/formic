@@ -6160,6 +6160,30 @@ function capability(agent, action) {
   return (agent.controls || []).find((c) => c.action === action);
 }
 
+/* One labeled cluster of the dock. The dock used to be a single undifferentiated
+   row, so an operator reaching for a verb had to recognise each button rather
+   than read a heading — and "the destructive one" was told apart only by hue and
+   position. Grouping by PURPOSE (talk to it / go to it / stop it / file it) is
+   the fix, and it is a presentation change only: no cluster adds a control,
+   removes one, or touches a capability.
+
+   `role="group"` + `aria-label` is what carries the category to a screen reader,
+   because visual proximity is not a grouping anyone can hear. The visible label
+   repeats the same word and is hidden from assistive tech so the name is
+   announced once rather than twice. It is a span with no fkey and no handler:
+   a heading is not a control, and grouping must not add a focus stop.
+
+   `extra` is written out at the call site instead of composed from `name`,
+   because a class the client only ever assembles at runtime is invisible to the
+   stylesheet's dead-rule lint — and that lint is worth more than the symmetry. */
+function dockGroup(name, extra = "") {
+  return el("div", {
+    class: extra ? "dock-group " + extra : "dock-group",
+    role: "group",
+    "aria-label": name,
+  }, el("span", { class: "dock-group-label", "aria-hidden": "true", text: name }));
+}
+
 /* Sticky composer + quiet tools. Replaces the old Focus card and Danger zone.
    `alarm` is the feed-staleness verdict: on a frozen board every control here is
    held and says so, because the snapshot's routing evidence is as old as the
@@ -6219,7 +6243,8 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
       + " · " + outcome.label));
   }
 
-  // Composer is the primary interaction — Focus no longer sits above a dead input.
+  // Communicate. The composer is the primary interaction and keeps the primary
+  // position — Focus no longer sits above a dead input.
   if (instructCap) {
     const key = agent.id + ":instruct";
     const busy = state.pending.has(key);
@@ -6246,7 +6271,8 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
         sendControl(agent, "instruct", text);
       },
     });
-    dock.append(el("form", {
+    const communicate = dockGroup("Communicate");
+    communicate.append(el("form", {
       class: "command-composer",
       onsubmit: (e) => {
         e.preventDefault();
@@ -6282,36 +6308,64 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
         "aria-busy": busy ? "true" : null,
         dataset: { fkey: "act:" + key },
       }, busy ? "Sending…" : "Send")));
+    dock.append(communicate);
   }
 
-  const tools = el("div", { class: "command-dock-tools" });
-  if (focusCap) tools.append(renderDockTool(agent, focusCap, "focus", { held }));
-  if (interruptCap) tools.append(renderDockTool(agent, interruptCap, "interrupt", { held }));
-  tools.append(el("span", { class: "command-dock-spacer" }));
-  // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
-  // the dock does not offer a destructive peer next to dead controls.
-  if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
-  /* The undo, wherever the row is. It is not destructive and it is not a peer of
-     the safe controls, so it does not hide behind the same lock — an operator
-     who filed something early is looking at exactly this row and needs the verb
-     the drawer has been naming at them all along. */
-  if (unarchiveCap && unarchiveCap.enabled) tools.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
-  dock.append(tools);
-  if (archiveCap && safeLocked) {
-    /* The summary names the one thing behind it. It read "More", which told an
-       operator nothing about whether the click was worth making — and what is
-       actually behind it is a single DESTRUCTIVE action, so "More" understated
-       it in the one direction that matters.
+  /* The remaining three categories share one row, in the order an operator
+     escalates through them: go there, stop it, file it. Order and membership
+     are the same buttons the flat row emitted, in the same sequence, so the tab
+     order and every `data-fkey` are unchanged by the grouping. */
+  const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
+  const actionRow = el("div", { class: "command-dock-actions" });
 
-       Not folded into the evidence rail, which was the other candidate: that
-       rail holds things to READ (paths, tokens, identity, transcript) and this
-       holds one thing to DO. They are two doors onto different content, so
-       collapsing them would put a destructive control inside a drawer labelled
-       evidence — worse than the vague label it replaced. */
-    dock.append(el("details", { class: "command-dock-more" },
-      el("summary", { text: "Archive this session" }),
-      renderDockTool(agent, archiveCap, "archive", { held })));
+  if (focusCap) {
+    const navigate = dockGroup("Navigate");
+    navigate.append(el("div", { class: "command-dock-tools" },
+      renderDockTool(agent, focusCap, "focus", { held })));
+    actionRow.append(navigate);
   }
+  if (interruptCap) {
+    const operate = dockGroup("Operate");
+    operate.append(el("div", { class: "command-dock-tools" },
+      renderDockTool(agent, interruptCap, "interrupt", { held })));
+    actionRow.append(operate);
+  }
+  if (archiveCap || unarchivable) {
+    const file = dockGroup("File", "dock-group--file");
+    const tools = el("div", { class: "command-dock-tools" });
+    // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
+    // the dock does not offer a destructive peer next to dead controls.
+    if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
+    /* The undo, wherever the row is. It is not destructive and it is not a peer of
+       the safe controls, so it does not hide behind the same lock — an operator
+       who filed something early is looking at exactly this row and needs the verb
+       the drawer has been naming at them all along. */
+    if (unarchivable) tools.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
+    file.append(tools);
+    if (archiveCap && safeLocked) {
+      /* The summary names the one thing behind it. It read "More", which told an
+         operator nothing about whether the click was worth making — and what is
+         actually behind it is a single DESTRUCTIVE action, so "More" understated
+         it in the one direction that matters.
+
+         Not folded into the evidence rail, which was the other candidate: that
+         rail holds things to READ (paths, tokens, identity, transcript) and this
+         holds one thing to DO. They are two doors onto different content, so
+         collapsing them would put a destructive control inside a drawer labelled
+         evidence — worse than the vague label it replaced.
+
+         Stays inside the File cluster rather than below the row: the disclosure
+         IS the filing control when safe controls are locked, and a labelled
+         cluster with nothing under it would read as a missing button. */
+      file.append(el("details", { class: "command-dock-more" },
+        el("summary", { text: "Archive this session" }),
+        renderDockTool(agent, archiveCap, "archive", { held })));
+    }
+    actionRow.append(file);
+  }
+  // An empty category is not rendered at all — a heading over no control reads
+  // as a control the board has lost, which is the opposite of the point.
+  if (focusCap || interruptCap || archiveCap || unarchivable) dock.append(actionRow);
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
   // Tests assert controlUnavailableText is used for unavailable safe controls.

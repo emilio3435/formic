@@ -2469,7 +2469,25 @@ body.feed-frozen .programs { opacity: 0.62; }
 .command-composer input:focus-visible { outline: 2px solid var(--ember); outline-offset: 1px; }
 .command-send { min-width: 4.5rem; }
 .command-dock-tools { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
-.command-dock-spacer { flex: 1 1 0.5rem; min-width: 0.5rem; }
+/* A locked File cluster holds only its disclosure, and an empty flex box would
+   still spend the cluster's row gap on nothing. */
+.command-dock-tools:empty { display: none; }
+/* Categorical clusters. The dock groups its controls by what they are FOR —
+   Communicate / Navigate / Operate / File — so an operator under pressure reads
+   a heading instead of recognising four buttons in a row. Quiet on purpose: the
+   labels orient and then get out of the way, in the same mono small-caps the
+   drawer already uses for block labels. */
+.command-dock-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.dock-group { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.dock-group-label {
+  font: 700 9px/1.3 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+/* Filing keeps the distance the old flex spacer bought it — a destructive verb
+   does not sit shoulder to shoulder with the ones used while working. */
+.dock-group--file { margin-left: auto; }
 .dock-tool {
   display: inline-flex; align-items: center; gap: 0.3rem;
   min-height: 32px; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);
