@@ -16,7 +16,6 @@
    requests: it decides WHAT to say, never where it lands on screen.  */
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
-import { MODEL_POLICY_LABELS } from "./client-catalogs.js";
 import { alerting, deriveActivity, deriveControlState, deriveOutcome, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
 import { state } from "./client-state.js";
 
@@ -436,17 +435,19 @@ export function issuesOf(snap) {
         affectedAgentIds: [agent.id],
       });
     }
-    const policy = modelPolicyView(agent);
-    if (live && policy && policy.state === "mismatch") {
-      issues.push({
-        id: "policy:" + agent.id,
-        kind: "policy",
-        severity: "error",
-        title: `${agentName(agent)} is running a non-approved model`,
-        summary: policy.summary + (policy.expected ? ` Expected: ${policy.expected}.` : ""),
-        affectedAgentIds: [agent.id],
-      });
-    }
+    /* A per-session "running a non-approved model" finding was synthesized here,
+       one per mismatched Cursor session, on top of the server's single aggregate.
+
+       It was unreachable work twice over. The policy it enforced is gone (see
+       snapshot-agent.ts). And the row could never have been actioned even while
+       the policy stood: `policy:<agentId>` is an id the CLIENT invents, so it is
+       absent from snapshot.issues, and handleTriageRequest resolves triage
+       targets out of exactly that array — every Triage click on one of these
+       returned 404 ISSUE_NOT_FOUND. Seven such rows were on the live board.
+
+       The rule this leaves behind: this function may SHAPE what the server sent,
+       never mint an id the server has not published. Anything the client invents
+       has no counterpart to act on. */
   }
   return issues;
 }
@@ -471,23 +472,10 @@ export function liveElapsedText(agent, generatedAt) {
   return fmtElapsed(agent.elapsedMs);
 }
 
-export function modelPolicyView(agent) {
-  const p = agent.modelPolicy;
-  if (!p || !MODEL_POLICY_LABELS[p.state]) return null;
-  // Never name this `state` — the module-level app-state singleton is what the
-  // rest of this file means by that identifier, and shadowing it here is a trap
-  // for the next edit that reaches for state.contextDisplay or state.aliases.
-  const policyState = p.state === "violation" ? "mismatch" : p.state === "unverified" ? "unreported" : p.state;
-  return {
-    state: policyState,
-    label: MODEL_POLICY_LABELS[p.state],
-    expected: p.expected || null,
-    summary: p.summary || (
-      policyState === "mismatch" ? "The reported model is outside the approved model policy."
-      : p.state === "compliant" ? "The reported model matches the approved model policy."
-      : "The model is unavailable, so policy compliance cannot be verified."),
-  };
-}
+/* modelPolicyView() stood here, turning agent.modelPolicy into a compliance
+   badge. The field no longer exists — the hub judges no Cursor session on which
+   model it runs. The model itself is still collected and still rendered; only
+   the verdict about it is gone. */
 
 export function preferredRenameTarget(agent) {
   if (agent && agent.target && agent.target.workspaceId) {

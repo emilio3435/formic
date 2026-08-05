@@ -149,14 +149,6 @@ export interface TokenUsage {
   provenance: "observed" | "estimated" | "unknown";
 }
 
-export interface ModelPolicy {
-  state: "compliant" | "mismatch" | "unreported";
-  expected: string;
-  observed?: string;
-  evidence: "cursor-ai-tracking" | "cursor-local" | "none";
-  summary: string;
-}
-
 export interface CostUsage {
   amount: number;
   currency: "USD";
@@ -358,7 +350,6 @@ export interface AgentSnapshot {
       | "assumption-stated";
     evidence?: string;
   };
-  modelPolicy?: ModelPolicy;
   parentAgentId?: string;
   threadDepth?: number;
   nickname?: string;
@@ -689,12 +680,6 @@ export interface HubSnapshot {
     tokenReporting?: number;
     tokenEligible?: number;
     tokenMedian?: number;
-    cursorModelHealth?: {
-      compliant: number;
-      mismatch: number;
-      unreported: number;
-      total: number;
-    };
     sourceHealth?: SourceHealthSummary;
   };
   issues?: OperatorIssue[];

@@ -44,7 +44,6 @@ import {
   activityForLifecycle,
   contextPctFor,
   controlsFor,
-  cursorModelPolicy,
   effortFor,
   lifecycleFor,
   operatorControlState,
@@ -372,7 +371,6 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
-      modelPolicy: cursorModelPolicy(source, sourcesById),
       parentAgentId: source.parentSourceSessionId
         ? `${source.provider}:${source.parentSourceSessionId}`
         : undefined,
@@ -546,14 +544,6 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      published ratio stayed plausible while its membership was wrong. */
   const knownCollectors = collectorProviders.length;
   const sourceTotal = Math.max(0, knownCollectors - absentSources);
-  const activeCursorAgents = liveAgents.filter((agent) => agent.provider === "cursor");
-  const cursorModelHealth = {
-    compliant: activeCursorAgents.filter((agent) => agent.modelPolicy?.state === "compliant").length,
-    mismatch: activeCursorAgents.filter((agent) => agent.modelPolicy?.state === "mismatch").length,
-    unreported: activeCursorAgents.filter((agent) => agent.modelPolicy?.state === "unreported").length,
-    total: activeCursorAgents.length,
-  };
-
   const scanWindowHours = input.scanWindowHours;
   const snapshot: HubSnapshot = {
     schemaVersion: 1,
@@ -610,7 +600,6 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       tokenReporting: workingAgents.filter((agent) => typeof agent.tokens.total === "number").length,
       tokenEligible: workingAgents.length,
       tokenMedian,
-      cursorModelHealth,
       sourceHealth: {
         healthy: Math.max(0, sourceTotal - degradedSources),
         degraded: Math.min(sourceTotal, degradedSources),

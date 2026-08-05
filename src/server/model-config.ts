@@ -5,8 +5,6 @@ export interface ModelConfig {
   claudeContextWindows: Record<string, number>;
   modelFamilyAliases: Record<string, string[]>;
   modelDisplayLabels: Record<string, string>;
-  cursorNativeFamilies: string[];
-  cursorRootModel: string;
 }
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
@@ -34,10 +32,6 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "gpt-5.6-sol": "sol 5.6",
     "grok-4.5": "grok 4.5",
   },
-  // Cursor's own model families. A session running any of these is compliant
-  // with Cursor-native routing; reported non-native models are violations.
-  cursorNativeFamilies: ["grok-4.5", "cursor-grok-4.5", "composer-2", "composer-2.5"],
-  cursorRootModel: "Grok 4.5 Fast",
 };
 
 function isModelConfig(value: unknown): value is ModelConfig {
@@ -49,14 +43,9 @@ function isModelConfig(value: unknown): value is ModelConfig {
     Array.isArray(config.modelFamilyAliases)) return false;
   if (!config.modelDisplayLabels || typeof config.modelDisplayLabels !== "object" ||
     Array.isArray(config.modelDisplayLabels)) return false;
-  if (typeof config.cursorRootModel !== "string" || !config.cursorRootModel.trim()) return false;
   if (!Object.values(config.claudeContextWindows).every(
     (window) => typeof window === "number" && Number.isFinite(window) && window > 0,
   )) return false;
-  if (!Array.isArray(config.cursorNativeFamilies) || config.cursorNativeFamilies.length === 0 ||
-    !config.cursorNativeFamilies.every((family) => typeof family === "string" && family.trim())) {
-    return false;
-  }
   if (!Object.entries(config.modelDisplayLabels).every(
     ([model, label]) =>
       model.trim() &&
@@ -133,20 +122,6 @@ export function modelFamily(model: string, config: ModelConfig = MODEL_CONFIG): 
     }
   }
   return canonical;
-}
-
-/** The Cursor-native family a model belongs to, or undefined if it is not
- *  a Cursor-native model. Matching mirrors the alias approach: exact match or
- *  a hyphen-bounded prefix, so "composer-2.5-fast" resolves to "composer-2.5"
- *  and never to "composer-2". */
-export function cursorNativeFamily(
-  model: string,
-  config: ModelConfig = MODEL_CONFIG,
-): string | undefined {
-  const canonical = canonicalModel(model);
-  return config.cursorNativeFamilies.find(
-    (family) => canonical === family || canonical.startsWith(`${family}-`),
-  );
 }
 
 export const MODEL_CONFIG = loadModelConfig(join(import.meta.dir, "../../config/models.json"));

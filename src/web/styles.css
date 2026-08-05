@@ -2367,7 +2367,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .status-line-item.outcome-needs-you,
 .status-line-item.outcome-blocked,
 .status-line-item.outcome-failed { color: var(--needs); font-weight: 650; }
-.status-line-item.policy-mismatch { color: var(--failed); font-weight: 650; }
 .control-banner {
   display: flex; gap: 0.55rem; align-items: flex-start;
   padding: 0.65rem 0.75rem; border-radius: var(--radius-sm);
@@ -2665,7 +2664,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .term-hint { text-decoration: underline dotted; text-underline-offset: 2px; text-decoration-thickness: 1px; cursor: help; }
 
 .git-dirty { color: var(--warn); }
-.policy-mismatch { color: var(--failed); font-weight: 650; }
 
 .transcript { margin: 0; padding: 0.6rem 0.7rem; max-height: 13rem; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 

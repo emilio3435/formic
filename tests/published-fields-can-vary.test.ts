@@ -80,9 +80,6 @@ const DELIBERATELY_CONSTANT: Record<string, string> = {
      that no fixture could move them. The "a collector that cannot read its
      files" state moves both, so the entries were stale and are gone — which is
      what this register is supposed to do to itself. */
-  "totals.cursorModelHealth.unreported":
-    "The Cursor pair here reports models on both sides, so nothing is unreported. The unreported verdict is "
-    + "covered by tests/snapshot-edges.test.ts, which pins a child whose parent never reported a model.",
 };
 
 function agent(overrides: Partial<CollectedAgent> = {}): CollectedAgent {

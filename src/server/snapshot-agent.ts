@@ -17,7 +17,6 @@ import type {
   IdentityTrace,
   LifecycleProvenance,
   LifecycleState,
-  ModelPolicy,
   OperatorControlState,
   OutcomeState,
   ProcessState,
@@ -27,7 +26,6 @@ import {
   type LifecycleThresholds,
   type LifecycleVerdict,
 } from "./lifecycle";
-import { MODEL_CONFIG, cursorNativeFamily } from "./model-config";
 import { transmitRefusal } from "./targets";
 import type { CollectedAgent } from "./types";
 
@@ -196,40 +194,24 @@ export function operatorControlState(
   return target.resolution === "ambiguous" ? "quarantined" : "observed-only";
 }
 
-export function cursorModelPolicy(
-  agent: CollectedAgent,
-  sourcesById: ReadonlyMap<string, CollectedAgent>,
-): ModelPolicy | undefined {
-  if (agent.provider !== "cursor") return undefined;
-  const parent = agent.parentSourceSessionId
-    ? sourcesById.get(`cursor:${agent.parentSourceSessionId}`)
-    : undefined;
-  const expected = parent?.model ?? MODEL_CONFIG.cursorRootModel;
-  const evidence = agent.parentSourceSessionId ? "cursor-ai-tracking" : "cursor-local";
-  if (!agent.model) {
-    return {
-      state: "unreported",
-      expected,
-      evidence: "none",
-      summary: "Cursor did not expose an authoritative model for this session.",
-    };
-  }
-  if (agent.parentSourceSessionId && !parent?.model) {
-    return {
-      state: "unreported",
-      expected: "Parent model (unreported)",
-      observed: agent.model,
-      evidence,
-      summary: `${agent.model} was observed, but the parent model was not reported, so inheritance cannot be verified.`,
-    };
-  }
-  // Any Cursor-native family (Grok or Composer) is compliant; a reported
-  // non-native model is a routing violation regardless of the parent model.
-  const nativeFamily = cursorNativeFamily(agent.model);
-  return nativeFamily
-    ? { state: "compliant", expected, observed: agent.model, evidence, summary: `${agent.model} runs the Cursor-native ${nativeFamily} family.` }
-    : { state: "mismatch", expected, observed: agent.model, evidence, summary: `${agent.model} is not a Cursor-native model family.` };
-}
+/* There was a Cursor model policy here, and it judged every Cursor session
+   against a rule Cursor's own product does not follow.
+
+   It carried two predicates that never agreed. `expected` was the PARENT
+   session's model (inheritance); the verdict was "is this a Cursor-native
+   family" (Grok or Composer). A session running claude-opus-5 under a parent
+   running claude-opus-5 therefore rendered "observed claude-opus-5; expected
+   claude-opus-5" and called itself a mismatch — the board contradicting itself
+   inside one sentence, seven times over on the live fleet.
+
+   Neither predicate is the policy. Cursor routes to whichever model the work
+   needs, and a hub that alarms on that is hampering the tool it is supposed to
+   be watching. Removed rather than repaired: there is no Cursor model policy to
+   express, so the honest number of policy findings is zero.
+
+   The observed model is still collected and still shown — what a session is
+   running is a useful fact. It is the COMPLIANCE VERDICT about that fact that
+   had no basis. (Emilio, 2026-08-05.) */
 
 export function roleFor(agent: CollectedAgent, hasChildren: boolean): AgentRole {
   const title = agent.displayName.toLowerCase();

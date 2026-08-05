@@ -1576,24 +1576,14 @@ describe("typical request (header token truth)", () => {
   });
 });
 
-describe("Cursor model policy", () => {
-  test("current and legacy states map to Compliant / Model mismatch / Model unreported", () => {
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "compliant" } })).label).toBe("Compliant");
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "mismatch", expected: "grok" } })).label).toBe("Model mismatch");
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "violation", expected: "grok" } })).state).toBe("mismatch");
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "unreported" } })).label).toBe("Model unreported");
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "unverified" } })).state).toBe("unreported");
-  });
+describe("Cursor model policy is gone, and stays gone", () => {
+  /* This block used to hold five tests for the compliance badge, the fleet
+     glance, and the per-session findings the client synthesized. All of it was
+     removed with the policy on 2026-08-05.
 
-  test("unknown is neither compliant nor a violation", () => {
-    expect(M.modelPolicyView(agent())).toBeNull();
-    const unreported = M.modelPolicyView(agent({ modelPolicy: { state: "unreported" } }));
-    expect(unreported.state).toBe("unreported");
-    expect(unreported.summary).toContain("cannot be verified");
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "definitely-fine" } }))).toBeNull();
-  });
+     Two claims replace them, because deletion needs a guard or it grows back. */
 
-  test("totals pass through tokenMedian, aggregate tokens, and cursorModelHealth", () => {
+  test("totals pass through tokenMedian and aggregate tokens, and carry no policy rollup", () => {
     const totals = {
       live: 33, tracked: 427, working: 8, idle: 25, history: 394, attention: 0,
       tokenReporting: 8, tokenEligible: 8, tokenMedian: 170_912, tokens: 1_223_880,
@@ -1602,37 +1592,37 @@ describe("Cursor model policy", () => {
     const t = M.totalsOf({ programs: [], totals });
     expect(t.tokenMedian).toBe(170_912);
     expect(t.tokens).toBe(1_223_880);
-    expect(t.cursorModelHealth).toEqual(totals.cursorModelHealth);
+    // Even when a stale server sends the rollup, the client stops carrying it.
+    expect(t.cursorModelHealth).toBeUndefined();
   });
 
-  test("fleet policy glance: zero active mismatches is calm, any mismatch is hot", () => {
-    const calm = M.cursorPolicyParts({ compliant: 2, mismatch: 0, unreported: 4, total: 6 });
-    expect(calm.map((p: { text: string }) => p.text)).toEqual(["0 mismatches", "2 compliant", "4 unreported"]);
-    expect(calm[0].tone).toBe("ok");
-    const hot = M.cursorPolicyParts({ compliant: 1, mismatch: 1, unreported: 0, total: 2 });
-    expect(hot[0]).toEqual({ text: "1 mismatch", tone: "bad" });
-    expect(M.cursorPolicyParts(undefined)).toBeNull();
-    expect(M.cursorPolicyParts({ compliant: 0, mismatch: 0, unreported: 0, total: 0 })).toBeNull();
-  });
+  test("the client mints no finding the server has not published", () => {
+    /* The real defect this guards. `policy:<agentId>` was a client-invented id,
+       so it never appeared in snapshot.issues — and handleTriageRequest resolves
+       triage targets out of exactly that array. Every Triage click on one of
+       these rows returned 404 ISSUE_NOT_FOUND. Seven were live on the board.
 
-  test("fallback issues surface live violations for Needs you", () => {
+       The assertion is deliberately broader than the policy that caused it: no
+       synthesized finding may carry an id the server did not send. */
     const snap = {
       programs: [{
         id: "p", name: "P",
         agents: [
-          agent({ id: "v", provider: "cursor", modelPolicy: { state: "mismatch", expected: "grok", summary: "Reported model is gpt-5." } }),
-          agent({ id: "done", status: "archived", modelPolicy: { state: "mismatch" } }),
-          agent({ id: "ok", provider: "cursor", modelPolicy: { state: "compliant" } }),
+          agent({ id: "v", provider: "cursor", model: "claude-opus-5", modelPolicy: { state: "mismatch", expected: "grok" } }),
+          agent({ id: "ok", provider: "cursor", model: "composer-2.5" }),
         ],
       }],
+      issues: [],
       controlHealth: { cmuxReachable: true, lastCheckedAt: "", errors: [], staleSources: [] },
     };
     const issues = M.issuesOf(snap);
-    const policy = issues.filter((i: { kind: string }) => i.kind === "policy");
-    expect(policy).toHaveLength(1);
-    expect(policy[0].severity).toBe("error");
-    expect(policy[0].affectedAgentIds).toEqual(["v"]);
-    expect(policy[0].summary).toContain("Expected: grok");
+
+    expect(issues.filter((i: { kind: string }) => i.kind === "policy")).toHaveLength(0);
+    expect(issues.some((i: { id: string }) => i.id.startsWith("policy:"))).toBe(false);
+    // Nothing the client emits may name an id the server never published.
+    const published = new Set(snap.issues.map((i: { id: string }) => i.id));
+    const invented = issues.filter((i: { id: string }) => !published.has(i.id) && !i.id.startsWith("agent:"));
+    expect(invented).toEqual([]);
   });
 });
 
@@ -2543,21 +2533,25 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     }
   });
 
-  test("(h2) the role chip and the model-policy chip left the row for the same reason", () => {
+  test("(h2) the role chip left the row; the model-policy chip left the product", () => {
     const off = clean({
       role: "verifier",
+      // A legacy record may still carry the field the policy deletion removed;
+      // nothing on the row, in the aria-label, or in the drawer may speak it.
       modelPolicy: { state: "violation", summary: "Running opus where the policy says grok" },
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(off, program));
     expect(findByClass(row, "policy-chip")).toBeNull();
     expect(findByClass(findByClass(row, "row-identity-tags"), "role-chip")).toBeNull();
-    // Both still reach a screen reader from the row itself…
+    // The role still reaches a screen reader from the row itself…
     expect(row.attributes["aria-label"]).toContain("Role:");
-    expect(row.attributes["aria-label"]).toContain("Model mismatch: Running opus where the policy says grok");
-    // …and both are one click away, from the same helpers the row used to call.
+    // …the policy verdict does not — it was removed, not relocated.
+    expect(row.attributes["aria-label"]).not.toContain("Model mismatch");
+    // The role is one click away, from the same helper the row used to call;
+    // the policy verdict is nowhere, drawer included.
     const facts = deepText(withDom(() => M.renderRowFacts(off)));
-    expect(facts).toContain("Running opus where the policy says grok");
+    expect(facts).not.toContain("Running opus where the policy says grok");
     expect(facts).toContain("role");
 
     // The two safety-critical dots are exactly what STAYED: they change what the
@@ -7540,27 +7534,6 @@ describe("FE-B: harness-backed client behavior", () => {
   });
 
   /* -------- finding 9: the shadowed `state` identifier ---------------------- */
-  test("(9) modelPolicyView returns the same shape after the shadow rename", () => {
-    // The rename must be invisible at the boundary: violation → mismatch,
-    // unverified → unreported, and the summary keyed off the NORMALIZED state.
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "violation" } }))).toEqual({
-      state: "mismatch",
-      label: "Model mismatch",
-      expected: null,
-      summary: "The reported model is outside the approved model policy.",
-    });
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "unverified" } }))).toEqual({
-      state: "unreported",
-      label: "Model unreported",
-      expected: null,
-      summary: "The model is unavailable, so policy compliance cannot be verified.",
-    });
-    expect(M.modelPolicyView(agent({ modelPolicy: { state: "compliant" } })).summary)
-      .toBe("The reported model matches the approved model policy.");
-    // No identifier named `state` is declared inside the function any more.
-    const fn = source.match(/function modelPolicyView\(agent\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fn).not.toMatch(/\bconst state\b/);
-  });
 });
 
 /* ---------------------------------------------------------------------------

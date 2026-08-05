@@ -69,7 +69,7 @@ const WEB_CLIENT_TOTALS_KEYS = [
    the record rather than an accident, and so ADDING a field to the server
    fails here until somebody decides whether the client tests need it. */
 const KNOWN_OMISSIONS = [
-  "cursorModelHealth", "ended", "needsYou", "systemFindings",
+  "ended", "needsYou", "systemFindings",
   "tokenEligible", "tokenMedian", "tokenReporting", "tokens",
 ] as const;
 
