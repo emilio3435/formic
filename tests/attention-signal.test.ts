@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   attentionFieldsFor,
   detectAttentionSignal,
+  readableClosingText,
   emptyAttentionCoverage,
   recordAttention,
   type AttentionSignalInput,
@@ -486,5 +487,31 @@ describe("evidence quotes the choice, and never breaks a word", () => {
     expect(ask.replace(/\s+/g, " ")).toContain(body);
     expect(/\w$/.test(body)).toBe(true);
     expect(ask.replace(/\s+/g, " ").startsWith(body)).toBe(true);
+  });
+});
+
+/* The same <timestamp> transport markup the namer must not read (see
+   session-names) also arrives here, where closings become quoted evidence. */
+describe("timestamp markup in transcripts", () => {
+  const CLOCK = "<timestamp>Tuesday, Aug 4, 2026, 6:10 PM (UTC-5)</timestamp>";
+
+  test("a question that stops on the clock is still the closing line", () => {
+    const signal = detectAttentionSignal(input({
+      lastAgentClosing: `Want the full accounting against all 79 findings, or is the working state enough?\n${CLOCK}`,
+    }));
+
+    expect(signal.kind).toBe("question-pending");
+    expect(signal.evidence).toBe("Want the full accounting against all 79 findings, or is the working state enough?");
+  });
+
+  test("a closing that is only the clock is no closing at all", () => {
+    expect(readableClosingText(input({ lastAgentClosing: CLOCK }))).toBeUndefined();
+  });
+
+  test("readable closing text quotes the words, never the clock among them", () => {
+    const text = readableClosingText(input({
+      lastAgentClosing: `Should I delete the stale fixtures? ${CLOCK}`,
+    }));
+    expect(text).toBe("Should I delete the stale fixtures?");
   });
 });

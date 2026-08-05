@@ -8,6 +8,14 @@ export interface HumanMessageCandidate {
   isMeta?: boolean;
 }
 
+/* Cursor (and any harness that embeds transport metadata in message text)
+   wraps a clock in <timestamp>…</timestamp> blocks. The clock is transport,
+   never words — strip it at every ingress where transcript text becomes
+   something the board publishes: tasks, messages, names, quoted evidence. */
+export function stripTimestampMarkup(text: string): string {
+  return text.replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "");
+}
+
 const NON_HUMAN_PREFIX = /^(?:#\s*(?:AGENTS|CLAUDE)\.md instructions\b|<(?:(?:environment_context|recommended_plugins|subagent_notification|turn_aborted|permissions instructions|collaboration_mode|apps_instructions|plugins_instructions|skills_instructions|instructions)\b|file\b)|#{1,6}\s+session update\b)/i;
 const TOOL_LINE = /^(?:tool[ _-]?(?:call|use|result)|function[ _-]?(?:call|result))\b/i;
 const SHELL_LINE = /^(?:[$›]\s*|(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za-z]:[\\/]))/i;
@@ -45,8 +53,7 @@ function cleanMessage(text: string): string | undefined {
   let value = text.replace(/\r/g, "").trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
 
-  value = value
-    .replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "")
+  value = stripTimestampMarkup(value)
     .replace(/<user_query\b[^>]*>|<\/user_query>/gi, "")
     .replace(/<file\b[^>]*>|<\/file>/gi, "")
     // Slash-command + local-command transport envelopes (Claude Code) are

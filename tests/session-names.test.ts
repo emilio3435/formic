@@ -348,3 +348,45 @@ describe("an authored title reaches the board and outranks the folder", () => {
     expect(names).toEqual(["Codex · lanes"]);
   });
 });
+
+/* Cursor transcripts open with <timestamp>…</timestamp> blocks around the real
+   words. Measured live 2026-08-05: cursor:98191ac2 sat on the board NAMED
+   "<timestamp>Tuesday, Aug 4, 2026, 6:10 PM (UTC-5)</timestamp>" — the namer
+   read the clock, the store froze it, and write-once made the pollution
+   permanent. The clock is transport, never identity, at every ingress. */
+describe("timestamp markup never becomes identity", () => {
+  const CLOCK = "<timestamp>Tuesday, Aug 4, 2026, 6:10 PM (UTC-5)</timestamp>";
+
+  test("a model title that is only the clock is no title at all", () => {
+    expect(cleanModelTitle(CLOCK)).toBeUndefined();
+  });
+
+  test("the heuristic names the work, not the clock above it", () => {
+    expect(distillName([`${CLOCK}\nFix the login redirect loop on staging`]))
+      .toBe("Fix the login redirect loop on staging");
+  });
+
+  test("the model is never shown the clock", () => {
+    expect(namingPrompt([`${CLOCK}\nFix the login redirect loop on staging`]))
+      .not.toContain("<timestamp");
+  });
+
+  test("a stored name that is pure markup is dropped on load, so the session can be renamed", async () => {
+    const { files } = memoryFiles({
+      [PATH]: JSON.stringify({
+        names: { "cursor:polluted": { name: CLOCK, by: "launch-env", at: "2026-08-04T23:10:00.000Z" } },
+      }),
+    });
+    const store = await JsonSessionNameStore.open(PATH, files);
+    expect(store.has("cursor:polluted")).toBe(false);
+  });
+
+  test("remember() strips an embedded clock and refuses a name that was nothing else", async () => {
+    const { files } = memoryFiles();
+    const store = await JsonSessionNameStore.open(PATH, files);
+    await store.remember("codex:mixed", { name: `Fix login ${CLOCK} bug`, by: "launch-env", at: "x" });
+    expect(store.get("codex:mixed")?.name).toBe("Fix login bug");
+    await store.remember("codex:pure", { name: CLOCK, by: "launch-env", at: "x" });
+    expect(store.has("codex:pure")).toBe(false);
+  });
+});
