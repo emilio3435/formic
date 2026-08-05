@@ -70,6 +70,11 @@ import {
   quarantineBrief,
   recentlyResolvedOf,
   roleView,
+  roleSourceView,
+  parseSenderHeader,
+  senderOf,
+  withoutSenderHeader,
+  specialtyLabel,
   roomLabelTarget,
   snapshotAgents,
   sourceAgentName,
@@ -338,7 +343,13 @@ function programRollupCells(agents, rollup = null) {
 const NO_READABLE_MESSAGE = "No readable message yet";
 
 function formatLastHumanMessage(agent, limit = 120) {
-  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
+  /* Without the envelope. A row gets ~120 characters and
+     `[from claude:8c052fe9-… run agent-atlas-2026-08-05]` is 74 of them, so
+     every lane in a swarm was spending more than half its line on machine
+     addressing — and saying nothing an operator reads a row for. Who sent it is
+     still shown, in the drawer, where there is room to name them. */
+  const raw = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage : "";
+  const message = withoutSenderHeader(raw).trim();
   return message ? conciseText(message, limit) : NO_READABLE_MESSAGE;
 }
 
@@ -1183,6 +1194,10 @@ globalThis.TheAntHill = {
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
+  // Message provenance and role confidence: the parser is pure and lives in
+  // presentation.js; these are re-exported here so the client's own test
+  // surface can drive parser and renderer through one handle.
+  parseSenderHeader, senderOf, withoutSenderHeader, roleSourceView, specialtyLabel,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
@@ -5148,7 +5163,10 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false) {
 function rowSummary(agent) {
   const message = formatLastHumanMessage(agent);
   if (message !== NO_READABLE_MESSAGE) return message;
-  if (agent.task) return conciseText(agent.task, 120);
+  // The task is where the envelope actually lands for a freshly spawned lane —
+  // every one of them begins with it — so the same strip applies here.
+  const task = agent.task ? withoutSenderHeader(agent.task).trim() : "";
+  if (task) return conciseText(task, 120);
   if (agent.statusReason) return conciseText(agent.statusReason, 120);
   return NO_READABLE_MESSAGE;
 }
@@ -6295,6 +6313,32 @@ function programMeterSegments(agents) {
   ];
 }
 
+/* The role, and how confident the board is that it IS the role. 1006 of the
+   1174 sessions on the live board carry `inferred` against 4 `declared`, so a
+   chip that draws a guess and a declaration identically states a certainty the
+   server never claimed. Solid = declared at spawn, outline = observed through
+   lineage, dashed = read off a title, with the reason in the tooltip. An absent
+   roleSource takes no modifier — it asserts nothing rather than asserting
+   certainty. */
+function roleChip(agent, rv = roleView(agent.role)) {
+  const source = roleSourceView(agent && agent.roleSource);
+  return el("span", {
+    class: "role-chip role-" + rv.key + (source ? " " + source.className : ""),
+    title: source ? source.title : null,
+    text: ROSTER_ROLE_SHORT[rv.key] || rv.label,
+  });
+}
+
+/* Territory beside authority. B4 moved frontend/backend out of the role union
+   because they described what a session works ON, not what it may decide — and
+   nothing rendered the field it moved them to, so those sessions went from
+   reading "Frontend / designer" to reading "Worker" with the fact still on the
+   wire. */
+function specialtyChip(agent) {
+  const label = specialtyLabel(agent);
+  return label ? el("span", { class: "specialty-chip", text: label }) : null;
+}
+
 function programRosterRow(agent) {
   const rv = roleView(agent.role);
   const act = deriveActivity(agent);
@@ -6306,9 +6350,16 @@ function programRosterRow(agent) {
     type: "button", class: "dw-roster-row",
     dataset: { fkey: "roster:" + agent.id },
     onclick: () => selectEntity({ kind: "agent", id: agent.id }),
-    "aria-label": "Open " + agentName(agent) + " · " + (ROSTER_ROLE_SHORT[rv.key] || rv.label) + " · " + stateText,
+    /* Spoken, not just drawn: the confidence is the whole point of the chip's
+       styling, and a dashed border says nothing to a screen reader. */
+    "aria-label": "Open " + agentName(agent)
+      + " · " + (ROSTER_ROLE_SHORT[rv.key] || rv.label)
+      + (agent.roleSource ? " (" + agent.roleSource + ")" : "")
+      + (specialtyLabel(agent) ? " · " + specialtyLabel(agent) : "")
+      + " · " + stateText,
   },
-    el("span", { class: "role-chip role-" + rv.key, text: ROSTER_ROLE_SHORT[rv.key] || rv.label }),
+    roleChip(agent, rv),
+    specialtyChip(agent),
     el("span", { class: "dw-roster-name", text: agentName(agent) }),
     el("span", { class: "dw-roster-state" }, el("span", { class: "dw-dot " + dotCls, "aria-hidden": "true" }), stateText));
 }
@@ -7395,8 +7446,13 @@ function dtdd(grid, label, value, opts = {}) {
 function renderRowFacts(agent) {
   const role = roleView(agent.role);
   const provenance = historyProvenance(agent);
+  const source = roleSourceView(agent.roleSource);
   const rows = [
-    role.key !== "agent" ? ["role", role.label, {}] : null,
+    /* The confidence rides as the hint rather than as a second row: "role:
+       Orchestrator" and "how we know: inferred" are one fact, and splitting them
+       is how a detail list turns into a field dump. */
+    role.key !== "agent" ? ["role", role.label, source ? { hint: source.title } : {}] : null,
+    specialtyLabel(agent) ? ["specialty", specialtyLabel(agent), {}] : null,
     (() => {
       const crumb = terminalBreadcrumb(agent, agentName(agent));
       return crumb ? ["terminal", crumb, { hint: focusDestinationHint(agent) }] : null;
@@ -7539,10 +7595,36 @@ function renderVitalsBand(agent) {
 
 const TURN_ROLE_LABELS = { user: "You", assistant: "Agent", task: "Task" };
 
-function renderChatTurn(role, text) {
+/* "You" is a claim, and for every lane in every swarm it was a false one: the
+   message came from an orchestrator through the producer helper, which stamps
+   `[from <agent.id> run <runId>]` on the front of it. When that envelope is
+   there the turn is attributed to whoever actually sent it, resolved against the
+   board so the operator reads a name rather than a provider session id, and the
+   run rides underneath as the other half of the provenance.
+
+   When it is absent the label stays "You" — which is now worth something,
+   because an agent-sent instruction can no longer wear it. */
+function renderChatTurn(role, text, sender = null) {
   return el("div", { class: "chat-turn chat-turn--" + role },
-    el("div", { class: "chat-turn-role", text: TURN_ROLE_LABELS[role] || role }),
+    el("div", { class: "chat-turn-role", text: sender ? sender.name : (TURN_ROLE_LABELS[role] || role) }),
+    sender ? el("div", { class: "chat-turn-sender", text: "sent in run " + sender.runId }) : null,
     el("p", { class: "chat-turn-body", tabindex: "0", text }));
+}
+
+/* The sender as a NAME. `agent.id` is `provider:sourceSessionId` — durable, and
+   unreadable — so it is resolved through the same fleet index every other
+   cross-agent surface uses. A sender that is not on the board (filtered out,
+   retired, or never collected) keeps its id: the honest answer is the id, not a
+   blank where an attribution should be. */
+function senderView(text, ui = state) {
+  const parsed = parseSenderHeader(text);
+  if (!parsed) return null;
+  const known = agentsById(ui && ui.snap).get(parsed.agentId);
+  return {
+    agentId: parsed.agentId,
+    runId: parsed.runId,
+    name: known ? agentName(known.agent) : parsed.agentId,
+  };
 }
 
 /* Drops any turn whose text repeats one already shown. This is the rule that
@@ -7596,7 +7678,7 @@ function dedupeTurns(candidates) {
    as "the latest provider-shaped assistant OR user prose", so using it to fill a
    turn labelled "You" is how the mislabel got in. When there is no user message,
    the honest stand-in is the task the operator actually set. */
-function renderChat(agent) {
+function renderChat(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   /* `task` is the last candidate, and it is what stops three independently
      reasonable dedup rules from composing into an empty drawer: the head
@@ -7627,12 +7709,20 @@ function renderChat(agent) {
      fields are attributed by the server (`lastUserMessage` is the user's
      request, `lastAgentMessage` the agent's reply), unlike `lastHumanMessage`,
      which is why they can be trusted to differ rather than merely observed to. */
-  const turns = dedupeTurns([
+  /* The envelope is read off each candidate and taken OFF its text before
+     dedupe, not after: dedupeTurns compares prose to decide what repeats, and
+     two turns carrying the same message under different addressing are the same
+     message. Stripping first is what lets that comparison see it. */
+  const candidates = [
     { role: "assistant", text: agent.lastAgentMessage },
     { role: "user", text: agent.lastUserMessage },
     { role: "task", text: drawerObjective(agent) ? "" : agent.task },
-  ]);
-  for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text));
+  ].map((turn) => {
+    const sender = senderView(turn.text, ui);
+    return sender ? { ...turn, text: withoutSenderHeader(turn.text), sender } : turn;
+  });
+  const turns = dedupeTurns(candidates);
+  for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text, turn.sender));
 
   /* The transcript path is not here. Evidence's artifact list already renders the
      same path with its own Copy button, and raw paths are exactly what "evidence

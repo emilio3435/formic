@@ -9766,3 +9766,161 @@ describe("Atlas F1: repo sections, worktree subsections, role order", () => {
     }
   });
 });
+
+/* ---------------------------------------------------------------------------
+   Atlas F2 — lineage confidence and message provenance.
+
+   Two facts B3/B4 put on the wire that nothing rendered: HOW a role was decided
+   (`roleSource`: 1006 inferred / 164 observed / 4 declared on the live board),
+   and WHO sent the instruction a session is working from.
+
+   The second matters more than it sounds. The drawer labels `lastUserMessage`
+   "You" — and for every lane in every swarm that message was sent by another
+   AGENT, not by the operator. The producer helper prefixes those with
+   `[from <agent.id> run <runId>]`, so the envelope is right there in the text
+   being misattributed. Parsing it is what makes an unheaded user turn mean
+   something: that one really was the human.
+   ------------------------------------------------------------------------ */
+describe("Atlas F2: role confidence and message provenance", () => {
+  // Verbatim from the live wire (this lane's own lastUserMessage).
+  const HEADER = "[from claude:8c052fe9-db5c-47c4-9e21-e9b623dd6c82 run agent-atlas-2026-08-05]";
+  const ORCH = "claude:8c052fe9-db5c-47c4-9e21-e9b623dd6c82";
+  const RUN = "agent-atlas-2026-08-05";
+
+  test("the producer header parses into a sender, a run and the message itself", () => {
+    const parsed = M.parseSenderHeader(`${HEADER} F2 is UNLOCKED — B4 landed.`);
+    expect(parsed).toEqual({ agentId: ORCH, runId: RUN, body: "F2 is UNLOCKED — B4 landed." });
+  });
+
+  test("only a leading header is provenance; a quoted one is prose", () => {
+    /* An agent that quotes an instruction back — extremely common — must not
+       have its own message attributed to whoever it quoted. The envelope is a
+       claim about THIS message's origin, so it only counts at the front. */
+    expect(M.parseSenderHeader(`I read "${HEADER} do the thing" and started.`)).toBeNull();
+    expect(M.parseSenderHeader("[from someone] no run named")).toBeNull();
+    expect(M.parseSenderHeader("plain operator message")).toBeNull();
+    expect(M.parseSenderHeader("")).toBeNull();
+    expect(M.parseSenderHeader(null)).toBeNull();
+  });
+
+  test("senderOf reads the fields that actually carry the header", () => {
+    /* The plan named `lastHumanMessage`; the live wire puts the envelope on
+       `lastUserMessage` and `task` — `lastHumanMessage` mirrored the AGENT's
+       reply on all four atlas lanes. Read all three, request first. */
+    expect(M.senderOf(agent({ lastUserMessage: `${HEADER} do the thing` })))
+      .toEqual({ agentId: ORCH, runId: RUN });
+    expect(M.senderOf(agent({ lastUserMessage: null, task: `${HEADER} you are lane fe-regroup` })))
+      .toEqual({ agentId: ORCH, runId: RUN });
+    // Absence is the signal that a human really did send it.
+    expect(M.senderOf(agent({ lastUserMessage: "ship it", task: "ship it" }))).toBeNull();
+  });
+
+  test("a row never spends its width on the envelope", () => {
+    /* Live defect: every lane's `task` begins with the 74-character header, and
+       rowSummary falls back to `task`, so half a 120-character row was machine
+       addressing before this. */
+    const summary = M.rowSummary(agent({
+      lastHumanMessage: null,
+      task: `${HEADER} You are lane fe-regroup. Read the brief in full.`,
+    }));
+    expect(summary).not.toContain("[from ");
+    expect(summary).not.toContain(ORCH);
+    expect(summary).toContain("Read the brief in full");
+    /* And with the envelope off the front, conciseText's existing "you are"
+       trim finally reaches the text it was written for — it never could while
+       74 characters of addressing sat in front of it. */
+    expect(summary).toBe("lane fe-regroup. Read the brief in full.");
+  });
+
+  test("an agent-sent instruction is attributed to the agent, not to \"You\"", () => {
+    /* Deliberately NOT named after the run: in this run the orchestrator's
+       manifest name happens to equal the runId, which would let a renderer that
+       printed only one of the two facts pass while showing the other. */
+    const orchestrator = agent({ id: ORCH, displayName: "atlas-orchestrator" });
+    const lane = agent({
+      id: "claude:lane", displayName: "fe-regroup",
+      lastAgentMessage: null,
+      lastUserMessage: `${HEADER} F2 is UNLOCKED — B4 landed.`,
+    });
+    const snap = { schemaVersion: 1, programs: [{ id: "p", name: "P", agents: [orchestrator, lane] }] };
+
+    const pane = withDom(() => M.renderChat(lane, { snap }));
+    const turn = byClass(pane, "chat-turn--user");
+    const role = byClass(turn, "chat-turn-role");
+
+    expect(textOf(role)).not.toContain("You");
+    // Named by whoever sent it — resolved against the board, not printed raw.
+    expect(textOf(role)).toBe("atlas-orchestrator");
+    expect(textOf(role)).not.toContain(ORCH);
+    // The run it was sent under is the other half of the provenance, and it is
+    // a DIFFERENT string from the sender's name.
+    expect(textOf(byClass(turn, "chat-turn-sender"))).toContain(RUN);
+    // And the envelope is gone from the prose it was wrapping.
+    expect(textOf(byClass(turn, "chat-turn-body"))).toBe("F2 is UNLOCKED — B4 landed.");
+    expect(textOf(turn)).not.toContain("[from ");
+  });
+
+  test("an unheaded user turn still says You — absence is the signal", () => {
+    const lane = agent({ id: "claude:solo", lastAgentMessage: null, lastUserMessage: "ship it" });
+    const pane = withDom(() => M.renderChat(lane, { snap: { schemaVersion: 1, programs: [] } }));
+    expect(textOf(byClass(pane, "chat-turn-role"))).toBe("You");
+  });
+
+  test("role confidence is a visible difference, not a hidden field", () => {
+    // declared solid, observed outline, inferred dashed + why.
+    const chipFor = (over: Record<string, unknown>) => {
+      const program = { id: "p", name: "P", agents: [agent({ id: "codex:rs", role: "orchestrator", ...over })] };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pane: any = withDom(() => {
+        const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+          .document.createElement("div");
+        M.renderProgramDrawer(p, { program });
+        return p;
+      });
+      return byClass(pane, "role-chip");
+    };
+
+    expect(chipFor({ roleSource: "declared" }).className).toContain("role-src-declared");
+    expect(chipFor({ roleSource: "observed" }).className).toContain("role-src-observed");
+    const inferred = chipFor({ roleSource: "inferred" });
+    expect(inferred.className).toContain("role-src-inferred");
+    // A guess has to say it is one, in words, where the operator is looking.
+    expect(String(inferred.attributes.title)).toContain("inferred");
+    // An absent roleSource claims nothing rather than claiming certainty.
+    expect(chipFor({}).className).not.toContain("role-src-declared");
+  });
+
+  test("specialty survives B4's demotion as its own chip", () => {
+    /* B4 moved frontend/backend out of the role union and into `specialty`
+       because they described territory, not authority. Nothing rendered the new
+       field, so a session that read "Frontend / designer" before the demotion
+       read "Worker" after it — the fact was on the wire and off the screen. */
+    const program = {
+      id: "p", name: "P",
+      agents: [agent({ id: "codex:sp", role: "worker", roleSource: "declared", specialty: "frontend" })],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pane: any = withDom(() => {
+      const p = (globalThis as unknown as { document: { createElement(t: string): unknown } })
+        .document.createElement("div");
+      M.renderProgramDrawer(p, { program });
+      return p;
+    });
+    expect(textOf(pane)).toContain("Worker");
+    expect(byClass(pane, "specialty-chip")).not.toBeNull();
+    expect(textOf(byClass(pane, "specialty-chip")).toLowerCase()).toContain("frontend");
+  });
+
+  test("B4's new roles are styled, not left to fall through to the neutral default", () => {
+    // worker/human/monitor/service arrived with B4 and had no rules at all;
+    // 13 live sessions are workers.
+    for (const role of [".role-worker", ".role-human", ".role-monitor", ".role-service"]) {
+      expect(styles.includes(role), role).toBe(true);
+    }
+    for (const src of [".role-src-declared", ".role-src-observed", ".role-src-inferred"]) {
+      expect(styles.includes(src), src).toBe(true);
+    }
+    expect(styles).toContain(".chat-turn-sender");
+    expect(styles).toContain(".specialty-chip");
+  });
+});

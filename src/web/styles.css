@@ -1327,6 +1327,15 @@ body.feed-frozen .programs { opacity: 0.62; }
    identity while surfaces stay near-neutral graphite (no candy stickers, no
    lavender/magenta brochure chroma). */
 .role-orchestrator { --role-color: #3f4c6b; --role-surface: #eef0f5; --role-ink: #303a56; }
+/* B4's taxonomy: human/monitor/worker/service arrived with the new role union
+   and had no rules at all, so 13 live workers drew the neutral fallback. Human
+   takes the warmest ink on the set — it is the only role that is a person. */
+.role-human { --role-color: #8a4a17; --role-surface: #f6efe8; --role-ink: #6f3a10; }
+.role-monitor { --role-color: #4a5c6b; --role-surface: #eef1f3; --role-ink: #384754; }
+.role-worker { --role-color: #3d5a4a; --role-surface: #ecf1ee; --role-ink: #2c4438; }
+/* A service is a dev server or a tail — deliberately the quietest thing on the
+   board, since it is excluded from agent counts and from "Needs you". */
+.role-service { --role-color: #6b6b6b; --role-surface: #f0f0f0; --role-ink: #555555; }
 .role-frontend { --role-color: #0a6790; --role-surface: #ecf2f6; --role-ink: #0a5576; }
 .role-backend { --role-color: #0c6669; --role-surface: #ebf2f1; --role-ink: #0a5456; }
 .role-verifier { --role-color: #5c5680; --role-surface: #eeeef4; --role-ink: #423d63; }
@@ -1605,6 +1614,39 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--role-ink, var(--muted));
   background: var(--role-surface, var(--surface));
   white-space: nowrap;
+}
+/* How the role was decided, as weight rather than as another word. 1006 live
+   sessions are `inferred` against 4 `declared`, so the DEFAULT reading on this
+   board has to be the least confident one, and only a declaration earns a solid
+   filled chip. Border STYLE carries it, never color: color on this chip already
+   means which role, and a second meaning on one channel is how a legend starts
+   needing a legend. Never a color-only difference either — the dashes are
+   visible without hue perception. */
+.role-src-declared { border-style: solid; }
+.role-src-observed { border-style: solid; background: transparent; }
+.role-src-inferred { border-style: dashed; background: transparent; border-left-style: solid; }
+.role-src-inferred { color: var(--muted); }
+/* Territory beside authority — quieter than the role, because it does not say
+   what the session may decide. */
+.specialty-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem 0.35rem;
+  border: 1px dotted var(--line-strong);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--faint);
+  white-space: nowrap;
+}
+/* Who sent an agent-to-agent instruction, under the name of whoever sent it.
+   Muted: the sender is context for the message, not the message. */
+.chat-turn-sender {
+  font-size: 10px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  margin-top: -0.1rem;
+  margin-bottom: 0.25rem;
 }
 /* The swarm chip is the caret. It was already the one element naming the
    subtree, so the control rides it rather than adding a glyph beside it — the

@@ -608,6 +608,90 @@ export function recentlyResolvedOf(snap) {
   return snap && Array.isArray(snap.recentlyResolved) ? snap.recentlyResolved : [];
 }
 
+/* ---------- message provenance ----------
+
+   The producer helper prefixes every orchestrator→lane message with
+   `[from <agent.id> run <runId>]`. That envelope is the answer to a question the
+   drawer was getting wrong: `lastUserMessage` is labelled "You", and for every
+   lane in every swarm it was sent by another AGENT, not by the operator.
+
+   Anchored at the START, deliberately. An agent quoting an instruction back
+   before answering is extremely common — this file already carries a scar from
+   a dedup rule that mistook a quote for a repeat — and a header in the middle of
+   prose is a session TALKING about a message, not a claim about who sent this
+   one. Provenance is only a fact when it is the envelope.
+
+   The absence of a header is itself the signal: a user turn with none really was
+   the human, which is what makes an injected instruction distinguishable. */
+const SENDER_HEADER = /^\s*\[from\s+([^\s\]]+)\s+run\s+([^\s\]]+)\]\s*/;
+
+export function parseSenderHeader(text) {
+  const value = typeof text === "string" ? text : "";
+  const match = SENDER_HEADER.exec(value);
+  if (!match) return null;
+  const [envelope, agentId, runId] = match;
+  if (!agentId || !runId) return null;
+  return { agentId, runId, body: value.slice(envelope.length).trim() };
+}
+
+/* Which fields actually carry it, measured rather than assumed: on the live
+   board the envelope sits on `lastUserMessage` and `task`, and on NEITHER of the
+   four atlas lanes' `lastHumanMessage` — that field mirrored the agent's own
+   reply. It is left out on purpose as well as on evidence: filling an
+   attribution from the one field the server documents as "assistant OR user
+   prose" is precisely how the "You" mislabel got in. */
+export function senderOf(agent) {
+  if (!agent) return null;
+  for (const field of [agent.lastUserMessage, agent.task]) {
+    const parsed = parseSenderHeader(field);
+    if (parsed) return { agentId: parsed.agentId, runId: parsed.runId };
+  }
+  return null;
+}
+
+/* The prose without its addressing. A row gets ~120 characters and the envelope
+   is 74 of them, so this is not tidiness — it is half the line back. */
+export function withoutSenderHeader(text) {
+  const parsed = parseSenderHeader(text);
+  if (parsed) return parsed.body;
+  return typeof text === "string" ? text : "";
+}
+
+/* How a role was decided, as something an operator can SEE. 1006 sessions on
+   the live board carry `inferred` against 4 `declared`, so a role chip that
+   renders a guess and a declaration identically is stating false confidence
+   about almost the whole fleet. Whole class-name literals: styles.css's orphan
+   lint reads the source as text and a name built at runtime is invisible to it
+   in both directions. */
+export const ROLE_SOURCE_VIEW = {
+  declared: {
+    className: "role-src-declared",
+    title: "Role declared at spawn — from the run manifest or ANTHILL_ROLE",
+  },
+  observed: {
+    className: "role-src-observed",
+    title: "Role observed from lineage — this session has children of its own",
+  },
+  inferred: {
+    className: "role-src-inferred",
+    title: "Role inferred from the session title — a guess, not a declaration",
+  },
+};
+
+export function roleSourceView(roleSource) {
+  return ROLE_SOURCE_VIEW[roleSource] || null;
+}
+
+/* Territory, not authority — which is why B4 took frontend/backend out of the
+   role union. It still has to reach the screen: before the demotion those
+   sessions read "Frontend / designer", and after it they read "Worker" with the
+   fact on the wire and nowhere else. */
+export const SPECIALTY_LABELS = { frontend: "Frontend", backend: "Backend" };
+
+export function specialtyLabel(agent) {
+  return (agent && SPECIALTY_LABELS[agent.specialty]) || "";
+}
+
 export function roleView(role) {
   const normalized = String(role || "agent")
     .trim()
