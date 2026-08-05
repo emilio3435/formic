@@ -218,8 +218,8 @@ export type RoleSource = "declared" | "observed" | "inferred"
 **Files:** Modify `src/web/app.js` (`syncProgramList`, `agentRowPlan`, paint sigs — board-lane versions), `src/web/client-state.js` (facets), `src/web/index.html` (`?v=` bump), `tests/web-client.test.ts` (single writer: FE owns it during Phase 2).
 
 **Structure:** Repo section header (repoName + branch/PR chips from `repo`/`pull_request_urls`) → worktree/run subsection (runId when declared, else branch@worktree basename) → rows ordered `ROSTER_ROLE_ORDER` then `agentSortRank`. Paint keys: `repoKey`, `repoKey\u001fworktreeKey`, `repoKey\u001fworktreeKey\u001frowKey` — extend the board lane's cache maps, don't fork them. Sessions with no repo render under today's program sections unchanged (fallback must be pixel-identical to pre-change for those rows — that's the regression gate).
-- [ ] Failing web-client tests for: two worktrees of one repo render under one repo section; declared run replaces worktree label; no-repo session unchanged; collapse state persists per repoKey (reuse `programOverrides` pattern, new localStorage key `mtn3-repos`).
-- [ ] Implement → green → **commit** `feat(board): group by repo, then worktree/run, then role`.
+- [x] Failing web-client tests for: two worktrees of one repo render under one repo section; declared run replaces worktree label; no-repo session unchanged; collapse state persists per repoKey (reuse `programOverrides` pattern, new localStorage key `mtn3-repos`).
+- [x] Implement → green → **commit** `feat(board): group by repo, then worktree/run, then role`.
 
 ### Task F2: lineage + provenance chips
 
