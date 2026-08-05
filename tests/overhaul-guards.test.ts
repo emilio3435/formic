@@ -255,6 +255,57 @@ describe("health severity: the quiet half must not be bought with the loud half"
     expect(issueById(snapshot.issues, "system:cmux-identity-conflicts")?.severity).toBe("error");
   });
 
+  test("a current command-hint identity conflict stays loud and names its live sources", () => {
+    const runtimeSessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const first = collected({
+      id: "claude:first",
+      provider: "claude",
+      sourceSessionId: "first",
+      runtimeSessionId,
+    });
+    const second = collected({
+      id: "claude:second",
+      provider: "claude",
+      sourceSessionId: "second",
+      runtimeSessionId,
+    });
+    const conflict =
+      "cmux SURF-CURRENT refused command identity: multiple active Claude sources (2) claim runtime session "
+      + runtimeSessionId;
+    const snapshot = buildSnapshot({
+      agents: [first, second],
+      surfaces: [{
+        ...conflictSurface("SURF-CURRENT", []),
+        identityConflict: conflict,
+        identityTrace: {
+          surfaceId: "SURF-CURRENT",
+          processes: [{ pid: 202, command: `claude --resume ${runtimeSessionId}`, recognizedAgentProcess: true }],
+          openFileMatches: [],
+          commandHints: [{
+            pid: 202,
+            provider: "claude",
+            value: runtimeSessionId,
+            full: true,
+            rejectionReason: "multiple active Claude sources (2) claim runtime session " + runtimeSessionId,
+          }],
+          outcome: "command-hint-conflict",
+          sourceSessionIds: [],
+          identityConflict: conflict,
+        },
+      }],
+      cmuxErrors: [conflict],
+      cmuxReachable: true,
+      archiveStore,
+      now: NOW,
+    });
+    const issue = issueById(snapshot.issues, "system:cmux-identity-conflicts");
+
+    expect(issue?.severity).toBe("error");
+    expect(issue?.affectedAgentIds).toEqual([first.id, second.id]);
+    expect(issueById(snapshot.issues, "system:cmux-control")).toBeUndefined();
+    expect(snapshot.controlHealth?.errors).toContain(conflict);
+  });
+
   test("every raised issue carries the text the card needs to render it", () => {
     /* Whatever the board claims is wrong has to arrive with something an
        operator can read. This pins title+summary, which is the renderable

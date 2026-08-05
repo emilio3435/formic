@@ -138,6 +138,31 @@ test("workspace env supplies declared lineage and is cached without retaining un
   ]]);
 });
 
+test("a tombstoned workspace is an enrichment miss while other env failures stay visible", async () => {
+  const missing = await collectCmuxWorkspaceEnvs({
+    run: async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "Error: not_found: Workspace not found",
+      timedOut: false,
+    }),
+  }, ["WORKSPACE-TOMBSTONED-20260805"]);
+  expect(missing).toEqual({ value: [], errors: [] });
+
+  const failed = await collectCmuxWorkspaceEnvs({
+    run: async () => ({
+      exitCode: 13,
+      stdout: "",
+      stderr: "permission denied",
+      timedOut: false,
+    }),
+  }, ["WORKSPACE-ENV-FAILURE-20260805"]);
+  expect(failed.value).toEqual([]);
+  expect(failed.errors).toEqual([
+    "cmux workspace env WORKSPACE-ENV-FAILURE-20260805 exited 13: permission denied",
+  ]);
+});
+
 const archiveStore: ArchiveStore = {
   has: () => false,
   archive: async () => {},

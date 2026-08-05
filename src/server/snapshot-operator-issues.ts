@@ -20,7 +20,9 @@ import { PROVIDERS } from "../shared/types";
 import { PROVIDER_DISPLAY_NAMES } from "./naming";
 import type { CmuxSurface } from "./types";
 
-const IDENTITY_CONFLICT_PATTERN = /conflicting open agent session files/i;
+const IDENTITY_CONFLICT_PATTERN = /conflicting open agent session files|refused command identity:|conflicting recognized agent commands/i;
+
+type AgentWithRuntimeSession = AgentSnapshot & { runtimeSessionId?: string };
 
 /* An identity conflict costs exactly one thing: controls stay quarantined for
    the sessions on that surface until the ambiguity clears. So the conflict is
@@ -74,8 +76,22 @@ export function classifyIdentityConflicts(
       ...(surface.identityTrace?.openFileMatches ?? []).map(({ sessionId }) => sessionId),
       ...surface.sourceSessionIds,
     ].map((sessionId) => sessionId.toLowerCase());
+    for (const hint of surface.identityTrace?.commandHints ?? []) {
+      if (!hint.rejectionReason) continue;
+      for (const agent of agents as readonly AgentWithRuntimeSession[]) {
+        const runtimeSessionId = agent.runtimeSessionId?.toLowerCase();
+        if (
+          agent.provider === hint.provider &&
+          (agent.sourceSessionId.toLowerCase() === hint.value.toLowerCase() || runtimeSessionId === hint.value.toLowerCase())
+        ) {
+          sessionIds.push(agent.sourceSessionId.toLowerCase());
+        }
+      }
+    }
+    const commandHintConflict = surface.identityTrace?.outcome === "command-hint-conflict"
+      && (surface.identityTrace.commandHints ?? []).some(({ rejectionReason }) => Boolean(rejectionReason));
     const liveHere = sessionIds.filter((sessionId) => liveSessionIds.has(sessionId));
-    if (liveHere.length > 0) {
+    if (liveHere.length > 0 || (commandHintConflict && sessionIds.length === 0)) {
       liveSurfaceIds.add(surface.surfaceId);
       for (const agent of agents) {
         if (agent.activity === "ended") continue;

@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { MemoryArchiveStore } from "../src/server/archive";
+import { collectCmuxWorkspaceEnvs } from "../src/server/cmux";
 import { HubState, type HubCollectors } from "../src/server/state";
 import type { IdentityBindingStore } from "../src/server/identity-bindings";
 import type {
@@ -75,6 +76,29 @@ describe("cmux collection time truth", () => {
     await state.refresh({ cmux: true });
 
     expect(executables).toEqual(["/opt/cmux/bin/cmux", "/opt/cmux/bin/cmux"]);
+  });
+
+  test("stale workspace metadata does not degrade an otherwise reachable control plane", async () => {
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      cmux: async () => ({
+        value: [{ workspaceId: "WORKSPACE-STALE", surfaceId: "SURFACE-STALE", sourceSessionIds: [] }],
+        errors: [],
+      }),
+      workspaceEnv: collectCmuxWorkspaceEnvs,
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 1, stdout: "", stderr: "Error: not_found: Workspace not found", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], { collectors });
+
+    await state.refresh({ cmux: true });
+
+    expect(state.get().controlHealth).toMatchObject({ cmuxReachable: true, errors: [] });
+    expect(state.get().issues?.find((issue) => issue.id === "system:cmux-control")).toBeUndefined();
   });
 
   test("a cmux request coalesced behind a source refresh still runs once and remains the lastCheckedAt", async () => {
