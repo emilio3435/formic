@@ -22,10 +22,12 @@ import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
+import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 export interface CollectSessionsOptions {
   hookProcessStarts?: () => ReadonlyMap<number, number> | undefined;
+  processLineageExec?: ProcessLineageExec;
 }
 const fileCache = new Map<string, {
   provider: Provider;
@@ -1082,30 +1084,6 @@ async function collectProvider(
   return { value: agents, errors, ...(absent ? { absent: true } : {}) };
 }
 
-function readProcessStartSeconds(): ReadonlyMap<number, number> | undefined {
-  try {
-    const result = Bun.spawnSync(["ps", "-axo", "pid=,lstart="], {
-      env: { ...process.env, LC_ALL: "C" },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (result.exitCode !== 0) return undefined;
-    const starts = new Map<number, number>();
-    for (const line of result.stdout.toString().split("\n")) {
-      const match = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
-      if (!match) continue;
-      const pid = Number(match[1]);
-      const startedAtMs = Date.parse(match[2]);
-      if (Number.isInteger(pid) && Number.isFinite(startedAtMs)) {
-        starts.set(pid, Math.floor(startedAtMs / 1_000));
-      }
-    }
-    return starts;
-  } catch {
-    return undefined;
-  }
-}
-
 function hookProcessAlive(
   record: HookSessionRecord,
   starts: ReadonlyMap<number, number> | undefined,
@@ -1120,6 +1098,8 @@ function attachHookFacts(
   result: CollectionResult<CollectedAgent[]>,
   records: ReadonlyMap<string, HookSessionRecord>,
   starts: ReadonlyMap<number, number> | undefined,
+  observedParents: ReadonlyMap<string, string> | undefined,
+  knownAgentIds: ReadonlySet<string>,
 ): CollectionResult<CollectedAgent[]> {
   return {
     ...result,
@@ -1130,6 +1110,7 @@ function attachHookFacts(
       const retainedAlive = agent.processIds?.includes(record.pid) ? agent.processAlive : undefined;
       const cwd = agent.cwd ?? record.cwd;
       const processAlive = observedAlive ?? retainedAlive;
+      const observedParentAgentId = observedParents?.get(agent.id);
       const endEvidence = retirementEndEvidence({
         endEvidence: agent.endEvidence,
         hookLifecycle: record.agentLifecycle,
@@ -1142,6 +1123,9 @@ function attachHookFacts(
         hookLifecycle: record.agentLifecycle,
         processIds: [record.pid],
         processAlive,
+        ...(observedParentAgentId && knownAgentIds.has(observedParentAgentId)
+          ? { lineage: { observedParentAgentId } }
+          : {}),
         ...(endEvidence ? { endEvidence } : {}),
       };
     }),
@@ -1165,13 +1149,20 @@ export async function collectSessions(
   const recordsBySession = new Map(
     hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
   );
+  const knownAgentIds = new Set(
+    [omp, codex, claude, cursor, factory].flatMap((result) => result.value.map((agent) => agent.id)),
+  );
+  const processLineage = hookRecords.length > 0
+    && (options.processLineageExec !== undefined || !options.hookProcessStarts)
+    ? readProcessLineage(hookRecords, options.processLineageExec)
+    : undefined;
   const starts = hookRecords.length > 0
-    ? (options.hookProcessStarts ?? readProcessStartSeconds)()
+    ? options.hookProcessStarts?.() ?? processLineage?.processStarts
     : undefined;
   return {
-    omp: attachHookFacts(omp, recordsBySession, starts),
-    codex: attachHookFacts(codex, recordsBySession, starts),
-    claude: attachHookFacts(claude, recordsBySession, starts),
+    omp: attachHookFacts(omp, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
+    codex: attachHookFacts(codex, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
+    claude: attachHookFacts(claude, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
     cursor,
     factory,
   };
