@@ -44,7 +44,10 @@ import {
   type NameCandidate,
 } from "./session-names";
 import { readRunManifests, type RunManifest } from "./run-manifests";
-import { senderTranscriptTailsFor } from "./sender-verification";
+import {
+  senderTranscriptTailsFor,
+  type SenderTranscriptEvidence,
+} from "./sender-verification";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -69,7 +72,10 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 const REFRESH_WATCHDOG_MS = 12_000;
 export const REFRESH_AGGREGATE_TIMEOUT_MS = 10_000;
 
-async function readBoundedTranscriptTail(path: string, maxBytes: number): Promise<string | undefined> {
+async function readBoundedTranscriptTail(
+  path: string,
+  maxBytes: number,
+): Promise<SenderTranscriptEvidence | undefined> {
   const handle = await open(path, "r");
   try {
     const before = await handle.stat();
@@ -84,7 +90,10 @@ async function readBoundedTranscriptTail(path: string, maxBytes: number): Promis
     }
     const after = await handle.stat();
     if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return undefined;
-    return buffer.subarray(0, bytesRead).toString("utf8");
+    return {
+      text: buffer.subarray(0, bytesRead).toString("utf8"),
+      complete: offset === 0,
+    };
   } finally {
     await handle.close();
   }

@@ -29,6 +29,8 @@ const transcriptWith = (body: string): string => JSON.stringify({
   },
 });
 
+const transcriptEvidence = (text: string, complete = true) => ({ text, complete });
+
 const collectedAgent = (
   id: string,
   lastUserMessage?: string,
@@ -49,17 +51,17 @@ const collectedAgent = (
 describe("agent message provenance", () => {
   test("verifies a claimed sender only from that sender's bounded transcript tail", () => {
     const tails = new Map([
-      [SENDER, transcriptWith(BODY)],
-      [OTHER_SENDER, transcriptWith("a different instruction")],
+      [SENDER, transcriptEvidence(transcriptWith(BODY), false)],
+      [OTHER_SENDER, transcriptEvidence(transcriptWith("a different instruction"))],
     ]);
 
     expect(senderVerificationFor({ lastUserMessage: headed(), task: headed() }, tails)).toBe(true);
   });
 
-  test("marks a claim false when the claimed sender's readable tail lacks the send", () => {
+  test("marks a claim false when the claimed sender's complete transcript lacks the send", () => {
     const tails = new Map([
-      [SENDER, transcriptWith("a different instruction")],
-      [OTHER_SENDER, transcriptWith(BODY)],
+      [SENDER, transcriptEvidence(transcriptWith("a different instruction"))],
+      [OTHER_SENDER, transcriptEvidence(transcriptWith(BODY))],
     ]);
 
     expect(senderVerificationFor({ lastUserMessage: headed(), task: headed() }, tails)).toBe(false);
@@ -72,15 +74,15 @@ describe("agent message provenance", () => {
     )).toBeUndefined();
     expect(senderVerificationFor(
       { lastUserMessage: headed(), task: headed() },
-      new Map([[SENDER, ""]]),
+      new Map([[SENDER, transcriptEvidence("")]]),
     )).toBe(false);
   });
 
   test("uses the current user request before a stale headed task", () => {
     const current = "T5 is unlocked now; begin with the provenance verifier.";
     const tails = new Map([
-      [SENDER, transcriptWith("the old task")],
-      [OTHER_SENDER, transcriptWith(current)],
+      [SENDER, transcriptEvidence(transcriptWith("the old task"))],
+      [OTHER_SENDER, transcriptEvidence(transcriptWith(current))],
     ]);
 
     expect(senderVerificationFor({
@@ -93,24 +95,38 @@ describe("agent message provenance", () => {
     expect(senderVerificationFor({
       lastUserMessage: "Please re-run the focused test.",
       task: headed(SENDER, "the original kickoff"),
-    }, new Map([[SENDER, transcriptWith("the original kickoff")]]))).toBeUndefined();
+    }, new Map([[SENDER, transcriptEvidence(transcriptWith("the original kickoff"))]]))).toBeUndefined();
   });
 
   test("does not verify prose that merely quotes a sender header", () => {
     expect(senderVerificationFor({
       lastUserMessage: `I received "${headed()}" and started.`,
       task: "plain task",
-    }, new Map([[SENDER, transcriptWith(BODY)]]))).toBeUndefined();
+    }, new Map([[SENDER, transcriptEvidence(transcriptWith(BODY))]]))).toBeUndefined();
   });
 
-  test("matches the stable head when the published request was truncated", () => {
+  test("a wire-truncated head can verify its long prefix but can never prove forgery", () => {
     const longBody = `Goal: ${"verify provenance carefully ".repeat(20)}`.trim();
-    const published = `${longBody.slice(0, 220).trimEnd()}…`;
+    /* Live proof from fe-states: lastUserMessage carried 145 real characters
+       followed by the wire's U+2026 truncation marker. The marker cannot occur
+       at that position in the sender's full transcript. */
+    const published = `${longBody.slice(0, 145).trimEnd()}…`;
+    expect(published.endsWith("…")).toBe(true);
+    expect(published.length).toBeGreaterThanOrEqual(100);
 
     expect(senderVerificationFor(
       { lastUserMessage: headed(SENDER, published) },
-      new Map([[SENDER, transcriptWith(longBody)]]),
+      new Map([[SENDER, transcriptEvidence(transcriptWith(longBody), false)]]),
     )).toBe(true);
+    expect(senderVerificationFor(
+      { lastUserMessage: headed(SENDER, published) },
+      new Map([[SENDER, transcriptEvidence(transcriptWith("a different instruction"))]]),
+    )).toBeUndefined();
+    const shortPublished = `${longBody.slice(0, 99)}…`;
+    expect(senderVerificationFor(
+      { lastUserMessage: headed(SENDER, shortPublished) },
+      new Map([[SENDER, transcriptEvidence(transcriptWith(longBody))]]),
+    )).toBeUndefined();
   });
 
   test("reads one bounded tail from each claimed sender's own transcript", async () => {
@@ -132,14 +148,14 @@ describe("agent message provenance", () => {
       },
     ], async (path, maxBytes) => {
       reads.push({ path, maxBytes });
-      return transcriptWith(BODY);
+      return transcriptEvidence(transcriptWith(BODY));
     });
 
     expect(reads).toEqual([{
       path: "/transcripts/sender.jsonl",
       maxBytes: MAX_SENDER_TRANSCRIPT_TAIL_BYTES,
     }]);
-    expect(tails.get(SENDER)).toContain(BODY);
+    expect(tails.get(SENDER)?.text).toContain(BODY);
   });
 
   test("does not turn an unreadable sender transcript into readable evidence", async () => {
@@ -170,7 +186,7 @@ describe("agent message provenance", () => {
       surfaces: [],
       archiveStore: { has: () => false, archive: async () => {} },
       now: new Date("2026-08-05T15:40:00.000Z"),
-      senderTranscriptTails: new Map([[SENDER, transcriptWith(BODY)]]),
+      senderTranscriptTails: new Map([[SENDER, transcriptEvidence(transcriptWith(BODY))]]),
     });
     const agents = snapshot.programs.flatMap((program) => program.agents);
 
@@ -179,7 +195,7 @@ describe("agent message provenance", () => {
     expect("senderVerified" in (agents.find((agent) => agent.id === unavailableId) ?? {})).toBe(false);
   });
 
-  test("the refresh reads only the bounded tail and picks up a later real send", async () => {
+  test("a miss outside the bounded tail stays absent until a later send enters the window", async () => {
     const root = await mkdtemp(join(tmpdir(), "anthill-sender-verification-"));
     const senderPath = join(root, "sender.jsonl");
     try {
@@ -217,7 +233,7 @@ describe("agent message provenance", () => {
           .find((agent) => agent.id === recipient.id)?.senderVerified;
       };
 
-      expect(await verdict()).toBe(false);
+      expect(await verdict()).toBeUndefined();
       await appendFile(senderPath, `\n${transcriptWith(BODY)}`, "utf8");
       expect(await verdict()).toBe(true);
     } finally {

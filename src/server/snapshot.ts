@@ -63,7 +63,10 @@ import {
   type RunManifest,
 } from "./run-manifests";
 import type { SessionNameRecord } from "./session-names";
-import { senderVerificationFor } from "./sender-verification";
+import {
+  senderVerificationFor,
+  type SenderTranscriptEvidence,
+} from "./sender-verification";
 import { taskStateWantsHuman } from "./task-state";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
@@ -107,8 +110,8 @@ export interface SnapshotInput {
   scanWindowHours?: number;
   /** The operator's freshness and quiet bands; defaults when absent. */
   thresholds?: LifecycleThresholds;
-  /** Readable bounded transcript tails keyed by the sender identity they attest. */
-  senderTranscriptTails?: ReadonlyMap<string, string>;
+  /** Readable transcript evidence keyed by sender, including whether the read was complete. */
+  senderTranscriptTails?: ReadonlyMap<string, SenderTranscriptEvidence>;
   /**
    * The identity scan enumerated every process without error, so a session no
    * process claims has been observed to be gone rather than merely unchecked.

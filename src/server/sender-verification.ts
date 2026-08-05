@@ -1,4 +1,5 @@
 export const SENDER_MESSAGE_HEAD_CHARS = 160;
+export const MIN_TRUNCATED_SENDER_MESSAGE_HEAD_CHARS = 100;
 export const MAX_SENDER_TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
 
 const SENDER_HEADER = /^\s*\[from\s+([^\s\]]+)\s+run\s+([^\s\]]+)\]\s*/;
@@ -7,6 +8,7 @@ export interface SenderClaim {
   agentId: string;
   runId: string;
   messageHead: string;
+  messageHeadTruncated: boolean;
 }
 
 export interface SenderClaimSource {
@@ -19,10 +21,15 @@ export interface SenderTranscriptSource extends SenderClaimSource {
   artifacts: readonly { kind?: string; path: string }[];
 }
 
+export interface SenderTranscriptEvidence {
+  text: string;
+  complete: boolean;
+}
+
 export type SenderTranscriptTailReader = (
   path: string,
   maxBytes: number,
-) => Promise<string | undefined>;
+) => Promise<SenderTranscriptEvidence | undefined>;
 
 function comparableText(text: string): string {
   return text
@@ -48,23 +55,35 @@ export function senderClaimFor(source: SenderClaimSource): SenderClaim | undefin
   const [, agentId, runId] = match;
   const body = comparableText(candidate.slice(match[0].length));
   if (!agentId || !runId || !body) return undefined;
+  const messageHeadTruncated = body.endsWith("…");
+  const comparableBody = messageHeadTruncated ? body.slice(0, -1).trimEnd() : body;
+  if (!comparableBody) return undefined;
   return {
     agentId,
     runId,
-    messageHead: body.slice(0, SENDER_MESSAGE_HEAD_CHARS).trimEnd(),
+    messageHead: comparableBody.slice(0, SENDER_MESSAGE_HEAD_CHARS).trimEnd(),
+    messageHeadTruncated,
   };
 }
 
-/* `transcriptTails` contains only tails that were actually readable. A missing
-   key therefore means unavailable evidence, while an accessible empty tail is
-   affirmative evidence that the claimed send is absent. */
+/* A bounded tail can prove presence, but only a complete transcript can prove
+   absence. A wire-truncated head is weaker still: after stripping its U+2026
+   marker, a long prefix may verify the send but can never prove forgery. */
 export function senderVerificationFor(
   source: SenderClaimSource,
-  transcriptTails: ReadonlyMap<string, string>,
+  transcriptTails: ReadonlyMap<string, SenderTranscriptEvidence>,
 ): boolean | undefined {
   const claim = senderClaimFor(source);
-  if (!claim || !transcriptTails.has(claim.agentId)) return undefined;
-  return comparableText(transcriptTails.get(claim.agentId) ?? "").includes(claim.messageHead);
+  const transcript = claim ? transcriptTails.get(claim.agentId) : undefined;
+  if (!claim || !transcript) return undefined;
+  const matches = comparableText(transcript.text).includes(claim.messageHead);
+  if (claim.messageHeadTruncated) {
+    return matches && claim.messageHead.length >= MIN_TRUNCATED_SENDER_MESSAGE_HEAD_CHARS
+      ? true
+      : undefined;
+  }
+  if (matches) return true;
+  return transcript.complete ? false : undefined;
 }
 
 /* Select only transcripts that can answer an active claim. Multiple recipients
@@ -74,7 +93,7 @@ export function senderVerificationFor(
 export async function senderTranscriptTailsFor(
   sources: readonly SenderTranscriptSource[],
   readTail: SenderTranscriptTailReader,
-): Promise<Map<string, string>> {
+): Promise<Map<string, SenderTranscriptEvidence>> {
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const claimedSenderIds = new Set(
     sources.flatMap((source) => {
@@ -82,7 +101,7 @@ export async function senderTranscriptTailsFor(
       return claim ? [claim.agentId] : [];
     }),
   );
-  const tails = new Map<string, string>();
+  const tails = new Map<string, SenderTranscriptEvidence>();
   await Promise.all([...claimedSenderIds].map(async (senderId) => {
     const transcriptPath = sourceById.get(senderId)?.artifacts
       .find((artifact) => artifact.kind === "transcript")?.path;
