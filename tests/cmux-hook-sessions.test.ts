@@ -28,7 +28,9 @@ afterEach(() => {
 
 describe("cmux hook-session stores", () => {
   test("readHookSessionStores parses claude store and normalizes provider", () => {
-    expect(readHookSessionStores(fixtureRoot)).toEqual([
+    // The fixture root also carries the T8 cursor/factory shim goldens; this
+    // test owns only the claude store's parse.
+    expect(readHookSessionStores(fixtureRoot).filter((r) => r.provider === "claude")).toEqual([
       {
         provider: "claude",
         sessionId: "11111111-2222-4333-8444-555555555555",
@@ -89,4 +91,14 @@ describe("cmux hook-session stores", () => {
 
     expect(readHookSessionStores(root)).toEqual([]);
   });
+});
+
+test("cursor and factory shim stores are read like the native three", () => {
+  // T8 ships shims that write cursor-/factory-hook-sessions.json; a reader
+  // that ignores those files makes the shims decorative. Fixture shapes are
+  // the shims' own goldens.
+  const records = readHookSessionStores("tests/fixtures/cmux-hook-sessions");
+  const providers = new Set(records.map((r) => r.provider));
+  expect(providers.has("cursor")).toBeTrue();
+  expect(providers.has("factory")).toBeTrue();
 });

@@ -276,11 +276,11 @@ describe("T10 sweep — shim goldens", () => {
 });
 
 describe("T10 sweep — succession retirement substrate (T2 gated)", () => {
-  test("T9 backfill history is the succession input; wire fields still await T2", () => {
-    // Product has not landed succeededBy / supersedes / endEvidence:"superseded".
-    expect(TYPES.includes("succeededBy")).toBeFalse();
-    expect(TYPES.includes("supersedes")).toBeFalse();
-    expect(TYPES.includes('"superseded"')).toBeFalse();
+  test("T9 backfill history is the succession input; T2 landed the wire fields", () => {
+    // The gated lock flipped when T2 landed: the wire now carries succession.
+    expect(TYPES.includes("succeededBy")).toBeTrue();
+    expect(TYPES.includes("supersedes")).toBeTrue();
+    expect(TYPES.includes('"superseded"')).toBeTrue();
 
     const root = fresh("succession-history");
     expect(root.startsWith(REAL_RUNS)).toBeFalse();

@@ -64,7 +64,10 @@ afterEach(() => {
 
 describe("collector goldens — hook store, manifests, sidebar snapshot", () => {
   test("hook store golden parses to the redacted binding records", () => {
-    expect(readHookSessionStores(HOOK_ROOT)).toEqual([
+    // The root also carries the cursor/factory shim goldens (owned by the shim
+    // suite); this golden pins the three native stores' exact parse.
+    const native = new Set(["claude", "codex", "omp"]);
+    expect(readHookSessionStores(HOOK_ROOT).filter((r) => native.has(r.provider))).toEqual([
       {
         provider: "claude",
         sessionId: "11111111-2222-4333-8444-555555555555",

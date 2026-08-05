@@ -3,7 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HookLifecycle } from "../shared/types";
 
-const HOOK_PROVIDERS = ["claude", "codex", "omp"] as const;
+// cursor and factory records come from the T8 shims rather than native hooks;
+// the reader treats all five stores identically.
+const HOOK_PROVIDERS = ["claude", "codex", "omp", "cursor", "factory"] as const;
 type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 export interface HookSessionRecord {
