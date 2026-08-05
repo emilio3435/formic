@@ -7,10 +7,11 @@
  * `$ANTHILL_CMUXTERM_ROOT` or `~/.cmuxterm`. Tests MUST set
  * ANTHILL_CMUXTERM_ROOT to a temp directory.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { HookLifecycle } from "../src/shared/types";
+import { atomicWriteJson } from "./lib/atomic-json";
 
 export const HOOK_STORE_PROVIDERS = ["cursor", "factory"] as const;
 export type HookStoreProvider = (typeof HOOK_STORE_PROVIDERS)[number];
@@ -162,7 +163,6 @@ export function upsertHookSessionRecord(
   assertRecordInput(input);
   const updatedAt = input.updatedAt ?? Date.now() / 1000;
   const path = hookStorePath(root, provider);
-  mkdirSync(dirname(path), { recursive: true });
   const store = readStore(path);
 
   const record: Record<string, unknown> = {
@@ -199,9 +199,7 @@ export function upsertHookSessionRecord(
     updatedAt,
   };
 
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  renameSync(tempPath, path);
+  atomicWriteJson(path, store);
   return path;
 }
 
