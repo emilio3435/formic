@@ -24,7 +24,7 @@ T6 (be-truth or be-live, whichever frees first) is the ONE serialization point: 
 
 ---
 
-### T1 — Kernel-verified lineage (be-truth)
+### T1 — Kernel-verified lineage (be-truth) ✅ **[DONE 9d03fe3, merged]**
 
 Walk pid→ppid chains (`ps -axo pid,ppid,lstart,command`, cached per collect) from each hook-store pid up to its cmux surface process. Produces `lineage.observedParentAgentId` + `lineageAgreement: "corroborated" | "contradicted" | "unobserved"` on the wire. A DECLARED parent that the kernel contradicts keeps the declared chain but carries the flag (F-side styles it hostile-red later; never silently re-parent). An UNDECLARED session whose ancestor chain reaches a known agent session gains `roleSource:"observed"` parentage — this is what binds subagents (live case: FE's security-review children) without any contract change. TDD: fixture a ps table; contradicted/corroborated/unobserved cases; subagent-adoption case.
 
