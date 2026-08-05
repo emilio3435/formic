@@ -45,6 +45,8 @@ interface FleetCase {
   expect: string[];
   removeAgentIds?: string[];
   expectAfterRemoval?: string[];
+  joinAgents?: { sourceSessionId: string; evidence: NameEvidence }[];
+  expectAfterJoin?: string[];
 }
 
 interface TruthTable {
@@ -81,27 +83,45 @@ describe("the naming truth table, executed fleet-wide", () => {
   }
 });
 
+function stickyStore() {
+  const remembered = new Map<string, string>();
+  return {
+    getNameTag: (agentId: string) => remembered.get(agentId),
+    rememberNameTags: async (assignments: readonly { agentId: string; tag: string }[]) => {
+      for (const { agentId, tag } of assignments) {
+        if (!remembered.has(agentId)) remembered.set(agentId, tag);
+      }
+    },
+  };
+}
+
+function fleetEntries(agents: FleetCase["agents"]) {
+  return agents.map((agent) => ({
+    agentId: `${agent.evidence.provider}:${agent.sourceSessionId}`,
+    sourceSessionId: agent.sourceSessionId,
+    identity: resolveAgentName(agent.evidence, table.homeDir),
+  }));
+}
+
 describe("disambiguators stay with the session that first received them", () => {
   for (const fleet of table.fleets.filter((entry) => entry.expectAfterRemoval)) {
     test(`${fleet.name} after another session leaves`, () => {
-      const remembered = new Map<string, string>();
-      const store = {
-        getNameTag: (agentId: string) => remembered.get(agentId),
-        rememberNameTags: async (assignments: readonly { agentId: string; tag: string }[]) => {
-          for (const { agentId, tag } of assignments) {
-            if (!remembered.has(agentId)) remembered.set(agentId, tag);
-          }
-        },
-      };
-      const entries = fleet.agents.map((agent) => ({
-        agentId: `${agent.evidence.provider}:${agent.sourceSessionId}`,
-        sourceSessionId: agent.sourceSessionId,
-        identity: resolveAgentName(agent.evidence, table.homeDir),
-      }));
+      const store = stickyStore();
+      const entries = fleetEntries(fleet.agents);
       expect(disambiguate(entries, store).map(({ name }) => name)).toEqual(fleet.expect);
       const removed = new Set(fleet.removeAgentIds ?? []);
       const survivors = entries.filter(({ agentId }) => !removed.has(agentId));
       expect(disambiguate(survivors, store).map(({ name }) => name)).toEqual(fleet.expectAfterRemoval!);
+    });
+  }
+
+  for (const fleet of table.fleets.filter((entry) => entry.expectAfterJoin)) {
+    test(`${fleet.name}`, () => {
+      const store = stickyStore();
+      const entries = fleetEntries(fleet.agents);
+      expect(disambiguate(entries, store).map(({ name }) => name)).toEqual(fleet.expect);
+      const joined = [...entries, ...fleetEntries(fleet.joinAgents ?? [])];
+      expect(disambiguate(joined, store).map(({ name }) => name)).toEqual(fleet.expectAfterJoin!);
     });
   }
 });
