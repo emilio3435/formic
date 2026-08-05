@@ -36,7 +36,7 @@ A manifest lane whose sessionId is REPLACED (orchestrator edits manifest, or T9 
 
 `repoKey` = FNV of normalized `origin` URL when one exists (fallback: today's common-dir realpath). Two clones of one repo become one band; a lane whose declared `repoRoot` differs from cwd renders under the TARGET repo. Migration: repoKey change breaks collapse-state localStorage keys and paint keys — ship a client-side key migration (fe-states does the 5-line read-through in T7; coordinate the one shared commit like B4 did).
 
-### T4 — B7 events tail (be-live)
+### T4 — B7 events tail (be-live) ✅ **[DONE 1ac2186, merged]**
 
 As specced in the atlas plan (stretch B7): `cmux events --cursor-file ~/.anthill/events.cursor --reconnect --category agent --category workspace` as a supervised child; `boot_id` change ⇒ full re-snapshot; deltas feed between polls; polling stays the reconciler. Latency polish, not correctness — land LAST in its lane if T5 runs long.
 
