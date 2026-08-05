@@ -79,6 +79,12 @@ export const state = {
   broadcastError: "",
   broadcastResults: null,      // Map agentId -> { ok, error }
   programOverrides: new Map(), // programId -> "open" | "closed"
+  /* Which repositories the operator has folded up. Keyed by repoKey — the FNV
+     of the git common dir, which is stable across every worktree of the repo
+     and across a cmux restart — so the choice outlives the worktrees it was
+     made over. Same shape and same failure handling as programOverrides, its
+     own storage key (mtn3-repos). */
+  repoOverrides: new Map(),  // repoKey -> "open" | "closed"
   /* Which swarms the operator has opened. Absent means CLOSED — a swarm's
      children are collapsed by default, so a ten-child verifier fan does not
      bury the nine other workstreams under it. Only "open" is ever stored, and

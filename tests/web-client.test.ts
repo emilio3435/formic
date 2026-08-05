@@ -442,6 +442,10 @@ function listUi(overrides: Record<string, unknown> = {}) {
     selected: null,
     selectedId: null,
     programOverrides: new Map<string, string>(),
+    // Repo bands default to OPEN when they hold a session the view admits, so
+    // an empty override map is a board with nothing folded up — which is what a
+    // first load actually looks like.
+    repoOverrides: new Map<string, string>(),
     // Absent means collapsed, so the default fixture is a board whose swarms
     // are all folded — which is what a first load actually looks like.
     swarmOverrides: new Map<string, string>(),
@@ -4324,7 +4328,9 @@ describe("program-header at-a-glance rollups (C2)", () => {
     expect((source.match(/sum \+ a\.tokens\.sessionTotal/g) ?? []).length).toBe(1);
     // renderProgram delegates its header rollup to the shared builder and keeps no
     // parallel arithmetic; the old rollupParts text summary is gone.
-    const rp = source.match(/function renderProgram\(program, agents\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    // Signature-tolerant: F1a gave renderProgram an opts bag (worktree label +
+    // paint key) without changing where its rollup comes from.
+    const rp = source.match(/function renderProgram\(program, agents[^)]*\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
     // Delegation is the contract; WHICH list it rolls up is asserted behaviorally
     // in "a filtered view leaves the program header counting the whole program".
     expect(rp).toContain("programHeadRollup(");
@@ -9409,5 +9415,253 @@ describe("the lifecycle contract on the board itself", () => {
     expect(balanced).toMatchObject({ fresh: 3, quiet: 45 });
     // Every preset keeps quiet longer than fresh, or it would delete the Waiting band.
     for (const preset of M.SETTINGS_PRESETS) expect(preset.quiet).toBeGreaterThan(preset.fresh);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Atlas F1a — the board regroups on repo → worktree → role.
+
+   The server (B2) now hands the client one program PER WORKTREE, tagged with
+   `groupPath: [repoKey, worktreeKey]`, so five worktrees of one repository
+   arrived as five sibling sections all printing the same name. These drive the
+   real two-level path (syncProgramList) with real nodes, so they cover the
+   grouping, the paint keys that keep rows alive across a 4s repaint, and the
+   fallback that must stay exactly as it was for a session with no repo.
+   ------------------------------------------------------------------------ */
+describe("Atlas F1: repo sections, worktree subsections, role order", () => {
+  function repoAgent(id: string, over: Record<string, unknown> = {}) {
+    return agent({ id, status: "running", ...over });
+  }
+  function worktree(opts: {
+    repoKey: string;
+    repoName?: string;
+    worktreeKey: string;
+    path: string;
+    branch?: string;
+    agents: Record<string, unknown>[];
+  }) {
+    const repo = {
+      repoKey: opts.repoKey,
+      repoName: opts.repoName ?? "the-mountain",
+      worktreePath: opts.path,
+      branch: opts.branch,
+      ephemeral: false,
+    };
+    return {
+      id: `repo:${opts.repoKey}:worktree:${opts.worktreeKey}`,
+      name: repo.repoName,
+      path: opts.path,
+      groupPath: [opts.repoKey, opts.worktreeKey],
+      agents: opts.agents.map((a) => ({ ...a, repo })),
+    };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const visibleOf = (...programs: any[]) => programs.map((program) => ({ program, agents: program.agents }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const paint = (root: any, visible: any[], over: Record<string, unknown> = {}) =>
+    withDom(() => M.syncProgramList(root, visible, listUi({
+      snap: { schemaVersion: 1, programs: visible.map((v) => v.program) },
+      ...over,
+    })));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rowIds = (node: any) => allByClass(node, "agent-row").map((n: any) => String(n.dataset.fkey).slice("agent:".length));
+  const withoutRepo = (a: Record<string, unknown>) => {
+    const copy = { ...a };
+    delete copy.repo;
+    return copy;
+  };
+
+  test("two worktrees of one repo render under a single repo section", () => {
+    const main = worktree({
+      repoKey: "k-two", worktreeKey: "wt-main", branch: "main",
+      path: "/Users/e/Developer/the-mountain", agents: [repoAgent("codex:two-a")],
+    });
+    const lane = worktree({
+      repoKey: "k-two", worktreeKey: "wt-lane", branch: "atlas-fe",
+      path: "/Users/e/Developer/.worktrees/ah-atlas-fe", agents: [repoAgent("codex:two-b")],
+    });
+    const visible = visibleOf(main, lane);
+    const root = newNode("div");
+
+    const shown = paint(root, visible);
+
+    // One section, not two: the repository is the group, the worktrees are its
+    // subsections. `shown` still counts every row the filter admitted.
+    expect(shown).toBe(2);
+    expect(root.children.length).toBe(1);
+    const section = root.children[0];
+    expect(section.className).toContain("repo-section");
+    expect(byClass(section, "repo-name").textContent).toBe("the-mountain");
+    expect(textOf(byClass(section, "repo-head"))).toContain("2 worktrees");
+
+    // The subsections carry the fact that distinguishes them — branch and the
+    // checkout they sit in — instead of repeating the repository name twice.
+    expect(allByClass(section, "program").length).toBe(2);
+    expect(allByClass(section, "program-name").map((n: { textContent: string }) => n.textContent))
+      .toEqual(["main@the-mountain", "atlas-fe@ah-atlas-fe"]);
+    expect(rowIds(section)).toEqual(["codex:two-a", "codex:two-b"]);
+  });
+
+  test("a lone worktree still groups under its repo, counted honestly", () => {
+    const only = worktree({
+      repoKey: "k-one", worktreeKey: "wt-only", branch: "main",
+      path: "/Users/e/Developer/hormiga", repoName: "hormiga", agents: [repoAgent("codex:one-a")],
+    });
+    const root = newNode("div");
+
+    paint(root, visibleOf(only));
+
+    const section = root.children[0];
+    expect(byClass(section, "repo-name").textContent).toBe("hormiga");
+    expect(textOf(byClass(section, "repo-head"))).toContain("1 worktree");
+    expect(textOf(byClass(section, "repo-head"))).not.toContain("1 worktrees");
+  });
+
+  /* The regression gate. Everything above is additive; a session whose cwd is
+     not a git checkout must reach the same DOM it reached before this task. */
+  test("a session with no repo keeps today's program section, untouched", () => {
+    const program = {
+      id: "cwd-loose-9x", name: "loose", path: "/tmp/loose",
+      agents: [repoAgent("codex:loose-1"), repoAgent("codex:loose-2")],
+    };
+    const root = newNode("div");
+
+    const shown = paint(root, visibleOf(program));
+
+    expect(shown).toBe(2);
+    expect(root.children.length).toBe(1);
+    const section = root.children[0];
+    expect(section.className).toContain("program");
+    expect(allByClass(root, "repo-section").length).toBe(0);
+    expect(byClass(section, "program-name").textContent).toBe("loose");
+    expect(byFkey(section, "prog:cwd-loose-9x")).not.toBeNull();
+    expect(byFkey(section, "prog-details:cwd-loose-9x")).not.toBeNull();
+    expect(rowIds(section)).toEqual(["codex:loose-1", "codex:loose-2"]);
+  });
+
+  /* Role order is the third level of the new hierarchy, so it applies where
+     that hierarchy does. The fallback path keeps the server's agentSortRank
+     order exactly, which is what makes the no-repo section a true regression
+     gate rather than a section that merely looks the same. */
+  test("role order applies inside a worktree and leaves the fallback alone", () => {
+    const roster = [
+      repoAgent("codex:role-v", { role: "verifier" }),
+      repoAgent("codex:role-o1", { role: "orchestrator" }),
+      repoAgent("codex:role-o2", { role: "orchestrator" }),
+      repoAgent("codex:role-plain"),
+    ];
+    const wt = worktree({
+      repoKey: "k-role", worktreeKey: "wt-role", branch: "main",
+      path: "/Users/e/Developer/roles", agents: roster,
+    });
+    const grouped = newNode("div");
+    paint(grouped, visibleOf(wt));
+    // Orchestrators lead; two of them keep the order the server sorted them in.
+    expect(rowIds(grouped)).toEqual(["codex:role-o1", "codex:role-o2", "codex:role-v", "codex:role-plain"]);
+
+    const flat = { id: "cwd-role-flat", name: "roles", agents: wt.agents.map(withoutRepo) };
+    const loose = newNode("div");
+    paint(loose, visibleOf(flat));
+    expect(rowIds(loose)).toEqual(["codex:role-v", "codex:role-o1", "codex:role-o2", "codex:role-plain"]);
+  });
+
+  test("repo collapse is per repoKey and persists the way program collapse does", () => {
+    const wt = worktree({
+      repoKey: "k-collapse", worktreeKey: "wt-c", branch: "main",
+      path: "/Users/e/Developer/collapsed", agents: [repoAgent("codex:col-1")],
+    });
+    const visible = visibleOf(wt);
+
+    const shut = newNode("div");
+    const shown = paint(shut, visible, { repoOverrides: new Map([["k-collapse", "closed"]]) });
+    // The count is what the FILTER admitted, not what was drawn — a collapsed
+    // repo hides rows without changing how many sessions matched.
+    expect(shown).toBe(1);
+    const section = shut.children[0];
+    expect(allByClass(section, "program").length).toBe(0);
+    expect(rowIds(section)).toEqual([]);
+    expect(byFkey(section, "repo:k-collapse").attributes["aria-expanded"]).toBe("false");
+
+    const open = newNode("div");
+    paint(open, visible, { repoOverrides: new Map([["k-collapse", "open"]]) });
+    expect(rowIds(open)).toEqual(["codex:col-1"]);
+    expect(byFkey(open, "repo:k-collapse").attributes["aria-expanded"]).toBe("true");
+
+    // Same storage shape as programOverrides, its own key, loaded at boot.
+    const load = source.match(/function loadRepoOverrides\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(load).toContain('localStorage.getItem("mtn3-repos")');
+    expect(source).toContain('localStorage.setItem("mtn3-repos"');
+    expect(source).toContain("loadRepoOverrides();");
+    const toggle = source.match(/function toggleRepo\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(toggle).toContain("saveRepoOverrides()");
+  });
+
+  /* programId used to key every paint cache. The new axes need their own keys
+     or the 4s tick rebuilds each row — which is how text selection, hover and
+     keyboard focus die on this board. */
+  test("a quiet repaint reuses the repo section, its worktrees and its rows", () => {
+    const wt = worktree({
+      repoKey: "k-quiet", worktreeKey: "wt-q", branch: "main",
+      path: "/Users/e/Developer/quiet", agents: [repoAgent("codex:quiet-1"), repoAgent("codex:quiet-2")],
+    });
+    const visible = visibleOf(wt);
+    const root = newNode("div");
+
+    paint(root, visible);
+    const section = root.children[0];
+    const sub = byClass(byClass(section, "repo-worktrees"), "program");
+    const rows = allByClass(section, "agent-row");
+    expect(sub).not.toBe(section); // the worktree is a subsection, not the section
+    expect(rows.length).toBe(2);
+
+    paint(root, visible);
+
+    expect(root.children[0]).toBe(section);
+    expect(allByClass(root, "program")[0]).toBe(sub);
+    expect(allByClass(root, "agent-row")[0]).toBe(rows[0]);
+    expect(allByClass(root, "agent-row")[1]).toBe(rows[1]);
+  });
+
+  test("two repos sharing a worktree key keep their own sections and rows", () => {
+    // Identical worktreeKey on purpose: the row key has to carry the repoKey or
+    // one repo's rows are served out of the other's cache entry.
+    const left = worktree({
+      repoKey: "k-left", repoName: "left", worktreeKey: "same",
+      path: "/a/app", branch: "main", agents: [repoAgent("codex:left-1")],
+    });
+    const right = worktree({
+      repoKey: "k-right", repoName: "right", worktreeKey: "same",
+      path: "/b/app", branch: "main", agents: [repoAgent("codex:right-1")],
+    });
+    const root = newNode("div");
+
+    paint(root, visibleOf(left, right));
+
+    expect(root.children.length).toBe(2);
+    expect(allByClass(root, "repo-name").map((n: { textContent: string }) => n.textContent)).toEqual(["left", "right"]);
+    expect(rowIds(root)).toEqual(["codex:left-1", "codex:right-1"]);
+  });
+
+  test("the board's paint signature carries the repo carets", () => {
+    /* Same reason programOverrides is in there: toggleRepo mutates nothing else,
+       so on a quiet fleet render()'s early return would swallow the click and
+       the caret would sit there dead. */
+    const wt = worktree({
+      repoKey: "k-sig", worktreeKey: "wt-sig", branch: "main",
+      path: "/Users/e/Developer/sig", agents: [repoAgent("codex:sig-1")],
+    });
+    const visible = visibleOf(wt);
+    const ui = (over: Record<string, unknown> = {}) => listUi({
+      snap: { schemaVersion: 1, programs: [wt] }, ...over,
+    });
+
+    expect(M.programsPaintSig(visible, ui({ repoOverrides: new Map([["k-sig", "closed"]]) })))
+      .not.toBe(M.programsPaintSig(visible, ui()));
+  });
+
+  test("the repo band ships its own rules rather than borrowing the program card", () => {
+    for (const rule of [".repo-section", ".repo-head", ".repo-caret", ".repo-name", ".repo-worktrees"]) {
+      expect(styles.includes(rule), rule).toBe(true);
+    }
   });
 });

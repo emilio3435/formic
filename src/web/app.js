@@ -462,9 +462,13 @@ function sharedRowNames(agents) {
   return repeated;
 }
 
-function programName(program) {
+/* `fallback` is what a program is called in the ONE place its own name would be
+   a repetition: a worktree subsection under a repo band, where `program.name`
+   is the repository name the band above it already prints. The operator's own
+   label still outranks both — renaming a worktree has to mean something. */
+function programName(program, fallback = "") {
   const alias = program && state.aliases.get(presentationLabelKey(programLabelTarget(program)));
-  return alias || (program ? program.name : "");
+  return alias || fallback || (program ? program.name : "");
 }
 
 
@@ -1386,6 +1390,23 @@ function loadOverrides() {
 function saveOverrides() {
   try {
     localStorage.setItem("mtn3-programs", JSON.stringify(Object.fromEntries(state.programOverrides)));
+  } catch { /* storage unavailable */ }
+}
+
+/* Repository collapse, on the programOverrides pattern exactly. Both modes are
+   written, because a repo's default is COMPUTED (open when it holds a session
+   the active view would admit) rather than fixed — so "closed" is a real choice
+   the operator made and not the absence of one. */
+function loadRepoOverrides() {
+  try {
+    const raw = localStorage.getItem("mtn3-repos");
+    if (raw) state.repoOverrides = new Map(Object.entries(JSON.parse(raw)));
+  } catch { /* first run or blocked storage */ }
+}
+
+function saveRepoOverrides() {
+  try {
+    localStorage.setItem("mtn3-repos", JSON.stringify(Object.fromEntries(state.repoOverrides)));
   } catch { /* storage unavailable */ }
 }
 
@@ -3860,6 +3881,182 @@ function renderScopeNote(shown) {
   note.hidden = parts.length === 0;
 }
 
+/* ---------- repo → worktree grouping ----------
+
+   The server hands the client one program PER WORKTREE, tagged with
+   `groupPath: [repoKey, worktreeKey]`. Five worktrees of one repository used to
+   arrive as five sibling sections all printing the same name, with nothing on
+   screen saying they were the same project — the exact smorgasbord the
+   basename-hash grouping produced, one layer up.
+
+   So the repository becomes the section and the worktrees become subsections
+   inside it. Programs the server could NOT resolve a repo for are untouched:
+   they keep today's flat program section, drawn by the same renderer through
+   the same caches. That is deliberate. Everything here is additive, so a
+   session whose cwd is not a git checkout reaches the DOM it always reached,
+   and reverting this task cannot change what those rows look like. */
+
+function repoOf(program) {
+  const carrier = program && program.agents && program.agents.find((agent) => agent && agent.repo);
+  return carrier ? carrier.repo : null;
+}
+
+function baseName(path) {
+  const trimmed = String(path || "").replace(/\/+$/, "");
+  return trimmed ? trimmed.slice(trimmed.lastIndexOf("/") + 1) : "";
+}
+
+/* What a worktree subsection is CALLED. The repository name is printed by the
+   band above it, so repeating it here would spend the widest line on the board
+   saying nothing; what distinguishes two checkouts of one repo is the branch
+   and the directory. B3 replaces this with the declared runId when there is
+   one — a run is a better answer than a path, and it is a fact rather than a
+   derivation. */
+function worktreeLabel(program) {
+  const repo = repoOf(program);
+  const base = baseName((repo && repo.worktreePath) || (program && program.path) || "");
+  const branch = (repo && repo.branch) || "";
+  if (branch && base) return branch + "@" + base;
+  return base || branch || (program ? program.name : "");
+}
+
+/* The board's sections, in server order: a repo group takes the position of its
+   first worktree, and everything without a groupPath stays exactly where it
+   was as its own program entry. Pure — it reads the visible list and nothing
+   else, so the whole grouping is testable without a DOM. */
+function repoGroups(visible) {
+  const sections = [];
+  const byRepo = new Map();
+  for (const entry of visible) {
+    const path = entry.program && entry.program.groupPath;
+    const repoKey = Array.isArray(path) ? path[0] : "";
+    const worktreeKey = Array.isArray(path) ? path[1] : "";
+    if (!repoKey || !worktreeKey) {
+      sections.push({ kind: "program", program: entry.program, agents: entry.agents });
+      continue;
+    }
+    let group = byRepo.get(repoKey);
+    if (!group) {
+      group = { kind: "repo", key: repoKey, name: "", pullRequestUrls: [], worktrees: [] };
+      byRepo.set(repoKey, group);
+      sections.push(group);
+    }
+    group.worktrees.push({
+      program: entry.program,
+      agents: entry.agents,
+      worktreeKey,
+      label: worktreeLabel(entry.program),
+    });
+  }
+  for (const group of byRepo.values()) {
+    const first = group.worktrees[0];
+    const repo = repoOf(first.program);
+    group.name = (repo && repo.repoName) || first.program.name || "";
+    const urls = new Set();
+    for (const { program } of group.worktrees) {
+      for (const agent of program.agents) for (const url of agent.pullRequestUrls || []) urls.add(url);
+    }
+    group.pullRequestUrls = [...urls];
+  }
+  return sections;
+}
+
+/* Paint keys for the two new axes. programId keyed every paint cache before
+   this, so a new grouping level without its own key would serve one repo's
+   rows out of another's cache entry — and a row rebuilt every 4s takes the
+   operator's text selection, hover and keyboard focus with it.
+
+   Namespaced rather than bare so they cannot collide with a program id inside
+   the section cache they share: `repo\u001f<key>` can never be an id the
+   server minted, and the row key carries BOTH the repo and the worktree,
+   because two repos routinely hold a worktree of the same name. */
+const REPO_KEY_PREFIX = "repo\u001f";
+const repoSectionKey = (repoKey) => REPO_KEY_PREFIX + repoKey;
+const worktreeSectionKey = (repoKey, worktreeKey) => REPO_KEY_PREFIX + repoKey + "\u001f" + worktreeKey;
+
+/* Open when the repository holds a session the ACTIVE VIEW would admit — the
+   same question programOpen asks, for the same reason: any second opinion about
+   the filter can contradict it, and a contradicting gate collapses a group over
+   rows that already cleared the filter. */
+function repoOpen(group, ui = state) {
+  const override = ui.repoOverrides && ui.repoOverrides.get(group.key);
+  if (override) return override === "open";
+  if (ui.view === "history") return false;
+  return group.worktrees.some(({ program }) => program.agents.some((agent) => viewMatches(ui.view, agent)));
+}
+
+function toggleRepo(group) {
+  state.repoOverrides.set(group.key, repoOpen(group) ? "closed" : "open");
+  saveRepoOverrides();
+  render();
+}
+
+/* Everything the repo BAND paints, and nothing its worktrees paint: the name,
+   the caret, the worktree count and the PR links. A row ticking inside one of
+   its worktrees must leave this node alone, or the band rebuild would take
+   every subsection under it with it. */
+function repoShellSig(group, ui) {
+  return [
+    group.key,
+    group.name,
+    repoOpen(group, ui) ? "open" : "shut",
+    String(group.worktrees.length),
+    group.pullRequestUrls.join(","),
+  ].join("\u001f");
+}
+
+/* "PR 412" from …/pull/412. The number is what an operator says out loud; the
+   bare word is the honest fallback for a URL shaped some other way. */
+function pullRequestLabel(url) {
+  const number = /\/(\d+)(?:[/?#].*)?$/.exec(String(url || ""))?.[1];
+  return number ? "PR " + number : "PR";
+}
+
+function renderRepoSection(group, ui = state) {
+  const open = repoOpen(group, ui);
+  const bodyId = "repo-body-" + group.key;
+  const count = group.worktrees.length;
+  /* A band, not a second card: no rollup, no rename, no details. The worktree
+     heads below already carry all three, and stacking two full program headers
+     over one row of work is how a hierarchy turns into chrome. */
+  const head = el("div", { class: "repo-head" },
+    el("button", {
+      type: "button",
+      class: "repo-caret",
+      "aria-expanded": String(open),
+      "aria-controls": bodyId,
+      "aria-label": (open ? "Collapse " : "Expand ") + group.name,
+      dataset: { fkey: "repo:" + group.key },
+      onclick: () => toggleRepo(group),
+    }, icon("caret")),
+    el("span", { class: "repo-name", text: group.name }),
+    el("span", {
+      class: "repo-worktree-count mono",
+      text: count === 1 ? "1 worktree" : count + " worktrees",
+    }),
+    ...group.pullRequestUrls.map((url) => el("a", {
+      class: "repo-pr",
+      href: url,
+      target: "_blank",
+      rel: "noreferrer",
+      text: pullRequestLabel(url),
+    })));
+
+  const section = el("section", {
+    class: "repo-section" + (open ? " open" : ""),
+    "aria-label": group.name,
+  },
+    el("h2", { class: "visually-hidden", text: group.name }),
+    head);
+  // Left empty on purpose, exactly as renderProgram leaves its body: the
+  // worktree subsections are reconciled in by key, so a band rebuild never
+  // destroys a subsection — or a row — that has not moved.
+  const body = el("div", { class: "repo-worktrees", id: bodyId });
+  programBodies.set(repoSectionKey(group.key), body);
+  section.append(body);
+  return section;
+}
+
 /* ---------- program list ---------- */
 
 function programOpen(program, ui = state) {
@@ -4053,12 +4250,12 @@ function toggleSwarm(agent) {
    that has not moved must leave the section node alone so its rows stay
    attached. renameDraft stays out for the same reason it stays out of every
    other signature (live input); every external reset of it flips renamePending. */
-function programShellSig(program, agents, ui) {
+function programShellSig(program, agents, ui, label = "") {
   const key = presentationLabelKey(programLabelTarget(program));
   const pool = ui.selecting ? program.agents.filter(broadcastEligible) : [];
   return [
     program.id,
-    programName(program),
+    programName(program, label),
     ui.labels.has(key) ? "1" : "0",
     programOpen(program, ui) ? "open" : "shut",
     // Header counts the whole program, so the signature must watch the whole
@@ -4145,6 +4342,10 @@ function programsPaintSig(visible, ui) {
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.selection].join(","),
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
+    /* Third instance of the same failure class: toggleRepo mutates nothing else
+       either, so on a quiet fleet the early return would swallow the click and
+       the repo caret would sit there dead. */
+    [...(ui.repoOverrides || [])].map(([id, mode]) => id + "=" + mode).join(","),
     /* Same reason programOverrides is here: toggleSwarm mutates nothing else,
        so on a quiet fleet the early return would swallow the click and the
        caret would sit there dead. Documented failure class, second instance. */
@@ -4234,14 +4435,48 @@ function syncProgramList(root, visible, ui = state) {
       build: () => renderNeedsYouStrip(strip),
     });
   }
-  for (const { program, agents } of visible) {
+  /* Three levels now, not two: repo bands, the worktree subsections inside
+     them, and the rows inside those — all through the SAME two cache maps,
+     under keys that name their axis. A program the server could not resolve a
+     repo for is still one flat section keyed by its id, drawn by the same
+     renderer, so nothing about that path moved. */
+  const groups = repoGroups(visible);
+  for (const group of groups) {
+    if (group.kind === "repo") {
+      sections.push({
+        key: repoSectionKey(group.key),
+        sig: repoShellSig(group, ui),
+        build: () => renderRepoSection(group, ui),
+      });
+      continue;
+    }
     sections.push({
-      key: program.id,
-      sig: programShellSig(program, agents, ui),
-      build: () => renderProgram(program, agents),
+      key: group.program.id,
+      sig: programShellSig(group.program, group.agents, ui),
+      build: () => renderProgram(group.program, group.agents),
     });
   }
-  const keptSections = reconcileKeyed(root, sections, programSectionCache);
+  const keptSections = new Set(reconcileKeyed(root, sections, programSectionCache));
+  /* Worktree subsections are section-level nodes living one level down, so they
+     share the section cache and are pruned with it — which means the prune has
+     to wait until both levels have been reconciled. A collapsed band plans no
+     subsections, exactly as a collapsed program plans no rows. */
+  for (const group of groups) {
+    if (group.kind !== "repo") continue;
+    const band = programBodies.get(repoSectionKey(group.key));
+    if (!band) continue;
+    const plan = repoOpen(group, ui)
+      ? group.worktrees.map(({ program, agents, worktreeKey, label }) => {
+        const key = worktreeSectionKey(group.key, worktreeKey);
+        return {
+          key,
+          sig: programShellSig(program, agents, ui, label),
+          build: () => renderProgram(program, agents, { label, bodyKey: key }),
+        };
+      })
+      : [];
+    for (const key of reconcileKeyed(band, plan, programSectionCache)) keptSections.add(key);
+  }
   for (const key of [...programSectionCache.keys()]) {
     if (keptSections.has(key)) continue;
     programSectionCache.delete(key);
@@ -4262,16 +4497,30 @@ function syncProgramList(root, visible, ui = state) {
     });
     for (const key of reconcileKeyed(stripBody, plan, agentRowCache)) keptRows.add(key);
   }
-  for (const { program, agents } of visible) {
-    shown += agents.length;
-    const body = programBodies.get(program.id);
-    if (!body) continue;
+  const rowsInto = (sectionKey, program, agents) => {
+    const body = programBodies.get(sectionKey);
+    if (!body) return;
     // A collapsed program keeps its section but drops its rows; the row cache
     // still holds them, so re-expanding costs a move rather than a rebuild.
     const plan = programOpen(program, ui)
-      ? agentRowPlan(program, agents, ui, board).map((item) => ({ ...item, key: program.id + "\u001f" + item.key }))
+      ? agentRowPlan(program, agents, ui, board).map((item) => ({ ...item, key: sectionKey + "\u001f" + item.key }))
       : [];
     for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
+  };
+  /* `shown` counts what the FILTER admitted, not what was drawn — a collapsed
+     band hides rows without changing how many sessions matched, which is the
+     number the scope note reports. */
+  for (const group of groups) {
+    if (group.kind === "repo") {
+      const open = repoOpen(group, ui);
+      for (const { program, agents, worktreeKey } of group.worktrees) {
+        shown += agents.length;
+        if (open) rowsInto(worktreeSectionKey(group.key, worktreeKey), program, agents);
+      }
+      continue;
+    }
+    shown += group.agents.length;
+    rowsInto(group.program.id, group.program, group.agents);
   }
   for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
   return shown;
@@ -4463,7 +4712,12 @@ function programHeadRollup(agents, rollup = null) {
       el("span", { class: "program-rollup-label", text: c.label }))));
 }
 
-function renderProgram(program, agents) {
+/* `opts.label` renames the head for a worktree subsection (the repo band above
+   it already prints the repository name); `opts.bodyKey` is the paint key its
+   rows are reconciled under, which is the section's key rather than the program
+   id once a program can appear inside a repo band. Both default to today's
+   behavior, so a flat program section is drawn by the same code it always was. */
+function renderProgram(program, agents, opts = {}) {
   const open = programOpen(program);
   const bodyId = "program-body-" + program.id;
   /* The header describes the PROGRAM; the body lists the agents the active
@@ -4472,7 +4726,7 @@ function renderProgram(program, agents) {
      lens on the board, not a change to what the program contains. */
   const rollup = programHeadRollup(program.agents, program.rollup);
 
-  const label = programName(program);
+  const label = programName(program, opts.label);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
   const head = el("div", { class: "program-head" },
     el("button", {
@@ -4528,7 +4782,7 @@ function renderProgram(program, agents) {
   // The body is left empty on purpose: renderPrograms reconciles the rows into
   // it by agent id, so a shell rebuild never destroys a row that has not moved.
   const body = el("div", { class: "program-agents", id: bodyId });
-  programBodies.set(program.id, body);
+  programBodies.set(opts.bodyKey || program.id, body);
   section.append(body);
   return section;
 }
@@ -4729,6 +4983,27 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui)) {
     else unsectioned.push(agent);
   }
 
+  /* The third level of the new hierarchy: inside a worktree, roots read in the
+     order the roster established — whoever OWNS the work first, the unknown
+     fallback last — instead of arriving in whatever order a rank over activity
+     produced. It sorts WITHIN each lifecycle section, never across them: a
+     section says what these rows are doing, and reordering across one would
+     make the heading a lie.
+
+     Applied only where the hierarchy is. `groupPath` is the server saying this
+     program IS a worktree; a program it could not resolve a repo for keeps the
+     server's agentSortRank order exactly, which is what makes that section a
+     true regression gate rather than one that merely looks unchanged.
+
+     A stable sort by role alone is the whole implementation — the server
+     already sorted the program by agentSortRank, so ties keep that order and
+     the client never re-derives a rank the server owns. */
+  if (program.groupPath) {
+    const byRole = (list) => list.sort((left, right) => roleRank(left) - roleRank(right));
+    byRole(unsectioned);
+    for (const bucket of buckets.values()) byRole(bucket);
+  }
+
   /* Exactly what appendTree will put on screen for this root: its own row, or
      an anchor holding children that are still drawn. Mirroring the walk rather
      than approximating it is what stops a heading rendering over nothing — a
@@ -4756,6 +5031,15 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui)) {
     for (const agent of drawn) appendTree(agent, 0);
   }
   return plan;
+}
+
+/* Where a role sits in the reading order the drawer's roster established.
+   Anything the catalog does not know — including a role a newer server sends
+   that this client has not learned yet — sorts last rather than first, so an
+   unknown word can never displace the orchestrator at the top of a worktree. */
+function roleRank(agent) {
+  const index = ROSTER_ROLE_ORDER.indexOf(roleView(agent.role).key);
+  return index === -1 ? ROSTER_ROLE_ORDER.length : index;
 }
 
 /* Is anything folded up under this parent asking for a person? Walks the whole
@@ -8684,6 +8968,7 @@ function boot() {
   // Register the painter for every module that was extracted off the render hub.
   setRepaint(render);
   loadOverrides();
+  loadRepoOverrides();
   loadSwarmOverrides();
   loadWidgetPreferences();
   loadLookback();
