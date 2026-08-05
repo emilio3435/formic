@@ -40,7 +40,7 @@ A manifest lane whose sessionId is REPLACED (orchestrator edits manifest, or T9 
 
 As specced in the atlas plan (stretch B7): `cmux events --cursor-file ~/.anthill/events.cursor --reconnect --category agent --category workspace` as a supervised child; `boot_id` change ⇒ full re-snapshot; deltas feed between polls; polling stays the reconciler. Latency polish, not correctness — land LAST in its lane if T5 runs long.
 
-### T5 — Provenance verification (be-live) ✅ **[DONE 25447b9, merged]**
+### T5 — Provenance verification (be-live) ✅ **[DONE 25447b9 + T5.1 bounce 1b0955f, merged]**
 
 The `[from <agent.id> run <runId>]` header is spoof-visible, not spoof-proof. For each parsed sender: confirm the claimed sender's own transcript contains the send (tail-scan its session file for the message head, bounded). Wire: `senderVerified?: boolean`. Unverifiable (no transcript access) ⇒ absent, never false. A header whose claimed sender's transcript provably lacks the message ⇒ `senderVerified: false` (fe styles it as forged). No crypto until this cheap check proves insufficient.
 
