@@ -197,8 +197,8 @@ export type RoleSource = "declared" | "observed" | "inferred"
 **Behavior:** first tag assigned to an `agent.id` persists (store `{agentId → tag}`); `disambiguate` consults the store before computing; fleet-relative escalation (the NUL composite path) only for never-seen collisions, and the escalated result is then persisted too. Result: a session's `#hex` never changes once shown.
 
 **Steps:**
-- [ ] **Step 1: Failing test** — same fleet minus one unrelated session ⇒ tags unchanged for survivors (this exact case flakes today).
-- [ ] **Step 2–4: FAIL → implement → PASS.** Truth-table update. **Step 5: Commit** `fix(names): disambiguator tags are sticky per session`.
+- [x] **Step 1: Failing test** — same fleet minus one unrelated session ⇒ tags unchanged for survivors (this exact case flakes today).
+- [x] **Step 2–4: FAIL → implement → PASS.** Truth-table update. **Step 5: Commit** `fix(names): disambiguator tags are sticky per session`.
 
 ### Task B6: durable agent links + zombie retirement
 
