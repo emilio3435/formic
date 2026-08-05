@@ -64,6 +64,7 @@ import {
 } from "./run-manifests";
 import type { SessionNameRecord } from "./session-names";
 import { senderVerificationFor } from "./sender-verification";
+import { taskStateWantsHuman } from "./task-state";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
   type ArchiveStore,
@@ -455,6 +456,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,
       scope,
+      ...(declared?.taskState && declared.taskStateAt
+        ? {
+            taskState: declared.taskState,
+            taskStateSource: "manifest" as const,
+            taskStateAt: declared.taskStateAt,
+          }
+        : {}),
       /* Published so the client's fallback classifier reaches the same verdict
          from the same evidence. Only where it is true and only on observed
          rows, so it costs nothing on the ~660 retained records it can never
@@ -705,7 +713,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          title badge, the notifier and the program rollup all read. This was
          issues.length — system findings — which meant the rollup cell and the
          totals disagreed about what the word meant while sharing it. */
-      needsYou: observedAgents.filter((agent) => Boolean(agent.attentionSignal)).length,
+      needsYou: observedAgents.filter((agent) =>
+        agent.lifecycle !== "finished" && taskStateWantsHuman(agent)).length,
       /* System findings keep their own vocabulary. A degraded collector and an
          agent that asked a question are both worth surfacing and neither is the
          other; folding them into one word is what made "needs you" unreadable. */
