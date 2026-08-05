@@ -203,7 +203,7 @@ export type RoleSource = "declared" | "observed" | "inferred"
 ### Task B6: durable agent links + zombie retirement
 
 **Files:** Create `src/server/agent-links.ts` + route in `src/server/index.ts` (`GET /agent/:id/focus` → resolve via B1 tier-0 then `targets.ts`; live ⇒ respond `{cmuxTarget}` and trigger focus via existing cmux action path; dead ⇒ `{transcriptPath}` fallback). Retirement: in the classifier, hook `agentLifecycle:"ended"` OR (`processAlive === false` AND cwd no longer exists) ⇒ `lifecycle` flows to the existing terminal states so rows leave live views (reuse `endEvidence`, add `"worktree-deleted"` to its union). Tests: `tests/agent-links.test.ts`, retirement cases in `tests/lifecycle-parity.test.ts` (both sides).
-- [ ] TDD steps as above; **commit** `feat(server): durable agent links and dead-worktree retirement`.
+- [x] TDD steps as above; **commit** `feat(server): durable agent links and dead-worktree retirement`. **[DONE 202da8e, merged]**
 
 ### Task B7 (stretch): events tail
 
