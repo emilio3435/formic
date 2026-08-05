@@ -60,11 +60,31 @@ export const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Int
    working agent — with the attention tab reading 0 beside it. A cockpit whose
    landing state is "show me all routine work" cannot also claim to stay silent
    about what does not need a human. */
-/* Five, not six. "Working" was Now minus alerts — a whole tab for a subtraction
-   the operator can do by eye — and every tab costs a glance on every visit.
-   Provider and program facets cover the case it served. */
-export const OPS_VIEWS = ["needs-you", "now", "waiting", "history"];
+/* Three, not five. Needs you / Now / Waiting were three lenses on ONE live
+   fleet, and the split cost the operator the thing the board exists to give
+   them: reaching a waiting session meant leaving the tab showing the working
+   ones, and an alerting agent was counted in two places at once.
+
+   Board is that fleet in one scroll. Attention is still first — it is a pinned
+   strip at the top rather than a tab you have to select — and the Waiting and
+   Unverified distinctions the tabs encoded are lifecycle dividers inside each
+   program group, so nothing the tabs said has gone quiet; it has stopped being
+   a tab flip away. History and Usage keep their own tabs because neither is
+   live work. */
+export const OPS_VIEWS = ["board", "history"];
 export const VIEWS = [...OPS_VIEWS, "usage"];
+
+/* The tabs Board replaced. A landing view saved server-side (`defaultView`)
+   still names one of them, and dropping the operator's stored choice on the
+   floor because the vocabulary moved is the kind of silent ignore this project
+   does not do — it lands on the view that now contains what they asked for. */
+export const LEGACY_VIEW_ALIASES = {
+  "needs-you": "board",
+  now: "board",
+  waiting: "board",
+  working: "board",
+  idle: "board",
+};
 export const LOOKBACK_STORAGE_KEY = "mtn3-lookbackHours";
 export const LOOKBACK_PRESETS = [1, 6, 24, 36];
 export const DEFAULT_LOOKBACK_HOURS = 6;
