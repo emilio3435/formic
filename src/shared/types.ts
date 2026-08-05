@@ -95,7 +95,32 @@ export type EndEvidence = "session-exit" | "turn-complete";
 export type ProcessState = "running" | "exited" | "died" | "unknown";
 export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";
-export type AgentRole = "orchestrator" | "verifier" | "automation" | "frontend" | "backend" | "tester" | "agent";
+export type AgentRole =
+  | "human"
+  | "orchestrator"
+  | "worker"
+  | "verifier"
+  | "tester"
+  | "monitor"
+  | "automation"
+  | "service"
+  | "agent";
+export const AGENT_ROLES = [
+  "human",
+  "orchestrator",
+  "worker",
+  "verifier",
+  "tester",
+  "monitor",
+  "automation",
+  "service",
+  "agent",
+] as const satisfies readonly AgentRole[];
+type AgentRolesAreExhaustive = Exclude<AgentRole, (typeof AGENT_ROLES)[number]> extends never ? true : never;
+const _agentRolesAreExhaustive: AgentRolesAreExhaustive = true;
+void _agentRolesAreExhaustive;
+export type RoleSource = "declared" | "observed" | "inferred";
+export type AgentSpecialty = "frontend" | "backend";
 export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
 /* `unarchive` is net-new. The board has told operators "Un-archive it from
    History if you filed it early" since the archive shipped, and there was no
@@ -343,6 +368,10 @@ export interface AgentSnapshot {
   outcome?: OutcomeState;
   controlState?: OperatorControlState;
   role?: AgentRole;
+  /** Whether the role was declared, witnessed through lineage, or inferred from prose. */
+  roleSource?: RoleSource;
+  /** Domain chip kept separate from role: frontend/backend describe work, not authority. */
+  specialty?: AgentSpecialty;
   /* One thing the operator can do about this agent, derived from what the agent
      wrote. Absent when nothing in the text says why it would want a human —
      which is most agents most of the time, and is the point. */

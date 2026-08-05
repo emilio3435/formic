@@ -9,7 +9,7 @@
   "lanes": [
     {
       "laneId": "fe1-geometry",
-      "role": "frontend",
+      "role": "worker",
       "provider": "claude",
       "sessionId": "lane-geometry-20260805",
       "worktree": "/Users/ant/Developer/.worktrees/inbox-fe1",

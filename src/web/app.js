@@ -150,6 +150,7 @@ import {
   LOOKBACK_STORAGE_KEY,
   OPS_VIEWS,
   OUTCOME_LABELS,
+  ROSTER_ROLE_ORDER,
   USAGE_RANGE_PRESETS,
   VIEWS,
   WIDGET_CATALOG,
@@ -5947,10 +5948,10 @@ function renderResolvedDrawer(pane, view) {
   if (chips) pane.append(chips);
 }
 
-const ROSTER_ROLE_ORDER = ["orchestrator", "backend", "frontend", "verifier", "tester", "automation", "agent"];
 const ROSTER_ROLE_SHORT = {
-  orchestrator: "Orchestrator", backend: "Backend", frontend: "Frontend",
-  verifier: "Verifier", tester: "Tester", automation: "Automation", agent: "Agent",
+  human: "Human", orchestrator: "Orchestrator", monitor: "Monitor",
+  verifier: "Verifier", worker: "Worker", tester: "Tester",
+  automation: "Automation", service: "Service", agent: "Agent",
 };
 
 /* Each agent falls in exactly one meter band so the segments sum to the roster

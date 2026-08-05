@@ -56,6 +56,77 @@ export const CONTROL_LABELS = {
    be the first import cycle in src/web. */
 export const ACTION_LABELS = { focus: "Focus", instruct: "Send", interrupt: "Interrupt", archive: "Archive", unarchive: "Un-archive" };
 
+export const ROLE_LABELS = {
+  human: "Human",
+  orchestrator: "Orchestrator",
+  worker: "Worker",
+  verifier: "Verifier",
+  tester: "Tester",
+  monitor: "Monitor",
+  automation: "Automation",
+  service: "Service",
+  agent: "Agent",
+  /* Old snapshot/free-form values remain readable during the wire transition.
+     They are presentation fallbacks, not members of AgentRole. */
+  frontend: "Frontend / designer",
+  backend: "Backend implementer",
+};
+
+export const ROLE_ALIASES = {
+  human: "human",
+  operator: "human",
+  "human operator": "human",
+  orchestrator: "orchestrator",
+  orchestration: "orchestrator",
+  coordinator: "orchestrator",
+  "swarm owner": "orchestrator",
+  worker: "worker",
+  verifier: "verifier",
+  reviewer: "verifier",
+  auditor: "verifier",
+  gatekeeper: "verifier",
+  validator: "verifier",
+  tester: "tester",
+  testing: "tester",
+  test: "tester",
+  qa: "tester",
+  "test lane": "tester",
+  monitor: "monitor",
+  watcher: "monitor",
+  automation: "automation",
+  autopilot: "automation",
+  automated: "automation",
+  service: "service",
+  "dev server": "service",
+  tail: "service",
+  agent: "agent",
+  frontend: "frontend",
+  "front end": "frontend",
+  designer: "frontend",
+  design: "frontend",
+  ui: "frontend",
+  ux: "frontend",
+  "frontend / designer": "frontend",
+  backend: "backend",
+  "back end": "backend",
+  server: "backend",
+  engine: "backend",
+  implementer: "backend",
+  "backend implementer": "backend",
+};
+
+export const ROSTER_ROLE_ORDER = [
+  "human",
+  "orchestrator",
+  "monitor",
+  "verifier",
+  "worker",
+  "tester",
+  "automation",
+  "service",
+  "agent",
+];
+
 /* Attention first, deliberately. The board used to open on "now" — every routine
    working agent — with the attention tab reading 0 beside it. A cockpit whose
    landing state is "show me all routine work" cannot also claim to stay silent

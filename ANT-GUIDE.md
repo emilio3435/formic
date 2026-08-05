@@ -527,8 +527,15 @@ the **Evidence** and **Transcript** sections for raw detail.
 
 **Swarm** *(on screen)*
 : When one agent launches others, they form a tree. The board shows this with
-indentation and `↳`. Agents can carry roles like *orchestrator*, *frontend*,
-*backend*, *verifier*, or *tester*.
+indentation and `↳`. Session roles are *human*, *orchestrator*, *monitor*,
+*verifier*, *worker*, *tester*, *automation*, or the unknown fallback *agent*.
+*Frontend* and *backend* describe a worker's specialty instead of pretending to
+describe its authority. Each role also says where it came from: **declared** by
+a run manifest or `ANTHILL_ROLE`, **observed** from a real parent/child link, or
+**inferred** from a title. A title can suggest an orchestrator, but can never
+invent a human or monitor. A cmux terminal with no agent bound to it is an
+observed *service* (for example a dev server or log tail), kept out of agent and
+**Needs you** counts.
 
 **Swarm control** *(on screen, as `Select to send`)*
 : Acting on several agents at once. Click **Select to send**, tick the agents you
