@@ -48,7 +48,7 @@ The `[from <agent.id> run <runId>]` header is spoof-visible, not spoof-proof. Fo
 
 Today `hookLifecycle:needsInput` ⇒ wantsHuman — correct mid-task, wrong for a lane whose assignment is complete and is idling at its prompt. Declared task-state joins the manifest: lane gains `status?: "active" | "parked" | "done"` (+ `statusAt`), written by the orchestrator (stand-down = parked, DONE ALL = done) or by T9 self-registration. Precedence: declared status > hook lifecycle for the *attention* verdict only (a parked lane that later ASKS something re-alerts — hook needsInput NEWER than statusAt wins). Wire: `taskState?: "active"|"parked"|"done"` + source. ANT-GUIDE/parity/docs in the same commits. This is the plan's one serialization point — its wire shape gates T7.
 
-### T7 — Render the truth (fe-states)
+### T7 — Render the truth (fe-states) ✅ **[DONE f1d76fa, merged]**
 
 - **Needs-You admits only genuine blocks**: `needsInput` AND NOT (parked/done with older hook signal). Parked rows show a quiet "parked" chip in their lifecycle section; done rows go to the Finished shelf. The live litmus: a board where fe-regroup post-DONE-ALL does NOT sit in Needs-You.
 - ✅ **[DONE 0b6b581, merged]** **T7a — one session, one name (no new wire needed, start immediately)**: every surface (row, Needs-You strip, swarm child, drawer, History) renders `identity.name` — the strip's stale distilled title and the swarm-child's workspace-title variant both die. Tag audit: `#hex` renders ONLY when the same base name appears twice in the current view (fe-regroup#8da7e056-on-a-unique-name is the red test).
