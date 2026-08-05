@@ -143,6 +143,13 @@ their declared lane id, while a declared orchestrator uses the run id. Manifest
 parentage also wins over transcript inference, so a declared lane stays under
 the orchestrator that owns its run.
 
+The collector checks hook-backed sessions against one kernel process table per
+scan. Exact ancestry is recorded separately as `lineage.observedParentAgentId`;
+`lineageAgreement` is `corroborated`, `contradicted`, or `unobserved`. A
+contradiction never moves a declared or provider-native chain. An undeclared
+session can adopt an exact observed parent, while missing or ambiguous process
+evidence remains unobserved rather than becoming a guessed relationship.
+
 > **The one number that will mislead you.** A row's **Tokens** is that agent's
 > *latest model call*. The **session tokens** figure on the grey program bar above
 > it is the *cumulative* total for every agent in that program, ended ones

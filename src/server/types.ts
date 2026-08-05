@@ -1,4 +1,5 @@
 import type {
+  AgentLineage,
   AgentIdentity,
   AgentStatus,
   Artifact,
@@ -59,6 +60,8 @@ export interface CollectedAgent {
   contextPct?: number;
   cost?: CostUsage | null;
   subagentCount?: number;
+  /** Exact kernel ancestry observed from this hook-backed session's process. */
+  lineage?: AgentLineage;
   parentSourceSessionId?: string;
   threadDepth?: number;
   nickname?: string;

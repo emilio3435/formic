@@ -8,6 +8,7 @@ import type {
   IdentityTrace,
   IssueLifecycle,
   IssueWorkState,
+  LineageAgreement,
   OperatorIssue,
   ProgramSnapshot,
   Provider,
@@ -243,14 +244,27 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     ).map((identity, index) => [named[index]!.id, identity] as const),
   );
   const childCounts = new Map<string, number>();
+  const parentById = new Map<string, string>();
+  const lineageAgreementById = new Map<string, LineageAgreement>();
   for (const source of sources) {
     const declared = declaredById.get(source.id);
-    const parentId = declared
-      ? declared.parentAgentId
-      : source.parentSourceSessionId
-        ? `${source.provider}:${source.parentSourceSessionId}`
-        : undefined;
+    const nativeParentId = source.parentSourceSessionId
+      ? `${source.provider}:${source.parentSourceSessionId}`
+      : undefined;
+    const claimedParentId = declared ? declared.parentAgentId : nativeParentId;
+    const observedParentId = source.lineage?.observedParentAgentId;
+    const claimedChain = declared !== undefined || nativeParentId !== undefined;
+    const parentId = claimedChain ? claimedParentId : observedParentId;
+    lineageAgreementById.set(
+      source.id,
+      !observedParentId
+        ? "unobserved"
+        : claimedChain && claimedParentId !== observedParentId
+          ? "contradicted"
+          : "corroborated",
+    );
     if (!parentId) continue;
+    parentById.set(source.id, parentId);
     childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
   }
   const sidebarByWorkspace = new Map(
@@ -461,11 +475,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         processState,
         transcriptEndedCleanly: source.transcriptEndedCleanly,
       }, outcome, controlState),
-      parentAgentId: declared
-        ? declared.parentAgentId
-        : source.parentSourceSessionId
-          ? `${source.provider}:${source.parentSourceSessionId}`
-          : undefined,
+      parentAgentId: parentById.get(source.id),
+      lineageAgreement: lineageAgreementById.get(source.id),
       threadDepth: source.threadDepth,
       nickname: source.nickname,
       /* Only when a human plausibly typed it — cmux titles every pane, and its
