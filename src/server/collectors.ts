@@ -1111,6 +1111,10 @@ function attachHookFacts(
       const cwd = agent.cwd ?? record.cwd;
       const processAlive = observedAlive ?? retainedAlive;
       const observedParentAgentId = observedParents?.get(agent.id);
+      const hookLifecycleAtDate = new Date(record.updatedAt * 1_000);
+      const hookLifecycleAt = Number.isFinite(hookLifecycleAtDate.getTime())
+        ? hookLifecycleAtDate.toISOString()
+        : undefined;
       const endEvidence = retirementEndEvidence({
         endEvidence: agent.endEvidence,
         hookLifecycle: record.agentLifecycle,
@@ -1121,6 +1125,7 @@ function attachHookFacts(
         ...agent,
         cwd,
         hookLifecycle: record.agentLifecycle,
+        ...(hookLifecycleAt ? { hookLifecycleAt } : {}),
         processIds: [record.pid],
         processAlive,
         ...(observedParentAgentId && knownAgentIds.has(observedParentAgentId)

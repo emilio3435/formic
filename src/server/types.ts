@@ -53,6 +53,8 @@ export interface CollectedAgent {
   statusReason: string;
   /** Lifecycle reported directly by cmux's provider hook-session store. */
   hookLifecycle?: HookLifecycle;
+  /** When the hook store recorded hookLifecycle. */
+  hookLifecycleAt?: string;
   startedAt?: string;
   updatedAt: string;
   tokens: TokenUsage;

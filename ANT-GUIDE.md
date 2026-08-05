@@ -160,6 +160,14 @@ carry a tag the board has nothing to spend it on, and in that case the board
 prints the words alone. The full session id is in the drawer for every row
 either way.
 
+A run manifest can also pair a lane's `statusAt` with one of three task states:
+`active`, `parked`, or `done`. This declaration only settles whether an old
+`needsInput` hook still belongs in **Needs you**; it does not change the session
+lifecycle or claim that a process exited. Undeclared and `active` lanes behave
+as before. For `parked` and `done`, a hook recorded at or before `statusAt` goes
+quiet, while a strictly newer `needsInput` re-alerts — a parked lane that asks a
+new question is therefore reachable again.
+
 The collector checks hook-backed sessions against one kernel process table per
 scan. Exact ancestry is recorded separately as `lineage.observedParentAgentId`;
 `lineageAgreement` is `corroborated`, `contradicted`, or `unobserved`. A

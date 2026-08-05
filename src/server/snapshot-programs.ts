@@ -21,6 +21,7 @@ import type {
   RepoIdentity,
 } from "../shared/types";
 import { fnvKey } from "./repo-identity";
+import { taskStateWantsHuman } from "./task-state";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 export interface ProgramHint {
@@ -61,7 +62,10 @@ export function rollupFor(agents: readonly AgentSnapshot[]): ProgramRollup {
        system findings and the client counted attention signals, so one phrase
        had three meanings and they could not agree. All three now read the same
        collection. System findings keep their own name in totals. */
-    needsYou: agents.filter((agent) => Boolean(agent.attentionSignal)).length,
+    needsYou: agents.filter((agent) =>
+      agent.lifecycle !== "finished"
+      && agent.scope !== "retained"
+      && taskStateWantsHuman(agent)).length,
     blocked: outcomeCount("blocked"),
     failed: outcomeCount("failed"),
     linked: agents.filter((agent) => agent.controlState === "linked").length,

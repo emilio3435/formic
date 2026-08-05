@@ -16,6 +16,7 @@
 import { fmtTok } from "./text-formatters.js";
 import { DEFAULT_LOOKBACK_HOURS } from "./client-catalogs.js";
 import { deriveLifecycle } from "./lifecycle.js";
+import { hookInputWantsHuman, taskStateWantsHuman } from "./task-state.js";
 
 /* ---------- derivations (narrow fallbacks for the transitional schema) ----------
    The server now emits activity/outcome/controlState directly; when a snapshot
@@ -241,7 +242,7 @@ export function livenessView(agent) {
    program; it has to here too, and it is the only route that survives a
    hibernated pane, whose transcript says nothing at all. */
 export function hookWantsInput(agent) {
-  return Boolean(agent) && agent.hookLifecycle === "needsInput";
+  return hookInputWantsHuman(agent);
 }
 
 /* The `!isTerminal` gate is load-bearing, not incidental. A hook record freezes
@@ -255,7 +256,7 @@ export function hookWantsInput(agent) {
    asking when it died". Removing it puts 45 ghosts in the Needs-you strip,
    which is the same failure alerting()'s rescue arm below has a scar for. */
 export function wantsHuman(agent) {
-  return Boolean(agent && (agent.attentionSignal || hookWantsInput(agent))) && !isTerminal(agent);
+  return taskStateWantsHuman(agent) && !isTerminal(agent);
 }
 
 export function alerting(agent) {

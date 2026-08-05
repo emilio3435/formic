@@ -22,6 +22,9 @@ void _providersAreExhaustive;
 export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archived";
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
 export type HookLifecycle = "idle" | "running" | "needsInput" | "ended" | "unknown";
+export type TaskState = "active" | "parked" | "done";
+export const TASK_STATES = ["active", "parked", "done"] as const satisfies readonly TaskState[];
+export type TaskStateSource = "manifest";
 /* Where an agent's name came from, in precedence order. Published so a surface
    can tell an AUTHORED name from a DERIVED one — the distinction the client had
    no way to make, which is how an agent deliberately named "Lifecycle Mapper"
@@ -345,6 +348,14 @@ export interface AgentSnapshot {
   activity?: ActivityState;
   /** Lifecycle reported directly by cmux's provider hook-session store. */
   hookLifecycle?: HookLifecycle;
+  /** When the hook store recorded hookLifecycle. */
+  hookLifecycleAt?: string;
+  /** The lane's declared work state; it affects attention, never lifecycle. */
+  taskState?: TaskState;
+  /** Where taskState came from. */
+  taskStateSource?: TaskStateSource;
+  /** The manifest statusAt paired with taskState. */
+  taskStateAt?: string;
   /* The one bucket this session occupies, and why. `lifecycle` is the verdict
      every surface is meant to read; `activity` and `status` above are the older
      vocabularies, published alongside it during the transition and derived from

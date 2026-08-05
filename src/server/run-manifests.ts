@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENT_ROLES, type AgentRole } from "../shared/types";
+import {
+  AGENT_ROLES,
+  TASK_STATES,
+  type AgentRole,
+  type TaskState,
+} from "../shared/types";
 import type { CmuxWorkspaceEnvVariables } from "./types";
 
 export interface RunManifestLane {
@@ -13,6 +18,8 @@ export interface RunManifestLane {
   branch?: string;
   model?: string;
   brief?: string;
+  status?: TaskState;
+  statusAt?: string;
 }
 
 export interface RunManifest {
@@ -28,9 +35,12 @@ export interface DeclaredLineage {
   laneId: string;
   role: AgentRole;
   parentAgentId?: string;
+  taskState?: TaskState;
+  taskStateAt?: string;
 }
 
 const DECLARED_AGENT_ROLES = new Set<AgentRole>(AGENT_ROLES.filter((role) => role !== "service"));
+const DECLARED_TASK_STATES = new Set<TaskState>(TASK_STATES);
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -58,6 +68,9 @@ function parseLane(value: unknown): RunManifestLane | undefined {
   const branch = optionalString(lane.branch);
   const model = optionalString(lane.model);
   const brief = optionalString(lane.brief);
+  const statusValue = optionalString(lane.status);
+  const status = statusValue as TaskState | undefined | null;
+  const statusAt = optionalString(lane.statusAt);
   if (
     !laneId
     || !role
@@ -68,6 +81,11 @@ function parseLane(value: unknown): RunManifestLane | undefined {
     || branch === null
     || model === null
     || brief === null
+    || status === null
+    || statusAt === null
+    || (status !== undefined && !DECLARED_TASK_STATES.has(status))
+    || Boolean(status) !== Boolean(statusAt)
+    || (statusAt !== undefined && !Number.isFinite(Date.parse(statusAt)))
   ) return undefined;
   return {
     laneId,
@@ -78,6 +96,7 @@ function parseLane(value: unknown): RunManifestLane | undefined {
     ...(branch ? { branch } : {}),
     ...(model ? { model } : {}),
     ...(brief ? { brief } : {}),
+    ...(status && statusAt ? { status, statusAt } : {}),
   };
 }
 
@@ -182,6 +201,9 @@ export function manifestFactsFor(
         laneId: lane.laneId,
         role: lane.role,
         parentAgentId: `${manifest.orchestrator.provider}:${manifest.orchestrator.sessionId}`,
+        ...(lane.status && lane.statusAt
+          ? { taskState: lane.status, taskStateAt: lane.statusAt }
+          : {}),
       };
     }
   }

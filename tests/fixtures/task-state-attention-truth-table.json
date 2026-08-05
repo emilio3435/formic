@@ -1,0 +1,127 @@
+{
+  "cases": [
+    {
+      "name": "an undeclared lane keeps the existing needs-input behavior",
+      "evidence": {
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "an active declaration never suppresses a needs-input hook",
+      "evidence": {
+        "taskState": "active",
+        "taskStateAt": "2026-08-05T12:01:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "parking after the ask silences the stale hook",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:01:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "done at the same instant wins because the ask is not newer",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "a parked lane that asks later re-alerts",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.001Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "a done lane that asks later re-alerts",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:01.000Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "an undated hook cannot overrule a dated parked declaration",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput"
+      },
+      "expected": false
+    },
+    {
+      "name": "a non-asking hook never wants a human",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T12:01:00.000Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "an undeclared lane still honors a content attention signal",
+      "evidence": {
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expectedHook": false,
+      "expected": true
+    },
+    {
+      "name": "an active lane still honors a content attention signal",
+      "evidence": {
+        "taskState": "active",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expectedHook": false,
+      "expected": true
+    },
+    {
+      "name": "parking after a content signal silences that stale request",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expected": false
+    },
+    {
+      "name": "a newer needs-input hook re-alerts even when done carries old content",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:01.000Z",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expected": true
+    }
+  ]
+}
