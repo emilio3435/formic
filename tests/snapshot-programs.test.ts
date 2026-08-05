@@ -88,6 +88,29 @@ test("repo-derived programs use the repo id and a stable worktree group path", (
   });
 });
 
+test("ephemeral worktrees of one repository fold into one disposable-checkouts subsection", () => {
+  const first: RepoIdentity = {
+    repoKey: "atlas-repo",
+    repoName: "ProjectAtlas",
+    worktreePath: "/Users/example/.codex/worktrees/run-one/ProjectAtlas",
+    branch: "codex/run-one",
+    ephemeral: true,
+  };
+  const second: RepoIdentity = {
+    ...first,
+    worktreePath: "/Users/example/.codex/worktrees/run-two/ProjectAtlas",
+    branch: "codex/run-two",
+  };
+  const expected = {
+    id: "repo:atlas-repo:ephemeral",
+    name: "disposable checkouts",
+    groupPath: ["atlas-repo", "ephemeral"] as [string, string],
+  };
+
+  expect(programFor(collected({ cwd: first.worktreePath }), [], undefined, false, first)).toEqual(expected);
+  expect(programFor(collected({ cwd: second.worktreePath }), [], undefined, false, second)).toEqual(expected);
+});
+
 test("operator program hints outrank repository derivation", () => {
   const repo: RepoIdentity = {
     repoKey: "atlas-repo",
@@ -201,7 +224,9 @@ test("the cmux tick keeps sidebar repo facts and they outrank spawned git branch
   expect(agent?.repo).toEqual({ ...repo, branch: "sidebar/live" });
   expect(agent?.git).toEqual({ branch: "sidebar/live", dirty: true, head: undefined });
   expect(agent?.pullRequestUrls).toEqual(["https://github.com/example/atlas/pull/42"]);
-  expect(snapshot.programs[0]?.id).toStartWith(`repo:${repo.repoKey}:worktree:`);
+  expect(snapshot.programs[0]?.id).toBe(repo.ephemeral
+    ? `repo:${repo.repoKey}:ephemeral`
+    : `repo:${repo.repoKey}:worktree:${fnvKey(repo.worktreePath)}`);
   expect(agent?.programId).toBe(`repo:${repo.repoKey}`);
 
   await state.refresh();
