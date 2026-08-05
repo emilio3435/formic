@@ -67,6 +67,24 @@ A tiny boot script each lane's launch command sources: reads `ANTHILL_RUN`/`ANTH
 
 Truth-table + golden coverage for everything above: lineageAgreement cases, succession retirement, origin-vs-path repoKeys, parked/blocked/done matrix (esp. parked-then-asks re-alert), forged-sender fixture, shim goldens. Hook-store compaction: dead `activeSessionsBySurface` entries pruned after N days (the file only grows today).
 
+### T12 — Stalled-active detection (be-live, follow-up; ratified 2026-08-05 PM)
+
+The gap that let be-truth hide for 82 minutes: a lane declared `active` whose
+hook has gone quiet asks for nothing, so no door into Needs-You opens. Detect
+it server-side and ride the EXISTING attention-signal machinery so no client
+change is needed: when `taskState === "active"` with `taskStateSource:
+"manifest"` AND the hook lifecycle has been `idle` (not running, not
+needsInput) continuously since `hookLifecycleAt` for longer than the threshold,
+emit an attention signal — kind `stalled-active`, nextAction "Nudge it or park
+it.", evidence naming the idle span and the declared state. Threshold: 30
+minutes, overridable via `data/settings.json` `stalledActiveMinutes` only if
+that is a trivial addition. Truth safety: no hook record or no
+`hookLifecycleAt` ⇒ no claim (absence is not staleness); `parked`/`done`
+declarations never stall; a `running` or `needsInput` hook never stalls. The
+T6 precedence is untouched — this ADDS a door for active lanes, it never
+reopens one T7 closed. TDD in the attention/task-state suites + truth-table
+rows; docs parity; lifecycle untouched.
+
 ### T11 — The cmux-restart drill (orchestrator + Emilio, scheduled)
 
 The un-run matrix item: copy agent links, restart cmux (UUIDs re-mint), assert every link resolves via surface/transcript and no identity churns. Needs Emilio's go (kills all lane terminals); run it BETWEEN programs, capture as a scripted checklist in `docs/` so it's repeatable.
