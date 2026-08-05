@@ -9,6 +9,7 @@ import type {
   Provider,
   SurfaceIdentityTrace,
   TokenUsage,
+  HookLifecycle,
 } from "../shared/types";
 
 export const MAX_TRANSCRIPT_TAIL_CHARS = 800;
@@ -49,6 +50,8 @@ export interface CollectedAgent {
   task?: string;
   status: AgentStatus;
   statusReason: string;
+  /** Lifecycle reported directly by cmux's provider hook-session store. */
+  hookLifecycle?: HookLifecycle;
   startedAt?: string;
   updatedAt: string;
   tokens: TokenUsage;

@@ -4,7 +4,7 @@ How a provider transcript on disk becomes a controllable agent row in the dashbo
 
 ## Collectors
 
-`src/server/collectors.ts` harvests provider sessions from their on-disk layouts — OMP (`~/.omp/agent/sessions/…`), Codex (`~/.codex/sessions/…rollout-…`), Claude (`~/.claude/projects/…`), Cursor via `src/server/cursor.ts`, and Factory via `src/server/factory.ts` (`~/.factory/sessions/<cwd-slug>/<uuid>.jsonl`, whose model and token usage live in a sibling `<uuid>.settings.json`) — inside the configured scan window (`data/settings.json`, default 36h). Each transcript parses into a `CollectedAgent` (`src/server/types.ts`): source session ID, cwd, status, tokens, transcript tail. In parallel, `src/server/cmux.ts` discovers live cmux terminal surfaces (`CmuxSurface`: surfaceId/workspaceId/paneId, cwd, tty, git state) and unread notifications over the cmux RPC socket (`src/server/cmux-auth.ts` handles auth outside a cmux shell).
+`src/server/collectors.ts` harvests provider sessions from their on-disk layouts — OMP (`~/.omp/agent/sessions/…`), Codex (`~/.codex/sessions/…rollout-…`), Claude (`~/.claude/projects/…`), Cursor via `src/server/cursor.ts`, and Factory via `src/server/factory.ts` (`~/.factory/sessions/<cwd-slug>/<uuid>.jsonl`, whose model and token usage live in a sibling `<uuid>.settings.json`) — inside the configured scan window (`data/settings.json`, default 36h). Each transcript parses into a `CollectedAgent` (`src/server/types.ts`): source session ID, cwd, status, tokens, transcript tail. Once per collection cycle, `src/server/cmux-hook-sessions.ts` also reads Claude/Codex/OMP records from `~/.cmuxterm/*-hook-sessions.json`; a valid record contributes its stable surface ID, cwd fallback, PID plus process-start check, and direct hook lifecycle (`running`, `idle`, `needsInput`, or `unknown`). In parallel, `src/server/cmux.ts` discovers live cmux terminal surfaces (`CmuxSurface`: surfaceId/workspaceId/paneId, cwd, tty, git state) and unread notifications over the cmux RPC socket (`src/server/cmux-auth.ts` handles auth outside a cmux shell).
 
 ## Refresh loop
 
@@ -28,9 +28,10 @@ Exactly one surviving identity sets `surface.sourceSessionIds`. Conflicting evid
 
 `src/server/targets.ts` (`resolveAgentTargetWithTrace`; `resolveAgentTarget` is its target-only wrapper) resolves each agent to at most one cmux surface, strictest tier first:
 
-1. **recorded** — `agent.recordedTarget` IDs (today: archive copies and sticky-binding bridges) match exactly one ready surface.
-2. **session** — the agent's source session ID appears on exactly one surface's `sourceSessionIds`.
-3. **unique-cwd** — fallback, only when this is the *only* active source with that cwd and there is exactly one unclaimed surface with that exact cwd.
+1. **hook-store** — cmux's hook-session record names a stable surface ID that is present in the current ready-surface scan.
+2. **recorded** — `agent.recordedTarget` IDs (today: archive copies and sticky-binding bridges) match exactly one ready surface.
+3. **session** — the agent's source session ID appears on exactly one surface's `sourceSessionIds`.
+4. **unique-cwd** — fallback, only when this is the *only* active source with that cwd and there is exactly one unclaimed surface with that exact cwd.
 
 Anything else is `ambiguous` (controls disabled, reason shown) or `missing` (view-only). Any `identityConflict` on a candidate surface quarantines the agent at whichever tier observed it — bindings never override that. Each resolution also emits an `IdentityTrace` (attached as `agent.identityTrace`): one step per tier with the concrete reason it matched, passed, or failed, plus binding-bridge details.
 

@@ -251,7 +251,10 @@ describe("sticky identity binding lifecycle", () => {
     expect(target.surfaceId).toBeUndefined();
     expect(target.reason).toContain("quarantined");
     expect(trace.matchedTier).toBeUndefined();
-    expect(trace.steps[0]).toMatchObject({ tier: "recorded", outcome: "quarantined" });
+    expect(trace.steps.map(({ tier, outcome }) => `${tier}:${outcome}`)).toEqual([
+      "hook-store:skipped",
+      "recorded:quarantined",
+    ]);
   });
 
   test("conflicted scans never record or refresh bindings", async () => {

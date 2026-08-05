@@ -19,8 +19,12 @@ import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
+import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
+export interface CollectSessionsOptions {
+  hookProcessStarts?: () => ReadonlyMap<number, number> | undefined;
+}
 const fileCache = new Map<string, {
   provider: Provider;
   dev: number;
@@ -1076,11 +1080,70 @@ async function collectProvider(
   return { value: agents, errors, ...(absent ? { absent: true } : {}) };
 }
 
+function readProcessStartSeconds(): ReadonlyMap<number, number> | undefined {
+  try {
+    const result = Bun.spawnSync(["ps", "-axo", "pid=,lstart="], {
+      env: { ...process.env, LC_ALL: "C" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (result.exitCode !== 0) return undefined;
+    const starts = new Map<number, number>();
+    for (const line of result.stdout.toString().split("\n")) {
+      const match = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
+      if (!match) continue;
+      const pid = Number(match[1]);
+      const startedAtMs = Date.parse(match[2]);
+      if (Number.isInteger(pid) && Number.isFinite(startedAtMs)) {
+        starts.set(pid, Math.floor(startedAtMs / 1_000));
+      }
+    }
+    return starts;
+  } catch {
+    return undefined;
+  }
+}
+
+function hookProcessAlive(
+  record: HookSessionRecord,
+  starts: ReadonlyMap<number, number> | undefined,
+): boolean | undefined {
+  if (!starts) return undefined;
+  const observedStart = starts.get(record.pid);
+  if (observedStart === undefined) return false;
+  return record.pidStartSeconds === undefined || observedStart === record.pidStartSeconds;
+}
+
+function attachHookFacts(
+  result: CollectionResult<CollectedAgent[]>,
+  records: ReadonlyMap<string, HookSessionRecord>,
+  starts: ReadonlyMap<number, number> | undefined,
+): CollectionResult<CollectedAgent[]> {
+  return {
+    ...result,
+    value: result.value.map((agent) => {
+      const record = records.get(`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`);
+      if (!record) return agent;
+      const observedAlive = hookProcessAlive(record, starts);
+      const retainedAlive = agent.processIds?.includes(record.pid) ? agent.processAlive : undefined;
+      return {
+        ...agent,
+        cwd: agent.cwd ?? record.cwd,
+        hookLifecycle: record.agentLifecycle,
+        processIds: [record.pid],
+        processAlive: observedAlive ?? retainedAlive,
+      };
+    }),
+  };
+}
+
 export async function collectSessions(
   home = homedir(),
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
+  options: CollectSessionsOptions = {},
 ): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
+  const hookRecords = readHookSessionStores(join(home, ".cmuxterm"));
   const [omp, codex, claude, cursor, factory] = await Promise.all([
     collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
     collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
@@ -1088,5 +1151,17 @@ export async function collectSessions(
     collectCursorSessions(home, Date.now(), windowMs, thresholds),
     collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds),
   ]);
-  return { omp, codex, claude, cursor, factory };
+  const recordsBySession = new Map(
+    hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
+  );
+  const starts = hookRecords.length > 0
+    ? (options.hookProcessStarts ?? readProcessStartSeconds)()
+    : undefined;
+  return {
+    omp: attachHookFacts(omp, recordsBySession, starts),
+    codex: attachHookFacts(codex, recordsBySession, starts),
+    claude: attachHookFacts(claude, recordsBySession, starts),
+    cursor,
+    factory,
+  };
 }

@@ -56,6 +56,17 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("publishes cmux hook lifecycle for downstream classification", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected({ hookLifecycle: "needsInput" })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents[0]?.hookLifecycle).toBe("needsInput");
+  });
+
   test("ships config-owned model display labels on the snapshot wire", () => {
     const snapshot = buildSnapshot({
       agents: [],
