@@ -93,8 +93,10 @@ export type CollectionScope = "observed" | "retained";
    ends a TURN (Claude end_turn, Codex task_complete, Cursor
    turn_ended:success) and says nothing about whether the session is over.
    `worktree-deleted` is synthesized only from two corroborating facts: the
-   process checked gone and its cwd no longer exists. */
-export type EndEvidence = "session-exit" | "turn-complete" | "worktree-deleted";
+   process checked gone and its cwd no longer exists. `superseded` records a
+   manifest lane moving to a newer session; it retires the older lane cycle
+   without claiming that its process exited. */
+export type EndEvidence = "session-exit" | "turn-complete" | "worktree-deleted" | "superseded";
 export type ProcessState = "running" | "exited" | "died" | "unknown";
 export type OutcomeState = "healthy" | "needs-you" | "blocked" | "failed";
 export type OperatorControlState = "linked" | "observed-only" | "quarantined";
@@ -412,6 +414,10 @@ export interface AgentSnapshot {
     evidence?: string;
   };
   parentAgentId?: string;
+  /** The next session observed for this manifest lane. */
+  succeededBy?: string;
+  /** The previous session observed for this manifest lane. */
+  supersedes?: string;
   threadDepth?: number;
   nickname?: string;
   /** The linked cmux PANE's own title — what the operator typed when they

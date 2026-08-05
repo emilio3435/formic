@@ -46,7 +46,11 @@ export function activityBandOf(ageMs, thresholds = DEFAULT_LIFECYCLE_THRESHOLDS)
 }
 
 export function retirementEndEvidence(evidence) {
-  if (evidence.endEvidence === "session-exit" || evidence.endEvidence === "worktree-deleted") {
+  if (
+    evidence.endEvidence === "session-exit"
+    || evidence.endEvidence === "worktree-deleted"
+    || evidence.endEvidence === "superseded"
+  ) {
     return evidence.endEvidence;
   }
   if (evidence.hookLifecycle === "ended") return "session-exit";
@@ -83,6 +87,20 @@ function finishedReason(provenance) {
    unverified fleet out of history. */
 function retainedVerdict(evidence) {
   const lifecycle = evidence.persisted?.lifecycle ?? "finished";
+  if (lifecycle === "finished" && evidence.persisted?.provenance === "operator-archive") {
+    return {
+      lifecycle,
+      provenance: "operator-archive",
+      reason: finishedReason("operator-archive"),
+    };
+  }
+  if (lifecycle === "finished" && evidence.endEvidence === "superseded") {
+    return {
+      lifecycle,
+      provenance: "provider-exit",
+      reason: "Replaced by a newer session for this lane.",
+    };
+  }
   if (lifecycle === "finished" && evidence.persisted?.provenance) {
     return {
       lifecycle,
@@ -113,6 +131,15 @@ export function classifyLifecycle(evidence, thresholds = DEFAULT_LIFECYCLE_THRES
   // Row 1 — human intent outranks every machine fact, including a live process.
   if (evidence.operatorArchived) {
     return { lifecycle: "finished", provenance: "operator-archive", reason: finishedReason("operator-archive") };
+  }
+
+  // Row 2 — a newer manifest binding closes the predecessor's lane cycle.
+  if (endEvidence === "superseded") {
+    return {
+      lifecycle: "finished",
+      provenance: "provider-exit",
+      reason: "Replaced by a newer session for this lane.",
+    };
   }
 
   // Row 2 — the only end-of-session fact a provider emits. A turn is not one.
