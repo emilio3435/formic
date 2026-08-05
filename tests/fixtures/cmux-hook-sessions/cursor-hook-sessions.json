@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sessions": {
+    "c1111111-2222-4333-8444-555555555555": {
+      "sessionId": "c1111111-2222-4333-8444-555555555555",
+      "surfaceId": "CAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+      "workspaceId": "c1111111-AAAA-4BBB-8CCC-222222222222",
+      "cwd": "/Users/example/Developer/redacted-cursor-project",
+      "pid": 5252,
+      "pidStartSeconds": 1785933001,
+      "agentLifecycle": "unknown",
+      "launchCommand": {
+        "executablePath": "/Users/example/.local/bin/cursor-agent",
+        "arguments": ["--resume", "c1111111-2222-4333-8444-555555555555"],
+        "workingDirectory": "/Users/example/Developer/redacted-cursor-project"
+      },
+      "updatedAt": 1785933010.5
+    }
+  },
+  "activeSessionsBySurface": {
+    "CAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE": {
+      "sessionId": "c1111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933010.5
+    }
+  },
+  "activeSessionsByWorkspace": {
+    "c1111111-AAAA-4BBB-8CCC-222222222222": {
+      "sessionId": "c1111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933010.5
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sessions": {
+    "f1111111-2222-4333-8444-555555555555": {
+      "sessionId": "f1111111-2222-4333-8444-555555555555",
+      "surfaceId": "FAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+      "workspaceId": "f1111111-AAAA-4BBB-8CCC-222222222222",
+      "cwd": "/Users/example/Developer/redacted-factory-project",
+      "pid": 5353,
+      "agentLifecycle": "unknown",
+      "launchCommand": {
+        "executablePath": "/opt/homebrew/bin/droid",
+        "arguments": ["-r", "f1111111-2222-4333-8444-555555555555"],
+        "workingDirectory": "/Users/example/Developer/redacted-factory-project"
+      },
+      "updatedAt": 1785933020.75
+    }
+  },
+  "activeSessionsBySurface": {
+    "FAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE": {
+      "sessionId": "f1111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933020.75
+    }
+  },
+  "activeSessionsByWorkspace": {
+    "f1111111-AAAA-4BBB-8CCC-222222222222": {
+      "sessionId": "f1111111-2222-4333-8444-555555555555",
+      "updatedAt": 1785933020.75
+    }
+  }
+}
