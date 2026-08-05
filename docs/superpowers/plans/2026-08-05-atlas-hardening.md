@@ -59,7 +59,7 @@ Today `hookLifecycle:needsInput` ⇒ wantsHuman — correct mid-task, wrong for 
 
 Wrapper launchers (`cursor-agent` / `droid` wrapped) that emit the same `~/.cmuxterm/<provider>-hook-sessions.json` records the other three providers get (sessionId, surface from $CMUX_* env, cwd, pid, lifecycle heartbeat). Fenced to `scripts/**` + shim files + fixtures; server reader already accepts any provider file present (B1 tolerates absence). If lifecycle can't be derived cheaply, ship binding-only records — binding is the valuable half.
 
-### T9 — Self-registration hook (harden2, after T6 contract)
+### T9 — Self-registration hook (harden2, after T6 contract) ✅ **[DONE 1216407, merged]**
 
 A tiny boot script each lane's launch command sources: reads `ANTHILL_RUN`/`ANTHILL_LANE` from its env, writes its own sessionId + `status:"active"` into the manifest lane (atomic, first-write-wins per session), and on clean exit writes `status:"done"`. Removes the orchestrator's backfill step (the exact step whose omission orphaned the harden lane). Plus `anthill-backfill <runId> <laneId> <provider:sessionId>` for retroactive adoption of any visible session (the operation proven live today).
 
