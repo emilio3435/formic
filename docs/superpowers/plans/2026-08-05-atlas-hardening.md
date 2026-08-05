@@ -28,7 +28,7 @@ T6 (be-truth or be-live, whichever frees first) is the ONE serialization point: 
 
 Walk pid→ppid chains (`ps -axo pid,ppid,lstart,command`, cached per collect) from each hook-store pid up to its cmux surface process. Produces `lineage.observedParentAgentId` + `lineageAgreement: "corroborated" | "contradicted" | "unobserved"` on the wire. A DECLARED parent that the kernel contradicts keeps the declared chain but carries the flag (F-side styles it hostile-red later; never silently re-parent). An UNDECLARED session whose ancestor chain reaches a known agent session gains `roleSource:"observed"` parentage — this is what binds subagents (live case: FE's security-review children) without any contract change. TDD: fixture a ps table; contradicted/corroborated/unobserved cases; subagent-adoption case.
 
-### T2 — Session succession + cycle retirement (be-truth)
+### T2 — Session succession + cycle retirement (be-truth) ✅ **[DONE 04ed591, merged]**
 
 A manifest lane whose sessionId is REPLACED (orchestrator edits manifest, or T9 self-registration re-registers) leaves a predecessor: same lane, older session. Bind `succeededBy`/`supersedes` between them; the predecessor flows to the finished shelf with endEvidence `"superseded"` (union + docs + parity). Live case: be-spine session-1. Manifest schema gains nothing — succession is derived from lane sessionId history (keep `~/.anthill/runs/<runId>.history.jsonl` appended on backfill; additive).
 
