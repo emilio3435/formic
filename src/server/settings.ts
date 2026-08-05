@@ -28,6 +28,7 @@ export const DEFAULT_VIEW: SettingsView = "needs-you";
 export const NUMERIC_SETTINGS = {
   activityFreshMinutes: { default: 3, min: 1, max: 30 },
   activityQuietMinutes: { default: 45, min: 5, max: 480 },
+  stalledActiveMinutes: { default: 30, min: 5, max: 480 },
   scanWindowHours: {
     default: DEFAULT_SCAN_WINDOW_HOURS,
     min: MIN_SCAN_WINDOW_HOURS,
@@ -47,6 +48,8 @@ export interface HubSettings {
   activityFreshMinutes: number;
   /** Silence at or beyond this stops reading as recent. Must exceed freshness. */
   activityQuietMinutes: number;
+  /** How long an active declaration may carry an idle hook before attention. */
+  stalledActiveMinutes: number;
   /** How far back collectors read transcripts. */
   scanWindowHours: number;
   /** How long finished sessions are kept. */

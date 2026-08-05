@@ -28,6 +28,18 @@ function input(overrides: Partial<AttentionSignalInput> = {}): AttentionSignalIn
   };
 }
 
+function stalledInput(overrides: Partial<AttentionSignalInput> = {}): AttentionSignalInput {
+  return {
+    ...input(),
+    taskState: "active",
+    taskStateSource: "manifest",
+    hookLifecycle: "idle",
+    hookLifecycleAt: "2026-08-05T12:00:00.000Z",
+    nowMs: Date.parse("2026-08-05T12:31:00.000Z"),
+    ...overrides,
+  };
+}
+
 describe("attention signal detectors", () => {
   test("a cmux permission prompt is named as a permission, not as generic waiting", () => {
     const signal = detectAttentionSignal(input({
@@ -159,6 +171,50 @@ describe("attention signal detectors", () => {
     }));
 
     expect(signal.kind).toBe("nothing-wanted");
+  });
+});
+
+describe("stalled-active detection", () => {
+  test("a manifest-active lane whose hook has been idle over thirty minutes asks for a nudge", () => {
+    expect(detectAttentionSignal(stalledInput())).toEqual({
+      kind: "stalled-active",
+      nextAction: "Nudge it or park it.",
+      evidence: "Hook idle for 31 minutes; manifest declares active.",
+    });
+  });
+
+  test("the threshold is strict and can be overridden by settings", () => {
+    expect(detectAttentionSignal(stalledInput({
+      nowMs: Date.parse("2026-08-05T12:30:00.000Z"),
+    })).kind).toBe("not-readable");
+    expect(detectAttentionSignal(stalledInput({ stalledActiveMinutes: 60 })).kind)
+      .toBe("not-readable");
+    expect(detectAttentionSignal(stalledInput({
+      stalledActiveMinutes: 60,
+      nowMs: Date.parse("2026-08-05T13:01:00.000Z"),
+    })).kind).toBe("stalled-active");
+  });
+
+  test.each([
+    ["no hook record", { hookLifecycle: undefined }],
+    ["no hook timestamp", { hookLifecycleAt: undefined }],
+    ["an invalid hook timestamp", { hookLifecycleAt: "not-a-time" }],
+    ["a parked declaration", { taskState: "parked" }],
+    ["a done declaration", { taskState: "done" }],
+    ["a non-manifest declaration", { taskStateSource: undefined }],
+    ["a running hook", { hookLifecycle: "running" }],
+    ["a needs-input hook", { hookLifecycle: "needsInput" }],
+  ])("%s never becomes a staleness claim", (_name, overrides) => {
+    expect(detectAttentionSignal(stalledInput(overrides as Partial<AttentionSignalInput>)).kind)
+      .not.toBe("stalled-active");
+  });
+
+  test("an existing direct ask keeps its higher-priority attention signal", () => {
+    const signal = detectAttentionSignal(stalledInput({
+      lastAgentClosing: "Should I publish the recovery branch now?",
+    }));
+    expect(signal.kind).toBe("question-pending");
+    expect(signal.nextAction).toBe("Answer the question it stopped on.");
   });
 });
 

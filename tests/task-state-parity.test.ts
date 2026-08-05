@@ -253,6 +253,49 @@ test("server attention totals obey task state and the newer-hook escape hatch", 
   expect(newer.programs[0]?.rollup?.needsYou).toBe(1);
 });
 
+test("a stalled active lane uses the existing attention door without changing lifecycle", () => {
+  const source = collected({
+    hookLifecycle: "idle",
+    hookLifecycleAt: "2026-08-05T11:30:00.000Z",
+    lastAgentClosing: "The implementation is still in progress.",
+  });
+  const runManifests: RunManifest[] = [{
+    ...declaredManifest(),
+    lanes: [{
+      ...declaredManifest().lanes[0]!,
+      status: "active",
+      statusAt: "2026-08-05T11:00:00.000Z",
+    }],
+  }];
+  const snapshot = buildSnapshot({
+    agents: [source], surfaces: [], archiveStore, runManifests,
+    now: new Date("2026-08-05T12:01:00.000Z"),
+  });
+  const agent = snapshot.programs[0]!.agents[0]!;
+
+  expect(agent).toMatchObject({
+    taskState: "active",
+    taskStateSource: "manifest",
+    hookLifecycle: "idle",
+    attentionSignal: {
+      kind: "stalled-active",
+      evidence: "Hook idle for 31 minutes; manifest declares active.",
+    },
+    nextAction: "Nudge it or park it.",
+  });
+  expect(agent.lifecycle).toBe("working");
+  expect(snapshot.totals.needsYou).toBe(1);
+  expect(snapshot.programs[0]?.rollup?.needsYou).toBe(1);
+
+  const patient = buildSnapshot({
+    agents: [source], surfaces: [], archiveStore, runManifests,
+    now: new Date("2026-08-05T12:01:00.000Z"),
+    stalledActiveMinutes: 60,
+  });
+  expect(patient.programs[0]!.agents[0]!.attentionSignal).toBeUndefined();
+  expect(patient.totals.needsYou).toBe(0);
+});
+
 test("collection preserves the hook timestamp used by the precedence rule", async () => {
   const home = mkdtempSync(join(tmpdir(), "anthill-task-state-hook-"));
   try {
@@ -312,5 +355,13 @@ describe("task-state documentation parity", () => {
     for (const state of TASK_STATES) expect(guide, state).toContain(`\`${state}\``);
     expect(guide).toContain("strictly newer");
     expect(guide).toMatch(/does not change the session\s+lifecycle/);
+  });
+
+  test("both docs name the stalled-active threshold and its fail-closed evidence", () => {
+    for (const document of [architecture, guide]) {
+      expect(document).toContain("stalled-active");
+      expect(document).toContain("30 minutes");
+      expect(document).toContain("hookLifecycleAt");
+    }
   });
 });

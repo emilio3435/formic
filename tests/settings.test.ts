@@ -181,6 +181,7 @@ describe("settings v2: every tunable number validates at both edges", () => {
       version: SETTINGS_VERSION,
       activityFreshMinutes: 3,
       activityQuietMinutes: 45,
+      stalledActiveMinutes: 30,
       scanWindowHours: 36,
       historyRetentionDays: 30,
       historyRecordLimit: 5000,
@@ -189,9 +190,16 @@ describe("settings v2: every tunable number validates at both edges", () => {
   });
 
   test("the derived units the rest of the server consumes come out of those numbers", () => {
-    const settings = normalizeSettings({ activityFreshMinutes: 2, activityQuietMinutes: 15, historyRetentionDays: 7, historyRecordLimit: 100 });
+    const settings = normalizeSettings({
+      activityFreshMinutes: 2,
+      activityQuietMinutes: 15,
+      stalledActiveMinutes: 60,
+      historyRetentionDays: 7,
+      historyRecordLimit: 100,
+    });
     expect(lifecycleThresholds(settings)).toEqual({ freshMs: 2 * 60_000, quietMs: 15 * 60_000 });
     expect(archiveLimits(settings)).toEqual({ retentionMs: 7 * 86_400_000, recordLimit: 100 });
+    expect(settings.stalledActiveMinutes).toBe(60);
   });
 
   test("an out-of-range value falls back to that key's default, not to the whole file's", () => {

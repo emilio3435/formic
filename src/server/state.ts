@@ -212,6 +212,7 @@ export class HubState {
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
       thresholds: bootSettings ? lifecycleThresholds(bootSettings) : undefined,
+      stalledActiveMinutes: bootSettings?.stalledActiveMinutes,
     }));
     this.#snapshot = withPulse(initialSnapshot, this.#pulse.report(Date.now()));
   }
@@ -686,6 +687,7 @@ export class HubState {
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
       thresholds,
+      stalledActiveMinutes: settings?.stalledActiveMinutes,
       processRosterComplete: this.#rosterComplete,
       senderTranscriptTails,
     }));

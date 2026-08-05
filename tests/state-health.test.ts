@@ -445,6 +445,7 @@ describe("operator thresholds reach the collectors", () => {
           version: 2,
           activityFreshMinutes: 3,
           activityQuietMinutes,
+          stalledActiveMinutes: 30,
           scanWindowHours: 36,
           historyRetentionDays: 30,
           historyRecordLimit: 5000,
