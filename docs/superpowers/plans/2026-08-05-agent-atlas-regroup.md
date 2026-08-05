@@ -78,19 +78,19 @@ export function hookRecordFor(provider: string, sessionId: string): HookSessionR
 - Consumes: `~/.cmuxterm/claude-hook-sessions.json`, `codex-hook-sessions.json`, `omp-hook-sessions.json` — shape: `sessions.<id>` records plus `activeSessionsBySurface{surfaceUUID→{sessionId,updatedAt}}`.
 
 **Steps:**
-- [ ] **Step 1: Fixture + failing tests.** Copy a redacted real store into the fixture (2 sessions, one `running` one `idle`, one with `lastPermissionMode:"auto"`). Tests:
+- [x] **Step 1: Fixture + failing tests.** Copy a redacted real store into the fixture (2 sessions, one `running` one `idle`, one with `lastPermissionMode:"auto"`). Tests:
 ```ts
 test("readHookSessionStores parses claude store and normalizes provider", …)
 test("hookRecordFor returns undefined for unknown session", …)
 test("malformed store file yields [] and does not throw", …)
 test("record with missing surfaceId is dropped", …)
 ```
-- [ ] **Step 2: Run tests — expect FAIL (module not found).**
-- [ ] **Step 3: Implement `cmux-hook-sessions.ts`.** Pure read + validate, `root` param for tests (defaults `~/.cmuxterm`), tolerate absent files. No caching beyond one read per collect cycle (call it from `collectSessions`).
-- [ ] **Step 4: Tests green.**
-- [ ] **Step 5: Wire tier 0 into `targets.ts`.** Before the existing 3-tier resolver: if `hookRecordFor(provider, sourceSessionId)` yields a surface that exists in the live cmux terminal parse, return `resolution: "exact"`, `attestation: "hook-store"`. Extend the `attestation` union in `src/shared/types.ts` accordingly; update `tests/naming-wire.test.ts` if it pins the union. Existing tiers remain as fallback.
-- [ ] **Step 6: Attach facts in `collectors.ts`.** For Claude/Codex/OMP sessions with a hook record: populate `processAlive` (pid + pidStartSeconds check), prefer hook `cwd` when session record lacks one, and carry `agentLifecycle` into a new optional `CollectedAgent.hookLifecycle` (typed in `src/server/types.ts`) for the classifier.
-- [ ] **Step 7: `bunx tsc --noEmit && bun test` green; commit** `feat(server): bind sessions to cmux surfaces via the hook-session store`.
+- [x] **Step 2: Run tests — expect FAIL (module not found).**
+- [x] **Step 3: Implement `cmux-hook-sessions.ts`.** Pure read + validate, `root` param for tests (defaults `~/.cmuxterm`), tolerate absent files. No caching beyond one read per collect cycle (call it from `collectSessions`).
+- [x] **Step 4: Tests green.**
+- [x] **Step 5: Wire tier 0 into `targets.ts`.** Before the existing 3-tier resolver: if `hookRecordFor(provider, sourceSessionId)` yields a surface that exists in the live cmux terminal parse, return `resolution: "exact"`, `attestation: "hook-store"`. Extend the `attestation` union in `src/shared/types.ts` accordingly; update `tests/naming-wire.test.ts` if it pins the union. Existing tiers remain as fallback.
+- [x] **Step 6: Attach facts in `collectors.ts`.** For Claude/Codex/OMP sessions with a hook record: populate `processAlive` (pid + pidStartSeconds check), prefer hook `cwd` when session record lacks one, and carry `agentLifecycle` into a new optional `CollectedAgent.hookLifecycle` (typed in `src/server/types.ts`) for the classifier.
+- [x] **Step 7: `bunx tsc --noEmit && bun test` green; commit** `feat(server): bind sessions to cmux surfaces via the hook-session store`.
 
 ### Task B2: repo + worktree as first-class entities
 
