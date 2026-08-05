@@ -8,6 +8,7 @@ import {
   type LifecycleEvidence,
   type LifecycleThresholds,
 } from "../src/server/lifecycle";
+import { AGENT_ROLES } from "../src/shared/types";
 import type { LifecycleProvenance, LifecycleState } from "../src/shared/types";
 
 /* The file that makes "one classifier" a checkable claim rather than an
@@ -37,10 +38,41 @@ const table = JSON.parse(
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let catalogs: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let presentation: any;
 
 beforeAll(async () => {
   // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
   client = await import("../src/web/lifecycle.js");
+  // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
+  catalogs = await import("../src/web/client-catalogs.js");
+  // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
+  presentation = await import("../src/web/presentation.js");
+});
+
+describe("role vocabulary stays aligned across server and client", () => {
+  test("every wire role has a client label and resolves without falling back", () => {
+    for (const role of AGENT_ROLES) {
+      expect(catalogs.ROLE_LABELS[role], `missing label for ${role}`).toBeString();
+      expect(presentation.roleView(role).key).toBe(role);
+    }
+  });
+
+  test("the roster uses the operator-priority order from the role contract", () => {
+    expect(catalogs.ROSTER_ROLE_ORDER).toEqual([
+      "human",
+      "orchestrator",
+      "monitor",
+      "verifier",
+      "worker",
+      "tester",
+      "automation",
+      "service",
+      "agent",
+    ]);
+  });
 });
 
 describe("the truth table, executed by the client mirror", () => {

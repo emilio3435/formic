@@ -49,7 +49,7 @@ import {
   operatorControlState,
   outcomeFor,
   processStateFor,
-  roleFor,
+  roleFor2,
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
@@ -391,6 +391,10 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const outcome = outcomeFor(source, terminal, Boolean(notification));
     const controlState = operatorControlState(target, terminal);
     const contextPct = contextPctFor(source);
+    const role = roleFor2(source, {
+      declaredRole: declared?.role,
+      observedChildren: childCounts.get(source.id) ?? 0,
+    });
     const snapshotStatusReason = retained
       ? verdict.reason
       : notificationSummary
@@ -433,7 +437,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       processState,
       outcome,
       controlState,
-      role: declared?.role ?? roleFor(source, (childCounts.get(source.id) ?? 0) > 0),
+      ...role,
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...(repo ? { repo } : {}),

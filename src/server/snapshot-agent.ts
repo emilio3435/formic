@@ -9,6 +9,7 @@
 
 import type {
   ActivityState,
+  AgentSpecialty,
   AgentRole,
   AgentSnapshot,
   AgentStatus,
@@ -20,6 +21,7 @@ import type {
   OperatorControlState,
   OutcomeState,
   ProcessState,
+  RoleSource,
 } from "../shared/types";
 import {
   classifyLifecycle,
@@ -213,22 +215,68 @@ export function operatorControlState(
    running is a useful fact. It is the COMPLIANCE VERDICT about that fact that
    had no basis. (Emilio, 2026-08-05.) */
 
-export function roleFor(agent: CollectedAgent, hasChildren: boolean): AgentRole {
+export interface RoleEvidence {
+  declaredRole?: AgentRole;
+  observedChildren?: number;
+  /** Set only for a cmux terminal surface that has no bound agent session. */
+  unboundSurface?: boolean;
+  /** A separate operator-owned flag; an ordinary display-name alias is not enough. */
+  operatorHuman?: boolean;
+}
+
+export interface RoleVerdict {
+  role: AgentRole;
+  roleSource: RoleSource;
+  specialty?: AgentSpecialty;
+}
+
+function specialtyFor(agent: CollectedAgent): AgentSpecialty | undefined {
+  const title = agent.displayName.toLowerCase();
+  if (/\b(?:frontend|front-end|renderer|\bui\b|\bux\b|design)\b/.test(title)) return "frontend";
+  if (/\b(?:backend|back-end|server|\bipc\b|engine)\b/.test(title)) return "backend";
+  return undefined;
+}
+
+export function roleFor2(
+  agent: CollectedAgent | undefined,
+  evidence: RoleEvidence = {},
+): RoleVerdict {
+  if (!agent) {
+    return evidence.unboundSurface
+      ? { role: "service", roleSource: "observed" }
+      : { role: "agent", roleSource: "inferred" };
+  }
+
+  const specialty = specialtyFor(agent);
+  const verdict = (role: AgentRole, roleSource: RoleSource): RoleVerdict => ({
+    role,
+    roleSource,
+    ...(specialty ? { specialty } : {}),
+  });
+  if (evidence.operatorHuman || evidence.declaredRole === "human") return verdict("human", "declared");
+  if (evidence.declaredRole === "orchestrator") return verdict("orchestrator", "declared");
+  if (Math.max(0, evidence.observedChildren ?? 0, agent.subagentCount ?? 0) > 0) {
+    return verdict("orchestrator", "observed");
+  }
+  /* Service is observed from an unbound surface, never declared on a session. */
+  if (evidence.declaredRole && evidence.declaredRole !== "service") {
+    return verdict(evidence.declaredRole, "declared");
+  }
+
   const title = agent.displayName.toLowerCase();
   const taskLead = (agent.task ?? "").split("\n", 1)[0]!.toLowerCase();
   const lead = `${title}\n${taskLead}`;
-  if (hasChildren || /(?:^|\n)(?:goal:\s*)?(?:orchestrat\w*|coordinat\w*|deploy (?:an? )?swarm|swarm owner)\b/.test(lead)) {
-    return "orchestrator";
+  if (/(?:^|\n)(?:goal:\s*)?(?:orchestrat\w*|coordinat\w*|deploy (?:an? )?swarm|swarm owner)\b/.test(lead)) {
+    return verdict("orchestrator", "inferred");
   }
   if (
     /\b(?:verifier|reviewer|auditor|gatekeeper)\b/.test(title) ||
     /(?:^|\n)(?:you are\s+)?(?:the\s+)?(?:independent(?:ly)?\s+|final\s+|read-only\s+|adversarial\s+)*(?:verif\w*|reviewer|auditor|gatekeeper)\b/.test(lead)
-  ) return "verifier";
-  if (/\b(?:automation|autopilot)\b/.test(lead)) return "automation";
-  if (/\b(?:frontend|front-end|renderer|\bui\b|\bux\b|design)\b/.test(title)) return "frontend";
-  if (/\b(?:backend|back-end|server|\bipc\b|engine)\b/.test(title)) return "backend";
-  if (/\b(?:tester|testing|\bqa\b|test lane)\b/.test(title)) return "tester";
-  return "agent";
+  ) return verdict("verifier", "inferred");
+  if (/\b(?:automation|autopilot)\b/.test(lead)) return verdict("automation", "inferred");
+  if (specialty || /\b(?:worker|implementer)\b/.test(title)) return verdict("worker", "inferred");
+  if (/\b(?:tester|testing|\bqa\b|test lane)\b/.test(title)) return verdict("tester", "inferred");
+  return verdict("agent", "inferred");
 }
 
 export function effortFor(agent: CollectedAgent): string | undefined {

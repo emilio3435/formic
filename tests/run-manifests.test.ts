@@ -26,12 +26,12 @@ test("a valid run manifest binds its lane and orchestrator to declared lineage",
   expect(manifests[0]).toMatchObject({
     runId: "inbox-ux-overhaul-2026-08-05",
     repoRoot: "/Users/ant/Developer/LaHormigaDormida",
-    lanes: [{ laneId: "fe1-geometry", role: "frontend" }],
+    lanes: [{ laneId: "fe1-geometry", role: "worker" }],
   });
   expect(manifestFactsFor("claude:lane-geometry-20260805", manifests)).toEqual({
     runId: "inbox-ux-overhaul-2026-08-05",
     laneId: "fe1-geometry",
-    role: "frontend",
+    role: "worker",
     parentAgentId: "claude:orch-atlas-20260805",
   });
   expect(manifestFactsFor("claude:orch-atlas-20260805", manifests)).toEqual({
@@ -174,7 +174,7 @@ function manifest(): RunManifest {
     orchestrator: { provider: "claude", sessionId: "manifest-orchestrator" },
     lanes: [{
       laneId: "be-manifest-lane",
-      role: "backend",
+      role: "worker",
       provider: "codex",
       sessionId: "declared-lane",
     }],
@@ -212,7 +212,8 @@ test("manifest lineage outranks workspace env and transcript parentage, includin
   const agent = program?.agents[0];
 
   expect(agent?.parentAgentId).toBe("claude:manifest-orchestrator");
-  expect(agent?.role).toBe("backend");
+  expect(agent?.role).toBe("worker");
+  expect(agent?.roleSource).toBe("declared");
   expect(agent?.identity).toMatchObject({
     name: "be-manifest-lane",
     source: "manifest",

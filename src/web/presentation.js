@@ -18,6 +18,9 @@
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
 import { alerting, deriveActivity, deriveControlState, deriveOutcome, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
 import { state } from "./client-state.js";
+import { ROLE_ALIASES, ROLE_LABELS } from "./client-catalogs.js";
+
+export { ROLE_ALIASES, ROLE_LABELS };
 
 /* Plain words for provider-native enums that used to render raw. */
 export const PROVENANCE_LABELS = { observed: "measured", estimated: "estimated", unknown: "unknown" };
@@ -56,49 +59,6 @@ export const IDENTITY_CAUSES = {
     why: "No cmux terminal reports this session, so there is nothing to route Focus or Send to.",
     next: "Open it in a cmux pane (or start the agent from one) and the next scan binds it.",
   },
-};
-
-export const ROLE_LABELS = {
-  orchestrator: "Orchestrator",
-  frontend: "Frontend / designer",
-  backend: "Backend implementer",
-  verifier: "Verifier",
-  tester: "Tester",
-  automation: "Automation",
-  agent: "Agent",
-};
-
-export const ROLE_ALIASES = {
-  orchestrator: "orchestrator",
-  orchestration: "orchestrator",
-  coordinator: "orchestrator",
-  "swarm owner": "orchestrator",
-  frontend: "frontend",
-  "front end": "frontend",
-  designer: "frontend",
-  design: "frontend",
-  ui: "frontend",
-  ux: "frontend",
-  "frontend / designer": "frontend",
-  backend: "backend",
-  "back end": "backend",
-  server: "backend",
-  engine: "backend",
-  implementer: "backend",
-  "backend implementer": "backend",
-  verifier: "verifier",
-  reviewer: "verifier",
-  auditor: "verifier",
-  gatekeeper: "verifier",
-  validator: "verifier",
-  tester: "tester",
-  testing: "tester",
-  test: "tester",
-  qa: "tester",
-  "test lane": "tester",
-  automation: "automation",
-  autopilot: "automation",
-  automated: "automation",
 };
 
 // Progress 0–100 per work state (normative). blocked keeps a mid value but

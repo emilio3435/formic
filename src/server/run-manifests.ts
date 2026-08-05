@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentRole } from "../shared/types";
+import { AGENT_ROLES, type AgentRole } from "../shared/types";
 import type { CmuxWorkspaceEnvVariables } from "./types";
 
 export interface RunManifestLane {
@@ -30,15 +30,7 @@ export interface DeclaredLineage {
   parentAgentId?: string;
 }
 
-const AGENT_ROLES = new Set<AgentRole>([
-  "orchestrator",
-  "verifier",
-  "automation",
-  "frontend",
-  "backend",
-  "tester",
-  "agent",
-]);
+const DECLARED_AGENT_ROLES = new Set<AgentRole>(AGENT_ROLES.filter((role) => role !== "service"));
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -69,7 +61,7 @@ function parseLane(value: unknown): RunManifestLane | undefined {
   if (
     !laneId
     || !role
-    || !AGENT_ROLES.has(role)
+    || !DECLARED_AGENT_ROLES.has(role)
     || provider === null
     || sessionId === null
     || worktree === null
@@ -205,7 +197,7 @@ export function envFactsFor(variables: CmuxWorkspaceEnvVariables): DeclaredLinea
     !runId
     || !laneId
     || !role
-    || !AGENT_ROLES.has(role)
+    || !DECLARED_AGENT_ROLES.has(role)
     || !parentAgentId
     || !/^[^:\s]+:.+$/.test(parentAgentId)
   ) return undefined;
