@@ -63,7 +63,7 @@ Wrapper launchers (`cursor-agent` / `droid` wrapped) that emit the same `~/.cmux
 
 A tiny boot script each lane's launch command sources: reads `ANTHILL_RUN`/`ANTHILL_LANE` from its env, writes its own sessionId + `status:"active"` into the manifest lane (atomic, first-write-wins per session), and on clean exit writes `status:"done"`. Removes the orchestrator's backfill step (the exact step whose omission orphaned the harden lane). Plus `anthill-backfill <runId> <laneId> <provider:sessionId>` for retroactive adoption of any visible session (the operation proven live today).
 
-### T10 — Hardening sweep (harden2)
+### T10 — Hardening sweep (harden2) ✅ **[DONE 2ca4791 + reader integration, merged]**
 
 Truth-table + golden coverage for everything above: lineageAgreement cases, succession retirement, origin-vs-path repoKeys, parked/blocked/done matrix (esp. parked-then-asks re-alert), forged-sender fixture, shim goldens. Hook-store compaction: dead `activeSessionsBySurface` entries pruned after N days (the file only grows today).
 
