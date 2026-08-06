@@ -127,6 +127,16 @@ import {
   TRANSCRIPT_MAX_LIMIT,
 } from "./api-client.js";
 import { classifyLifecycle, evidenceFromAgent } from "./lifecycle.js";
+/* The Cleaner's whole derivation. app.js keeps the fetch and the paint; which
+   state the chip is in is decided in cleaner.js against the live session. */
+import {
+  cleanerFromResponse,
+  cleanerView,
+  cleanupCounts,
+  countsSentence,
+  CLEANER_IN_FLIGHT,
+  CLEANER_LABELS,
+} from "./cleaner.js";
 import {
   alerting,
   buildClusters,
@@ -2362,10 +2372,25 @@ function widgetLabelNode(id, label) {
    recorded here rather than implied, the way the a11y sweep records its own
    NOT RUN row. */
 function cleanupAction() {
-  const running = state.cleanup.running;
+  /* Two things can be in flight and they are different facts: the propose sweep
+     the board runs itself, and the Cleaner LANE it launched. `examining` is the
+     first; every other state is read from the second's session — see cleaner.js,
+     where the whole derivation lives and is testable without a DOM. */
+  const examining = state.cleanup.running;
+  const view = cleanerView(state.snap, state.cleaner);
+  const busy = examining || CLEANER_IN_FLIGHT.has(view.state);
+  const label = examining ? "Examining…" : CLEANER_LABELS[view.state] || "Clean up";
+  /* A stated failure, never a spinner that outlives its cause. The route names
+     which step refused and that sentence is what the operator reads. */
+  const failed = !examining && view.state === "failed";
+  const asking = !examining && view.state === "needs-you";
+  const running = busy;
   return el("button", {
     type: "button",
-    class: "verdict-cleanup" + (running ? " is-running" : ""),
+    class: "verdict-cleanup"
+      + (busy ? " is-running" : "")
+      + (failed ? " is-failed" : "")
+      + (asking ? " is-asking" : ""),
     /* aria-disabled, NOT disabled. A disabled element leaves the tab order, and
        this button is rebuilt on the same paint that disables it — so render()'s
        fkey restore found the new node, called focus() on something disabled,
@@ -2376,14 +2401,18 @@ function cleanupAction() {
        control focusable; requestCleanupProposal already refuses re-entry. */
     "aria-disabled": running ? "true" : null,
     "aria-busy": running ? "true" : null,
-    title: running
+    title: examining
       ? "Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval."
-      : "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead panes. Nothing will be deleted without your approval — you paste the confirm command yourself.",
+      : view.message
+        || "Launch a Cleaner: it proposes first, asks you here, and only removes what you approve. Nothing is deleted without your answer.",
     dataset: { fkey: "cleanup-propose" },
-    onclick: (e) => { e.stopPropagation(); void requestCleanupProposal(); },
+    /* R2′: the board LAUNCHES a lane; it still never deletes. The gate did not
+       disappear, it moved onto the board — the Cleaner asks as an ordinary agent
+       and the operator answers it the way they answer every other one. */
+    onclick: (e) => { e.stopPropagation(); void requestCleanerLaunch(); },
   },
     el("span", { class: "verdict-cleanup-mark", "aria-hidden": "true" }),
-    running ? "Examining…" : "Clean up");
+    label);
 }
 
 /* Whether the sweep is worth offering.
@@ -2792,6 +2821,19 @@ function notifyPanelPaintSig(model, open) {
     state.cleanup.running ? "sweeping" : "",
     String(state.cleanup.at),
     state.cleanup.error,
+    /* The Cleaner lane's binding, for the same reason the sweep's state is here:
+       the chip follows a SESSION, and its state changes when that session
+       changes without any signed widget value moving. Omitting this is exactly
+       the CLEAN-1 defect — the header simply never repainted during a sweep and
+       the whole running state was unreachable from the control that starts it. */
+    state.cleaner.sessionId,
+    /* …and the DERIVED state, not just the binding. The chip's words change when
+       the Cleaner's session changes — working to asking, asking to ended — and
+       none of that moves a widget value either. Signing only the session id
+       would repaint on adoption and then freeze for the rest of the run, which
+       is CLEAN-1 again one level down. */
+    cleanerView(state.snap, state.cleaner).state,
+    state.cleaner.error,
     feedFrozen() ? "held" : "",
   ].join("\u001f");
 }
@@ -3012,6 +3054,43 @@ function renderNotificationCenter() {
 function announceCleanup(text) {
   const region = $("cleanup-status");
   if (region) region.textContent = text;
+}
+
+/* Launch one Cleaner lane and bind the chip to it.
+
+   R2′ of the Cleaner plan: the board may start the agent, and still may not
+   delete. `/api/cleanup/launch` is a spawn route with no confirm counterpart —
+   the Cleaner proposes, asks the operator in its own session, and only then
+   removes.
+
+   No second-launch guard beyond the binding, deliberately. A double click is
+   answered by the SERVER with `CLEANER_ALREADY_RUNNING` carrying the running
+   lane's id, and cleanerFromResponse adopts it. Debouncing the button here would
+   be the client guessing at server state, which is the same class of mistake as
+   a timer-driven progress bar. */
+async function requestCleanerLaunch() {
+  if (state.cleaner.launching) return;
+  state.cleaner = { sessionId: "", code: "", error: "", launching: true };
+  announceCleanup("Starting a Cleaner lane. It will propose first and ask you before removing anything.");
+  render();
+  let body = null;
+  let httpOk = false;
+  try {
+    const res = await apiFetch("/api/cleanup/launch", {
+      method: "POST",
+      headers: { accept: "application/json" },
+    }, 90_000);
+    httpOk = res.ok;
+    body = await res.json().catch(() => null);
+  } catch {
+    /* Left null on purpose: cleanerFromResponse turns a dead transport into a
+       STATED failure. The one thing this may never do is leave the chip mid
+       spin with nothing said. */
+  }
+  state.cleaner = { ...cleanerFromResponse(body, httpOk), launching: false };
+  announceCleanup(state.cleaner.error
+    || "A Cleaner lane is running. It appears on the board like any other agent, and it will ask you before it removes anything.");
+  render();
 }
 
 async function requestCleanupProposal() {
@@ -3611,6 +3690,19 @@ function renderHealthRail() {
     state.cleanup.running ? "sweeping" : "",
     String(state.cleanup.at),
     state.cleanup.error,
+    /* The Cleaner lane's binding, for the same reason the sweep's state is here:
+       the chip follows a SESSION, and its state changes when that session
+       changes without any signed widget value moving. Omitting this is exactly
+       the CLEAN-1 defect — the header simply never repainted during a sweep and
+       the whole running state was unreachable from the control that starts it. */
+    state.cleaner.sessionId,
+    /* …and the DERIVED state, not just the binding. The chip's words change when
+       the Cleaner's session changes — working to asking, asking to ended — and
+       none of that moves a widget value either. Signing only the session id
+       would repaint on adoption and then freeze for the rest of the run, which
+       is CLEAN-1 again one level down. */
+    cleanerView(state.snap, state.cleaner).state,
+    state.cleaner.error,
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings

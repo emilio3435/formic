@@ -90,6 +90,11 @@ export const state = {
      refusals with reasons, and the confirm command the OPERATOR pastes. The
      board never executes it, so nothing here is ever a deletion, only a plan. */
   cleanup: { running: false, error: "", view: null, at: 0 },
+  /* The Cleaner lane the chip is following, by session id. Everything the chip
+     shows about it is DERIVED from that session in the snapshot — see
+     cleaner.js — so nothing here is a state, only the binding and the one
+     failure the board learned from the launch route itself. */
+  cleaner: { sessionId: "", code: "", error: "", launching: false },
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,

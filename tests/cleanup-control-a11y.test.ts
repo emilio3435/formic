@@ -202,8 +202,11 @@ describe("CLEAN-5: the indicator is not a colour-only signal", () => {
   });
 
   test("the state is carried by the label, not only by the indicator", () => {
-    /* A screen reader gets nothing from a spinner. The word is the signal. */
-    expect(cleanupButton).toMatch(/running \? "Examining…" : "Clean up"/);
+    /* A screen reader gets nothing from a spinner. The word is the signal, and
+       since S3 the word comes from the Cleaner's derived state rather than a
+       single boolean — every state in CLEANER_LABELS has one. */
+    expect(cleanupButton).toMatch(/const label = examining \? "Examining…" : CLEANER_LABELS\[view\.state\]/);
+    expect(cleanupButton).toMatch(/\},\s*\n\s*el\("span", \{ class: "verdict-cleanup-mark", "aria-hidden": "true" \}\),\s*\n\s*label\);/);
   });
 
   test("reduced motion keeps a visible marker rather than removing it", () => {
