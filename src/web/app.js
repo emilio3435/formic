@@ -1424,7 +1424,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, hiddenByLookback, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
@@ -6075,6 +6075,37 @@ function stripRowOpts(program, board) {
   };
 }
 
+/* How many sessions the LOOKBACK — and only the lookback — is holding back.
+
+   Every other filter in currentFilter is applied, so this answers the one
+   question the all-clear cannot answer for itself: "is the board empty, or is
+   the window just short?" A bare "showing 6h" leaves an operator guessing
+   whether that matters; a count tells them.
+
+   It calls the filtering program's own predicates rather than re-deriving them.
+   passesReviewVisibility and passesEveryLens are theirs, and a second copy of
+   either would be a second answer to the same question — the defect this file
+   has a scar for in three other places. */
+function hiddenByLookback(ui = state) {
+  if (!lookbackApplies(ui.view) || ui.lookbackHours == null || !ui.snap) return 0;
+  let hidden = 0;
+  for (const { agent, program } of snapshotAgents(ui.snap)) {
+    if (passesLookback(agent, ui.view, ui.lookbackHours)) continue;   // inside the window
+    if (!viewMatches(ui.view, agent)) continue;
+    if (!matchesQuery(agent, program, ui.query)) continue;
+    if (!passesReviewVisibility(
+      agent,
+      ui.view,
+      ui.showReviewWorkers,
+      Boolean(ui.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, ui.query),
+    )) continue;
+    if (ui.facetProgram && program.id !== ui.facetProgram) continue;
+    if (!passesEveryLens(agent, ui)) continue;
+    hidden += 1;
+  }
+  return hidden;
+}
+
 /* The constrained-empty sentence, pure so the harness can reach it: renderPrograms
    is below the seam and this copy was unreachable by test — the exact shape a
    sentence drifts in. Returns null when no constraint is active, and the caller
@@ -6083,7 +6114,29 @@ function emptyListMessage(ui = state) {
   const lookbackHiding = lookbackApplies(ui.view) && ui.lookbackHours != null;
   const reviewsHidden = !ui.showReviewWorkers ? reviewWorkerCount(ui) : 0;
   const active = activeLenses(ui);
-  if (!ui.query && !ui.facetProgram && !active.length && !lookbackHiding && !reviewsHidden) return null;
+  /* THE LOOKBACK IS NOT A CONSTRAINT THE OPERATOR CHOSE.
+
+     It was in this test, and because lookbackApplies("board") is true and no
+     reachable preset is null, `lookbackHiding` was ALWAYS true on Board — so
+     this returned a sentence every time and the rich all-clear below was dead
+     code at every window an operator can pick. It was reachable only through
+     the separate Everything control. Nothing covered it: `grep "Nothing is
+     live" tests/` returned nothing at all, which is how it rotted unnoticed.
+
+     Making the branch merely reachable would have been worse than leaving it.
+     "Nothing is live" is FALSE under a 6h window: withinLookback filters on
+     updatedAt recency, so a session whose process is alive and which has been
+     waiting on a person for eight hours is live and outside it — and because
+     the filter keys on quiet time, the rows it excludes first are the ones
+     quiet longest, exactly the blocked-on-a-human population this board exists
+     to surface. A thin-but-true line would have become a rich-but-false one.
+
+     So the lookback stops forcing this sentence, and the rich state DISCLOSES
+     the window instead, carrying how many sessions it is holding back. Both
+     facts are true at once and both get said. The lookback still appears in the
+     list below when some other constraint is also active — it is a real part of
+     "why is this empty" then, just never the whole of it. */
+  if (!ui.query && !ui.facetProgram && !active.length && !reviewsHidden) return null;
   /* One hidden reviewer is one review worker. The count is rendered into the
      sentence, so the noun and its verb have to agree with it or the disclosure
      reads as a bug in the very number it is disclosing. */
@@ -6189,6 +6242,11 @@ function renderPrograms() {
 
        Zero live sessions is now said in those words, and the findings that do
        exist are named and pointed at rather than papered over. */
+    /* How many sessions the window is holding back — the number that turns
+       "showing 6h" from a fact the operator has to interpret into one they can
+       act on. Computed once here and read by both the headline and the
+       disclosure, so the two cannot disagree about it. */
+    const hiddenNow = hiddenByLookback(state);
     const openFindings = state.view === "board" ? issuesOf(state.snap) : [];
     const allClear = state.view === "board" && openFindings.length === 0;
     const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
@@ -6209,7 +6267,22 @@ function renderPrograms() {
          over a state that by construction has no working sessions in it. */
       wrap.append(
         ...(allClear ? [el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check"))] : []),
-        el("p", { class: "all-clear-head", text: "Nothing is live" }),
+        /* THE CLAIM IS QUALIFIED, NOT SOFTENED.
+
+           "Nothing is live" is false whenever the window is shorter than the
+           collectors' reach: withinLookback filters on updatedAt recency, so a
+           session whose process is alive and which has been waiting on a person
+           for eight hours is live and simply outside a 6h view. Saying it flatly
+           would conceal exactly the sessions that have been quiet longest —
+           which, because the filter keys on quiet time, are the blocked-on-a-
+           human rows this board exists to surface.
+
+           So the headline says what was actually measured: nothing is live IN
+           THE WINDOW BEING SHOWN. Unqualified only when the window is hiding
+           nothing, where the shorter sentence is the true one. */
+        el("p", { class: "all-clear-head", text: hiddenNow
+          ? "Nothing is live in the last " + lookbackLabel(state.lookbackHours)
+          : "Nothing is live" }),
         el("p", { class: "all-clear-vitals" },
           el("span", { text: `${t.tracked} tracked · ${t.live} live` }),
           /* A stalled session is neither working nor done — it is the third
@@ -6226,6 +6299,29 @@ function renderPrograms() {
             dataset: { ago: state.snap.generatedAt },
             text: "checked " + agoText(state.snap.generatedAt),
           })),
+        /* The window's own disclosure, and the escape from it.
+
+           Both facts are true at once — the board is all-clear AND it is only
+           looking back this far — so both are said. The COUNT is what makes it
+           actionable: a bare "showing 6h" leaves the operator to guess whether
+           that matters, where "8 sessions are outside it" tells them, and tells
+           them the ones most likely to be there are the ones quiet longest.
+
+           Silent when the window hides nothing, because then the headline above
+           is unqualified and true, and a standing footnote about a window that
+           is holding nothing back is the kind of permanent line that stops
+           being read. */
+        ...(hiddenNow ? [el("p", { class: "all-clear-window" },
+          el("span", {
+            text: `${hiddenNow} session${hiddenNow === 1 ? "" : "s"} `
+              + `${hiddenNow === 1 ? "is" : "are"} outside this window.`,
+          }),
+          el("button", {
+            type: "button", class: "all-clear-widen",
+            dataset: { fkey: "all-clear-widen" },
+            "aria-label": `Show everything the collectors have, not only the last ${lookbackLabel(state.lookbackHours)}`,
+            onclick: () => setLookbackHours(null),
+          }, "Show everything"))] : []),
         /* An all-clear may only render over an EMPTY findings collection, never
            over an empty row list alone. A board carrying a collector fault and
            no live agent used to render a check mark and the words "Nothing

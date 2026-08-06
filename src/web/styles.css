@@ -3825,3 +3825,30 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--ink);
 }
 .cleanup-plan-path { margin: 0.25rem 0 0; font-size: 0.66rem; color: var(--faint); overflow-wrap: anywhere; }
+
+/* The all-clear's window disclosure. Both facts are true at once — the board is
+   clear AND it is only looking back this far — so this sits under the vitals
+   rather than replacing them, and carries the count that makes "showing 6h"
+   something an operator can act on instead of interpret. */
+.all-clear-window {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  color: var(--faint);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.all-clear-widen {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.all-clear-widen:hover { color: var(--ink); }

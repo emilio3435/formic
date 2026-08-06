@@ -12895,3 +12895,72 @@ describe("the cleanup sweep proposes and never executes", () => {
     expect(sig).toContain("state.cleanup.error");
   });
 });
+
+/* ---------------------------------------------------------------------------
+   The Board's rich all-clear is unreachable at every lookback an operator can
+   pick, and it would be FALSE if it were reached.
+
+   RED ON PURPOSE. These pin the two halves of a defect that is still open, and
+   they are written before the fix so that reachability cannot be declared won on
+   a branch where the branch is still dead. See
+   .agent/runs/board-all-clear-lookback-disclosure/.
+   ------------------------------------------------------------------------- */
+
+describe("the Board all-clear is reachable, and honest about its window", () => {
+  const boardUi = (over: Record<string, unknown> = {}) => listUi({
+    view: "board",
+    lookbackHours: M.DEFAULT_LOOKBACK_HOURS,
+    query: "",
+    facetProgram: "",
+    showReviewWorkers: true,
+    snap: snapshot({ programs: [{ id: "p", name: "P", agents: [] }] }),
+    ...over,
+  });
+
+  test("at the DEFAULT lookback, an unconstrained empty board reaches the rich all-clear", () => {
+    /* emptyListMessage returning non-null is what makes the rich branch dead:
+       renderPrograms prints its thin "Nothing matches…" line instead, and the
+       verdict mark, "Nothing is live", the vitals with the ticking age, the
+       open-findings disclosure and the escape into History all go with it.
+
+       lookbackApplies("board") is true, LOOKBACK_HOUR_PRESETS carries no null,
+       and DEFAULT_LOOKBACK_HOURS is 6 — so `lookbackHours != null` holds for
+       every preset an operator can pick and the thin line always wins. Only the
+       separate Everything control, which sets it to null, reaches the rich
+       state. That is why this rotted silently: `grep "Nothing is live" tests/`
+       returned nothing at all. */
+    expect(M.emptyListMessage(boardUi())).toBeNull();
+  });
+
+  test("a real constraint still speaks — this is a reachability fix, not a mute", () => {
+    // The thin line is correct when something the operator chose is hiding rows.
+    expect(M.emptyListMessage(boardUi({ query: "ridge" }))).toContain("Nothing matches");
+    expect(M.emptyListMessage(boardUi({ facetProgram: "p" }))).toContain("Nothing matches");
+  });
+
+  test("the rich all-clear may not claim 'Nothing is live' while a window hides live sessions", () => {
+    /* The second half, and the reason the fix is a DISCLOSURE rather than just
+       making the branch reachable. withinLookback filters on updatedAt recency,
+       so a session whose process is alive and which has been waiting on a person
+       for eight hours is live AND outside a 6h window.
+
+       Worse: because the filter keys on quiet time, the rows it excludes FIRST
+       are the ones quiet longest — exactly the blocked-on-a-human population
+       this program exists to surface. A flat "Nothing is live" at 6h conceals
+       precisely the rows that matter most. */
+    const eightHoursAgo = new Date(Date.now() - 8 * 3_600_000).toISOString();
+    const waiting = agent({ id: "codex:old", updatedAt: eightHoursAgo, status: "waiting" });
+    expect(M.withinLookback(waiting, 6)).toBe(false);   // hidden by the window
+    expect(M.isTerminal(waiting)).toBe(false);          // …and demonstrably live
+
+    /* So the rich state has to say BOTH facts at once: the board is all-clear,
+       and it is only looking back 6h — carrying how many sessions that window is
+       hiding, because a bare "showing 6h" leaves the operator guessing whether
+       it matters. `hiddenByLookback` is the function that must exist; this fails
+       until it does. */
+    const hidden = M.hiddenByLookback(boardUi({
+      snap: snapshot({ programs: [{ id: "p", name: "P", agents: [waiting] }] }),
+    }));
+    expect(hidden).toBe(1);
+  });
+});
