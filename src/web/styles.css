@@ -927,7 +927,11 @@ body.feed-frozen .programs { opacity: 0.62; }
    positioned descendants, so the first dropdown to open would have been scrolled
    away inside the very bar that opened it. */
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding-bottom: 2px; }
-.filter-bar:empty { display: none; }
+/* The `:empty` fallback is gone with FE-4 D4: the bar now always carries the
+   sentence's live region as a permanent child, so it is never empty and the rule
+   could never match again. Hiding it was never that rule's job anyway —
+   `[hidden] { display: none !important }` at the top of this file does it, which
+   is what `bar.hidden = true` has always been relying on. */
 .filter-bar > * { flex: none; }
 .filter-lead { position: sticky; left: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.15rem; background: var(--canvas); padding-right: 0.2rem; }
 /* The `filter-group` segmented control — it held the provider, lookback and
@@ -1022,28 +1026,26 @@ body.feed-frozen .programs { opacity: 0.62; }
 .filter-menu-item:hover { background: var(--sand); color: var(--ink); }
 .filter-menu-count { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
 
-/* The fleet's review-worker policy. Deliberately NOT a filter-chip: it is a
-   shared server setting rather than this browser's lens, and dressing it as a
-   chip taught operators it was a sixth thing they were narrowing by. It reads as
-   a line of disclosure that happens to be clickable — no border, no fill, no
-   pressed state — so it sits in the bar without competing with the controls that
-   actually filter. */
-.filter-policy {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.2rem;
-  min-height: 30px;
-  font-size: 12px;
+/* The fleet's review-worker policy, now the FOOTER of the Class menu.
+
+   It was a standalone fragment in the bar, standing in the row of things that
+   narrow this board — which it is not: it is a server setting shared by every
+   browser, and a standing policy about which rows the Board is for. Inside the
+   menu it sits under the classes it governs, separated by a rule and set in the
+   quieter ink, so it reads as a statement about the fleet rather than as one
+   more class you could pick. (The `filter-policy` bar fragment it replaces is
+   gone; the CSS census forbids a declared class the client never emits, so its
+   rules could not stay behind. Named without its leading dot on purpose — the
+   census reads this file's comments too.) */
+.filter-menu-policy {
+  margin-top: 0.3rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
   font-weight: 600;
   color: var(--faint);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
 }
-.filter-policy:hover { color: var(--ink); text-decoration: underline; }
-.filter-policy.is-showing { color: var(--muted); }
-.filter-policy-mark { font-size: 12px; line-height: 1; }
+.filter-menu-policy:hover { color: var(--ink); }
 .filter-menu-item.is-active { color: var(--ink); background: var(--sand); border-color: var(--line-strong); }
 /* The caveat under the Days group, not a footnote nobody reads: it is inside the
    group it qualifies and it is that group's aria-describedby. */
@@ -1078,6 +1080,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* The board's sentence, in the filter bar row. It TAKES the slack between the
+   lenses and the right-aligned Time trigger, which is both its meaning (lenses
+   left, working-set control right, the reconciliation between them) and what
+   stops that alignment reading as stranded.
+
+   `flex` with `min-width: 0` rather than a fixed width: on a narrow bar the
+   sentence wraps to its own line and the controls stay put. It must never widen
+   the bar, because this bar cannot recover with `overflow-x` — an overflow
+   container clips the dropdowns that hang off it. */
+.scope-note.is-inline { flex: 1 1 14rem; min-width: 0; margin-left: 0.35rem; }
 /* The self-writing line. Its lens fragments are real buttons styled as emphasis
    inside the sentence — an operator reading "showing working codex sessions"
    should be able to act on the words rather than hunt the bar for whichever
@@ -1195,9 +1207,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .rename-form .rename-source { flex-basis: 100%; font-size: 11px; color: var(--faint); }
 .rename-error { flex-basis: 100%; margin: 0; color: var(--ember); font-size: 12.5px; }
 
-.program-select-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.9rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--moss) 5%, var(--surface)); }
-.program-select-note { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-
 .program-agents { border-top: 1px solid var(--line); }
 .program:not(.open) .program-agents { display: none; border-top: 0; }
 
@@ -1284,9 +1293,7 @@ body.feed-frozen .programs { opacity: 0.62; }
    rule uses, so keyboard focus reads identically everywhere on the board. */
 .agent-row:focus-visible { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); box-shadow: inset 0 0 0 2px var(--ember); }
 .agent-row.is-selected { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border-left-color: var(--ink); }
-.agent-row.is-selecting { cursor: default; }
 .agent-row.is-renaming { border-bottom-color: transparent; }
-.agent-row[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 .agent-row-edit-wrap { border-bottom: 1px solid var(--line); }
 .agent-row-edit-wrap .rename-form { border-bottom: 0; }
 
@@ -1342,7 +1349,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 2px var(--ember); }
 .agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 2px var(--ember); }
 .agent-row.is-ended { opacity: 0.66; }
-.agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
 /* One shared 5-track template — identity (wide, left) + the right-aligned
    instrument cluster: status, model+ctx%, tokens, elapsed. Both the header and
@@ -1761,12 +1767,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you .row-summary { color: color-mix(in srgb, var(--ember) 65%, var(--ink)); }
 .agent-row.is-failed .row-summary { color: color-mix(in srgb, var(--failed) 65%, var(--ink)); }
 
-/* selection checkbox */
-.row-check { position: absolute; top: 0.6rem; left: 0.5rem; width: 1.2rem; height: 1.2rem; display: grid; place-items: center; border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--raise); color: transparent; }
-.agent-row.is-selecting { padding-left: 2.3rem; }
-.agent-row.is-checked .row-check { border-color: var(--moss); background: var(--moss); color: #fff; }
-.row-check .ico { width: 0.85rem; height: 0.85rem; }
-
 /* swarm tree connectors + depth accents */
 .agent-row.depth-1 { --tree-depth: 1; --tree-color: #6c8b6b; }
 .agent-row.depth-2 { --tree-depth: 2; --tree-color: #b6794f; }
@@ -1778,7 +1778,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    nesting reuses the level-3 indent; the depth colour + swarm/depth chips carry
    the rest of the hierarchy. min(var(--tree-depth), 3) caps the multiplier. */
 .agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--tree-color); }
-.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 1.3rem); }
 .agent-row.is-child::before {
   content: "";
   position: absolute;
@@ -2835,59 +2834,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .control-feedback.ok { color: var(--ok); }
 .control-feedback.err { color: var(--bad); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* ---------- broadcast dock ---------- */
-
-.broadcast-bar {
-  position: fixed;
-  left: 50%;
-  bottom: 1.1rem;
-  transform: translateX(-50%);
-  z-index: 45;
-  width: min(96vw, 46rem);
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--raise);
-  box-shadow: var(--shadow-lift);
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.broadcast-bar[hidden] { display: none; }
-.broadcast-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.broadcast-head .ico { width: 1.15rem; height: 1.15rem; color: var(--ember); }
-.broadcast-title { font-weight: 750; font-size: 15px; }
-.broadcast-count { font-size: 12.5px; color: var(--muted); }
-.broadcast-count strong { color: var(--ink); }
-.broadcast-clear { margin-left: auto; font-size: 12.5px; color: var(--ember); font-weight: 650; }
-.broadcast-recipients { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 5rem; overflow-y: auto; }
-.recipient-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line-strong); background: var(--surface); }
-.recipient-chip.is-eligible { border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); color: var(--ink); }
-.recipient-chip.is-ineligible { color: var(--faint); border-style: dashed; }
-.recipient-chip .rc-state { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
-.recipient-chip.is-eligible .rc-state { color: var(--moss); }
-.recipient-result { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; }
-.recipient-result.ok { color: var(--moss); }
-.recipient-result.err { color: var(--ember); }
-.broadcast-compose { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: stretch; }
-.broadcast-compose textarea {
-  flex: 1 1 16rem;
-  min-height: 46px;
-  padding: 0.5rem 0.65rem;
-  font: inherit;
-  font-size: 13.5px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  resize: vertical;
-}
-.broadcast-send { align-self: stretch; }
-.broadcast-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem; border: 1px solid color-mix(in srgb, var(--ember) 45%, transparent); border-radius: var(--radius-sm); background: var(--ember-soft); font-size: 13px; }
-.broadcast-note { font-size: 12px; color: var(--faint); }
-.broadcast-note.err { color: var(--ember); }
-.broadcast-note.is-held { color: var(--ember); font-weight: 650; }
-
 /* ---------- empty state ---------- */
 
 .empty-state { margin: 4rem auto; max-width: 26rem; text-align: center; color: var(--muted); }
@@ -3044,11 +2990,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   .agent-row:focus .row-summary,
   .agent-row.is-selected .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
   .agent-row.is-child { padding-left: calc(0.65rem + min(var(--tree-depth), 3) * 0.85rem); }
-  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 0.85rem); }
   .tri-spine { flex-direction: column; gap: 0.45rem; }
   .tri-step { flex: 1 1 auto; padding-right: 0; }
   .tri-step::before { display: none; }
-  .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch.
      (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */
@@ -3058,51 +3002,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 /* ---------- usage tab ---------- */
 
-/* ---------- action log ----------
-   A ledger, not a feed: fixed columns so outcome is scannable down one edge and
-   a page of failures cannot hide among the successes. */
-
-.actions-panel { padding: 0 1.1rem 1.1rem; }
-.actions-panel[hidden] { display: none; }
-.action-log { display: flex; flex-direction: column; gap: 0.5rem; }
-.action-log-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
-.action-log-title {
-  margin: 0;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
-}
-.action-log-note { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--faint); }
-.action-log-note.err { color: var(--ember); }
-.action-rows {
-  display: flex; flex-direction: column;
-  border: 1px solid var(--line); border-radius: 4px;
-  background: var(--raise);
-  max-height: 24rem; overflow: auto;
-}
-.action-row {
-  display: grid;
-  grid-template-columns: 5rem 5.5rem minmax(6rem, 1fr) 9rem minmax(0, 1.4fr);
-  gap: 0.6rem; align-items: baseline;
-  padding: 0.4rem 0.65rem;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-}
-.action-row:last-child { border-bottom: 0; }
-.action-when, .action-kind { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
-.action-kind { color: var(--muted); font-weight: 650; }
-.action-who { color: var(--muted); overflow-wrap: anywhere; }
-.action-outcome { font-weight: 650; color: var(--muted); }
-.action-detail { color: var(--faint); overflow-wrap: anywhere; }
-.action-row[data-tone="ok"] .action-outcome { color: var(--moss); }
-.action-row[data-tone="warn"] .action-outcome { color: var(--amber); }
-.action-row[data-tone="err"] .action-outcome { color: var(--ember); }
+/* The command dock's "did I already send this?" crumb — the one surviving
+   reader of the operator journal after the action-log panel came out. */
 .command-dock-last { margin: 0 0 0.4rem; font-size: 11.5px; color: var(--faint); }
 .command-dock-last[data-tone="err"] { color: var(--ember); }
 .command-dock-last[data-tone="warn"] { color: var(--amber); }
-
-@media (max-width: 720px) {
-  .action-row { grid-template-columns: 1fr 1fr; }
-}
 
 .usage-panel {
   display: grid;
@@ -3751,7 +3655,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   vertical-align: middle;
 }
 .verdict-cleanup:hover { background: var(--sand); }
-.verdict-cleanup:disabled { cursor: progress; opacity: 0.85; }
+/* aria-disabled rather than :disabled — the button stays focusable while a sweep
+   runs, because a control that leaves the tab order mid-interaction strands the
+   keyboard operator who just activated it. Styled the same either way. */
+.verdict-cleanup[aria-disabled="true"] { cursor: progress; opacity: 0.85; }
 
 /* The indicator states that A PROCESS IS UNDERWAY. It must never imply the
    fault is fixed, so it is a bare rotating arc with no completion affordance —

@@ -18,12 +18,9 @@ import {
 } from "./feed-freshness.js";
 import {
   ACTION_KIND_LABELS,
-  actionRecipients,
   loadActions,
   normalizeActions,
   refreshActions,
-  renderActionLog,
-  renderActionsPanel,
 } from "./action-log.js";
 import {
   loadTranscript,
@@ -141,6 +138,7 @@ import {
   isLive,
   isReviewWorker,
   sessionKindOf,
+  agentClassOf,
   isTerminal,
   isUnverified,
   lifecycleOf,
@@ -1364,10 +1362,10 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
-  isReviewWorker, sessionKindOf,
+  isReviewWorker, sessionKindOf, agentClassOf,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_HOUR_PRESETS, LOOKBACK_DAY_PRESETS,
-  broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
+  CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
@@ -1392,19 +1390,14 @@ globalThis.TheAntHill = {
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
-  actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
+  actionOutcomeView, lastActionFor,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   // The attention surface. NOTIFY_DEPS is a `const` and stays out of this
   // hoisted block for the same TDZ reason CONN_LABELS does; it is exported from
   // the test seam at the foot of the file.
   attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
   notificationPanelModel, feedTone, blockingCount, blockingAgentIds,
-  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
-  /* The broadcast bar itself, not just its signature. It now carries the only
-     pointer-reachable exit from selection mode — the toolbar button that used to
-     be it is gone — so "there is a way out" has to be assertable against the
-     rendered control rather than against a source string. */
-  renderBroadcastBar,
+  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, agentsById,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
   lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
@@ -1957,7 +1950,6 @@ function pollConnectionHealth(now = Date.now()) {
 function refreshStalenessSurfaces() {
   renderFeedAlarm();
   if (state.selected) renderInspector();
-  if (state.selecting) renderBroadcastBar();
 }
 
 function tickFreshnessSurfaces() {
@@ -2162,9 +2154,7 @@ function render() {
   // Its own step, not a tail of the widget paint — see renderPulseStrip.
   renderSettingsPanel();
   renderPrograms();
-  renderActionsPanel();
   renderInspector();
-  renderBroadcastBar();
   renderSkeleton();
   renderEmpty();
 
@@ -2292,11 +2282,16 @@ function cleanupAction() {
   return el("button", {
     type: "button",
     class: "verdict-cleanup" + (running ? " is-running" : ""),
-    disabled: running ? "" : null,
+    /* aria-disabled, NOT disabled. A disabled element leaves the tab order, and
+       this button is rebuilt on the same paint that disables it — so render()'s
+       fkey restore found the new node, called focus() on something disabled,
+       and the call did nothing. Measured: activeElement === body the instant a
+       keyboard operator activated Clean up, and it never came back, because the
+       next paint read its focusKey off <body> and had nothing to restore.
+       aria-disabled says the same thing to assistive tech while keeping the
+       control focusable; requestCleanupProposal already refuses re-entry. */
+    "aria-disabled": running ? "true" : null,
     "aria-busy": running ? "true" : null,
-    /* aria-live so the transition is announced: a spinner is invisible to a
-       screen reader, and "a sweep is running" is the whole message. */
-    "aria-live": "polite",
     title: running
       ? "Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval."
       : "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead panes. Nothing will be deleted without your approval — you paste the confirm command yourself.",
@@ -2837,9 +2832,20 @@ function renderNotificationCenter() {
    plan missing a refusal is a plan that proposes deleting something it should
    not — so an incomplete enumeration is reported as incomplete and no removable
    is shown from it. */
+/* The sweep's non-visual signal, written to the static region in the rail header
+   rather than to the button. The button is rebuilt on every paint, and a live
+   region that is destroyed and recreated announces nothing — so the announcement
+   it used to carry could never fire. A spinner says nothing to a screen reader,
+   which left a non-sighted operator with no signal that anything had started. */
+function announceCleanup(text) {
+  const region = $("cleanup-status");
+  if (region) region.textContent = text;
+}
+
 async function requestCleanupProposal() {
   if (state.cleanup.running) return;              // overlapping calls share one run server-side
   state.cleanup = { running: true, error: "", view: null, at: Date.now() };
+  announceCleanup("Cleanup sweep running. Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval.");
   render();
   try {
     const res = await apiFetch("/api/cleanup/propose", {
@@ -2862,6 +2868,11 @@ async function requestCleanupProposal() {
       view: null, at: Date.now(),
     };
   }
+  /* The outcome, in the same region. "Incomplete" and "ready" are different
+     facts and the operator must not read one as the other — the same rule the
+     error string above already follows. */
+  announceCleanup(state.cleanup.error
+    || "Cleanup proposal ready. Open Notifications to read it; nothing has been deleted.");
   render();
 }
 
@@ -3379,6 +3390,16 @@ function renderHealthRail() {
       const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
+    /* The sweep's own state. The notification panel's signature already signs
+       this — "or the panel would freeze mid-run" — but the rail is where the
+       Clean up BUTTON lives, and it never got the same treatment. Measured on
+       the live board: with a sweep running, the header button stayed "Clean up",
+       stayed enabled and never showed its indicator, because not one signed
+       input moves while a sweep is in flight. The entire running state was
+       unreachable from the control that starts it. */
+    state.cleanup.running ? "sweeping" : "",
+    String(state.cleanup.at),
+    state.cleanup.error,
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -4580,12 +4601,6 @@ function renderTabs() {
        standard tablist contract and what a screen-reader user already expects. */
     btn.tabIndex = isCurrent ? 0 : -1;
   }
-  /* The Select-to-send maintenance block stood here. Its button is gone from the
-     toolbar (operator directive, 2026-08-05), so there is nothing left to keep
-     hidden, pressed, or renamed. Selection mode itself is untouched and still
-     enterable — a program drawer's "Broadcast to N eligible" turns it on — and
-     the broadcast bar now carries the "Done selecting" exit the toolbar button
-     used to be. The Action log is the one that went fully UI-unreachable. */
   const search = $("search");
   const opsRow = $("ops-toolbar-row");
   if (opsRow) opsRow.hidden = state.view === "usage";
@@ -4614,6 +4629,37 @@ function filterChip(label, active, onclick, opts = {}) {
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
+/* The class vocabulary, in the order the menu offers it, with the word each one
+   wears on screen.
+
+   Ordered by what the class MEANS rather than alphabetically: the fleet-shaped
+   answers first (who is being reviewed, who runs the fleet), then the
+   disciplines, then the remaining published roles, then the floor. The labels
+   are spelled here rather than borrowed from ROLE_LABELS because half of these
+   are not roles — `reviewer` is a session kind and `frontend`/`backend` are
+   specialties — and the two that overlap read differently on this axis:
+   "Frontend", not the roster caption "Frontend / designer".
+
+   This list and agentClassOf's precedence are two statements of one vocabulary
+   and nothing in the language keeps them together, so a test drives every branch
+   of the precedence and requires each answer to come back as a labeled option —
+   a class with no entry here would be dropped from the menu, which is a row
+   hidden behind a filter with no item able to un-hide it. */
+const AGENT_CLASSES = [
+  ["reviewer", "Reviewer"],
+  ["orchestrator", "Orchestrator"],
+  ["frontend", "Frontend"],
+  ["backend", "Backend"],
+  ["automation", "Automation"],
+  ["tester", "Tester"],
+  ["verifier", "Verifier"],
+  ["worker", "Worker"],
+  ["monitor", "Monitor"],
+  ["service", "Service"],
+  ["human", "Human"],
+  ["agent", "Agent"],
+];
+
 /* The lifecycle lens values, in the order the board stacks their sections. The
    value is the lens; the label SPELLS OUT what it encompasses, because "Waiting"
    alone was a word an operator had to already know the board's meaning of. */
@@ -4663,6 +4709,24 @@ const UNREPORTED = "";
    offers, how a value matches an agent, and how to say it in English. */
 const LENS_AXES = [
   {
+    /* Class leads, because it answers WHO the agent is — provider, model, span
+       and context are all questions about the same agent once you know that. It
+       also carries the fleet's review policy in its footer (see `footer`), which
+       is the one thing on this bar that is not a lens. */
+    key: "class",
+    stateKey: "facetClasses",
+    label: "Class",
+    allLabel: "All classes",
+    views: null,
+    options: (agents) => {
+      const present = new Set(agents.map((agent) => agentClassOf(agent)));
+      return AGENT_CLASSES.filter(([value]) => present.has(value))
+        .map(([value, label]) => ({ value, label, short: label.toLowerCase() }));
+    },
+    matches: (agent, value) => agentClassOf(agent) === value,
+    footer: (ui) => reviewPolicyFooter(ui),
+  },
+  {
     key: "provider",
     stateKey: "facetProviders",
     label: "Provider",
@@ -4695,8 +4759,12 @@ const LENS_AXES = [
     allLabel: "All models",
     views: null,
     options: (agents) => {
+      /* modelShort() returns null for placeholder strings ("<synthetic>") that
+         are nonetheless truthy on live rows — fall back to the raw value or the
+         label is null and the menu render dies on .toLowerCase(). Measured
+         live 2026-08-06: the board failed to paint on exactly this. */
       const named = [...new Set(agents.map((a) => a.model).filter(Boolean))].sort()
-        .map((model) => ({ value: model, fkey: model, label: modelShort(model) }));
+        .map((model) => ({ value: model, fkey: model, label: modelShort(model) || model }));
       return agents.some((a) => !a.model)
         ? [...named, { value: UNREPORTED, fkey: "unreported", label: "Unreported", short: "no reported model" }]
         : named;
@@ -4801,6 +4869,12 @@ function lensOptions(axis, ui = state) {
    ship. */
 function lensApplies(axis, ui = state) {
   if ((ui[axis.stateKey] || []).length) return true;
+  /* An axis whose menu carries something OTHER than its own options renders
+     whenever that something has to be reachable. The Class menu holds the
+     fleet's review policy, and an axis that declined to render would take the
+     policy down with it — reviewers hidden with no control anywhere able to
+     show them, which is the one thing this bar may never ship. */
+  if (axis.footer && axis.footer(ui)) return true;
   if (axis.views && !axis.views.includes(ui.view)) return false;
   return lensOptions(axis, ui).filter((option) => option.count > 0).length >= 2;
 }
@@ -4811,12 +4885,20 @@ function lensApplies(axis, ui = state) {
    ("time"), the trigger carries the fkey the rest of the client addresses it by
    ("lookback:menu") — the fkey namespaces are the ones operators' focus restore
    and muscle memory were already built on, so they are kept rather than renamed
-   to match a new state field. */
-const FILTER_MENU_TRIGGERS = {
-  time: "lookback:menu",
-  provider: "provider:menu",
-  status: "status:menu",
-};
+   to match a new state field.
+
+   A lens menu's trigger is always `<axis key>:menu`, so it is DERIVED from the
+   axis table rather than listed here. This was a hand-kept map of three when the
+   bar had five lens menus, and Escape out of Model, Span or Context therefore
+   looked up nothing and dropped a keyboard operator on <body> — the one failure
+   the whole fkey contract exists to prevent. Adding Class would have made it
+   four names short of six; deriving it makes a new axis impossible to forget. */
+const FILTER_MENU_TRIGGERS = { time: "lookback:menu" };
+
+function filterMenuTriggerKey(menu) {
+  if (FILTER_MENU_TRIGGERS[menu]) return FILTER_MENU_TRIGGERS[menu];
+  return LENS_AXES.some((axis) => axis.key === menu) ? menu + ":menu" : "";
+}
 
 /* Put a keyboard operator back on the control they opened the menu from.
 
@@ -4841,7 +4923,7 @@ function setOpenFilterMenu(menu) {
 
 function closeFilterMenu() {
   if (!state.openFilterMenu) return;
-  const triggerKey = FILTER_MENU_TRIGGERS[state.openFilterMenu];
+  const triggerKey = filterMenuTriggerKey(state.openFilterMenu);
   state.openFilterMenu = "";
   render();
   focusFilterTrigger(triggerKey);
@@ -4880,9 +4962,13 @@ function filterMenuItem(triggerKey, item) {
   const role = item.role || "menuitemradio";
   return el("button", {
     type: "button",
-    class: "filter-menu-item" + (item.checked ? " is-active" : ""),
+    class: "filter-menu-item" + (item.class ? " " + item.class : "") + (item.checked ? " is-active" : ""),
     role,
-    "aria-checked": String(Boolean(item.checked)),
+    /* A plain `menuitem` is an ACTION and has no checked state to report. Giving
+       the review policy an aria-checked="false" would announce it as an unpicked
+       member of the class group it sits under — which is exactly the "it is a
+       lens" reading this whole control was moved to stop making. */
+    "aria-checked": role === "menuitem" ? null : String(Boolean(item.checked)),
     title: item.title || null,
     /* The count is a number sitting in its own column, which reads as "codex 5"
        when the accessible name is assembled from the text — a session count and
@@ -4971,6 +5057,7 @@ function lensTriggerLabel(axis, options, selected) {
 function lensFilterMenu(axis, ui) {
   const options = lensOptions(axis, ui);
   const selected = ui[axis.stateKey] || [];
+  const footer = axis.footer ? axis.footer(ui) : null;
   const items = [
     {
       fkey: axis.key + ":all",
@@ -4992,17 +5079,23 @@ function lensFilterMenu(axis, ui) {
       apply: () => toggleFacet(axis.stateKey, option.value),
     })),
   ];
+  const title = selected.length
+    ? "Narrowing by " + axis.label.toLowerCase() + ". Pick more to widen — within one filter the choices add up."
+    : "Narrow by " + axis.label.toLowerCase() + ". Counts are of the whole window, so they do not move as you filter.";
   return filterMenu({
     menu: axis.key,
     fkey: axis.key + ":menu",
-    label: lensTriggerLabel(axis, options, selected),
+    /* The mark rides on the CLOSED trigger, because the population it is about
+       is now one level deep. A menu that has to be opened before it will admit
+       that rows are missing is a menu that does not admit it. */
+    label: lensTriggerLabel(axis, options, selected) + (footer && footer.mark ? " " + footer.mark : ""),
     menuLabel: axis.label,
     active: selected.length > 0,
     open: ui.openFilterMenu === axis.key,
-    title: selected.length
-      ? "Narrowing by " + axis.label.toLowerCase() + ". Pick more to widen — within one filter the choices add up."
-      : "Narrow by " + axis.label.toLowerCase() + ". Counts are of the whole window, so they do not move as you filter.",
-    sections: [{ items }],
+    title: footer && footer.markTitle ? title + " " + footer.markTitle : title,
+    // The footer is its own section, so the divider above it is a boundary in
+    // the markup and not only in the CSS.
+    sections: footer ? [{ items }, { items: [footer.item] }] : [{ items }],
   });
 }
 
@@ -5109,46 +5202,84 @@ function timeFilterMenu(ui) {
   });
 }
 
-/* The review-worker policy, and the one control on this bar that is NOT a lens
-   and must not dress like one.
+/* The review-worker policy, and the one control on this bar that is NOT a lens.
 
-   It wore `filter-chip` and sat first in the row, so it read as a sixth
-   narrowing this browser was applying — which is false twice over. It is a
-   SERVER setting shared by every browser looking at this fleet, so turning it on
-   changes what a colleague sees; and it is a standing policy about which rows
-   the Board is for, not a question about the sessions in front of you.
+   It has been a chip and then a standalone `⊘ N reviewers hidden` fragment, and
+   in both shapes it stood in the row of things that narrow this board — which is
+   false twice over. It is a SERVER setting shared by every browser looking at
+   this fleet, so turning it on changes what a colleague sees; and it is a
+   standing policy about which rows the Board is FOR, not a question about the
+   sessions in front of you.
 
-   So it is a plain disclosure that states the count and its own reach, with a ⊘
-   rather than a pressed state: nothing here is "active" or "inactive", the fleet
-   is simply configured one way or the other. */
-function reviewPolicyControl(ui, reviews) {
+   So it moves inside the Class menu, where the population it governs is one of
+   the classes, and it renders there as a separated ACTION rather than a member
+   of the set above it. Two things keep it from simply disappearing at that
+   depth: `lensApplies` renders the Class menu whenever this footer exists, and
+   the closed trigger wears the ⊘ while anything is being withheld.
+
+   Returns null when the control would change nothing to say — no reviewers in
+   the window and the fleet already showing them. */
+function reviewPolicyFooter(ui) {
+  if (ui.view !== "board") return null;
   const showing = Boolean(ui.showReviewWorkers);
+  const reviews = reviewWorkerCount(ui);
+  if (!reviews && !showing) return null;
+  // Guarded by the line above: not showing, here, always means some are hidden.
+  const hidden = !showing;
   const noun = reviews + " reviewer" + (reviews === 1 ? "" : "s");
-  return el("button", {
-    type: "button",
-    class: "filter-policy" + (showing ? " is-showing" : ""),
-    dataset: { fkey: "session-kind:review" },
-    /* No aria-pressed. This is not a toggle reporting its own state — it is a
-       statement of the fleet's setting whose label already says which way it
-       falls, and a pressed state on top of that says it twice and disagrees
-       with itself half the time. */
-    title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
-    onclick: () => setShowReviewWorkers(!state.showReviewWorkers),
-  },
-    el("span", { class: "filter-policy-mark", "aria-hidden": "true", text: "⊘" }),
-    showing ? "showing " + noun : noun + " hidden");
+  return {
+    mark: hidden ? "⊘" : "",
+    markTitle: hidden
+      ? "⊘ " + noun + " hidden from the Board by the fleet's review setting."
+      : "",
+    item: {
+      /* The fkey it has always had. The control moved one level deep; that is no
+         reason to make an operator's hands, or their focus restore, relearn it. */
+      fkey: "session-kind:review",
+      /* A `menuitem`, not a `menuitemcheckbox`. Everything above it in this menu
+         is a member of the set the browser is narrowing by; this writes a
+         setting on the server, and announcing it as a checkbox in that group
+         would say the fleet's policy is a sixth class. */
+      role: "menuitem",
+      class: "filter-menu-policy",
+      label: (hidden
+        ? "⊘ Show " + reviews + " hidden reviewer" + (reviews === 1 ? "" : "s")
+        : "⊘ Hide routine reviewers") + " — fleet-wide setting",
+      title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
+      apply: () => setShowReviewWorkers(!state.showReviewWorkers),
+    },
+  };
+}
+
+/* Empty the bar around the one node that must SURVIVE the repaint.
+
+   Every control here is rebuilt on every paint, but the sentence's live region
+   (`#bar-scope-note`, declared in index.html) cannot be: an aria-live element
+   that is destroyed and recreated announces nothing, because the region has to
+   already be in the tree when its content changes. */
+function clearFilterBar(bar, keep) {
+  for (const child of [...(bar.childNodes || [])]) {
+    if (child !== keep && typeof child.remove === "function") child.remove();
+  }
 }
 
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
-  bar.textContent = "";
+  const note = $("bar-scope-note");
+  clearFilterBar(bar, note);
+  /* Everything that belongs in FRONT of the sentence goes in with insertBefore
+     rather than append, or the one surviving node would keep the position it
+     held before the rebuild and every control would land behind it. A document
+     built without the note takes insertBefore(node, null), which appends —
+     exactly the old behaviour. */
+  const place = (node) => { if (node) bar.insertBefore(node, note); };
   if (ui.view === "usage") {
     bar.hidden = false;
     bar.setAttribute("aria-hidden", "false");
-    bar.append(el("span", { class: "filter-lead", text: "Range" }));
+    place(el("span", { class: "filter-lead", text: "Range" }));
     for (const preset of USAGE_RANGE_PRESETS) {
-      bar.append(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
+      place(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
         state.usageRangeId = preset.id;
         state.usageCustomHours = preset.hours;
         void loadUsageData(true);
@@ -5156,7 +5287,7 @@ function renderFilterBar(ui = state) {
       }, { fkey: "usage-range:" + preset.id }));
     }
     const customActive = ui.usageRangeId === "custom";
-    bar.append(filterChip(
+    place(filterChip(
       customActive ? ("Custom " + ui.usageCustomHours + "h") : "Custom",
       customActive,
       () => {
@@ -5180,35 +5311,39 @@ function renderFilterBar(ui = state) {
   }
   bar.hidden = false;
   bar.setAttribute("aria-hidden", "false");
-  /* The tab strip is navigation. This is the one filter surface: the Board-only
-     review disclosure and the time lens live together here, while the collector
-     window below remains a server setting rather than a second filter. */
-  bar.append(el("span", { class: "filter-lead", text: "Filters" }));
-  const reviews = reviewWorkerCount(ui);
-  if (ui.view === "board" && reviews > 0) bar.append(reviewPolicyControl(ui, reviews));
-  /* The lenses: Provider · Status · Model · Span · Context, in that order and in
-     one flat row. Five closed triggers stand where fifteen open chips used to,
-     which is why this stays flat instead of nesting the last three behind a
-     "More" — a filter you have to go looking for is one operators stop knowing
-     they have.
+  /* The tab strip is navigation. This is the one filter surface: the lenses and
+     the time control live together here, while the collector window below
+     remains a server setting rather than a second filter. */
+  place(el("span", { class: "filter-lead", text: "Filters" }));
+  /* The lenses: Class · Provider · Status · Model · Span · Context, in that
+     order and in one flat row. Class leads because it answers who the agent is,
+     and everything after it is a question about that same agent. Six closed
+     triggers stand where fifteen open chips used to, which is why this stays
+     flat instead of nesting the tail behind a "More" — a filter you have to go
+     looking for is one operators stop knowing they have.
 
      Each renders only where it has something to say: two or more populated
      options, or a selection the operator still needs a way to switch off. */
   for (const axis of LENS_AXES) {
-    if (lensApplies(axis, ui)) bar.append(lensFilterMenu(axis, ui));
+    if (lensApplies(axis, ui)) place(lensFilterMenu(axis, ui));
   }
   /* No always-on program chips — programs are unbounded and the bar would grow
      without limit. The lens is SET from the drawer and CLEARED here, so an
      active narrowing is still one visible control away from off. */
   if (ui.facetProgram) {
     const scoped = ((ui.snap && ui.snap.programs) || []).find((p) => p.id === ui.facetProgram);
-    bar.append(filterChip(
+    place(filterChip(
       "Only " + (scoped ? programName(scoped) : "one program"),
       true,
       () => setFacetProgram(state.facetProgram),
       { fkey: "program:clear", title: "Show every program again" },
     ));
   }
+  /* The sentence stands here, between the lenses it summarises and the control
+     that decides the population it counts against — which is also what it says.
+     It is already a child of the bar in the markup; this only has work to do in
+     a document that was built without it. */
+  if (note && ![...(bar.childNodes || [])].includes(note)) bar.append(note);
   /* Time goes LAST and hard right, separated from everything before it.
      Everything to its left narrows within the population; this control decides
      what the population is. The gap is the two-layer boundary drawn in space —
@@ -5226,11 +5361,31 @@ function renderFilterBar(ui = state) {
      server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
+/* Two slots, one line at a time.
+
+   D4: the board's sentence moved INTO the filter bar row, between the lenses and
+   the working-set control — it reconciles those two layers, so it stands between
+   them, and it fills the gap that made the right-aligned Time trigger read as
+   stranded. Usage keeps the old line below the search box: it has no lenses and
+   no working set, only a range, so there is no two-layer gap there to stand in.
+
+   Whichever slot is not speaking is emptied AND hidden. Both halves matter: a
+   leftover sentence in the other slot would be a second, stale answer to the
+   same question, and a slot left carrying the hidden flag it picked up on the
+   other view is how a quiet board followed by a switch to Usage produced a range
+   line that was written and never shown. */
 function renderScopeNote(shown) {
-  const note = $("scope-note");
+  const usage = state.view === "usage";
+  const note = usage ? $("scope-note") : $("bar-scope-note");
+  const idle = usage ? $("bar-scope-note") : $("scope-note");
+  if (idle) {
+    idle.textContent = "";
+    idle.hidden = true;
+  }
   if (!note) return;
-  if (state.view === "usage") {
+  if (usage) {
     const range = usageRangeHours();
+    note.hidden = false;
     note.textContent = state.usageLoading
       ? "Loading BurnBar usage…"
       : `Usage range ${range}h · source BurnBar` + (state.usageSummary && state.usageSummary.available === false
@@ -5759,14 +5914,13 @@ function toggleSwarm(agent) {
   render();
 }
 
-/* Everything the program SHELL paints — head label, caret state, rollup cells,
-   the selection row and the rename form. Deliberately NOT the rows: a rollup
-   that has not moved must leave the section node alone so its rows stay
-   attached. renameDraft stays out for the same reason it stays out of every
-   other signature (live input); every external reset of it flips renamePending. */
+/* Everything the program SHELL paints — head label, caret state, rollup cells
+   and the rename form. Deliberately NOT the rows: a rollup that has not moved
+   must leave the section node alone so its rows stay attached. renameDraft stays
+   out for the same reason it stays out of every other signature (live input);
+   every external reset of it flips renamePending. */
 function programShellSig(program, agents, ui, label = "") {
   const key = presentationLabelKey(programLabelTarget(program));
-  const pool = ui.selecting ? program.agents.filter(broadcastEligible) : [];
   return [
     program.id,
     programName(program, label),
@@ -5775,8 +5929,6 @@ function programShellSig(program, agents, ui, label = "") {
     // Header counts the whole program, so the signature must watch the whole
     // program too — otherwise a change outside the active filter never repaints.
     programRollupCells(program.agents, program.rollup).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
-    ui.selecting ? "1" : "0",
-    ui.selecting ? pool.length + "/" + pool.filter((a) => ui.selection.has(a.id)).length : "",
     ui.renaming === key ? "1" : "0",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -5785,10 +5937,10 @@ function programShellSig(program, agents, ui, label = "") {
 
 /* Everything ONE row paints. agentRecordSig is the same whole-record projection
    the drawer uses, so a snapshot field added later is covered automatically;
-   the rest is the per-row slice of list state (this row's selection, checkbox
-   and rename form) plus its position in the swarm tree. The live elapsed clock
-   stays out — tickClocks rewrites it in place from data-elapsed-base — but the
-   >10min staleness fact does not tick, so it is in. */
+   the rest is the per-row slice of list state (whether this row is the open
+   drawer, and its rename form) plus its position in the swarm tree. The live
+   elapsed clock stays out — tickClocks rewrites it in place from
+   data-elapsed-base — but the >10min staleness fact does not tick, so it is in. */
 function agentRowSig(agent, ui, opts = {}) {
   return [
     agentRecordSig(agent),
@@ -5796,8 +5948,6 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
     ui.labels.get(presentationLabelKey(preferredRenameTarget(agent))) || "",
     ui.selectedId === agent.id ? "1" : "0",
-    ui.selecting ? "1" : "0",
-    ui.selection.has(agent.id) ? "1" : "0",
     ui.renaming === presentationLabelKey(preferredRenameTarget(agent)) ? "1" : "0",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -5860,9 +6010,7 @@ function programsPaintSig(visible, ui) {
     LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
-    ui.selecting ? "1" : "0",
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
-    [...ui.selection].join(","),
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
     /* Third instance of the same failure class: toggleRepo mutates nothing else
        either, so on a quiet fleet the early return would swallow the click and
@@ -6418,18 +6566,6 @@ function renderProgram(program, agents, opts = {}) {
   const section = el("section", { class: "program" + (open ? " open" : ""), "aria-label": label },
     el("h2", { class: "visually-hidden", text: label }),
     head);
-  if (state.selecting) {
-    const pool = program.agents.filter(broadcastEligible);
-    const chosen = pool.filter((a) => state.selection.has(a.id)).length;
-    section.append(el("div", { class: "program-select-row" },
-      el("button", {
-        type: "button", class: "btn",
-        disabled: pool.length ? null : "",
-        dataset: { fkey: "prog-select:" + program.id },
-        onclick: () => selectProgramEligible(program),
-      }, pool.length ? `Select ${pool.length} eligible` : "No eligible agents"),
-      chosen ? el("span", { class: "program-select-note", text: `${chosen} of ${pool.length} selected` }) : null));
-  }
   if (state.renaming === presentationLabelKey(programLabelTarget(program))) section.append(renderRenameForm(program));
   // The body is left empty on purpose: renderPrograms reconciles the rows into
   // it by agent id, so a shell rebuild never destroys a row that has not moved.
@@ -6936,10 +7072,8 @@ function agentContextPct(agent) {
 
    Two different endings, and the board already knew the difference: `scope`
    says whether the board is still watching a session, and `provenance` says
-   what ended it. broadcastIneligibleReason has been reading exactly these two
-   fields to say "in history" vs "archived" since the naming contract landed —
-   in a chip nobody sees unless they enter select mode. This is the same model,
-   same two facts, said on the row.
+   what ended it. Those two fields are the whole model, and this is them said on
+   the row.
 
      Archived by you   — you made this decision. It is undoable (Un-archive in
                          the dock) and the record is complete.
@@ -7041,8 +7175,6 @@ function renderAgentRow(agent, program, opts = {}) {
   // its own red span. Full state stays in the tooltip + row aria-label.
   const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
 
-  const eligible = broadcastEligible(agent);
-  const checked = state.selection.has(agent.id);
   const nameTarget = preferredRenameTarget(agent);
   const nameKey = presentationLabelKey(nameTarget);
   const editing = state.renaming === nameKey;
@@ -7081,13 +7213,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const history = historyProvenance(agent);
   const elapsed = liveElapsedText(agent, state.snap && state.snap.generatedAt);
 
-  const activate = () => {
-    if (state.selecting) {
-      if (eligible) toggleSelect(agent.id);
-      return;
-    }
-    selectAgent(agent.id);
-  };
+  const activate = () => { selectAgent(agent.id); };
 
   const identity = el("span", { class: "row-identity" },
     providerMark(agent),
@@ -7103,7 +7229,7 @@ function renderAgentRow(agent, program, opts = {}) {
           text: "#" + nameTag,
         })
         : null,
-      state.selecting ? null : el("button", {
+      el("button", {
         type: "button",
         class: "agent-rename",
         "aria-label": "Rename " + displayName,
@@ -7293,8 +7419,6 @@ function renderAgentRow(agent, program, opts = {}) {
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
-    (state.selecting ? " is-selecting" : "") +
-    (checked ? " is-checked" : "") +
     /* Context pressure, from the same thresholds the summary dial paints with,
        so a row can never read calm under a dial reading hot. Only on rows still
        doing something: a finished session at 96% is a fact about a window
@@ -7310,46 +7434,33 @@ function renderAgentRow(agent, program, opts = {}) {
     })()) +
     (editing ? " is-renaming" : "");
 
-  const children = [];
-  if (state.selecting) {
-    children.push(el("span", {
-      class: "row-check",
-      "aria-hidden": "true",
-    }, checked ? icon("check") : null));
-  }
-  children.push(line1);
-
   const row = el("div", {
     class: rowClass,
     id: "agent-" + agent.id,
     role: "button",
-    tabindex: state.selecting && !eligible ? "-1" : "0",
+    tabindex: "0",
     // The de-noised naming detail rides the tooltip for sighted hover; screen
     // readers get it (plus tokens/elapsed/access) in the aria-label below.
     title: sourceDetail || null,
     "aria-current": selected ? "true" : null,
-    "aria-pressed": state.selecting ? String(checked) : null,
-    "aria-disabled": state.selecting && !eligible ? "true" : null,
     /* Everything the row diet took off the visible line is still spoken here,
        and that is the condition the diet was allowed under: the row got quieter
        to LOOK at, not quieter to listen to. Program, role,
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""}${state.selecting ? (eligible ? " Selectable for broadcast." : " Not available for broadcast.") : " Select to open the full message and session details in the inspector."}`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
-      if (state.selecting && !eligible) return;
       activate();
     },
     onkeydown: (e) => {
       if (e.target.closest(".agent-rename, .rename-form, input, button")) return;
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
-      if (state.selecting && !eligible) return;
       activate();
     },
-  }, children);
+  }, line1);
 
   if (!editing) return row;
 
@@ -7400,8 +7511,8 @@ function nextRowIndex(current, key, count) {
   }
 }
 
-/* Only rows that are actually reachable: in select mode the broadcast-ineligible
-   ones carry tabindex="-1", and arrow nav must skip exactly what Tab skips. */
+/* Only rows that are actually reachable — arrow nav must walk exactly what Tab
+   walks, so it reads the same tabindex the rows carry rather than a second list. */
 function navigableRows() {
   const root = $("programs");
   return root ? [...root.querySelectorAll('.agent-row[tabindex="0"]')] : [];
@@ -7554,8 +7665,8 @@ function lineagePaintSig(agent, snap) {
    row beside it updated every snapshot.
 
    Live inputs are deliberately excluded (drafts, renameDraft): tearing a text
-   box down while it is being typed into is the very bug the broadcast composer
-   had. Both are only ever cleared externally alongside a flag that IS in the
+   box down while it is being typed into is the very bug this rule exists to
+   stop. Both are only ever cleared externally alongside a flag that IS in the
    signature (sendControl clears drafts as it clears pending and sets feedback;
    submitRename flips renamePending), so exclusion cannot strand a stale value. */
 function inspectorPaintSig(sel, view, ui) {
@@ -8104,14 +8215,7 @@ function renderProgramDrawer(pane, view) {
     pane.append(grid);
   }
 
-  const eligible = agents.filter(broadcastEligible).length;
   pane.append(el("div", { class: "controls-row" },
-    el("button", {
-      type: "button", class: "btn primary dw-full",
-      disabled: eligible ? null : "",
-      dataset: { fkey: "prog-broadcast:" + program.id },
-      onclick: () => { enterSelectMode(true); selectProgramEligible(program); },
-    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients"),
     /* Set here, cleared from the Filters bar — the drawer is where an operator
        is already looking at one program and decides they want only it. */
     el("button", {
@@ -9974,109 +10078,6 @@ async function submitRename(target) {
   }
 }
 
-/* ---------- selection + broadcast ---------- */
-
-/* Only live, instruct-capable, linked recipients can be sent to; everyone else
-   is shown as unavailable and never counted as sent. */
-function broadcastEligible(agent) {
-  const cap = (agent.controls || []).find((c) => c.action === "instruct");
-  return !isTerminal(agent) && !!cap && cap.enabled === true;
-}
-
-/* Why an ineligible recipient can't receive a broadcast, in one operator word —
-   read from the SAME state broadcastEligible checks so the chip label and the
-   eligibility gate never disagree. Ended sessions split archived vs ended;
-   live-but-locked sessions read their control state (quarantined vs view only). */
-function broadcastIneligibleReason(agent) {
-  /* Four reasons, not one word for four facts. "Archived" used to cover a
-     provider exit, an operator's decision, a dead process and a record that
-     simply aged out — so the chip explaining why a recipient is unavailable told
-     the operator nothing they could act on. The provenance names which it is. */
-  if (scopeOf(agent) === "retained") return "in history";
-  if (lifecycleOf(agent) === "finished") {
-    const why = provenanceOf(agent);
-    if (why === "operator-archive") return "archived";
-    if (why === "process-died") return "process died";
-    if (why === "process-absent") return "no process";
-    return "finished";
-  }
-  const control = deriveControlState(agent);
-  if (control === "quarantined") return "quarantined";
-  // Distinct from "view only": this row HAS a pane, it just cannot be proven.
-  if (control === "unproven") return "session not proven";
-  return "view only";
-}
-
-function toggleSelect(agentId) {
-  if (state.selection.has(agentId)) state.selection.delete(agentId);
-  else state.selection.add(agentId);
-  state.broadcastResults = null;
-  render();
-}
-
-function selectProgramEligible(program) {
-  for (const a of program.agents) if (broadcastEligible(a)) state.selection.add(a.id);
-  state.broadcastResults = null;
-  render();
-}
-
-function clearSelection() {
-  state.selection.clear();
-  state.broadcastResults = null;
-  state.broadcastConfirming = false;
-  state.broadcastError = "";
-  render();
-}
-
-function enterSelectMode(on) {
-  state.selecting = on;
-  if (!on) clearSelection();
-  else render();
-}
-
-function selectedRecipients() {
-  const byId = new Map(snapshotAgents(state.snap).map(({ agent, program }) => [agent.id, { agent, program }]));
-  return [...state.selection].map((id) => byId.get(id)).filter(Boolean);
-}
-
-async function sendBroadcast() {
-  if (state.broadcastPending) return;
-  const recipients = selectedRecipients();
-  const eligible = recipients.filter(({ agent }) => broadcastEligible(agent));
-  const instruction = state.broadcastDraft.trim();
-  if (!eligible.length || !instruction) return;
-  state.broadcastPending = true;
-  state.broadcastError = "";
-  render();
-  try {
-    const res = await apiFetch("/api/broadcast", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentIds: eligible.map(({ agent }) => agent.id), instruction }),
-    }, API_WRITE_TIMEOUT_MS);
-    const body = await res.json().catch(() => null);
-    if (!body || !Array.isArray(body.results)) {
-      throw new Error(body && body.error && body.error.message ? body.error.message : "Broadcast failed (HTTP " + res.status + ")");
-    }
-    state.broadcastResults = new Map(body.results.map((r) => [r.agentId, r]));
-    state.broadcastConfirming = false;
-    const sent = body.sent || 0;
-    const failed = body.failed || 0;
-    toast(
-      failed ? `Sent to ${sent}, ${failed} could not receive it` : `Instruction broadcast to ${sent} ${sent === 1 ? "agent" : "agents"}`,
-      failed ? "err" : "ok",
-    );
-    if (sent && !failed) state.broadcastDraft = "";
-  } catch (err) {
-    state.broadcastError = err && err.message ? err.message : "Broadcast failed";
-    state.broadcastConfirming = false;
-  } finally {
-    state.broadcastPending = false;
-    render();
-    refreshActions(); // per-recipient outcomes now survive a reload
-  }
-}
-
 /* ---------- out-of-page notification ----------
 
    With ~200 sessions the operator is working in other windows. An agent that
@@ -10093,31 +10094,6 @@ async function sendBroadcast() {
    newly entered the needs-a-human set. Not on count changes, not on an agent
    leaving, not on the first paint (opening the page to six waiting agents is
    not six pieces of news), and never on routine churn. */
-
-
-
-
-
-
-/* ---------- action log ----------
-
-   What was broadcast, to whom, and whether it landed lived only in client
-   memory (state.broadcastResults) and died on reload. A broadcast reaches up to
-   50 agents and instruct is fire-and-forget text typed into a terminal, so after
-   a refresh the operator could not tell which lanes received an instruction,
-   which came back TEXT_STAGED_NOT_SUBMITTED, or whether they had already sent
-   it — and the natural recovery is to send it again, double-instructing lanes
-   that already got it.
-
-   Contract (GET /api/actions?limit=<n>, built in a parallel lane):
-     { ok, actions: [{ id, at, kind, agentIds, outcome, detail }] }   // newest first
-   This is an OPERATOR log, not a transcript: it never carries agent output. */
-
-
-
-
-
-
 
 
 
@@ -10142,110 +10118,6 @@ async function copyText(text) {
   } catch {
     toast("Copy failed — clipboard unavailable", "err");
   }
-}
-
-/* Everything the dock paints, deliberately minus broadcastDraft: the composer is
-   a live input and tearing it down mid-sentence is the bug this guard exists to
-   stop. The one place that clears the draft externally (sendBroadcast success)
-   also writes broadcastResults and flips broadcastPending, so an external reset
-   can never be missed by leaving the draft out. */
-function broadcastPaintSig(recipients, eligible, ui) {
-  return [
-    recipients.map(({ agent }) => agent.id + "=" + (broadcastEligible(agent) ? "1" : "0") + ":" + agentName(agent)).join(","),
-    String(eligible.length),
-    // A board that goes stale mid-compose must repaint the dock so Send stops
-    // offering to fan a message out over four-day-old routing.
-    feedFrozen(ui) ? "held" : "",
-    ui.broadcastResults
-      ? [...ui.broadcastResults].map(([id, r]) => id + "=" + (r && r.ok ? "ok" : (r && r.error && r.error.code) || "err")).join(",")
-      : "",
-    ui.broadcastConfirming ? "1" : "0",
-    ui.broadcastPending ? "1" : "0",
-    ui.broadcastError || "",
-  ].join("\u001f");
-}
-
-/* Broadcast dock — appears only in selection mode. Recipients are previewed
-   honestly: eligible (live + instruct-capable) vs unavailable, and per-recipient
-   results after send are never smoothed over. */
-function renderBroadcastBar() {
-  const bar = $("broadcast-bar");
-  if (!state.selecting) {
-    state.paintSig.broadcast = "closed";
-    bar.textContent = "";
-    bar.hidden = true;
-    return;
-  }
-  bar.hidden = false;
-
-  const recipients = selectedRecipients();
-  const eligible = recipients.filter(({ agent }) => broadcastEligible(agent));
-  const results = state.broadcastResults;
-  const alarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
-  if (paintUnchanged("broadcast", broadcastPaintSig(recipients, eligible, state))) return;
-  bar.textContent = "";
-  if (alarm) bar.append(el("p", { class: "broadcast-note is-held", role: "status", text: staleControlNote(alarm) }));
-
-  bar.append(el("div", { class: "broadcast-head" },
-    icon("broadcast", { label: "Broadcast" }),
-    el("span", { class: "broadcast-title", text: "Broadcast instruction" }),
-    el("span", { class: "broadcast-count" },
-      el("strong", { text: String(eligible.length) }), ` of ${recipients.length} selected can receive it`),
-    recipients.length
-      ? el("button", { type: "button", class: "broadcast-clear", dataset: { fkey: "broadcast-clear" }, onclick: clearSelection }, "Clear all")
-      : null,
-    /* The way OUT of selection mode, and it has to live here now.
-       "Done selecting" used to be the toolbar's Select button wearing its second
-       label; that button is gone, and removing it left exactly one exit — the
-       Escape key. Select mode is still enterable by mouse from a program
-       drawer's "Broadcast to N eligible", so without this a pointer-only
-       operator could get in and not get out. "Clear all" beside it empties the
-       selection and deliberately STAYS in the mode; this is the one that leaves. */
-    el("button", {
-      type: "button", class: "broadcast-clear", dataset: { fkey: "broadcast-done" },
-      onclick: () => enterSelectMode(false),
-    }, "Done selecting")));
-
-  if (recipients.length) {
-    const list = el("div", { class: "broadcast-recipients" });
-    for (const { agent, program } of recipients) {
-      const ok = broadcastEligible(agent);
-      const result = results && results.get(agent.id);
-      list.append(el("span", { class: "recipient-chip " + (ok ? "is-eligible" : "is-ineligible"), title: programName(program) },
-        el("span", { text: agentName(agent) }),
-        result
-          ? el("span", { class: "recipient-result " + (result.ok ? "ok" : "err"), text: result.ok ? "sent" : (result.error && result.error.code === "AGENT_NOT_FOUND" ? "gone" : "failed") })
-          : el("span", { class: "rc-state", text: ok ? "ready" : broadcastIneligibleReason(agent) })));
-    }
-    bar.append(list);
-  } else {
-    bar.append(el("p", { class: "broadcast-note", text: "Pick agents from the list, or use “Select eligible” on a program header. Only live, instruct-capable sessions can receive a broadcast." }));
-  }
-
-  const instruction = state.broadcastDraft;
-  if (state.broadcastConfirming) {
-    bar.append(el("div", { class: "broadcast-confirm", role: "group", "aria-label": "Confirm broadcast" },
-      el("span", { text: `Send this instruction to ${eligible.length} ${eligible.length === 1 ? "agent" : "agents"}?` }),
-      el("button", { type: "button", class: "btn primary", disabled: state.broadcastPending || alarm ? "" : null, "aria-busy": state.broadcastPending ? "true" : null, dataset: { fkey: "broadcast-confirm" }, onclick: () => { if (!alarm) sendBroadcast(); } }, state.broadcastPending ? "Sending…" : `Confirm broadcast`),
-      el("button", { type: "button", class: "btn", disabled: state.broadcastPending ? "" : null, dataset: { fkey: "broadcast-cancel" }, onclick: () => { state.broadcastConfirming = false; render(); } }, "Cancel")));
-  } else {
-    const canSend = !alarm && eligible.length > 0 && instruction.trim().length > 0;
-    bar.append(el("div", { class: "broadcast-compose" },
-      el("textarea", {
-        placeholder: eligible.length ? "Instruction sent to every eligible recipient…" : "Select at least one eligible agent first",
-        "aria-label": "Broadcast instruction",
-        value: instruction,
-        dataset: { fkey: "broadcast-draft" },
-        oninput: (e) => { state.broadcastDraft = e.target.value; const btn = document.querySelector('[data-fkey="broadcast-send"]'); if (btn) btn.disabled = !(eligible.length && e.target.value.trim()); },
-      }),
-      el("button", {
-        type: "button", class: "btn primary broadcast-send",
-        disabled: canSend ? null : "",
-        dataset: { fkey: "broadcast-send" },
-        onclick: () => { if (eligible.length && state.broadcastDraft.trim()) { state.broadcastConfirming = true; render(); } },
-      }, "Send to " + eligible.length)));
-  }
-  if (state.broadcastError) bar.append(el("p", { class: "broadcast-note err", role: "alert", text: state.broadcastError }));
 }
 
 function firstLoadPending(ui = state) {
@@ -10419,10 +10291,7 @@ function tickClocks(frozen = feedFrozen(), now = Date.now()) {
 function setView(view) {
   if (state.view === view || !VIEWS.includes(view)) return;
   state.view = view;
-  if (view === "usage") {
-    if (state.selecting) enterSelectMode(false);
-    void loadUsageData();
-  }
+  if (view === "usage") void loadUsageData();
   render();
 }
 
@@ -10943,20 +10812,6 @@ function boot() {
     if (btn && btn.dataset.view) setView(btn.dataset.view);
   });
 
-  /* Select-to-send and Action log lost their toolbar buttons here (operator
-     directive, 2026-08-05). The wiring goes with them because it cannot stay: $()
-     returns null for an element that is not in the document, and
-     null.addEventListener would throw inside boot() — taking the whole client
-     down, not merely the two features.
-
-     Everything BELOW the wiring survives on purpose. enterSelectMode,
-     state.selecting, renderBroadcastBar, loadActions and #actions-panel are all
-     intact. Selection keeps a real entry point (a program drawer's "Broadcast to
-     N eligible") and its exit moved into the broadcast bar; the ACTION LOG is
-     now genuinely unreachable from the UI — loadActions still runs once at boot
-     and #actions-panel still paints, but nothing can open it. That is deliberate
-     and temporary: whether the subsystem comes out is a separate ruling. */
-
   $("settings-toggle").addEventListener("click", () => {
     state.settingsPanelOpen = !state.settingsPanelOpen;
     renderSettingsPanel();
@@ -11034,14 +10889,9 @@ function boot() {
       if (origin) origin.focus();
     } else if (state.renaming) {
       cancelRename();
-    } else if (state.broadcastConfirming) {
-      state.broadcastConfirming = false;
-      render();
     } else if (state.widgetCustomizerOpen) {
       state.widgetCustomizerOpen = false;
       renderHealthRail();
-    } else if (state.selecting) {
-      enterSelectMode(false);
     } else if (state.selectedId) {
       closeInspector();
     }
@@ -11109,12 +10959,11 @@ Object.assign(globalThis.TheAntHill, {
   // is no way to assert the behaviour without both ends.
   state,
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
-  apiFetch, sendControl, sendBroadcast, recollectSnapshot, fetchSnapshot,
+  apiFetch, sendControl, recollectSnapshot, fetchSnapshot,
   applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
   loadTranscript, loadActions, applyAttention,
-  toggleSelect, enterSelectMode, selectedRecipients,
   // Surfaces added this wave, plus the const limits FE-C had to leave out.
   // Startup path + the server-health probe, driven for real by tests.
   boot, stopBoot, pollServerHealth, renderServerHealth, SERVER_HEALTH_POLL_MS,

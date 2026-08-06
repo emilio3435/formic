@@ -356,7 +356,7 @@ describe("client request deadlines", () => {
    very paint under test. */
 async function withState<T>(patch: Record<string, unknown>, fn: () => Promise<T> | T): Promise<T> {
   const full = {
-    paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
+    paintSig: { programs: "", inspector: "", widgets: "", alarm: null, actions: null },
     ...patch,
   };
   const keys = Object.keys(full);
@@ -458,6 +458,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     // The lenses are SETS now (FE-2 / amendment 1): empty = lens off.
+    facetClasses: [] as string[],
     facetProviders: [] as string[],
     facetStatuses: [] as string[],
     facetModels: [] as string[],
@@ -467,8 +468,6 @@ function listUi(overrides: Record<string, unknown> = {}) {
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
-    selecting: false,
-    selection: new Set<string>(),
     selected: null,
     selectedId: null,
     programOverrides: new Map<string, string>(),
@@ -796,22 +795,11 @@ describe("summary status and widgets", () => {
     expect(M.CONTROL_STATE_TEXT.unproven).toBe("Look only — session not proven");
     expect(M.CONTROL_STATE_TEXT.unproven).not.toBe("Ready");
 
-    /* Eligibility is read from the SERVER capability, so it fails closed on its
-       own — but the reason shown must distinguish "has a pane we cannot prove"
-       from "has no pane". */
-    const off = agent({
-      target: { surfaceId: "s1", resolution: "unique-cwd" },
-      controls: [{ action: "instruct", enabled: false, reason: "x" }],
-    });
-    expect(M.broadcastEligible ? M.broadcastEligible(off) : false).toBe(false);
-    expect(M.broadcastIneligibleReason(off)).toBe("session not proven");
-
     // The gate is a gate, not a wall: an attested row keeps everything.
     const on = agent({
       target: { surfaceId: "s1", resolution: "exact" },
       controls: [{ action: "instruct", enabled: true }],
     });
-    expect(M.broadcastIneligibleReason(on)).not.toBe("session not proven");
     expect(M.quarantineBrief(on, "linked")).toBeNull();
   });
 
@@ -1872,19 +1860,24 @@ describe("views split Now from History", () => {
         lookbackHours: 6,
         snap,
         showReviewWorkers: false,
+        // FE-4 D3: the policy lives in the Class menu's footer now, so it is on
+        // screen only while that menu is open. Closed, the disclosure rides the
+        // trigger — pinned in the FE4-D3 tests.
+        openFilterMenu: "class",
       }));
       const bar = domById.get("filter-bar");
-      /* D4. The disclosure survives; what changed is that it stopped dressing as
-         a lens. It said "Show review workers (1)" in chip clothing at the head of
-         the filter row, which read as a sixth narrowing THIS browser was
-         applying — false twice over: it is a server setting shared by every
-         browser looking at the fleet, and it is a standing policy about which
-         rows the Board is for rather than a question about the sessions in front
-         of you. It states the count and its own reach instead. */
+      /* D4, then FE-4 D3. The disclosure survives every move; what changed each
+         time is what it is DRESSED as. It said "Show review workers (1)" in chip
+         clothing at the head of the filter row, which read as a narrowing THIS
+         browser was applying — false twice over: it is a server setting shared by
+         every browser looking at the fleet, and it is a standing policy about
+         which rows the Board is for rather than a question about the sessions in
+         front of you. It is now a separated action inside the Class menu, under
+         the classes it governs. */
       const policy = byFkey(bar, "session-kind:review");
-      expect(policy.className).toContain("filter-policy");
+      expect(policy.className).toContain("filter-menu-policy");
       expect(policy.className).not.toContain("filter-chip");
-      expect(textOf(policy)).toContain("1 reviewer hidden");
+      expect(textOf(policy)).toContain("1 hidden reviewer");
       // No pressed state: the label already says which way the fleet is set, and
       // a toggle's self-report on top of that would disagree with it half the time.
       expect(policy.attributes["aria-pressed"]).toBeUndefined();
@@ -1894,11 +1887,14 @@ describe("views split Now from History", () => {
       expect(textOf(bar)).toContain("Last 6h");
     });
 
-    // Showing them says so, and the noun agrees with the count either way.
+    // Showing them, the action is the way back — and it still says whose setting
+    // it is, because that is the half an operator cannot see from the board.
     withDom(() => {
-      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, snap, showReviewWorkers: true }));
+      M.renderFilterBar(listUi({
+        view: "board", lookbackHours: 6, snap, showReviewWorkers: true, openFilterMenu: "class",
+      }));
       expect(textOf(byFkey(domById.get("filter-bar"), "session-kind:review")))
-        .toContain("showing 1 reviewer");
+        .toContain("Hide routine reviewers — fleet-wide setting");
     });
   });
 });
@@ -2365,53 +2361,6 @@ describe("unavailable-control explanation stays plain-language", () => {
   });
 });
 
-describe("broadcast recipient eligibility", () => {
-  test("only live, instruct-capable sessions are eligible", () => {
-    const live = agent({ status: "running", controls: [{ action: "instruct", enabled: true }] });
-    expect(M.broadcastEligible(live)).toBe(true);
-  });
-
-  test("ended, observed-only, and instruction-less sessions are never eligible", () => {
-    expect(M.broadcastEligible(agent({ status: "archived", controls: [{ action: "instruct", enabled: true }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "instruct", enabled: false, reason: "Observed only." }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "focus", enabled: true }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [] }))).toBe(false);
-  });
-
-  test("ineligible recipients name their reason from the same state the gate reads", () => {
-    /* Four reasons where there used to be one word for four facts. "Archived"
-       covered a provider exit, an operator's decision, a dead process and a
-       record that simply aged out, so the chip explaining why a recipient was
-       unavailable told the operator nothing they could act on. */
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "operator-archive" }))).toBe("archived");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "provider-exit" }))).toBe("finished");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "process-died" }))).toBe("process died");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "waiting", scope: "retained" }))).toBe("in history");
-    /* And an unverified session is NOT one of them. Nothing ended it, so the
-       reason it cannot be sent to — if it cannot — is about its target, not
-       about it being over. */
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "unverified", target: { resolution: "missing" } })))
-      .toBe("view only");
-    // Live-but-locked reads its control state: ambiguous target → quarantined,
-    // everything else → view only. Same fields deriveControlState consumes.
-    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
-    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
-    expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
-    // Never the bare "unavailable" placeholder.
-    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } }), agent({ lifecycle: "unverified" })]) {
-      expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
-    }
-  });
-
-  test("the broadcast dock chip renders the reason word, not a bare 'unavailable'", () => {
-    const barSrc = source.match(/function renderBroadcastBar\(\) \{[\s\S]*?\n\}/)?.[0];
-    expect(barSrc).toBeDefined();
-    // The chip's resting state label is derived, never the old hard-coded string.
-    expect(barSrc).toContain('text: ok ? "ready" : broadcastIneligibleReason(agent)');
-    expect(barSrc).not.toContain('"unavailable"');
-  });
-});
-
 describe("redesigned network contracts (source-level)", () => {
   test("program rename is presentation-only via GET/POST /api/program-aliases", () => {
     expect(source).toContain('apiFetch("/api/program-aliases"');
@@ -2552,53 +2501,6 @@ describe("redesigned network contracts (source-level)", () => {
       }));
   });
 
-  /* W4-B: was five source substrings that could not fail if sendBroadcast
-     started posting every selected id, or started calling a 200 a delivery.
-     Both are now asserted from the request it makes and the results it keeps. */
-  test("broadcast posts only eligible recipients and never fabricates delivery", async () => {
-    const live = agent({ id: "codex:live", controls: [{ action: "instruct", enabled: true }] });
-    const locked = agent({ id: "codex:locked", controls: [{ action: "instruct", enabled: false, reason: "quarantined" }] });
-    const ended = agent({ id: "codex:ended", status: "archived", controls: [{ action: "instruct", enabled: true }] });
-    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [live, locked, ended] }] });
-
-    await withState({
-      snap, conn: "live", selecting: true,
-      selection: new Set([live.id, locked.id, ended.id]),
-      broadcastDraft: "rebase onto main", broadcastConfirming: true,
-      broadcastPending: false, broadcastResults: null, broadcastError: "",
-    }, async () => {
-      await withRequests([{
-        status: 200,
-        json: { ok: false, partial: true, sent: 0, failed: 1, results: [{ agentId: live.id, ok: false, error: { code: "CMUX_FAILED", message: "no pane" } }] },
-      }], async (calls) => {
-        await M.sendBroadcast();
-        // Only the eligible recipient is offered to the server; the locked and
-        // ended sessions are never counted as instructed.
-        expect(calls).toHaveLength(1);
-        expect(calls[0]!.url).toBe("/api/broadcast");
-        expect(calls[0]!.body.agentIds).toEqual([live.id]);
-        expect(calls[0]!.body.instruction).toBe("rebase onto main");
-        // A per-recipient failure is kept as a failure — never smoothed into
-        // "sent", and the composer keeps the text so it can be retried.
-        expect(M.state.broadcastResults.get(live.id).ok).toBe(false);
-        expect(M.state.broadcastDraft).toBe("rebase onto main");
-        expect(M.state.broadcastConfirming).toBe(false);
-      });
-    });
-
-    // A response with no per-recipient results is an error, not a success.
-    await withState({
-      snap, conn: "live", selecting: true, selection: new Set([live.id]),
-      broadcastDraft: "go", broadcastConfirming: true, broadcastPending: false,
-      broadcastResults: null, broadcastError: "",
-    }, async () => {
-      await withRequests([{ status: 200, json: { ok: true, sent: 1, failed: 0 } }], async () => {
-        await M.sendBroadcast();
-        expect(M.state.broadcastResults).toBeNull();
-        expect(M.state.broadcastError).toContain("Broadcast failed");
-      });
-    });
-  });
 });
 
 describe("calm program and agent list rendering", () => {
@@ -3311,7 +3213,7 @@ describe("source hygiene", () => {
   });
 
   test("the redesigned control surface exposes its structural anchors", () => {
-    for (const id of ["health-rail", "filter-bar", "broadcast-bar",
+    for (const id of ["health-rail", "filter-bar",
       "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
@@ -4594,8 +4496,8 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     expect(prHead).toBeGreaterThan(-1);
     expect(pr).toContain("programRollupLine(program)");
     expect(prHead).toBeLessThan(pr.indexOf('class: "dw-roster"'));
-    // The broadcast lever stays a body control (not promoted into the head).
-    expect(pr).toContain("prog-broadcast:");
+    // The scoping lever stays a body control (not promoted into the head).
+    expect(pr).toContain("facet-program:");
   });
 
   test("(b) regression guard: workStateBanner + impactBlock still render, logic byte-untouched", () => {
@@ -5346,25 +5248,20 @@ describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
   //     = 4.7rem = 75px ≤ 25% of the 380px min pane); depth colour + chips carry
   //     the deeper hierarchy. The cap must bind at EVERY indenting site, not just
   //     one file-wide match — so each rule is extracted and checked on its own.
-  test("(d) the cap min(var(--tree-depth), 3) binds at all five indenting sites", () => {
+  test("(d) the cap min(var(--tree-depth), 3) binds at all four indenting sites", () => {
     // 1. desktop child row indent
     const isChild = styles.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(isChild).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 2. desktop child row while selecting
-    const selecting = styles.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(selecting).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 3. connector rail (tracks the same cap so it stays aligned)
+    // 2. connector rail (tracks the same cap so it stays aligned)
     const connector = styles.match(/\.agent-row\.is-child::before\s*\{[^}]*\}/)?.[0] ?? "";
     expect(connector).toContain("(min(var(--tree-depth), 3) - 1) * 1.3rem");
-    // 4. swarm anchor indent (matches the row indent)
+    // 3. swarm anchor indent (matches the row indent)
     const anchor = styles.match(/\.swarm-anchor\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(anchor).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 5. the ≤720px mobile step rules (smaller 0.85rem step)
+    // 4. the ≤720px mobile step rule (smaller 0.85rem step)
     const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
     const mChild = mobile.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(mChild).toContain("min(var(--tree-depth), 3) * 0.85rem");
-    const mSelecting = mobile.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(mSelecting).toContain("min(var(--tree-depth), 3) * 0.85rem");
     // Absence: no uncapped multiplier survives at any width (the ", 3)" between
     // the var and the operator means the capped form is not a false match here).
     expect(styles).not.toContain("var(--tree-depth) * 1.3rem");
@@ -5815,19 +5712,12 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       facetProgram: "",
       facetProviders: [],
       lookbackHours: 24,
-      selecting: false,
       selected: null,
-      selection: new Set<string>(),
       programOverrides: new Map<string, string>(),
       swarmOverrides: new Map<string, string>(),
       // Same default as swarms: collapsed unless the operator opened it.
       shelfOverrides: new Map<string, string>(),
       labels: new Map<string, string>(),
-      broadcastResults: null,
-      broadcastConfirming: false,
-      broadcastPending: false,
-      broadcastError: "",
-      broadcastDraft: "",
       ...overrides,
     };
   }
@@ -5940,8 +5830,8 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     expect(M.programsPaintSig(visible, ui({ renaming: "program:p" }))).not.toBe(base);
     expect(M.programsPaintSig(visible, ui({ renamePending: true }))).not.toBe(base);
     expect(M.programsPaintSig(visible, ui({ renameError: "Save failed" }))).not.toBe(base);
-    // The rename input keeps its text across snapshots (same reasoning as the
-    // broadcast composer); every external reset of it flips renamePending.
+    // The rename input keeps its text across snapshots (the live-input rule);
+    // every external reset of it flips renamePending.
     expect(M.programsPaintSig(visible, ui({ renameDraft: "half a name" }))).toBe(base);
     // The fields the signature already covered still work.
     expect(M.programsPaintSig(visible, ui({ query: "ridge" }))).not.toBe(base);
@@ -5993,32 +5883,6 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     expect(empty.value).toBeUndefined();
   });
 
-  test("(3) an idle snapshot does not tear down a live broadcast composer", () => {
-    const recipients = [{ agent: agent(), program }];
-    const eligible = recipients;
-    const base = M.broadcastPaintSig(recipients, eligible, ui());
-    // Typing must not change the signature — that is what used to wipe the box
-    // every ~4s when the next SSE snapshot arrived.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastDraft: "restart the collector" }))).toBe(base);
-    // Everything the dock actually paints does change it.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastConfirming: true }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastPending: true }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastError: "Broadcast failed (HTTP 500)" }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
-    }))).not.toBe(base);
-    // Per-recipient outcomes are distinguished, not just presence.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
-    }))).not.toBe(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: false, error: { code: "AGENT_NOT_FOUND" } }]]),
-    })));
-    // Selection changes rebuild the recipient chips.
-    expect(M.broadcastPaintSig([], [], ui())).not.toBe(base);
-    // An agent losing eligibility mid-compose must repaint its chip.
-    const gone = [{ agent: agent({ status: "stale", controls: [] }), program }];
-    expect(M.broadcastPaintSig(gone, [], ui())).not.toBe(base);
-  });
 });
 
 /* ---------------------------------------------------------------------------
@@ -6326,74 +6190,6 @@ describe("FE-B: harness-backed client behavior", () => {
     const eyebrow = html.match(/<p class="eyebrow[^"]*">/)?.[0] ?? "";
     expect(eyebrow).toContain("visually-hidden");
     expect(html).toContain("Live multi-agent control room");
-  });
-
-  /* Cockpit audit §19 pinned that the toolbar's Select button appeared only when
-     something could actually receive a broadcast. The button is gone (operator
-     directive, 2026-08-05), so the gate it read is gone with it — there is no
-     toolbar control left to render conditionally.
-
-     What the audit was really protecting outlives the button and is asserted
-     here instead: a surface must never offer a broadcast to an agent that Send
-     would refuse. Selection is now entered from a program drawer, whose button
-     counts eligible recipients with the SAME predicate the broadcast bar uses,
-     and disables itself at zero. */
-  test("(19a) nothing offers a broadcast to an agent that Send would refuse", () => {
-    const reachable = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
-    const unreachable = agent({ id: "codex:no", status: "running", activity: "working", outcome: "healthy", controlState: "quarantined", controls: [] });
-    expect(M.broadcastEligible(reachable)).toBe(true);
-    expect(M.broadcastEligible(unreachable)).toBe(false);
-
-    // The entry point, over a program where nothing can receive: offered, and
-    // disabled, and saying so rather than naming a count of zero.
-    const dead = withDom(() => {
-      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
-        .document.createElement("div");
-      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [unreachable] } });
-      return byFkey(pane, "prog-broadcast:p1");
-    });
-    expect(dead.attributes.disabled).toBe("");
-    expect(textOf(dead)).toBe("No eligible recipients");
-
-    const live = withDom(() => {
-      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
-        .document.createElement("div");
-      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [reachable, unreachable] } });
-      return byFkey(pane, "prog-broadcast:p1");
-    });
-    expect(live.attributes.disabled).toBeUndefined();
-    expect(textOf(live)).toBe("Broadcast to 1 eligible"); // the eligible one only
-
-    // The toolbar's gate and its label are gone with the button they served.
-    expect(source).not.toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
-    expect(source).not.toContain('"Select to send"');
-  });
-
-  /* Removing the Select button removed the ONLY control that left selection
-     mode — it was the same button wearing its "Done selecting" label. Selection
-     is still enterable by mouse from a program drawer, so without a replacement
-     a pointer-only operator could get in and not get out; Escape alone is not an
-     exit a mouse can find. The broadcast bar carries it now. */
-  test("selection mode keeps a way out that is not the Escape key", async () => {
-    const only = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
-    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [only] }] });
-    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
-      () => withRequests([], async () => {
-        M.renderBroadcastBar();
-        const done = byFkey(domById.get("broadcast-bar"), "broadcast-done");
-        expect(textOf(done)).toBe("Done selecting");
-        await fire(done);
-        expect(M.state.selecting).toBe(false);
-      }));
-    /* And "Clear all" is NOT that exit — it empties the selection and stays in
-       the mode, which is a different operation and must remain one. */
-    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
-      () => withRequests([], async () => {
-        M.renderBroadcastBar();
-        await fire(byFkey(domById.get("broadcast-bar"), "broadcast-clear"));
-        expect(M.state.selection.size).toBe(0);
-        expect(M.state.selecting).toBe(true);
-      }));
   });
 
   /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with
@@ -7224,6 +7020,8 @@ describe("FE-B: harness-backed client behavior", () => {
     await withState({
       snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+      // FE-4 D3: the control is the Class menu's footer, so the menu is open.
+      openFilterMenu: "class",
     }, () => withRequests([
       { status: 200, json: { ok: true, settings: { showReviewWorkers: true } } },
       { status: 200, json: { ok: true, ...snap } },
@@ -7245,6 +7043,7 @@ describe("FE-B: harness-backed client behavior", () => {
     await withState({
       snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+      openFilterMenu: "class",
     }, () => withRequests([new Error("connection refused")], async () => {
       M.renderFilterBar(M.state);
       await fire(byFkey(domById.get("filter-bar"), "session-kind:review"));
@@ -7317,14 +7116,17 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual(["lookback:menu"]);
     });
 
-    /* The same bar over a real fleet, which is where the facet chips appear. The
+    /* The same bar over a real fleet, which is where the facet menus appear. The
        ORDER is the contract — the bar is torn down and rebuilt on every paint,
        focus restore keys on position-independent fkeys, and a screen reader
-       walks the axes in this sequence: session kind, then the lenses, then TIME
-       LAST. Time moved to the end deliberately (FE-2 D2): everything before it
-       narrows within the population, and it is the one control that decides what
-       the population is, so the two layers are separated in space as well as in
-       the markup. Updated deliberately here, never incidentally. */
+       walks the axes in this sequence: the lenses, then TIME LAST. Time moved to
+       the end deliberately (FE-2 D2): everything before it narrows within the
+       population, and it is the one control that decides what the population is,
+       so the two layers are separated in space as well as in the markup. CLASS
+       leads the lenses (FE-4 D2) because it answers who the agent is, and every
+       axis after it is a question about that same agent — and the review policy
+       is no longer a stop of its own here at all, having moved into the Class
+       menu's footer. Updated deliberately here, never incidentally. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const review = agent({
@@ -7347,15 +7149,19 @@ describe("FE-B: harness-backed client behavior", () => {
       const keys = focusKeysOf(bar());
       expect(new Set(keys).size).toBe(keys.length);
       /* CLOSED triggers, one per axis. Three focus stops where the chips took
-         nine, and the axis order is the contract: session kind, then the lenses
-         in bar order, then TIME last — the working-set control, held apart from
-         everything that merely narrows within it. */
+         nine, and the axis order is the contract: the lenses in bar order, then
+         TIME last — the working-set control, held apart from everything that
+         merely narrows within it. */
       expect(keys).toEqual([
-        "session-kind:review",
+        "class:menu",
         "provider:menu",
         "status:menu",
         "lookback:menu",
       ]);
+      /* The review policy is inside the Class menu now, so it is not a stop on
+         the closed bar. Its fkey is unchanged and it is one keystroke deeper,
+         with the ⊘ on the trigger saying so — pinned in the FE4-D3 tests. */
+      expect(keys).not.toContain("session-kind:review");
       /* Model, Span and Context are absent, and for the same reason Provider was
          absent a moment ago: this fleet reports one model, no measured spans and
          no context readings, so each of those axes has exactly one populated
@@ -7366,14 +7172,16 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys.some((k: string) => k.startsWith("context:"))).toBe(false);
     });
 
-    /* All five axes at once, over a fleet that can actually distinguish on each
-       one. This is the bar-order contract from amendment 1: Provider · Status ·
-       Model · Span · Context, flat rather than nested behind a "More" — a filter
-       you have to go looking for is one operators stop knowing they have. */
+    /* All six axes at once, over a fleet that can actually distinguish on each
+       one. This is the bar-order contract from amendment 1 with FE-4's Class at
+       its head: Class · Provider · Status · Model · Span · Context, flat rather
+       than nested behind a "More" — a filter you have to go looking for is one
+       operators stop knowing they have. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const rich = [
         agent({ id: "codex:1", provider: "codex", model: "gpt-5-codex", updatedAt, elapsedMs: 60_000,
+          role: "orchestrator",
           tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 } }),
         agent({ id: "claude:1", provider: "claude", model: "claude-opus-5", status: "waiting", updatedAt,
           elapsedMs: 20 * 3_600_000,
@@ -7382,7 +7190,7 @@ describe("FE-B: harness-backed client behavior", () => {
       const snap = snapshot({ programs: [{ id: "p", name: "P", agents: rich }] });
       M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
       expect(focusKeysOf(bar())).toEqual([
-        "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
+        "class:menu", "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
         "lookback:menu",
       ]);
     });
@@ -7584,9 +7392,9 @@ describe("FE-B: harness-backed client behavior", () => {
 
   /* -------- FE-2 D3 + amendment 1: the lens axes --------------------------- */
 
-  /* The fleet the lens tests share: two providers, two models, two lifecycles,
-     two span bands, two context bands, and one row that reports none of the
-     optional readings — so every axis has something to distinguish AND an
+  /* The fleet the lens tests share: two classes, two providers, two models, two
+     lifecycles, two span bands, two context bands, and one row that reports none
+     of the optional readings — so every axis has something to distinguish AND an
      Unreported population to account for. */
   const lensFleet = () => {
     const updatedAt = new Date().toISOString();
@@ -7595,7 +7403,11 @@ describe("FE-B: harness-backed client behavior", () => {
       programs: [{
         id: "p", name: "P", agents: [
           agent({
-            id: "codex:short", provider: "codex", model: "gpt-5-codex", updatedAt,
+            /* FE-4 D2: the Class axis needs two populated members here or the
+               table tests below would cover it with a single-bucket fixture,
+               where "the options partition the working set" is true of any
+               classification at all. */
+            id: "codex:short", provider: "codex", model: "gpt-5-codex", updatedAt, role: "orchestrator",
             elapsedMs: 30 * 60_000,                                     // under 1h
             tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 }, // 10%
           }),
@@ -7636,6 +7448,31 @@ describe("FE-B: harness-backed client behavior", () => {
       const total = M.lensOptions(axis, ui).reduce((n: number, o: { count: number }) => n + o.count, 0);
       expect(total, `${axis.key} partitions the working set`).toBe(ws.length);
     }
+  });
+
+  test("(FE2-D3) a model the shortener refuses still gets a labeled option, not a crash", () => {
+    /* Live regression, 2026-08-06 06:15: the fleet carries model "<synthetic>"
+       (a truthy string, so it passes filter(Boolean)) and modelShort() returns
+       NULL for it by design (placeholder guard). The option's label came out
+       null, lensFilterMenu called .toLowerCase() on it, and render() threw
+       before the board ever painted — the page was down. The label falls back
+       to the raw string: honest, filterable, and render survives. */
+    const updatedAt = new Date().toISOString();
+    const snap = snapshot({
+      programs: [{ id: "p", name: "P", agents: [
+        agent({ id: "claude:syn", provider: "claude", model: "<synthetic>", updatedAt, task: "A" }),
+        agent({ id: "codex:m", provider: "codex", model: "gpt-5.6-sol", updatedAt, task: "B" }),
+      ] }],
+    });
+    const ui = listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true });
+    const modelAxis = M.LENS_AXES.find((a: { key: string }) => a.key === "model")!;
+    const labels = M.lensOptions(modelAxis, ui).map((o: { label: unknown }) => o.label);
+    for (const label of labels) expect(typeof label, String(label)).toBe("string");
+    expect(labels).toContain("<synthetic>");
+    // And the whole bar renders over this fleet — the crash site was render().
+    withDom(() => {
+      expect(() => M.renderFilterBar(ui)).not.toThrow();
+    });
   });
 
   test("(FE2-D3) the counts do not move when another lens narrows the board", () => {
@@ -7692,7 +7529,10 @@ describe("FE-B: harness-backed client behavior", () => {
      operator to discover, which is why lenses "looked broken" every time they
      failed to move the number beside the tab they were filtering. */
 
-  const noteOf = () => domById.get("scope-note")!;
+  /* FE-4 D4 moved the board's sentence into the filter bar row; `#scope-note`
+     below the search box is now the Usage line's slot alone. The render target
+     changed, the behaviour these pin did not. */
+  const noteOf = () => domById.get("bar-scope-note")!;
   /* The fake document lives only for the duration of withRequests, so anything
      that clicks the rendered sentence has to run INSIDE it — render() reads
      `document` and a fire() after the teardown throws rather than failing. */
@@ -7727,6 +7567,7 @@ describe("FE-B: harness-backed client behavior", () => {
     };
     const base = await countWith({});
     expect(base).toBe("4");
+    expect(await countWith({ facetClasses: ["orchestrator"] })).toBe(base);
     expect(await countWith({ facetProviders: ["codex"] })).toBe(base);
     expect(await countWith({ facetStatuses: ["waiting"] })).toBe(base);
     expect(await countWith({ facetModels: ["gpt-5-codex"] })).toBe(base);
@@ -7735,8 +7576,8 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(await countWith({ query: "nothing-matches-this" })).toBe(base);
     // Every lens at once, still the same number.
     expect(await countWith({
-      facetProviders: ["codex"], facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"],
-      facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
+      facetClasses: ["orchestrator"], facetProviders: ["codex"], facetStatuses: ["waiting"],
+      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
     })).toBe(base);
 
     // …and the working-set controls DO move it, which is the other half of the
@@ -7815,10 +7656,12 @@ describe("FE-B: harness-backed client behavior", () => {
        sentence is standing next to. */
     await sentence({
       snap: lensFleet(), lookbackHours: 6, showReviewWorkers: false, query: "ridge",
-      facetProgram: "p", facetProviders: ["codex"], facetStatuses: ["waiting"],
-      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"],
+      facetProgram: "p", facetClasses: ["orchestrator"], facetProviders: ["codex"],
+      facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"],
+      facetContexts: ["over-75"],
     }, 1, async () => {
       await fire(byFkey(noteOf(), "sentence:clear"));
+      expect(M.state.facetClasses).toEqual([]);
       expect(M.state.facetProviders).toEqual([]);
       expect(M.state.facetStatuses).toEqual([]);
       expect(M.state.facetModels).toEqual([]);
@@ -7850,6 +7693,305 @@ describe("FE-B: harness-backed client behavior", () => {
         expect(M.state.openFilterMenu).toBe("");
         expect(M.state.lookbackHours).toBe(6); // nothing was selected on the way out
         expect(focused).toEqual([`[data-fkey="lookback:menu"]`]);
+
+        /* …and out of EVERY lens menu, not just the three a hand-kept map
+           happened to name. Escape out of Model, Span or Context looked up
+           nothing and dropped the operator on <body>; the trigger key is derived
+           from the axis table now, so a new axis cannot arrive without one. */
+        for (const axis of M.LENS_AXES) {
+          focused.length = 0;
+          M.state.openFilterMenu = axis.key;
+          M.closeFilterMenu();
+          expect(focused, axis.key).toEqual([`[data-fkey="${axis.key}:menu"]`]);
+        }
+      }));
+  });
+
+  /* -------- FE-4 D1: the class of an agent ----------------------------------
+     WHO the agent is, as one word, over the fields the server publishes. The
+     board already carries role, specialty and sessionKind and asks the operator
+     to hold all three in their head; this collapses them into a single axis.
+
+     One class per agent, because the lens axes must PARTITION the working set —
+     an agent in two buckets makes the counts sum to more than the board holds,
+     which is the invariant (FE2-D3) that lets a menu of counts be trusted at
+     all. So the classification is a precedence, and these pin the order rather
+     than the individual answers: any test that only checked "an orchestrator is
+     an orchestrator" would pass over a table that ranked specialty first. */
+
+  test("(FE4-D1) agentClassOf is a precedence over the published fields, not a set of tags", () => {
+    // 1. Review kind outranks everything, including a role the session declared.
+    expect(M.agentClassOf(agent({ sessionKind: "review", role: "orchestrator" }))).toBe("reviewer");
+    /* …including the prose fallback, so a snapshot from a server that predates
+       sessionKind classifies the same way it filters (sessionKindOf, not a
+       second reading of the task text). */
+    expect(M.agentClassOf(agent({ task: "Review this change for security vulnerabilities." })))
+      .toBe("reviewer");
+
+    // 2. Automation, from either carrier — the kind or the role.
+    expect(M.agentClassOf(agent({ sessionKind: "automation" }))).toBe("automation");
+    expect(M.agentClassOf(agent({ role: "automation" }))).toBe("automation");
+    // But a review that happens to run under automation is still a review.
+    expect(M.agentClassOf(agent({ sessionKind: "review", role: "automation" }))).toBe("reviewer");
+
+    /* 3 before 4. An orchestrator that also declares a frontend specialty is an
+       ORCHESTRATOR: what it does to the fleet outranks what it works on, and
+       filing it under Frontend would hide the fleet's coordinators inside a
+       discipline bucket. */
+    expect(M.agentClassOf(agent({ role: "orchestrator", specialty: "frontend" }))).toBe("orchestrator");
+    expect(M.agentClassOf(agent({ role: "orchestrator" }))).toBe("orchestrator");
+
+    // 4. Specialty outranks the remaining roles: a frontend worker is Frontend.
+    expect(M.agentClassOf(agent({ specialty: "frontend", role: "worker" }))).toBe("frontend");
+    expect(M.agentClassOf(agent({ specialty: "backend", role: "worker" }))).toBe("backend");
+
+    // 5. Every other published role carries through verbatim.
+    for (const role of ["tester", "verifier", "worker", "monitor", "service", "human"]) {
+      expect(M.agentClassOf(agent({ role })), role).toBe(role);
+    }
+
+    /* 6. And the floor. A row with no role, and a row carrying a word that is
+       not in the wire's vocabulary, are both simply an agent — guessing a class
+       from an unrecognised string is how "any other published role" would turn
+       into re-deriving from prose. */
+    expect(M.agentClassOf(agent({}))).toBe("agent");
+    expect(M.agentClassOf(agent({ role: "vibes-engineer" }))).toBe("agent");
+    expect(M.agentClassOf(undefined)).toBe("agent");
+  });
+
+  /* -------- FE-4 D2/D3: the Class axis, and the policy inside it ------------ */
+
+  const classAxis = () => M.LENS_AXES.find((a: { key: string }) => a.key === "class");
+  const classUi = (over: Record<string, unknown> = {}) =>
+    listUi({ view: "board", lookbackHours: null, showReviewWorkers: true, ...over });
+  const classFleet = (...agents: unknown[]) =>
+    snapshot({ programs: [{ id: "p", name: "P", agents }] });
+
+  test("(FE4-D2) Class leads the axis table, and every class it can produce has a menu label", () => {
+    /* Class is FIRST because it answers who the agent is; provider, model, span
+       and context are all questions about the same agent once you know that. */
+    expect(M.LENS_AXES[0].key).toBe("class");
+    expect(M.LENS_AXES[0].stateKey).toBe("facetClasses");
+
+    /* The label table and the precedence are two lists of the same vocabulary,
+       and nothing in the type system keeps them together — a class the
+       precedence can return but the table has not met would be dropped from the
+       options, which breaks the partition invariant by hiding rows behind a
+       filter with no item able to un-hide them. So every branch of agentClassOf
+       is driven, and each result has to come back as a labeled option. */
+    const updatedAt = new Date().toISOString();
+    const oneOfEach = [
+      agent({ id: "a:rev", updatedAt, sessionKind: "review", task: "Review this change for security vulnerabilities." }),
+      agent({ id: "a:auto", updatedAt, role: "automation" }),
+      agent({ id: "a:orch", updatedAt, role: "orchestrator" }),
+      agent({ id: "a:fe", updatedAt, specialty: "frontend" }),
+      agent({ id: "a:be", updatedAt, specialty: "backend" }),
+      agent({ id: "a:test", updatedAt, role: "tester" }),
+      agent({ id: "a:ver", updatedAt, role: "verifier" }),
+      agent({ id: "a:work", updatedAt, role: "worker" }),
+      agent({ id: "a:mon", updatedAt, role: "monitor" }),
+      agent({ id: "a:svc", updatedAt, role: "service" }),
+      agent({ id: "a:human", updatedAt, role: "human" }),
+      agent({ id: "a:plain", updatedAt }),
+    ];
+    const ui = classUi({ snap: classFleet(...oneOfEach) });
+    const options = M.lensOptions(classAxis(), ui);
+    expect(options.length).toBe(oneOfEach.length);
+    for (const option of options) {
+      expect(typeof option.label, String(option.value)).toBe("string");
+      expect(option.label.length, String(option.value)).toBeGreaterThan(0);
+      expect(option.count, String(option.value)).toBe(1);
+    }
+    // Ordered by what the class MEANS, not alphabetically: the fleet-shaped
+    // answers first, the floor last.
+    expect(options.map((o: { value: string }) => o.value)).toEqual([
+      "reviewer", "orchestrator", "frontend", "backend", "automation",
+      "tester", "verifier", "worker", "monitor", "service", "human", "agent",
+    ]);
+  });
+
+  test("(FE4-D3) the review policy is a footer ACTION inside the Class menu, not a sixth class", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", provider: "codex", updatedAt, role: "orchestrator", task: "Ship it." });
+    const snap = classFleet(review, work);
+
+    await withState({ snap, view: "board", lookbackHours: null, showReviewWorkers: false, openFilterMenu: "class" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        const bar = domById.get("filter-bar");
+        const policy = byFkey(bar, "session-kind:review");
+        /* Same fkey it has always had — focus restore and muscle memory were
+           built on it, and the control moving one level deep is no reason to
+           make an operator's hands relearn where it is. */
+        expect(policy).toBeTruthy();
+        expect(policy.className).toContain("filter-menu-policy");
+        /* A menuitem, NOT a menuitemcheckbox. The items above it are members of
+           a set this browser narrows by; this one writes a setting on the
+           server, and announcing it as a checkbox in that group tells a screen
+           reader operator it is a sixth class. */
+        expect(policy.attributes.role).toBe("menuitem");
+        expect(policy.attributes["aria-checked"]).toBeUndefined();
+        expect(textOf(policy)).toContain("1 hidden reviewer");
+        expect(textOf(policy)).toContain("fleet-wide setting");
+        expect(policy.attributes.title).toContain("colleagues");
+      }));
+
+    // Closed, the bar carries no policy control of its own — it is inside the menu.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: false }));
+      const bar = domById.get("filter-bar");
+      expect(byFkey(bar, "session-kind:review")).toBeNull();
+      expect(byClass(bar, "filter-policy")).toBeNull();
+      /* …but the disclosure does not go with it. A hidden population one level
+         deep with nothing at the surface saying so is the same as not saying so:
+         the Class TRIGGER wears the mark, and its title carries the count and
+         the fact that the setting is the fleet's. */
+      const trigger = byFkey(bar, "class:menu");
+      expect(textOf(trigger)).toContain("Class");
+      expect(textOf(trigger)).toContain("⊘");
+      expect(trigger.attributes.title).toContain("1 reviewer");
+      expect(trigger.attributes.title).toContain("fleet");
+    });
+
+    // Showing them, the mark is gone — nothing is being withheld to disclose.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
+      expect(textOf(byFkey(domById.get("filter-bar"), "class:menu"))).not.toContain("⊘");
+    });
+  });
+
+  test("(FE4-D3) the Reviewer option appears exactly when the policy stops hiding them", () => {
+    /* The interplay needs no special case, and this is the pin that says so.
+       The working set EXCLUDES hidden reviewers, so while the policy hides them
+       the Reviewer class simply has nothing in it and is not offered; flip the
+       policy and the option appears with its count. A menu item that filtered
+       for a population the board had already removed would offer the operator a
+       guaranteed-empty board. */
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", provider: "codex", updatedAt, role: "orchestrator", task: "Ship it." });
+    const snap = classFleet(review, work);
+
+    const values = (showReviewWorkers: boolean) =>
+      M.lensOptions(classAxis(), classUi({ snap, showReviewWorkers }))
+        .map((o: { value: string; count: number }) => [o.value, o.count]);
+
+    expect(values(false)).toEqual([["orchestrator", 1]]);
+    expect(values(true)).toEqual([["reviewer", 1], ["orchestrator", 1]]);
+  });
+
+  test("(FE4-D3) the Class menu renders for the policy alone, so the disclosure cannot vanish", () => {
+    /* A one-option axis is furniture and does not render — that rule is what
+       keeps the bar honest. But the Class menu now carries the fleet's review
+       policy in its footer, and an axis that declined to render would take the
+       policy down with it: the reviewers would be hidden with no control
+       anywhere able to show them. */
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    // Hidden, the working set holds nothing at all — not one class, zero.
+    const snap = classFleet(review);
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: false }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeTruthy();
+    });
+
+    /* The mirror case, and it is not symmetric with the one above: the fleet is
+       SHOWING reviewers and there are none in the window. The policy still has
+       to be reachable, because otherwise the only way back to the fleet's
+       default would be to wait for a reviewer to appear — a setting an operator
+       turned on and cannot turn off. */
+    const plain = classFleet(agent({ id: "codex:w1", provider: "codex", updatedAt, task: "Ship it." }));
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap: plain, showReviewWorkers: true }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeTruthy();
+    });
+
+    /* And where there is no policy to state at all — the fleet is at its default
+       and there is nothing to hide — the ordinary rule holds: one class on the
+       wire is no choice, so the axis stays absent rather than rendering a control
+       whose only effect is to be turned back off. */
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap: plain, showReviewWorkers: false }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeNull();
+    });
+  });
+
+  /* -------- FE-4 D4: the sentence moves into the filter bar row ------------- */
+
+  test("(FE4-D4) the sentence sits between the lenses and the working-set control", async () => {
+    /* Where it is IS what it says. The lenses narrow within a population; Time
+       decides what the population is; the sentence reconciles those two numbers,
+       and it now stands in the gap between the two layers rather than on a line
+       of its own below the search box — which also fills the void that made the
+       right-aligned Time trigger read as stranded. */
+    await withState({
+      view: "board", lookbackHours: null, showReviewWorkers: true, fetchFailed: false,
+      snap: lensFleet(), facetProviders: ["codex"],
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      M.renderScopeNote(1);
+      const bar = domById.get("filter-bar")!;
+      const note = domById.get("bar-scope-note")!;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const slots = (bar as any).children.map((child: any) =>
+        child === note ? "sentence" : (focusKeysOf(child)[0] || child.className));
+      expect(slots[0]).toBe("filter-lead");
+      expect(slots[slots.length - 1]).toBe("lookback:menu");
+      expect(slots[slots.length - 2]).toBe("sentence");
+      // Every lens trigger is in front of it, none behind.
+      expect(slots.indexOf("class:menu")).toBeLessThan(slots.indexOf("sentence"));
+      expect(slots.indexOf("provider:menu")).toBeLessThan(slots.indexOf("sentence"));
+
+      expect(note.hidden).toBe(false);
+      expect(textOf(note)).toContain("codex");
+      expect(textOf(byClass(note, "scope-count"))).toBe("1 of 3");
+      /* Still a live region, and still the SAME one across paints. It is
+         declared in the markup rather than built by renderFilterBar because an
+         aria-live element that is destroyed and recreated announces nothing —
+         the region has to be in the tree before its content changes. */
+      expect(html).toContain('id="bar-scope-note"');
+      expect(note.attributes["aria-live"] ?? "polite").toBe("polite");
+      M.renderFilterBar(M.state);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((bar as any).children.filter((c: unknown) => c === note).length).toBe(1);
+      expect(domById.get("bar-scope-note")).toBe(note);
+
+      // The old slot below the search box is emptied, not left holding a stale
+      // copy of a sentence that now lives somewhere else.
+      expect(textOf(domById.get("scope-note"))).toBe("");
+      expect(domById.get("scope-note")!.hidden).toBe(true);
+    }));
+  });
+
+  test("(FE4-D4) Usage keeps its own line below the search box", async () => {
+    /* Usage has no lenses and no working set — only a range — so there is no
+       two-layer gap for a sentence to stand in. Its line stays where it was, and
+       the bar's region goes quiet rather than carrying a leftover board
+       sentence into a view that cannot have one. */
+    await withState({ view: "usage", usageRangeId: "24h", usageCustomHours: 24, usageLoading: false, snap: lensFleet() },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        M.renderScopeNote(0);
+        expect(textOf(domById.get("scope-note"))).toContain("Usage range 24h");
+        /* And it is VISIBLE. Leaving the board's hidden flag on this element was
+           how a quiet board followed by a switch to Usage produced a range line
+           that was written and never shown. */
+        expect(domById.get("scope-note")!.hidden).toBe(false);
+        expect(textOf(domById.get("bar-scope-note"))).toBe("");
+        expect(domById.get("bar-scope-note")!.hidden).toBe(true);
       }));
   });
 
@@ -7884,8 +8026,8 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(textOf(table)).toContain("Recent invocations");
     /* The session-link button only exists when the invocation maps to an agent
        in state.snap, which this suite cannot set; likewise the two confirm-strip
-       Cancel buttons are gated behind state.confirming / state.broadcastConfirming.
-       All three carry an fkey now, but they are covered by inspection, not here —
+       Cancel button is gated behind state.confirming.
+       Both carry an fkey now, but they are covered by inspection, not here —
        said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
   });
 
@@ -8064,8 +8206,6 @@ describe("FE-B: harness-backed client behavior", () => {
       ["terminal breadcrumb", { target: { resolution: "exact", surfaceId: "s1", workspaceTitle: "ridge" } }, {}],
       ["staleness fact", { updatedAt: new Date(Date.now() - 40 * 60_000).toISOString() }, {}],
       ["selection highlight", {}, { selectedId: "codex:a1" }],
-      ["select mode", {}, { selecting: true }],
-      ["checkbox", {}, { selecting: true, selection: new Set(["codex:a1"]) }],
       ["rename form", {}, { renaming: M.presentationLabelKey(M.preferredRenameTarget(base)) }],
       ["rename pending", {}, { renamePending: true }],
       ["rename error", {}, { renameError: "Too long" }],
@@ -8095,7 +8235,6 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(shell([{ ...a, status: "attention" }, b])).not.toBe(base); // rollup counts
     expect(shell([a, b], { programOverrides: new Map([["p1", "closed"]]) })).not.toBe(base); // caret
     expect(shell([a, b], { labels: new Map([["program:p1", "Ridge"]]) })).not.toBe(base); // head label
-    expect(shell([a, b], { selecting: true })).not.toBe(base); // selection row
     expect(shell([a, b], { renaming: "program:p1" })).not.toBe(base); // rename form
     expect(shell([a], { })).not.toBe(base); // fewer visible agents
   });
@@ -8740,12 +8879,6 @@ describe("FE-B: harness-backed client behavior", () => {
       // the one nobody chose.
       expect(M.historyProvenance(archived).className).toContain("history-chip--archived");
       expect(M.historyProvenance(retained).className).toContain("history-chip--retained");
-
-      /* Derived from the SAME two fields broadcastIneligibleReason has been
-         reading since the naming contract landed. One model, two surfaces —
-         a second derivation here is how they would start disagreeing. */
-      expect(M.broadcastIneligibleReason(retained)).toBe("in history");
-      expect(M.broadcastIneligibleReason(archived)).toBe("archived");
     });
 
     test("a session that ended some other way claims neither", () => {
@@ -9313,19 +9446,6 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
       .not.toBe(M.inspectorPaintSig(sel, view, fresh));
   });
 
-  test("(1) a board that freezes mid-compose repaints the broadcast dock", () => {
-    const recipients = [{ agent: agent({ status: "running", controls: [{ action: "instruct", enabled: true }] }), program: { id: "p", name: "P", agents: [] } }];
-    // broadcastPaintSig reads the wall clock (it is called during a real paint),
-    // so "fresh" here has to be a snapshot generated a moment ago.
-    const fresh = { conn: "live", snap: { generatedAt: new Date().toISOString() }, broadcastResults: null, broadcastConfirming: false, broadcastPending: false, broadcastError: "" };
-    const stuck = { ...fresh, snap: { generatedAt: FROZEN_AT } };
-    // The guard exists so the dock does not strobe; it must still notice this.
-    expect(M.broadcastPaintSig(recipients, recipients, stuck))
-      .not.toBe(M.broadcastPaintSig(recipients, recipients, fresh));
-    // …and typing still must not move it (FE-A's live-input rule, unchanged).
-    expect(M.broadcastPaintSig(recipients, recipients, { ...fresh, broadcastDraft: "half a sentence" }))
-      .toBe(M.broadcastPaintSig(recipients, recipients, fresh));
-  });
 });
 
 /* ---------------------------------------------------------------------------
@@ -9608,53 +9728,12 @@ describe("FE-C: operator actions survive a reload, failures included", () => {
     expect(M.actionOutcomeView(undefined).label).toBe("unknown");
   });
 
-  test("(3) the log renders newest-first with failures and staged fully visible", () => {
-    const items = [ACT.delivered, ACT.staged, ACT.failed, ACT.partial];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const panel: any = withDom(() => M.renderActionLog(actionsUi({ items }), (id: string) => (id === "codex:a1" ? "Ridge worker" : null)));
-    const rows = allByClass(panel, "action-row");
-    expect(rows).toHaveLength(4);
-    // Contract order is newest-first; the view must not resort and lose it. The
-    // detail strings are unique, so this pins position, not just membership.
-    expect(rows.map((r: unknown) => textOf(r).includes(ACT.delivered.detail))).toEqual([true, false, false, false]);
-    expect(items.map((a) => a.detail).every((d, i) => textOf(rows[i]).includes(d))).toBe(true);
-    const text = textOf(panel);
-    expect(text).toContain("Delivered");
-    expect(text).toContain("not submitted");
-    expect(text).toContain("Failed");
-    expect(text).toContain("Partly delivered");
-    // The failure's own words survive — "0 of 4 recipients delivered" is the
-    // whole point, and a log that dropped it would read as four successes.
-    expect(text).toContain("0 of 4 recipients delivered");
-    // Recipients resolve to names where the snapshot still knows them, and a
-    // fan-out collapses to a count instead of a wall of session ids.
-    expect(text).toContain("Ridge worker");
-    expect(text).toContain("4 sessions");
-    // Outcome tone rides a data attribute so one column is scannable.
-    expect(rows.map((r: { dataset: { tone: string } }) => r.dataset.tone)).toEqual(["ok", "warn", "err", "warn"]);
-  });
-
-  test("(3) recipients degrade honestly rather than dropping unknown sessions", () => {
-    expect(M.actionRecipients({ agentIds: [] }, () => "x")).toBe("no recipients");
-    // An agent gone from the snapshot keeps its raw id — never silently omitted
-    // from the record of who was instructed.
-    expect(M.actionRecipients({ agentIds: ["codex:gone"] }, () => null)).toBe("codex:gone");
-    expect(M.actionRecipients({ agentIds: ["a", "b", "c"] }, (id: string) => id.toUpperCase())).toBe("A, B, C");
-    expect(M.actionRecipients({ agentIds: ["a", "b", "c", "d"] }, () => "n")).toBe("4 sessions");
-  });
-
-  test("(3) an empty log, a loading log and a missing endpoint each read differently", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const render = (over: Record<string, unknown>): any => withDom(() => M.renderActionLog(actionsUi(over)));
-    // Empty is empty — and says what WILL appear, including the failures.
-    const empty = textOf(render({}));
-    expect(empty).toContain("No operator actions recorded yet");
-    expect(empty).toContain("including the ones that fail");
-    expect(textOf(render({ loading: true }))).toContain("Reading the action log");
-    // A build without the route says so; it never renders as "nothing happened".
-    const missing = textOf(render({ error: "The action log is not available in this build." }));
-    expect(missing).toContain("not available in this build");
-    expect(missing).not.toContain("No operator actions recorded yet");
+  /* The panel that showed these three states is gone (operator directive,
+     2026-08-05), but the sentences are not decoration: loadActions still writes
+     them into state.actions.error, and a build without the route must latch
+     available=false rather than let the dock's "last action" crumb read as
+     "nothing was ever sent to this agent". */
+  test("(3) a missing route, an unreachable server and a server fault each say so", () => {
     expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
     expect(M.actionsFailureText(0, null)).toContain("Could not reach the server");
     expect(M.actionsFailureText(500, { error: { code: "LOG_CORRUPT" } })).toContain("LOG_CORRUPT");
@@ -10466,7 +10545,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     });
   });
 
-  test("(3) the live action-log route loads and renders every real outcome", async () => {
+  test("(3) the live action-log route loads every real outcome, refusals included", async () => {
     // Verbatim from :4792 after two refused control attempts. A journal that
     // showed only successes would read as proof the instruction landed.
     const live = {
@@ -10500,17 +10579,17 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
         expect(M.state.actions.fetchedAt).toBeGreaterThan(0);
         expect(M.state.actions.items).toHaveLength(2);
 
-        const panel = withDom(() => M.renderActionLog(M.state, null));
-        expect(byClass(panel, "action-log-note")).toBeNull();
-        expect(allByClass(panel, "action-row")).toHaveLength(2);
-        const first = allByClass(panel, "action-row")[0];
-        expect(textOf(byClass(first, "action-kind"))).toBe("Interrupt");
-        expect(textOf(byClass(first, "action-outcome"))).toBe("Failed");
-        // The server's own reason survives to the screen, not summarised away.
-        expect(textOf(byClass(first, "action-detail"))).toBe(live.actions[0]!.detail);
-        // An agent the snapshot no longer names keeps its raw id rather than
-        // vanishing from the record of who was instructed.
-        expect(textOf(byClass(first, "action-who"))).toBe("codex:w5b-probe-not-a-real-agent");
+        // Newest-first order is the contract, and normalizeActions must not
+        // resort it: the dock reads items[0] as "the last thing I did here".
+        const first = M.state.actions.items[0];
+        expect(first.id).toBe(live.actions[0]!.id);
+        expect(first.kind).toBe("interrupt");
+        expect(M.actionOutcomeView(first.outcome).label).toBe("Failed");
+        // The server's own reason survives normalization, not summarised away.
+        expect(first.detail).toBe(live.actions[0]!.detail);
+        // A refused attempt is kept as a refusal — a journal that dropped these
+        // two would read as proof the interrupt landed.
+        expect(M.state.actions.items.map((a: { outcome: string }) => a.outcome)).toEqual(["failed", "failed"]);
       });
     });
   });
@@ -10827,7 +10906,7 @@ describe("W6-B: sequenced snapshot deltas stay complete", () => {
   test("the quiet-feed clock repaints the alarm without waiting for another snapshot", async () => {
     const stale = snapshot({ generatedAt: new Date(Date.now() - 61_000).toISOString() });
 
-    await withState({ snap: stale, conn: "reconnecting", selected: null, selecting: false }, async () => {
+    await withState({ snap: stale, conn: "reconnecting", selected: null }, async () => {
       await withRequests([], async (calls) => {
         M.tickFreshnessSurfaces();
 

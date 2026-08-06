@@ -50,13 +50,14 @@ export const state = {
      Session-scoped, all of them: they answer "what am I looking at right now",
      not "what should this board default to", so they do not persist and do not
      travel. */
+  facetClasses: [],
   facetProviders: [],
   facetStatuses: [],
   facetModels: [],
   facetSpans: [],
   facetContexts: [],
-  /* Which filter dropdown is open: "" | time | provider | status | model | span
-     | context. One at a time, deliberately — two menus hanging off the same bar
+  /* Which filter dropdown is open: "" | time | class | provider | status | model
+     | span | context. One at a time, deliberately — two menus hanging off the same bar
      would overlap, and the operator has no way to tell which one a click is
      aimed at. Session-scoped like the lenses it opens: a menu left hanging is
      not a preference. */
@@ -116,13 +117,6 @@ export const state = {
   renameDraft: "",
   renamePending: false,
   renameError: "",
-  selecting: false,            // selection/broadcast mode
-  selection: new Set(),        // selected agent ids
-  broadcastDraft: "",
-  broadcastConfirming: false,
-  broadcastPending: false,
-  broadcastError: "",
-  broadcastResults: null,      // Map agentId -> { ok, error }
   programOverrides: new Map(), // programId -> "open" | "closed"
   /* Which repositories the operator has folded up. Keyed by repoKey — the FNV
      of the git common dir, which is stable across every worktree of the repo
@@ -160,9 +154,9 @@ export const state = {
   transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
   // Persistent operator journal (GET /api/actions). `available` latches false on
   // a build with no such route so a missing endpoint is asked for once, not
-  // every five seconds forever.
+  // every five seconds forever. The panel that listed it is gone; what reads it
+  // now is the command dock's "last action" fact.
   actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
-  actionsOpen: false,
   // Operator attention verdicts (POST /api/attention). The snapshot carries the
   // effect, never the record, so the server's own answer is kept here to name
   // what was done. An expired snooze is dropped by attentionRecord(), which is
@@ -186,10 +180,10 @@ export const state = {
   queueError: "",
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  // `alarm` and `actions` start null, not "": their calm signature IS the empty
-  // string, so a "" seed would make the very first paint a no-op and leave both
-  // surfaces showing whatever markup they were served with.
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
+  // `alarm` starts null, not "": its calm signature IS the empty string, so a ""
+  // seed would make the very first paint a no-op and leave the surface showing
+  // whatever markup it was served with.
+  paintSig: { programs: "", inspector: "", widgets: "", alarm: null },
 };
 
 /* WHICH entity a painted inspector signature describes — the kind and id that

@@ -32,15 +32,18 @@ a defect asserted green stops being a defect.
 | 1 | AX tree with the panel open | **PASS with 3 defects** — toggle contract correct, badge count in the name; three naming defects on the panel and its rows |
 | 2 | Focus contract | **PASS with 1 defect** — Esc, Tab, Shift+Tab, outside-press all correct; focus is dropped to `<body>` when the focused row leaves the feed |
 | 3 | Console clean | **PASS** — zero messages of any level across open → route → close |
-| 4 | `(hover: none)` at 420px | **PASS with 1 defect** — no hover-only affordance anywhere; the Focus control misses the codebase's own 44px touch sweep |
-| 5 | `prefers-reduced-motion` | **NOT RUN live** — `/browse` cannot emulate the media feature. Rule-level proof holds; see §5 |
+| 4 | `(hover: none)` at 420px | **PASS with 1 defect** — no hover-only affordance anywhere; the Focus control misses the codebase's own 44px touch sweep. The media-feature emulation itself is **still NOT RUN** — see §4-emulation |
+| 5 | `prefers-reduced-motion` | ~~NOT RUN~~ → **PASS, measured live 2026-08-06 07:2x** under real emulation, both surfaces. See §5 |
 | 6 | Responsive 420 / 768 / 1280 | **FAIL at 420px** — no horizontal scroll anywhere, but the panel overflows the viewport's **left** edge by 24px and the clipped strip is unreachable. **Fixed in `fd34a66`; its regression guard is NOT RUN — see §6-guard** |
 | 7 | The ember contract, visually | **PASS** — measured on the live blocking board and across all three tones |
 
-⚠ **Two rows are NOT RUN, not passed.** Check 5 was never observed in a browser,
-and check 6's *guard* measures the stylesheet rather than the panel. Both are
-written up in full below rather than left as a green tick; a check nobody can see
-failing is the failure mode this document exists to prevent.
+⚠ **What is still not observed.** Check 5 **was closed on 2026-08-06** once the
+harness gained media emulation — it is now a measured pass, not an argument.
+What remains: check 4's `(hover: none)` *emulation* (its conclusion does not
+depend on it — §4-emulation), and check 6's *guard*, which measures the
+stylesheet rather than the panel. Both are written up in full rather than left as
+a green tick; a check nobody can see failing is the failure mode this document
+exists to prevent.
 
 **Seven defects, one environment note.** None of them is in the model — `notification-center.js`
 came through the derivation probes clean on every fixture. All seven are in the paint.
@@ -281,9 +284,31 @@ measurements:
    `text-decoration`. `.notify-row-meta` also reserves its action space with `min-height: 1.4rem`,
    so nothing reflows under a pointer.
 
-**Emulation caveat:** `(hover: none)` itself was **not emulated** — `/browse` exposes no
-`Emulation.setEmulatedMedia`. It did not need to be: emulation would only matter if something *were*
-hover-gated, and nothing is. Both measurements above are hover-independent.
+### §4-emulation · `(hover: none)` is **still NOT RUN** — and this time it is the feature, not the tool
+
+Retried on 2026-08-06 after the harness gained `Emulation.setEmulatedMedia`. **It did not take**,
+and the failure was isolated rather than assumed:
+
+```
+A  setEmulatedMedia hover=none                        -> (hover: none) false, (hover: hover) TRUE
+B  setEmulatedMedia prefers-color-scheme=dark  CONTROL -> (prefers-color-scheme: dark) TRUE
+C  setDeviceMetricsOverride {mobile:true, 420x900}     -> innerWidth 420, but hover/pointer unchanged
+```
+
+**B is the control and it is the whole argument.** The CDP method, the allowlist entry and the
+rebuilt daemon all work — a `prefers-*` feature emulates correctly on the same call. So this is
+not a broken tool: `hover` and `pointer` are derived from the emulated *input device*, not from
+the media-feature override, and C shows that mobile device metrics alone do not move them either.
+
+Closing it needs `Emulation.setTouchEmulationEnabled` (usually with
+`setEmitTouchEventsForMouse`) in the allowlist. Only four `Emulation` methods are permitted today
+— `setDeviceMetricsOverride`, `clearDeviceMetricsOverride`, `setUserAgentOverride`,
+`setEmulatedMedia` — and neither touch method is among them.
+
+**Check 4's conclusion is unaffected, and never depended on this.** "Hover-revealed" means
+*hidden at rest*, so the rest-state measurement at 420px answers it directly, and the complete
+enumeration of `:hover` rules bounds every way it could have been otherwise. What is NOT RUN is
+the media query, not the finding — recorded that way rather than quietly folded into the PASS.
 
 ### DEFECT A11Y-6 · Focus is a 32px target where its sibling Reply is 44px
 
@@ -318,14 +343,54 @@ a failure.
 
 ---
 
-## 5. `prefers-reduced-motion` — NOT RUN live
+## 5. `prefers-reduced-motion` — ~~NOT RUN~~ **PASS, measured 2026-08-06 07:2x**
 
-**Stated plainly, per the kickoff: this check could not be run as specified.** `/browse` has no
-media-emulation command and `Emulation.setEmulatedMedia` is not in its CDP allowlist
-(`~/.claude/skills/gstack/browse/src/cdp-allowlist.ts` permits only `setDeviceMetricsOverride`,
-`clearDeviceMetricsOverride`, `setUserAgentOverride`). The `reduce` branch was therefore never
-observed in a running browser. `matchMedia("(prefers-reduced-motion: reduce)").matches` was `false`
-throughout.
+**The harness changed, not the finding.** For the whole program this row was rule-level only,
+because `/browse` had no media-emulation command and `Emulation.setEmulatedMedia` was not in its
+CDP allowlist. On 2026-08-06 the allowlist gained that entry
+(`scope: tab`, `output: trusted`) and the node server bundle was rebuilt. The check is now
+observable, so it was run. **This row did not turn green because someone re-read the CSS.**
+
+⚠ The old binary is still `dist/browse` from Jul 15 and does not contain the symbol; the
+daemon that enforces the allowlist is `dist/server-node.mjs`, rebuilt 07:20. The CLI does no
+client-side validation, so a **daemon restart** is what picks the change up.
+
+**The emulation was proved to take before anything was measured**, because measuring the
+`no-preference` branch and reporting a pass would be worse than the NOT RUN it replaced:
+
+```
+before emulation   reduce false   no-preference true
+after  emulation   reduce TRUE    no-preference false
+```
+
+**Panel, open, under real `reduce`:** every transition resolved to `none` / `0s`, and an
+enumeration of *every node inside the panel* returned an empty list of animated elements.
+
+```
+.notify-row  .notify-quiet  .notify-act  .notify-switch-track
+    transition: none   transitionDuration: 0s   animationName: none
+anyAnimatedNodeInPanel: []
+```
+
+**Clean up chip, mid-sweep, under real `reduce`** — the surface that actually has a keyframe
+(`cleanup-spin`), screenshot at `docs/a11y-shots/09-cleanup-reduced-motion.png`:
+
+| Reading | Value | Means |
+|---|---|---|
+| `animationName` | `none` | `cleanup-spin` is stopped |
+| `animationDuration` | `0s` | …and not merely paused |
+| `opacity` | `1` | the marker is still **there** |
+| `borderStyle` | `dashed` | the static variant took |
+| `borderTopColor` == `borderRightColor` | `rgb(154,107,18)` | the ring is complete, not a gap pretending to spin |
+| button text | `Examining…` | the state is carried by the label too, not only the mark |
+| `aria-busy` | `true` | …and by the tree |
+
+So the chip **does not go blank** when motion is refused: it stops moving and keeps saying a
+process is underway, in three independent ways. That is what the rule intended and it is now
+observed rather than argued.
+
+The rule-level proof recorded below still holds and is what the committed tests assert; the
+live measurement corroborates it rather than replacing it.
 
 **What was measured instead — a complete enumeration, not a spot check.** Every CSS rule in every
 loaded stylesheet was walked and tested against every node in `#notify-toggle` and
@@ -532,6 +597,151 @@ lesson is cheap and worth keeping: **`bun test` green is not `test:ci` green, an
 
 Each fix should land with the claim-shaped test that would have caught it; those tests are not in
 `tests/notification-center-a11y.test.ts` because they would be red until the fix lands.
+
+---
+
+## Second pass — the Clean up control (2026-08-06 06:5x)
+
+**Scope gap, not a re-audit.** The original sweep was scoped to `#notify-toggle` and
+`#notifications-panel`. `cleanupAction()` shipped in S6-T3 *after* it and landed in main
+without any a11y pass. It lives on the header instrument-trust chip
+(`app.js:2280`, `.verdict-cleanup`), so no check above ever touched it.
+
+Same server: `MOUNTAIN_PORT=4799`, live board, `/browse`. The board carried no debris, so
+`cleanupOffered()` was false; the control was brought on screen through its own render path
+by setting `state.cleanup.error` — a state the app reaches on its own whenever enumeration
+fails — never by hand-editing the DOM.
+
+| # | Check | Result |
+|---|---|---|
+| C1 | Does the running state reach the screen at all? | **FAIL** — the header never repaints during a sweep |
+| C2 | Focus on activation | **FAIL** — falls to `<body>` and never returns |
+| C3 | Is the transition announced? | **FAIL** — the live region is destroyed and recreated every paint |
+| C4 | Contract sentence in `title` | **PASS, with a caveat** — the orchestrator's suspicion was half right; see C4 |
+| C5 | Mark `aria-hidden`, colour-only signal | **PASS** |
+| C6 | Target size | **PASS via the 2.5.8 spacing exception** — 74.8 × 17px, nearest target 101px away |
+| C7 | `prefers-reduced-motion` static variant | ~~NOT RUN~~ → **PASS, measured 2026-08-06 07:2x** — spin stopped, dashed marker still visible; see §5 |
+
+### CLEAN-1 · The entire running state was unreachable — FIXED
+
+**Selector:** `app.js` `renderHealthRail()`'s paint signature (the `paintUnchanged("widgets", …)` guard).
+
+The Clean up button lives in the header rail. The rail's paint signature signs widget values,
+tones and sublabels — **and nothing about the sweep**. Not one signed input moves while a
+sweep is in flight, so the guard returns early and the button is never rebuilt.
+
+Measured on the live board, with the guard left alone:
+
+```
+resting                     text "Clean up"   disabled false  markOpacity 0
+running, guard intact       text "Clean up"   disabled false  markOpacity 0   ← no change at all
+running, guard invalidated  text "Examining…" disabled true   markOpacity 1   ← the UI is correct
+```
+
+A real activation confirmed it end to end: `running` went `true → false` while the button
+read `"Clean up"` throughout and the indicator never appeared.
+
+**What a user hits.** They press Clean up and *nothing happens*. No label change, no spinner,
+no busy state — on a control whose entire S6-T3 design is "a rotating indicator on the chip
+and nothing else". The sweep runs and its result appears in a different surface. The obvious
+next move is to press it again.
+
+**The same bug was already found and fixed one surface away.** The notification panel's
+signature signs the sweep, with a comment saying why: *"The sweep's own state, or the panel
+would freeze mid-run: the indicator starts and the plan arrives without any snapshot value
+changing."* The rail holds the **button** and never got the same treatment.
+
+**Fix:** three lines added to the rail's signature — `state.cleanup.running`, `.at`, `.error` —
+mirroring the panel's. Verified with the guard untouched: `"Examining…"`, `aria-busy="true"`,
+indicator visible.
+
+### CLEAN-2 · Focus fell to `<body>` on activation and never returned — FIXED
+
+**Selector:** `app.js:2285`, `disabled: running ? "" : null`.
+
+This is A11Y-2 by a third route, and it was **masked by CLEAN-1** — the button never actually
+disabled, so the defect could not be observed until the repaint was fixed. Measured under a
+repainting rail:
+
+```
+focus the button          activeElement = .verdict-cleanup
+sweep starts              activeElement = BODY        node replaced, new node disabled
+sweep settles             activeElement = BODY        never restored
+control vanishes          activeElement = BODY
+```
+
+`render()` restores focus by `data-fkey`. It *finds* the rebuilt node — so the `else if`
+fallbacks never run — and calls `.focus()` on it, which does nothing because the node is now
+`disabled`. On the next paint `focusKey` is read off `<body>`, which has no `fkey`, so there
+is nothing left to restore. Focus is gone for good.
+
+**What a user hits.** A keyboard operator presses Enter on Clean up and is silently returned
+to the top of the document, mid-task, with no way back except re-tabbing the whole page.
+
+**Fix:** `aria-disabled="true"` instead of `disabled`. It says the same thing to assistive
+tech while keeping the control in the tab order, and `requestCleanupProposal()` already
+refuses re-entry (`if (state.cleanup.running) return`), so nothing depends on the native
+attribute. CSS moves from `:disabled` to `[aria-disabled="true"]`. Verified: focus stays on
+`.verdict-cleanup` through running **and** settled.
+
+### CLEAN-3 · The announcement could never fire — FIXED
+
+**Selector:** `app.js:2289`, `"aria-live": "polite"` on the button itself.
+
+Measured: the button node is **replaced on every paint** (`sameNodeAsBefore: false`). A live
+region that is destroyed and recreated announces nothing — the region has to already be in
+the tree when its content changes. So the one non-visual signal this control had could never
+fire, and a spinner says nothing to a screen reader. Combined with CLEAN-1, a non-sighted
+operator got **no signal whatsoever** that a sweep had started.
+
+**This codebase already knew.** `index.html` says it in its own words about `#bar-scope-note`:
+*"an aria-live region that is destroyed and recreated announces nothing: the region has to
+already be in the tree when its content changes."*
+
+**Fix:** a static `#cleanup-status` (`role="status"`, `aria-live="polite"`, visually hidden)
+declared in `index.html` beside `#scan-window` — `renderHealthRail` only empties
+`#health-widgets`, so it survives the paint that relabels the button. `announceCleanup()`
+writes to it at both transitions; the misleading `aria-live` comes off the button. Verified on
+a real sweep: *"Cleanup sweep running…"* then *"Cleanup proposal ready…"*, with
+`regionNodeStillOriginal: true`.
+
+### C4 · The contract sentence — the suspicion was half right
+
+**Measured, not assumed.** Chrome's AX tree exposes the `title` as the accessible
+**description**, in full:
+
+```
+role: button   name: "Clean up"
+description: "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead
+              panes. Nothing will be deleted without your approval — you paste the confirm
+              command yourself."
+```
+
+So *"invisible to screen readers"* is **wrong** — it is exposed, and the contract is
+reachable. Two halves of the concern do stand: a description is announced inconsistently
+across AT and verbosity settings, and `title` needs hover, so on touch the sentence is
+**unreachable by any means**.
+
+**Not fixed, and deliberately.** Promoting it to `aria-describedby` on a visible node would
+put a 30-word sentence permanently inside a compact header chip, which is the "standing scold"
+S6-T3 removed on purpose. The honest options are a visually-hidden `aria-describedby` target
+(fixes AT, not touch) or moving the contract into the proposal surface the operator reaches
+before any command runs — which is where the confirm command already lives. **That is a
+design call, not an a11y fix, so it is written up here rather than decided by this lane.**
+
+### C5, C6, C7 — measured, no action
+
+- **`.verdict-cleanup-mark` is correctly `aria-hidden="true"`**, 9×9, `opacity: 0` at rest.
+- **Not a colour-only signal.** The state is carried by presence/absence plus a label change
+  (`Clean up` → `Examining…`), not by hue. Text contrast 4.68:1 against its composited
+  background (needs 4.5).
+- **Target 74.8 × 17px**, at 1280 *and* 420 — under WCAG 2.5.8's 24×24. **Passes via the
+  spacing exception**: the nearest other target's centre is 101px away, far outside the 24px
+  circle. Recorded as an observation, the same treatment `.notify-act` got at desktop, not
+  filed as a defect.
+- **`prefers-reduced-motion`: NOT RUN**, same harness limit as check 5. `styles.css:3671`
+  switches the rotation for a dashed static ring, and the rule is asserted at rule level only.
+  The source comment already says so, which is the right form.
 
 ---
 

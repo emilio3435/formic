@@ -79,6 +79,16 @@
            and mixing a stable board-wide fact into a volatile filter line makes
            the stable fact inherit the volatility. -->
       <span id="scan-window" class="scan-window" hidden></span>
+      <!-- The Clean up sweep's only non-visual signal. It is declared HERE, in
+           static markup, for the same reason #bar-scope-note below is: an
+           aria-live region that is destroyed and recreated announces nothing,
+           and the region has to already be in the tree when its content changes.
+           The button used to carry aria-live itself and was rebuilt by every
+           paint, so the announcement could never fire — a spinner is invisible
+           to a screen reader, which left no signal at all that a sweep had
+           started. renderHealthRail only empties #health-widgets, so this
+           survives the paint that relabels the button. -->
+      <span id="cleanup-status" class="visually-hidden" role="status" aria-live="polite"></span>
       <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
     </div>
     <div id="health-widgets" class="rail-inner"></div>
@@ -103,7 +113,19 @@
             <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
             <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
           </nav>
-          <div class="filter-bar" id="filter-bar" aria-label="Filters" hidden aria-hidden="true"></div>
+          <!-- FE-4 D4: the reconciling sentence lives IN the filter bar row, after
+               the lenses and before the right-aligned working-set control — lenses
+               narrow within a population, Time decides what the population is, and
+               this reconciles the two numbers, so it stands between them.
+
+               It is declared here rather than built by renderFilterBar because the
+               bar is torn down on every paint and an aria-live region that is
+               destroyed and recreated announces nothing: the region has to already
+               be in the tree when its content changes. renderFilterBar empties the
+               bar AROUND it. -->
+          <div class="filter-bar" id="filter-bar" aria-label="Filters" hidden aria-hidden="true">
+            <p id="bar-scope-note" class="scope-note is-inline" aria-live="polite" hidden></p>
+          </div>
           <div class="toolbar-row" id="ops-toolbar-row">
             <div class="search-wrap">
               <label class="visually-hidden" for="search">Search agents by name, task, program, provider, model, role, status, directory, or result</label>
@@ -137,10 +159,6 @@
         <section id="programs" class="programs" aria-label="Programs and agents"></section>
         <section id="usage-panel" class="usage-panel" aria-label="BurnBar usage" hidden></section>
 
-        <!-- Persistent operator journal: what was sent, to whom, and whether it
-             landed — including the failures and the staged-not-submitted ones. -->
-        <section id="actions-panel" class="actions-panel" aria-label="Recent operator actions" hidden></section>
-
         <div id="empty-state" class="empty-state" hidden>
           <svg class="empty-mound" viewBox="0 0 200 60" aria-hidden="true" focusable="false">
             <path d="M8,50 C36,44 58,54 86,49" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0.5 7"></path>
@@ -163,8 +181,6 @@
       <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
     </div>
   </div>
-
-  <div id="broadcast-bar" class="broadcast-bar" hidden aria-live="polite"></div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

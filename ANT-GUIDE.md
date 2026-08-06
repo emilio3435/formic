@@ -722,12 +722,6 @@ invent a human or monitor. A cmux terminal with no agent bound to it is an
 observed *service* (for example a dev server or log tail), kept out of agent and
 **Needs you** counts.
 
-**Swarm control** *(on screen, as `Select to send`)*
-: Acting on several agents at once. Click **Select to send**, tick the agents you
-want, and a bar appears letting you send one instruction to all of them (a
-**broadcast**). Agents that cannot be safely reached are not selectable, on
-purpose, so on a quiet board you may find nothing to tick.
-
 **Collector**
 : The part that reads each tool's log files — one per provider **the board was
 taught about**. When a collector cannot read its files, that provider's data goes
