@@ -6973,60 +6973,32 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(custom.dataset.fkey).toBe("lookback:custom");
   });
 
-  /* fetchSettings' only failure record was `state.settingsLoaded = false`, and
-     nothing anywhere read that field — the flag was written and never consulted,
-     so a dead /api/settings was invisible by construction. Meanwhile the scan
-     chip printed the hard-coded 36 as "36h window", which reads as a value the
-     server reported. */
-  test("(3b) the collection status states the window without asserting an unconfirmed one", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const statusOf = (ui: Record<string, unknown>): any => withDom(() => {
-      M.renderFilterBar(listUi({ view: "board", ...ui }));
-      return byClass(domById.get("filter-bar"), "filter-status");
+  /* The collection window left the bar entirely (operator directive,
+     2026-08-05): it is the server's reach, not a lens, and the summary rail
+     already states it ambiently (renderScanWindow, pinned below at "an
+     unconfirmed scan window is withheld"). A Filters bar that mentions the
+     server's collection bound teaches operators it is one of the filters. */
+  test("(3b) the filter bar carries no collection status and no disclaimer", () => {
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 12, settingsError: "" }));
+      const bar = domById.get("filter-bar");
+      expect(byClass(bar, "filter-status")).toBeNull();
+      expect(byClass(bar, "filter-note")).toBeNull();   // "· your view only" is gone
+      expect(textOf(bar)).not.toContain("Collecting");
+      expect(textOf(bar)).not.toContain("your view only");
     });
-
-    // Settings answered: the number is reported, so state it plainly.
-    const ok = statusOf({ scanWindowHours: 12, settingsError: "" });
-    expect(textOf(ok)).toContain("Collecting last 12h");
-    expect(ok.className).not.toContain("is-unverified");
-
-    // Settings failed and no snapshot corroborates it: say so instead of
-    // passing the built-in default off as the server's answer.
-    const bad = statusOf({ scanWindowHours: 36, settingsError: "settings 500" });
-    expect(textOf(bad)).toContain("Collecting: unverified");
-    expect(textOf(bad)).not.toContain("Collecting last 36h");
-    expect(bad.className).toContain("is-unverified");
-    expect(bad.attributes.title).toContain("settings 500"); // the reason is reachable
-    expect(bad.attributes.title).toContain("36h");          // and so is the fallback used
-
-    // A snapshot IS authoritative, so it overrides a failed settings call —
-    // no false alarm once the real number has arrived by another route.
-    const rescued = statusOf({
-      scanWindowHours: 36,
-      settingsError: "settings 500",
-      snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
+    // The unverified-settings branch has no bar rendering to fall back to either.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, settingsError: "settings 500" }));
+      expect(textOf(domById.get("filter-bar"))).not.toContain("unverified");
     });
-    expect(textOf(rescued)).toContain("Collecting last 24h");
-    expect(rescued.className).not.toContain("is-unverified");
   });
 
-  /* It stopped being an editor. Every other control on the bar changes what YOU
-     see; this one changed what the SERVER collects — sessions outside the window
-     leave the wire entirely, for every browser. Two different powers wearing the
-     same chip shape is what the apologetic "· your view only" note beside it was
-     papering over. */
-  test("(3b2) the collection window is read-only on the bar and editable in Settings", () => {
+  test("(3b2) the collection window is editable in Settings, not on the bar", () => {
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, lookbackHours: 6 }));
-      const bar = domById.get("filter-bar");
-      const status = byClass(bar, "filter-status");
-      // A span, not a button: it leaves the focus order entirely.
-      expect(status.tagName).toBe("span");
-      expect(buttonsOf(bar).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
+      expect(buttonsOf(domById.get("filter-bar")).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
         .not.toContain("scan-window");
-      // The title carries the semantics the chip never stated.
-      expect(status.attributes.title)
-        .toBe("Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.");
     });
 
     /* The editor, where the server's other knobs live — carrying the same
@@ -12036,10 +12008,11 @@ describe("Tokens states a consumption floor with its coverage, or says nothing",
     // every card's value identical while the population underneath them moves.
     const rail = source.match(/function renderHealthRail\(\)[\s\S]*?\n\}/)?.[0] ?? "";
     expect(rail.indexOf("renderScanWindow()")).toBeLessThan(rail.indexOf('paintUnchanged("widgets"'));
-    // The board's reach and the operator's filter are different windows and are
-    // no longer printed as one setting in one line.
+    // The board's reach and the operator's filter are different windows, and
+    // the scope note now prints NEITHER: the pressed chip states the lookback,
+    // the rail states the scan window (operator directive, 2026-08-05).
     const scope = source.match(/function renderScopeNote\([\s\S]*?\n\}/)?.[0] ?? "";
-    expect(scope).toContain("lookback ");
+    expect(scope).not.toContain("lookbackLabel(");
     expect(scope).not.toContain("· scan ");
   });
 

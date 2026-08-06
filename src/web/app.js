@@ -4455,30 +4455,10 @@ function renderFilterBar(ui = state) {
       { fkey: "program:clear", title: "Show every program again" },
     ));
   }
-  /* Says who it affects, because it is the one control on this bar that is not
-     about your browser. */
-  bar.append(el("span", { class: "filter-note", text: "· your view only" }));
-  /* The snapshot is the authoritative carrier; /api/settings is the boot path
-     that fills this in before one arrives. When neither answered, the number is
-     a hard-coded default, and printing "36h window" claims the server confirmed
-     it. Say it is unverified instead — the chip still works, it just stops
-     asserting. */
-  const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
-  const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
-  const unverified = !confirmed && !!ui.settingsError;
-  /* Read-only, and a <span> rather than a button so it leaves the focus order.
-     Every other control on this bar changes what YOU see; this one changed what
-     the server COLLECTS — sessions outside it leave the wire entirely, for every
-     browser. Two different powers wearing the same chip is what the apologetic
-     "· your view only" note beside it was there to paper over. The editor moved
-     to Settings, where the rest of the server's knobs live. */
-  bar.append(el("span", {
-    class: "filter-status" + (unverified ? " is-unverified" : ""),
-    title: unverified
-      ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Change it in Settings."
-      : "Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.",
-    text: unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
-  }));
+  /* Nothing else. The collection window is the server's reach, not a lens —
+     it lives in Settings (editor) and the summary rail (reading), never here.
+     And no "your view only" disclaimer: since D7 the review toggle is a shared
+     server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
 function renderScopeNote(shown) {
@@ -4512,14 +4492,9 @@ function renderScopeNote(shown) {
     const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
     parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
-  /* The lookback stays here, beside the filters that set it: it is the
-     OPERATOR's window over rows the board already has. The scan window left this
-     line for the summary rail (S2-T3) — it is the board's own reach, it
-     qualifies every reading rather than this list, and printing it twice in two
-     vocabularies is how two windows come to be read as one setting. */
-  if (lookbackApplies(state.view)) {
-    parts.push(`lookback ${lookbackLabel(state.lookbackHours)}`);
-  }
+  /* No unconditional lookback echo: the pressed chip already says it, and a
+     line that always renders is a line nobody reads. The live region speaks
+     only when something is NARROWING the list or the data went stale. */
   if (state.fetchFailed) parts.push("last refresh failed");
   note.textContent = parts.join(" · ");
   note.hidden = parts.length === 0;
