@@ -1874,10 +1874,31 @@ describe("views split Now from History", () => {
         showReviewWorkers: false,
       }));
       const bar = domById.get("filter-bar");
-      expect(textOf(bar)).toContain("Show review workers (1)");
-      expect(buttonsOf(bar).map((button: { dataset: Record<string, string> }) => button.dataset.fkey))
-        .toContain("session-kind:review");
+      /* D4. The disclosure survives; what changed is that it stopped dressing as
+         a lens. It said "Show review workers (1)" in chip clothing at the head of
+         the filter row, which read as a sixth narrowing THIS browser was
+         applying — false twice over: it is a server setting shared by every
+         browser looking at the fleet, and it is a standing policy about which
+         rows the Board is for rather than a question about the sessions in front
+         of you. It states the count and its own reach instead. */
+      const policy = byFkey(bar, "session-kind:review");
+      expect(policy.className).toContain("filter-policy");
+      expect(policy.className).not.toContain("filter-chip");
+      expect(textOf(policy)).toContain("1 reviewer hidden");
+      // No pressed state: the label already says which way the fleet is set, and
+      // a toggle's self-report on top of that would disagree with it half the time.
+      expect(policy.attributes["aria-pressed"]).toBeUndefined();
+      // The title has to say it is not yours alone — that is the whole disclosure.
+      expect(policy.attributes.title).toContain("FLEET setting");
+      expect(policy.attributes.title).toContain("your colleagues");
       expect(textOf(bar)).toContain("Last 6h");
+    });
+
+    // Showing them says so, and the noun agrees with the count either way.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, snap, showReviewWorkers: true }));
+      expect(textOf(byFkey(domById.get("filter-bar"), "session-kind:review")))
+        .toContain("showing 1 reviewer");
     });
   });
 });

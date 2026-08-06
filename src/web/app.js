@@ -5109,6 +5109,36 @@ function timeFilterMenu(ui) {
   });
 }
 
+/* The review-worker policy, and the one control on this bar that is NOT a lens
+   and must not dress like one.
+
+   It wore `filter-chip` and sat first in the row, so it read as a sixth
+   narrowing this browser was applying — which is false twice over. It is a
+   SERVER setting shared by every browser looking at this fleet, so turning it on
+   changes what a colleague sees; and it is a standing policy about which rows
+   the Board is for, not a question about the sessions in front of you.
+
+   So it is a plain disclosure that states the count and its own reach, with a ⊘
+   rather than a pressed state: nothing here is "active" or "inactive", the fleet
+   is simply configured one way or the other. */
+function reviewPolicyControl(ui, reviews) {
+  const showing = Boolean(ui.showReviewWorkers);
+  const noun = reviews + " reviewer" + (reviews === 1 ? "" : "s");
+  return el("button", {
+    type: "button",
+    class: "filter-policy" + (showing ? " is-showing" : ""),
+    dataset: { fkey: "session-kind:review" },
+    /* No aria-pressed. This is not a toggle reporting its own state — it is a
+       statement of the fleet's setting whose label already says which way it
+       falls, and a pressed state on top of that says it twice and disagrees
+       with itself half the time. */
+    title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
+    onclick: () => setShowReviewWorkers(!state.showReviewWorkers),
+  },
+    el("span", { class: "filter-policy-mark", "aria-hidden": "true", text: "⊘" }),
+    showing ? "showing " + noun : noun + " hidden");
+}
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -5155,19 +5185,7 @@ function renderFilterBar(ui = state) {
      window below remains a server setting rather than a second filter. */
   bar.append(el("span", { class: "filter-lead", text: "Filters" }));
   const reviews = reviewWorkerCount(ui);
-  if (ui.view === "board" && reviews > 0) {
-    bar.append(filterChip(
-      ui.showReviewWorkers ? "Hide review workers" : "Show review workers (" + reviews + ")",
-      Boolean(ui.showReviewWorkers),
-      () => setShowReviewWorkers(!state.showReviewWorkers),
-      {
-        fkey: "session-kind:review",
-        title: ui.showReviewWorkers
-          ? "Hide routine review workers from the Board"
-          : "Show routine review workers on the Board. Attention rows remain visible either way.",
-      },
-    ));
-  }
+  if (ui.view === "board" && reviews > 0) bar.append(reviewPolicyControl(ui, reviews));
   /* The lenses: Provider · Status · Model · Span · Context, in that order and in
      one flat row. Five closed triggers stand where fifteen open chips used to,
      which is why this stays flat instead of nesting the last three behind a

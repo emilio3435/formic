@@ -1021,6 +1021,29 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .filter-menu-item:hover { background: var(--sand); color: var(--ink); }
 .filter-menu-count { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
+
+/* The fleet's review-worker policy. Deliberately NOT a filter-chip: it is a
+   shared server setting rather than this browser's lens, and dressing it as a
+   chip taught operators it was a sixth thing they were narrowing by. It reads as
+   a line of disclosure that happens to be clickable — no border, no fill, no
+   pressed state — so it sits in the bar without competing with the controls that
+   actually filter. */
+.filter-policy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.2rem;
+  min-height: 30px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.filter-policy:hover { color: var(--ink); text-decoration: underline; }
+.filter-policy.is-showing { color: var(--muted); }
+.filter-policy-mark { font-size: 12px; line-height: 1; }
 .filter-menu-item.is-active { color: var(--ink); background: var(--sand); border-color: var(--line-strong); }
 /* The caveat under the Days group, not a footnote nobody reads: it is inside the
    group it qualifies and it is that group's aria-describedby. */
@@ -1508,13 +1531,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 600;
   color: var(--muted);
 }
-/* The `ri-scope-mark` glyph — one superscript character saying "this number has
-   a condition on it" — is gone (operator directive, 2026-08-05). It appeared on
-   nearly every row, and a mark that never varies distinguishes nothing while
-   still costing the eye a stop on each pass. The condition itself did not go:
-   the tokens cell's aria-label and title still carry ", latest model call", so
-   the qualification survives for screen readers and on hover. (Named without a
-   leading dot: the CSS census reads this file's comments.) */
 .row-session-tag {
   font-family: var(--font-mono);
   font-size: 10.5px;
