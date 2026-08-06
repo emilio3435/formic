@@ -6,6 +6,7 @@ import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
 import { CleanupProposeError, type CleanupProposer } from "./cleanup-propose";
+import { CLEANER_NAME, CleanupLaunchError, type CleanupLaunch, type CleanupLauncher } from "./cleanup-launch";
 import {
   defaultAttentionStore,
   MemoryAttentionStore,
@@ -325,6 +326,7 @@ export interface MountainAppDependencies {
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
   cleanupProposer?: CleanupProposer;
+  cleanupLauncher?: CleanupLauncher;
   cmuxExecutable?: string;
   now?: () => number;
   webRoot: string;
@@ -500,6 +502,71 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       cleanupProposeInFlight = tracked;
     }
     return cleanupProposeInFlight;
+  };
+  let cleanerSession: CleanupLaunch & { observed: boolean } | undefined;
+  let cleanupLaunchInFlight: Promise<CleanupLaunch> | undefined;
+  const cleanerAgent = (sessionId: string, snapshot = dependencies.state.get()) =>
+    snapshot.programs.flatMap(({ agents }) => agents).find(
+      (agent) => agent.provider === "cursor" && agent.sourceSessionId === sessionId,
+    );
+  const runningCleaner = () => dependencies.state.get().programs
+    .flatMap(({ agents }) => agents)
+    .find((agent) =>
+      agent.provider === "cursor" && agent.identity?.name === CLEANER_NAME && agent.activity !== "ended"
+    );
+  const alreadyRunning = (sessionId: string): CleanupLaunchError => Object.assign(
+    new CleanupLaunchError(
+      "CLEANER_ALREADY_RUNNING",
+      `Cleaner session ${sessionId} is already running; bind to that session instead of launching another lane.`,
+    ),
+    { sessionId },
+  );
+  const observeCleaner = async (sessionId: string): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const snapshot = await recollect();
+      if (cleanerAgent(sessionId, snapshot)) return;
+    }
+    throw new CleanupLaunchError(
+      "CLEANER_SESSION_NOT_OBSERVED",
+      `Cursor session ${sessionId} did not appear in a fresh snapshot, so the board cannot bind to the Cleaner lane.`,
+    );
+  };
+  const runCleanupLaunch = async (): Promise<CleanupLaunch> => {
+    if (cleanerSession) {
+      const current = cleanerAgent(cleanerSession.sessionId);
+      if (cleanerSession.observed && current?.activity === "ended") cleanerSession = undefined;
+      else {
+        if (!cleanerSession.observed) {
+          await observeCleaner(cleanerSession.sessionId);
+          cleanerSession.observed = true;
+          return { sessionId: cleanerSession.sessionId };
+        }
+        throw alreadyRunning(cleanerSession.sessionId);
+      }
+    }
+    const existing = runningCleaner();
+    if (existing) {
+      cleanerSession = { sessionId: existing.sourceSessionId, observed: true };
+      throw alreadyRunning(existing.sourceSessionId);
+    }
+    if (!dependencies.cleanupLauncher) {
+      throw new CleanupLaunchError("CLEANER_UNAVAILABLE", "Cleaner launch is not configured on this server.");
+    }
+    const launched = await dependencies.cleanupLauncher();
+    cleanerSession = { ...launched, observed: false };
+    await observeCleaner(launched.sessionId);
+    cleanerSession.observed = true;
+    return launched;
+  };
+  const cleanupLaunch = (): Promise<CleanupLaunch> => {
+    if (!cleanupLaunchInFlight) {
+      const run = runCleanupLaunch();
+      const tracked = run.finally(() => {
+        if (cleanupLaunchInFlight === tracked) cleanupLaunchInFlight = undefined;
+      });
+      cleanupLaunchInFlight = tracked;
+    }
+    return cleanupLaunchInFlight;
   };
   const clients = new Set<ReadableStreamDefaultController<string>>();
   /* Streams the server closed for backpressure, as distinct from clients that
@@ -679,6 +746,38 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             },
           },
           { status: 503, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      }
+    }
+    if (url.pathname === "/api/cleanup/launch") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST to launch the Cleaner lane.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Cleaner launch requires an exact same-origin loopback Origin header.");
+      }
+      try {
+        const { sessionId } = await cleanupLaunch();
+        return Response.json(
+          { ok: true, sessionId },
+          { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        const candidate = error as { code?: unknown; message?: unknown; sessionId?: unknown };
+        const code = typeof candidate.code === "string" ? candidate.code : "CLEANER_LAUNCH_FAILED";
+        return Response.json(
+          {
+            ok: false,
+            ...(typeof candidate.sessionId === "string" ? { sessionId: candidate.sessionId } : {}),
+            error: {
+              code,
+              message: typeof candidate.message === "string" ? candidate.message : String(error),
+            },
+          },
+          {
+            status: code === "CLEANER_ALREADY_RUNNING" ? 409 : 503,
+            headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+          },
         );
       }
     }

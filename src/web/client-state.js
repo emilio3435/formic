@@ -90,6 +90,11 @@ export const state = {
      refusals with reasons, and the confirm command the OPERATOR pastes. The
      board never executes it, so nothing here is ever a deletion, only a plan. */
   cleanup: { running: false, error: "", view: null, at: 0 },
+  /* The Cleaner lane the chip is following, by session id. Everything the chip
+     shows about it is DERIVED from that session in the snapshot — see
+     cleaner.js — so nothing here is a state, only the binding and the one
+     failure the board learned from the launch route itself. */
+  cleaner: { sessionId: "", code: "", error: "", launching: false },
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,
@@ -106,6 +111,10 @@ export const state = {
      still while half the fleet climbs. Per-browser, like the lookback, because
      it is a display preference rather than a fact about the fleet. */
   contextSpread: "average",    // average | median
+  /* Where alerting rows are drawn on the board: "pane" collects them in the
+     Needs-you strip, "inline" leaves them in their program groups. Per-browser,
+     same reasoning as contextSpread. */
+  needsYouDisplay: "pane",     // pane | inline
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
   labelsLoading: false,

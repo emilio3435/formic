@@ -16,6 +16,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readForeignSqlite } from "./foreign-sqlite";
 
 function dylibCandidates(): string[] {
   const home = homedir();
@@ -64,11 +65,11 @@ async function main(): Promise<void> {
     throw new Error("sql must be a non-empty string.");
   }
   assertSelectOnly(request.sql);
+  const sql = request.sql;
   const params = Array.isArray(request.params) ? request.params : [];
 
   Database.setCustomSQLite(resolveDylib());
-  const db = new Database(dbPath, { readonly: true });
-  try {
+  const rows = readForeignSqlite(dbPath, (db) => {
     db.run(`PRAGMA key = '${key}'`);
     const cipher = db.query("PRAGMA cipher_version").get() as { cipher_version?: string } | null;
     if (!cipher?.cipher_version) {
@@ -76,11 +77,9 @@ async function main(): Promise<void> {
     }
     // Force a page read so a wrong key fails here instead of later.
     db.query("SELECT count(*) AS n FROM sqlite_master").get();
-    const rows = db.query(request.sql).all(...params);
-    process.stdout.write(`${JSON.stringify({ ok: true, rows })}\n`);
-  } finally {
-    db.close();
-  }
+    return db.query(sql).all(...params);
+  });
+  process.stdout.write(`${JSON.stringify({ ok: true, rows })}\n`);
 }
 
 main().catch((error) => {

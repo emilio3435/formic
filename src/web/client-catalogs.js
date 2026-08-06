@@ -185,6 +185,11 @@ export const USAGE_RANGE_PRESETS = [
    fleet — nothing on the server changes when it flips. */
 export const CONTEXT_SPREAD_KEY = "mtn3-contextSpread";
 
+/* Where the board draws its alerting rows: collected in the Needs-you strip
+   ("pane") or left in their program groups ("inline"). Per-browser like the
+   spread above — a display preference, not a fact about the fleet. */
+export const NEEDS_YOU_DISPLAY_KEY = "mtn3-needs-you-display";
+
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
   "momentum", "burn", "tokens", "context-peak", "health",

@@ -1,0 +1,216 @@
+<meta charset="utf-8">
+<title>Health chip → masthead — four options</title>
+<style>
+  :root{
+    --ink:#121820; --muted:#445260; --faint:#5a6876;
+    --line:#d4dce4; --line-strong:#aeb9c4;
+    --surface:#fbfcfd; --raise:#fff; --sand:#f2f0ea;
+    --ember:#c23b2e; --amber:#9a6b12; --moss:#1f6b4a; --slate:#3f5f78;
+    --ember-soft:color-mix(in srgb,var(--ember) 9%,var(--surface));
+    --amber-soft:color-mix(in srgb,var(--amber) 10%,var(--surface));
+    --signal-rail:2px;
+    --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:2rem 1.5rem 6rem;background:#eef1f4;color:var(--ink);font:400 14px/1.55 var(--ui)}
+  .wrap{max-width:1140px;margin:0 auto}
+  h1{font-size:1.35rem;margin:0 0 .25rem;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 2rem;max-width:66ch}
+  h2{font-size:.95rem;margin:2.6rem 0 .3rem;letter-spacing:.02em}
+  .why{color:var(--muted);font-size:.88rem;margin:0 0 .9rem;max-width:74ch}
+  .why b{color:var(--ink);font-weight:600}
+  .verdict{font-size:.8rem;margin:.55rem 0 0;color:var(--faint)}
+  .verdict.good{color:var(--moss)} .verdict.bad{color:var(--ember)}
+
+  /* ── board chrome, faithful to styles.css ── */
+  .board{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(18,24,32,.05)}
+  .masthead{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.75rem 1rem;background:var(--raise);border-bottom:1px solid var(--line)}
+  .brand{font-size:1.05rem;font-weight:650;letter-spacing:-.01em}
+  .signals{display:flex;align-items:center;gap:.5rem}
+  .btn{padding:.32rem .7rem;border:1px solid var(--line-strong);border-radius:999px;background:var(--raise);font:600 12px/1 var(--ui);color:var(--muted);cursor:pointer}
+  .btn .n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;margin-left:.35rem;border-radius:999px;background:var(--ember);color:#fff;font-size:10px;font-weight:700}
+  .conn{display:inline-flex;align-items:center;gap:.45rem;padding:.3rem .6rem;border:1px solid var(--line-strong);border-radius:999px;background:var(--raise);font:700 11.5px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--line-strong)}
+  .conn.live{color:var(--moss);border-color:color-mix(in srgb,var(--moss) 40%,var(--line-strong))}
+  .conn.live .dot{background:var(--moss)}
+
+  .rail{display:flex;gap:0;padding:.65rem 1rem;background:var(--raise);border-bottom:1px solid var(--line)}
+  .cell{padding:0 1.1rem;border-left:1px solid var(--line);flex:1}
+  .cell:first-child{padding-left:0;border-left:0}
+  .k{font:600 9.5px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .v{font-size:1.35rem;font-weight:650;margin-top:.3rem;letter-spacing:-.01em}
+  .v .u{font-size:.8rem;font-weight:600;color:var(--muted);margin-left:.2rem}
+  .sub{font-size:11.5px;color:var(--muted);margin-top:.25rem}
+  .strip{padding:.5rem 1rem;font-size:11px;color:var(--faint);background:var(--surface)}
+
+  /* today's full-width health block */
+  .health-row{padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--raise)}
+  .health-verdict{display:flex;align-items:center;gap:.4rem;font-size:1.15rem;font-weight:650;color:var(--amber);margin-top:.25rem}
+  .health-detail{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:.3rem}
+  .health-detail .t{font-size:11.5px;color:var(--muted)}
+
+  .cleanup{display:inline-flex;align-items:center;gap:.4rem;padding:.24rem .62rem;border:1px solid var(--line-strong);border-radius:999px;background:var(--raise);font:600 11.5px/1 var(--ui);color:var(--muted);cursor:pointer;white-space:nowrap}
+  .cleanup .ring{width:9px;height:9px;border-radius:50%;border:1.5px solid currentColor;border-top-color:transparent;opacity:0}
+  .cleanup.busy .ring{opacity:1;animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── option A: trust folded into the connection pill ── */
+  .conn.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line-strong));background:var(--amber-soft)}
+  .conn.warn .dot{background:var(--amber)}
+  .conn .sep{width:1px;height:11px;background:color-mix(in srgb,var(--amber) 35%,var(--line-strong));margin:0 .1rem}
+  .conn .qual{text-transform:none;letter-spacing:0;font-weight:600;font-size:11px}
+
+  /* ── option B: sibling pill, appears only when degraded ── */
+  .trust{display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .6rem;border:1px solid color-mix(in srgb,var(--amber) 45%,var(--line-strong));border-left:var(--signal-rail) solid var(--amber);border-radius:999px;background:var(--amber-soft);font:600 11.5px/1 var(--ui);color:var(--amber);cursor:pointer;white-space:nowrap}
+  .trust .glyph{font-size:10px}
+
+  /* ── option C: segmented ── */
+  .seg{display:inline-flex;align-items:stretch;border:1px solid var(--line-strong);border-radius:999px;overflow:hidden;background:var(--raise)}
+  .seg > span{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .6rem;font:700 11.5px/1 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--moss)}
+  .seg > span + span{border-left:1px solid var(--line-strong);text-transform:none;letter-spacing:0;font-weight:600;color:var(--amber);background:var(--amber-soft)}
+  .seg.allgood > span + span{color:var(--moss);background:transparent}
+
+  .note{font-size:.82rem;color:var(--faint);margin:.5rem 0 0;max-width:74ch}
+  .note code{font-family:var(--mono);font-size:.9em}
+  .pair{display:grid;gap:.6rem;margin-top:.7rem}
+  .lbl{font:600 9.5px/1 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:.3rem}
+</style>
+
+<div class="wrap">
+<h1>Health chip → the masthead</h1>
+<p class="lede">Four ways to stop giving a full row to a status word. Every option keeps the same seam: the masthead
+<b>qualifies</b>, the notification center <b>explains and acts</b>. The fault sentence and the Clean up action move to
+Notifications in A, B and C — the header still never links, it just points.</p>
+
+<!-- ───────────────────────── TODAY ───────────────────────── -->
+<h2>Today — for comparison</h2>
+<p class="why">A verdict at heading size, a fault sentence, and an action, occupying a full row of the rail.</p>
+<div class="board">
+  <div class="masthead">
+    <div class="brand">The Ant Hill</div>
+    <div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button>
+      <button class="btn">Settings</button>
+      <span class="conn live"><span class="dot"></span>Live</span>
+    </div>
+  </div>
+  <div class="rail">
+    <div class="cell"><div class="k">Momentum</div><div class="v">8<span class="u">shipping</span></div><div class="sub">11 quiet 15m+</div></div>
+    <div class="cell"><div class="k">Burn</div><div class="v">28k<span class="u">/min</span></div><div class="sub">10m average · $3.26 last hour</div></div>
+    <div class="cell"><div class="k">Context</div><div class="v">31%<span class="u">average window</span></div><div class="sub">Median 25% · 31/32 reporting</div></div>
+  </div>
+  <div class="health-row">
+    <div class="k">Health</div>
+    <div class="health-verdict">◇ Readings degraded</div>
+    <div class="health-detail">
+      <span class="t">cursor GUI conversations: unable to open database file · last healthy 33m ago · snapshot 4s ago</span>
+      <button class="cleanup"><span class="ring"></span>Clean up</button>
+    </div>
+  </div>
+  <div class="strip">Board 19 · History 6 · Usage</div>
+</div>
+<p class="verdict bad">Costs a full row. The verdict is the largest thing on the board after the brand, for a state that is usually fine.</p>
+
+<!-- ───────────────────────── A ───────────────────────── -->
+<h2>A · Fold it into the LIVE pill</h2>
+<p class="why">One pill answers one question — <b>can I trust what I am looking at?</b> Connection and instruments are the
+same question asked of two subsystems, so they share a control. Healthy is <b>unchanged from today</b>; degraded grows a
+qualifier and turns amber. Click → Notifications, where the sentence and the action live.</p>
+<div class="pair">
+  <div>
+    <div class="lbl">Healthy — identical to today</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="conn live"><span class="dot"></span>Live</span>
+    </div></div></div>
+  </div>
+  <div>
+    <div class="lbl">Degraded</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="conn warn"><span class="dot"></span>Live<span class="sep"></span><span class="qual">1 source unread</span></span>
+    </div></div></div>
+  </div>
+</div>
+<p class="verdict good">Cheapest in space. Healthy costs nothing new.</p>
+<p class="note"><b>The risk, stated:</b> it conflates two failures that need different actions. "The feed dropped" is
+<em>reload</em>; "a collector cannot read its store" is <em>investigate</em>. One amber pill for both means the operator
+cannot tell which without clicking. Mitigated by the qualifier naming the subsystem, not the severity.</p>
+
+<!-- ───────────────────────── B ───────────────────────── -->
+<h2>B · A sibling pill that only exists when something is wrong</h2>
+<p class="why">LIVE keeps meaning exactly one thing. A second pill appears <b>only</b> when instruments are degraded,
+carrying the left-edge signal rail this design language already uses for attention. On a healthy board it is not there —
+so its presence <em>is</em> the signal, and no space is spent being fine.</p>
+<div class="pair">
+  <div>
+    <div class="lbl">Healthy — nothing added</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="conn live"><span class="dot"></span>Live</span>
+    </div></div></div>
+  </div>
+  <div>
+    <div class="lbl">Degraded</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="trust"><span class="glyph">◇</span>1 source unread</span>
+      <span class="conn live"><span class="dot"></span>Live</span>
+    </div></div></div>
+  </div>
+</div>
+<p class="verdict good">Keeps the two failures separate. Absence carries meaning, which is this product's whole idiom.</p>
+<p class="note"><b>The risk:</b> the masthead reflows when it appears. Reserve its width, or accept a small shift on a
+state change that is already rare.</p>
+
+<!-- ───────────────────────── C ───────────────────────── -->
+<h2>C · One segmented control, both halves always visible</h2>
+<p class="why">Connection and instruments stay distinguishable but share a footprint. Both states are always legible, so
+the operator learns where instrument health lives <b>before</b> it breaks — the discoverability problem the Clean up
+button already had.</p>
+<div class="pair">
+  <div>
+    <div class="lbl">Healthy</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="seg allgood"><span><span class="dot" style="background:var(--moss)"></span>Live</span><span>Readings ok</span></span>
+    </div></div></div>
+  </div>
+  <div>
+    <div class="lbl">Degraded</div>
+    <div class="board"><div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+      <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+      <span class="seg"><span><span class="dot" style="background:var(--moss)"></span>Live</span><span>◇ 1 source unread</span></span>
+    </div></div></div>
+  </div>
+</div>
+<p class="verdict">Most discoverable, most permanent. Spends space on "fine" — the scold this program keeps removing.</p>
+
+<!-- ───────────────────────── D ───────────────────────── -->
+<h2>D · Stay in the rail, but as one line</h2>
+<p class="why">The conservative option: keep health where the other readings are, collapse it from a block to a single
+row. Keeps the action <em>with</em> the fault sentence, which is what we just fixed in <code>d240270</code>.</p>
+<div class="board">
+  <div class="masthead"><div class="brand">The Ant Hill</div><div class="signals">
+    <button class="btn">Notifications <span class="n">9</span></button><button class="btn">Settings</button>
+    <span class="conn live"><span class="dot"></span>Live</span>
+  </div></div>
+  <div class="health-row" style="padding:.5rem 1rem">
+    <div class="health-detail" style="margin-top:0">
+      <span class="t"><b style="color:var(--amber);font-weight:650">◇ Readings degraded</b> &nbsp;·&nbsp; cursor GUI conversations: unable to open database file · last healthy 33m ago</span>
+      <button class="cleanup"><span class="ring"></span>Clean up</button>
+    </div>
+  </div>
+  <div class="strip">Board 19 · History 6 · Usage</div>
+</div>
+<p class="verdict">Smallest change, smallest payoff. Still spends a row, just a shorter one.</p>
+
+<h2>My recommendation</h2>
+<p class="why"><b>B.</b> It is the only option where a healthy board spends <em>zero</em> pixels on health, and where the
+control's mere presence is the signal — the same idiom as the Clean up button appearing only when there is something to
+clean, and the same reason the notification badge renders its zero rather than vanishing. It also keeps "the feed
+dropped" and "a collector is broken" as separate facts, which they are: one is reload, the other is investigate.</p>
+<p class="why">If you want health visible even when fine, take <b>C</b> — but that is a permanent claim of wellness, and
+this product's voice has been that silence means fine.</p>
+</div>

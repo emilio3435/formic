@@ -1189,6 +1189,15 @@ body.feed-frozen .programs { opacity: 0.62; }
 .program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
+/* Inline-mode reachability: the one alert signal a COLLAPSED repo band has.
+   Ember for the same reason the rollup's alerts cell is ember — it is the
+   band-level count of sessions asking for a person. */
+.repo-alerts {
+  font-size: 11.5px;
+  color: var(--ember);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -1338,9 +1347,13 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
 .agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
+/* Needs-you MEMBERSHIP (inline display mode) — same treatment as is-needs-you,
+   different fact: a hook-needsInput row is in the set with a healthy outcome. */
+.agent-row.is-alerting { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
 .agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
 .agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
+.agent-row.is-alerting:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
 /* The alert rails above ride the same box-shadow property as the :focus-visible
    ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
    on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
@@ -1348,6 +1361,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 2px var(--ember); }
 .agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 2px var(--ember); }
 .agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 2px var(--ember); }
+.agent-row.is-alerting:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 2px var(--ember); }
 .agent-row.is-ended { opacity: 0.66; }
 
 /* One shared 5-track template — identity (wide, left) + the right-aligned
@@ -1643,17 +1657,23 @@ body.feed-frozen .programs { opacity: 0.62; }
 .swarm-chip.is-open { border-style: solid; }
 .swarm-chip.is-alerting { color: var(--ember); border-color: var(--ember); }
 .swarm-caret { font-size: 8.5px; line-height: 1; }
-/* Which program a strip row came from. The strip is flat and cross-program, so
-   this carries the one fact the missing program header would have. */
+/* Which program a strip row came from — repo plus branch@directory, the same
+   words its group header says. A button, because the strip is flat and
+   cross-program: this chip is the road back to the group it names. */
 .row-program-chip {
   flex: none;
+  font: inherit;
   font-size: 10.5px;
   color: var(--faint);
   background: var(--sand);
+  border: 0;
   border-radius: 3px;
   padding: 0 0.3rem;
   white-space: nowrap;
+  cursor: pointer;
 }
+.row-program-chip:hover { color: var(--ink); }
+.row-program-chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 /* The two endings a history record can have, and they are typeset apart because
    they are different facts. Solid outline for the one an operator chose; dashed
    for the one nobody chose — the board simply stopped watching, and a dashed
@@ -2933,7 +2953,11 @@ body.feed-frozen .programs { opacity: 0.62; }
      measured 70x32 — and Focus is the one that moves the operator to the agent.
      The sweep already covers the same control in the verdict head; the
      notification row is the other place a .dock-tool sits inline. */
-  .notify-act, .notify-row-acts .dock-tool, .filter-chip, .program-details,
+  /* .verdict-cleanup joins the sweep here for the first time — A11Y-6 covered the
+     notification row's Focus control, never this one, and it measured 17px. It is
+     the only action the header offers, so it should not be the smallest target
+     on the board on a phone. */
+  .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 
@@ -3215,6 +3239,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .settings-preview { margin: 0; padding: 0.5rem 0.65rem; border-left: var(--signal-rail) solid var(--working); background: var(--moss-soft); font-size: 0.85rem; }
 .settings-advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 .settings-advanced[open] { display: grid; gap: 0.75rem; }
+/* The per-browser section, ruled off from the server fields above it because
+   it answers to a different authority: this browser, not the fleet. */
+.settings-local { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+.settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
+.settings-radio { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; }
 .settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-actions .settings-spacer { flex: 1; }
 /* The half-circle context dial and its median/average ticks. */
@@ -3325,16 +3354,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
-}
-/* What a program group says about the rows the strip took. Dim, because it is
-   an explanation of an absence rather than a thing to act on — but present,
-   because a group that silently omitted a session would make the two places an
-   operator looks for it disagree. */
-.pinned-note {
-  margin: 0.3rem 0 0;
-  padding: 0 0.85rem 0 0.8rem;
-  font-size: 11.5px;
-  color: var(--faint);
 }
 /* The empty board's closing line: the constraint that produced the emptiness,
    under the verdict rather than inside it. */
@@ -3529,7 +3548,24 @@ body.feed-frozen .programs { opacity: 0.62; }
   text-align: left;
 }
 .notify-quiet:hover { background: var(--sand); color: var(--ink); }
-.notify-quiet-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The clamp moved DOWN a level. This used to be the single clamped line itself;
+   it now holds the impact line and, when the row has one, the fault line beneath
+   it — so each line ellipsises on its own instead of the pair being truncated as
+   one run of text. */
+.notify-quiet-name { flex: 1; min-width: 0; }
+.notify-quiet-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The fault sentence: quieter than the consequence above it, because the
+   operator reads what it costs them first and what the collector said second. */
+.notify-quiet-fault {
+  display: block;
+  margin-top: 0.12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  color: var(--faint);
+}
+.notify-quiet:hover .notify-quiet-fault { color: var(--muted); }
 .notify-quiet-prog { font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
 .notify-quiet-time { flex: none; font: 400 0.7rem/1 var(--font-mono); color: var(--faint); white-space: nowrap; }
 
@@ -3639,22 +3675,51 @@ body.feed-frozen .programs { opacity: 0.62; }
    and a command the operator pastes into a terminal themselves.
    ------------------------------------------------------------------------- */
 
+/* A control WITHIN a reading, so it borrows .rail-action's shape rather than
+   inventing one: muted ink and a transparent edge at rest, resolving to
+   --line-strong + --sand on hover. It used to take `color: inherit`, which made
+   it the same amber as the verdict beside it — a subordinate control wearing the
+   verdict's ink competes with the number it qualifies. No new accent: --muted is
+   the existing secondary-text token, the same one .rail-action uses.
+
+   No margin-left. .verdict-chip already sets gap: 0.45rem, so the old margin
+   stacked a second, different gap and pushed the control off the chip's rhythm. */
+/* The health cell's detail line becomes the action's row: the sentence takes the
+   space it needs, the control is pinned to the card's right edge, and both sit on
+   one centre line. Scoped to the health cell — every other reading's sub is plain
+   text and must not become a flex row. */
+.reading-sub-action {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.reading-sub-action .reading-sub-text { flex: 1; min-width: 0; }
+/* Pinned to the edge rather than trailing the copy: a control whose x drifts with
+   the length of a verdict word has no anchor, which is half of why this read
+   wrong appended to the heading. */
+.reading-sub-action .verdict-cleanup { flex: none; margin-left: auto; }
+
 .verdict-cleanup {
   appearance: none;
-  margin-left: 0.5rem;
-  padding: 0.14rem 0.4rem;
-  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--raise);
-  color: inherit;
-  font: 600 0.66rem/1 var(--font-ui);
-  cursor: pointer;
+  align-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  vertical-align: middle;
+  justify-content: center;
+  gap: 0.32rem;
+  padding: 0.24rem 0.56rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--sand);
+  color: var(--muted);
+  font: 650 0.72rem/1 var(--font-ui);
+  letter-spacing: 0.01em;
+  cursor: pointer;
 }
-.verdict-cleanup:hover { background: var(--sand); }
+.verdict-cleanup:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--raise);
+}
 /* aria-disabled rather than :disabled — the button stays focusable while a sweep
    runs, because a control that leaves the tab order mid-interaction strands the
    keyboard operator who just activated it. Styled the same either way. */
@@ -3663,17 +3728,50 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* The indicator states that A PROCESS IS UNDERWAY. It must never imply the
    fault is fixed, so it is a bare rotating arc with no completion affordance —
    no check, no fill, no bar that could read as progress toward a repair. */
+/* COLLAPSED at rest, not merely transparent. It was opacity: 0 with its 9px box
+   still in flow, so the label was pushed 9px + gap to the right of centre inside
+   its own button — measured, and the reason the control read as left-aligned.
+   A resting indicator must occupy nothing; it earns its space when it spins. */
 .verdict-cleanup-mark {
+  display: none;
   width: 9px;
   height: 9px;
   border-radius: 50%;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
-  opacity: 0;
 }
+/* display, not opacity/width: a zero-width box still contributes its borders AND
+   the flex gap beside it — measured at 3px + 5px, which is precisely the offset
+   that made the label sit right of centre. Removed from layout, the label is
+   centred by justify-content and the indicator costs nothing until it runs. */
 .verdict-cleanup.is-running .verdict-cleanup-mark {
-  opacity: 1;
+  display: block;
   animation: cleanup-spin 900ms linear infinite;
+}
+/* S5 — the launch has a beat: the ring completes ONE rotation and lands.
+
+   Motion that terminates reads as competence; motion that repeats reads as
+   waiting. The looping spin above is honest while the board is genuinely
+   waiting on a lane it can see; this is the moment the Cleaner is confirmed
+   alive, and it resolves rather than keeps turning.
+
+   `forwards` matters as much as the count: without it the ring would snap back
+   to its start angle after landing, which is a bounce, and nothing bounces. */
+.verdict-cleanup.is-landing .verdict-cleanup-mark {
+  display: block;
+  /* The SAME keyframe as the spin, run exactly once and held. A landing is not a
+     different motion from a rotation — it is a rotation that stops — so this
+     needs no new @keyframes, and the A6 guard's exhaustive animation list stays
+     true without being edited. `forwards` is what makes it land rather than snap
+     back to its start angle, and nothing bounces. */
+  animation: cleanup-spin 620ms cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+  border-top-color: currentColor;
+}
+/* After the landing, while the Cleaner works: a closed, still ring. The lane is
+   alive and visible on the board, and that row is the progress indicator now. */
+.verdict-cleanup.is-alive .verdict-cleanup-mark {
+  display: block;
+  border-top-color: currentColor;
 }
 @keyframes cleanup-spin { to { transform: rotate(360deg); } }
 
@@ -3682,10 +3780,17 @@ body.feed-frozen .programs { opacity: 0.62; }
    this rule is asserted at rule level and is NOT verified live. Recorded rather
    than implied. */
 @media (prefers-reduced-motion: reduce) {
-  .verdict-cleanup.is-running .verdict-cleanup-mark {
+  .verdict-cleanup.is-running .verdict-cleanup-mark,
+  /* The landing beat obeys the setting too, and lands in its FINISHED state
+     rather than being removed: the ring is closed and solid, which is what the
+     animation was travelling towards. Refusing the motion must not refuse the
+     meaning. */
+  .verdict-cleanup.is-landing .verdict-cleanup-mark,
+  .verdict-cleanup.is-alive .verdict-cleanup-mark {
     animation: none;
     border-top-color: currentColor;
     border-style: dashed;
+    transform: none;
   }
 }
 

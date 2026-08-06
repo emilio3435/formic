@@ -127,6 +127,21 @@ import {
   TRANSCRIPT_MAX_LIMIT,
 } from "./api-client.js";
 import { classifyLifecycle, evidenceFromAgent } from "./lifecycle.js";
+/* The Cleaner's whole derivation. app.js keeps the fetch and the paint; which
+   state the chip is in is decided in cleaner.js against the live session. */
+/* The previous derived state, so the landing beat can fire on the transition
+   rather than on a clock. Module-scoped: it describes this board's last paint,
+   not any one render call. */
+let cleanerLastState = "idle";
+import {
+  cleanerFromResponse,
+  cleanerLands,
+  cleanerView,
+  cleanupCounts,
+  countsSentence,
+  CLEANER_IN_FLIGHT,
+  CLEANER_LABELS,
+} from "./cleaner.js";
 import {
   alerting,
   buildClusters,
@@ -173,6 +188,7 @@ import {
   LOOKBACK_HOUR_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
+  NEEDS_YOU_DISPLAY_KEY,
   OPS_VIEWS,
   OUTCOME_LABELS,
   RETIRED_WIDGET_IDS,
@@ -726,7 +742,18 @@ function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
 const DEGRADED_SEVERITY = {
   blocking: { key: "blocking", label: "Blocking", detail: "Operator actions are unavailable." },
   stale: { key: "stale", label: "Stale", detail: "Numbers on screen may no longer be true." },
-  advisory: { key: "advisory", label: "Advisory", detail: "The board is usable; evidence needs tidying." },
+  /* DESCRIBES THE STATE, never a remedy. It used to read "evidence needs
+     tidying", which asserts a fix — and on a live board whose actual fault was
+     `cursor GUI conversations: unable to open database file`, tidying fixes
+     nothing. A surface stating a conclusion its evidence does not support is the
+     defect class this whole program removes; a severity label is the last place
+     it should reappear, because it qualifies every reading beside it.
+
+     The other six strings in this function were checked for the same mistake and
+     are clean: they each name a condition ("Operator actions are unavailable",
+     "showing the previous good snapshot") or a condition and its consequence
+     ("cmux unreachable — Focus and Send cannot route"). None prescribes. */
+  advisory: { key: "advisory", label: "Advisory", detail: "The board is usable; some evidence is incomplete." },
 };
 
 function degradedSeverity(snap, conn = "live", fetchFailed = state.fetchFailed) {
@@ -925,6 +952,30 @@ function completionWindowText(momentum) {
     + (full ? "this hour" : "in " + fmtElapsed(momentum.observedWindowMs) + " observed");
 }
 
+/* WHICH sources are down, by name, from the per-provider map the wire already
+   carries. A count answers "how many" and the operator's question is "which one",
+   because the answer decides whether the sessions they are watching are the ones
+   that went missing.
+
+   Degrades to the count when byProvider is absent rather than asserting names it
+   does not have — an older snapshot ships the tallies without the breakdown. */
+function degradedSourceNames(source) {
+  const n = source.degraded;
+  const count = `${n} degraded source${n === 1 ? "" : "s"}`;
+  const by = source && source.byProvider;
+  const down = by ? Object.keys(by).filter((p) => by[p] && by[p].healthy === false) : [];
+  if (!down.length) return count;
+  const names = down.map(providerLabel);
+  const listed = names.length === 1
+    ? names[0]
+    : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  /* Name first, count second. The count is what web-client.test.ts pins as this
+     line's contract and it is genuinely worth keeping — "how many" and "which"
+     are different questions and the operator asks both. Leading with the name is
+     what was missing. */
+  return `${listed} · ${count}`;
+}
+
 function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed, queueError = state.queueError) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
@@ -1023,8 +1074,19 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
                 ? (errors === 1
                   ? control.errors[0]
                   : `${control.errors[0]} (+${errors - 1} more)`)
+              /* NAMES the source and says where the fault sentence is.
+                 This branch used to read "1 degraded source · 0 stale · 0
+                 errors" — three counts and no cause. It is the line Emilio was
+                 looking at when he said the indicator "just says Whoops": the
+                 chip knew a source was down and would not say which, while the
+                 collector's own sentence sat unrendered on the issue.
+
+                 The chip stays a qualifier and still never links — the seam
+                 holds — so it names the source and points at the surface that
+                 has the sentence, rather than leaving the operator to hunt for
+                 a panel they have no reason to suspect. */
               : source && source.degraded > 0
-                ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
+                ? `${degradedSourceNames(source)} — the collector's own words are in Notifications.`
                 : "Source or control evidence needs review.",
       // An advisory is not an alarm: it takes its own tone so the strip shrinks
       // it to a micro cell instead of sizing it like a blocked control plane.
@@ -1401,6 +1463,10 @@ globalThis.TheAntHill = {
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
   lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
+  // The Needs-you display preference: where alerting rows are drawn.
+  needsYouDisplayOf, loadNeedsYouDisplay, setNeedsYouDisplay,
+  // The strip chip's words and its jump, assertable without a DOM.
+  stripChipLabel, jumpToProgramGroup,
   swarmOpen, toggleSwarm, historyProvenance, historyChips, renderRowFacts,
   boardIndex, sharedRowNames, rowDisplayName, landingView, LEGACY_VIEW_ALIASES,
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
@@ -1458,6 +1524,39 @@ function loadContextSpread() {
   } catch {
     state.contextSpread = "average";
   }
+}
+
+/* Where the board draws its alerting rows. "pane" is the strip at the top;
+   "inline" leaves them in their program groups. Only the exact other word is
+   honoured — a value this client never wrote falls back to the pane, which is
+   the behavior every operator has already learned. The accessor takes a ui so
+   the list helpers stay drivable without the module's state, and an absent
+   field (every existing test fixture) reads as the default. */
+function needsYouDisplayOf(ui = state) {
+  return ui.needsYouDisplay === "inline" ? "inline" : "pane";
+}
+
+function loadNeedsYouDisplay() {
+  try {
+    const raw = localStorage.getItem(NEEDS_YOU_DISPLAY_KEY);
+    state.needsYouDisplay = raw === "inline" ? "inline" : "pane";
+  } catch {
+    state.needsYouDisplay = "pane";
+  }
+}
+
+function saveNeedsYouDisplay() {
+  try {
+    localStorage.setItem(NEEDS_YOU_DISPLAY_KEY, state.needsYouDisplay);
+  } catch { /* storage unavailable */ }
+}
+
+function setNeedsYouDisplay(mode) {
+  const next = mode === "inline" ? "inline" : "pane";
+  if (next === state.needsYouDisplay) return;
+  state.needsYouDisplay = next;
+  saveNeedsYouDisplay();
+  render();
 }
 
 function loadLookback() {
@@ -2278,10 +2377,38 @@ function widgetLabelNode(id, label) {
    recorded here rather than implied, the way the a11y sweep records its own
    NOT RUN row. */
 function cleanupAction() {
-  const running = state.cleanup.running;
+  /* Two things can be in flight and they are different facts: the propose sweep
+     the board runs itself, and the Cleaner LANE it launched. `examining` is the
+     first; every other state is read from the second's session — see cleaner.js,
+     where the whole derivation lives and is testable without a DOM. */
+  const examining = state.cleanup.running;
+  const view = cleanerView(state.snap, state.cleaner);
+  const busy = examining || CLEANER_IN_FLIGHT.has(view.state);
+  const label = examining ? "Examining…" : CLEANER_LABELS[view.state] || "Clean up";
+  /* A stated failure, never a spinner that outlives its cause. The route names
+     which step refused and that sentence is what the operator reads. */
+  const failed = !examining && view.state === "failed";
+  const asking = !examining && view.state === "needs-you";
+  /* S5: the ring lands on an OBSERVED edge — the paint where the lane the board
+     asked for first appears on it. cleanerLastState is the previous derived
+     answer, so this cannot re-fire on a repaint, and it cannot fire at all
+     without a session having actually shown up. */
+  const landing = cleanerLands(cleanerLastState, view.state);
+  cleanerLastState = view.state;
+  const running = busy;
   return el("button", {
     type: "button",
-    class: "verdict-cleanup" + (running ? " is-running" : ""),
+    class: "verdict-cleanup"
+      /* Spin only while genuinely waiting with nothing to show; land once when
+         the lane appears; then hold the landed ring while it works. A ring that
+         resumed spinning after landing would un-terminate its own motion, and
+         once the Cleaner is on the board the board's ROW is where progress
+         lives — this chip has handed off to it. */
+      + (landing ? " is-landing"
+        : examining || view.state === "launching" ? " is-running"
+          : view.state === "watching" ? " is-alive" : "")
+      + (failed ? " is-failed" : "")
+      + (asking ? " is-asking" : ""),
     /* aria-disabled, NOT disabled. A disabled element leaves the tab order, and
        this button is rebuilt on the same paint that disables it — so render()'s
        fkey restore found the new node, called focus() on something disabled,
@@ -2292,23 +2419,51 @@ function cleanupAction() {
        control focusable; requestCleanupProposal already refuses re-entry. */
     "aria-disabled": running ? "true" : null,
     "aria-busy": running ? "true" : null,
-    title: running
+    title: examining
       ? "Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval."
-      : "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead panes. Nothing will be deleted without your approval — you paste the confirm command yourself.",
+      : view.message
+        || "Launch a Cleaner: it proposes first, asks you here, and only removes what you approve. Nothing is deleted without your answer.",
     dataset: { fkey: "cleanup-propose" },
-    onclick: (e) => { e.stopPropagation(); void requestCleanupProposal(); },
+    /* R2′: the board LAUNCHES a lane; it still never deletes. The gate did not
+       disappear, it moved onto the board — the Cleaner asks as an ordinary agent
+       and the operator answers it the way they answer every other one. */
+    onclick: (e) => { e.stopPropagation(); void runCleanupFlow(); },
   },
     el("span", { class: "verdict-cleanup-mark", "aria-hidden": "true" }),
-    running ? "Examining…" : "Clean up");
+    label);
 }
 
-/* Whether there is anything for a sweep to propose. The action is offered only
-   when debris exists — a permanent Clean up button on a tidy board is a standing
-   suggestion that something is wrong, which is the scold this program removes. */
+/* Whether the sweep is worth offering.
+
+   THE ORIGINAL RULE IS KEPT, because it is still half the answer: a permanent
+   Clean up button on a tidy board is a standing suggestion that something is
+   wrong, which is the scold this program removes. That is why this still returns
+   false whenever the chip reads healthy, and why there is no second entry point
+   anywhere else — one control, one home.
+
+   WIDENED 2026-08-06, because the old gate made the control unfindable. It was
+   offered only when debris had already been COUNTED (`remedy.tidy &&
+   remedy.paneCount`, from controlHealth), which is absent on most boards. So the
+   button was correct and invisible: an operator went looking for Clean up,
+   could not find it, and reasonably guessed it was the drawer's archive control.
+   A control you cannot find is a control you cannot trust, and an action nobody
+   can reach is not a quieter UI — it is a missing one.
+
+   The new gate is the chip's own verdict: offer it whenever the chip is DEGRADED
+   for ANY reason — stale source, collector error, debris, anything that makes it
+   say something other than healthy. The operator is already being told something
+   is wrong, and this is the one action they have; offering it there is help, not
+   nagging. The scold case — a healthy board — is untouched.
+
+   Still propose-only, always. R2 stands: the board never deletes. */
 function cleanupOffered() {
+  if (state.cleanup.running || state.cleanup.view || state.cleanup.error) return true;
   const remedy = healthRemedy(state.snap);
-  return Boolean(state.cleanup.running || state.cleanup.view || state.cleanup.error
-    || (remedy && remedy.tidy && remedy.paneCount));
+  if (remedy && remedy.tidy && remedy.paneCount) return true;
+  /* The same predicate renderInstrumentBlock calls `degraded`, so the button and
+     the sentence explaining why it is there can never disagree about whether the
+     instruments are in trouble. */
+  return systemStatus(state.snap, state.conn).key !== "operational";
 }
 
 function healthMicroChip(data) {
@@ -2362,9 +2517,16 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
     .filter(Boolean).join(" ");
   let valueNode;
   if (id === "health") {
+    /* The Clean up control USED to sit here, appended to the verdict.
+       S6 of the Cleaner plan moved it to the end of the detail line below. Three
+       reasons, and the third is the cause: at verdict type size, immediately
+       after "Readings degraded", it parsed as a BADGE on the heading — and
+       badges do not get pressed; it had no anchor, so its x moved with the
+       length of the verdict word; and it acts on the sentence BELOW it, since
+       the fault is named in the detail line. It was a control one line above
+       its own subject. */
     valueNode = el("span", { class: valueClass },
-      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value,
-        cleanupOffered() ? cleanupAction() : null));
+      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -2431,14 +2593,40 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   /* The generic severity blurb and a specific problem sentence contradict each
      other when both print: "The board is usable; evidence needs tidying. 3 live
      sessions can't take commands." is the same self-disagreement the headline
-     used to have with its own badge. The specific sentence wins outright. */
+     used to have with its own badge. The specific sentence wins outright.
+     (That advisory string now reads "some evidence is incomplete" — it stopped
+     prescribing a remedy that may not fit the fault. The rule here is unchanged:
+     a specific sentence still beats any generic one.) */
   /* The severity's own detail already IS the consequence sentence, so printing
      the generic sublabel after it says cmux is unreachable twice in one line.
      Seen on the live board: "cmux unreachable — Focus and Send cannot route.
      cmux unreachable — terminal titles and Focus/Send stay offline." */
+  /* THE SPECIFIC SENTENCE WINS — which is what the comment above always said,
+     applied the right way round. This used to blank problemText whenever a
+     severityDetail existed, so the specific line lost to the generic one on every
+     degraded board. Emilio read the result as "it just says Whoops": the chip
+     printed "The board is usable; evidence needs tidying" and swallowed "Cursor
+     is not reporting cleanly — the collector's own words are in Notifications."
+
+     The duplication that rule was written for is still handled, and better: the
+     cmux case printed severityDetail AND sublabel saying the same thing twice.
+     Now exactly one sentence prints, and it is the more specific one. The generic
+     severity blurb is the fallback for a state with nothing better to say. */
+  /* ADVISORY is the one severity whose detail is a constant. blocking and stale
+     both override theirs with a sentence derived from the actual fault ("cmux
+     unreachable — Focus and Send cannot route", "Last refresh failed — showing
+     the previous good snapshot"), and those beat any sublabel. Advisory's is a
+     fixed string that describes the class and never the cause, so there it is
+     the sublabel that carries the information and the constant that should give
+     way. Blanking problemText whenever ANY severityDetail existed made the
+     generic case win too, which is what Emilio read as "it just says Whoops". */
+  const genericSeverity = data.severityKey === "advisory";
   const problemText = (remedy && remedy.problem)
-    || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
-  const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
+    || (reason ? reason.title
+      : genericSeverity
+        ? (data.sublabel || data.severityDetail)
+        : (data.severityDetail || data.sublabel));
+  const lead = "";
   /* The finding-link branch stood here — two buttons routing into the inspector,
      landed at 4bcbd84 by a concurrent lane. It is removed with the card that
      carried it, and the reason is the seam rather than the code: THE HEADER
@@ -2446,7 +2634,21 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      clothes, and the moment one exists an operator has two places to look for
      the same thing. Both of those findings are in the notification center now,
      each with its evidence sentence, its impact and its route. */
-  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  subNode.append(el("span", { class: "reading-sub-text", text: lead + problemText + sinceNote + snapNote }));
+  /* The action, with the sentence it acts on, anchored to the card's right edge.
+     The fault is described on THIS line; the control belongs beside its subject
+     rather than beside the verdict, and the edge gives it a fixed x instead of
+     one that drifts with the copy.
+
+     The row takes a class of its own rather than being styled off `.widget-health`:
+     the widget class is built as "widget-" + id and never appears literally in
+     the source, so the orphan-CSS guard cannot see it — and scoping by what the
+     row IS (a detail line carrying an action) beats scoping by which reading it
+     happens to belong to. */
+  if (id === "health" && cleanupOffered()) {
+    subNode.classList.add("reading-sub-action");
+    subNode.append(cleanupAction());
+  }
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
@@ -2637,6 +2839,19 @@ function notifyPanelPaintSig(model, open) {
     state.cleanup.running ? "sweeping" : "",
     String(state.cleanup.at),
     state.cleanup.error,
+    /* The Cleaner lane's binding, for the same reason the sweep's state is here:
+       the chip follows a SESSION, and its state changes when that session
+       changes without any signed widget value moving. Omitting this is exactly
+       the CLEAN-1 defect — the header simply never repainted during a sweep and
+       the whole running state was unreachable from the control that starts it. */
+    state.cleaner.sessionId,
+    /* …and the DERIVED state, not just the binding. The chip's words change when
+       the Cleaner's session changes — working to asking, asking to ended — and
+       none of that moves a widget value either. Signing only the session id
+       would repaint on adoption and then freeze for the rest of the run, which
+       is CLEAN-1 again one level down. */
+    cleanerView(state.snap, state.cleaner).state,
+    state.cleaner.error,
     feedFrozen() ? "held" : "",
   ].join("\u001f");
 }
@@ -2733,6 +2948,10 @@ function notifyWaitText(item) {
    it is the sentence read INSTEAD of opening the drawer, and it is not visible
    on this row, so it extends the name rather than contradicting it. */
 function notifyQuietRow(item) {
+  /* Evidence earns its own line only when it is not a restatement of the impact
+     the row already shows. Compared on content rather than on kind, so a future
+     item type gets the right treatment without this function learning about it. */
+  const showsFault = Boolean(item.evidence) && item.evidence.trim() !== item.impact.trim();
   const visible = (item.source.programName ? item.source.programName + " · " : "") + item.impact;
   return el("button", {
     type: "button", class: "notify-quiet",
@@ -2741,9 +2960,22 @@ function notifyQuietRow(item) {
     onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
   },
     el("span", { class: "notify-quiet-name" },
-      item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
-      item.source.programName ? " · " : null,
-      item.impact),
+      el("span", { class: "notify-quiet-line" },
+        item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
+        item.source.programName ? " · " : null,
+        item.impact),
+      /* THE FACT, on screen. A quiet row used to put evidence in the accessible
+         name only, so a dataflow item — which always lands in Watching — could
+         carry "cursor GUI conversations: unable to open database file" and show
+         the operator nothing but a consequence sentence. That is the surface
+         saying Whoops: three layers of category rendered, the one line with a
+         fault in it withheld.
+
+         Only when it ADDS something. When evidence and impact say the same thing
+         — which is every handoff row, where both derive from the same signal —
+         a second line would be the row repeating itself. A span, not a <p>:
+         this is inside a <button>, which may hold phrasing content only. */
+      showsFault ? el("span", { class: "notify-quiet-fault" }, el("q", { text: item.evidence })) : null),
     el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
 }
 
@@ -2840,6 +3072,62 @@ function renderNotificationCenter() {
 function announceCleanup(text) {
   const region = $("cleanup-status");
   if (region) region.textContent = text;
+}
+
+/* One press, two steps, in the order §2's state machine names them: `examining`
+   is the board's own propose sweep, `launching` is the lane it then starts.
+
+   The sweep runs FIRST because it is the only thing that produces counts,
+   refusals with their reasons, and per-item rollback SHAs — the Cleaner reports
+   its own progress through the ordinary session machinery and there is no
+   channel that returns a manifest. Skipping it would leave S4 with nothing to
+   render but an adjective.
+
+   An incomplete enumeration stops the flow. A plan missing a refusal is a plan
+   that proposes removing something it should not, and launching an agent to act
+   on one would be worse than not launching at all. */
+async function runCleanupFlow() {
+  if (state.cleanup.running || state.cleaner.launching) return;
+  await requestCleanupProposal();
+  if (state.cleanup.error) return;
+  await requestCleanerLaunch();
+}
+
+/* Launch one Cleaner lane and bind the chip to it.
+
+   R2′ of the Cleaner plan: the board may start the agent, and still may not
+   delete. `/api/cleanup/launch` is a spawn route with no confirm counterpart —
+   the Cleaner proposes, asks the operator in its own session, and only then
+   removes.
+
+   No second-launch guard beyond the binding, deliberately. A double click is
+   answered by the SERVER with `CLEANER_ALREADY_RUNNING` carrying the running
+   lane's id, and cleanerFromResponse adopts it. Debouncing the button here would
+   be the client guessing at server state, which is the same class of mistake as
+   a timer-driven progress bar. */
+async function requestCleanerLaunch() {
+  if (state.cleaner.launching) return;
+  state.cleaner = { sessionId: "", code: "", error: "", launching: true };
+  announceCleanup("Starting a Cleaner lane. It will propose first and ask you before removing anything.");
+  render();
+  let body = null;
+  let httpOk = false;
+  try {
+    const res = await apiFetch("/api/cleanup/launch", {
+      method: "POST",
+      headers: { accept: "application/json" },
+    }, 90_000);
+    httpOk = res.ok;
+    body = await res.json().catch(() => null);
+  } catch {
+    /* Left null on purpose: cleanerFromResponse turns a dead transport into a
+       STATED failure. The one thing this may never do is leave the chip mid
+       spin with nothing said. */
+  }
+  state.cleaner = { ...cleanerFromResponse(body, httpOk), launching: false };
+  announceCleanup(state.cleaner.error
+    || "A Cleaner lane is running. It appears on the board like any other agent, and it will ask you before it removes anything.");
+  render();
 }
 
 async function requestCleanupProposal() {
@@ -3015,10 +3303,26 @@ function renderCleanupPlan() {
   const worktrees = (view.refused && view.refused.worktrees) || [];
   const branches = (view.refused && view.refused.branches) || [];
   const out = [];
+  /* A sweep that finds nothing is a REAL ANSWER and has to read as one — not as
+     a failure, and not as silence. Same rule the all-clear panel follows:
+     "watching, found nothing" and "not watching" must not render identically, so
+     this says what was examined rather than just what was absent. `refused` is
+     exactly the set the sweep looked at and chose to keep, and the reasons are
+     listed below, so the count is evidence rather than reassurance. */
+  const examined = worktrees.length + branches.length;
+  /* S4's verdict line: a COUNT, split by kind, never an adjective. "2 worktrees,
+     1 branch proposed, 1 refused" is a fact an operator can act on; "Cleanup
+     complete!" is a mood. countsSentence also refuses the word "removed" — the
+     board observes that a sweep proposed things and that a session ended; it
+     never observes a removal, because nothing reports one. */
+  const counts = cleanupCounts(view);
+  out.push(el("p", { class: "notify-instrument-problem", text: countsSentence(counts) }));
   out.push(el("p", { class: "notify-instrument-remedy", text:
     removable.length
-      ? `${removable.length} item${removable.length === 1 ? "" : "s"} can be removed, and nothing will be until you run the command below.`
-      : "Nothing is removable right now." }));
+      ? "A Cleaner will ask you here before it removes any of them. Each carries the rollback SHA that undoes it."
+      : examined
+        ? `Nothing to sweep. ${examined} item${examined === 1 ? " was" : "s were"} examined and every one was kept — the reasons are below.`
+        : "Nothing to sweep. No worktrees or branches were eligible for removal." }));
 
   if (removable.length) {
     out.push(el("ul", { class: "cleanup-list", "aria-label": "Removable, with rollback" },
@@ -3043,9 +3347,14 @@ function renderCleanupPlan() {
         el("span", { class: "cleanup-reason", text: (item.reasons || []).join(" · ") })))));
   }
 
-  out.push(el("p", { class: "cleanup-confirm" },
-    el("span", { class: "cleanup-confirm-lead", text: "Paste this to remove them:" }),
-    el("code", { class: "mono", text: view.confirmCommand || "" })));
+  /* Only when there is something to remove. A confirm command shown against an
+     empty plan invites the operator to run a removal that would remove nothing,
+     on the one surface whose entire contract is that removal is deliberate. */
+  if (removable.length) {
+    out.push(el("p", { class: "cleanup-confirm" },
+      el("span", { class: "cleanup-confirm-lead", text: "Paste this to remove them:" }),
+      el("code", { class: "mono", text: view.confirmCommand || "" })));
+  }
   if (view.planPath) {
     out.push(el("p", { class: "cleanup-plan-path mono", text: "plan: " + view.planPath }));
   }
@@ -3101,6 +3410,9 @@ function renderSettingsPanel() {
     state.settingsPanelOpen ? "1" : "0",
     JSON.stringify(state.settings ?? null),
     state.settingsPending ? "1" : "0",
+    /* The local display pref rebuilds the panel too, or the radio the operator
+       just clicked would keep the stale checkmark until a server value moved. */
+    state.needsYouDisplay || "",
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:
@@ -3159,6 +3471,28 @@ function renderSettingsPanel() {
       settingsField("historyRecordLimit", "History record cap",
         "At most this many History records are kept. 100–50000.",
         s.historyRecordLimit ?? 5000, 100, 50000)),
+    /* Per-browser display preference, deliberately OUTSIDE the Save flow: every
+       field above is a fleet-shared server setting, this one is where THIS
+       browser draws the board's alerting rows. It applies the moment it is
+       clicked, writes localStorage rather than POSTing, and Save and Reset
+       leave it alone. */
+    el("fieldset", { class: "settings-local" },
+      el("legend", { text: "Needs-you display" }),
+      el("p", { class: "settings-help", text: "Saved in this browser only. Applies immediately — Save below does not affect it." }),
+      ...[
+        ["pane", "Pinned pane", "Alerting sessions are collected in the strip at the top of the board."],
+        ["inline", "Inline", "Alerting sessions stay in their program groups, marked in place."],
+      ].map(([value, label, help]) => el("label", { class: "settings-radio" },
+        el("input", {
+          type: "radio",
+          name: "needs-you-display",
+          value,
+          checked: state.needsYouDisplay === value ? "" : null,
+          dataset: { fkey: "needs-you-display-" + value },
+          onchange: () => setNeedsYouDisplay(value),
+        }),
+        el("span", { text: label }),
+        el("span", { class: "settings-help", text: help })))),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -3400,6 +3734,19 @@ function renderHealthRail() {
     state.cleanup.running ? "sweeping" : "",
     String(state.cleanup.at),
     state.cleanup.error,
+    /* The Cleaner lane's binding, for the same reason the sweep's state is here:
+       the chip follows a SESSION, and its state changes when that session
+       changes without any signed widget value moving. Omitting this is exactly
+       the CLEAN-1 defect — the header simply never repainted during a sweep and
+       the whole running state was unreachable from the control that starts it. */
+    state.cleaner.sessionId,
+    /* …and the DERIVED state, not just the binding. The chip's words change when
+       the Cleaner's session changes — working to asking, asking to ended — and
+       none of that moves a widget value either. Signing only the session id
+       would repaint on adoption and then freeze for the rest of the run, which
+       is CLEAN-1 again one level down. */
+    cleanerView(state.snap, state.cleaner).state,
+    state.cleaner.error,
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -5588,6 +5935,22 @@ function worktreeLabel(program) {
   return base || branch || (program ? program.name : "");
 }
 
+/* What a strip row's chip SAYS. A flat program's name is its whole identity,
+   but a worktree program's server name is the repository — one word shared by
+   every checkout of it, which is exactly the ambiguity the strip suffered
+   from. So the chip speaks both axes: the repo, then the same branch@directory
+   words the group header below says, so the operator can match the two
+   surfaces by reading either one. */
+function stripChipLabel(program) {
+  if (!program) return "";
+  if (!Array.isArray(program.groupPath)) return programName(program);
+  const repo = repoOf(program);
+  const repoName = (repo && repo.repoName) || "";
+  const label = worktreeLabel(program);
+  if (repoName && label && label !== repoName) return repoName + " · " + label;
+  return repoName || label || programName(program);
+}
+
 /* The board's sections, in server order: a repo group takes the position of its
    first worktree, and everything without a groupPath stays exactly where it
    was as its own program entry. Pure — it reads the visible list and nothing
@@ -5660,6 +6023,45 @@ function toggleRepo(group) {
   render();
 }
 
+/* The strip chip's destination: put the parent group on screen. Explicit
+   "closed" overrides are REMOVED rather than overwritten — open is already the
+   computed default for a group holding an alerting row, so deleting the fold
+   restores it, and writing "open" would persist a choice the operator never
+   made. The repaint runs synchronously so the scroll that follows it owns the
+   final position: render() saves and restores main.scrollTop inside the call,
+   and the next paint re-saves whatever scrollIntoView left. Focus lands on the
+   group's own caret, whose `prog:` focus key is what render()'s restore
+   preserves across later repaints. Optional calls, because the test harness's
+   nodes have neither scrollIntoView nor focus. */
+function jumpToProgramGroup(program) {
+  if (!program) return;
+  const repoKey = Array.isArray(program.groupPath) ? String(program.groupPath[0] || "") : "";
+  if (repoKey && state.repoOverrides.get(repoKey) === "closed") {
+    state.repoOverrides.delete(repoKey);
+    saveRepoOverrides();
+  }
+  if (state.programOverrides.get(program.id) === "closed") {
+    state.programOverrides.delete(program.id);
+    saveOverrides();
+  }
+  render();
+  const head = document.querySelector(`[data-fkey="${CSS.escape("prog:" + program.id)}"]`);
+  if (!head) return;
+  head.scrollIntoView?.({ block: "center" });
+  head.focus?.({ preventScroll: true });
+}
+
+/* How many sessions in this band are asking for a person — over the FULL
+   population of each worktree program, the same convention the worktree
+   rollup uses, so the band and the heads under it can never disagree. */
+function repoAlertCount(group) {
+  let count = 0;
+  for (const { program } of group.worktrees) {
+    count += program.agents.filter((agent) => alerting(agent)).length;
+  }
+  return count;
+}
+
 /* Everything the repo BAND paints, and nothing its worktrees paint: the name,
    the caret, the worktree count and the PR links. A row ticking inside one of
    its worktrees must leave this node alone, or the band rebuild would take
@@ -5671,6 +6073,10 @@ function repoShellSig(group, ui) {
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
+    /* The inline-mode alert marker is painted on this head, and nothing else
+       in this signature moves when a session starts or stops asking — the
+       documented mutates-only-itself failure class. */
+    needsYouDisplayOf(ui) === "inline" ? "alerts:" + repoAlertCount(group) : "",
   ].join("\u001f");
 }
 
@@ -5685,6 +6091,7 @@ function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
+  const alerts = needsYouDisplayOf(ui) === "inline" ? repoAlertCount(group) : 0;
   /* A band, not a second card: no rollup, no rename, no details. The worktree
      heads below already carry all three, and stacking two full program headers
      over one row of work is how a hierarchy turns into chrome. */
@@ -5703,6 +6110,20 @@ function renderRepoSection(group, ui = state) {
       class: "repo-worktree-count mono",
       text: count === 1 ? "1 worktree" : count + " worktrees",
     }),
+    /* Inline mode only. With no strip, a collapsed band is the one place an
+       alerting session could hide with zero signal — the worktree heads under
+       it carry an alerts cell, but a shut fold draws no worktree heads. In
+       pane mode the strip holds those rows, and a band count pointing at rows
+       that are not under it would contradict the strip's own sentence. */
+    alerts
+      ? el("span", {
+        class: "repo-alerts is-alerting mono",
+        "aria-label": alerts === 1
+          ? "1 session needs you in " + group.name
+          : alerts + " sessions need you in " + group.name,
+        text: alerts === 1 ? "1 alert" : alerts + " alerts",
+      })
+      : null,
     ...group.pullRequestUrls.map((url) => el("a", {
       class: "repo-pr",
       href: url,
@@ -5967,7 +6388,11 @@ function agentRowSig(agent, ui, opts = {}) {
     opts.swarmOpen ? "swarm-open" : "swarm-shut",
     opts.swarmAlerting ? "swarm-alert" : "",
     // The strip's copy of a row carries a program chip its group copy does not.
-    opts.programChip ? "chip:" + programName(opts.programChip) : "",
+    opts.programChip ? "chip:" + stripChipLabel(opts.programChip) : "",
+    // Inline mode's membership mark. A hook can flip it with nothing else in
+    // this signature moving, so it has to be in here or the row keeps its
+    // cached, unmarked node.
+    opts.alerting ? "alert-mark" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -6010,6 +6435,10 @@ function programsPaintSig(visible, ui) {
     LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
+    /* Fifth instance of the mutates-only-itself failure class: the settings
+       radio writes needsYouDisplay and nothing else, so without this the strip
+       would neither leave nor return until something unrelated repainted. */
+    needsYouDisplayOf(ui),
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
     /* Third instance of the same failure class: toggleRepo mutates nothing else
@@ -6104,8 +6533,10 @@ function syncProgramList(root, visible, ui = state) {
   const sections = [];
   /* Board only, and only over a board that has something on it: History is a
      record rather than a request, and an empty board says its own sentence
-     below rather than pinning "no session is asking" over nothing. */
-  if (ui.view === "board" && visible.length) {
+     below rather than pinning "no session is asking" over nothing. In inline
+     mode there is no strip at all — not even the calm empty state, because a
+     surface whose whole job the operator turned off has nothing true to say. */
+  if (ui.view === "board" && visible.length && needsYouDisplayOf(ui) === "pane") {
     sections.push({
       key: STRIP_ID,
       sig: "strip\u001f" + (strip.length ? stripSig(strip) : "clear"),
@@ -6162,7 +6593,7 @@ function syncProgramList(root, visible, ui = state) {
 
   let shown = 0;
   const keptRows = new Set();
-  const stripBody = strip.length ? programBodies.get(STRIP_ID) : null;
+  const stripBody = strip.length && needsYouDisplayOf(ui) === "pane" ? programBodies.get(STRIP_ID) : null;
   if (stripBody) {
     const plan = strip.map(({ agent, program }) => {
       const opts = stripRowOpts(program, board);
@@ -6674,25 +7105,21 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      Board only, and that is not a stylistic choice: the strip renders on Board,
      so on any other view this would remove a row from the only place it is
      drawn. A finished session whose process is somehow still running satisfies
-     alerting(), and it would have silently disappeared out of History. */
-  const pinnedIds = ui.view === "board"
+     alerting(), and it would have silently disappeared out of History. Pane
+     mode only, for the same reason: inline mode draws no strip, so pinning a
+     row away here would remove it from the only place it is drawn. */
+  const pinnedIds = ui.view === "board" && needsYouDisplayOf(ui) === "pane"
     ? new Set(agents.filter((agent) => alerting(agent)).map((agent) => agent.id))
     : new Set();
 
+  /* Inline mode's row-level signal. The strip used to BE the signal; with it
+     off, membership itself must mark the row — outcome ink alone misses the
+     hook-needsInput shape that dominates the live set, and six sessions asking
+     for a person would render as six ordinary Waiting rows. Board only,
+     exactly like pinnedIds and for the same reason. */
+  const markAlerting = ui.view === "board" && needsYouDisplayOf(ui) === "inline";
+
   const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
-  if (pinnedIds.size) {
-    const n = pinnedIds.size;
-    plan.push({
-      key: "pinned-note",
-      sig: "pinned:" + n,
-      build: () => el("p", { class: "pinned-note" },
-        el("span", {
-          text: n === 1
-            ? "1 session from this program is in Needs you, above"
-            : n + " sessions from this program are in Needs you, above",
-        })),
-    });
-  }
 
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || [])
@@ -6716,6 +7143,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
         // Ember on the chip when something folded up inside is asking for a
         // person. The row itself is calm; the swarm it is holding is not.
         swarmAlerting: !open && hasAlertingDescendant(agent.id, fullChildren, fullById),
+        alerting: markAlerting && alerting(agent),
       };
       plan.push({
         key: "row:" + agent.id,
@@ -7244,13 +7672,21 @@ function renderAgentRow(agent, program, opts = {}) {
       }, icon("rename")),
       /* Only in the Needs-you strip. The strip is flat and cross-program, so
          the program header that would otherwise say where a row came from is
-         not above it — the chip is that header, per row. In a program group the
-         header IS above it and the chip would restate it on every line. */
+         not above it — the chip is that header, per row, down to the same
+         branch@directory words. And because the header it stands in for is
+         also where the operator would go next, the chip is the road back: a
+         button that puts the parent group on screen. */
       opts.programChip
-        ? el("span", {
+        ? el("button", {
           class: "row-program-chip",
-          title: "Program: " + programName(opts.programChip),
-          text: programName(opts.programChip),
+          title: "Jump to " + stripChipLabel(opts.programChip),
+          "aria-label": "Jump to program group: " + stripChipLabel(opts.programChip),
+          dataset: { fkey: "strip-chip:" + agent.id },
+          onclick: (e) => {
+            e.stopPropagation();
+            jumpToProgramGroup(opts.programChip);
+          },
+          text: stripChipLabel(opts.programChip),
         })
         : null),
     el("span", { class: "row-identity-tags" },
@@ -7416,6 +7852,10 @@ function renderAgentRow(agent, program, opts = {}) {
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
     (outcome !== "healthy" ? " is-" + outcome : "") +
+    /* Needs-you membership, not outcome: inline mode's stand-in for the strip.
+       A row can be in the set with a healthy outcome (hook needsInput), so
+       this mark and is-needs-you are two different facts. */
+    (opts.alerting ? " is-alerting" : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
@@ -7448,10 +7888,10 @@ function renderAgentRow(agent, program, opts = {}) {
        to LOOK at, not quieter to listen to. Program, role,
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
-      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
+      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip, .row-program-chip")) return;
       activate();
     },
     onkeydown: (e) => {
@@ -10763,6 +11203,7 @@ function boot() {
   loadWidgetPreferences();
   loadLookback();
   loadContextSpread();
+  loadNeedsYouDisplay();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
   renderNotificationCenter();

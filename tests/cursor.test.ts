@@ -18,6 +18,7 @@ import {
 import { buildSnapshot } from "../src/server/snapshot";
 import { PulseTracker } from "../src/server/pulse";
 import { resolveAgentTarget } from "../src/server/targets";
+import { readForeignSqlite } from "../src/server/foreign-sqlite";
 import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
 
 const SESSION_ID = "286ab053-e84f-4538-9292-4aa3fae6fe9b";
@@ -146,6 +147,18 @@ async function setupGuiComposerHome(options: {
     tracking.close();
   }
   return home;
+}
+
+function guiConversationPath(home: string): string {
+  return join(
+    home,
+    "Library",
+    "Application Support",
+    "Cursor",
+    "User",
+    "globalStorage",
+    "conversation-search.db",
+  );
 }
 
 describe("Cursor Agent persisted session truth", () => {
@@ -493,6 +506,24 @@ describe("Cursor Agent persisted session truth", () => {
     }
   });
 
+  test("the shared foreign-store reader cannot mutate its source database", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mountain-cursor-readonly-store-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "store.db");
+    const database = new Database(path);
+    database.exec("create table evidence (value text); insert into evidence values ('kept')");
+    database.close();
+
+    expect(() => readForeignSqlite(path, (foreign) => foreign.exec("delete from evidence"))).toThrow();
+
+    const check = new Database(path, { readonly: true });
+    try {
+      expect(check.query("select value from evidence").get()).toEqual({ value: "kept" });
+    } finally {
+      check.close();
+    }
+  });
+
   test("rejects a store whose authoritative agentId conflicts with its session directory", async () => {
     const agent = parseCursorSession({
       sessionId: SESSION_ID,
@@ -671,6 +702,100 @@ describe("Cursor Agent persisted session truth", () => {
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });
+  });
+
+  test("a missing GUI conversation store is unknown rather than an empty population", async () => {
+    const home = await setupGuiComposerHome({});
+    await rm(guiConversationPath(home));
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.value).toEqual([]);
+    expect(result.errors).toEqual([
+      "cursor GUI conversations: database is missing; Cursor GUI sessions could not be enumerated for this scan.",
+    ]);
+  });
+
+  test("an unreadable GUI conversation store names permissions and the missing population", async () => {
+    const home = await setupGuiComposerHome({});
+    const path = guiConversationPath(home);
+    await chmod(path, 0);
+    try {
+      const result = await collectCursorSessions(home, 1784692000000);
+
+      expect(result.value).toEqual([]);
+      expect(result.errors).toEqual([
+        "cursor GUI conversations: database permissions deny read access; Cursor GUI sessions could not be enumerated for this scan.",
+      ]);
+    } finally {
+      await chmod(path, 0o600);
+    }
+  });
+
+  test("a corrupt GUI conversation store names corruption and the missing population", async () => {
+    const home = await setupGuiComposerHome({});
+    await writeFile(guiConversationPath(home), "not a sqlite database");
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.value).toEqual([]);
+    expect(result.errors).toEqual([
+      "cursor GUI conversations: database is corrupt or is not SQLite; Cursor GUI sessions could not be enumerated for this scan.",
+    ]);
+  });
+
+  test("a locked GUI conversation store is unknown for one scan and recovers on the next", async () => {
+    const home = await setupGuiComposerHome({});
+    const locked = new Database(guiConversationPath(home));
+    locked.exec("pragma journal_mode = delete; begin exclusive");
+    try {
+      const failed = await collectCursorSessions(home, 1784692000000);
+
+      expect(failed.value).toEqual([]);
+      expect(failed.errors).toEqual([
+        "cursor GUI conversations: database is locked or busy; Cursor GUI sessions could not be enumerated for this scan.",
+      ]);
+    } finally {
+      locked.exec("rollback");
+      locked.close();
+    }
+
+    const recovered = await collectCursorSessions(home, 1784692000000);
+    expect(recovered.errors).toEqual([]);
+    expect(recovered.value.map(({ id }) => id)).toContain(`cursor:${GUI_SESSION_ID}`);
+  });
+
+  test("an unsupported GUI conversation schema names the incompatible store", async () => {
+    const home = await setupGuiComposerHome({});
+    const path = guiConversationPath(home);
+    await rm(path);
+    const database = new Database(path);
+    database.exec("create table replacement_conversations (id text)");
+    database.close();
+
+    const result = await collectCursorSessions(home, 1784692000000);
+
+    expect(result.errors).toEqual([
+      "cursor GUI conversations: database schema is incompatible; Cursor GUI sessions could not be enumerated for this scan.",
+    ]);
+  });
+
+  test("reads a stable WAL conversation store without requiring writable sidecars", async () => {
+    const home = await setupGuiComposerHome({});
+    const path = guiConversationPath(home);
+    const database = new Database(path);
+    database.query("pragma journal_mode = wal").get();
+    database.close();
+    const globalStorage = join(path, "..");
+    await chmod(globalStorage, 0o555);
+    try {
+      const result = await collectCursorSessions(home, 1784692000000);
+
+      expect(result.errors).toEqual([]);
+      expect(result.value.map(({ id }) => id)).toContain(`cursor:${GUI_SESSION_ID}`);
+    } finally {
+      await chmod(globalStorage, 0o755);
+    }
   });
 
   test("reads the GUI model and effort from composerData, overriding ai-tracking", async () => {
