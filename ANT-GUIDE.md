@@ -281,11 +281,15 @@ evidence remains unobserved rather than becoming a guessed relationship.
 > correctly. Read its drawer if you need the total.
 
 The fleet-wide wire reading is `totals.consumption`: `sessionTotal` summed once
-for every session in the configured scan window, including finished sessions.
-It is deliberately not the row's latest-call occupancy, processed tokens, or
-cache re-reads; those remain separate session facts. The field is absent when a
-provider scan, the scan window, or any session total is incomplete. A complete
-empty window reports `0`.
+for each reporting session in the configured scan window, including finished
+sessions. It is deliberately not the row's latest-call occupancy, processed
+tokens, or cache re-reads; those remain separate session facts. Its coverage is
+`consumptionReporting/consumptionEligible`, counted over the same observed,
+non-retained population as the sum. When reporting is incomplete,
+`consumptionIsFloor:true` means the client prints a leading `≥`; the number is a
+known floor, never a total in disguise. The aggregate and its coverage are all
+absent when a provider scan or the scan window is incomplete. A complete empty
+window reports `0` with `0/0` coverage and no floor flag.
 
 ### 4. Click it, deal with it, press `Escape`
 

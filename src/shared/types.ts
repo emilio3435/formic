@@ -759,10 +759,18 @@ export interface HubSnapshot {
     live: number;
     tracked: number;
     attention: number;
-    /* Complete scan-window CONSUMPTION: sessionTotal for every observed
-       session, each token counted once. Absent when the window, enumeration,
-       or any session term is incomplete; never occupancy or processed flow. */
+    /* Known scan-window CONSUMPTION: sessionTotal for each reporting observed
+       session, each token counted once. When some eligible sessions do not
+       report, consumptionIsFloor and the same-population coverage make the
+       subtotal explicit. The whole group is absent only when the window or
+       enumeration is incomplete; never occupancy or processed flow. */
     consumption?: number;
+    /** Observed scan-window sessions included in consumption. */
+    consumptionReporting?: number;
+    /** All observed, non-retained sessions eligible for consumption. */
+    consumptionEligible?: number;
+    /** Present only when consumption excludes at least one eligible session. */
+    consumptionIsFloor?: boolean;
     tokens?: number;
     working?: number;
     idle?: number;

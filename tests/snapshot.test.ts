@@ -608,6 +608,9 @@ describe("snapshot control safety and SSE deduplication", () => {
 
     expect(snapshot.totals.tokens).toBe(data.expected.workingOccupancy);
     expect(snapshot.totals.consumption).toBe(data.expected.consumption);
+    expect(snapshot.totals.consumptionReporting).toBe(2);
+    expect(snapshot.totals.consumptionEligible).toBe(2);
+    expect(snapshot.totals).not.toHaveProperty("consumptionIsFloor");
     expect(sum("sessionProcessed")).toBe(data.expected.processed);
     expect(sum("sessionCachedInput")).toBe(data.expected.cachedInput);
     expect(new Set([
@@ -617,7 +620,43 @@ describe("snapshot control safety and SSE deduplication", () => {
     ]).size).toBe(3);
   });
 
-  test("fleet consumption is absent unless the window, enumeration, and every term are complete", () => {
+  test("fleet consumption publishes a labeled floor with coverage when some terms do not report", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({
+          id: "codex:reporting-consumption",
+          sourceSessionId: "reporting-consumption",
+          tokens: { sessionTotal: 1_500, provenance: "observed" },
+        }),
+        collected({
+          id: "cursor:missing-consumption",
+          provider: "cursor",
+          sourceSessionId: "missing-consumption",
+          tokens: { provenance: "unknown" },
+        }),
+        collected({
+          id: "claude:estimated-consumption",
+          provider: "claude",
+          sourceSessionId: "estimated-consumption",
+          tokens: { sessionTotal: 2_500, provenance: "estimated" },
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      scanWindowHours: 36,
+      sessionCollectionComplete: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.totals).toMatchObject({
+      consumption: 1_500,
+      consumptionReporting: 1,
+      consumptionEligible: 3,
+      consumptionIsFloor: true,
+    });
+  });
+
+  test("fleet consumption stays absent when its window or enumeration is unknown", () => {
     const agent = collected({
       tokens: {
         total: 900_000,
@@ -639,28 +678,29 @@ describe("snapshot control safety and SSE deduplication", () => {
       scanWindowHours: 36,
       sessionCollectionComplete: false,
     });
-    const missingTerm = buildSnapshot({
-      ...input,
-      agents: [collected({ tokens: { total: 900_000, provenance: "observed" } })],
-      scanWindowHours: 36,
-      sessionCollectionComplete: true,
-    });
-    const partialTerm = buildSnapshot({
-      ...input,
-      agents: [collected({ tokens: { sessionTotal: 1_500, provenance: "estimated" } })],
-      scanWindowHours: 36,
-      sessionCollectionComplete: true,
-    });
 
-    for (const snapshot of [missingWindow, incompleteEnumeration, missingTerm, partialTerm]) {
-      expect(snapshot.totals).not.toHaveProperty("consumption");
+    for (const snapshot of [missingWindow, incompleteEnumeration]) {
+      for (const field of [
+        "consumption",
+        "consumptionReporting",
+        "consumptionEligible",
+        "consumptionIsFloor",
+      ]) {
+        expect(snapshot.totals).not.toHaveProperty(field);
+      }
     }
-    expect(buildSnapshot({
+    const empty = buildSnapshot({
       ...input,
       agents: [],
       scanWindowHours: 36,
       sessionCollectionComplete: true,
-    }).totals.consumption).toBe(0);
+    });
+    expect(empty.totals).toMatchObject({
+      consumption: 0,
+      consumptionReporting: 0,
+      consumptionEligible: 0,
+    });
+    expect(empty.totals).not.toHaveProperty("consumptionIsFloor");
   });
 
   test("reports peak and median context across live agents", () => {

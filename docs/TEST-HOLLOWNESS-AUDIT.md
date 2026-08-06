@@ -34,7 +34,7 @@ Verification of this deliverable (footer): `bunx tsc --noEmit` exit 0 · `bun ru
 |---|---|
 | `attentionClassOf` / kinds: `stalled-active` → `"blocking"` | **RED** (ember contract + out-of-page + matrix + a11y) |
 | `hasCurrentImpact` true for lifecycle `"resolved"` | **RED** (promotion table + S1-T2) |
-| `totals.consumption` fall back to occupancy `tokens.total` when incomplete | **RED** (`tests/snapshot.test.ts` "fleet consumption is absent unless…") — note: happy-path "never occupancy" alone would miss an incomplete-only fallback |
+| `totals.consumption` falls back to occupancy `tokens.total` when the window or enumeration is unknown | **RED** (`tests/snapshot.test.ts` "fleet consumption stays absent…") — missing token terms instead publish a `sessionTotal` floor with same-population coverage |
 | Notification route kind ∉ `DRAWER_RENDERERS` | **RED** |
 | Reintroduce per-row wait from `hookLifecycleAt` (and peers) | **RED** (web-client walks every candidate clock — proven) |
 | Emit `pulse.standbyMs` as `0` | **RED** (pulse.test) / **GREEN** (harden-notify standby fixture JSON-only) |
@@ -45,7 +45,7 @@ Verification of this deliverable (footer): `bunx tsc --noEmit` exit 0 · `bun ru
 |---|---|---|---|
 | `pulse.blocked` counts person-blockers only | `tests/pulse.test.ts` | Count `noticed` as blocked | **RED** |
 | Health chip qualifies instruments, not fleet all-clear | `tests/health-card.test.ts` | `"Readings healthy"` → `"All clear"` | **RED** |
-| Fleet consumption is sessionTotal, absent when incomplete | `tests/snapshot.test.ts` | Incomplete → sum of `tokens.total` | **RED** |
+| Fleet consumption is a `sessionTotal` floor with same-population coverage; absent only when the window or enumeration is unknown | `tests/snapshot.test.ts` | Missing terms → omit the floor/coverage, or unavailable scan → sum `tokens.total` | **RED** |
 
 ---
 

@@ -612,16 +612,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const scanWindowKnown = typeof input.scanWindowHours === "number"
     && Number.isFinite(input.scanWindowHours)
     && input.scanWindowHours > 0;
-  const consumptionTermsComplete = observedAgents.every((agent) =>
-    agent.tokens.provenance === "observed"
-    && typeof agent.tokens.sessionTotal === "number"
-    && Number.isFinite(agent.tokens.sessionTotal)
-    && agent.tokens.sessionTotal >= 0,
-  );
+  const consumptionValues = observedAgents
+    .filter((agent) =>
+      agent.tokens.provenance === "observed"
+      && typeof agent.tokens.sessionTotal === "number"
+      && Number.isFinite(agent.tokens.sessionTotal)
+      && agent.tokens.sessionTotal >= 0)
+    .map((agent) => agent.tokens.sessionTotal!);
   const consumption = input.sessionCollectionComplete === true
     && scanWindowKnown
-    && consumptionTermsComplete
-    ? observedAgents.reduce((total, agent) => total + agent.tokens.sessionTotal!, 0)
+    ? consumptionValues.reduce((total, value) => total + value, 0)
     : undefined;
   const countLifecycle = (state: LifecycleState): number =>
     observedAgents.filter((agent) => agent.lifecycle === state).length;
@@ -768,7 +768,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       live: liveAgents.length,
       tracked: allAgents.length,
       attention: observedAgents.filter((agent) => agent.attention === true).length,
-      ...(consumption === undefined ? {} : { consumption }),
+      ...(consumption === undefined ? {} : {
+        consumption,
+        consumptionReporting: consumptionValues.length,
+        consumptionEligible: observedAgents.length,
+        ...(consumptionValues.length < observedAgents.length ? { consumptionIsFloor: true } : {}),
+      }),
       tokens: tokenValues.length ? tokenValues.reduce((total, value) => total + value, 0) : undefined,
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,

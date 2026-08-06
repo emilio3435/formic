@@ -11,11 +11,19 @@ landed at 21:12 (`365a958`) and consumption landed at 21:34 (`a018e29`). The
 fresh snapshot therefore comes from a long-running process that has not loaded
 those S0 commits.
 
+> **R3 correction.** This sample proved that the original all-terms-observed
+> publication gate could never pass on this machine. The raw measurement below
+> is unchanged, but its consumption ruling is superseded: a known subtotal now
+> publishes with same-population coverage and an optional-true floor flag. For
+> this sample the corrected contract is `consumption: 75,786,036`,
+> `consumptionReporting: 344`, `consumptionEligible: 384`, and
+> `consumptionIsFloor: true` — rendered with a leading `≥`.
+
 ## Raw field verdicts
 
 | Field | Live wire value | Verdict |
 |---|---|---|
-| `totals.consumption` | **Absent** | **NOT SAFE TO RENDER.** The live population definitively fails the all-terms-observed gate, so the card would remain absent even after the server loads the field. |
+| `totals.consumption` | **Absent under the original gate** | **SAFE TO RENDER UNDER R3 AS A FLOOR.** Render `≥75,786,036` with `344/384` coverage; never present it as complete. |
 | `attentionClass` | 34 live agents: 0 blocking, 0 noticed, **34 with the key absent** | **NOT SAFE TO RENDER.** This process predates the wire field; zero is not a measured class count. |
 | `pulse.blocked` | **Absent** (`pulse` contains only `momentum`, `burn`, and `activity`) | **NOT SAFE TO RENDER.** The board has four current person-blockers, but the live process cannot publish their count yet. |
 | `pulse.standbyMs` | **Absent**; zero keys anywhere in the snapshot | **SAFE TO RENDER AS ABSENT.** No dead-time duration is on the wire. |
@@ -28,13 +36,13 @@ those S0 commits.
   boolean is internal, so this corroborates rather than directly reads the
   gate; no live evidence says this gate failed.
 - Scan window: known, `scanWindowHours: 36` and `lookbackHours: 36`.
-- Terms: **failed**. Of 384 observed, non-retained sessions, 344 carried a
+- Terms: **partial**. Of 384 observed, non-retained sessions, 344 carried a
   finite `sessionTotal` with provenance `observed`; 40 did not: 38 Cursor, one
   Claude, and one Codex. Three missing Cursor terms were live (one working, two
   waiting), so aging finished rows out of the window would not make the total
   appear now.
 
-For diagnosis only, never as a publishable total, the 344 complete terms sum to
+The 344 reporting terms sum to the R3 publishable floor
 `75,786,036` consumption tokens. Their independently named neighbors are
 `3,296,702,408` cached-input tokens and `3,372,488,444` processed tokens; the
 identity `consumption + cached input = processed` holds exactly. The same
@@ -43,13 +51,13 @@ snapshot's working-agent occupancy is `totals.tokens: 1,244,801`.
 OpenBurnBar independently returned HTTP 200 for the exact snapshot window
 `2026-08-04T15:19:29.974Z` through `2026-08-06T03:19:29.974Z`: source healthy,
 `processedTokens: 3,098,282,466`, `tokensMissing: 0`, and 387 invocations. The
-non-publishable partial consumption is 60.88x occupancy and remains below both
+consumption floor is 60.88x occupancy and remains below both
 processed readings (40.88x smaller than BurnBar; 44.50x smaller than the
 board's complete-term subtotal). The two processed readings themselves differ:
 the board subtotal is 274,205,978 tokens (8.85%) above BurnBar. Their populations
 are not complete and aligned in this sample, so this proves only the requested
 ordering, not cross-source equality. The direction is sane, but it cannot rescue
-a total with 40 missing terms.
+a complete total with 40 missing terms; under R3 it supports the labeled floor.
 
 ## Blocking population
 
@@ -68,7 +76,6 @@ four blocking agents, exactly matching the four rows the board says need a
 person. That is a plausible pre-deployment cross-check, not a live wire match:
 the sampled wire contains neither the per-agent classes nor `pulse.blocked`.
 
-**Overall verdict: do not render consumption, `attentionClass`, or
-`pulse.blocked` from this live server yet. Re-measure the latter two after a
-normal server restart. Pull the consumption card for the current population:
-even after deployment, active Cursor sessions make the honest aggregate absent.**
+**R3 verdict: render consumption only as `≥75,786,036 · 344/384 reporting` for
+this measured population. Re-measure `attentionClass` and `pulse.blocked` after
+a normal server restart; their live-wire verdict remains unchanged.**
