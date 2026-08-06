@@ -195,6 +195,108 @@ describe("the toggle is a disclosure and says so", () => {
   });
 });
 
+describe("A11Y-3: the panel's container can carry the name it is given", () => {
+  /* Measured before: the AX tree reported `role: generic, name: "4 agents
+     stopped"`. ARIA prohibits an accessible name on role=generic, so the
+     aria-labelledby sitting there named a container no screen reader would
+     enter, and the panel was unreachable by rotor. Measured after: `role:
+     group, name: "Notifications"`. */
+
+  const panelTag = html.match(/<div id="notifications-panel"[^>]*>/)?.[0] ?? "";
+
+  test("it declares a role that permits naming", () => {
+    expect(panelTag).not.toBe("");
+    /* generic is the implicit role of a bare div and is name-PROHIBITED. Any of
+       these three carries a name legitimately; group is what shipped, and is
+       what the panel's own instrument block already uses one level down. */
+    expect(panelTag).toMatch(/role="(group|region|dialog)"/);
+  });
+
+  test("its name is stable across paints, not the heading that counts agents", () => {
+    expect(panelTag).toMatch(/aria-label="[^"]+"/);
+    /* The <h2> reads "4 agents stopped" and is rewritten on every paint. Naming
+       the container from it means the container is re-announced whenever the
+       count moves, which is noise rather than information. */
+    expect(panelTag).not.toContain("aria-labelledby");
+    /* …and the heading itself stays, because the panel still needs one. */
+    expect(appjs).toContain('id: "notify-panel-title"');
+  });
+});
+
+describe("A11Y-4: no two controls in the panel answer to the same name", () => {
+  /* Measured before: four buttons named exactly "Focus" in one open panel —
+     indistinguishable in a rotor or under voice control. The dock is a
+     one-agent surface where "Focus" is unambiguous; this list is the one place
+     several agents' tools coexist. Measured after: "Focus Debug schedule draft
+     generation algorithm". */
+
+  test("the panel names its Focus control for the agent it focuses", () => {
+    const region = appjs.slice(
+      appjs.indexOf("---------- the notification center ----------"),
+      appjs.indexOf("function renderSettingsPanel"),
+    );
+    expect(region).toMatch(/ariaLabel: "Focus " \+ agentName\(found\.agent\)/);
+  });
+
+  test("renderDockTool is extended, not forked, and every other call site is unchanged", () => {
+    /* The gate matters more than the label: renderDockTool is the one place the
+       capability check, confirm strip and busy state live, and a second Focus
+       button built beside it would drift from all three. The override is opt-in
+       and null when absent, so every dock tool keeps its visible label as its
+       name — and `ariaLabel` is the option name this file already uses for the
+       same job on the rename forms, rather than a new spelling. */
+    expect(appjs).toContain('"aria-label": opts.ariaLabel || null,');
+
+    /* Exactly one call site overrides the name: the notification row, which is
+       the only place several agents' tools share a list. If a second appears,
+       either it has the same ambiguity — and this test should be updated with
+       the reason — or a caller is renaming a control that was fine. */
+    /* Block comments stripped first: this file explains itself at length, and a
+       call site's options can sit a dozen prose lines below its opening paren,
+       which no fixed window would reach. */
+    const code = appjs.replace(/\/\*[\s\S]*?\*\//g, "");
+    const callSites = [...code.matchAll(/renderDockTool\(/g)]
+      .map((m) => code.slice(m.index ?? 0, (m.index ?? 0) + 200));
+    expect(callSites.length).toBeGreaterThan(1);
+    expect(callSites.filter((site) => site.includes("ariaLabel:")).length).toBe(1);
+  });
+
+  test("the destination stays a description rather than joining the name", () => {
+    /* First draft appended focusDestinationHint and measured as a name that read
+       a home path aloud, one segment at a time, on every row. */
+    expect(appjs).not.toMatch(/ariaLabel: "Focus " \+ agentName\(found\.agent\) \+ " — "/);
+    expect(appjs).toMatch(/action === "focus" \? focusDestinationHint\(agent\)/);
+  });
+});
+
+describe("A11Y-5: a quiet row's name contains everything the row visibly says", () => {
+  /* WCAG 2.5.3. Measured before — visible "the-ant-hill · Execute LANE-FE1 …",
+     name "Execute LANE-FE1 …" — the program the operator can read was missing
+     from the name that overrides it, so saying what you see matched nothing.
+     Measured after: name.includes(visibleProgram) === true. */
+
+  const quietRow = appjs.slice(
+    appjs.indexOf("function notifyQuietRow(item)"),
+    appjs.indexOf("function renderNotificationCenter"),
+  );
+
+  test("the row builds its visible prefix once and names itself with it", () => {
+    expect(quietRow.length).toBeGreaterThan(100);
+    /* The program and the separator the row RENDERS… */
+    expect(quietRow).toMatch(/class: "notify-quiet-prog", text: item\.source\.programName/);
+    /* …are the same program and separator it is NAMED by. Two expressions, so
+       the test reads both: this is the drift the defect was. */
+    expect(quietRow).toMatch(/const visible = \(item\.source\.programName \? item\.source\.programName \+ " · " : ""\) \+ item\.impact;/);
+    expect(quietRow).toMatch(/"aria-label": item\.evidence \? visible \+ " " \+ item\.evidence : visible/);
+  });
+
+  test("the blocking row still names its program too, by its own route", () => {
+    /* The row above this one never had the bug — it says "In <program>." — and
+       the fix must not quietly restyle it into agreement. */
+    expect(appjs).toMatch(/"aria-label": item\.impact \+ " In " \+ \(item\.source\.programName \|\| "an unnamed program"\)/);
+  });
+});
+
 describe("Escape returns the operator to the control that opened the panel", () => {
   /* Measured live: focus was inside the panel, Escape closed it, and
      document.activeElement was #notify-toggle — not <body>. */
@@ -336,6 +438,23 @@ describe("no control in the panel is revealed by hover", () => {
   test("the row reserves its action space at rest, so nothing shifts under a pointer", () => {
     const meta = styleRules.find((r) => r.selector === ".notify-row-meta");
     expect(meta?.body).toMatch(/min-height:/);
+  });
+
+  test("A11Y-6: both row actions clear 44px once there is no pointer", () => {
+    /* Measured before at 420px and 768px, same row, same line: Reply 115x44,
+       Focus 70x32 — and Focus is the one that moves the operator to the agent.
+       .notify-act was in the touch sweep; the .dock-tool beside it was missed
+       when the panel shipped. Measured after: 44. */
+    const sweep = styleRules.find(
+      (r) => r.selector.includes(".notify-act") && /min-height:\s*44px/.test(r.body),
+    );
+    expect(sweep).toBeDefined();
+    expect(sweep ? sweep.selector : "").toContain(".notify-row-acts .dock-tool");
+    /* …and it is the touch breakpoint that carries it, not the desktop rule. */
+    const sweepSelector = sweep ? sweep.selector : "";
+    const at = cleanCss.indexOf(sweepSelector);
+    expect(at).toBeGreaterThan(-1);
+    expect(cleanCss.lastIndexOf("@media (max-width: 1024px)", at)).toBeGreaterThan(-1);
   });
 });
 

@@ -2876,7 +2876,12 @@ body.feed-frozen .programs { opacity: 0.62; }
      .agent-rename has been one since this sweep was written. */
   .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename, .swarm-chip,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
-  .notify-act, .filter-chip, .program-details,
+  /* .notify-row-acts .dock-tool was missed when the panel shipped, and the gap
+     was visible in one row: Reply measured 115x44 while the Focus beside it
+     measured 70x32 — and Focus is the one that moves the operator to the agent.
+     The sweep already covers the same control in the verdict head; the
+     notification row is the other place a .dock-tool sits inline. */
+  .notify-act, .notify-row-acts .dock-tool, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 

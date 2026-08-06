@@ -2562,7 +2562,24 @@ function notifyRowActions(item) {
   const acts = el("span", { class: "notify-row-acts" });
   if (!found) return acts;
   const focusCap = capability(found.agent, "focus");
-  if (focusCap) acts.append(renderDockTool(found.agent, focusCap, "focus", { fkeyPrefix: "notify:" }));
+  if (focusCap) {
+    acts.append(renderDockTool(found.agent, focusCap, "focus", {
+      fkeyPrefix: "notify:",
+      /* Named for the list it sits in, not for the dock it borrows: several
+         agents' Focus buttons coexist here and "Focus" alone told a screen
+         reader nothing about which one.
+
+         The agent's name and nothing else. The first draft appended
+         focusDestinationHint and was measured reading aloud as "Focus Execute
+         lane F-1 — Jump to COOPER DRAFT · F1 pane · Claude bare ·… ·
+         /Users/…/cooper-scheduler.worktrees/draft-f1" — a home path spoken one
+         segment at a time, on every row. The name has to disambiguate, which
+         the agent's name already does; the destination stays on `title`, where
+         it is a description an operator can ask for rather than one they must
+         sit through. */
+      ariaLabel: "Focus " + agentName(found.agent),
+    }));
+  }
   acts.append(el("button", {
     type: "button", class: "notify-act",
     dataset: { fkey: "notify:reply:" + found.agent.id },
@@ -2613,11 +2630,23 @@ function notifyWaitText(item) {
   return Number.isFinite(ms) && ms >= 0 ? fmtElapsed(ms) : "";
 }
 
+/* The accessible name OVERRIDES the visible text, so it has to contain it.
+
+   This row shows "<program> · <impact>" and named itself "<impact> <evidence>",
+   dropping the program the operator can see — WCAG 2.5.3 Label in Name. A voice
+   operator reading "the-ant-hill · …" off the screen and saying it got no match,
+   and a screen-reader operator heard an agent with no program on a board where
+   the same lane name recurs across several. The blocking row above already puts
+   the program in its name ("… In <program>. Opens the session."); this is the
+   same rule applied to the row that was missing it. Evidence stays on the end:
+   it is the sentence read INSTEAD of opening the drawer, and it is not visible
+   on this row, so it extends the name rather than contradicting it. */
 function notifyQuietRow(item) {
+  const visible = (item.source.programName ? item.source.programName + " · " : "") + item.impact;
   return el("button", {
     type: "button", class: "notify-quiet",
     dataset: { fkey: "notify:open:" + item.id },
-    "aria-label": item.impact + " " + item.evidence,
+    "aria-label": item.evidence ? visible + " " + item.evidence : visible,
     onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
   },
     el("span", { class: "notify-quiet-name" },
@@ -8082,6 +8111,18 @@ function renderDockTool(agent, cap, action, opts = {}) {
     disabled: cap.enabled && !busy && !held ? null : "",
     "aria-busy": busy ? "true" : null,
     title: held ? "Held — the board is not current" : cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
+    /* OPT-IN, and null everywhere it is not passed, so every existing call site
+       keeps the visible label as its accessible name.
+
+       The dock is a one-agent surface where "Focus" is unambiguous. The
+       notification panel is the one place several agents' tools sit in one list,
+       and there it produced four buttons named exactly "Focus" — measured in the
+       AX tree, indistinguishable in a rotor or under voice control. The title
+       above carries the destination, but with text content present a title is
+       the DESCRIPTION, not the name, and plenty of operators never hear it.
+       Naming it at the call site that has the ambiguity beats forking this
+       function, which exists to be the one capability gate. */
+    "aria-label": opts.ariaLabel || null,
     dataset: { fkey },
     onclick: () => {
       if (held) return;

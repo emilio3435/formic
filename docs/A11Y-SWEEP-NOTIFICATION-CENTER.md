@@ -528,4 +528,57 @@ lesson is cheap and worth keeping: **`bun test` green is not `test:ci` green, an
 Each fix should land with the claim-shaped test that would have caught it; those tests are not in
 `tests/notification-center-a11y.test.ts` because they would be red until the fix lands.
 
+---
+
+## Status — 2026-08-06 23:4x, all seven closed
+
+| # | Defect | Landed | Verified |
+|---|---|---|---|
+| A11Y-1 | panel clipped 24px off the left at 420px | `fd34a66` (fe-notify) | panel `32 → 388`, nothing clipped |
+| A11Y-2 | focus dropped to `<body>` when the focused row leaves the feed | `62a7f04` | `activeIsBody false`, `activeInPanel true` |
+| A11Y-3 | panel name unexposable on `role="generic"` | this commit | AX tree: `role: group, name: "Notifications"` |
+| A11Y-4 | four buttons named exactly `"Focus"` | this commit | `"Focus Debug schedule draft generation algorithm"` |
+| A11Y-5 | quiet row's visible program missing from its name | this commit | `name.includes(visibleProgram) === true` |
+| A11Y-6 | Focus 32px beside a 44px Reply | this commit | both 44px at 420px |
+| A11Y-7 | `is-blocking` unused — ember guarded by call site | still open | — |
+
+Each fix was measured on the live board before and after, not asserted. Two
+things are worth carrying forward from doing them:
+
+**The first A11Y-4 draft was worse than the defect.** Appending
+`focusDestinationHint` to the name produced *"Focus Execute lane F-1 — Jump to
+COOPER DRAFT · F1 pane · Claude bare ·… · /Users/…/cooper-scheduler.worktrees/draft-f1"*
+— a home path read aloud one segment at a time, on every row. Caught by looking
+at the rendered name rather than at the diff. The name disambiguates; the
+destination stays on `title`, where it is a description an operator can ask for
+instead of one they must sit through.
+
+**`bun test` on one file is not a gate.** This lane shipped two errors that only
+`tsc` or the full `test:ci` could see: a `TS7016` from importing an untyped
+browser module, and a literal **NUL byte** in a test file that tripped
+`check-nul-files` and would have failed CI. Both were invisible to a green
+single-file run. `bunx tsc --noEmit` **and** `bun run test:ci`, every time.
+
+### Check 6's guard — where it actually stands
+
+The `align-self: stretch` assertion in `tests/notification-center-a11y.test.ts`
+**does not guard A11Y-1**, and is now annotated in place saying so. Three
+mutations measured at 420px:
+
+| Mutation | Panel box | Clipped? | Text guard |
+|---|---|---|---|
+| A · anchor reverted to `align-self: center` | `48 → 372` | no | **RED** (false positive) |
+| B · centred anchor + viewport-measured width — *what shipped* | `-24 → 372` | **yes** | RED |
+| C · anchor stretched, width clamp back | `-8 → 388` | **yes** | **GREEN** (blind) |
+
+`tests/notification-center-geometry.test.ts` measures the box itself and catches
+B and C. It is written, typechecks, and passes 13/13 — **but it is not in the
+tree**, because it needs a real browser and must therefore be excluded from CI
+via `scripts/ci-tests.sh`'s `LOCAL_ONLY` list, which is another lane's file.
+
+**So Check 6's CI guard is text-only today, and is blind to route C.** That is a
+known, stated gap, not a covered row. It closes when the `LOCAL_ONLY` line lands;
+it becomes CI-enforceable only if a headless browser joins `devDependencies`,
+which is a browser download in a package that advertises zero dependencies.
+
 **Standing by for the header audit once S2–S4 land.**
