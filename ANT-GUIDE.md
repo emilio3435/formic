@@ -84,6 +84,13 @@ it. A question it asks *after* is a live one, and it comes straight back in.
 That is the only way back, and it is deliberate: standing a lane down silences
 its old request, never a new one.
 
+The wire names this distinction as `attentionClass: "blocking" | "noticed"`.
+Permission and input requests, unresolved forks, stated handoffs, pending
+questions, and stated assumptions are `blocking`; `stalled-active` is
+`noticed`. Quiet, out-of-scope, and unreadable findings carry no class at all.
+`pulse.blocked` counts only the live `blocking` set; no waiting-time field is
+published because the current data cannot establish when that wait began.
+
 ### 2. The board opens on `Board`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)
@@ -206,6 +213,31 @@ has been idle and offers one action: “Nudge it or park it.” Set
 No hook record or no valid `hookLifecycleAt` means no staleness claim;
 `running`, `needsInput`, `parked`, and `done` lanes never qualify. This is an
 attention signal only and does not change the session lifecycle.
+
+### Notification center — attention, not confidence
+
+The header answers whether you can trust the board's numbers. The **notification
+center** (the bell) answers what needs you, and why. It never aggregates into a
+metric, and the header never links into a to-do.
+
+Every live item is one of three kinds:
+
+| Kind | What it is |
+|---|---|
+| **handoff** | A session whose attention class is **blocking** or **noticed** — a person-blocker or a watcher notice. Routes to that agent. |
+| **dataflow** | A board finding (collector fault, stale source, tidy-up). Routes to an intervention or advisory drawer. |
+| **investigation** | A queued investigation. Routes to the investigation drawer. |
+
+**blocking** vs **noticed.** `blocking` means a person is the reason work stopped
+(permission, input, fork, handoff, question, assumption). `noticed` is
+**stalled-active** — the board saw an idle active lane; nobody is waiting on you.
+Quiet readings (`nothing-wanted`, `out-of-scope`, `not-readable`) carry no class
+at all.
+
+**Ember means a person.** The bell fills ember only when some item is severity
+`blocking`. Amber outline is watch-only. Grey with a rendered `0` is all clear.
+An out-of-page OS notification fires for the blocking set only — never for a
+watcher notice alone.
 
 Changing the lane's bound `sessionId` is different. When the run's additive
 history records an older binding, the board links the sessions as `succeededBy`

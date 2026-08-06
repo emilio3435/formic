@@ -1,0 +1,57 @@
+{
+  "purpose": "The blocked/noticed partition as data. When be-dwell lands attentionClass beside attentionSignal, every kind is tested against this table. The three silent kinds must produce no class at all — absence, not a third value — or the notification center will invent severity from an honest quiet.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §3 S0-T2",
+  "allowedClasses": ["blocking", "noticed"],
+  "rows": [
+    {
+      "kind": "permission-requested",
+      "attentionClass": "blocking",
+      "why": "Control-plane permission prompt: a person is the blocker. Ember fill + OS delivery."
+    },
+    {
+      "kind": "input-requested",
+      "attentionClass": "blocking",
+      "why": "Control-plane wait without naming a permission: still a person-blocker."
+    },
+    {
+      "kind": "fork-unresolved",
+      "attentionClass": "blocking",
+      "why": "Named alternatives handed back: the operator must pick."
+    },
+    {
+      "kind": "handoff-stated",
+      "attentionClass": "blocking",
+      "why": "Declarative hand-back: the common wait that question-pending is blind to."
+    },
+    {
+      "kind": "question-pending",
+      "attentionClass": "blocking",
+      "why": "Closing interrogative: classic person-blocker."
+    },
+    {
+      "kind": "assumption-stated",
+      "attentionClass": "blocking",
+      "why": "Stated assumption inviting correction: silence is consent by omission."
+    },
+    {
+      "kind": "stalled-active",
+      "attentionClass": "noticed",
+      "why": "Watcher noticed an idle active lane. Amber outline only — never OS delivery."
+    },
+    {
+      "kind": "nothing-wanted",
+      "attentionClass": null,
+      "why": "We read its closing words and nothing wants you. Absence, not all-clear as a severity."
+    },
+    {
+      "kind": "out-of-scope",
+      "attentionClass": null,
+      "why": "Ended session: every control disabled. Never a live center item."
+    },
+    {
+      "kind": "not-readable",
+      "attentionClass": null,
+      "why": "Nothing to read is not a correct negative. Blind silence must not look disciplined."
+    }
+  ]
+}

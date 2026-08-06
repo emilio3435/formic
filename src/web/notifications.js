@@ -15,8 +15,8 @@
 
 import { $, el } from "./dom-primitives.js";
 import { state } from "./client-state.js";
-import { agentName, agentsById, snapshotAgents } from "./presentation.js";
-import { alerting } from "./agent-model.js";
+import { agentName, agentsById } from "./presentation.js";
+import { blockingAgentIds } from "./notification-center.js";
 
 export const NOTIFY_STORAGE_KEY = "mtn3-notify";
 
@@ -50,12 +50,20 @@ export function saveNotifyPreference() {
    Never on load: an unprompted permission dialog is how a page gets denied
    permanently, which would silently disable the feature forever. */
 
+/* S1-T5. This read `alerting()` — the board's broad "not healthy and not
+   finished" verdict — which is a strict superset of "a person is the blocker".
+   The consequence was narrow and bad: the OS notification fired for a stalled
+   advisory while the button correctly stayed amber, so the one contract this
+   surface rests on ("ember only when a person is the blocker") broke at the
+   exact moment the operator is not looking at the screen to check it.
+
+   Repointed at the blocking half of the attention partition. This changes WHO
+   delivery fires for and nothing else — permission is still requested from a
+   click and never on load, NOTIFY_TAG still replaces rather than stacks, the
+   title still counts, and notificationPlan still only speaks about agents that
+   are NEW to the set. Targeting, not mechanics. */
 export function needsHumanIds(snap) {
-  const ids = [];
-  // alerting() is that verdict — sharing it is what stops the notifier from
-  // announcing a different set of agents than the Alerts view shows.
-  for (const { agent } of snapshotAgents(snap)) if (alerting(agent)) ids.push(agent.id);
-  return ids.sort();
+  return blockingAgentIds(snap);
 }
 
 /* Pure. `prev === null` means "we have not looked yet": seed the baseline and
@@ -90,9 +98,16 @@ export function titleWithAlerts(base, count) {
    They were both labelled "Alerts" on adjacent surfaces with no shared meaning,
    so "Alerts off" sat inches from "Alerts 0" and an operator could reasonably
    read the first as an explanation of the second. */
-export function notifyToggleView(notify, supported = notificationsSupported(), count = 0) {
+export function notifyToggleView(notify, supported = notificationsSupported(), count = 0, tone = "clear") {
   const n = Number.isFinite(count) && count > 0 ? count : 0;
   const suffix = n ? ` · ${n} waiting on you` : "";
+  /* `tone` is the verdict, not a restatement of the count.
+     `blocked` means a PERSON is the blocker; `noticed` means the watcher has
+     something and nobody is waiting on you; `clear` means neither. It rides here
+     rather than being re-derived at the button because the badge's ink and the
+     panel's ember rail have to be the same judgement — a red button over a panel
+     with nothing red in it is the exact disagreement this surface replaced. */
+  const badgeTone = tone === "blocked" || tone === "noticed" ? tone : "clear";
   const view = !supported
     ? { label: "Notifications unsupported", pressed: false, disabled: true, title: "This browser has no Notification API." }
     : notify.permission === "denied"
@@ -103,10 +118,26 @@ export function notifyToggleView(notify, supported = notificationsSupported(), c
   return {
     ...view,
     count: n,
+    tone: badgeTone,
     title: view.title + suffix,
     // The button's accessible name carries the backlog too — a screen reader
     // must not have to infer it from a bare digit beside the label.
     ariaLabel: view.label + (n ? `, ${n} agent${n === 1 ? "" : "s"} waiting on you` : ""),
+    /* The DISCLOSURE's name, which is a different control from the delivery
+       switch above it.
+       The words above govern whether the browser may interrupt you; these
+       describe what is waiting inside the panel. They were one control until
+       the notification center existed, which is why "Notifications off" once
+       sat inches from four stopped agents and read as an explanation of them.
+       The badge's digit never stands alone here: "1" beside a red dot is not a
+       reading a screen reader can pass on. */
+    disclosureLabel: "Notifications, " + (
+      badgeTone === "blocked"
+        ? `${n} agent${n === 1 ? "" : "s"} waiting on you`
+        : badgeTone === "noticed"
+          ? `${n} being watched, nobody waiting on you`
+          : "nothing waiting"
+    ),
   };
 }
 
@@ -168,22 +199,45 @@ export async function toggleNotifications() {
    the delivery channel and never the backlog. Turning notifications off is a
    choice about interruption, not a reason to stop showing the number. */
 
-export function renderNotifyToggle() {
+/* `tone`/`count` are passed in rather than re-derived: the panel computes the
+   feed once per paint and the badge is a reading off that same list. Deriving
+   them twice is how a button comes to disagree with the panel it opens. The
+   defaults keep the zero-argument call in render() honest before the first
+   snapshot lands. */
+const BADGE_TONE_CLASS = { blocked: "is-blocked", noticed: "is-noticed", clear: "is-clear" };
+
+export function renderNotifyToggle(count = 0, tone = "clear", open = false) {
   const btn = $("notify-toggle");
   if (!btn) return;
-  const view = notifyToggleView(state.notify, notificationsSupported(), needsHumanIds(state.snap).length);
-  btn.textContent = view.label;
-  // The count is its own node rather than text appended to the label, so it can
-  // take the ember treatment the tab counts already use and stays out of the
-  // button's text content.
-  if (view.count) btn.append(el("span", { class: "notify-badge", "aria-hidden": "true", text: String(view.count) }));
-  btn.setAttribute("aria-pressed", view.pressed ? "true" : "false");
-  btn.setAttribute("title", view.title);
-  btn.setAttribute("aria-label", view.ariaLabel);
-  if (view.disabled) btn.setAttribute("disabled", "");
-  else btn.removeAttribute("disabled");
-  btn.classList.toggle("is-on", view.pressed);
-  btn.classList.toggle("is-alerting", view.count > 0);
+  const view = notifyToggleView(state.notify, notificationsSupported(), count, tone);
+  /* The label is "Notifications" in every state. It names what the control
+     governs, and it is the same word in the panel's footer switch and in
+     Settings; the delivery state it used to carry now lives on the switch that
+     actually changes it. */
+  btn.textContent = "Notifications";
+  /* The badge ALWAYS renders, zero included — a zero is a reading, an absent
+     badge is an absence, and an operator cannot tell "nothing is waiting" from
+     "this stopped working" by looking at a gap. The count is its own node so it
+     can take the ember treatment without entering the button's text content. */
+  btn.append(el("span", {
+    class: "notify-badge " + BADGE_TONE_CLASS[view.tone],
+    "aria-hidden": "true",
+    text: String(view.count),
+  }));
+  /* A disclosure, not a switch. It never carries aria-pressed: the thing that
+     is on or off is delivery, and delivery's control is inside the panel. */
+  btn.removeAttribute("aria-pressed");
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  btn.setAttribute("aria-controls", "notifications-panel");
+  btn.setAttribute("title", "What needs a person right now.");
+  btn.setAttribute("aria-label", view.disclosureLabel);
+  /* Never disabled. Denied or unsupported delivery is a fact about the browser's
+     interruption channel; the list of who is waiting has nothing to do with it,
+     and locking the operator out of it because they declined a permission would
+     be the worst possible reading of "no". */
+  btn.removeAttribute("disabled");
+  btn.classList.toggle("is-open", open);
+  btn.classList.toggle("is-alerting", view.tone === "blocked");
 }
 
 /* Delivery, kept separate from the decision so every gate is assertable without

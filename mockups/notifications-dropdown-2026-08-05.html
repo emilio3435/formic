@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>Ant Hill — notifications dropdown mockups · 2026-08-05</title>
+<style>
+  /* Tokens verbatim from src/web/styles.css (techno orchestra). Light only:
+     the console commits to one ground and the dropdown must sit on it. */
+  :root {
+    --canvas:#f3f5f7; --surface:#fbfcfd; --raise:#ffffff; --sand:#e8edf2;
+    --ink:#121820; --muted:#445260; --faint:#5a6876;
+    --line:#d4dce4; --line-strong:#aeb9c4;
+    --ember:#c23b2e; --amber:#9a6b12; --moss:#1f6b4a; --slate:#3f5f78; --clay:#64707c;
+    --ember-soft:color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --amber-soft:color-mix(in srgb, var(--amber) 10%, var(--surface));
+    --moss-soft:color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --signal-rail:2px;
+    --claude:#a64b2a; --codex:#2e6d58; --omp:#68469a; --cursor:#3d6585;
+    --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+    --radius:8px; --radius-sm:5px;
+    --shadow-lift:0 2px 6px rgba(23,33,43,.07), 0 18px 44px rgba(23,33,43,.12);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--canvas); color:var(--ink); font:14px/1.45 var(--font-ui); padding:2rem 2.5rem 6rem; -webkit-font-smoothing:antialiased; }
+  h1 { font-size:1.15rem; margin-bottom:.3rem; }
+  .note { color:var(--faint); font-size:.82rem; max-width:78ch; }
+  .note + .note { margin-top:.5rem; }
+  .note b { color:var(--muted); font-weight:650; }
+  .spec { font:600 .62rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:3.2rem 0 .35rem; }
+  .spec b { color:var(--moss); }
+  .variant-note { font-size:.8rem; color:var(--muted); margin:.15rem 0 1rem; max-width:82ch; }
+  .variant-note em { color:var(--ink); font-style:normal; font-weight:650; }
+  .mono { font-family:var(--font-mono); }
+  hr.rule { border:0; border-top:1px solid var(--line); margin:3.4rem 0 0; }
+
+  /* ---------- app chrome the dropdown hangs from ---------- */
+  /* overflow stays visible: the panel is a dropdown and must be allowed to hang
+     over the board. The stage is padded tall enough to hold it. */
+  .stage { position:relative; max-width:1220px; background:var(--canvas); border:1px solid var(--line-strong); border-radius:10px; }
+  .masthead { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1.1rem; background:var(--surface); border-bottom:1px solid var(--line); border-radius:10px 10px 0 0; }
+  .wordmark { font:700 1.15rem/1.1 var(--font-ui); letter-spacing:-.01em; }
+  .signals { display:flex; align-items:center; gap:.5rem; }
+  .btn { appearance:none; font:600 .78rem/1 var(--font-ui); color:var(--ink); background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:.55rem .7rem; cursor:pointer; display:inline-flex; align-items:center; gap:.45rem; }
+  .btn:hover { background:var(--sand); }
+  .conn { display:inline-flex; align-items:center; gap:.4rem; font:600 .7rem/1 var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--moss); border:1px solid color-mix(in srgb, var(--moss) 35%, var(--line-strong)); border-radius:99px; padding:.4rem .6rem; }
+  .conn i { width:6px; height:6px; border-radius:50%; background:var(--moss); }
+
+  /* the anchor button: badge ink says WHICH kind of attention is waiting */
+  .notify-wrap { position:relative; }
+  .notify-btn.is-open { background:var(--sand); border-color:var(--ink); }
+  .badge { font:700 .68rem/1 var(--font-mono); border-radius:99px; padding:.2rem .38rem; min-width:1.35em; text-align:center; }
+  .badge.stop { background:var(--ember); color:#fff; }
+  .badge.watch { background:transparent; color:var(--amber); border:1px solid color-mix(in srgb, var(--amber) 45%, var(--line-strong)); }
+  .badge.calm { background:transparent; color:var(--faint); border:1px solid var(--line-strong); }
+
+  /* faint board underneath, so the panel's scale and overlap are honest */
+  /* the faked board only needs to be tall enough that the open panel is not
+     clipped by the mockup's own frame */
+  .under { padding:.9rem 1.1rem 1.2rem; min-height:26rem; }
+  .stage.tall .under { min-height:37rem; }
+  .under-rail { display:flex; gap:2.2rem; align-items:baseline; padding-bottom:.9rem; border-bottom:1px solid var(--line); }
+  .u-lab { font:600 .58rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
+  .u-val { font:700 1.4rem/1 var(--font-ui); }
+  .u-val small { font:600 .72rem/1 var(--font-ui); color:var(--muted); margin-left:.3rem; }
+  .lane { display:flex; align-items:center; gap:.7rem; padding:.5rem .1rem; border-bottom:1px solid var(--line); font-size:.82rem; }
+  .lane .nm { font-weight:650; }
+  .lane .mt { color:var(--faint); font-family:var(--font-mono); font-size:.72rem; }
+  .lane .sp { flex:1; }
+  .arow { display:flex; align-items:center; gap:.7rem; padding:.36rem 0 .36rem 1.1rem; border-bottom:1px solid var(--line); font-size:.78rem; color:var(--muted); }
+  .arow .mt { font:400 .68rem/1 var(--font-mono); color:var(--faint); }
+  .arow .sp { flex:1; }
+  .dim { opacity:.4; }
+  .dimmer { opacity:.28; }
+
+  /* ---------- shared panel chrome ---------- */
+  .panel { position:absolute; z-index:5; top:calc(100% + .5rem); right:0; background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow-lift); overflow:hidden; }
+  .panel-head { padding:.85rem .95rem .8rem; border-bottom:1px solid var(--line); }
+  .eyebrow { font:600 .58rem/1 var(--font-mono); letter-spacing:.15em; text-transform:uppercase; color:var(--faint); }
+  .sect { display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; padding:.75rem .95rem .3rem; }
+  .sect .eyebrow.stop { color:var(--ember); }
+  .sect .hint { font-size:.72rem; color:var(--faint); }
+  .row { position:relative; display:block; width:100%; text-align:left; background:transparent; border:0; border-top:1px solid var(--line); padding:.6rem .95rem .6rem 1.05rem; cursor:pointer; font:inherit; color:inherit; }
+  .row:hover, .row.hovered { background:var(--sand); }
+  .row::before { content:""; position:absolute; left:0; top:10%; bottom:10%; width:var(--signal-rail); background:var(--rail); }
+  .row.stop { --rail:var(--ember); }
+  .row.watch { --rail:var(--amber); }
+  .row.run   { --rail:var(--slate); }
+  .r-title { font-weight:650; font-size:.86rem; letter-spacing:-.002em; }
+  .r-trace { font:400 .7rem/1.3 var(--font-mono); color:var(--faint); margin-top:.15rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .r-time { font:600 .72rem/1 var(--font-mono); color:var(--ember); white-space:nowrap; }
+  .row.watch .r-time { color:var(--amber); }
+  .row.run   .r-time { color:var(--slate); }
+  .panel-foot { display:flex; align-items:center; justify-content:space-between; gap:.8rem; padding:.65rem .95rem; border-top:1px solid var(--line); background:var(--surface); }
+  .switch { display:inline-flex; align-items:center; gap:.5rem; font-size:.76rem; color:var(--muted); cursor:pointer; }
+  .switch i { width:26px; height:15px; border-radius:99px; background:var(--moss); position:relative; flex:none; }
+  .switch i::after { content:""; position:absolute; top:2px; right:2px; width:11px; height:11px; border-radius:50%; background:#fff; }
+  .linky { font:600 .74rem/1 var(--font-ui); color:var(--muted); background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+  .linky:hover { color:var(--ink); }
+
+  /* ============ A. STANDBY QUEUE ============ */
+  .panel-a { width:432px; }
+  .a-head { display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; }
+  .a-lede { font:650 1rem/1.2 var(--font-ui); margin-top:.25rem; }
+  .a-cost { text-align:right; }
+  .a-cost .n { font:700 1.75rem/1 var(--font-mono); color:var(--ember); letter-spacing:-.02em; }
+  .a-cost .l { font:600 .56rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin-top:.25rem; }
+  .a-row-top { display:flex; align-items:baseline; gap:.8rem; }
+  .a-row-top .r-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* the signature: dead time drawn to scale against the longest wait in the queue */
+  .dwell { display:flex; align-items:center; gap:.6rem; margin-top:.4rem; }
+  .dwell-track { flex:1; height:3px; border-radius:99px; background:color-mix(in srgb, var(--ember) 13%, var(--sand)); }
+  .dwell-fill { display:block; height:3px; border-radius:99px; background:var(--ember); }
+  .acts { display:flex; gap:.35rem; opacity:0; }
+  .row.hovered .acts, .row:hover .acts { opacity:1; }
+  .act { font:600 .68rem/1 var(--font-ui); color:var(--ink); background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:.3rem .5rem; cursor:pointer; }
+  .act.primary { background:var(--ink); color:var(--raise); border-color:var(--ink); }
+  .quiet-row { display:flex; align-items:baseline; gap:.7rem; padding:.4rem .95rem; font-size:.78rem; color:var(--muted); border-top:1px solid var(--line); }
+  .quiet-row:first-of-type { border-top:0; }
+  .quiet-row .q-nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .quiet-row .q-mt { font:400 .7rem/1 var(--font-mono); color:var(--faint); white-space:nowrap; }
+  .quiet-row:hover { background:var(--sand); }
+
+  /* ============ B. FLOORPLAN ============ */
+  .panel-b { width:466px; }
+  .b-tally { display:flex; align-items:baseline; gap:.55rem; margin-top:.3rem; font:650 .95rem/1.2 var(--font-ui); }
+  .b-tally s { text-decoration:none; color:var(--line-strong); font-weight:400; }
+  .b-tally .n-stop { color:var(--ember); }
+  .b-tally .n-watch { color:var(--amber); }
+  .b-tally .n-run { color:var(--slate); }
+  .grp { display:flex; align-items:center; gap:.6rem; padding:.55rem .95rem .3rem; background:var(--surface); border-top:1px solid var(--line); }
+  .grp .g-nm { font:600 .74rem/1 var(--font-mono); letter-spacing:.02em; }
+  .grp .g-sp { flex:1; }
+  .grp .g-ct { font:600 .6rem/1 var(--font-mono); letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+  .grp.lit { background:var(--sand); box-shadow:inset var(--signal-rail) 0 var(--ink); }
+  .b-row-top { display:flex; align-items:baseline; gap:.8rem; }
+  .b-row-top .r-title { flex:1; min-width:0; }
+  /* B's signature: the agent's own last words, so a yes/no never needs the drawer */
+  .peek { margin:.5rem 0 .1rem; padding:.45rem .6rem; border-left:var(--signal-rail) solid var(--line-strong); background:var(--sand); font:400 .76rem/1.4 var(--font-ui); color:var(--muted); }
+  .peek q { quotes:"“" "”"; color:var(--ink); }
+  .b-acts { display:flex; gap:.35rem; margin-top:.5rem; }
+  .foot-hint { font-size:.72rem; color:var(--faint); }
+
+  /* board-side marks demo */
+  .marks { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1.4rem; max-width:1220px; }
+  .mark-card { background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; overflow:hidden; }
+  .mark-card h3 { font:600 .6rem/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; color:var(--faint); padding:.7rem .85rem; border-bottom:1px solid var(--line); }
+  .mark-body { padding:.5rem .85rem .8rem; }
+  .prog-head { display:flex; align-items:center; gap:.6rem; padding:.45rem 0; font:600 .78rem/1 var(--font-mono); }
+  .pip { width:7px; height:7px; border-radius:50%; flex:none; }
+  .pip.stop { background:var(--ember); box-shadow:0 0 0 3px color-mix(in srgb, var(--ember) 16%, transparent); }
+  .pip.watch { background:var(--amber); }
+  .waitchip { font:600 .6rem/1 var(--font-mono); letter-spacing:.06em; text-transform:uppercase; color:var(--ember); border:1px solid color-mix(in srgb, var(--ember) 40%, var(--line-strong)); background:var(--ember-soft); border-radius:99px; padding:.25rem .45rem; }
+  .agent-row { display:flex; align-items:center; gap:.6rem; padding:.42rem 0 .42rem .6rem; font-size:.8rem; border-top:1px solid var(--line); position:relative; }
+  .agent-row.stopped::before { content:""; position:absolute; left:0; top:15%; bottom:15%; width:var(--signal-rail); background:var(--ember); }
+  .agent-row .sp { flex:1; }
+  .agent-row .mt { font:400 .7rem/1 var(--font-mono); color:var(--faint); }
+  .mark-note { font-size:.76rem; color:var(--muted); padding:0 .85rem .85rem; }
+
+  @media (prefers-reduced-motion:no-preference) { .row, .grp, .act { transition:background-color .12s ease, opacity .12s ease; } }
+  @media (max-width:760px) {
+    body { padding:1.2rem 1rem 4rem; }
+    .panel-a, .panel-b { position:static; width:auto; margin:.8rem 1.1rem 1.1rem; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Notifications dropdown — two directions</h1>
+<p class="note">The inline findings ledger under the summary strip is <b>deleted</b>. Attention now has one home: the Notifications control in the masthead, backed by marks on the board itself. Both directions below start from the same diagnosis — the old ledger gave five rows identical weight when only <b>two of them were actually blocking a human</b>. Everything here is drawn with the console's own tokens; nothing new is invented for the palette.</p>
+<p class="note">The split both directions make: <b>an agent that stopped and is waiting on a person</b> is a queue with a running cost. <b>Something the watcher noticed</b> is a log entry. The old panel blended them, which is why it read as noise.</p>
+
+<!-- ============================================================= A -->
+<p class="spec"><b>A.</b> Standby queue — dead time is the metric</p>
+<p class="variant-note">Leads with <em>cost, not count</em>: how much agent time is sitting idle on you right now. Rows are sorted by how long each has been stopped, and each carries a rail drawn to scale against the longest wait — the queue reads as a descending staircase, so the one bleeding the most time is unmistakable without reading a single number. Observations drop to a muted list with no rails and no buttons, because there is nothing to press.</p>
+
+<div class="stage">
+  <div class="masthead">
+    <div class="wordmark">The Ant&nbsp;Hill</div>
+    <div class="signals">
+      <div class="notify-wrap">
+        <button class="btn notify-btn is-open" aria-expanded="true">Notifications <span class="badge stop">2</span></button>
+
+        <div class="panel panel-a">
+            <div class="panel-head">
+              <div class="a-head">
+                <div>
+                  <div class="eyebrow">Waiting on you</div>
+                  <div class="a-lede">2 agents stopped</div>
+                </div>
+                <div class="a-cost">
+                  <div class="n">1h 15m</div>
+                  <div class="l">standby</div>
+                </div>
+              </div>
+            </div>
+
+            <button class="row stop hovered">
+              <div class="a-row-top">
+                <span class="r-title">Awaiting your call on push/PR</span>
+                <span class="r-time">1h 04m</span>
+              </div>
+              <div class="r-trace">the-ant-hill · model-config · frozen at 6ae884b</div>
+              <div class="dwell">
+                <span class="dwell-track"><b class="dwell-fill" style="width:100%"></b></span>
+                <span class="acts"><span class="act">Focus</span><span class="act primary">Reply</span></span>
+              </div>
+            </button>
+
+            <button class="row stop">
+              <div class="a-row-top">
+                <span class="r-title">Claude needs your permission</span>
+                <span class="r-time">11m</span>
+              </div>
+              <div class="r-trace">cooper-scheduler · calendar-draft · claude</div>
+              <div class="dwell">
+                <span class="dwell-track"><b class="dwell-fill" style="width:17%"></b></span>
+                <span class="acts"><span class="act">Focus</span><span class="act primary">Reply</span></span>
+              </div>
+            </button>
+
+            <div class="sect">
+              <span class="eyebrow">Watching</span>
+              <span class="hint">nothing is waiting on you</span>
+            </div>
+            <div class="quiet-row">
+              <span class="q-nm">Home · FE-4 integration went quiet</span>
+              <span class="q-mt">45m</span>
+            </div>
+
+            <div class="sect">
+              <span class="eyebrow">Running on its own</span>
+            </div>
+            <div class="quiet-row">
+              <span class="q-nm">Re-establish one session identity per cmux surface</span>
+              <span class="q-mt">47 agents · 26s</span>
+            </div>
+            <div class="quiet-row">
+              <span class="q-nm">Isolate the system fault and verify recovery</span>
+              <span class="q-mt">queued · 2d</span>
+            </div>
+
+            <div class="panel-foot">
+              <span class="switch"><i></i>Notify me when an agent stops</span>
+              <button class="linky">Mute for 1 hour</button>
+            </div>
+          </div>
+      </div>
+      <button class="btn">Settings</button>
+      <span class="conn"><i></i>Live</span>
+    </div>
+  </div>
+
+  <div class="under">
+    <div class="under-rail">
+      <div><div class="u-lab">Findings</div><div class="u-val">3<small>findings</small></div></div>
+      <div><div class="u-lab">Momentum</div><div class="u-val">3<small>shipping</small></div></div>
+      <div><div class="u-lab">Burn</div><div class="u-val">0<small>/min</small></div></div>
+      <div><div class="u-lab">Context peak</div><div class="u-val">86<small>% peak window</small></div></div>
+    </div>
+    <div class="lane dim"><span class="nm">the-ant-hill</span><span class="mt">4 agents</span><span class="sp"></span><span class="mt">1h 04m</span></div>
+    <div class="arow dimmer"><span>model-config</span><span class="sp"></span><span class="mt">stopped 1h 04m</span></div>
+    <div class="arow dimmer"><span>snapshot-be</span><span class="sp"></span><span class="mt">working 40s</span></div>
+    <div class="lane dim"><span class="nm">cooper-scheduler</span><span class="mt">2 agents</span><span class="sp"></span><span class="mt">11m</span></div>
+    <div class="arow dimmer"><span>calendar-draft</span><span class="sp"></span><span class="mt">stopped 11m</span></div>
+    <div class="arow dimmer"><span>hub-api</span><span class="sp"></span><span class="mt">working 2m</span></div>
+    <div class="lane dim"><span class="nm">Home</span><span class="mt">6 agents</span><span class="sp"></span><span class="mt">45m</span></div>
+    <div class="arow dimmer"><span>fe-4-integration</span><span class="sp"></span><span class="mt">quiet 45m</span></div>
+    <div class="arow dimmer"><span>docs-sweep</span><span class="sp"></span><span class="mt">working 6m</span></div>
+    <div class="arow dimmer"><span>lane6-be</span><span class="sp"></span><span class="mt">working 12s</span></div>
+  </div>
+
+  </div>
+
+<!-- ============================================================= B -->
+<p class="spec"><b>B.</b> Floorplan — the dropdown is a legend for the board</p>
+<p class="variant-note">Groups by program, in the same containers the board uses, so the panel and the workboard beneath it are the same map at two zoom levels; hovering a group <em>lights that lane on the board</em> behind the panel. Its second move is the peek: the agent's own last sentence, inline, so a yes/no can be answered without ever opening the drawer. Observations still sink to the bottom, but they keep their program so you know where to look.</p>
+
+<div class="stage tall">
+  <div class="masthead">
+    <div class="wordmark">The Ant&nbsp;Hill</div>
+    <div class="signals">
+      <div class="notify-wrap">
+        <button class="btn notify-btn is-open" aria-expanded="true">Notifications <span class="badge stop">2</span></button>
+
+        <div class="panel panel-b">
+            <div class="panel-head">
+              <div class="eyebrow">Notifications</div>
+              <div class="b-tally">
+                <span class="n-stop">2 stopped</span><s>·</s>
+                <span class="n-watch">1 quiet</span><s>·</s>
+                <span class="n-run">2 running</span>
+              </div>
+            </div>
+
+            <div class="grp">
+              <span class="g-nm">the-ant-hill</span>
+              <span class="g-sp"></span>
+              <span class="g-ct">1 stopped</span>
+            </div>
+            <button class="row stop">
+              <div class="b-row-top">
+                <span class="r-title">Awaiting your call on push/PR</span>
+                <span class="r-time">1h 04m</span>
+              </div>
+              <div class="r-trace">model-config · frozen at 6ae884b</div>
+            </button>
+
+            <div class="grp lit">
+              <span class="g-nm">cooper-scheduler</span>
+              <span class="g-sp"></span>
+              <span class="g-ct">1 stopped</span>
+            </div>
+            <button class="row stop hovered">
+              <div class="b-row-top">
+                <span class="r-title">Claude needs your permission</span>
+                <span class="r-time">11m</span>
+              </div>
+              <div class="r-trace">calendar-draft · claude</div>
+              <div class="peek"><q>Write the calendar drafting workflow to docs/plans, or keep it in the scheduling hub README?</q></div>
+              <div class="b-acts">
+                <span class="act">Focus pane</span>
+                <span class="act primary">Reply</span>
+              </div>
+            </button>
+
+            <div class="grp">
+              <span class="g-nm">Home</span>
+              <span class="g-sp"></span>
+              <span class="g-ct">1 quiet</span>
+            </div>
+            <button class="row watch">
+              <div class="b-row-top">
+                <span class="r-title">FE-4 integration went quiet</span>
+                <span class="r-time">45m</span>
+              </div>
+              <div class="r-trace">no source activity since 17:31</div>
+            </button>
+
+            <div class="sect">
+              <span class="eyebrow">Running on its own</span>
+              <span class="hint">no one is blocked</span>
+            </div>
+            <button class="row run">
+              <div class="b-row-top">
+                <span class="r-title">Re-establish one session identity per cmux surface</span>
+                <span class="r-time">26s</span>
+              </div>
+              <div class="r-trace">47 agents · 14 programs · GPT-5.6 Luna · xhigh</div>
+            </button>
+            <button class="row run">
+              <div class="b-row-top">
+                <span class="r-title">Isolate the system fault and verify recovery</span>
+                <span class="r-time">2d</span>
+              </div>
+              <div class="r-trace">5 agents · 4 programs · queued</div>
+            </button>
+
+            <div class="panel-foot">
+              <span class="foot-hint">Hovering a program lights its lane on the board.</span>
+              <button class="linky">Notification settings</button>
+            </div>
+          </div>
+      </div>
+      <button class="btn">Settings</button>
+      <span class="conn"><i></i>Live</span>
+    </div>
+  </div>
+
+  <div class="under">
+    <div class="under-rail">
+      <div><div class="u-lab">Findings</div><div class="u-val">3<small>findings</small></div></div>
+      <div><div class="u-lab">Momentum</div><div class="u-val">3<small>shipping</small></div></div>
+      <div><div class="u-lab">Burn</div><div class="u-val">0<small>/min</small></div></div>
+      <div><div class="u-lab">Context peak</div><div class="u-val">86<small>% peak window</small></div></div>
+    </div>
+    <!-- the lit lane: what hovering "cooper-scheduler" in the panel does out here -->
+    <div class="lane dim"><span class="nm">the-ant-hill</span><span class="mt">4 agents</span><span class="sp"></span><span class="mt">1h 04m</span></div>
+    <div class="arow dimmer"><span>model-config</span><span class="sp"></span><span class="mt">stopped 1h 04m</span></div>
+    <div class="arow dimmer"><span>snapshot-be</span><span class="sp"></span><span class="mt">working 40s</span></div>
+    <div class="lane"><span class="pip stop"></span><span class="nm">cooper-scheduler</span><span class="mt">2 agents</span><span class="sp"></span><span class="waitchip">1 waiting</span></div>
+    <div class="arow"><span>calendar-draft</span><span class="sp"></span><span class="mt">stopped 11m</span></div>
+    <div class="arow"><span>hub-api</span><span class="sp"></span><span class="mt">working 2m</span></div>
+    <div class="lane dim"><span class="nm">Home</span><span class="mt">6 agents</span><span class="sp"></span><span class="mt">45m</span></div>
+    <div class="arow dimmer"><span>fe-4-integration</span><span class="sp"></span><span class="mt">quiet 45m</span></div>
+    <div class="arow dimmer"><span>docs-sweep</span><span class="sp"></span><span class="mt">working 6m</span></div>
+    <div class="arow dimmer"><span>lane6-be</span><span class="sp"></span><span class="mt">working 12s</span></div>
+  </div>
+
+  </div>
+
+<!-- ============================================================= board marks -->
+<p class="spec">On the board — what carries the signal when the panel is closed</p>
+<p class="variant-note">The dropdown can only be the whole answer if the board says <em>where</em> without being opened. Same vocabulary in both directions: an ember pip and a count on the program header, an ember signal rail on the specific stopped row. Nothing blinks, nothing fills.</p>
+
+<div class="marks">
+  <div class="mark-card">
+    <h3>Program header — one agent stopped</h3>
+    <div class="mark-body">
+      <div class="prog-head"><span class="pip stop"></span>cooper-scheduler<span class="sp" style="flex:1"></span><span class="waitchip">1 waiting</span></div>
+      <div class="agent-row stopped"><span>calendar-draft</span><span class="sp"></span><span class="mt">stopped 11m</span></div>
+      <div class="agent-row"><span>hub-api</span><span class="sp"></span><span class="mt">working 2m</span></div>
+    </div>
+    <p class="mark-note">The chip counts people-blockers only. A quiet lane gets an amber pip and no chip — it is worth a look, not a trip.</p>
+  </div>
+  <div class="mark-card">
+    <h3>Closed button — the badge ink is the verdict</h3>
+    <div class="mark-body" style="display:flex; gap:.6rem; flex-wrap:wrap; padding-top:.9rem;">
+      <button class="btn notify-btn">Notifications <span class="badge stop">2</span></button>
+      <button class="btn notify-btn">Notifications <span class="badge watch">1</span></button>
+      <button class="btn notify-btn">Notifications <span class="badge calm">0</span></button>
+    </div>
+    <p class="mark-note">Ember = someone is stopped on you. Amber outline = the watcher noticed something, nobody is blocked. Grey = nothing is waiting; 41 agents are working.</p>
+  </div>
+</div>
+
+<hr class="rule">
+<p class="spec">Where they differ</p>
+<p class="note"><b>A</b> is faster when you are triaging by urgency across the whole fleet — it answers “what is costing me the most time right now” before you read a word. <b>B</b> is faster when you are working a specific program and want the panel to point at the board — and its peek is the only thing here that lets you answer an agent without leaving the panel. They are not exclusive: A's dead-time rail could ride inside B's grouped rows, at the cost of a busier panel.</p>
+
+</body>
+</html>

@@ -1,0 +1,72 @@
+{
+  "purpose": "S5-T1: demoted signals stay reachable. Resolved, verified-without-impact, and stale-without-current-impact each still reach a real drawer via recentlyResolvedOf and the resolved renderer, so the center's footer History link is honest. A footer that opens an empty pool fails this contract. Snap shapes match the promotion truth table's demotion rows.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §3 S5-T1",
+  "drawerRenderersMustInclude": ["resolved", "agent", "intervention", "advisory", "investigation", "program"],
+  "cases": [
+    {
+      "name": "resolved item is in recentlyResolvedOf and opens the resolved drawer",
+      "claim": "The live center demotes resolved work; History must still find it by id.",
+      "demotion": "resolved",
+      "item": {
+        "id": "system:resolved-1",
+        "route": { "kind": "resolved", "id": "system:resolved-1" }
+      },
+      "snap": {
+        "programs": [{ "id": "p", "name": "Ant Hill", "agents": [] }],
+        "recentlyResolved": [
+          { "id": "system:resolved-1", "title": "Identity conflict cleared" }
+        ]
+      },
+      "expect": {
+        "inRecentlyResolvedOf": true,
+        "routeKind": "resolved",
+        "drawerRenderer": "resolved"
+      }
+    },
+    {
+      "name": "verified-without-impact stays in the resolved pool",
+      "claim": "Verifying with no live affected agent is history, not disappearance. The footer link must resolve the id.",
+      "demotion": "verified-without-impact",
+      "item": {
+        "id": "system:verifying-orphan",
+        "route": { "kind": "resolved", "id": "system:verifying-orphan" }
+      },
+      "snap": {
+        "programs": [{ "id": "p", "name": "Ant Hill", "agents": [] }],
+        "recentlyResolved": [
+          { "id": "system:verifying-orphan", "title": "Stale source verified clear" }
+        ]
+      },
+      "expect": {
+        "inRecentlyResolvedOf": true,
+        "routeKind": "resolved",
+        "drawerRenderer": "resolved"
+      }
+    },
+    {
+      "name": "stale-without-current-impact stays in the resolved pool",
+      "claim": "Affected ids that resolve to zero live agents leave the center but keep a History route. Ghost rows must not become unreachable rows.",
+      "demotion": "stale-without-current-impact",
+      "item": {
+        "id": "system:stale-impact",
+        "route": { "kind": "resolved", "id": "system:stale-impact" },
+        "affectedAgentIds": ["codex:retired"]
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{ "id": "codex:other", "lifecycle": "working" }]
+        }],
+        "recentlyResolved": [
+          { "id": "system:stale-impact", "title": "Abandoned worktree advisory" }
+        ]
+      },
+      "expect": {
+        "inRecentlyResolvedOf": true,
+        "routeKind": "resolved",
+        "drawerRenderer": "resolved"
+      }
+    }
+  ]
+}

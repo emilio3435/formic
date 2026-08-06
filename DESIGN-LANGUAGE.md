@@ -159,6 +159,13 @@ of a rigid grid: `.reading.cell-hot` grows (`flex-grow: 2.4`), takes ember ink a
 a larger value (1.7rem); `.reading.cell-micro` collapses to a trailing chip
 (0.95rem). Urgency earns space and ink; calm does not.
 
+**Notification center badge.** Ember fill is reserved for severity `blocking` —
+a person is the blocker (`handoff` from a blocking attention class). Watcher
+notices (`noticed` / `stalled-active`) and dataflow/investigation warnings take
+amber outline, never ember fill. All-clear is grey with a rendered `0` in the
+accessible name. The header's instrument-trust chip may offer Clean up; that
+action only runs a propose sweep and lands a `dataflow` item — it never deletes.
+
 **Calm collapse.** When nothing needs attention, the whole cell row folds to one
 moss line: `.pulse-calm` (framed to `--frame`), with `.pulse-cleared` washing
 `--moss-soft` in once as a one-shot transition — no keyframe loop. Related resting

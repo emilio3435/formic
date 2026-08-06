@@ -240,6 +240,40 @@ describe("TTY and open-session identity evidence", () => {
     });
   });
 
+  test("a resumed Claude source prefers the exact source session over its runtime alias", async () => {
+    const runtimeSessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const original: CollectedAgent = {
+      ...agent,
+      id: `claude:${runtimeSessionId}`,
+      provider: "claude",
+      sourceSessionId: runtimeSessionId,
+      runtimeSessionId,
+    };
+    const resumed: CollectedAgent = {
+      ...original,
+      id: "claude:bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+      sourceSessionId: "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: `202 ttys033 /Users/me/.local/bin/claude --resume ${runtimeSessionId}`,
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [original, resumed], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([runtimeSessionId]);
+    expect(enriched.value[0]?.identityTrace).toMatchObject({
+      outcome: "command-hint-match",
+      commandHints: [{ resolvedSessionId: runtimeSessionId }],
+    });
+  });
+
   test("a completed process scan marks retained exact PIDs absent without guessing on probe failure", async () => {
     const retained: CollectedAgent = {
       ...agent,

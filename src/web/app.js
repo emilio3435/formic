@@ -44,6 +44,21 @@ import {
   toggleNotifications,
 } from "./notifications.js";
 
+/* The attention surface. Its derivation is a module of its own so the big new
+   panel stays out of this contended file; what lands here is the wiring it
+   cannot do for itself — the two resolvers that live in app.js, one render call,
+   and one boot listener. */
+import {
+  attentionClassOf,
+  blockingAgentIds,
+  blockingCount,
+  feedTone,
+  hasCurrentImpact,
+  notificationCandidates,
+  notificationFeed,
+  notificationPanelModel,
+} from "./notification-center.js";
+
 import {
   actionOutcomeView,
   agentLabelEligible,
@@ -123,6 +138,7 @@ import {
   deriveOutcome,
   deriveRollup,
   isLive,
+  isReviewWorker,
   isTerminal,
   isUnverified,
   lifecycleOf,
@@ -1007,7 +1023,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   const totals = totalsOf(snap);
   if (id === "needs-you") {
     const attention = attentionSummary(snap);
-    const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
+    const findings = pulseFindings(snap, queueItems).slice(0, 2);
+    const top = findings.map((f) => f.title).join(" · ");
     /* This card is the one that means "stop reading and go do something", so a
        missing input has to be admitted HERE rather than only in a console warning.
        Queued triage items are part of its findings list; when the queue did not
@@ -1019,6 +1036,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
       sublabel: queueDown || (attention.count && top ? top : "No active findings."),
+      /* Keep the compact headline, but carry the exact issue ids and evidence
+         needed to make each title actionable. The old inline ledger was removed
+         to keep the rail bounded; these two records are the compact route into
+         the existing inspector instead. */
+      findings: queueDown ? [] : findings,
       tone: attention.count || queueDown ? "hot" : "ok",
     };
   }
@@ -1177,10 +1199,6 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
 }
 
 const AFFECTS_SAMPLE_LIMIT = 6;
-// At most five rows in the inline pulse expansion before a "+N more" control
-// reveals the rest in place — dense but never an unbounded wall.
-const MAX_PULSE_ROWS = 5;
-
 // Server-owned work state → the single row vocabulary (label + visual key +
 // tone). issueWorkState prefers live optimistic signals, then this map, then a
 // severity default, so the board always names who (if anyone) is on a finding.
@@ -1210,21 +1228,6 @@ const STAGE_BY_WORK = {
   verifying: 3, blocked: 3,
   cleared: 4,
 };
-const STAGE_LABELS = ["Watch", "Triage", "Verify", "Cleared"];
-
-// Each work key → row glyph shape + state-label tone + progress-rail tone. The
-// glyph/rail/st classes are styled in styles.css (.glyph.act/.warn/.run/.ok).
-const FINDING_VISUAL = {
-  needs: { glyph: "act", st: "hot", rail: "hot" },
-  watching: { glyph: "warn", st: "warm", rail: "warm" },
-  triaging: { glyph: "run", st: "cool", rail: "" },
-  planned: { glyph: "run", st: "cool", rail: "" },
-  queued: { glyph: "run", st: "cool", rail: "" },
-  investigating: { glyph: "run", st: "cool", rail: "" },
-  verifying: { glyph: "run", st: "warm", rail: "warm" },
-  blocked: { glyph: "act", st: "hot", rail: "hot" },
-  cleared: { glyph: "ok", st: "ok", rail: "ok" },
-};
 
 /* ---------- test surface ---------- */
 
@@ -1249,6 +1252,7 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
+  isReviewWorker,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
@@ -1278,6 +1282,11 @@ globalThis.TheAntHill = {
   controlOutcome,
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
+  // The attention surface. NOTIFY_DEPS is a `const` and stays out of this
+  // hoisted block for the same TDZ reason CONN_LABELS does; it is exported from
+  // the test seam at the foot of the file.
+  attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
+  notificationPanelModel, feedTone, blockingCount, blockingAgentIds,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
@@ -1298,7 +1307,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
 /* ---------- state ---------- */
@@ -1980,7 +1989,7 @@ function paintUnchanged(key, signature) {
 function findingPaintKey(finding) {
   return [
     finding.kind, finding.id, finding.work.key, finding.progress,
-    finding.title, finding.impact, finding.pin ? "1" : "0",
+    finding.title, finding.summary, finding.impact, finding.pin ? "1" : "0",
     state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id ? "1" : "0",
   ].join("\u001f");
 }
@@ -2005,11 +2014,13 @@ function render() {
   renderConn();
   renderFeedAlarm();
   renderHealthRail();
-  // The toggle now carries a snapshot-derived count, so it has to repaint with
-  // the board. It used to be painted once in boot() and on click, which was
-  // fine while the label was pure preference state — but boot() runs before the
-  // first snapshot, so the badge would have been stuck at zero forever.
-  renderNotifyToggle();
+  /* The toggle carries a snapshot-derived count, so it has to repaint with the
+     board. It used to be painted once in boot() and on click, which was fine
+     while the label was pure preference state — but boot() runs before the first
+     snapshot, so the badge would have been stuck at zero forever.
+     renderNotificationCenter paints it now, off the same feed the panel lists,
+     so the button and the panel cannot disagree about who is waiting. */
+  renderNotificationCenter();
   renderTabs();
   renderFilterBar();
   // Its own step, not a tail of the widget paint — see renderPulseStrip.
@@ -2149,18 +2160,6 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   if (id === "health") {
     valueNode = el("span", { class: valueClass },
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
-  } else if (id === "needs-you") {
-    // The verdict count is the strip's one expansion control: it toggles the
-    // inline findings panel in place (rows open the drawer; no triage here).
-    valueNode = el("button", {
-      type: "button",
-      class: valueClass + " pulse-verdict",
-      "aria-expanded": String(state.pulseExpanded),
-      "aria-controls": "pulse-findings",
-      dataset: { fkey: "pulse-verdict" },
-      onclick: togglePulseFindings,
-    }, data.value,
-      data.unit ? el("span", { class: "unit", text: data.unit }) : null);
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -2223,7 +2222,23 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   const problemText = (remedy && remedy.problem)
     || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
   const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
-  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  if (id === "needs-you" && data.findings && data.findings.length) {
+    const links = el("span", { class: "reading-finding-links" });
+    data.findings.forEach((finding, index) => {
+      if (index) links.append(el("span", { class: "reading-finding-separator", "aria-hidden": "true", text: " · " }));
+      links.append(el("button", {
+        type: "button",
+        class: "reading-finding-link",
+        title: finding.summary || finding.impact || finding.title,
+        "aria-label": "Open finding: " + finding.title + ". " + (finding.summary || finding.impact || "Evidence available in the inspector."),
+        dataset: { fkey: "summary-finding:" + finding.kind + ":" + finding.id },
+        onclick: () => selectEntity({ kind: finding.kind, id: finding.id }),
+      }, finding.title));
+    });
+    subNode.append(links);
+  } else {
+    subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  }
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
@@ -2386,6 +2401,212 @@ function renderSettingsVerdict() {
   node.hidden = true;
   node.className = "";
   node.textContent = "";
+}
+
+/* ---------- the notification center ----------
+
+   Attention's one home. The model is notification-center.js; what lives here is
+   the paint, because the row's controls have to reuse the board's OWN capability
+   gate (`capability` + `renderDockTool` + `sendControl`) and its own router
+   (`selectEntity`), and those are private to this file. A second send path
+   beside them is exactly the drift this program exists to remove. */
+
+function closeNotificationsPanel(returnFocus = true) {
+  if (!state.notifyPanelOpen) return;
+  state.notifyPanelOpen = false;
+  render();
+  if (returnFocus) $("notify-toggle")?.focus();
+}
+
+function toggleNotificationsPanel() {
+  state.notifyPanelOpen = !state.notifyPanelOpen;
+  render();
+  if (state.notifyPanelOpen) {
+    // Into the panel, not left on the button: a disclosure the operator opened
+    // is a place they meant to go.
+    const first = $("notifications-panel")?.querySelector("button:not([disabled])");
+    if (first) first.focus();
+  } else {
+    $("notify-toggle")?.focus();
+  }
+}
+
+/* The panel's OWN signature, deliberately not hung off the widgets guard.
+   That guard covers the summary rail; a panel that shared it repainted when the
+   rail happened to change and froze when it did not — the settings panel's bug,
+   and the reason renderSettingsPanel got a signature of its own. */
+function notifyPanelPaintSig(model, open) {
+  return [
+    open ? "1" : "0",
+    model.tone,
+    String(model.count),
+    model.lede + "|" + model.rest,
+    // Row identity AND the sentence each row is showing: an agent that changes
+    // what it is asking must repaint even though the roster did not move.
+    [...model.groups.flatMap((g) => g.items), ...model.watching, ...model.investigations]
+      .map((item) => item.id + "~" + item.since + "~" + item.evidence + "~" + item.lifecycle).join(","),
+    state.notify.enabled ? "on" : "off",
+    state.notify.permission,
+    feedFrozen() ? "held" : "",
+  ].join("\u001f");
+}
+
+/* Focus reuses the dock's tool verbatim — same capability gate, same confirm
+   strip, same busy state, same disabled reason — with an fkey prefix so focus
+   restore binds to the instance that was clicked rather than to the drawer's
+   twin. Reply does NOT: its gate is the command dock's composer, which cannot
+   be reused inside a dropdown without building a second send path. So Reply
+   takes the documented degradation and SAYS SO on the control: it opens the
+   session's inspector, where the reply box already is. */
+function notifyRowActions(item) {
+  const found = agentsById(state.snap).get(item.source.agentId);
+  const acts = el("span", { class: "notify-row-acts" });
+  if (!found) return acts;
+  const focusCap = capability(found.agent, "focus");
+  if (focusCap) acts.append(renderDockTool(found.agent, focusCap, "focus", { fkeyPrefix: "notify:" }));
+  acts.append(el("button", {
+    type: "button", class: "notify-act",
+    dataset: { fkey: "notify:reply:" + found.agent.id },
+    title: "Opens this session's inspector, where the reply box is.",
+    "aria-label": "Reply to " + agentName(found.agent) + " — opens its inspector, where the reply box is",
+    onclick: () => { closeNotificationsPanel(false); selectEntity({ kind: "agent", id: found.agent.id }); },
+  }, "Reply in inspector"));
+  return acts;
+}
+
+function notifyRow(item) {
+  const trace = [item.source.agentName, (agentsById(state.snap).get(item.source.agentId) || {}).agent?.provider]
+    .filter(Boolean).join(" · ");
+  return el("div", { class: "notify-row is-blocking" },
+    el("div", { class: "notify-row-top" },
+      /* The title line is the ROUTE. A whole-row button would have to contain
+         the Focus and Reply buttons, and a button inside a button is not a
+         thing a browser or a screen reader can make sense of. */
+      el("button", {
+        type: "button", class: "notify-row-open",
+        dataset: { fkey: "notify:open:" + item.id },
+        "aria-label": item.impact + " In " + (item.source.programName || "an unnamed program") + ". Opens the session.",
+        onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
+      }, item.impact),
+      /* A handoff row carries no age: `since` is permanently null for one, per
+         S0-T1. The node is omitted rather than rendered empty — an empty slot
+         beside three rows reads as a missing reading, and there is no reading
+         missing. */
+      notifyWaitText(item) ? el("span", { class: "notify-row-time", text: notifyWaitText(item) }) : null),
+    el("div", { class: "notify-row-meta" },
+      el("span", { class: "notify-row-trace", text: trace }),
+      notifyRowActions(item)),
+    item.evidence
+      ? el("p", { class: "notify-peek" }, el("q", { text: item.evidence }))
+      : null);
+}
+
+/* How long this RECORD has stood — a finding's openedAt, an investigation's
+   createdAt. Both are durable server facts about a row in a store.
+
+   Never a person's dead time: S0-T1 measured that no source can say when a
+   block began, so a handoff item's `since` is null and this returns nothing for
+   one. Never "0m" either — a zero here would be read as "just now", which is
+   the opposite of what an unmeasurable age means. */
+function notifyWaitText(item) {
+  if (!item.since) return "";
+  const ms = Date.now() - Date.parse(item.since);
+  return Number.isFinite(ms) && ms >= 0 ? fmtElapsed(ms) : "";
+}
+
+function notifyQuietRow(item) {
+  return el("button", {
+    type: "button", class: "notify-quiet",
+    dataset: { fkey: "notify:open:" + item.id },
+    "aria-label": item.impact + " " + item.evidence,
+    onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
+  },
+    el("span", { class: "notify-quiet-name" },
+      item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
+      item.source.programName ? " · " : null,
+      item.impact),
+    el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
+}
+
+function renderNotificationCenter() {
+  const panel = $("notifications-panel");
+  const toggle = $("notify-toggle");
+  if (!panel || !toggle) return;
+  const open = Boolean(state.notifyPanelOpen);
+  const model = notificationPanelModel(state.snap, state.queueItems, Date.now(), NOTIFY_DEPS);
+  // One derivation, two surfaces: the badge is a reading off the same list the
+  // panel renders, so the button can never disagree with what it opens.
+  renderNotifyToggle(model.count, model.tone, open);
+  panel.hidden = !open;
+  if (paintUnchanged("notifyPanel", notifyPanelPaintSig(model, open))) return;
+  panel.textContent = "";
+  if (!open) return;
+
+  /* No standby hero. The rev-2 mockup put a fleet dead-time total in the
+     largest type here and S0-T1 measured that every candidate source for it is
+     a write clock, a mid-wait repeat, or a journal that rolls away — so the
+     number is not obtainable and the slot is gone rather than apologised for.
+     The count leads, which it already did. */
+  panel.append(el("div", { class: "notify-panel-head" },
+    el("div", {},
+      el("span", { class: "notify-eyebrow", text: model.verdict }),
+      el("h2", { id: "notify-panel-title", class: "notify-lede", text: model.lede }),
+      model.rest ? el("p", { class: "notify-rest", text: model.rest }) : null)));
+
+  for (const group of model.groups) {
+    panel.append(el("div", { class: "notify-group" },
+      el("span", { class: "notify-group-name mono", text: group.programName }),
+      el("span", { class: "notify-group-count", text: group.items.length + " stopped" })));
+    for (const item of group.items) panel.append(notifyRow(item));
+  }
+
+  if (model.watching.length) {
+    panel.append(el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Watching" }),
+      el("span", { class: "notify-sect-hint", text: "nothing is waiting on you" })));
+    for (const item of model.watching) panel.append(notifyQuietRow(item));
+  }
+
+  if (model.investigations.length) {
+    panel.append(el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Running on its own" })));
+    for (const item of model.investigations) panel.append(notifyQuietRow(item));
+  }
+
+  /* All clear does not go blank. "Watching, found nothing" and "not watching"
+     are the two states an empty panel is otherwise ambiguous between, and the
+     collectors' own numbers are evidence a stalled client cannot produce. */
+  if (model.proof) {
+    const proof = [
+      model.proof.working != null ? model.proof.working + " agents working" : "",
+      model.proof.programs != null ? model.proof.programs + " programs watched" : "",
+      model.proof.scanAgo ? "last scan " + model.proof.scanAgo + " ago" : "",
+    ].filter(Boolean).join(" · ");
+    panel.append(el("p", { class: "notify-proof mono", text: proof || "No collector has reported yet." }));
+  }
+
+  panel.append(renderNotifyDeliverySwitch());
+}
+
+/* Delivery's own control, and the ONLY place permission is requested — from
+   this click and never on load. toggleNotifications is untouched; this is the
+   button that calls it, moved off the masthead where its words read as a
+   verdict about the backlog beside it. */
+function renderNotifyDeliverySwitch() {
+  const view = notifyToggleView(state.notify, undefined, 0, "clear");
+  return el("div", { class: "notify-foot" },
+    el("button", {
+      type: "button",
+      class: "notify-switch" + (view.pressed ? " is-on" : ""),
+      "aria-pressed": view.pressed ? "true" : "false",
+      disabled: view.disabled ? "" : null,
+      title: view.title,
+      dataset: { fkey: "notify:delivery" },
+      onclick: () => { toggleNotifications().then(render); },
+    },
+      el("span", { class: "notify-switch-track", "aria-hidden": "true" }),
+      "Notify me when an agent stops"),
+    el("span", { class: "notify-foot-state", text: view.label }));
 }
 
 function renderSettingsPanel() {
@@ -2665,8 +2886,6 @@ function renderHealthRail() {
     model.calm ? "calm:" + (model.watch || []).join("|") : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
-    state.pulseExpanded ? "1" : "0",
-    state.pulseShowAll ? "1" : "0",
     buckets.map((b) => b.activeSessions).join(","),
     model.findings.map(findingPaintKey).join("|"),
     // The calm line renders momentum/burn/health regardless of which widgets
@@ -2708,7 +2927,6 @@ function renderHealthRail() {
       widgets.append(renderSummaryWidget(id, cell.weight, cell.data));
     }
   }
-  renderPulseFindings(model);
   renderWidgetCustomizer();
   /* renderSettingsPanel used to be called here, and it was the "settings do not
      stick" bug. This function returns early whenever the WIDGET paint signature
@@ -3319,6 +3537,14 @@ function issueImpactLine(issue, snap = state.snap) {
   return affectedImpact(issue, snap).plain;
 }
 
+/* The two resolvers notification-center.js cannot import for itself, since this
+   file is the entry point and exports almost nothing. programName applies the
+   operator's own aliases out of state.aliases; issueImpactLine prefers the
+   server's impactSummary over the local rollup. Passed rather than re-derived,
+   so the impact sentence in the notification center and the one in the drawer
+   are the same sentence by construction. */
+const NOTIFY_DEPS = { programNameFor: programName, impactFor: issueImpactLine };
+
 const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
 
 /* Ordered, flattened finding list for the pulse strip's inline expansion — the
@@ -3572,85 +3798,50 @@ function findingFromQueueItem(item) {
   };
 }
 
-/* Two-line ledger row (mockup A2): full title + live summary on the first
-   line, a mono evidence line under it, and a right-aligned instrument
-   cluster — compact stage rail, state word, age. Every pixel of strip width
-   carries information; nothing stretches to fill. */
-function renderFindingRow(finding) {
-  const visual = FINDING_VISUAL[finding.work.key] || FINDING_VISUAL.watching;
-  const selected = state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id;
-  const open = () => selectEntity({ kind: finding.kind, id: finding.id });
-  const stage = issueStage(finding.work.key);
-  const stageName = STAGE_LABELS[stage - 1] || finding.work.label;
-  const railClass = "stage-rail" + (visual.rail ? " " + visual.rail : "");
-  const evidence = (Array.isArray(finding.evidence) ? finding.evidence : []).filter(Boolean);
-  const sinceMs = finding.since ? Date.parse(finding.since) : NaN;
-  const age = Number.isFinite(sinceMs) ? fmtElapsed(Math.max(0, Date.now() - sinceMs)) : "";
-  return el("button", {
-    type: "button",
-    class: "finding" + (finding.pin ? " pin" : "") + (selected ? " is-selected" : ""),
-    dataset: { fkey: "finding:" + finding.kind + ":" + finding.id },
-    "aria-label": "Open " + finding.work.label + ": " + finding.title,
-    onclick: open,
-  },
-    el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
-    el("span", { class: "copy" },
-      el("span", { class: "lede" },
-        el("span", { class: "title", text: finding.title }),
-        el("span", { class: "gist", text: finding.summary || finding.impact })),
-      evidence.length ? el("span", { class: "trace" },
-        evidence.map((token) => el("i", { text: token }))) : null),
-    el("span", { class: "meta" },
-      el("span", {
-        class: railClass,
-        "aria-label": "Stage: " + stageName + " (" + stage + " of 4)",
-        "data-stage": String(stage),
-      }, el("i"), el("i"), el("i"), el("i")),
-      el("span", { class: "state st-" + (visual.st || "cool"), text: finding.work.label }),
-      age ? el("span", { class: "age", text: age }) : null));
-}
-
-function togglePulseFindings() {
-  state.pulseExpanded = !state.pulseExpanded;
-  // The findings ledger and the widget customizer are both summary-strip (chrome)
-  // expansions; opening both at once could exceed the viewport, so they are
-  // mutually exclusive — opening the findings collapses the customizer.
-  if (state.pulseExpanded) state.widgetCustomizerOpen = false;
-  else state.pulseShowAll = false;
-  renderHealthRail();
-}
-
-/* Inline expansion under the strip — at most MAX_PULSE_ROWS finding rows plus
-   an in-place "+N more"/"Show less" control. Rows open the drawer; triage and
-   queue actions stay drawer-only. */
-function renderPulseFindings(model) {
-  const panel = $("pulse-findings");
-  if (!panel) return;
-  const open = !model.calm && state.pulseExpanded && model.findings.length > 0;
-  panel.hidden = !open;
-  panel.textContent = "";
-  if (!open) return;
-  const visible = state.pulseShowAll ? model.findings : model.findings.slice(0, MAX_PULSE_ROWS);
-  for (const finding of visible) panel.append(renderFindingRow(finding));
-  const more = model.findings.length - MAX_PULSE_ROWS;
-  if (more > 0) {
-    panel.append(el("button", {
-      type: "button",
-      class: "pulse-more",
-      dataset: { fkey: "pulse-more" },
-      onclick: () => { state.pulseShowAll = !state.pulseShowAll; renderHealthRail(); },
-      text: state.pulseShowAll ? "Show less" : ("+" + more + " more"),
-    }));
-  }
-}
-
 /* ---------- toolbar ---------- */
+
+/* Board is the operator's work view, not a denial of what the collector saw.
+   Review workers are hidden only when they are routine and non-attention; a
+   review that needs a person remains pinned and visible. A search is an
+   explicit request, so a matching review worker is also admitted. History
+   remains complete regardless of this Board-only presentation choice. */
+function passesReviewVisibility(agent, view, showReviewWorkers = state.showReviewWorkers, searchMatches = false) {
+  return view !== "board"
+    || showReviewWorkers
+    || !isReviewWorker(agent)
+    || alerting(agent)
+    || searchMatches;
+}
+
+function reviewWorkerCount(ui = state) {
+  if (!ui.snap || ui.view !== "board") return 0;
+  return snapshotAgents(ui.snap)
+    .map(({ agent }) => agent)
+    .filter((agent) => isReviewWorker(agent)
+      && viewMatches("board", agent)
+      && passesLookback(agent, "board", ui.lookbackHours)
+      && !alerting(agent))
+    .length;
+}
+
+function setShowReviewWorkers(show) {
+  const next = Boolean(show);
+  if (next === state.showReviewWorkers) return;
+  state.showReviewWorkers = next;
+  render();
+}
 
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
+    passesReviewVisibility(
+      agent,
+      state.view,
+      state.showReviewWorkers,
+      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+    ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
@@ -3681,6 +3872,12 @@ function shelfFilter() {
     !viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
+    passesReviewVisibility(
+      agent,
+      state.view,
+      state.showReviewWorkers,
+      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+    ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
@@ -3738,34 +3935,18 @@ function renderTabs() {
     if (!countNode) continue;
     const count = state.snap
       ? agents.filter((a) =>
-          viewMatches(view, a) && passesLookback(a, view, state.lookbackHours),
+          viewMatches(view, a)
+          && passesLookback(a, view, state.lookbackHours)
+          && passesReviewVisibility(a, view, state.showReviewWorkers),
         ).length
       : null;
-    /* The lookback rides the tab it filters. History reads 37 while 388 ended
-       agents are on the wire — correct, because of the 6h window — but the scope
-       note that disclosed it renders only once you are already IN that view, so
-       from anywhere else the count silently understated by 351.
-
-       The GPT lane's §8 asked for the scope line to fall silent when no filter is
-       active and I implemented it; that was right about the restated counts and
-       wrong about the lookback, which was the one thing only that line said. The
-       disclosure belongs on the count it qualifies. (Day review 3.2.) */
-    /* A lookback qualifies a number. There is no number to qualify at zero, and
-       "Idle 0 · 6h" spends three glyphs saying a window narrowed nothing. */
-    const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
-      ? " · " + lookbackLabel(state.lookbackHours)
-      : "";
-    /* The Board tab says how much of itself it cannot vouch for. These sessions
-       are the largest population on the board and the whole reason the contract
-       exists; folding them silently into the count would hide the disclosure
-       inside the number it is about. The Unverified divider inside each program
-       group says the same thing row-by-row — this is the whole-fleet total, and
-       it is what an operator sees before they scroll. */
     const unverified = count != null && view === "board"
-      ? agents.filter((a) => isUnverified(a)).length
+      ? agents.filter((a) => passesReviewVisibility(a, view, state.showReviewWorkers) && isUnverified(a)).length
       : 0;
     const unverifiedNote = unverified > 0 ? " · " + unverified + " unverified" : "";
-    countNode.textContent = count == null ? "" : String(count) + window + unverifiedNote;
+    /* Tabs are navigation and counts. The active time window belongs to the
+       single filter bar below, so a tab never repeats it as a second toggle. */
+    countNode.textContent = count == null ? "" : String(count) + unverifiedNote;
     /* Zero counts go quiet rather than disappearing.
 
        At n=3 the navigation reads "Needs you 0 | Now 3 | Working 3 | Idle 0 |
@@ -3890,12 +4071,24 @@ function renderFilterBar(ui = state) {
   }
   bar.hidden = false;
   bar.setAttribute("aria-hidden", "false");
-  /* "Lookback" named the mechanism, not the question. Both controls here are
-     about time and neither said whose time, so the pair read as one setting
-     with two halves — which is exactly the confusion, because they act on
-     different things: this one hides rows in the browser, the next one changes
-     what the server collects. */
-  bar.append(el("span", { class: "filter-lead", text: "Show sessions from" }));
+  /* The tab strip is navigation. This is the one filter surface: the Board-only
+     review disclosure and the time lens live together here, while the collector
+     window below remains a server setting rather than a second filter. */
+  bar.append(el("span", { class: "filter-lead", text: "Filters" }));
+  const reviews = reviewWorkerCount(ui);
+  if (ui.view === "board" && reviews > 0) {
+    bar.append(filterChip(
+      ui.showReviewWorkers ? "Hide review workers" : "Show review workers (" + reviews + ")",
+      Boolean(ui.showReviewWorkers),
+      () => setShowReviewWorkers(!state.showReviewWorkers),
+      {
+        fkey: "session-kind:review",
+        title: ui.showReviewWorkers
+          ? "Hide routine review workers from the Board"
+          : "Show routine review workers on the Board. Attention rows remain visible either way.",
+      },
+    ));
+  }
   const lookbackGroup = el("div", {
     class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
   });
@@ -4506,6 +4699,7 @@ function programsPaintSig(visible, ui) {
     ui.facetProgram,
     ui.facetProvider,
     ui.lookbackHours,
+    ui.showReviewWorkers ? "1" : "0",
     ui.selecting ? "1" : "0",
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.selection].join(","),
@@ -4771,13 +4965,17 @@ function renderPrograms() {
   if (shown || !tracked) return;
 
   const lookbackHiding = lookbackApplies(state.view) && state.lookbackHours != null;
-  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding) {
+  const reviewsHidden = !state.showReviewWorkers ? reviewWorkerCount(state) : 0;
+  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding || reviewsHidden) {
     const parts = [];
     if (state.query || state.facetProgram || state.facetProvider) parts.push("search and filters");
     if (lookbackHiding) parts.push("lookback (" + lookbackLabel(state.lookbackHours) + ")");
+    if (reviewsHidden) parts.push(reviewsHidden + " review workers hidden");
     root.append(el("p", {
       class: "no-match",
-      text: "Nothing matches the current " + parts.join(" and ") + " in this view.",
+      text: reviewsHidden && parts.length === 1
+        ? reviewsHidden + " review workers are hidden from the Board. Show them from Filters."
+        : "Nothing matches the current " + parts.join(" and ") + " in this view.",
     }));
   } else {
     /* Every empty state names the constraints that produced it, including the
@@ -9385,10 +9583,25 @@ function boot() {
   loadContextSpread();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
-  renderNotifyToggle();
+  renderNotificationCenter();
   void fetchSettings();
 
-  $("notify-toggle").addEventListener("click", () => void toggleNotifications());
+  /* The masthead control opens the attention panel; DELIVERY is toggled by the
+     switch in that panel's footer, which is where toggleNotifications — and the
+     one requestPermission call in this client — is now reached. Still from a
+     click, still never on load. */
+  $("notify-toggle").addEventListener("click", toggleNotificationsPanel);
+
+  /* Outside-click closes, on the same guard the settings dialog uses: only a
+     press that BEGAN outside. A drag that starts on the evidence quote and ends
+     on the board is a selection, not a dismissal. */
+  document.addEventListener("mousedown", (e) => {
+    if (!state.notifyPanelOpen) return;
+    const panel = $("notifications-panel");
+    const toggle = $("notify-toggle");
+    if (panel?.contains(e.target) || toggle?.contains(e.target)) return;
+    closeNotificationsPanel(false);
+  });
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
@@ -9417,9 +9630,6 @@ function boot() {
 
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
-    // Exclusive with the findings ledger (both are chrome expansions) — opening
-    // the customizer collapses the findings so the strip never exceeds the viewport.
-    if (state.widgetCustomizerOpen) state.pulseExpanded = false;
     renderHealthRail();
   });
 
@@ -9439,12 +9649,37 @@ function boot() {
   document.addEventListener("keydown", (e) => { handleRowNavigation(e); });
   document.addEventListener("keydown", (e) => { handleCockpitKeys(e); });
 
+  /* Up/Down walk the panel's rows while it is open. Scoped to the panel — a
+     dropdown that swallowed the board's own row navigation would be worse than
+     one that has none. */
+  document.addEventListener("keydown", (e) => {
+    if (!state.notifyPanelOpen) return;
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const panel = $("notifications-panel");
+    if (!panel || !panel.contains(document.activeElement)) return;
+    const stops = [...panel.querySelectorAll("button:not([disabled])")];
+    if (!stops.length) return;
+    e.preventDefault();
+    const at = stops.indexOf(document.activeElement);
+    const next = e.key === "ArrowDown"
+      ? stops[(at + 1) % stops.length]
+      : stops[(at <= 0 ? stops.length : at) - 1];
+    next?.focus();
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     /* Ahead of the rest: it is a modal, and a modal that ignores Escape is the
        one dismissal every operator tries first. */
     if (state.settingsPanelOpen) {
       closeSettingsPanel();
+      return;
+    }
+    /* Same rule for the attention panel, and it returns focus to the control
+       that opened it — a dismissal that strands focus on <body> loses a keyboard
+       operator their place on the board entirely. */
+    if (state.notifyPanelOpen) {
+      closeNotificationsPanel();
       return;
     }
     if (state.confirming) {
@@ -9513,6 +9748,14 @@ Object.assign(globalThis.TheAntHill, {
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
+  // The exact resolver pair app.js hands the notification center, so a test can
+  // drive the wired derivation rather than its unwired defaults.
+  NOTIFY_DEPS,
+  /* The drawer table's own keys, so "every route resolves to a real drawer" is
+     asserted against the router rather than against a list kept by hand — a new
+     notification kind cannot ship without a drawer to open. Keys only: the
+     renderers themselves are not test surface. */
+  DRAWER_KINDS: Object.keys(DRAWER_RENDERERS),
   // The module's real state object. Exported because the confirmation strip,
   // the pending set, the feedback map and the attention/triage records are all
   // written by the request functions and read by the render functions — there

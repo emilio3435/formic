@@ -35,6 +35,10 @@ export const state = {
   facetProgram: "",
   facetProvider: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
+  // Review workers are still in the snapshot and History. Board hides the
+  // repetitive, non-attention rows by default, with an explicit toggle to
+  // bring them back into the operator's working view.
+  showReviewWorkers: false,
   scanWindowHours: 36,
   /* Was `settingsLoaded`, which nothing ever read — written true and false and
      never consulted, so a dead /api/settings was invisible by construction.
@@ -49,6 +53,10 @@ export const state = {
   settings: null,
   settingsLoaded: false,
   settingsPanelOpen: false,
+  /* The attention panel's disclosure state. A panel the operator opened stays
+     open across the four-second repaint — closing it under them would make the
+     board unreadable while anything is actually waiting. */
+  notifyPanelOpen: false,
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,
@@ -139,11 +147,6 @@ export const state = {
   /* An empty triage queue and an unreachable one produce the same zero queue
      findings, and the strip called that calm. This is what tells them apart. */
   queueError: "",
-  // Inline pulse expansion. The needs-you verdict button opens a capped
-  // findings panel in place; "+N more" reveals the rest. Both are transient —
-  // not persisted, so a reload returns to the collapsed strip.
-  pulseExpanded: false,
-  pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
   // `alarm` and `actions` start null, not "": their calm signature IS the empty

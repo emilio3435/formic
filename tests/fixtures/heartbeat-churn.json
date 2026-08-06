@@ -1,0 +1,64 @@
+{
+  "purpose": "Regression guard for a blockedSince that may never ship. S0-T1 measured no defensible stable entry clock on the hook contract, so absence is the expected wire state. IF a stable entry clock is ever added, a session that stays in needsInput while the hook record's updatedAt advances must not reset dead time — any age drop across passes fails this fixture. It does not require blockedSince or standbyMs on today's wire.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §3 S0-T1 and §6 Truth-safety",
+  "claim": "A heartbeat cannot reset dead time. If blockedSince exists, it is the instant the session entered its current person-blocked state — stable across collector passes and across a server bounce. It is never updatedAt, and never 0.",
+  "wireExpectation": "blockedSince may be permanently absent; this fixture is inert until a stable entry clock lands",
+  "session": {
+    "id": "codex:heartbeat-churn",
+    "hookLifecycle": "needsInput",
+    "attentionClass": "blocking",
+    "attentionSignal": { "kind": "question-pending" }
+  },
+  "passes": [
+    {
+      "name": "pass-1 entry",
+      "at": "2026-08-05T12:00:00.000Z",
+      "hookRecord": {
+        "updatedAt": "2026-08-05T12:00:00.000Z",
+        "agentLifecycle": "needsInput"
+      },
+      "expect": {
+        "blockedSince": "2026-08-05T12:00:00.000Z",
+        "deadTimeMs": 0
+      }
+    },
+    {
+      "name": "pass-2 heartbeat sixty seconds later — same needsInput",
+      "at": "2026-08-05T12:01:00.000Z",
+      "hookRecord": {
+        "updatedAt": "2026-08-05T12:01:00.000Z",
+        "agentLifecycle": "needsInput"
+      },
+      "expect": {
+        "blockedSince": "2026-08-05T12:00:00.000Z",
+        "deadTimeMs": 60000,
+        "blockedSinceUnchangedFrom": "pass-1 entry",
+        "deadTimeMustNotDrop": true
+      }
+    },
+    {
+      "name": "pass-3 another heartbeat — age only grows",
+      "at": "2026-08-05T12:02:30.000Z",
+      "hookRecord": {
+        "updatedAt": "2026-08-05T12:02:30.000Z",
+        "agentLifecycle": "needsInput"
+      },
+      "expect": {
+        "blockedSince": "2026-08-05T12:00:00.000Z",
+        "deadTimeMs": 150000,
+        "blockedSinceUnchangedFrom": "pass-1 entry",
+        "deadTimeMustNotDrop": true
+      }
+    }
+  ],
+  "antiCases": [
+    {
+      "name": "deriving blockedSince from updatedAt on every pass",
+      "claim": "If a future blockedSince tracks the heartbeat write time, deadTime collapses toward zero each pass. That is the defect this guard exists to catch — only if the field lands.",
+      "forbidden": {
+        "blockedSinceEquals": "hookRecord.updatedAt",
+        "onPasses": ["pass-2 heartbeat sixty seconds later — same needsInput", "pass-3 another heartbeat — age only grows"]
+      }
+    }
+  ]
+}

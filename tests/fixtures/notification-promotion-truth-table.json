@@ -1,0 +1,257 @@
+{
+  "purpose": "§4.3 hasCurrentImpact truth table. One row per condition. Live items reach the notification center; demoted items must still reach a real drawer (resolved / history / audit) so the center's footer link stays honest. Snaps use the real programs[] / issues[] shape so tests/harden-notify-fixtures.test.ts can execute hasCurrentImpact against each row. attentionClass on agents is optional — the client falls back to attentionSignal.kind until be-dwell lands the wire field.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §4.3",
+  "cases": [
+    {
+      "name": "blocking attention reaches the live center",
+      "claim": "A person-blocker is evidence-backed current impact: the person is the reason work stopped.",
+      "item": {
+        "id": "agent:codex:blocking-question",
+        "kind": "handoff",
+        "severity": "blocking",
+        "route": { "kind": "agent", "id": "codex:blocking-question" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{
+            "id": "codex:blocking-question",
+            "lifecycle": "waiting",
+            "attentionSignal": { "kind": "question-pending", "evidence": "Do you want me to land this now?" }
+          }]
+        }],
+        "issues": []
+      },
+      "expect": {
+        "live": true,
+        "surface": "center"
+      }
+    },
+    {
+      "name": "resolved lifecycle leaves the live surface for history",
+      "claim": "A resolved item is done work. Keeping it live would make the center a museum.",
+      "item": {
+        "id": "system:resolved-1",
+        "kind": "dataflow",
+        "severity": "warning",
+        "route": { "kind": "advisory", "id": "system:resolved-1" }
+      },
+      "snap": {
+        "programs": [{ "id": "p", "name": "Ant Hill", "agents": [] }],
+        "issues": [{
+          "id": "system:resolved-1",
+          "kind": "system",
+          "severity": "warning",
+          "title": "Identity conflict cleared",
+          "affectedAgentIds": [],
+          "lifecycle": {
+            "state": "resolved",
+            "openedAt": "2026-08-05T18:00:00.000Z",
+            "resolvedAt": "2026-08-05T20:00:00.000Z"
+          }
+        }],
+        "recentlyResolved": [{ "id": "system:resolved-1", "title": "Identity conflict cleared" }]
+      },
+      "expect": {
+        "live": false,
+        "surface": "history",
+        "drawer": "resolved",
+        "reason": "resolved"
+      }
+    },
+    {
+      "name": "verifying with no live affected agent is history",
+      "claim": "Verifying-without-impact means the check finished and nobody live still carries the fault. Demote; keep the resolved drawer reachable.",
+      "item": {
+        "id": "system:verifying-orphan",
+        "kind": "dataflow",
+        "severity": "warning",
+        "route": { "kind": "advisory", "id": "system:verifying-orphan" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{
+            "id": "codex:gone",
+            "lifecycle": "finished",
+            "status": "archived",
+            "scope": "retained"
+          }]
+        }],
+        "issues": [{
+          "id": "system:verifying-orphan",
+          "kind": "system",
+          "severity": "warning",
+          "title": "Stale source verifying",
+          "affectedAgentIds": ["codex:gone"],
+          "lifecycle": {
+            "state": "verifying",
+            "openedAt": "2026-08-05T18:00:00.000Z",
+            "verificationStartedAt": "2026-08-05T20:00:00.000Z"
+          }
+        }],
+        "recentlyResolved": [{ "id": "system:verifying-orphan", "title": "Stale source verifying" }]
+      },
+      "expect": {
+        "live": false,
+        "surface": "history",
+        "drawer": "resolved",
+        "reason": "verified-without-impact"
+      }
+    },
+    {
+      "name": "stale-without-current-impact — affected ids resolve to zero live agents",
+      "claim": "Affected agent ids that point at nobody live are stale. The center must not keep a ghost; History still opens the resolved drawer for the id.",
+      "item": {
+        "id": "system:stale-impact",
+        "kind": "dataflow",
+        "severity": "warning",
+        "route": { "kind": "advisory", "id": "system:stale-impact" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [
+            {
+              "id": "codex:retired-a",
+              "lifecycle": "finished",
+              "status": "archived",
+              "scope": "retained"
+            },
+            {
+              "id": "codex:someone-else",
+              "lifecycle": "working"
+            }
+          ]
+        }],
+        "issues": [{
+          "id": "system:stale-impact",
+          "kind": "system",
+          "severity": "warning",
+          "title": "Abandoned worktree advisory",
+          "affectedAgentIds": ["codex:retired-a", "codex:retired-b"],
+          "lifecycle": { "state": "open", "openedAt": "2026-08-05T18:00:00.000Z" }
+        }],
+        "recentlyResolved": [{ "id": "system:stale-impact", "title": "Abandoned worktree advisory" }]
+      },
+      "expect": {
+        "live": false,
+        "surface": "history",
+        "drawer": "resolved",
+        "reason": "stale-without-current-impact"
+      }
+    },
+    {
+      "name": "source healthy / verified leaves live for audit",
+      "claim": "A healthy verified source is not a to-do. Audit may still name it; the live center must not.",
+      "item": {
+        "id": "system:healthy-source",
+        "kind": "dataflow",
+        "severity": "warning",
+        "route": { "kind": "advisory", "id": "system:healthy-source" }
+      },
+      "snap": {
+        "programs": [{ "id": "p", "name": "Ant Hill", "agents": [] }],
+        "issues": []
+      },
+      "expect": {
+        "live": false,
+        "surface": "audit"
+      }
+    },
+    {
+      "name": "nothing-wanted is never surfaced",
+      "claim": "Honest quiet is not a notification. Surfacing it would rebuild filler under a new name.",
+      "item": {
+        "id": "agent:codex:quiet",
+        "kind": "handoff",
+        "severity": "warning",
+        "route": { "kind": "agent", "id": "codex:quiet" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{
+            "id": "codex:quiet",
+            "lifecycle": "waiting",
+            "outcome": "healthy",
+            "attentionSignal": { "kind": "nothing-wanted" }
+          }]
+        }],
+        "issues": []
+      },
+      "expect": {
+        "live": false,
+        "surface": "never"
+      }
+    },
+    {
+      "name": "declared done with no newer needsInput goes to history",
+      "claim": "A lane's self-declared completion is a declaration, not a measurement (A3). Without a newer needsInput it must not stay live; History keeps the trail.",
+      "item": {
+        "id": "agent:codex:declared-done",
+        "kind": "handoff",
+        "severity": "blocking",
+        "route": { "kind": "agent", "id": "codex:declared-done" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{
+            "id": "codex:declared-done",
+            "lifecycle": "waiting",
+            "taskState": "done",
+            "taskStateAt": "2026-08-05T12:00:00.000Z",
+            "hookLifecycle": "needsInput",
+            "hookLifecycleAt": "2026-08-05T11:59:00.000Z",
+            "attentionSignal": { "kind": "question-pending", "evidence": "stale ask" }
+          }]
+        }],
+        "issues": [],
+        "recentlyResolved": [{ "id": "agent:codex:declared-done", "title": "Declared done" }]
+      },
+      "expect": {
+        "live": false,
+        "surface": "history",
+        "reason": "declared-done-without-newer-needsInput"
+      }
+    },
+    {
+      "name": "noticed-only never counts as live blocking impact",
+      "claim": "stalled-active is Watch, not Waiting-on-you. hasCurrentImpact keeps it live on the Watch surface, but it must not earn ember fill or OS delivery — severity stays warning, not blocking.",
+      "item": {
+        "id": "agent:codex:stalled",
+        "kind": "handoff",
+        "severity": "warning",
+        "route": { "kind": "agent", "id": "codex:stalled" }
+      },
+      "snap": {
+        "programs": [{
+          "id": "p",
+          "name": "Ant Hill",
+          "agents": [{
+            "id": "codex:stalled",
+            "lifecycle": "waiting",
+            "taskState": "active",
+            "taskStateSource": "manifest",
+            "hookLifecycle": "idle",
+            "hookLifecycleAt": "2026-08-05T11:29:00.000Z",
+            "attentionSignal": { "kind": "stalled-active", "evidence": "Hook idle for 31 minutes; manifest declares active." }
+          }]
+        }],
+        "issues": []
+      },
+      "expect": {
+        "live": true,
+        "surface": "center",
+        "blockingFeed": false,
+        "verdictTone": "noticed"
+      }
+    }
+  ]
+}

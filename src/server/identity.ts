@@ -287,6 +287,20 @@ function resolveCommandHint(
       ? sourceId === hint.value || runtimeId === hint.value
       : sourceId.startsWith(hint.value) || runtimeId?.startsWith(hint.value);
   });
+  /* A resumed Claude transcript keeps the original runtime session ID while
+     receiving a new source file ID. When the command names that original ID,
+     the exact source match is the canonical identity; treating its resumed
+     alias as a second owner creates a permanent false conflict on every scan. */
+  const exactSource = matches.find((agent) => agent.sourceSessionId.toLowerCase() === hint.value);
+  if (exactSource) {
+    return {
+      hint: {
+        provider: hint.provider,
+        value: exactSource.sourceSessionId.toLowerCase(),
+        full: true,
+      },
+    };
+  }
   const active = matches.filter((agent) => agent.status === "running" || agent.status === "waiting");
   const candidates = active.length > 0 ? active : matches;
   if (candidates.length === 0) {

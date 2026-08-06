@@ -1,5 +1,6 @@
 import { getUsageSummary, type UsageSummary } from "./burnbar";
 import { AGENT_IDLE_GAP_MS } from "./types";
+import { attentionClassFor } from "./attention-signal";
 import type {
   AgentSnapshot,
   HubPulse,
@@ -230,6 +231,7 @@ export class PulseTracker {
     };
 
     return {
+      blocked: liveAgents.filter((agent) => attentionClassFor(agent) === "blocking").length,
       momentum: {
         working: this.#latestSnapshot?.totals.working ?? 0,
         completionsLastHour: null,

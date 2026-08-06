@@ -156,6 +156,12 @@ function makeNode(tag: string): FakeNode {
       return (i >= 0 && node.parent.children[i + 1]) || null;
     },
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    /* The real DOM has it and the client uses it — the notify control removes
+       aria-pressed and disabled rather than writing a falsey value, because an
+       element carrying `aria-pressed="false"` is a toggle that happens to be
+       off, not a disclosure. A stub that silently lacked it made that a
+       TypeError only the paint path could find. */
+    removeAttribute(k: string) { delete node.attributes[k]; },
     hasAttribute(k: string) { return k in node.attributes; },
     listeners: {} as Record<string, Array<(event: unknown) => unknown>>,
     addEventListener(type: string, fn: (event: unknown) => unknown) {
@@ -435,6 +441,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     facetProvider: "",
+    showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
     selecting: false,
@@ -1225,6 +1232,11 @@ describe("summary status and widgets", () => {
     const data = M.summaryWidgetData("needs-you", snap);
     expect(data).toMatchObject({ value: "2", unit: "findings", tone: "hot" });
     expect(data.sublabel).toBe("Control failure · Stale source");
+    expect(data.findings.map((finding: { kind: string; id: string; title: string }) => [finding.kind, finding.id, finding.title]))
+      .toEqual([
+        ["intervention", "system:1", "Control failure"],
+        ["advisory", "system:2", "Stale source"],
+      ]);
   });
 
   test("uses explicit No data values when optional pulse/context evidence is absent", () => {
@@ -1415,6 +1427,90 @@ describe("views split Now from History", () => {
     expect(M.withinLookback(stale, null, now)).toBe(true);
     expect(M.lookbackApplies("history")).toBe(true);
     expect(M.lookbackApplies("now")).toBe(false);
+  });
+
+  test("review-worker classification is task-based and provider-neutral", async () => {
+    const reviewTask = "Review this change for security vulnerabilities.";
+    for (const provider of ["claude", "codex", "cursor"]) {
+      expect(M.isReviewWorker(agent({ provider, task: reviewTask })), provider).toBe(true);
+    }
+    expect(M.isReviewWorker(agent({
+      provider: "codex",
+      task: "Implement the lifecycle change and add regression coverage.",
+      displayName: "Lifecycle worker",
+    }))).toBe(false);
+
+    const review = agent({ task: reviewTask, updatedAt: new Date().toISOString() });
+    expect(M.passesReviewVisibility(review, "board", false)).toBe(false);
+    expect(M.passesReviewVisibility(review, "board", true)).toBe(true);
+    expect(M.passesReviewVisibility(review, "history", false)).toBe(true);
+
+    const program = { id: "p", name: "P", agents: [review] };
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(false);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(true);
+    });
+    await withState({
+      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(true);
+    });
+    const alertingReview = agent({
+      task: reviewTask, status: "attention", outcome: "needs-you", updatedAt: new Date().toISOString(),
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(alertingReview, program)).toBe(true);
+    });
+  });
+
+  test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:review",
+      provider: "claude",
+      task: "Review this change for security vulnerabilities.",
+      displayName: "Security vulnerability review",
+      updatedAt,
+    });
+    const work = agent({
+      id: "codex:work",
+      provider: "codex",
+      task: "Implement the lifecycle change.",
+      updatedAt,
+    });
+    const program = { id: "p", name: "P", agents: [review, work] };
+    const snap = snapshot({ programs: [program], scanWindowHours: 36 });
+
+    await withState({ snap, view: "board", lookbackHours: 6, showReviewWorkers: false }, () => withDom(() => {
+      M.renderTabs();
+      expect(domById.get("count-board")!.textContent).toBe("1");
+    }));
+
+    withDom(() => {
+      M.renderFilterBar(listUi({
+        view: "board",
+        lookbackHours: 6,
+        snap,
+        showReviewWorkers: false,
+      }));
+      const bar = domById.get("filter-bar");
+      expect(textOf(bar)).toContain("Show review workers (1)");
+      expect(buttonsOf(bar).map((button: { dataset: Record<string, string> }) => button.dataset.fkey))
+        .toContain("session-kind:review");
+      expect(textOf(bar)).toContain("Last 6h");
+    });
   });
 });
 
@@ -2657,14 +2753,20 @@ describe("operations canvas layout", () => {
     expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*none/);
   });
 
-  test("finding rows open the drawer; the strip never grows its own triage chrome", () => {
-    expect(source).toContain("function renderFindingRow(");
+  test("the summary strip never grows its own findings ledger or triage chrome", () => {
     expect(source).toContain("function pulseStripModel(");
-    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
     expect(source).toContain("renderTriage(issue)");
     // The strip must not grow Generate-triage chrome; the drawer keeps it.
     expect(source).not.toContain('class: "signal-primary"');
     expect(source).not.toContain('class: "signal-title-btn"');
+    /* The inline findings ledger under the summary strip is GONE (2026-08-05).
+       Attention routes through the masthead Notifications control and per-row
+       marks on the board instead, so nothing may rebuild a row list here. */
+    expect(source).not.toContain("function renderFindingRow(");
+    expect(source).not.toContain("function renderPulseFindings(");
+    expect(html).not.toContain('id="pulse-findings"');
+    expect(source).toContain('class: "reading-finding-link"');
+    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
   });
 
   test("the inspector/drawer holds a stable 480-520px desktop pane, no 42vw overshoot", () => {
@@ -2795,7 +2897,7 @@ describe("source hygiene", () => {
 
   test("the redesigned control surface exposes its structural anchors", () => {
     for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
-      "pulse-findings", "nest-beacon", "health-widgets", "customize-summary",
+      "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
@@ -2955,19 +3057,21 @@ describe("source hygiene", () => {
   test("signal chrome uses techno-orchestra tokens, not hospital banner fills", () => {
     expect(styles).toContain('"Techno orchestra"');
     expect(styles).toContain("--signal-rail: 2px");
-    expect(styles).toContain(".glyph.act");
+    /* The one surviving example of the rule the token exists for: severity is
+       carried by an inked mark on a plain ground, never a filled banner. (It used
+       to be `.glyph.act`, which left with the findings ledger.) */
+    expect(styles).toMatch(/\.verdict-ok\s*\{\s*color:\s*var\(--moss\)/);
     expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
   });
 });
 
 describe("pulse strip — verdict-first summary", () => {
-  test("the verdict button and calm line carry the markup the strip depends on", () => {
-    expect(html).toContain('<div id="pulse-findings" hidden></div>');
-    expect(source).toContain('class: valueClass + " pulse-verdict"');
-    expect(source).toContain('"aria-expanded": String(state.pulseExpanded)');
-    expect(source).toContain('"aria-controls": "pulse-findings"');
-    expect(source).toContain('dataset: { fkey: "pulse-verdict" }');
-    expect(source).toContain("onclick: togglePulseFindings");
+  test("the calm line carries the markup the strip depends on, and the verdict is a reading not a toggle", () => {
+    /* NEEDS YOU reports a count and nothing else. It used to be the strip's one
+       expansion control, opening an inline findings ledger in place; that surface
+       is gone, so the number must not carry a disclosure it can no longer open. */
+    expect(source).not.toContain("pulse-verdict");
+    expect(source).not.toContain("state.pulseExpanded");
     /* The class now carries an is-watching modifier for the watch tier, so assert
        the contract (a live status region) rather than the literal attribute
        string, which was pinning a concatenation. */
@@ -3076,29 +3180,25 @@ describe("pulse strip — verdict-first summary", () => {
     expect(model.findings.map((f: { id: string }) => f.id)).toEqual(["queue:orphan"]);
   });
 
-  test("the strip renders findings and widgets with no board-level triage CTAs — triage stays drawer-only", () => {
-    const pulseFindingsPanel = source.match(/function renderPulseFindings\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  test("the strip renders widgets with no board-level triage CTAs — triage stays drawer-only", () => {
     const summaryWidget = source.match(/function renderSummaryWidget\([\s\S]*?\n\}\n/)?.[0] ?? "";
     const pulseCalm = source.match(/function renderPulseCalm\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    const findingRow = source.match(/function renderFindingRow\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(pulseFindingsPanel).toBeTruthy();
     expect(summaryWidget).toBeTruthy();
     expect(pulseCalm).toBeTruthy();
-    expect(findingRow).toBeTruthy();
-    for (const chunk of [pulseFindingsPanel, summaryWidget, pulseCalm, findingRow]) {
+    for (const chunk of [summaryWidget, pulseCalm]) {
       expect(chunk).not.toContain("triageIssue(");
       expect(chunk).not.toContain('"Triage this finding"');
       expect(chunk).not.toContain('"Queue investigation"');
       expect(chunk).not.toContain("renderTriage(");
     }
-    expect(findingRow).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
   });
 
   test("strip CSS binds to the DOM app.js actually builds", () => {
-    // The expansion panel carries only the id (the markup is a fixed contract),
-    // so a class selector would never bind — the panel must be styled by id.
-    expect(styles).toMatch(/#pulse-findings\s*\{/);
-    expect(styles).not.toMatch(/\.pulse-findings\s*\{/);
+    // The findings ledger is gone; its styling must not outlive it, or the next
+    // reader takes 100 lines of dead row chrome for a live surface.
+    expect(styles).not.toMatch(/#pulse-findings\s*\{/);
+    expect(styles).not.toMatch(/\.finding\s*\{/);
+    expect(styles).not.toMatch(/\.pulse-more\s*\{/);
     // app.js drops the one-shot pulse-cleared class on the rail, so the moss
     // wash must reach the calm line through the rail, not expect the class
     // on the (rebuilt-each-paint) calm line itself.
@@ -3172,13 +3272,15 @@ describe("state cards — two-line ledger rows, instrument brief, verdict result
   });
 
   test("state-card CSS binds to the DOM app.js builds, and the replaced chrome is gone", () => {
-    for (const selector of [".finding .lede", ".finding .gist", ".finding .trace", ".finding .meta",
-      ".finding .state.st-hot", ".tri-band", ".tri-spine", ".tri-dot", ".brf-head", ".brf-glyph",
+    for (const selector of [".tri-band", ".tri-spine", ".tri-dot", ".brf-head", ".brf-glyph",
       ".brf-routes", ".brf-route", ".brf-times"]) {
       expect(styles).toContain(selector);
     }
     for (const dead of [".triage-plan-head", ".triage-mode", ".triage-details", ".triage-steps",
-      ".triage-briefing-kicker "]) {
+      ".triage-briefing-kicker ",
+      // The A2 ledger row and its indicator vocabulary left with the strip's
+      // findings panel (2026-08-05); the drawer never used either.
+      ".finding .lede", ".finding .meta", ".glyph.act", ".stage-rail"]) {
       expect(styles).not.toContain(dead);
     }
   });
@@ -4677,8 +4779,8 @@ describe("peripheral surfaces conform to the design language (A5)", () => {
 });
 
 /* Scroll shell + sticky headers (Emilio 2026-07-23).
-   Part 0 root cause: the `flex:none` .health-rail hosts unbounded inline
-   expansions (#pulse-findings, #widget-customizer); on the fragile height:100%
+   Part 0 root cause: the `flex:none` .health-rail hosts an unbounded inline
+   expansion (#widget-customizer); on the fragile height:100%
    body box (overflow-y computes to auto) that chrome can exceed the viewport and
    the DOCUMENT scrolls, carrying masthead + summary away. The fix is a 100dvh app
    frame with bounded expansions + contained pane scrolling; sticky program/column
@@ -4704,17 +4806,13 @@ describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", (
     expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*scrollbar-gutter:\s*stable/);
   });
 
-  // (a) The summary strip's inline expansions are the Part-0 culprit: `flex:none`
-  //     chrome with no height bound. Each expansion gets a max-height + internal
-  //     scroll so the chrome can never push the document into scrolling.
-  test("(a) the findings + customizer expansions are height-bounded with internal scroll", () => {
-    const findings = styles.match(/#pulse-findings\s*\{[^}]*\}/)?.[0] ?? "";
-    // vh fallback line before the dvh bound, matching the body's fallback discipline.
-    expect(findings).toContain("max-height: min(40vh");
-    expect(findings).toContain("max-height: min(40dvh"); // sized against the viewport
-    expect(findings).toContain("overflow-y: auto");
-    expect(findings).not.toContain("overflow: hidden"); // the unbounded clip is replaced
+  // (a) The summary strip's inline expansion is the Part-0 culprit: `flex:none`
+  //     chrome with no height bound. It gets a max-height + internal scroll so the
+  //     chrome can never push the document into scrolling. (The findings ledger was
+  //     the second such expansion; it was deleted outright on 2026-08-05.)
+  test("(a) the customizer expansion is height-bounded with internal scroll", () => {
     const customizer = styles.match(/\.widget-customizer\s*\{[^}]*\}/)?.[0] ?? "";
+    // vh fallback line before the dvh bound, matching the body's fallback discipline.
     expect(customizer).toContain("max-height: min(50vh");
     expect(customizer).toContain("max-height: min(50dvh");
     expect(customizer).toContain("overflow-y: auto");
@@ -4818,20 +4916,19 @@ describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
 
 /* Review fixes (2026-07-23): the fix's own edge cases. */
 describe("scroll shell: review fixes", () => {
-  // (1 Important) The findings ledger and the widget customizer are BOTH
+  // (1 Important) The findings ledger and the widget customizer were BOTH
   //   flex:none summary-strip expansions; opening both at once was 918px > 900px
-  //   at 1440×900 (clipped invisibly by body overflow-y:clip). Make them mutually
-  //   exclusive — opening either collapses the other — so combined overflow is
-  //   structurally impossible (the max-height bounds stay as belt-and-suspenders).
-  test("(1) the two summary-strip expansions are mutually exclusive", () => {
-    // Opening the findings collapses the customizer.
-    const pulse = source.match(/function togglePulseFindings\(\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(pulse).toContain("state.pulseExpanded = !state.pulseExpanded");
-    expect(pulse).toContain("state.widgetCustomizerOpen = false");
-    // Opening the customizer collapses the findings.
+  //   at 1440×900 (clipped invisibly by body overflow-y:clip). They were made
+  //   mutually exclusive; deleting the ledger (2026-08-05) removes the collision
+  //   at its source. The invariant that survives is the one that caused it: the
+  //   summary strip hosts exactly ONE expansion, so two can never stack again.
+  test("(1) the summary strip hosts exactly one expansion", () => {
     const handler = source.match(/"customize-summary"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{[\s\S]*?\}\);/)?.[0] ?? "";
     expect(handler).toContain("state.widgetCustomizerOpen = !state.widgetCustomizerOpen");
-    expect(handler).toContain("state.pulseExpanded = false");
+    // One expansion child inside #health-rail, and it is the customizer.
+    const rail = html.match(/<section id="health-rail"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(rail).toContain('id="widget-customizer"');
+    expect(rail.match(/\shidden(\s|>)/g)?.length ?? 0).toBe(1);
   });
 
   // (2 Important) The nowrap rollup sits inside a .program overflow:clip card, so
@@ -5691,21 +5788,15 @@ describe("FE-B: harness-backed client behavior", () => {
       .toBe("↑2 done in 10m observed");
   });
 
-  /* GPT day review 3.2, which they credit to their own §8 — silencing the scope
-     note was right about the restated counts and wrong about the lookback, the
-     one thing only that line disclosed. History read 37 against 388 ended agents
-     on the wire, and the note renders only once you are already in that view. */
-  test("(3.2) a lookback-filtered tab count discloses its window", () => {
+  /* The tab count and the time lens used to be adjacent copies of the same
+     choice. The tab remains honest about its population, while the filter bar
+     is the one place that owns the active window. */
+  test("(3.2) the filter bar owns time scope without changing the lookback model", () => {
     expect(M.lookbackApplies("history")).toBe(true);
     // Board inherited the lookback along with the Waiting population it filters.
     expect(M.lookbackApplies("board")).toBe(true);
     expect(M.lookbackApplies("usage")).toBe(false);
-    // The suffix is built from the same label the filter bar uses, so the tab and
-    // the control that changes it can never name different windows.
     expect(M.lookbackLabel(6)).toBe("6h");
-    expect(source).toContain('" · " + lookbackLabel(state.lookbackHours)');
-    // Unfiltered views get no suffix — the count is the whole truth there.
-    expect(source).toContain("lookbackApplies(view) && state.lookbackHours != null");
   });
 
   /* The seam the needsYou mess came from: two derivations of one number. A
@@ -8416,18 +8507,59 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
   const calm = (id: string) => agent({ id, status: "running", outcome: "healthy", displayName: id });
   const snapOf = (...agents: unknown[]) => snapshot({ programs: [{ id: "p", name: "P", agents }] });
 
-  test("(4) 'needs a human' is the board's own verdict, not a second definition", () => {
+  /* S1-T5 REWRITE. This asserted that delivery fires for the board's broad
+     alerting() population — any row that is neither healthy nor finished.
+
+     That was the defect, not the contract. alerting() is a strict SUPERSET of
+     "a person is the blocker", so the OS notification woke the operator for a
+     stalled advisory while the button beside it correctly stayed amber. The one
+     sentence this whole surface rests on — ember only when a person is the
+     blocker — broke at the exact moment the operator is not looking at the
+     screen to check it. Repointed at the blocking half of the attention
+     partition; the rows below are the ones that used to fire and no longer do. */
+  test("(4) delivery fires for a person-blocker, not for everything unhealthy", () => {
+    const asks = (id: string) => agent({
+      id, displayName: id,
+      attentionSignal: { kind: "question-pending", evidence: "Push, or hold for the reconciliation?" },
+    });
     const snap = snapOf(
-      waiting("codex:1"),
-      agent({ id: "codex:2", outcome: "blocked" }),
-      agent({ id: "codex:3", outcome: "failed" }),
-      calm("codex:4"),
+      asks("codex:1"),
+      // Unhealthy, and asking nobody anything. The board still shows all three
+      // as findings; none of them is a reason to interrupt a person elsewhere.
+      waiting("codex:2"),
+      agent({ id: "codex:3", outcome: "blocked" }),
+      agent({ id: "codex:4", outcome: "failed" }),
+      calm("codex:5"),
       // An ended session is not waiting for anyone, whatever it last reported.
-      agent({ id: "codex:5", status: "archived", outcome: "needs-you" }),
+      agent({ id: "codex:6", status: "archived", outcome: "needs-you" }),
     );
-    expect(M.needsHumanIds(snap)).toEqual(["codex:1", "codex:2", "codex:3"]);
-    expect(M.needsHumanIds(snapOf(calm("codex:4")))).toEqual([]);
+    expect(M.needsHumanIds(snap)).toEqual(["codex:1"]);
+    // The watcher's own tier never delivers: nobody is blocked, so nothing may
+    // interrupt someone who is not looking.
+    expect(M.needsHumanIds(snapOf(agent({ id: "codex:7", attentionSignal: { kind: "stalled-active" } })))).toEqual([]);
+    expect(M.needsHumanIds(snapOf(calm("codex:5")))).toEqual([]);
     expect(M.needsHumanIds(null)).toEqual([]);
+    // …and it is the same set the badge counts, not a second population.
+    expect(M.needsHumanIds(snap)).toEqual(M.blockingAgentIds(snap));
+  });
+
+  test("(4) an out-of-page notification never fires for a watcher-only board", () => {
+    /* The plan's claim in its sharpest form: a stalled-active fleet is amber on
+       the button and SILENT off it. deliverNotification is reached only through
+       a plan built from needsHumanIds, so a feed with nobody blocked cannot
+       produce one that fires. */
+    const stalled = snapOf(
+      agent({ id: "codex:1", displayName: "codex:1", attentionSignal: { kind: "stalled-active" } }),
+      agent({ id: "codex:2", displayName: "codex:2", attentionSignal: { kind: "stalled-active" } }),
+    );
+    const plan = M.notificationPlan([], M.needsHumanIds(stalled));
+    expect(plan.fire).toBe(false);
+    let built = 0;
+    class Spy { constructor() { built += 1; } }
+    expect(M.deliverNotification(plan, { enabled: true, permission: "granted" }, Spy)).not.toBe("sent");
+    expect(built).toBe(0);
+    // The badge still speaks — amber, not ember, and never a zero it has not earned.
+    expect(M.feedTone(M.notificationFeed(stalled, [], Date.now(), M.NOTIFY_DEPS))).toBe("noticed");
   });
 
   test("(4) it fires for a NEW waiter and stays silent for everything else", () => {
@@ -8522,7 +8654,9 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.notifyToggleView({ enabled: false, permission: "denied" }, true, 4).count).toBe(4);
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, false, 4).count).toBe(4);
 
-    // A quiet fleet stays quiet: no badge, no count noise in the label or title.
+    // A quiet fleet stays quiet in the WORDS. The badge itself still renders its
+    // zero — see the badge-tone test below — because an absent badge and a calm
+    // one look identical and only one of them is good news.
     const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
     expect(calmView.count).toBe(0);
     expect(calmView.ariaLabel).toBe("Notifications on");
@@ -8531,18 +8665,57 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
       .toBe("Notifications off, 1 agent waiting on you");
 
-    // The badge is a real node carrying the digit, not text glued onto the label.
-    expect(source).toContain('class: "notify-badge"');
-    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.ariaLabel\)/);
+    /* The badge is a real node carrying the digit, not text glued onto the
+       label — that is what lets it take the ember fill without the count
+       entering the button's text content. Its tone class is composed from whole
+       string literals, never assembled from a runtime value, because the
+       orphan-CSS guard reads this file as text. */
+    expect(source).toContain('class: "notify-badge " + BADGE_TONE_CLASS[view.tone]');
+    expect(source).toContain('text: String(view.count)');
+    for (const cls of ["is-blocked", "is-noticed", "is-clear"]) expect(source, cls).toContain(`"${cls}"`);
+    // The disclosure's accessible name, not the delivery switch's.
+    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.disclosureLabel\)/);
 
     /* Placement rule, not style — this is the bug the unit tests above could
        not see. The toggle used to paint once in boot() and on click, which was
        fine for pure preference state. Now that it carries a snapshot-derived
        count it MUST paint inside render(), because boot() runs before the first
        snapshot exists: the count was always 0 and the badge never appeared on
-       the real page even though every assertion above passed. */
+       the real page even though every assertion above passed.
+
+       renderNotificationCenter is the one that paints it now: it computes the
+       feed once and hands the badge its count and tone off that same list, so
+       the button cannot report a different population than the panel it opens. */
     const renderFn = source.match(/\nfunction render\(\)[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(renderFn).toContain("renderNotifyToggle()");
+    expect(renderFn).toContain("renderNotificationCenter()");
+    expect(source).toContain("renderNotifyToggle(model.count, model.tone, open)");
+  });
+
+  test("(4) the badge's ink is the verdict, and it always renders a reading", () => {
+    /* The contract the whole surface rests on: ember filled ONLY when a person
+       is the blocker. Amber outline is the watcher having something; grey
+       outline is a real, rendered zero. */
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 2, "blocked").tone).toBe("blocked");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 1, "noticed").tone).toBe("noticed");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0, "clear").tone).toBe("clear");
+    // An unknown tone falls back to the calm one. A badge is never ember by accident.
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 9, "sideways").tone).toBe("clear");
+
+    // Ember is a fill; the other two are outlines. Asserted on the stylesheet,
+    // because "filled" is the entire distinction the operator reads at a glance.
+    expect(styles).toContain(".notify-badge.is-blocked { background: var(--ember)");
+    expect(styles).toContain(".notify-badge.is-noticed { color: var(--amber)");
+    expect(styles).toContain(".notify-badge.is-clear { color: var(--faint)");
+
+    // The digit never stands alone for a screen reader.
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 3, "blocked").disclosureLabel)
+      .toBe("Notifications, 3 agents waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1, "blocked").disclosureLabel)
+      .toBe("Notifications, 1 agent waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 2, "noticed").disclosureLabel)
+      .toBe("Notifications, 2 being watched, nobody waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 0, "clear").disclosureLabel)
+      .toBe("Notifications, nothing waiting");
   });
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {
@@ -10877,5 +11050,353 @@ describe("T7: lineage the kernel contradicts, and a sender the server could not 
       .toEqual({ agentId: "claude:8c052fe9", runId: "atlas-hardening-2026-08-05" });
     // An empty string is a present request that is simply empty, not an absence.
     expect(M.senderOf(agent({ lastUserMessage: "", task: `${HEAD} you are lane fe-states` }))).toBeNull();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   S1 · the notification center.
+
+   The header is confidence and this is attention. Every test below names the
+   claim the surface makes and fails when that claim stops being true — the
+   badge is ember only when a person is the blocker, nothing resolved or
+   impact-free reaches the live list, and every route opens a real drawer.
+   ------------------------------------------------------------------------- */
+
+describe("S1: the notification center is attention, and it never aggregates", () => {
+  const blocked = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "question-pending", evidence: "Push the branch and open the PR, or hold for the reconciliation?" },
+    ...over,
+  });
+  const noticed = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "stalled-active", evidence: "Manifest says active; the hook has stayed idle." },
+    ...over,
+  });
+  const quiet = (id: string) => agent({ id, displayName: id, programId: "p", outcome: "healthy" });
+  const snapOf = (agents: unknown[], over: Record<string, unknown> = {}) =>
+    snapshot({ programs: [{ id: "p", name: "Ant Hill", agents }], ...over });
+  const NOW = Date.parse("2026-08-05T21:00:00.000Z");
+  const feed = (snap: unknown, queue: unknown[] = []) => M.notificationFeed(snap, queue, NOW, M.NOTIFY_DEPS);
+
+  const issue = (over: Record<string, unknown> = {}) => ({
+    id: "system:sources", kind: "system", severity: "warning",
+    title: "Two sources disagree", summary: "The cmux store and the transcript report different session ids.",
+    affectedAgentIds: [], ...over,
+  });
+
+  test("every live item names its kind, severity, source, lifecycle, evidence, impact and a route", () => {
+    const snap = snapOf([blocked("codex:1"), noticed("codex:2"), quiet("codex:3")], { issues: [issue()] });
+    const items = feed(snap, [{
+      issueId: "inv:1", id: "q1", state: "running", headline: "Isolate the system fault",
+      rationale: "Two collectors disagree about one surface.", createdAt: "2026-08-05T19:00:00.000Z",
+      affectedAgents: 47, affectedPrograms: 3, runModel: "luna",
+    }]);
+    // All three feeds are represented — this is the schema assertion the plan asks for.
+    expect(items.map((i: { kind: string }) => i.kind).sort())
+      .toEqual(["dataflow", "handoff", "handoff", "investigation"]);
+    for (const item of items) {
+      expect(typeof item.id, item.id).toBe("string");
+      expect(item.id.length).toBeGreaterThan(0);
+      expect(["handoff", "dataflow", "investigation"]).toContain(item.kind);
+      expect(["blocking", "warning"]).toContain(item.severity);
+      expect(typeof item.source, item.id).toBe("object");
+      expect(typeof item.lifecycle, item.id).toBe("string");
+      // Whole sentences, not field dumps: the operator reads these INSTEAD of
+      // opening the drawer, so an empty one is a row that says nothing.
+      expect(item.evidence.length, item.id).toBeGreaterThan(0);
+      expect(item.impact.length, item.id).toBeGreaterThan(0);
+      // `since` is required and nullable — "we cannot measure it" is an answer,
+      // and the one thing it may never be is a made-up zero.
+      expect(item.since === null || typeof item.since === "string", item.id).toBe(true);
+      expect(item.route.id.length, item.id).toBeGreaterThan(0);
+    }
+  });
+
+  test("every route resolves to a real drawer", () => {
+    const snap = snapOf([blocked("codex:1"), noticed("codex:2")], {
+      issues: [issue(), issue({ id: "system:hard", severity: "error" })],
+    });
+    const items = feed(snap, [{ issueId: "inv:1", id: "q1", state: "queued", headline: "H", createdAt: "2026-08-05T19:00:00.000Z" }]);
+    const kinds = new Set<string>(items.map((i: { route: { kind: string } }) => i.route.kind));
+    // Not a hand-kept list: the drawer table itself is the assertion, so a new
+    // item kind cannot ship without a drawer to open.
+    expect(M.DRAWER_KINDS.length).toBeGreaterThan(0);
+    for (const kind of kinds) expect(M.DRAWER_KINDS, kind).toContain(kind);
+    expect([...kinds].sort()).toEqual(["advisory", "agent", "intervention", "investigation"]);
+  });
+
+  test("a handoff item routes to the agent's own drawer, not to an advisory about it", () => {
+    // issuesOf mints `agent:<id>` for the same agent; the center takes that id
+    // over so the parity gate is an identity check and one thing gets one row.
+    const snap = snapOf([blocked("codex:1")]);
+    const items = feed(snap);
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("agent:codex:1");
+    expect(items[0].route).toEqual({ kind: "agent", id: "codex:1" });
+    expect(M.issuesOf(snap).map((i: { id: string }) => i.id)).toContain("agent:codex:1");
+  });
+
+  test("the ember contract: severity 'blocking' means a person is the blocker and nothing else", () => {
+    // A person waiting.
+    expect(feed(snapOf([blocked("codex:1")]))[0].severity).toBe("blocking");
+    // A watcher's observation is not a person waiting.
+    expect(feed(snapOf([noticed("codex:2")]))[0].severity).toBe("warning");
+    // Nor is an ERROR-severity collector fault, however bad it is. If the badge
+    // is ember, someone stopped and is waiting for you — that is the whole
+    // contract, and it only holds if nothing else can claim this severity.
+    const faulted = feed(snapOf([quiet("codex:3")], { issues: [issue({ severity: "error" })] }));
+    expect(faulted).toHaveLength(1);
+    expect(faulted[0].kind).toBe("dataflow");
+    expect(faulted[0].severity).toBe("warning");
+    expect(M.feedTone(faulted)).toBe("noticed");
+  });
+
+  test("the badge tone and count come off the feed, not a parallel population", () => {
+    expect(M.feedTone(feed(snapOf([blocked("codex:1"), noticed("codex:2")])))).toBe("blocked");
+    expect(M.feedTone(feed(snapOf([noticed("codex:2")])))).toBe("noticed");
+    expect(M.feedTone(feed(snapOf([quiet("codex:3")])))).toBe("clear");
+    expect(M.feedTone([])).toBe("clear");
+    // The count beside an ember button has to mean what the ember means.
+    expect(M.blockingCount(feed(snapOf([blocked("codex:1"), blocked("codex:2"), noticed("codex:3")])))).toBe(2);
+    expect(M.blockingCount(feed(snapOf([noticed("codex:3")])))).toBe(0);
+  });
+
+  test("the blocking/noticed partition is the server's word, and the client's only until it ships", () => {
+    // S0-T2's exact rule over the kinds that ARE on the wire today.
+    for (const kind of ["permission-requested", "input-requested", "fork-unresolved",
+      "handoff-stated", "question-pending", "assumption-stated"]) {
+      expect(M.attentionClassOf(agent({ attentionSignal: { kind } })), kind).toBe("blocking");
+    }
+    expect(M.attentionClassOf(agent({ attentionSignal: { kind: "stalled-active" } }))).toBe("noticed");
+    // Absence, not a third value.
+    for (const kind of ["nothing-wanted", "out-of-scope", "not-readable"]) {
+      expect(M.attentionClassOf(agent({ attentionSignal: { kind } })), kind).toBeNull();
+    }
+    expect(M.attentionClassOf(agent({}))).toBeNull();
+    // When be-dwell ships the field, the server's word wins over the derivation.
+    expect(M.attentionClassOf(agent({ attentionClass: "noticed", attentionSignal: { kind: "question-pending" } })))
+      .toBe("noticed");
+    expect(M.attentionClassOf(agent({ attentionClass: "blocking", attentionSignal: { kind: "stalled-active" } })))
+      .toBe("blocking");
+  });
+
+  test("a lane that was stood down is not blocking, and a lane that then asks re-alerts", () => {
+    // The atlas-hardening T6/T7 precedence, read and not reopened. The veto runs
+    // on the server's own word too, so the two can never disagree about it.
+    const parked = { taskState: "parked", taskStateSource: "manifest", taskStateAt: "2026-08-05T20:00:00.000Z" };
+    expect(M.attentionClassOf(agent({ ...parked, attentionSignal: { kind: "question-pending" } }))).toBeNull();
+    expect(M.attentionClassOf(agent({ ...parked, attentionClass: "blocking" }))).toBeNull();
+    expect(M.attentionClassOf(agent({ taskState: "done", taskStateSource: "manifest", taskStateAt: "2026-08-05T20:00:00.000Z", attentionSignal: { kind: "question-pending" } }))).toBeNull();
+    // …until it asks something NEWER than the declaration.
+    const asking = agent({
+      ...parked, attentionSignal: { kind: "question-pending" },
+      hookLifecycle: "needsInput", hookLifecycleAt: "2026-08-05T20:30:00.000Z",
+    });
+    expect(M.attentionClassOf(asking)).toBe("blocking");
+    expect(feed(snapOf([asking]))).toHaveLength(1);
+  });
+
+  test("a handoff carries no dead time, and no clock can sneak in as one", () => {
+    /* S0-T1's ruling, pinned so it cannot be quietly reopened.
+       docs/S0-T1-DEAD-TIME-MEASUREMENT.md measured every candidate for "when did
+       this person-block begin". hookLifecycleAt advanced 01:38:51 → 01:39:16 →
+       01:40:41 on a session that stayed needsInput the whole time — a write
+       clock. The hook notification repeated mid-wait, so it would RESET the age
+       during one block. Stop and UserPromptSubmit mark other boundaries, and the
+       cmux journal rolls away. Dead time is DROPPED, not deferred.
+
+       This test fails the moment any of those is wired in, which is the point:
+       a heartbeat here makes the oldest wait on the board read as the newest. */
+    const clocks = {
+      hookLifecycleAt: "2026-08-05T20:59:00.000Z",
+      updatedAt: "2026-08-05T20:59:30.000Z",
+      taskStateAt: "2026-08-05T20:00:00.000Z",
+      // Even if a later lane revives the field, it is not a source any more.
+      blockedSince: "2026-08-05T19:56:00.000Z",
+    };
+    const [item] = feed(snapOf([blocked("codex:1", clocks)]));
+    expect(item.since).toBeNull();
+    for (const clock of Object.values(clocks)) expect(item.since, clock).not.toBe(clock);
+    // …and nothing downstream fabricates a zero out of the absence.
+    expect(String(item.since)).not.toBe("0");
+    expect(M.notificationPanelModel(snapOf([blocked("codex:1", clocks)]), [], NOW, M.NOTIFY_DEPS))
+      .not.toHaveProperty("standby");
+  });
+
+  test("a record's own age survives, because that one is actually measured", () => {
+    /* The distinction the ruling turns on. A person's dead time is unobtainable;
+       a RECORD's age is a durable server fact — when the finding opened, when the
+       investigation was created — and those keep their timestamps. */
+    const withIssue = snapOf([quiet("codex:9")], {
+      issues: [issue({ lifecycle: { state: "open", openedAt: "2026-08-05T19:56:00.000Z" } })],
+    });
+    expect(feed(withIssue)[0].since).toBe("2026-08-05T19:56:00.000Z");
+    const [inv] = feed(snapOf([]), [{
+      issueId: "inv:1", id: "q1", state: "running", headline: "H",
+      createdAt: "2026-08-05T18:00:00.000Z",
+    }]);
+    expect(inv.since).toBe("2026-08-05T18:00:00.000Z");
+    // A record instant AHEAD of this browser is clock skew, not a negative age.
+    const skewed = snapOf([quiet("codex:9")], {
+      issues: [issue({ lifecycle: { state: "open", openedAt: "2026-08-05T21:30:00.000Z" } })],
+    });
+    expect(feed(skewed)[0].since).toBeNull();
+  });
+
+  test("with no wait to sort on, the order is stable rather than arbitrary", () => {
+    /* Blocking first, then the watch tier — and inside a tier, ids, because
+       every handoff now has a null `since`. Stable matters: a list that
+       reshuffled on each four-second paint would be unreadable exactly while
+       something is waiting. */
+    const snap = snapOf([
+      blocked("codex:c"), noticed("codex:watch"), blocked("codex:a"), blocked("codex:b"),
+    ]);
+    const once = feed(snap).map((i: { id: string }) => i.id);
+    expect(once).toEqual(["agent:codex:a", "agent:codex:b", "agent:codex:c", "agent:codex:watch"]);
+    // Same snapshot, later clock: identical order.
+    expect(M.notificationFeed(snap, [], NOW + 60_000, M.NOTIFY_DEPS).map((i: { id: string }) => i.id))
+      .toEqual(once);
+  });
+});
+
+describe("S1-T2: hasCurrentImpact is the only gate between live and history", () => {
+  const NOW = Date.parse("2026-08-05T21:00:00.000Z");
+  const asking = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "question-pending", evidence: "Which one?" }, ...over,
+  });
+  const snapOf = (agents: unknown[], over: Record<string, unknown> = {}) =>
+    snapshot({ programs: [{ id: "p", name: "Ant Hill", agents }], ...over });
+  const split = (snap: unknown, queue: unknown[] = []) => M.notificationCandidates(snap, queue, NOW, M.NOTIFY_DEPS);
+  const issue = (over: Record<string, unknown> = {}) => ({
+    id: "system:sources", kind: "system", severity: "warning",
+    title: "Two sources disagree", summary: "The cmux store and the transcript disagree.",
+    affectedAgentIds: [], ...over,
+  });
+
+  test("a person waiting outranks every demotion below it", () => {
+    const snap = snapOf([asking("codex:1")]);
+    const item = split(snap).live[0];
+    expect(item.severity).toBe("blocking");
+    expect(M.hasCurrentImpact(item, snap)).toBe(true);
+  });
+
+  test("resolved goes to history, and says so", () => {
+    const snap = snapOf([], {
+      issues: [issue({ lifecycle: { state: "resolved", openedAt: "2026-08-05T18:00:00.000Z", resolvedAt: "2026-08-05T20:00:00.000Z" } })],
+    });
+    const { live, demoted } = split(snap);
+    expect(live).toHaveLength(0);
+    expect(demoted.map((d: { id: string; reason: string }) => [d.id, d.reason]))
+      .toEqual([["system:sources", "resolved"]]);
+  });
+
+  test("verifying stays only while it points at a live agent", () => {
+    const verifying = { state: "verifying", openedAt: "2026-08-05T18:00:00.000Z", verificationStartedAt: "2026-08-05T20:00:00.000Z" };
+    const live = agent({ id: "codex:live", programId: "p" });
+    const withLive = snapOf([live], { issues: [issue({ lifecycle: verifying, affectedAgentIds: ["codex:live"] })] });
+    expect(split(withLive).live.map((i: { id: string }) => i.id)).toContain("system:sources");
+
+    // The ended session cannot be helped by verifying anything.
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const withEnded = snapOf([ended], { issues: [issue({ lifecycle: verifying, affectedAgentIds: ["codex:gone"] })] });
+    expect(split(withEnded).live.map((i: { id: string }) => i.id)).not.toContain("system:sources");
+    expect(split(withEnded).demoted[0].reason).toBe("verifying with no live affected agent");
+
+    // Verifying is the WEAKER claim, so system-wide is not enough to keep it —
+    // this is the row that distinguishes it from the stale rule below.
+    const systemWide = snapOf([], { issues: [issue({ lifecycle: verifying })] });
+    expect(split(systemWide).live).toHaveLength(0);
+  });
+
+  test("a finding whose agents are all gone is stale; one that named none is system-wide", () => {
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const stale = snapOf([ended], { issues: [issue({ affectedAgentIds: ["codex:gone"] })] });
+    expect(split(stale).live).toHaveLength(0);
+    expect(split(stale).demoted[0].reason).toBe("stale — no live affected agent");
+
+    /* The trap this row exists to avoid: "zero live affected agents" is TRUE of
+       a system-wide dataflow fault, which is precisely the item this surface
+       exists to carry. An empty list is not a stale list. */
+    const systemWide = snapOf([], { issues: [issue({ affectedAgentIds: [] })] });
+    expect(split(systemWide).live.map((i: { id: string }) => i.id)).toEqual(["system:sources"]);
+  });
+
+  test("a silent reading never becomes a handoff, and never earns the ember", () => {
+    /* "We read its closing words and nothing wants a human" is a fact about the
+       TEXT, not a request. types.ts:406 types the wire's attentionSignal.kind as
+       the seven ACTIONABLE kinds only — isActionable() gates it server-side —
+       so this row of the truth table is a defensive gate on a shape the wire
+       forbids, not a live demotion. Asserted anyway: the gate is what makes the
+       forbidding safe to rely on. */
+    for (const kind of ["nothing-wanted", "out-of-scope", "not-readable"]) {
+      const snap = snapOf([agent({ id: "codex:1", programId: "p", outcome: "healthy", attentionSignal: { kind } })]);
+      expect(M.attentionClassOf(snap.programs[0].agents[0]), kind).toBeNull();
+      expect(split(snap).live.filter((i: { kind: string }) => i.kind === "handoff"), kind).toHaveLength(0);
+      expect(M.feedTone(split(snap).live), kind).not.toBe("blocked");
+    }
+  });
+
+  test("an alerting agent with no attention class still reaches the center", () => {
+    /* The live case the row above is often confused with, and the one the parity
+       gate turns on: a FAILED session that never asked for anything. issuesOf
+       mints its finding off alerting(), so the board counts it today and nothing
+       counted today may become unreachable. It arrives as a dataflow finding
+       rather than a handoff — nobody is waiting on a person — so it is on the
+       surface and it is not ember. */
+    const failed = snapOf([agent({ id: "codex:2", programId: "p", outcome: "failed" })]);
+    expect(M.issuesOf(failed).map((i: { id: string }) => i.id)).toEqual(["agent:codex:2"]);
+    const items = split(failed).live;
+    expect(items.map((i: { id: string; kind: string; severity: string }) => [i.id, i.kind, i.severity]))
+      .toEqual([["agent:codex:2", "dataflow", "warning"]]);
+    expect(M.feedTone(items)).toBe("noticed");
+    /* The two severities are different axes and this row is where they part.
+       The ITEM is "warning" because no person is waiting; the ROUTE is the
+       intervention drawer because the BOARD called the finding an error. The
+       item's severity drives the ember, the board's drives which drawer opens,
+       and folding them would either redden the badge for a collector fault or
+       send a failed session to the wrong panel. */
+    expect(M.issuesOf(failed)[0].severity).toBe("error");
+    expect(items[0].route).toEqual({ kind: "intervention", id: "agent:codex:2" });
+  });
+
+  test("an agent that has stopped asking leaves the live list with a reason", () => {
+    const snap = snapOf([asking("codex:1")]);
+    const item = split(snap).live[0];
+    // Same item, next snapshot: it answered.
+    const answered = snapOf([agent({ id: "codex:1", programId: "p" })]);
+    expect(M.hasCurrentImpact(item, answered)).toBe(false);
+    // And gone from the snapshot entirely.
+    expect(M.hasCurrentImpact(item, snapOf([]))).toBe(false);
+  });
+
+  test("one thing gets one row: a queued investigation does not double its finding", () => {
+    const snap = snapOf([], { issues: [issue()] });
+    const queue = [{ issueId: "system:sources", id: "q1", state: "running", headline: "Isolate it", createdAt: "2026-08-05T19:00:00.000Z" }];
+    const items = split(snap, queue).live;
+    expect(items.map((i: { id: string }) => i.id)).toEqual(["system:sources"]);
+    expect(items[0].kind).toBe("dataflow");
+    // An ORPHAN queue row — its finding has left the snapshot — still surfaces.
+    const orphan = split(snapOf([]), [{ issueId: "inv:9", id: "q9", state: "running", headline: "Still running", createdAt: "2026-08-05T19:00:00.000Z" }]);
+    expect(orphan.live.map((i: { id: string; kind: string }) => [i.id, i.kind])).toEqual([["inv:9", "investigation"]]);
+  });
+
+  test("the parity gate: every finding on the board resolves to an item or a named demotion", () => {
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const snap = snapOf([asking("codex:1"), ended], {
+      issues: [
+        issue(),
+        issue({ id: "system:stale", affectedAgentIds: ["codex:gone"] }),
+        issue({ id: "system:done", lifecycle: { state: "resolved", openedAt: "2026-08-05T18:00:00.000Z" } }),
+      ],
+    });
+    const queue = [{ issueId: "inv:7", id: "q7", state: "queued", headline: "Q", createdAt: "2026-08-05T19:00:00.000Z" }];
+    const { live, demoted } = split(snap, queue);
+    const board = [...M.issuesOf(snap).map((i: { id: string }) => i.id), ...queue.map((q) => q.issueId)];
+    const accounted = new Set([...live, ...demoted.map((d: { item: unknown }) => d.item)].map((i: { id: string }) => i.id));
+    for (const id of board) expect(accounted.has(id), id).toBe(true);
+    // …and every demotion carries a reason a human can read in the table.
+    for (const d of demoted) expect(d.reason.length, d.id).toBeGreaterThan(0);
   });
 });

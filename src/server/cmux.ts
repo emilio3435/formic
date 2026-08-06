@@ -334,6 +334,7 @@ const ANTHILL_ENV_KEYS = [
   "ANTHILL_ROLE",
   "ANTHILL_PARENT",
 ] as const;
+const CMUX_WORKSPACE_NOT_FOUND = /not_found:\s*workspace not found/i;
 
 function envRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -389,6 +390,10 @@ export async function collectCmuxWorkspaceEnvs(
       return undefined;
     }
     if (result.exitCode !== 0) {
+      /* Terminal discovery retains last-known workspace IDs for tombstoned
+         panes. Their env lookup is an expected enrichment miss, not a control
+         failure; every other lookup failure remains operator-visible. */
+      if (CMUX_WORKSPACE_NOT_FOUND.test(result.stderr)) return undefined;
       errors.push(
         `cmux workspace env ${workspaceId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
       );

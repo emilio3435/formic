@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  attentionClassFor,
+  attentionClassForKind,
   attentionFieldsFor,
   detectAttentionSignal,
   readableClosingText,
   emptyAttentionCoverage,
   recordAttention,
+  withAttentionClasses,
+  type AttentionClassEvidence,
   type AttentionSignalInput,
+  type AttentionSignalKind,
 } from "../src/server/attention-signal";
+import type { AgentSnapshot, HubSnapshot } from "../src/shared/types";
 
 /* The layer these tests cover replaced nextActionFor(activity, outcome,
    controlState), which read no content and answered "Review this session in
@@ -39,6 +47,67 @@ function stalledInput(overrides: Partial<AttentionSignalInput> = {}): AttentionS
     ...overrides,
   };
 }
+
+const attentionClassMatrix = JSON.parse(readFileSync(
+  join(import.meta.dir, "fixtures/attention-class-matrix.json"),
+  "utf8",
+)) as {
+  rows: Array<{ kind: AttentionSignalKind; attentionClass: "blocking" | "noticed" | null }>;
+};
+
+const parkedThenAsks = JSON.parse(readFileSync(
+  join(import.meta.dir, "fixtures/parked-then-asks.json"),
+  "utf8",
+)) as {
+  cases: Array<{
+    name: string;
+    evidence: AttentionClassEvidence;
+    expect: { attentionClass: "blocking" | null };
+  }>;
+};
+
+describe("attentionClass wire partition", () => {
+  for (const row of attentionClassMatrix.rows) {
+    test(`${row.kind} uses the committed blocking/noticed/absent partition`, () => {
+      expect(attentionClassForKind(row.kind)).toBe(row.attentionClass ?? undefined);
+    });
+  }
+
+  for (const row of parkedThenAsks.cases) {
+    test(`${row.name} keeps task-state precedence`, () => {
+      expect(attentionClassFor(row.evidence)).toBe(row.expect.attentionClass ?? undefined);
+    });
+  }
+
+  test("the final wire decorator emits blocking and removes a stood-down stale class", () => {
+    const blocking = {
+      id: "codex:blocking",
+      activity: "idle",
+      lifecycle: "waiting",
+      scope: "observed",
+      hookLifecycle: "needsInput",
+    } as AgentSnapshot;
+    const stoodDown = {
+      id: "codex:stood-down",
+      activity: "idle",
+      lifecycle: "waiting",
+      scope: "observed",
+      attentionClass: "blocking",
+      attentionSignal: { kind: "question-pending" },
+      taskState: "done",
+      taskStateAt: "2026-08-05T12:01:00.000Z",
+      hookLifecycle: "needsInput",
+      hookLifecycleAt: "2026-08-05T12:00:00.000Z",
+    } as AgentSnapshot;
+    const snapshot = {
+      programs: [{ id: "p", name: "P", agents: [blocking, stoodDown] }],
+    } as HubSnapshot;
+
+    const [publishedBlocking, publishedStoodDown] = withAttentionClasses(snapshot).programs[0]!.agents;
+    expect(publishedBlocking?.attentionClass).toBe("blocking");
+    expect(publishedStoodDown).not.toHaveProperty("attentionClass");
+  });
+});
 
 describe("attention signal detectors", () => {
   test("a cmux permission prompt is named as a permission, not as generic waiting", () => {

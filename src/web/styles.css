@@ -214,26 +214,34 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   color: var(--faint);
 }
 
-.masthead-signals { align-self: center; display: flex; align-items: center; gap: 0.5rem; }
+/* Positioning context for the attention panel, which hangs from this row. It is
+   anchored to the row's right edge rather than to the button, so a 452px panel
+   cannot push past the viewport on a narrow window. */
+.masthead-signals { align-self: center; display: flex; align-items: center; gap: 0.5rem; position: relative; }
 .notify-toggle { white-space: nowrap; }
-.notify-toggle.is-on { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); }
+.notify-toggle.is-open { background: var(--sand); border-color: var(--ink); }
 
-/* The waiting-on-you count, in the same ember ink the tab counts use (.view-tab
-   .count.is-alerting) so one alert vocabulary runs across the console. It rides
-   the muted button too — that is the point: silencing delivery must not silence
-   the backlog. The border keeps it legible against .is-on's moss. */
+/* The badge's INK IS THE VERDICT, which is why it has three states and not a
+   presence/absence.
+
+   Ember, filled, is the only one that means a person is the blocker — nothing
+   else in this client may claim it, so if the button is red someone stopped and
+   is waiting for you. Amber outline is the watcher having something while
+   nobody is blocked. Grey outline still renders its zero: an absent badge and a
+   quiet fleet look identical, and only one of them is good news. */
 .notify-toggle .notify-badge {
   margin-left: 0.4rem;
   padding: 0 0.34rem;
-  border: 1px solid color-mix(in srgb, var(--ember) 40%, transparent);
   border-radius: 999px;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   font-size: 0.85em;
   line-height: 1.45;
-  color: var(--ember);
-  background: color-mix(in srgb, var(--ember) 12%, transparent);
+  border: 1px solid transparent;
 }
+.notify-badge.is-blocked { background: var(--ember); color: var(--raise); }
+.notify-badge.is-noticed { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, var(--line-strong)); }
+.notify-badge.is-clear { color: var(--faint); border-color: var(--line-strong); }
 .notify-toggle.is-alerting { border-color: color-mix(in srgb, var(--ember) 45%, var(--line-strong)); }
 
 .conn {
@@ -406,6 +414,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.reading-finding-links { display: inline; }
+.reading-finding-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.reading-finding-link:hover,
+.reading-finding-link:focus-visible { color: var(--ink); text-decoration-color: currentColor; }
+.reading-finding-link:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 2px; }
+.reading-finding-separator { color: var(--muted); }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
 /* The uppercase severity badge that used to sit here is gone. It existed to
    qualify a headline that read the bare word "Degraded" for all three
@@ -492,9 +518,9 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
-/* Same Part-0 guard as #pulse-findings: the customizer expands inside the flex:none
-   summary strip, so it is bounded to the viewport and scrolls internally rather than
-   growing the chrome until the document scrolls. */
+/* Part-0 guard: the customizer expands inside the flex:none summary strip, so it
+   is bounded to the viewport and scrolls internally rather than growing the
+   chrome until the document scrolls. */
 .widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50vh, 22rem); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
 .widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
@@ -645,167 +671,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Activity sparkline on the calm line — sized here (the SVG carries only a
    viewBox; an unsized inline SVG would fall back to the 300×150 default). */
 .pulse-spark { flex: none; width: 6rem; height: 1.1rem; }
-
-/* Inline expansion: a bordered panel of finding rows, matching the old lane.
-   The element carries only the id (index.html markup is a fixed contract). */
-#pulse-findings {
-  max-width: var(--frame);
-  margin: 0 auto 0.15rem;
-  /* Part-0 fix: this expansion lives in the flex:none .health-rail, so without a
-     bound it grows the chrome past the viewport and the document scrolls. Cap it
-     against the viewport and scroll the ledger internally; the chrome stays put.
-     vh fallback line before dvh, matching the body's fallback discipline. */
-  max-height: min(40vh, 26rem);
-  max-height: min(40dvh, 26rem);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--raise);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  contain: layout paint;
-}
-.pulse-more {
-  appearance: none;
-  display: block;
-  width: 100%;
-  border: 0;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  font: 650 11px/1 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 0.65rem 0.75rem;
-  cursor: pointer;
-  text-align: left;
-  min-height: 44px;
-}
-.pulse-more:hover { color: var(--ink); background: var(--surface); }
-
-/* Finding row — two-line ledger (mockup A2). Line one: full title + live
-   summary sharing the width; line two: mono evidence tokens. The right meta
-   cluster (compact stage rail, state word, age) is fixed — nothing stretches
-   to fill the strip. Pin stays the firm ember left rail. */
-.finding {
-  display: grid;
-  grid-template-columns: 0.85rem minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  align-items: center;
-  padding: 0.5rem 0.75rem;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-  min-height: 44px;
-}
-.finding:last-child { border-bottom: 0; }
-.finding:hover { background: var(--surface); }
-.finding:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.finding.pin { box-shadow: inset 3px 0 var(--ember); }
-.finding.is-selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
-.finding.pin.is-selected { box-shadow: inset 3px 0 var(--ember), inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
-.finding .copy { min-width: 0; display: flex; flex-direction: column; gap: 0.16rem; }
-.finding .lede { display: flex; align-items: baseline; gap: 0.7rem; min-width: 0; overflow: hidden; }
-.finding .title {
-  flex: 0 1 auto;
-  font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.finding .gist {
-  flex: 1 1 3rem;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.finding .trace {
-  display: flex;
-  gap: 1.1rem;
-  font: 400 11px/1.2 var(--font-mono);
-  color: var(--faint);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.finding .trace i { font-style: normal; }
-.finding .meta { display: flex; align-items: center; gap: 0.8rem; justify-self: end; }
-.finding .meta .stage-rail { width: 4.6rem; }
-.finding .state {
-  font: 650 10px/1.2 var(--font-mono);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.finding .state.st-hot { color: var(--ember); }
-.finding .state.st-warm { color: var(--amber); }
-.finding .state.st-cool { color: var(--slate); }
-.finding .state.st-ok { color: var(--moss); }
-.finding .age {
-  font: 400 11px/1.2 var(--font-mono);
-  color: var(--faint);
-  min-width: 3.4ch;
-  text-align: right;
-}
-.glyph {
-  width: 0.7rem;
-  height: 0.7rem;
-  border: 1.5px solid currentColor;
-  border-radius: 2px;
-  flex: none;
-}
-.glyph.act { color: var(--ember); border-color: var(--ember); }
-.glyph.warn {
-  color: var(--amber);
-  border: 0;
-  background: var(--amber);
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-}
-.glyph.run { color: var(--slate); border-radius: 50%; }
-.glyph.ok {
-  color: var(--moss);
-  border: 0;
-  background: var(--moss);
-  border-radius: 50%;
-}
-/* Four-tick workflow rail: Watch → Triage → Verify → Cleared. Active ticks
-   fill left-to-right from the finding's work stage; tone follows work key. */
-.stage-rail {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 3px;
-  align-items: center;
-  height: 6px;
-}
-.stage-rail > i {
-  display: block;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--line);
-}
-.stage-rail[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail[data-stage="4"] > i:nth-child(-n+4) { background: var(--slate); }
-.stage-rail.hot[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.hot[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.hot[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.hot[data-stage="4"] > i:nth-child(-n+4) { background: var(--ember); }
-.stage-rail.warm[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.warm[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.warm[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.warm[data-stage="4"] > i:nth-child(-n+4) { background: var(--amber); }
-.stage-rail.ok[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.ok[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.ok[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
 
 /* Drawer-shared signal helpers (Impact / Technical) */
 .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
@@ -3104,7 +2969,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   .tri-spine { flex-direction: column; gap: 0.45rem; }
   .tri-step { flex: 1 1 auto; padding-right: 0; }
   .tri-step::before { display: none; }
-  .finding .gist, .finding .trace { display: none; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch.
@@ -3487,3 +3351,251 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* The empty board's closing line: the constraint that produced the emptiness,
    under the verdict rather than inside it. */
 .all-clear-note { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.85rem; }
+
+/* ===========================================================================
+   The notification center — attention's one home.
+
+   Built to mockups/notifications-dropdown-proposal-2026-08-05.html rev 2. Every
+   row is three lines and each one is a sentence: what stopped, where it is,
+   what it is asking. The evidence peek STANDS rather than hiding behind a
+   hover — it is the line that decides whether you need to open anything at all,
+   and a line you have to hover to read is a line a touch operator cannot read.
+
+   No inline style anywhere: the strict CSP holds here as it does for the SVG
+   meters, so every state is a class.
+   ========================================================================= */
+
+.notify-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(452px, calc(100vw - 2rem));
+  max-height: min(34rem, calc(100vh - 6rem));
+  overflow-y: auto;
+  background: var(--raise);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  text-align: left;
+}
+
+/* The instrument hero: the verdict in words on the left, the standby total on
+   the right. Both are readings, and neither is a to-do — the rows below are. */
+.notify-panel-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0.95rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+.notify-eyebrow {
+  display: block;
+  font: 600 0.58rem/1 var(--font-mono);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.notify-lede { margin: 0.25rem 0 0; font: 650 1rem/1.2 var(--font-ui); }
+.notify-rest { margin: 0.32rem 0 0; font: 400 0.7rem/1 var(--font-mono); color: var(--faint); }
+
+/* The rev-2 mockup's standby hero stood here — a fleet dead-time total in the
+   largest type on the panel. It is gone, and its rules are deleted rather than
+   left orphaned, because S0-T1 measured that the quantity is not obtainable
+   from any source this board has: the hook clock advances mid-wait, the hook
+   notification repeats mid-wait, and the cmux journal rolls away. The head now
+   carries the verdict, the count and the tally, all of which are measured. */
+
+.notify-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.95rem 0.3rem;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+.notify-group-name { font: 600 0.72rem/1 var(--font-mono); }
+.notify-group-count {
+  margin-left: auto;
+  font: 600 0.56rem/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.notify-row {
+  position: relative;
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0.95rem 0.65rem 1.05rem;
+}
+.notify-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10%;
+  bottom: 10%;
+  width: var(--signal-rail);
+  background: var(--ember);
+}
+.notify-row:hover, .notify-row:focus-within { background: var(--sand); }
+.notify-row-top { display: flex; align-items: baseline; gap: 0.8rem; }
+/* The title line IS the route. A button rather than a clickable div so it is
+   reachable, nameable and Enter-activatable without inventing key handling. */
+.notify-row-open {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font: 650 0.86rem/1.3 var(--font-ui);
+  color: inherit;
+  letter-spacing: -0.002em;
+}
+.notify-row-open:hover { text-decoration: underline; text-underline-offset: 2px; }
+.notify-row-time { flex: none; font: 600 0.72rem/1 var(--font-mono); color: var(--ember); white-space: nowrap; }
+/* The actions ride the trace line rather than claiming one of their own, and
+   the space is reserved at rest so nothing shifts when they appear. */
+.notify-row-meta { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.2rem; min-height: 1.4rem; }
+.notify-row-trace {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 0.7rem/1.3 var(--font-mono);
+  color: var(--faint);
+}
+.notify-row-acts { display: flex; gap: 0.35rem; flex: none; align-items: center; }
+.notify-act, .notify-row-acts .dock-tool {
+  font: 600 0.68rem/1 var(--font-ui);
+  padding: 0.28rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--raise);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.notify-act:hover, .notify-row-acts .dock-tool:hover { background: var(--sand); }
+.notify-act:disabled, .notify-row-acts .dock-tool:disabled { cursor: not-allowed; opacity: 0.55; }
+/* What the agent actually asked, standing rather than hover-only. */
+.notify-peek {
+  margin: 0.4rem 0 0;
+  padding: 0.05rem 0 0.05rem 0.6rem;
+  border-left: var(--signal-rail) solid var(--line);
+  font: 400 0.78rem/1.45 var(--font-ui);
+  color: var(--muted);
+}
+.notify-row:hover .notify-peek, .notify-row:focus-within .notify-peek { border-left-color: var(--line-strong); color: var(--ink); }
+
+/* The log below the queue. A log does not need to be navigable — it needs to be
+   skippable — so these are one line each and carry no rail. */
+.notify-sect {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.75rem 0.95rem 0.3rem;
+  border-top: 1px solid var(--line);
+}
+.notify-sect-hint { font-size: 0.72rem; color: var(--faint); }
+.notify-quiet {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0.4rem 0.95rem;
+  font: 400 0.78rem/1.4 var(--font-ui);
+  color: var(--muted);
+  text-align: left;
+}
+.notify-quiet:hover { background: var(--sand); color: var(--ink); }
+.notify-quiet-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify-quiet-prog { font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
+.notify-quiet-time { flex: none; font: 400 0.7rem/1 var(--font-mono); color: var(--faint); white-space: nowrap; }
+
+/* All clear shows what the watcher is watching. "Watching, found nothing" and
+   "not watching" are the two states an empty panel is otherwise ambiguous
+   between, and the collector counts are evidence a stalled client cannot fake. */
+.notify-proof { margin: 0; padding: 0.7rem 0.95rem 0.8rem; font: 400 0.72rem/1.5 var(--font-mono); color: var(--faint); }
+
+.notify-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.65rem 0.95rem;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky;
+  bottom: 0;
+}
+/* Delivery's control, and the only place in this client that asks for browser
+   permission. It sits at the foot of the panel because it governs interruption,
+   not the backlog — those were one control once, and "Notifications off" read
+   as an explanation of the four agents standing beside it. */
+.notify-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: 400 0.76rem/1.3 var(--font-ui);
+  color: var(--muted);
+}
+.notify-switch:disabled { cursor: not-allowed; opacity: 0.6; }
+.notify-switch-track {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.notify-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--raise);
+}
+.notify-switch.is-on { color: var(--ink); }
+.notify-switch.is-on .notify-switch-track { background: var(--moss); }
+.notify-switch.is-on .notify-switch-track::after { left: auto; right: 2px; }
+.notify-foot-state { font: 600 0.7rem/1 var(--font-mono); color: var(--faint); white-space: nowrap; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .notify-row, .notify-quiet, .notify-act, .notify-peek, .notify-switch-track {
+    transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+}
+
+/* Touch has no hover, so nothing here may depend on one — the actions already
+   stand at rest, which is the whole reason the evidence peek and the Focus/Reply
+   pair are not hover-revealed.
+
+   The narrow layout stays ABSOLUTE rather than switching to fixed. A fixed
+   dropdown stops moving with the page, so it hangs over the board while the
+   button that opened it scrolls away — the panel and its control have to stay
+   one object. Width is already clamped to the viewport above; this only widens
+   the gutter and shortens it so it fits a phone. */
+@media (max-width: 760px) {
+  .notify-panel {
+    width: min(452px, calc(100vw - 1.5rem));
+    max-height: 70vh;
+  }
+}

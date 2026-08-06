@@ -1,0 +1,83 @@
+{
+  "purpose": "Atlas-hardening T6/T7 precedence must stay unbroken under the notification center. A lane that declared parked or done and then asks a question must re-alert; a declaration at or after the ask must silence the stale hook. This is attention-only — it never claims the process ended.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §3 S0-T2 and claims-first 'A parked lane that then asks something re-alerts.'",
+  "companion": "tests/fixtures/task-state-attention-truth-table.json",
+  "cases": [
+    {
+      "name": "a parked lane that asks later re-alerts",
+      "claim": "Parking is a declaration, not a muzzle forever. A strictly newer needsInput means a person is wanted again — blocking must return, and the center must re-alert.",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.001Z"
+      },
+      "expect": {
+        "wantsHuman": true,
+        "attentionClass": "blocking",
+        "reAlert": true
+      }
+    },
+    {
+      "name": "a done lane that asks later re-alerts",
+      "claim": "Declared done with a newer ask is the same re-alert rule. A3 forbids treating the declaration as a completion metric; it does not forbid the newer ask from reaching the center.",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:01.000Z"
+      },
+      "expect": {
+        "wantsHuman": true,
+        "attentionClass": "blocking",
+        "reAlert": true
+      }
+    },
+    {
+      "name": "parking after the ask silences the stale hook",
+      "claim": "If the declaration is at or after the hook, the stale ask must not stay live. Otherwise every parked lane would permanently ember-fill the badge.",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:01:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expect": {
+        "wantsHuman": false,
+        "attentionClass": null,
+        "reAlert": false
+      }
+    },
+    {
+      "name": "done at the same instant wins because the ask is not newer",
+      "claim": "Equal timestamps are not a newer ask. The declaration wins; no blocking class.",
+      "evidence": {
+        "taskState": "done",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z"
+      },
+      "expect": {
+        "wantsHuman": false,
+        "attentionClass": null,
+        "reAlert": false
+      }
+    },
+    {
+      "name": "a parked declaration never yields blocking from stalled-active alone",
+      "claim": "stalled-active opens the door only for an active lane. A parked lane must not be reopened by watcher-noticed idle — that would break T6/T7 and paint ember from a notice.",
+      "evidence": {
+        "taskState": "parked",
+        "taskStateAt": "2026-08-05T12:00:00.000Z",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T11:29:00.000Z",
+        "attentionSignal": { "kind": "stalled-active" }
+      },
+      "expect": {
+        "wantsHuman": false,
+        "attentionClass": null,
+        "reAlert": false
+      }
+    }
+  ]
+}
