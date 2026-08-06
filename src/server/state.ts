@@ -137,6 +137,7 @@ export class HubState {
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #liveAgentProcessIds?: number[];
   #recognizedAgentProcessIds?: number[];
+  #processStartsByPid?: Map<number, number>;
   /* Whether the last completed scan enumerated everything it needed to. Held
      like #surfaces rather than recomputed per refresh, because a refresh that
      skips cmux has not learned anything new about the process table either. */
@@ -575,6 +576,9 @@ export class HubState {
           this.#recognizedAgentProcessIds = identityResult.recognizedAgentProcessIds
             ? [...identityResult.recognizedAgentProcessIds]
             : undefined;
+          this.#processStartsByPid = identityResult.processStarts
+            ? new Map(Object.entries(identityResult.processStarts).map(([pid, start]) => [Number(pid), start]))
+            : undefined;
           this.#rosterComplete = identityResult.rosterComplete === true;
           identityErrors = identityResult.errors;
         } else if (cmux.errors.length === 0) {
@@ -623,6 +627,7 @@ export class HubState {
           this.#surfaces,
           this.#liveAgentProcessIds,
           this.#recognizedAgentProcessIds,
+          this.#processStartsByPid,
         )
       : collectedAgents;
     /* Then the persisted witnesses, for sessions this scan found nothing about.

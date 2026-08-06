@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   enrichCmuxIdentity,
   identityFromSessionPath,
+  parseProcessTable,
   isRecognizedAgentProcess,
 } from "../src/server/identity";
 import { resolveAgentTarget } from "../src/server/targets";
@@ -48,6 +49,74 @@ const surface: CmuxSurface = {
 };
 
 describe("TTY and open-session identity evidence", () => {
+  test("the process table is read with start times, in a locale that renders them predictably", async () => {
+    const runner = new SequenceRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+    await enrichCmuxIdentity([surface], [agent], runner);
+    /* A pid is only checkable against a start time, so the scan has to ask for
+       one — and `ps` renders `lstart` per locale, so it has to pin the locale
+       it is parsed against. Still ONE ps: a second call would shift every
+       positional expectation in the runners that drive this function. */
+    expect(runner.commands[0]).toEqual([
+      "env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,lstart=,command=",
+    ]);
+  });
+
+  test("the process table parses with or without a start-time column", () => {
+    const dated = parseProcessTable(
+      " 202 ttys033 Wed Aug  5 16:36:08 2026 /Users/me/.local/bin/claude --resume abc",
+    );
+    expect(dated[0]).toMatchObject({
+      pid: 202,
+      tty: "ttys033",
+      command: "/Users/me/.local/bin/claude --resume abc",
+    });
+    expect(dated[0]?.startSeconds).toBe(Math.floor(Date.parse("Wed Aug  5 16:36:08 2026") / 1_000));
+
+    /* Fixtures predate the column, and an unexpected locale must degrade to "no
+       start time" rather than slicing a date onto the front of the command —
+       a corrupted command breaks every attribution path downstream. */
+    const undated = parseProcessTable(" 202 ttys033 /Users/me/.local/bin/claude --resume abc");
+    expect(undated[0]).toMatchObject({ command: "/Users/me/.local/bin/claude --resume abc" });
+    expect(undated[0]?.startSeconds).toBeUndefined();
+
+    const foreign = parseProcessTable(" 202 ttys033 mie ago  5 16:36:08 2026 /usr/bin/omp");
+    expect(foreign[0]?.startSeconds).toBeUndefined();
+  });
+
+  test("attributed pids carry the start time that makes them re-checkable", async () => {
+    const target: CollectedAgent = {
+      ...agent,
+      processIds: undefined,
+      processAlive: undefined,
+      processStarts: undefined,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: " 4242 ttys033 Wed Aug  5 16:36:08 2026 /Users/me/.local/bin/omp -p",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p4242",
+          "n/Users/me/.omp/agent/sessions/project/run_019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    await enrichCmuxIdentity([surface], [target], runner);
+
+    expect(target.processIds).toEqual([4242]);
+    expect(target.processStarts?.[4242])
+      .toBe(Math.floor(Date.parse("Wed Aug  5 16:36:08 2026") / 1_000));
+  });
+
   test("lsof targets only recognized agent processes while command hints still inspect the whole tty", () => {
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
     expect(isRecognizedAgentProcess("/usr/bin/login -pflq user /bin/zsh")).toBeFalse();
