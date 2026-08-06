@@ -1,6 +1,8 @@
 # Clean up becomes a Cleaner agent — plan
 
-> **Status: DRAFT — needs Emilio's ratify. One ruling reversal inside, called out rather than buried.**
+> **Status: RATIFIED 2026-08-06 08:34 — in implementation.**
+> **R2′ approved by Emilio: the board may launch a Cleaner agent. The gate moves to the board, it does not disappear.**
+> **§5 chip placement approved: end of the detail line, right-aligned to the card edge.**
 > **Baseline:** `main` after `6338edb`. Clean up is proven wired end to end on a degraded board.
 > Predecessor: `2026-08-05-confidence-header-and-notification-center.md` (S6, and ruling **R2**).
 
@@ -102,8 +104,11 @@ Right-aligning it where it is (Emilio's suggestion) fixes #2 but not #1 or #3 �
 - Double-click launches one Cleaner, not two.
 - A refusal from the sweep survives to the UI with its reason — a plan missing a refusal proposes deleting something it should not.
 
-## 7. Open for Emilio
+## 7. Decisions taken (Emilio, 2026-08-06 08:34)
 
-1. **Ratify or reject R2′** (§1). Everything downstream depends on it.
-2. **Approval inside the Cleaner, or approval on the board?** The Cleaner asking as a normal agent is simpler and reuses everything. A board-level approve button is fewer clicks and more machinery.
-3. **Chip placement** (§5) — detail line right-aligned, or right-aligned where it is.
+- **R2′ ratified.** The board may launch a Cleaner agent. The human gate moves onto the board rather than disappearing: the Cleaner asks as a lane, the operator answers as they answer any agent. No destructive HTTP route, ever.
+- **States ratified.** Every state derives from the Cleaner's observable session. No timers. If it cannot be observed it is not shown.
+- **Flair ratified.** Delight is the machine visibly working — a ring that lands rather than loops, a named colleague arriving on the board, a verdict that is a count. No decoration.
+- **Chip placement ratified:** end of the detail line, right-aligned to the card edge, vertically centred on the detail line's cap height.
+
+**Approval location — orchestrator's call, taken:** the Cleaner asks as a normal agent. It reuses `attentionClass:"blocking"`, the notification center, the drawer and the reply path, all of which already exist and are tested. A board-level approve button would be a second approval mechanism for one caller, and this program spent a month removing surfaces that duplicate each other.
