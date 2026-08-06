@@ -566,10 +566,15 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 
 .pane-list {
-  /* The roster's stuck program/column headers pin at these offsets. --program-head-h
-     matches the single-line head (46px desktop; re-pointed to 60px in the <=1024px
-     block where the touch sweep grows the head's buttons). --column-head-h matches
-     the column header's own height and drives the rows' scroll-margin (head + column). */
+  /* The roster's frozen stack pins at these offsets, top to bottom:
+     band head (--repo-head-h) → the band's one column header (--column-head-h)
+     → the current worktree rule (--worktree-head-h). A FLAT program keeps the
+     old two-tier stack (--program-head-h + --column-head-h). Each token must
+     equal its element's single-line stuck height exactly; all are re-pointed
+     in the <=1024px block where the touch sweep grows the controls. The rows'
+     scroll-margin clears the deepest stack. */
+  --repo-head-h: 46px;
+  --worktree-head-h: 34px;
   --program-head-h: 46px;
   --column-head-h: 25px;
   flex: 1;
@@ -1189,16 +1194,9 @@ body.feed-frozen .programs { opacity: 0.62; }
 .program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
-/* Inline-mode reachability: the one alert signal a COLLAPSED repo band has.
-   Ember for the same reason the rollup's alerts cell is ember — it is the
-   band-level count of sessions asking for a person. */
-.repo-alerts {
-  font-size: 11.5px;
-  color: var(--ember);
-  font-weight: 700;
-  white-space: nowrap;
-}
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
+/* The head's filter disclosure: informational, never a to-do. */
+.head-shown { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* inline rename editor */
 .rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; width: 100%; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--raise); }
@@ -1247,34 +1245,102 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 /* ---------- repo bands ----------
 
-   The repository is the section and its worktrees are the subsections inside
-   it, so this layer must NOT read as a second card: two stacked bordered
-   headers over one row of work is chrome, not hierarchy. It is a titled rule —
-   name, worktree count, PR links — and the worktree cards keep the card
-   treatment they already had, indented under it. */
+   The repository is the program tier — the top of the operator's attention
+   order — so it is the ONE card on the board: border, surface, lift. Its
+   worktrees render inside it as labelled rules, not as sibling cards. It was
+   measured the other way round: the band was a hairline while every checkout
+   under it wore a border, a radius and the only drop shadow on the page, so
+   at a squint the board read as eleven unrelated boxes. The strongest
+   containment signal must belong to the top of the hierarchy. */
 
-.repo-section { margin-bottom: 1.2rem; }
+.repo-section {
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  /* `clip`, not `hidden`, for the same measured reason the worktree card
+     learned it: `hidden` makes the card a sticky scroll-scope and the head
+     pins to the card instead of the roster (probe D: head to -269px). */
+  overflow: clip;
+}
 .repo-head {
+  /* Top of the frozen stack. The program name used to be the FIRST thing to
+     scroll off screen — the one tier the operator ranks by was the only one
+     that could be absent. Opaque and single-line so its stuck height equals
+     --repo-head-h exactly. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--surface);
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 0.45rem;
-  padding: 0 0.15rem 0.35rem;
+  padding: 0.4rem 0.9rem;
+  min-height: var(--repo-head-h);
   border-bottom: 1px solid var(--line);
-  margin-bottom: 0.65rem;
 }
 .repo-caret { flex: none; color: var(--faint); font-size: 11px; transition: transform 150ms ease; display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: var(--radius-sm); }
 .repo-caret:hover { color: var(--ink); background: var(--raise); }
 .repo-section.open .repo-caret { transform: rotate(90deg); }
-/* Truncates for the same reason the program name does: one line, any width. */
-.repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: 0.95rem; letter-spacing: -0.005em; }
+/* Truncates for the same reason the program name does: one line, any width.
+   The largest type on the board, by design: the three tiers were 15.2 / 16 /
+   15 px, all 700, all one ink — a ladder that ran BACKWARDS at the top. */
+.repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; font-size: 1.25rem; letter-spacing: -0.015em; }
 .repo-worktree-count { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .repo-pr { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 0.32rem; }
 .repo-pr:hover { color: var(--ember); border-color: var(--line-strong); }
-.repo-worktrees { padding-left: 0.55rem; border-left: 1px solid var(--line); }
+/* The band's one column header pins directly under the band head, above the
+   worktree rules in the stack. Child selector: the flat-program copy inside a
+   program body keeps the base offsets. */
+.repo-section > .agent-column-header { top: var(--repo-head-h); z-index: 3; }
+/* No indent rail: a 1px rail cannot win a weight contest against the card
+   border it sits beside. Nesting is carried by the type ladder and spine. */
 .repo-worktrees .program:last-child { margin-bottom: 0; }
-/* A collapsed band plans no subsections, so without this its indent rule would
-   still draw — a 1px stub hanging under a folded-up repository. */
+/* A collapsed band plans no subsections, so without this its rules would
+   still draw under a folded-up repository. */
 .repo-section:not(.open) .repo-worktrees { display: none; }
+
+/* A banded worktree is a labelled rule inside the card, not a second card:
+   the 117px of per-checkout chrome (head + own column bar + card edges) that
+   wrapped every 52px row is what made siblings read as strangers. */
+.program.is-banded {
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.program.is-banded + .program.is-banded { border-top: 1px solid var(--line); }
+.program.is-banded .program-head {
+  /* Middle tier of the frozen stack: the current worktree stays named while
+     its rows scroll. Under the band head and the column bar in z, so an
+     incoming band covers it at a section boundary. */
+  top: calc(var(--repo-head-h) + var(--column-head-h));
+  z-index: 2;
+  min-height: var(--worktree-head-h);
+  padding: 0.2rem 0.9rem;
+}
+.program.is-banded .program-caret { width: 1.2rem; height: 1.2rem; font-size: 10px; }
+/* Topic tier: a branch is an identifier, so it rides the mono face (the sans
+   face collapsed I/l/1 in exactly the labels the operator types into git) at
+   a step DOWN from the band name — it was the largest heading on the board. */
+.program.is-banded .program-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+/* The rule reveals its editors on approach, like .agent-rename: a 30px
+   bordered Details pill on every checkout out-weighed the alert counts.
+   :focus-within keeps both reachable by keyboard. */
+.program.is-banded .program-rename,
+.program.is-banded .program-details { opacity: 0; min-height: 24px; padding-top: 0; padding-bottom: 0; }
+.program.is-banded .program-head:hover .program-rename,
+.program.is-banded .program-head:focus-within .program-rename,
+.program.is-banded .program-head:hover .program-details,
+.program.is-banded .program-head:focus-within .program-details { opacity: 1; }
+/* The worktree spine: inset, never border-left — a border would narrow these
+   rows relative to the band-level column header above them and silently
+   de-register every numeric column from its label. */
+.program.is-banded .program-agents { box-shadow: inset 2px 0 var(--line); }
 
 /* ---------- agent rows ---------- */
 
@@ -1289,9 +1355,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-left: 4px solid transparent;
   cursor: pointer;
   box-sizing: border-box;
-  /* Keyboard parity: Tab/arrow focus scrolls the row clear of the stuck header
-     stack (program head + column header) so it never lands hidden beneath them. */
-  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));
+  /* Keyboard parity: Tab/arrow focus scrolls the row clear of the deepest
+     frozen stack (band head + column header + worktree rule) so it never
+     lands hidden beneath it. */
+  scroll-margin-top: calc(var(--repo-head-h) + var(--column-head-h) + var(--worktree-head-h));
 }
 .agent-row:last-child { border-bottom: 0; }
 .agent-row:hover { background: var(--sand); }
@@ -1306,10 +1373,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row-edit-wrap { border-bottom: 1px solid var(--line); }
 .agent-row-edit-wrap .rename-form { border-bottom: 0; }
 
-.agent-row.provider-claude:not(.is-selected) { border-left-color: color-mix(in srgb, var(--claude) 50%, transparent); }
-.agent-row.provider-codex:not(.is-selected) { border-left-color: color-mix(in srgb, var(--codex) 50%, transparent); }
-.agent-row.provider-omp:not(.is-selected) { border-left-color: color-mix(in srgb, var(--omp) 50%, transparent); }
-.agent-row.provider-cursor:not(.is-selected) { border-left-color: color-mix(in srgb, var(--cursor) 50%, transparent); }
+/* No provider tint on the edge. Claude's desaturated terracotta sat on the
+   same 4px stripe as the ember attention rail — on a Claude-dominant fleet,
+   essentially every row wore a permanent pale-red edge, a 1:1 signal-to-noise
+   ratio on the board's primary attention channel by construction. Provider
+   already prints twice per row: the avatar mark and the MODEL cell. */
 
 /* Role cues remain distinct from provider and operational-state cues. The
    variables work whether the interaction lane adds the role class to a row or
@@ -1332,12 +1400,10 @@ body.feed-frozen .programs { opacity: 0.62; }
 .role-verifier { --role-color: #5c5680; --role-surface: #eeeef4; --role-ink: #423d63; }
 .role-tester { --role-color: #995000; --role-surface: #f5efe6; --role-ink: #7e4300; }
 .role-automation { --role-color: #0a6f5b; --role-surface: #eaf2ef; --role-ink: #0a5749; }
-.agent-row.role-orchestrator,
-.agent-row.role-frontend,
-.agent-row.role-backend,
-.agent-row.role-verifier,
-.agent-row.role-tester,
-.agent-row.role-automation { box-shadow: inset 3px 0 var(--role-color); }
+/* No role rail either: role is identity, the rail is triage. Six role
+   classes wrote the same box-shadow slot the attention rails need, and the
+   winner was whichever rule the cascade reached last. Role keeps its chip
+   (drawer) and its --role-color vocabulary above. */
 
 /* Alert washes must ride WITH a status-colored edge mark, never a standalone
    flood (Rule 1 — indicator inks, not flood fills; codified soft-wash threshold:
@@ -1529,13 +1595,19 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-name {
   display: block;
   min-width: 0;
-  font-weight: 700;
-  font-size: 15px;
+  /* Bottom of the type ladder: 20 / 12 / 14 px, weight and ink descending
+     with it. The old 15px/700 tied the agent tier to the topic tier on every
+     channel at once. */
+  font-weight: 650;
+  font-size: 14px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.agent-row.is-parent .agent-name { font-weight: 800; }
+/* A parent still reads heavier than its siblings, but no longer heavier than
+   every heading above it — 800 made the deepest tier the loudest text on the
+   whole board. */
+.agent-row.is-parent .agent-name { font-weight: 750; }
 .agent-rename {
   flex: 0 0 auto;
   display: inline-flex;
@@ -1657,23 +1729,29 @@ body.feed-frozen .programs { opacity: 0.62; }
 .swarm-chip.is-open { border-style: solid; }
 .swarm-chip.is-alerting { color: var(--ember); border-color: var(--ember); }
 .swarm-caret { font-size: 8.5px; line-height: 1; }
-/* Which program a strip row came from — repo plus branch@directory, the same
-   words its group header says. A button, because the strip is flat and
-   cross-program: this chip is the road back to the group it names. */
-.row-program-chip {
-  flex: none;
-  font: inherit;
-  font-size: 10.5px;
-  color: var(--faint);
-  background: var(--sand);
+/* The strip's group headings: which program a run of pinned rows came from —
+   repo plus branch@directory, the same words its board section says — and the
+   jump control back to that section. Ink-weight text rather than a chip: this
+   is a heading doing a heading's job. */
+.strip-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0.45rem 0 0.05rem;
+  padding: 0 0.85rem 0 0.8rem;
   border: 0;
-  border-radius: 3px;
-  padding: 0 0.3rem;
-  white-space: nowrap;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
   cursor: pointer;
+  text-align: left;
 }
-.row-program-chip:hover { color: var(--ink); }
-.row-program-chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.strip-group-head:hover .strip-group-name { text-decoration: underline; }
+.strip-group-head:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.strip-group-go { color: var(--faint); font-size: 10px; }
 /* The two endings a history record can have, and they are typeset apart because
    they are different facts. Solid outline for the one an operator chose; dashed
    for the one nobody chose — the board simply stopped watching, and a dashed
@@ -1706,7 +1784,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   white-space: nowrap;
 }
 .row-died .ico { width: 0.75rem; height: 0.75rem; flex: none; }
-.agent-row.is-died { box-shadow: inset 3px 0 var(--failed); }
+/* Right edge, not left: the left rail is the attention channel, and a row
+   can be dead AND asking — the two marks must never fight over one slot. The
+   .row-died pill carries the words; this is the scannable echo. */
+.agent-row.is-died { border-right: 3px solid var(--failed); }
 
 /* A declared task state. Quiet by construction — this is the one mark on the
    board that says a row is silent BECAUSE someone decided it should be, so it
@@ -1740,7 +1821,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   white-space: nowrap;
 }
 .lineage-contradicted .ico { width: 0.75rem; height: 0.75rem; flex: none; }
-.agent-row.is-lineage-disputed { box-shadow: inset 3px 0 var(--failed); }
+.agent-row.is-lineage-disputed { border-right: 3px solid var(--failed); }
 /* An attribution the server could not confirm. Amber rather than the failed
    red the two marks above use, and that gap is deliberate: those two report
    something that HAPPENED, while this reports a check that did not come back
@@ -1788,16 +1869,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-failed .row-summary { color: color-mix(in srgb, var(--failed) 65%, var(--ink)); }
 
 /* swarm tree connectors + depth accents */
-.agent-row.depth-1 { --tree-depth: 1; --tree-color: #6c8b6b; }
-.agent-row.depth-2 { --tree-depth: 2; --tree-color: #b6794f; }
-.agent-row.depth-3 { --tree-depth: 3; --tree-color: #667c91; }
-.agent-row.depth-4 { --tree-depth: 4; --tree-color: #776b8f; }
+/* One neutral tree ink, no per-depth hues: the old palette (green, rust,
+   blue, purple) mimicked the provider palette pairwise, so a Claude subagent
+   at depth 1 wore the green that meant Codex on every other row. Depth is
+   carried by the indent and the elbow; colour stays free for providers'
+   avatars and the attention channel. */
+.agent-row.depth-1 { --tree-depth: 1; }
+.agent-row.depth-2 { --tree-depth: 2; }
+.agent-row.depth-3 { --tree-depth: 3; }
+.agent-row.depth-4 { --tree-depth: 4; }
 /* Indent cap (N=3): full indent for the first 3 levels, then stop — 3·1.3rem +
    0.8rem base = 4.7rem = 75px ≈ 19.8% of the 380px min drawer-open pane (25% =
    95px), where uncapped depth-4 hit 96px and crushed the content column. Deeper
    nesting reuses the level-3 indent; the depth colour + swarm/depth chips carry
    the rest of the hierarchy. min(var(--tree-depth), 3) caps the multiplier. */
-.agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--tree-color); }
+.agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--line-strong); }
 .agent-row.is-child::before {
   content: "";
   position: absolute;
@@ -1805,8 +1891,8 @@ body.feed-frozen .programs { opacity: 0.62; }
   left: calc(0.55rem + (min(var(--tree-depth), 3) - 1) * 1.3rem);
   width: 0.8rem;
   height: 1.95rem;
-  border-left: 1.5px solid var(--tree-color);
-  border-bottom: 1.5px solid var(--tree-color);
+  border-left: 1.5px solid var(--line-strong);
+  border-bottom: 1.5px solid var(--line-strong);
   border-radius: 0 0 0 6px;
   opacity: 0.6;
 }
@@ -1820,7 +1906,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-height: 40px;
   padding: 0.4rem 0.7rem;
   text-align: left;
-  scroll-margin-top: calc(var(--program-head-h) + var(--column-head-h));   /* clear the stuck header stack on keyboard focus */
+  scroll-margin-top: calc(var(--repo-head-h) + var(--column-head-h) + var(--worktree-head-h));   /* clear the frozen stack on keyboard focus */
   color: var(--muted);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--sand) 55%, var(--raise));
@@ -2916,7 +3002,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   /* The touch sweep below grows the head's rename/details controls to 44px, so
      the single-line head is taller here — re-point the sticky offset to match so
      the column header stays flush under it. */
-  .pane-list { --program-head-h: 60px; }
+  .pane-list { --repo-head-h: 60px; --program-head-h: 60px; }
   /* Full-sheet inspector owns the viewport; drop the shared desktop shell. */
   .ops-stage {
     border: 0;
@@ -2983,9 +3069,12 @@ body.feed-frozen .programs { opacity: 0.62; }
      the least-critical tokens cell (the alerts cell is never dropped). Also raise
      the stuck column header's scroll-margin offset to the 2-row mobile header. */
   .program-rollup-cell--tokens { display: none; }
-  .pane-list { --column-head-h: 44px; }
+  .pane-list { --column-head-h: 44px; --worktree-head-h: 44px; }
   .program-rename,
   .agent-rename { width: 2.75rem; height: 2.75rem; opacity: 1; }
+  /* No hover on touch: the banded head's revealed editors stay visible. */
+  .program.is-banded .program-rename,
+  .program.is-banded .program-details { opacity: 1; min-height: 44px; }
   .agent-column-header,
   .agent-grid {
     grid-template-columns: minmax(0, 1fr) minmax(5.2rem, auto);
@@ -3283,15 +3372,18 @@ body.feed-frozen .programs { opacity: 0.62; }
    A left rail rather than a background wash: the row backgrounds are already
    spoken for by outcome (needs-you, blocked, failed), and a second wash would
    mix into a colour that means neither. */
-.agent-row.ctx-warn { box-shadow: inset 3px 0 var(--amber); }
-.agent-row.ctx-hot { box-shadow: inset 3px 0 var(--ember); }
+/* No context rail: the MODEL cell's value already turns amber/ember below,
+   and the rail rules here out-cascaded the dead-process and disputed-lineage
+   marks purely by file position — the least consequential fact silently
+   overwrote the two that most invalidate the row. */
 /* Attention still owns the rail when both apply — a session asking for a human
    outranks one that is merely filling its window. */
-.agent-row.is-needs-you.ctx-warn, .agent-row.is-needs-you.ctx-hot { box-shadow: inset 4px 0 var(--needs); }
 /* Which is why the reading itself is coloured too. The rail is one channel and
    attention already owns it, so on exactly the busiest rows — the ones both
    asking for a human AND close to full — a rail-only highlight is invisible.
    The number carries it independently and is where the eye goes to check. */
+/* QUIET is advisory ink: dormancy past the stall threshold, not an alarm. */
+.ri-elapsed.is-quiet .ri-value { color: var(--amber); font-weight: 650; }
 .agent-row.ctx-warn .ri-model .ri-value { color: var(--amber); font-weight: 700; }
 .agent-row.ctx-hot .ri-model .ri-value { color: var(--ember); font-weight: 700; }
 /* ---------- the pinned Needs-you strip ----------
@@ -3336,7 +3428,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .lifecycle-section {
   margin: 0.5rem 0 0;
   padding: 0.4rem 0.85rem 0 0.8rem;
-  border-top: 1px dashed var(--line-strong);
+  /* --line, not --line-strong: the one line that took the stronger token was
+     the divider INSIDE a card — 1.54x the contrast of the boundary between
+     two repositories. The rule ladder must point the same way the hierarchy
+     does. */
+  border-top: 1px dashed var(--line);
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.09em;
@@ -3698,6 +3794,25 @@ body.feed-frozen .programs { opacity: 0.62; }
    the length of a verdict word has no anchor, which is half of why this read
    wrong appended to the heading. */
 .reading-sub-action .verdict-cleanup { flex: none; margin-left: auto; }
+/* A launch refusal, on the detail line beside the control that refused. Amber
+   rather than ember: nothing is blocked on a person and nothing was removed —
+   the board could not start a lane, which is a fact about this board. */
+.cleanup-failure {
+  flex: 1 1 100%;
+  order: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  border-left: 2px solid var(--amber);
+  background: var(--amber-soft);
+  color: var(--ink);
+}
+.cleanup-failure-code { font-size: 0.7rem; color: var(--amber); }
+.cleanup-failure-said { font-weight: 650; }
+.cleanup-failure-means { flex: 1 1 100%; color: var(--muted); }
 
 .verdict-cleanup {
   appearance: none;

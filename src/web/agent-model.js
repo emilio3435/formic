@@ -541,7 +541,11 @@ export function buildClusters(agents) {
 
 export function tokenSummary(tokens) {
   const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
-  if (!tokens || (tokens.total == null && tokens.input == null && tokens.output == null && tokens.cachedInput == null)) {
+  /* Zero is absence here, not a measurement: a session whose every figure is 0
+     has reported nothing, and a bold "0" styled exactly like a reading claimed
+     a measurement the source never made. */
+  const absent = (v) => v == null || v === 0;
+  if (!tokens || (absent(tokens.total) && absent(tokens.input) && absent(tokens.output) && absent(tokens.cachedInput))) {
     const provenance = tokens ? tokens.provenance : "unknown";
     return {
       label,

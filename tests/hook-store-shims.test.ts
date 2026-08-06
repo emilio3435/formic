@@ -178,6 +178,64 @@ describe("anthill cursor-agent / droid shims (T8)", () => {
     expect(record.pid as number).toBeGreaterThan(0);
   });
 
+  test("cursor-agent shim keeps an interactive agent in the terminal foreground", () => {
+    const root = freshFixture("shim-cursor-interactive");
+    const fakeBin = join(root, "fake-bin");
+    const hookRoot = join(root, "cmuxterm");
+    const marker = join(root, "foreground.txt");
+    mkdirSync(fakeBin, { recursive: true });
+    mkdirSync(hookRoot, { recursive: true });
+    assertNeverTouchesRealCmuxterm(hookRoot);
+
+    writeExecutable(
+      join(fakeBin, "cursor-agent"),
+      [
+        "#!/bin/bash",
+        "if [[ -t 0 ]]; then",
+        "  printf 'foreground\\n' > \"$MARKER\"",
+        "  sleep 0.5",
+        "  exit 0",
+        "fi",
+        "printf 'background\\n' > \"$MARKER\"",
+        "exit 42",
+        "",
+      ].join("\n"),
+    );
+
+    const sessionId = "c2222222-3333-4444-8555-666666666666";
+    const result = run(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "/dev/null",
+        join(PROJECT_ROOT, "scripts/anthill-cursor-agent"),
+        "agent",
+        "--resume",
+        sessionId,
+      ],
+      root,
+      {
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        HOME: join(root, "home"),
+        MARKER: marker,
+        TERM: "xterm-256color",
+        ANTHILL_CMUXTERM_ROOT: hookRoot,
+        ANTHILL_CURSOR_AGENT_BIN: join(fakeBin, "cursor-agent"),
+        CMUX_SURFACE_ID: "CBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF",
+        CMUX_WORKSPACE_ID: "c2222222-BBBB-4CCC-8DDD-333333333333",
+        BUN_BIN: process.execPath.includes("bun") ? process.execPath : "bun",
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("foreground\n");
+    const store = JSON.parse(
+      readFileSync(join(hookRoot, "cursor-hook-sessions.json"), "utf8"),
+    ) as { sessions: Record<string, Record<string, unknown>> };
+    expect(store.sessions[sessionId]).toMatchObject({ agentLifecycle: "ended" });
+  });
+
   test("droid shim binds -r session into factory-hook-sessions.json under temp root", () => {
     const root = freshFixture("shim-droid");
     const fakeBin = join(root, "fake-bin");

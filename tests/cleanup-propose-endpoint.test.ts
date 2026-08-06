@@ -13,6 +13,7 @@ import {
   createNativeCleanupLauncher,
   type CleanupLauncher,
 } from "../src/server/cleanup-launch";
+import { detectAttentionSignal } from "../src/server/attention-signal";
 import type {
   CleanupNotificationView,
 } from "../scripts/anthill-cleanup-sweep";
@@ -135,6 +136,7 @@ function launchServer(cleanupLauncher: CleanupLauncher, state: MountainAppState)
     runner,
     archiveStore,
     cleanupLauncher,
+    cleanupObserveIntervalMs: 0,
     webRoot: import.meta.dir,
   });
 }
@@ -237,7 +239,9 @@ describe("POST /api/cleanup/propose", () => {
     const worker = readFileSync(join(root, "src/server/cleanup-propose-worker.ts"), "utf8");
     const launcher = readFileSync(join(root, "src/server/cleanup-launch.ts"), "utf8");
     const production = readFileSync(join(root, "src/server/index.ts"), "utf8");
-    const reachable = [app, proposer, worker, launcher, production].join("\n");
+    const cursorWrapper = readFileSync(join(root, "scripts/anthill-cursor-agent"), "utf8");
+    const hookShim = readFileSync(join(root, "scripts/lib/anthill-hook-shim-common.sh"), "utf8");
+    const reachable = [app, proposer, worker, launcher, production, cursorWrapper, hookShim].join("\n");
 
     expect(worker).toContain("enumerateCleanup");
     expect(launcher).not.toMatch(/from\s+["'][^"']*anthill-cleanup-sweep/);
@@ -257,9 +261,16 @@ describe("POST /api/cleanup/propose", () => {
 describe("Cleaner lane contract", () => {
   test("launches the ratified model and cleanup skill through the ordinary Cursor hook wrapper", async () => {
     const sessionId = "79592379-c8fb-4ea4-800c-57c22d3c435e";
+    const workspaceTarget = "workspace:9";
+    const surfaceId = "c6314aaf-2931-44b0-a0e6-09265eb1f543";
     const runner = new ScriptedRunner([
       { exitCode: 0, stdout: `${sessionId}\n`, stderr: "", timedOut: false },
-      { exitCode: 0, stdout: "workspace:9\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `${workspaceTarget}\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `* ${surfaceId}  /repo  [selected]\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "Last login: Thu Aug 6\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "  Cursor Agent\n  v2026.08.04\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
     ]);
     const named: Array<{ agentId: string; name: string }> = [];
     const launch = createNativeCleanupLauncher({
@@ -271,15 +282,34 @@ describe("Cleaner lane contract", () => {
 
     expect(await launch()).toEqual({ sessionId });
     expect(runner.commands[0]).toEqual(["/repo/scripts/anthill-cursor-agent", "create-chat"]);
-    expect(runner.commands[1]?.slice(0, 2)).toEqual(["cmux", "new-workspace"]);
+    expect(runner.commands[1]?.slice(0, 4)).toEqual(["cmux", "--id-format", "uuids", "new-workspace"]);
     expect(runner.commands[1]).toContain("Cleaner");
     expect(runner.commands[1]).toContain("false");
     const command = runner.commands[1]?.[runner.commands[1]!.indexOf("--command") + 1] ?? "";
     expect(command).toContain("/repo/scripts/anthill-cursor-agent");
+    expect(command).toContain("'agent'");
     expect(command).toContain(`'--resume' '${sessionId}'`);
     expect(command).toContain(`'--model' '${CLEANER_MODEL}'`);
-    expect(command).toContain("/cleanup");
-    expect(command).toContain("scripts/anthill-cleanup-sweep.ts");
+    expect(command).not.toContain(CLEANER_PROMPT);
+    expect(runner.commands[2]).toEqual([
+      "cmux", "--id-format", "uuids", "list-pane-surfaces", "--workspace", workspaceTarget,
+    ]);
+    expect(runner.commands[3]).toEqual([
+      "cmux", "read-screen", "--surface", surfaceId,
+    ]);
+    expect(runner.commands[4]).toEqual(runner.commands[3]!);
+    expect(runner.commands[5]).toEqual([
+      "cmux",
+      "rpc",
+      "surface.send_text",
+      JSON.stringify({ surface_id: surfaceId, text: CLEANER_PROMPT }),
+    ]);
+    expect(runner.commands[6]).toEqual([
+      "cmux",
+      "rpc",
+      "surface.send_key",
+      JSON.stringify({ surface_id: surfaceId, key: "Enter" }),
+    ]);
     expect(named).toEqual([{ agentId: `cursor:${sessionId}`, name: "Cleaner" }]);
 
     expect(CLEANER_PROMPT.startsWith("Goal:")).toBe(true);
@@ -289,6 +319,42 @@ describe("Cleaner lane contract", () => {
     expect(CLEANER_PROMPT).toMatch(/rollback SHA/i);
     expect(CLEANER_PROMPT).toMatch(/live agent process.*hard stop/i);
     expect(CLEANER_PROMPT).toMatch(/ordinary session/i);
+    const finalLine = CLEANER_PROMPT.trim().split("\n").at(-1);
+    expect(finalLine).toBe(
+      "Should I run guarded confirm for the exact removable items above, or decline and leave the repository unchanged?",
+    );
+    expect(detectAttentionSignal({
+      lastAgentClosing: finalLine,
+      activity: "idle",
+      processState: "running",
+    }).kind).toBe("fork-unresolved");
+  });
+
+  test("reports prompt submission failure instead of calling an unseeded interactive lane launched", async () => {
+    const sessionId = "79592379-c8fb-4ea4-800c-57c22d3c435e";
+    const workspaceTarget = "workspace:9";
+    const surfaceId = "c6314aaf-2931-44b0-a0e6-09265eb1f543";
+    const runner = new ScriptedRunner([
+      { exitCode: 0, stdout: `${sessionId}\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `${workspaceTarget}\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `* ${surfaceId}  /repo  [selected]\n`, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "  Cursor Agent\n  v2026.08.04\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 1, stdout: "", stderr: "surface rejected Enter", timedOut: false },
+    ]);
+    const named: string[] = [];
+    const launch = createNativeCleanupLauncher({
+      repoRoot: "/repo",
+      cmuxExecutable: "cmux",
+      runner,
+      nameSession: async (agentId) => { named.push(agentId); },
+    });
+
+    await expect(launch()).rejects.toMatchObject({
+      code: "CLEANER_LAUNCH_FAILED",
+      message: expect.stringMatching(/prompt.*not submitted/i),
+    });
+    expect(named).toEqual([]);
   });
 
   test("reports cmux refusal as a launch failure and leaves no authored lane name behind", async () => {
@@ -401,6 +467,33 @@ describe("POST /api/cleanup/launch", () => {
 
     expect(cleaner?.identity?.name).toBe("Cleaner");
     expect(cleaner?.provider).toBe("cursor");
+  });
+
+  test("waits through Cursor transcript publication lag instead of returning an unbindable id", async () => {
+    const sessionId = "79592379-c8fb-4ea4-800c-57c22d3c435e";
+    let snapshot = emptySnapshot();
+    let refreshes = 0;
+    const state: MountainAppState = {
+      get: () => snapshot,
+      subscribe: () => () => {},
+      refresh: async () => {
+        refreshes += 1;
+        if (refreshes >= 4) {
+          snapshot = {
+            ...snapshot,
+            programs: [{ id: "cleanup", name: "Cleanup", agents: [cleanerAgent(sessionId)] }],
+          };
+        }
+        return snapshot;
+      },
+    };
+    const fetch = launchServer(async () => ({ sessionId }), state);
+
+    const response = await fetch(launchRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, sessionId });
+    expect(refreshes).toBe(4);
   });
 
   test("an unobservable session fails closed and a retry cannot launch a duplicate", async () => {

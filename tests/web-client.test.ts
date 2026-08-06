@@ -996,7 +996,7 @@ describe("summary status and widgets", () => {
     expect(M.usageRateWindowText({ from: "2026-08-02T00:00:00Z", to: "2026-08-03T00:00:00Z" }))
       .toBe("24.0h average, not a current rate");
     expect(M.usageRateWindowText({ from: "2026-07-03T00:00:00Z", to: "2026-08-02T00:00:00Z" }))
-      .toContain("30d average");
+      .toContain("30.0d average");
     // No window on the wire means no window claim, not an invented one.
     expect(M.usageRateWindowText({})).toBe("tokens per hour");
     expect(M.usageRateWindowText({ from: "x", to: "y" })).toBe("tokens per hour");
@@ -1188,7 +1188,7 @@ describe("summary status and widgets", () => {
 
     // Token throughput is independent of cost: no price must not blank the rate.
     expect(unknown.value).toBe("840");
-    expect(unknown.tone).toBe("ok");
+    expect(unknown.tone).toBe("neutral"); // neutral ink: a spend rate has no healthy band
   });
 
   /* Claude transcripts report observed totals with no context-window size, so a
@@ -1286,19 +1286,24 @@ describe("summary status and widgets", () => {
 
   test("momentum copy stays window-honest and never fabricates a zero-window readout", () => {
     const withMomentum = (momentum: Record<string, unknown>) => snapshot({ pulse: { momentum } });
-    // No pulse at all (older server) degrades gracefully.
-    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toBe("No completion data yet.");
+    /* The shipping count opens the sub now that attention holds the headline;
+       every window-honest sentence keeps its exact wording after it. */
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toContain("shipping · No completion data yet.");
     // Under one completed 5-min bucket there is no completion window to report,
     // but stall detection (updatedAt-based) is valid immediately.
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 0 })).sublabel)
-      .toBe("No completion data yet.");
+      .toContain("shipping · No completion data yet.");
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 2 })).sublabel)
-      .toBe("2 quiet 15m+");
+      .toContain("shipping · 2 quiet 15m+");
     // A young tracker reports its real window, never a fabricated "this hour".
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 3, observedWindowMs: 20 * 60_000, stalled: 1 })).sublabel)
-      .toBe("↑3 done in 20m observed · 1 quiet 15m+");
+      .toContain("shipping · ↑3 done in 20m observed · 1 quiet 15m+");
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 3, observedWindowMs: 3_600_000, stalled: 0 })).sublabel)
-      .toBe("↑3 done this hour");
+      .toContain("shipping · ↑3 done this hour");
+    // The headline is the attention count, ember when nonzero.
+    const calm = M.summaryWidgetData("momentum", snapshot());
+    expect(calm.unit).toContain("need you");
+    expect(calm.tone).toBe("ok");
   });
 });
 
@@ -1927,7 +1932,47 @@ describe("swarm clusters", () => {
   });
 });
 
+describe("snippet honesty", () => {
+  test("the summary line spends its characters on words, not transport", () => {
+    /* Sweep audit §15: the snippet is the line the operator reads to decide
+       whether to act, and raw markdown link syntax, bare URLs and workspace
+       UUIDs were consuming half its 88-character budget. */
+    expect(M.conciseText("Back up and pushed — [PR #21](https://github.com/emilio3435/the-ant-hill/pull/21). Landed."))
+      .toBe("Back up and pushed — PR #21. Landed.");
+    expect(M.conciseText("see https://github.com/emilio3435/the-ant-hill/pull/21 now"))
+      .toBe("see github.com/…/21 now");
+    expect(M.conciseText("read this too: cmux://workspace/357F2CA2-696F-46B2-BBDF-DF672CE80B14"))
+      .toBe("read this too: cmux://…");
+    expect(M.conciseText("session 0123456789abcdef0123456789abcdef0123 retried"))
+      .toBe("session … retried");
+    // Ordinary prose is untouched.
+    expect(M.conciseText("Lane G-1 is complete, nothing pushed.")).toBe("Lane G-1 is complete, nothing pushed.");
+  });
+});
+
 describe("token honesty", () => {
+  test("an all-zero reading renders as absence, not as a measurement", () => {
+    /* Sweep audit §16: a spend-limit-locked session reported total 0 and the
+       row printed a bold "0" styled exactly like a reading — a measurement the
+       source never made. Zero everywhere is a source that has said nothing. */
+    const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 0 });
+    expect(s.known).toBe(false);
+    expect(s.text).toBe("not reported");
+    // A real measurement with one zero part is untouched.
+    expect(M.tokenSummary({ provenance: "observed", total: 1200, output: 0 }).known).toBe(true);
+  });
+
+  test("days keep a decimal and start at the day itself", () => {
+    /* Sweep audit §9: Math.round at a 36h threshold printed "2d" for a
+       36-hour span — a 33% overstatement — and could never print 1d, while
+       precision fell from "22.1h" to "2d" across a one-second boundary. */
+    const H = 3600 * 1000;
+    expect(M.fmtElapsed(23 * H)).toBe("23.0h");
+    expect(M.fmtElapsed(25 * H)).toBe("1.0d");
+    expect(M.fmtElapsed(36 * H)).toBe("1.5d");
+    expect(M.fmtElapsed(48 * H)).toBe("2.0d");
+  });
+
   test("unavailable Cursor usage renders as not reported, never invented", () => {
     const s = M.tokenSummary({ provenance: "unknown" });
     expect(s.known).toBe(false);
@@ -2517,17 +2562,20 @@ describe("calm program and agent list rendering", () => {
        list actually produces — the column header still leads it. */
     const program = { id: "p1", name: "P", agents: [agent({ id: "codex:a1" }), agent({ id: "codex:a2" })] };
     const plan = M.agentRowPlan(program, program.agents, listUi({ snap: { schemaVersion: 1, programs: [program] } }));
-    /* Two working roots, so one Active divider leads them. The dividers are plan
-       items exactly like the rows are — keyed and signed — which is what lets
-       reconcileKeyed leave a section head alone while a row under it repaints. */
+    /* Two working roots and nothing else: the sole populated section earns no
+       divider — a heading over the only population divides nothing — so the
+       header leads straight into the rows. */
     expect(plan.map((item: { key: string }) => item.key))
-      .toEqual(["columns", "section:active", "row:codex:a1", "row:codex:a2"]);
+      .toEqual(["columns", "row:codex:a1", "row:codex:a2"]);
     // C1: the header names the identity column plus the promoted instrument
     // cluster (status word, model+ctx%, tokens, elapsed) — "Context"/"Access" text
     // tags left the row grid (Access folds into the aria-label; ctx% rides Model).
     const header = withDom(() => plan[0].build());
     expect(header.className).toContain("agent-column-header");
-    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Span"]) {
+    // The default (Board) lens labels the fifth column QUIET — time since the
+    // last update, the question a live lens is actually asked. Span stays on
+    // History, where a total duration is the point.
+    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Quiet"]) {
       expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -2563,6 +2611,27 @@ describe("calm program and agent list rendering", () => {
     expect(row).not.toContain("act-glyph act-");
     expect(row).toContain('"row-state-alert"');
     expect(styles).toContain(".row-state-alert { color: var(--needs); }");
+  });
+
+  test("an alerting row says Alert even when Waiting got there first", () => {
+    /* Sweep audit §2: the group head said "6 alerts" while most of its rows
+       printed only "Waiting" — a hook-shaped alert has a HEALTHY outcome, so
+       the attention word was gated behind !words.length and lost on exactly
+       the rows where it was the only signal. It appends now; it never depends
+       on being the only word. */
+    const hooked = agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+    expect(M.rowStateWords("idle", "healthy", "now", hooked)).toEqual(["Waiting", "Alert"]);
+    expect(M.rowStateWords("working", "healthy", "now", hooked)).toEqual(["Alert"]);
+    // Never doubled when the outcome already carries the word.
+    expect(M.rowStateWords("idle", "needs-you", "now", hooked)).toEqual(["Waiting", "Alert"]);
+
+    /* And the ink follows the words: outcome-picked ink painted "Alert" in
+       the healthy activity green — the safe color — on those same rows. */
+    const program = { id: "p1", name: "P", agents: [hooked] };
+    const rendered = withDom(() => M.renderAgentRow(hooked, program));
+    const word = byClass(rendered, "row-state-alert");
+    expect(word).not.toBe(null);
+    expect(textOf(word)).toContain("Alert");
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
@@ -2659,6 +2728,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       model: "gpt-5-codex",
       tokens: { provenance: "observed", scope: "latest-turn", total: 40000, contextWindow: 200000 },
       elapsedMs: 125000,
+      updatedAt: new Date().toISOString(),
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(live, program));
@@ -2668,12 +2738,18 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(text).toContain("gpt-5-codex"); // model short id, reused from modelShort
     expect(text).toContain("20%");         // ctx% (40k/200k) — DESIGN "model + ctx%"
     expect(text).toContain("40k");         // observed tokens, reused from tokenSummary
-    expect(text).toContain("2m");          // 125s uptime → fmtElapsed "2m"
+    /* On the Board lens the fifth cell is QUIET, and a fresh row draws no
+       cell at all — blank IS the signal. A row three hours quiet says so. */
+    expect(findByClass(row, "is-quiet")).toBeNull();
+    const stale = agent({ model: "gpt-5-codex", updatedAt: new Date(Date.now() - 3 * 3600e3).toISOString() });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const staleRow: any = withDom(() => M.renderAgentRow(stale, program));
+    expect(textOf(findByClass(staleRow, "is-quiet"))).toContain("3.0h");
     // Values ride the canonical "<size> mono" convention (DESIGN rule 2 —
     // mono for values), like vital-big mono; status word is the one non-value.
     const monoVals = classesOf(instruments)
       .filter((c) => /\bri-value\b/.test(c) && /\bmono\b/.test(c));
-    expect(monoVals.length).toBeGreaterThanOrEqual(3); // model, tokens, elapsed
+    expect(monoVals.length).toBeGreaterThanOrEqual(2); // model, tokens
   });
 
   test("(b) unknown tokens/context omit cells honestly — no fabricated numbers", () => {
@@ -2819,7 +2895,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const header: any = withDom(() => M.renderAgentColumnHeader());
     const text = textOf(header);
-    for (const label of ["Agent", "Status", "Model", "Tokens", "Span"]) {
+    for (const label of ["Agent", "Status", "Model", "Tokens", "Quiet"]) {
       expect(text).toContain(label);
     }
   });
@@ -5206,15 +5282,36 @@ describe("scroll shell: sticky left-pane headers (Part 2)", () => {
     expect(head).toContain("flex-wrap: nowrap");
   });
 
-  // (b) The column header pins directly below the stuck program head, offset by a
-  //     CSS var that matches the single-line head, keeping its opaque --sand.
-  test("(b) .agent-column-header is sticky below the head via --program-head-h, keeping --sand", () => {
-    const col = styles.match(/\.agent-column-header\s*\{[^}]*\}/)?.[0] ?? "";
+  // (b) The band head is the TOP of the frozen stack: the program name used to
+  //     be the first thing to scroll off screen — the tier the operator ranks
+  //     by was the only one that could be absent.
+  test("(b) the repo band head pins at the top of the stack, opaque", () => {
+    const head = styles.match(/\.repo-head\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(head).toContain("position: sticky");
+    expect(head).toContain("top: 0");
+    expect(head).toContain("background: var(--surface)");
+    expect(head).toContain("flex-wrap: nowrap");
+    // The worktree rule is the stack's middle tier, under band head + columns.
+    const banded = styles.match(/\.program\.is-banded \.program-head\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(banded).toContain("top: calc(var(--repo-head-h) + var(--column-head-h))");
+    // The band card keeps the sticky escape the worktree card learned: clip.
+    const band = styles.match(/\.repo-section\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(band).toContain("overflow: clip");
+    expect(band).not.toContain("overflow: hidden");
+  });
+
+  // (b) The column header pins directly below its stuck head, keeping its
+  //     opaque --sand: the flat program's copy under --program-head-h, the
+  //     band's one copy under --repo-head-h.
+  test("(b) .agent-column-header is sticky below its head, keeping --sand", () => {
+    const col = styles.match(/^\.agent-column-header\s*\{[^}]*\}/m)?.[0] ?? "";
     expect(col).toContain("position: sticky");
     expect(col).toContain("top: var(--program-head-h)");
     expect(col).toContain("background: var(--sand)"); // already opaque, preserved
-    // The offset var is defined (and re-pointed where the touch sweep grows the head).
+    expect(styles).toContain(".repo-section > .agent-column-header { top: var(--repo-head-h); z-index: 3; }");
+    // The offset vars are defined (and re-pointed where the touch sweep grows the head).
     expect(styles).toContain("--program-head-h:");
+    expect(styles).toContain("--repo-head-h:");
   });
 
   // (b) The `.program { overflow: hidden }` scroll-scope is what breaks sticky
@@ -5226,20 +5323,22 @@ describe("scroll shell: sticky left-pane headers (Part 2)", () => {
     expect(prog).not.toContain("overflow: hidden");
   });
 
-  // (c) Keyboard parity: focused rows clear the stuck stack (head + column header)
-  //     so Tab/arrow focus never lands hidden beneath the frozen headers.
-  test("(c) rows carry scroll-margin-top equal to the stuck header stack (head + column)", () => {
+  // (c) Keyboard parity: focused rows clear the DEEPEST frozen stack (band
+  //     head + column header + worktree rule) so Tab/arrow focus never lands
+  //     hidden beneath the frozen headers.
+  test("(c) rows carry scroll-margin-top equal to the frozen stack", () => {
     // Both focusable roster elements — agent rows AND swarm anchors — clear the stack.
     const row = styles.match(/\.agent-row\s*\{[^}]*\}/)?.[0] ?? "";
     expect(row).toContain("scroll-margin-top:");
-    expect(row).toContain("var(--program-head-h)");
-    expect(row).toContain("var(--column-head-h)");   // magic px replaced by a coupled var
+    expect(row).toContain("var(--repo-head-h)");
+    expect(row).toContain("var(--column-head-h)");
+    expect(row).toContain("var(--worktree-head-h)");
     const anchor = styles.match(/\.swarm-anchor\s*\{[^}]*\}/)?.[0] ?? "";
     expect(anchor).toContain("scroll-margin-top:");
-    expect(anchor).toContain("var(--program-head-h)");
+    expect(anchor).toContain("var(--repo-head-h)");
     expect(anchor).toContain("var(--column-head-h)");
     // The offset vars are defined together on the scroll container.
-    expect(styles).toMatch(/\.pane-list\s*\{[^}]*--program-head-h:/);
+    expect(styles).toMatch(/\.pane-list\s*\{[^}]*--repo-head-h:/);
     expect(styles).toMatch(/\.pane-list\s*\{[^}]*--column-head-h:/);
   });
 });
@@ -5372,7 +5471,7 @@ describe("FE-A: snapshot freshness drives the connection verdict", () => {
   test("the badge shows the actual snapshot age as soon as it stops being fresh", () => {
     expect(M.connLabelText("live", ago(3_000), NOW)).toBe("Live");
     expect(M.connLabelText("live", ago(40_000), NOW)).toBe("Live · snapshot 40s ago");
-    expect(M.connLabelText("stale", ago(91 * 3_600_000), NOW)).toBe("Stale feed · snapshot 4d ago");
+    expect(M.connLabelText("stale", ago(91 * 3_600_000), NOW)).toBe("Stale feed · snapshot 3.8d ago");
     // Nothing measurable → no fabricated age suffix.
     expect(M.connLabelText("live", null, NOW)).toBe("Live");
     expect(M.connLabelText("connecting", ago(91 * 3_600_000), NOW)).toBe("Connecting");
@@ -8247,36 +8346,32 @@ describe("FE-B: harness-backed client behavior", () => {
     const cache = new Map();
 
     withDom(() => M.reconcileKeyed(body, planFor([a, b, c]), cache));
-    // column header + Active divider + 3 rows.
-    expect(body.children.length).toBe(5);
-    const [header, activeHead, rowA, rowB, rowC] = body.children;
+    // column header + 3 rows — the sole populated section draws no divider.
+    expect(body.children.length).toBe(4);
+    const [header, rowA, rowB, rowC] = body.children;
 
     withDom(() => M.reconcileKeyed(
       body,
       planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]),
       cache,
     ));
-    expect(body.children.length).toBe(5);
+    expect(body.children.length).toBe(4);
     expect(body.children[0]).toBe(header);
-    // The divider is a keyed plan item like everything else, so a row ticking
-    // underneath it leaves its node exactly where it was.
-    expect(body.children[1]).toBe(activeHead);
-    expect(body.children[2]).not.toBe(rowA);
-    expect(body.children[3]).toBe(rowB);
-    expect(body.children[4]).toBe(rowC);
+    expect(body.children[1]).not.toBe(rowA);
+    expect(body.children[2]).toBe(rowB);
+    expect(body.children[3]).toBe(rowC);
     // The rebuilt row really is the one that moved, and it shows the new number.
-    expect(textOf(body.children[2])).toContain("40k");
+    expect(textOf(body.children[1])).toContain("40k");
 
     // A repaint with nothing changed touches no node at all.
     const settled = [...body.children];
     withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, b, c]), cache));
     expect(body.children).toEqual(settled);
 
-    // An agent leaving the view removes exactly its row — and the divider above
-    // it repaints, because its own signature carries the section's population.
+    // An agent leaving the view removes exactly its row.
     withDom(() => M.reconcileKeyed(body, planFor([{ ...a, tokens: { provenance: "observed", total: 40_000 } }, c]), cache));
-    expect(body.children.length).toBe(4);
-    expect(body.children[3]).toBe(rowC);
+    expect(body.children.length).toBe(3);
+    expect(body.children[2]).toBe(rowC);
   });
 
   test("(2) the whole list path: a live tick repaints one row, not the list", () => {
@@ -8302,9 +8397,9 @@ describe("FE-B: harness-backed client behavior", () => {
     const [alphaSection, betaSection] = root.children;
     const alphaBody = alphaSection.children[alphaSection.children.length - 1];
     const betaBody = betaSection.children[betaSection.children.length - 1];
-    expect(alphaBody.children.length).toBe(4); // column header + Active divider + 2 rows
-    const [, activeHead, rowS1, rowS2] = alphaBody.children;
-    const rowS3 = betaBody.children[2];
+    expect(alphaBody.children.length).toBe(3); // column header + 2 rows (solo section, no divider)
+    const [, rowS1, rowS2] = alphaBody.children;
+    const rowS3 = betaBody.children[1];
 
     // A token tick on codex:s1 — the production case. Everything else must be
     // the same node object it was, including both program sections and the
@@ -8313,26 +8408,24 @@ describe("FE-B: harness-backed client behavior", () => {
     withDom(() => M.syncProgramList(root, visible, ui(visible)));
     expect(root.children[0]).toBe(alphaSection);
     expect(root.children[1]).toBe(betaSection);
-    expect(alphaBody.children[1]).toBe(activeHead);
-    expect(alphaBody.children[2]).not.toBe(rowS1);
-    expect(alphaBody.children[3]).toBe(rowS2);
-    expect(betaBody.children[2]).toBe(rowS3);
-    expect(textOf(alphaBody.children[2])).toContain("40k");
+    expect(alphaBody.children[1]).not.toBe(rowS1);
+    expect(alphaBody.children[2]).toBe(rowS2);
+    expect(betaBody.children[1]).toBe(rowS3);
+    expect(textOf(alphaBody.children[1])).toContain("40k");
 
     // A status flip DOES move the program rollup, so Beta's shell is rebuilt —
-    // but its row node is re-adopted rather than reconstructed. It also moves
-    // the row out of Active and into Waiting, so the divider above it is a
-    // different section entirely.
+    // but its row node is re-adopted rather than reconstructed. The row moves
+    // out of Active and into Waiting; a solo section either way, no divider.
     visible = build(40_000, "attention");
     withDom(() => M.syncProgramList(root, visible, ui(visible)));
     expect(root.children[0]).toBe(alphaSection);
     expect(root.children[1]).not.toBe(betaSection);
     const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
-    expect(newBetaBody.children.length).toBe(3);
+    expect(newBetaBody.children.length).toBe(2);
     expect(textOf(newBetaBody.children[1])).toContain("Waiting");
-    expect(newBetaBody.children[2]).not.toBe(rowS3); // its own signature moved too
+    expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
-    expect(alphaBody.children[3]).toBe(rowS2);
+    expect(alphaBody.children[2]).toBe(rowS2);
   });
 
   /* A filter is a lens on the board, not a change to what a program contains.
@@ -8603,8 +8696,8 @@ describe("FE-B: harness-backed client behavior", () => {
     })));
     expect(shown).toBe(1);
     const body = root.children[0].children[root.children[0].children.length - 1];
-    expect(body.children.length).toBe(3); // column header + Active divider + the rescued row
-    expect(textOf(body.children[2])).toContain("Claude · live worker");
+    expect(body.children.length).toBe(2); // column header + the rescued row (solo section, no divider)
+    expect(textOf(body.children[1])).toContain("Claude · live worker");
   });
 
   /* ------------------------------------------------------------------------
@@ -8660,18 +8753,24 @@ describe("FE-B: harness-backed client behavior", () => {
       // sections is not a change to how many sessions matched.
       expect(shown).toBe(3);
 
-      // Strip first, then the programs in server order.
-      expect(root.children.length).toBe(3);
-      const [strip, alphaSection, betaSection] = root.children;
+      /* Strip first, then Alpha. Beta is GONE: its only session is pinned, and
+         a head plus a column bar over nothing is the empty shell this board
+         stopped drawing. Its identity lives on the strip's own group heading. */
+      expect(root.children.length).toBe(2);
+      const [strip, alphaSection] = root.children;
       expect(strip.className).toContain("needs-strip");
       expect(textOf(strip)).toContain("Needs you");
 
-      // Both alerting rows, from both programs, and each carrying the program
-      // its group header would otherwise have said for it.
+      // Both alerting rows, each under its own program heading — the heading
+      // is the fact the missing group header below would have said.
       const stripBody = strip.children[strip.children.length - 1];
-      expect(stripBody.children.length).toBe(2);
+      expect(allByClass(stripBody, "strip-group-head")).toHaveLength(2);
+      expect(allByClass(stripBody, "agent-row")).toHaveLength(2);
       expect(textOf(stripBody)).toContain("Alpha");
       expect(textOf(stripBody)).toContain("Beta");
+      // Heading, then its rows: the head for Alpha directly precedes Alpha's row.
+      expect(stripBody.children[0].className).toContain("strip-group-head");
+      expect(stripBody.children[1].dataset.fkey).toBe("agent:codex:a-alert");
 
       /* The dedupe, which is the whole point: one row per session. A session
          rendered twice would carry `agent:<id>` on two nodes, so focus restore
@@ -8688,16 +8787,12 @@ describe("FE-B: harness-backed client behavior", () => {
 
       /* The placeholder that used to restate the strip inside each group is
          gone: the group header's own "alerts" rollup cell already says a
-         session is asking, and the strip row's chip says where it came from.
-         Restating it as a body row doubled the vertical noise for no new
-         information. */
+         session is asking, and the strip's group heading says where it came
+         from. Restating it as a body row doubled the vertical noise for no
+         new information. (Beta's whole shell is asserted absent above.) */
       const alphaBody = alphaSection.children[alphaSection.children.length - 1];
       expect(textOf(alphaBody)).not.toContain("in Needs you");
       expect(textOf(alphaBody)).not.toContain("Alert");
-      // Beta had nothing but the alerting row, so its body is the column
-      // header alone — no note row either.
-      const betaBody = betaSection.children[betaSection.children.length - 1];
-      expect(textOf(betaBody)).not.toContain("in Needs you");
     });
 
     test("acknowledging an alert returns the row to its lifecycle section", () => {
@@ -8741,9 +8836,11 @@ describe("FE-B: harness-backed client behavior", () => {
         "section:unverified", "row:codex:u",
       ]);
 
-      // A section with no members prints no heading at all: a divider over
-      // nothing teaches the operator to stop reading dividers.
-      expect(keys([rows[2]!])).toEqual(["columns", "section:active", "row:codex:a"]);
+      /* A section with no members prints no heading, and the sole populated
+         section prints none either — a divider over the only population
+         divides nothing. Unverified is exempt: its head is a disclosure about
+         evidence, not a state word the rows repeat. */
+      expect(keys([rows[2]!])).toEqual(["columns", "row:codex:a"]);
       expect(keys([rows[0]!])).toEqual(["columns", "section:unverified", "row:codex:u"]);
     });
 
@@ -8789,9 +8886,9 @@ describe("FE-B: harness-backed client behavior", () => {
       // Closed by default: absent from the plan, so absent from the DOM — which
       // is what takes it out of navigableRows and Tab order in one move, with
       // no second rule to keep in step.
-      expect(plan()).toEqual(["columns", "section:active", "row:codex:parent"]);
+      expect(plan()).toEqual(["columns", "row:codex:parent"]);
       expect(plan({ swarmOverrides: new Map([["codex:parent", "open"]]) }))
-        .toEqual(["columns", "section:active", "row:codex:parent", "row:codex:child"]);
+        .toEqual(["columns", "row:codex:parent", "row:codex:child"]);
 
       // The caret is a real control with its own focus key, because render()
       // restores focus by fkey and the row already owns `agent:<id>`.
@@ -8818,16 +8915,52 @@ describe("FE-B: harness-backed client behavior", () => {
       // and cross-program precisely so a collapsed swarm cannot swallow one.
       const strip = root.children[0];
       expect(strip.className).toContain("needs-strip");
+      // Heading for its program, then the row itself.
       const stripBody = strip.children[strip.children.length - 1];
-      expect(stripBody.children.length).toBe(1);
-      expect(stripBody.children[0].dataset.fkey).toBe("agent:codex:child");
+      expect(stripBody.children.length).toBe(2);
+      expect(stripBody.children[0].className).toContain("strip-group-head");
+      expect(stripBody.children[1].dataset.fkey).toBe("agent:codex:child");
 
-      // …and the parent's own chip takes ember ink, so the fold itself reports
-      // what is inside it. No auto-expand: the child stays collapsed below.
+      /* …and the parent's chip stops promising what its caret cannot show:
+         the child's row went to the strip, so expanding here would draw
+         nothing. The ember and the caret go with it — the strip owns the
+         signal — and a non-expanding chip still names the swarm's size. */
       const body = root.children[1].children[root.children[1].children.length - 1];
       const chip = nodeByClass(body, "swarm-chip");
-      expect(chip.className).toContain("is-alerting");
-      expect(chip.attributes["aria-expanded"]).toBe("false");
+      expect(chip.tagName).toBe("span");
+      expect(chip.className).not.toContain("is-alerting");
+      expect(chip.attributes["aria-expanded"]).toBeUndefined();
+      expect(textOf(chip)).toContain("swarm 1");
+    });
+
+    test("the swarm chip counts what its caret reveals, and names the rest", () => {
+      /* Lineage audit §5: the chip counted the whole board's descendants while
+         the caret drew one program's filter-admitted rows — measured live at a
+         40% mismatch, and a click that reveals nothing teaches the operator
+         the control is broken. The button's number is the drawable set; the
+         swarm's true size survives in the "of" clause. */
+      const parent = agent({ id: "codex:parent", status: "running" });
+      const here = agent({ id: "codex:here", status: "running", parentAgentId: "codex:parent" });
+      const gone = agent({ id: "codex:gone", status: "running", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, here, gone] };
+      const ui = boardUi({ snap: { schemaVersion: 1, programs: [program] } });
+      const buildRow = (admitted: unknown[]) => {
+        const plan = M.agentRowPlan(program, admitted, ui);
+        const item = plan.find((p: { key: string }) => p.key === "row:codex:parent");
+        return withDom(() => item.build());
+      };
+
+      // One of two children admitted by the filter: the label says both facts.
+      const partial = nodeByClass(buildRow([parent, here]), "swarm-chip");
+      expect(partial.tagName).toBe("button");
+      expect(textOf(partial)).toContain("swarm 1 of 2");
+
+      // Every child out of view: the relationship stays visible, the caret
+      // does not — a caret that reveals nothing is the defect being removed.
+      const none = nodeByClass(buildRow([parent]), "swarm-chip");
+      expect(none.tagName).toBe("span");
+      expect(none.attributes["aria-expanded"]).toBeUndefined();
+      expect(textOf(none)).toContain("swarm 2");
     });
 
     test("swarm expansion persists exactly the way program expansion does", () => {
@@ -8861,12 +8994,13 @@ describe("FE-B: harness-backed client behavior", () => {
       const anchor = nodeByClass(body, "swarm-anchor");
       expect(anchor.dataset.fkey).toBe("swarm-anchor:codex:parent");
       expect(anchor.attributes["aria-label"]).toContain("pinned in Needs you");
-      // And the strip row keeps the ordinary key.
-      const stripRow = root.children[0].children[root.children[0].children.length - 1].children[0];
+      // And the strip row keeps the ordinary key (under its group heading).
+      const stripRow = byFkey(root.children[0], "agent:codex:parent");
+      expect(stripRow).not.toBe(null);
       expect(stripRow.dataset.fkey).toBe("agent:codex:parent");
     });
 
-    test("a strip row's chip names the worktree, and is a jump control", () => {
+    test("the strip groups its rows under worktree headings that name both axes", () => {
       const worker = asking({
         id: "codex:wt-alert",
         repo: { repoKey: "r1", repoName: "cooper", worktreePath: "/lanes/ev2-g1", branch: "feat/ev2-g1", ephemeral: false },
@@ -8877,21 +9011,23 @@ describe("FE-B: harness-backed client behavior", () => {
       withDom(() => M.syncProgramList(root, visible, boardUi({
         snap: { schemaVersion: 1, programs: [program] },
       })));
-      /* A repo name alone is ambiguous across that repo's checkouts — the chip
-         carries the same branch@directory words the group header says, so the
-         operator can match the two surfaces by reading either one. */
-      const chip = byClass(root.children[0], "row-program-chip");
-      expect(chip.tagName).toBe("button");
-      expect(textOf(chip)).toBe("cooper · feat/ev2-g1@ev2-g1");
-      expect(chip.dataset.fkey).toBe("strip-chip:codex:wt-alert");
-      /* The row's own aria-label says the same words: a nested control inside
-         a role=button row is unreachable to some screen readers, so the row
-         must not depend on the button being read. */
+      /* A repo name alone is ambiguous across that repo's checkouts — the
+         heading carries the same branch@directory words the group header below
+         would say, and it IS the jump control back to that group. */
+      const head = byClass(root.children[0], "strip-group-head");
+      expect(head.tagName).toBe("button");
+      expect(textOf(head)).toContain("cooper · feat/ev2-g1");
+      expect(head.dataset.fkey).toBe("strip-head:p-g1");
+      // The chip is gone from the row line — the heading replaced it, so the
+      // row's full width belongs to its title again…
+      expect(byClass(root.children[0], "row-program-chip")).toBe(null);
+      /* …while the row's own aria-label keeps the words: a screen reader
+         arrowing through rows may never visit the heading between them. */
       const row = byFkey(root.children[0], "agent:codex:wt-alert");
-      expect(row.attributes["aria-label"]).toContain("cooper · feat/ev2-g1@ev2-g1");
+      expect(row.attributes["aria-label"]).toContain("cooper · feat/ev2-g1");
     });
 
-    test("the chip's jump clears a closed fold and leaves the row unselected", async () => {
+    test("the heading's jump clears a closed fold and leaves the rows unselected", async () => {
       const worker = asking({
         id: "codex:wt-alert",
         repo: { repoKey: "r1", repoName: "cooper", worktreePath: "/lanes/ev2-g1", branch: "feat/ev2-g1", ephemeral: false },
@@ -8922,14 +9058,14 @@ describe("FE-B: harness-backed client behavior", () => {
           (globalThis as unknown as { document: any }).document.body = newNode("body");
           const root = newNode("div");
           M.syncProgramList(root, visible, M.state);
-          const chip = byClass(root.children[0], "row-program-chip");
-          await fire(chip, "click");
+          const head = byClass(root.children[0], "strip-group-head");
+          await fire(head, "click");
           /* The fold the operator closed is re-opened by REMOVING the override:
              open is the computed default for a group holding an alerting row,
              and the jump must not persist a choice the operator never made. */
           expect(M.state.repoOverrides.has("r1")).toBe(false);
           expect(M.state.programOverrides.has("p-g1")).toBe(false);
-          // The chip is not the row: jumping must not open the inspector.
+          // The heading is not a row: jumping must not open the inspector.
           expect(M.state.selectedId).toBe(null);
         }));
       } finally {
@@ -8947,8 +9083,69 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(fn).toContain("render();");
       expect(fn.indexOf("render();")).toBeLessThan(fn.indexOf("scrollIntoView"));
       expect(fn).toContain('"prog:"');
+      /* A group whose every session is pinned draws no shell, so its caret is
+         not in the DOM — the jump falls back to the repo band that holds it. */
+      expect(fn).toContain('"repo:"');
       expect(fn).toContain("scrollIntoView?.(");
       expect(fn).toContain("focus?.(");
+    });
+
+    test("a repo band whose every worktree is hollow draws nothing at all", () => {
+      const repo = { repoKey: "r-h", repoName: "cooper", worktreePath: "/lanes/h1", branch: "feat/h1", ephemeral: false };
+      const pinnedOnly = {
+        id: "repo:r-h:worktree:w-h1", name: "cooper", path: "/lanes/h1",
+        groupPath: ["r-h", "w-h1"], agents: [asking({ id: "codex:h1-alert", repo })],
+      };
+      const visible = [{ program: pinnedOnly, agents: pinnedOnly.agents }];
+      const root = newNode("div");
+      const shown = withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [pinnedOnly] },
+      })));
+      // The strip holds the session; the board below adds no empty band.
+      expect(shown).toBe(1);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0].className).toContain("needs-strip");
+    });
+
+    test("a band keeps only the worktrees that still have something to draw", () => {
+      const mk = (key: string, wt: string, agents: Record<string, unknown>[]) => ({
+        id: `repo:${key}:worktree:${wt}`, name: "cooper", path: "/lanes/" + wt,
+        groupPath: [key, wt], agents,
+      });
+      const repo = { repoKey: "r-mix", repoName: "cooper", worktreePath: "/lanes/mix", branch: "feat/mix", ephemeral: false };
+      const hollowWt = mk("r-mix", "w-a", [asking({ id: "codex:mix-alert", repo })]);
+      const liveWt = mk("r-mix", "w-b", [agent({ id: "codex:mix-work", status: "running", repo: { ...repo, worktreePath: "/lanes/mix-b", branch: "feat/mix-b" } })]);
+      const visible = [
+        { program: hollowWt, agents: hollowWt.agents },
+        { program: liveWt, agents: liveWt.agents },
+      ];
+      const root = newNode("div");
+      const shown = withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [hollowWt, liveWt] },
+      })));
+      expect(shown).toBe(2);
+      // Strip + one band, and the band holds exactly one worktree subsection.
+      expect(root.children.length).toBe(2);
+      const band = root.children[1];
+      expect(band.className).toContain("repo-section");
+      expect(allByClass(band, "program")).toHaveLength(1);
+      expect(byFkey(band, "agent:codex:mix-work")).not.toBe(null);
+      expect(byFkey(band, "agent:codex:mix-alert")).toBe(null);
+    });
+
+    test("a shelf full of finished work keeps its shell even when live rows are pinned", () => {
+      /* Hollow means NOTHING to draw. A worktree whose only live session is
+         pinned but whose Finished shelf holds records still owes the operator
+         the shelf toggle — suppressing it would orphan those records. */
+      const program = { id: "p-shelf", name: "Shelfy", agents: [asking({ id: "codex:shelf-alert" })] };
+      const done = agent({ id: "codex:shelf-done", lifecycle: "finished", status: "ended" });
+      const visible = [{ program, agents: program.agents, finished: [done] }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      expect(root.children.length).toBe(2);
+      expect(textOf(root.children[1])).toContain("Finished");
     });
   });
 
@@ -9037,11 +9234,11 @@ describe("FE-B: harness-backed client behavior", () => {
       const alertRow = byFkey(alphaBody, "agent:codex:a-alert");
       expect(alertRow).not.toBe(null);
       expect(alertRow.className).toContain("is-needs-you");
-      // ...under their lifecycle section head, which pane mode would have
-      // suppressed for an all-pinned section.
+      // ...back in its group — whose solo lifecycle divider is elided now,
+      // in every mode: a heading over the only population divides nothing.
       const betaBody = inlineRoot.children[1].children[inlineRoot.children[1].children.length - 1];
       expect(byFkey(betaBody, "agent:codex:b-alert")).not.toBe(null);
-      expect(allByClass(betaBody, "lifecycle-section")).toHaveLength(1);
+      expect(allByClass(betaBody, "lifecycle-section")).toHaveLength(0);
       // ...and every session is drawn exactly once.
       const keys = findAll(inlineRoot, (n) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
         .map((n) => n.dataset.fkey as string);
@@ -9129,7 +9326,7 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(pane).not.toBe(inline);
     });
 
-    test("inline mode marks a repo band that holds an alerting session", () => {
+    test("the band head's rollup says a shut fold is hiding an alert", () => {
       const repo = { repoKey: "k-band", repoName: "cooper", worktreePath: "/lanes/g1", branch: "feat/g1", ephemeral: false };
       const program = {
         id: "repo:k-band:worktree:wt-g1", name: "cooper", path: "/lanes/g1",
@@ -9139,31 +9336,26 @@ describe("FE-B: harness-backed client behavior", () => {
       const visible = [{ program, agents: program.agents }];
       const snap = { schemaVersion: 1, programs: [program] };
 
-      /* Collapsed is the reachability case: with no strip and the fold shut,
-         the band head is the only surface left that can say a session inside
-         is asking. The worktree heads carry an alerts cell already; the band
-         head carried nothing. */
+      /* Collapsed is the reachability case: with the fold shut, the band head
+         is the only surface left that can say a session inside is asking. The
+         band rolls up its WHOLE population through the same programRollupCells
+         the worktree heads use, so the two can never disagree. */
       const root = newNode("div");
       withDom(() => M.syncProgramList(root, visible, inlineUi({
         snap, repoOverrides: new Map([["k-band", "closed"]]),
       })));
-      const marker = byClass(root.children[0], "repo-alerts");
-      expect(marker).not.toBe(null);
-      expect(textOf(marker)).toBe("1 alert");
-      expect(marker.attributes["aria-label"]).toContain("cooper");
-
-      /* Pane mode: the strip holds the row, and a band count pointing at rows
-         that are NOT under it would contradict the strip's own sentence. */
-      const paneRoot = newNode("div");
-      withDom(() => M.syncProgramList(paneRoot, visible, inlineUi({ snap, needsYouDisplay: "pane" })));
-      expect(byClass(paneRoot, "repo-alerts")).toBe(null);
+      const head = byClass(root.children[0], "repo-head");
+      expect(textOf(head)).toContain("1alert");
+      const cells = allByClass(head, "program-rollup-cell");
+      expect(cells.some((c: { className: string }) => c.className.includes("is-alerting"))).toBe(true);
     });
 
-    test("an alert arriving repaints the band head marker", () => {
-      /* The band's shell signature carried no alert data at all, so without
-         this the marker would neither appear nor clear until something
-         unrelated (a PR link, a worktree count) repainted the band — the
-         documented mutates-only-itself failure class. */
+    test("an alert arriving repaints the band head", () => {
+      /* The band's shell signature carries its rollup cells: an alert arriving
+         changes nothing else the shell paints, so without them the head would
+         neither gain nor clear its alerts cell until something unrelated (a PR
+         link, a worktree count) repainted the band — the documented
+         mutates-only-itself failure class. */
       const repo = { repoKey: "k-sig", repoName: "cooper", worktreePath: "/lanes/s", branch: "feat/s", ephemeral: false };
       const programOf = (agents: Record<string, unknown>[]) => ({
         id: "repo:k-sig:worktree:w", name: "cooper", path: "/lanes/s",
@@ -9174,13 +9366,13 @@ describe("FE-B: harness-backed client behavior", () => {
       withDom(() => M.syncProgramList(root, [{ program: calm, agents: calm.agents }], inlineUi({
         snap: { schemaVersion: 1, programs: [calm] },
       })));
-      expect(byClass(root, "repo-alerts")).toBe(null);
+      expect(textOf(byClass(root, "repo-head"))).not.toContain("alert");
 
       const loud = programOf([asking({ id: "codex:sig-x", repo })]);
       withDom(() => M.syncProgramList(root, [{ program: loud, agents: loud.agents }], inlineUi({
         snap: { schemaVersion: 1, programs: [loud] },
       })));
-      expect(byClass(root, "repo-alerts")).not.toBe(null);
+      expect(textOf(byClass(root, "repo-head"))).toContain("1alert");
     });
   });
 
@@ -9550,7 +9742,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(alarm).not.toBeNull();
     expect(alarm.kind).toBe("frozen");
     expect(alarm.headline).toContain("Feed frozen");
-    expect(alarm.headline).toContain("4d");              // the age, in the headline
+    expect(alarm.headline).toContain("3.8d");            // the age, in the headline
     expect(alarm.ageMs).toBeGreaterThan(91 * 3_600_000);
     // It names the consequence, not just the condition.
     expect(alarm.detail).toContain("Controls are held");
@@ -9581,7 +9773,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     const node: any = withDom(() => M.feedAlarmNode(alarm));
     const text = textOf(node);
     expect(text).toContain("Feed frozen");
-    expect(text).toContain("4d");
+    expect(text).toContain("3.8d");
     expect(text).toContain("Refresh now");
     const refresh = buttonsOf(node);
     expect(refresh).toHaveLength(1);
@@ -9603,7 +9795,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     // bug was that this number kept climbing for four days, which made a dead
     // agent the most convincingly alive thing on the page.
     expect(M.elapsedTickText(base, from, FROZEN_NOW, true)).toBe("60s");
-    expect(M.elapsedTickText(base, from, FROZEN_NOW, false)).toBe("4d"); // the lie, for contrast
+    expect(M.elapsedTickText(base, from, FROZEN_NOW, false)).toBe("3.8d"); // the lie, for contrast
     // Unreadable datasets yield null rather than "—" written over a real value.
     expect(M.elapsedTickText("nope", from, now, false)).toBeNull();
     expect(M.elapsedTickText(base, "nope", now, false)).toBeNull();
@@ -9629,7 +9821,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     };
 
     withStub(() => M.tickClocks(false, FROZEN_NOW));
-    expect(uptime.textContent).toBe("4d");                 // the bug, reproduced
+    expect(uptime.textContent).toBe("3.8d");               // the bug, reproduced
     expect(uptime.classList.contains("is-frozen")).toBe(false);
 
     withStub(() => M.tickClocks(true, FROZEN_NOW));
@@ -9747,7 +9939,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(M.staleControlNote(null)).toBe("");
     expect(M.staleControlNote(M.feedAlarm("offline", null, FROZEN_NOW))).toContain("unreachable");
     const frozen = M.staleControlNote(M.feedAlarm("live", FROZEN_AT, FROZEN_NOW));
-    expect(frozen).toContain("4d");
+    expect(frozen).toContain("3.8d");
     expect(frozen).toContain("Refresh");
   });
 
@@ -11551,12 +11743,121 @@ describe("Atlas F1: repo sections, worktree subsections, role order", () => {
     expect(byClass(section, "repo-name").textContent).toBe("the-mountain");
     expect(textOf(byClass(section, "repo-head"))).toContain("2 worktrees");
 
-    // The subsections carry the fact that distinguishes them — branch and the
-    // checkout they sit in — instead of repeating the repository name twice.
+    // The subsections carry only what distinguishes them: a checkout named
+    // after the repo adds nothing the band has not said, so `main` stands
+    // alone while the lane keeps its branch@directory pair.
     expect(allByClass(section, "program").length).toBe(2);
     expect(allByClass(section, "program-name").map((n: { textContent: string }) => n.textContent))
-      .toEqual(["main@the-mountain", "atlas-fe@ah-atlas-fe"]);
+      .toEqual(["main", "atlas-fe@ah-atlas-fe"]);
     expect(rowIds(section)).toEqual(["codex:two-a", "codex:two-b"]);
+  });
+
+  test("one column header serves the whole band, and only while it is open", () => {
+    /* Ten copies of five never-changing labels — one per worktree — were the
+       strongest repeating rhythm on the measured board, and they set the
+       perceived section grain at the CHECKOUT, which is why eleven checkouts
+       read as eleven unrelated sections. The band draws the one copy; its
+       worktrees draw rows only. A flat program is its own band and keeps its
+       own header. */
+    const main = worktree({
+      repoKey: "k-col", worktreeKey: "wt-a", branch: "main",
+      path: "/w/one", agents: [repoAgent("codex:col-a")],
+    });
+    const lane = worktree({
+      repoKey: "k-col", worktreeKey: "wt-b", branch: "lane",
+      path: "/w/two", agents: [repoAgent("codex:col-b")],
+    });
+    const root = newNode("div");
+    paint(root, visibleOf(main, lane));
+    const section = root.children[0];
+    expect(allByClass(section, "agent-column-header")).toHaveLength(1);
+    // The one copy is the band's, not a worktree's: it sits outside every
+    // program body, above the subsections it labels.
+    expect(allByClass(byClass(section, "repo-worktrees"), "agent-column-header")).toHaveLength(0);
+    // The band head rolls up the whole population under it — before this, the
+    // unit the operator buckets attention by had no numbers on it at all.
+    expect(textOf(byClass(section, "repo-head"))).toContain("2agents");
+    // The two class literals CSS distinguishes the shapes by.
+    expect(allByClass(section, "program").every((n: { className: string }) => n.className.includes("is-banded"))).toBe(true);
+
+    // Shut fold: no columns to label, no header.
+    const shutRoot = newNode("div");
+    paint(shutRoot, visibleOf(main, lane), { repoOverrides: new Map([["k-col", "closed"]]) });
+    expect(allByClass(shutRoot.children[0], "agent-column-header")).toHaveLength(0);
+
+    // The flat path is untouched: its own header, its own card.
+    const flat = { id: "flat-1", name: "Home", agents: [repoAgent("codex:flat-a")] };
+    const flatRoot = newNode("div");
+    paint(flatRoot, [{ program: flat, agents: flat.agents }]);
+    expect(allByClass(flatRoot.children[0], "agent-column-header")).toHaveLength(1);
+    expect(flatRoot.children[0].className).toContain("is-flat");
+  });
+
+  test("a band's only checkout is labelled by its branch alone", () => {
+    /* `@directory` earns its place by separating siblings; a lone checkout
+       has none, and on the live board the directory half actively
+       contradicted the band name above it (`…@the-mountain-main` under
+       "the-ant-hill"). */
+    const only = worktree({
+      repoKey: "k-solo", repoName: "the-ant-hill", worktreeKey: "wt-solo",
+      branch: "fix/cmux-control-health-lifecycle",
+      path: "/Users/e/Developer/the-mountain-main", agents: [repoAgent("codex:solo-a")],
+    });
+    const root = newNode("div");
+    paint(root, visibleOf(only));
+    expect(byClass(root, "program-name").textContent).toBe("fix/cmux-control-health-lifecycle");
+  });
+
+  test("the Board head speaks the live lens, and discloses what the filter hid", () => {
+    /* Sweep audit §8/§11: "554 ended" was the loudest number on the head while
+       zero ended rows were below it, and the "session tokens" aggregate is not
+       summable with anything visible. Both belong to History/Usage; the Board
+       head describes the live lens and says when the body is filtered. */
+    const busy = worktree({
+      repoKey: "k-lens", worktreeKey: "wt-lens", branch: "lens", path: "/w/lens",
+      agents: [
+        repoAgent("codex:lens-a"),
+        repoAgent("codex:lens-b", {
+          status: "idle", lifecycle: "finished",
+          tokens: { provenance: "observed", scope: "session", sessionTotal: 9_000_000 },
+        }),
+        repoAgent("codex:lens-c"),
+      ],
+    });
+    const visible = [{ program: busy, agents: [busy.agents[0], busy.agents[2]] }];
+    const root = newNode("div");
+    withDom(() => M.syncProgramList(root, visible, listUi({
+      view: "board", lookbackHours: null,
+      snap: { schemaVersion: 1, programs: [busy] },
+    })));
+    for (const node of [byClass(root, "repo-head"), byClass(root, "program-head")]) {
+      expect(textOf(node)).not.toContain("ended");
+      expect(textOf(node)).not.toContain("session tokens");
+    }
+    expect(textOf(byClass(root, "head-shown"))).toBe("2 of 3 shown");
+
+    // History keeps the full census — ended is the point there.
+    const hist = newNode("div");
+    withDom(() => M.syncProgramList(hist, visible, listUi({
+      view: "history",
+      snap: { schemaVersion: 1, programs: [busy] },
+    })));
+    expect(textOf(byClass(hist, "repo-head"))).toContain("ended");
+    expect(byClass(hist, "head-shown")).toBe(null);
+  });
+
+  test("an open single-session worktree on the Board carries no rollup", () => {
+    // Its one row IS the census, printed just below; "1 agent · 0 working"
+    // over it was one fact wearing three cells. The band head keeps the
+    // band-level census either way.
+    const solo = worktree({
+      repoKey: "k-solo2", worktreeKey: "wt-s2", branch: "solo", path: "/w/s2",
+      agents: [repoAgent("codex:solo2-a")],
+    });
+    const root = newNode("div");
+    paint(root, visibleOf(solo), { view: "board", lookbackHours: null });
+    expect(byClass(byClass(root, "program-head"), "program-rollup")).toBe(null);
+    expect(byClass(byClass(root, "repo-head"), "program-rollup")).not.toBe(null);
   });
 
   test("a lone worktree still groups under its repo, counted honestly", () => {
@@ -11811,7 +12112,7 @@ describe("Atlas F1: repo sections, worktree subsections, role order", () => {
     paint(root, visibleOf(disposable("0d42", "codex:eph-a"), disposable("21a3", "codex:eph-b"), checkout));
 
     const labels = allByClass(root, "program-name").map((n: { textContent: string }) => n.textContent);
-    expect(labels).toEqual(["0d42", "21a3", "fix/history-rich-detail-drawer@elio-intelligence-suite"]);
+    expect(labels).toEqual(["0d42", "21a3", "fix/history-rich-detail-drawer"]);
     // The whole point: no subsection under a band may repeat the band's name.
     expect(labels).not.toContain("elio-intelligence-suite");
     expect(new Set(labels).size).toBe(labels.length);

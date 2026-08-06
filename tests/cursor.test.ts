@@ -250,6 +250,30 @@ describe("Cursor Agent persisted session truth", () => {
     expect(agent?.lastHumanMessage).not.toContain("identity.ts");
   });
 
+  test("publishes Cursor's role-attributed closing so a final approval fork remains readable", async () => {
+    const explanation = "I verified the cleanup plan and every rollback SHA before asking for a decision. ".repeat(8);
+    const approvalFork = "Reply with one of: 1. Approve 2. Decline";
+    const agent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: await fixture("cursor-meta.json"),
+      transcriptJsonl: [
+        JSON.stringify({ role: "user", message: { content: "Propose cleanup and wait for approval." } }),
+        JSON.stringify({
+          role: "assistant",
+          message: { content: [{ type: "text", text: `${explanation}${approvalFork}` }] },
+        }),
+        // A later assistant record is tool machinery, not words authored by the agent.
+        JSON.stringify({ role: "assistant", message: { content: [{ type: "tool_result", text: "diff --git a/x b/x" }] } }),
+        JSON.stringify({ type: "turn_ended", status: "success" }),
+      ].join("\n"),
+      nowMs: 1784689180000,
+    });
+
+    expect(agent?.lastAgentMessage).not.toContain(approvalFork);
+    expect(agent?.lastAgentClosing).toContain(approvalFork);
+    expect(agent?.lastAgentClosing).not.toContain("diff --git");
+  });
+
   test("parses a Cursor child as a real parent-linked session with its own model", () => {
     const child = parseCursorChildSession({
       sessionId: "6514e366-df29-434b-979d-52a26168e188",
@@ -275,6 +299,7 @@ describe("Cursor Agent persisted session truth", () => {
       // Transcript mtime equals now: a fresh child stays working despite the
       // last turn_ended:"success" already recorded in the cumulative transcript.
       status: "running",
+      lastAgentClosing: "Build verified.",
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });

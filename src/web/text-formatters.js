@@ -1,7 +1,14 @@
 /* Small text and elapsed-time formatters with no application-state dependency. */
 
+/* At most three significant figures at every magnitude: "325.8M" beside
+   "6.6M" beside "361k" made the tokens column shift precision between
+   adjacent rows, and a column that cannot be compared by eye wastes its
+   right alignment. */
 export const fmtTok = (n) =>
-  n >= 1e9 ? (n / 1e9).toFixed(2) + "B"
+  n >= 1e11 ? Math.round(n / 1e9) + "B"
+  : n >= 1e10 ? (n / 1e9).toFixed(1) + "B"
+  : n >= 1e9 ? (n / 1e9).toFixed(2) + "B"
+  : n >= 1e8 ? Math.round(n / 1e6) + "M"
   : n >= 1e6 ? (n / 1e6).toFixed(1) + "M"
   : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
 
@@ -10,8 +17,13 @@ export function fmtElapsed(ms) {
   const s = ms / 1000;
   if (s < 90) return Math.round(s) + "s";
   if (s < 5400) return Math.round(s / 60) + "m";
-  if (s < 129600) return (s / 3600).toFixed(1) + "h";
-  return Math.round(s / 86400) + "d";
+  if (s <= 86400) return (s / 3600).toFixed(1) + "h";
+  /* One decimal, threshold at the day itself (inclusive, so an exactly-24h
+     usage window still reads "24.0h"). Math.round at a 36h threshold printed
+     "2d" for a 36-hour span — a 33% overstatement — and could never print
+     "1d" at all, while precision fell from three significant figures to one
+     across a one-second boundary. */
+  return (s / 86400).toFixed(1) + "d";
 }
 
 export function agoText(iso) {

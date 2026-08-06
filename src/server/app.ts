@@ -80,6 +80,8 @@ export const MAX_SSE_BACKLOG_BYTES = 8 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ACTION_LOG_ENTRIES = 500;
+const CLEANER_OBSERVE_ATTEMPTS = 10;
+const CLEANER_OBSERVE_INTERVAL_MS = 500;
 
 export type OperatorActionKind = "focus" | "instruct" | "interrupt" | "broadcast" | "archive" | "unarchive";
 export type OperatorActionOutcome = "ok" | "failed" | "partial" | "staged";
@@ -327,6 +329,8 @@ export interface MountainAppDependencies {
   settingsStore?: JsonSettingsStore;
   cleanupProposer?: CleanupProposer;
   cleanupLauncher?: CleanupLauncher;
+  /** Delay between Cleaner publication checks; zero keeps route tests deterministic. */
+  cleanupObserveIntervalMs?: number;
   cmuxExecutable?: string;
   now?: () => number;
   webRoot: string;
@@ -478,6 +482,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
       ? defaultAttentionStore()
       : Promise.resolve(new MemoryAttentionStore());
+  const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
   const recollect = (): Promise<HubSnapshot> => {
     if (!recollectInFlight) {
@@ -522,9 +527,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     { sessionId },
   );
   const observeCleaner = async (sessionId: string): Promise<void> => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < CLEANER_OBSERVE_ATTEMPTS; attempt += 1) {
       const snapshot = await recollect();
       if (cleanerAgent(sessionId, snapshot)) return;
+      if (attempt + 1 < CLEANER_OBSERVE_ATTEMPTS && cleanupObserveIntervalMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, cleanupObserveIntervalMs));
+      }
     }
     throw new CleanupLaunchError(
       "CLEANER_SESSION_NOT_OBSERVED",

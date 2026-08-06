@@ -223,3 +223,117 @@ Report **which transitions were measured against a live Cleaner and which are
 fixture-only.** As of this note, *all* of S3 is fixture-only: no live Cleaner has
 been launched yet, because the wiring that would launch one is the part still
 blocked.
+
+---
+
+# Retirement note — 2026-08-06 11:0x
+
+Everything below is what is NOT in a commit message. The commits carry what was
+built and why; this carries what a fresh lane would otherwise learn the hard way.
+
+## The chip state machine — what is not obvious from the code
+
+**`cleanerLastState` is a module-scoped variable in `app.js` mutated inside
+`cleanupAction()`.** That is a render-time side effect, and it is load-bearing:
+it is how the landing beat fires on a transition rather than on a clock. Two
+consequences a refactor will not see coming:
+
+- If `cleanupAction()` is ever called **twice in one paint** (two chips, or a
+  micro chip plus a full one), the second call reads the state the first just
+  wrote and the landing is swallowed. Today only one call site can be live at a
+  time because the health cell is either micro or full-width, never both.
+- If the control stops rendering for a paint, the variable freezes at its last
+  value rather than resetting. That is intentional — the binding survives — but
+  it means `idle` is not re-entered by the chip disappearing.
+
+**`cleanerView()` is called twice per paint**: once inside the paint signature
+and once in `cleanupAction()`. It is pure, so this is free and correct. It is
+also a trap: making it stateful or expensive would break the signature's meaning
+and double any cost. Keep it pure.
+
+**`cleanupOffered()` gates the whole control, and it is keyed on the chip being
+degraded — not on whether a Cleaner is running.** So a board that recovers while
+a Cleaner is mid-run hides the control, and with it the Cleaner's state, even
+though the lane is alive. The lane is still visible as an ordinary row (which is
+the R2′ gate, so nothing is lost that matters), but the CHIP will not tell you.
+Nobody has decided whether that is right. It is worth a ruling rather than a
+silent fix: keeping a control visible only while a fault persists is exactly the
+anti-scold rule S6 was built on, and overriding it for the Cleaner may be
+correct or may be the scold returning by the back door.
+
+**`resolved` is reachable but never yet seen.** It requires the bound session to
+go terminal. No live Cleaner has ended while the chip was bound to it, so the
+`resolved` label and its counts have been exercised by fixture only.
+
+## Live vs fixture, per transition — the honest ledger
+
+| Transition | Status |
+|---|---|
+| `idle → launching` | **LIVE.** Real click, real POST, label "Starting…", focus retained. |
+| `launching → failed` | **LIVE, twice, two different causes.** A 404 (server predating the route) and a real 503 `CLEANER_SESSION_CREATE_FAILED`. Both rendered a stated failure; neither left a spinner. |
+| `launching → watching` | **FIXTURE ONLY.** |
+| `watching → needs-you` | **FIXTURE ONLY** — and see the blocker below; it cannot happen live yet at all. |
+| `watching/needs-you → resolved` | **FIXTURE ONLY.** |
+| `409 → adopted → watching` | **FIXTURE ONLY.** No second launch has ever succeeded, because no first launch has. |
+| S5 landing ring, normal motion | **LIVE-MEASURED** (`cleanup-spin`, 1 iteration, `forwards`, then held). |
+| S5 landing ring, reduced motion | **LIVE-MEASURED** through `setEmulatedMedia`, gate asserted true first. |
+| S6 geometry at 1280 and 420 | **LIVE-MEASURED.** |
+| The ask becoming a handoff item | **FIXTURE ONLY**, and correct in fixture. |
+
+**Why the success path has never run:** `cursor-agent` cannot authenticate under
+the throwaway `HOME` that makes the board degraded, and the board must be
+degraded for the control to appear at all. Those two requirements conflict.
+Resolving it needs either a real-home server with the chip forced visible, or a
+Cursor login inside the fake home. Spawning a Cleaner against the live repo is an
+outward action and was left to the orchestrator deliberately.
+
+**Defect 1 (the board cannot see the Cleaner's ask) is `src/server/cursor.ts`.**
+`lastAgentClosing` is `0/93` for Cursor against `606/719` for Claude, and
+`attention-signal.ts` states that field is what makes the content detectors
+possible. Until it lands, `needs-you` cannot occur live for any Cursor lane.
+be-dwell has it.
+
+## Things that did not work — do not spend the time again
+
+- **A standalone HTML fixture for measuring panel geometry.** Extracting the
+  masthead into its own page drops the ancestor chain, so `.masthead-signals`
+  landed at 8..412 instead of 48..372 and the defect did not reproduce. Measure
+  the real app, or include the whole `<body>` chain.
+- **Exempting `kind === "system"` from the stale-demotion rule.** Too broad —
+  the abandoned-worktree row in the truth-table fixture is also `system`. The
+  working discriminator is whether the index can RESOLVE the named agents at all:
+  present-and-terminal is stale, unresolvable is the fault itself.
+- **Flipping sublabel-over-severityDetail for every severity.** Only `advisory`
+  has a constant detail; `blocking` and `stale` derive theirs from the fault and
+  are better than their sublabel. The blanket flip swapped one specific sentence
+  for another and broke a test that was right.
+- **Adding a `cleanup-land` keyframe.** `tests/web-client.test.ts` carries an
+  exhaustive `@keyframes` list whose whole purpose is to make a new animation's
+  author confirm reduced-motion coverage. Reuse `cleanup-spin` with one iteration
+  instead — a landing is a rotation that stops, not a different motion.
+- **Scoping CSS on `.widget-health`.** That class is built as `"widget-" + id`
+  and never appears literally in the client, so the orphan-CSS guard flags it.
+  Scope on a class the code emits as a literal.
+- **`String.replace` in mutation checks.** It takes the FIRST occurrence, and the
+  rail and the notification panel have identically-worded signature lines — a
+  mutation check reported a test as toothless when it had in fact edited the
+  wrong copy. Use `lastIndexOf` and slice, and mutation-check the mutation.
+
+## Environment traps
+
+- **Served assets carry `Cache-Control: max-age=60`.** Every browser check after
+  an edit needs `sleep 61` or a hard reload, or you measure the old bundle. This
+  cost several wrong readings before it was noticed.
+- **`agentsById()` caches by snapshot object identity.** Mutating `state.snap` in
+  place does not invalidate it; replace the object
+  (`st.snap = JSON.parse(JSON.stringify(st.snap))`) or the board will not see
+  your fixture agent.
+- **`browse` is one shared daemon.** Driving it changes the viewport and page for
+  whoever else is using it. It also needs a restart to pick up a rebuilt
+  `dist/server-node.mjs` — the CLI binary is stale and does not carry the CDP
+  allowlist.
+- **Demo board:** `http://localhost:4796`, pid noted at launch, `HOME` pointed at
+  `<scratch>/fakehome` with an unreadable Cursor GUI store and the other
+  collectors symlinked, so only Cursor fails. Side effect: BurnBar cost reads
+  unavailable. `4799` was held by a process this lane did not start and was left
+  alone; `4701` is the operator's board and was never touched.

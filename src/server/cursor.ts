@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite";
 import {
   stripTimestampMarkup,
   extractLastHumanMessage,
+  extractClosingByRole,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -286,6 +287,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
+    lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: input.transcriptPath
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
@@ -380,6 +382,7 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
+    lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],

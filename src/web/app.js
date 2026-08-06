@@ -603,6 +603,14 @@ function rowStalenessText(agent, nowMs = Date.now()) {
   return "updated " + fmtElapsed(ageMs) + " ago";
 }
 
+/* The Board's fifth column answers the question the operator is actually
+   asking on a live lens — "how long has this been quiet" — not "how old is
+   this session". Blank when fresh: fresh needs no number. */
+function rowQuietText(agent, nowMs = Date.now()) {
+  const m = /^updated (.+) ago$/.exec(rowStalenessText(agent, nowMs));
+  return m ? m[1] : "";
+}
+
 function lookbackLabel(hours) {
   if (hours == null) return "all collected";
   return hours + "h";
@@ -1132,7 +1140,21 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       if (stall) parts.push(stall);
       if (parts.length) sublabel = parts.join(" · ");
     }
-    return { value: String(totals.working), unit: "shipping", sublabel, tone: "ok" };
+    /* Attention leads. The strip was the one surface with zero attention
+       information — a header that summarizes everything except what needs a
+       human is a header the operator learns to skip. The old rule ("nothing
+       here is a to-do") is deliberately broken here, by operator decision
+       (2026-08-06): this is a fleet console, and its first number is the
+       number of sessions asking for a person. Shipping and the stall facts
+       move to the sub, keeping their window-honest wording. */
+    const asking = (snap.programs || []).reduce(
+      (total, program) => total + (program.agents || []).filter((a) => alerting(a)).length, 0);
+    return {
+      value: String(asking),
+      unit: asking === 1 ? "needs you" : "need you",
+      sublabel: totals.working + " shipping · " + sublabel,
+      tone: asking ? "hot" : "ok",
+    };
   }
   if (id === "burn") {
     const burn = snap.pulse && snap.pulse.burn;
@@ -1221,7 +1243,10 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       value: hasRate ? fmtTok(burn.tokensPerMin) : "Token rate unavailable",
       unit: hasRate ? "/min" : "",
       sublabel: [windowNote, sub].filter(Boolean).join(" · ") + blindNote,
-      tone: hasRate ? "ok" : "missing",
+      /* Neutral ink, not green: green on a burn rate asserted that spend is
+         good news, when it only meant "a rate exists". Green is reserved for
+         values inside a healthy band, and a spend rate has no band. */
+      tone: hasRate ? "neutral" : "missing",
     };
   }
   if (id === "tokens") {
@@ -1345,7 +1370,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
          drawer. */
       value: headline + "%",
       unit: headlineMode === "average" ? "average window" : "median window",
-      sublabel: (secondLabel || "Single reading") + coverage,
+      /* The tone below colors by the PEAK while the headline is the average —
+         a number that changes color without changing value teaches the
+         operator to stop reading color. The peak it colors by is named. */
+      sublabel: [secondLabel || "Single reading", peakPct != null ? "peak " + peakPct + "%" : ""]
+        .filter(Boolean).join(" · ") + coverage,
       /* The alarm still reads the PEAK, not the headline. One session about to
          run out of room is worth colouring the card for even when the fleet's
          typical occupancy is comfortable — demoting peak from the headline is
@@ -1419,7 +1448,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand,
+  quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand, conciseText,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
@@ -2647,6 +2676,22 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      happens to belong to. */
   if (id === "health" && cleanupOffered()) {
     subNode.classList.add("reading-sub-action");
+    /* A launch refusal SAYS WHAT HAPPENED, on the line, not just in a title.
+       The server answers with a code and a sentence and the chip used to collapse
+       both to the word "failed" — a fact on the wire, a category on the screen,
+       which is the defect this program has been pulling out of every surface it
+       touches. The code is carried too, in mono, so a bug report is greppable. */
+    const failure = cleanerView(state.snap, state.cleaner);
+    if (failure.state === "failed") {
+      subNode.append(el("span", { class: "cleanup-failure" },
+        failure.code ? el("code", { class: "mono cleanup-failure-code", text: failure.code }) : null,
+        el("span", { class: "cleanup-failure-said", text: failure.message }),
+        /* …and what it MEANS, which is a different question from what refused.
+           "cursor-agent create-chat timed out" is a fact; "this board cannot
+           spawn Cursor sessions right now, cleanup is not broken" is the thing
+           the operator needed to know. */
+        failure.meaning ? el("span", { class: "cleanup-failure-means", text: failure.meaning }) : null));
+    }
     subNode.append(cleanupAction());
   }
   if (remedy && remedy.instruction) {
@@ -5931,6 +5976,12 @@ function worktreeLabel(program) {
      Only when there is no branch: a branch already distinguishes the checkout,
      and `main@the-mountain` must not become `main@Developer`. */
   if (!branch && base && base === repoName) base = parentName(path) || base;
+  /* `feat/ev2-g1@ev2-g1` said its one distinguishing token twice — a checkout
+     directory is routinely named after the branch tail — and `branch@repoName`
+     repeats the band head directly above. Either way the suffix separates
+     nothing, and the widest line on the board was spending half its width on
+     it, in a face where I/l/1 collide. */
+  if (branch && base && (base === branch.split("/").pop() || base === repoName)) return branch;
   if (branch && base) return branch + "@" + base;
   return base || branch || (program ? program.name : "");
 }
@@ -5984,6 +6035,15 @@ function repoGroups(visible) {
     const first = group.worktrees[0];
     const repo = repoOf(first.program);
     group.name = (repo && repo.repoName) || first.program.name || "";
+    /* A band's only checkout needs no disambiguator: `@directory` earns its
+       place by separating siblings, and there are none — while on the live
+       board the directory half actively contradicted the band name above it
+       (`…@the-mountain-main` under "the-ant-hill"). Multi-worktree bands keep
+       both halves; uniqueness within the band is what the suffix is FOR. */
+    if (group.worktrees.length === 1) {
+      const branch = (repo && repo.branch) || "";
+      if (branch && first.label.startsWith(branch + "@")) first.label = branch;
+    }
     const urls = new Set();
     for (const { program } of group.worktrees) {
       for (const agent of program.agents) for (const url of agent.pullRequestUrls || []) urls.add(url);
@@ -6045,38 +6105,44 @@ function jumpToProgramGroup(program) {
     saveOverrides();
   }
   render();
-  const head = document.querySelector(`[data-fkey="${CSS.escape("prog:" + program.id)}"]`);
+  /* A group whose every session is pinned draws no shell, so its own caret may
+     not be in the DOM — fall back to the repo band that would hold it. */
+  const head = document.querySelector(`[data-fkey="${CSS.escape("prog:" + program.id)}"]`)
+    || (repoKey ? document.querySelector(`[data-fkey="${CSS.escape("repo:" + repoKey)}"]`) : null);
   if (!head) return;
   head.scrollIntoView?.({ block: "center" });
   head.focus?.({ preventScroll: true });
 }
 
-/* How many sessions in this band are asking for a person — over the FULL
-   population of each worktree program, the same convention the worktree
-   rollup uses, so the band and the heads under it can never disagree. */
-function repoAlertCount(group) {
-  let count = 0;
-  for (const { program } of group.worktrees) {
-    count += program.agents.filter((agent) => alerting(agent)).length;
-  }
-  return count;
+/* The band's whole population — every worktree's FULL program.agents, the
+   same convention the worktree rollups use, so the band and the heads under
+   it can never disagree about a count. */
+function bandAgents(group) {
+  const agents = [];
+  for (const { program } of group.worktrees) agents.push(...program.agents);
+  return agents;
 }
 
 /* Everything the repo BAND paints, and nothing its worktrees paint: the name,
-   the caret, the worktree count and the PR links. A row ticking inside one of
-   its worktrees must leave this node alone, or the band rebuild would take
-   every subsection under it with it. */
+   the caret, the worktree count, the PR links and the rollup. A row ticking
+   inside one of its worktrees must leave this node alone, or the band rebuild
+   would take every subsection under it with it. */
 function repoShellSig(group, ui) {
   return [
     group.key,
+    // The band head's rollup and column header are view-shaped (see
+    // programShellSig): a view switch must rebuild the shell.
+    ui.view,
     group.name,
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
-    /* The inline-mode alert marker is painted on this head, and nothing else
-       in this signature moves when a session starts or stops asking — the
-       documented mutates-only-itself failure class. */
-    needsYouDisplayOf(ui) === "inline" ? "alerts:" + repoAlertCount(group) : "",
+    /* The head's rollup cells. Derived by the SAME programRollupCells the
+       worktree heads use — two derivations of one number is the seam every
+       token defect on this board came through — and a cell moving must
+       repaint this head or it freezes: nothing else in this signature moves
+       when a session starts or stops asking. */
+    programRollupCells(bandAgents(group), null).map((c) => c.value + " " + c.label + (c.alert ? "!" : "")).join(","),
   ].join("\u001f");
 }
 
@@ -6091,10 +6157,12 @@ function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
-  const alerts = needsYouDisplayOf(ui) === "inline" ? repoAlertCount(group) : 0;
-  /* A band, not a second card: no rollup, no rename, no details. The worktree
-     heads below already carry all three, and stacking two full program headers
-     over one row of work is how a hierarchy turns into chrome. */
+  /* The band is the program tier, so it carries the program-tier facts: the
+     fold, the name, the PRs, and the rollup over its WHOLE population —
+     before this the unit the operator buckets attention by was the only unit
+     on the board with no numbers on it, and "how is cooper doing" meant
+     mentally summing eight worktree stats lines. The rollup's alerts cell is
+     also what says a shut fold is hiding a session that is asking. */
   const head = el("div", { class: "repo-head" },
     el("button", {
       type: "button",
@@ -6107,30 +6175,17 @@ function renderRepoSection(group, ui = state) {
     }, icon("caret")),
     el("span", { class: "repo-name", text: group.name }),
     el("span", {
-      class: "repo-worktree-count mono",
+      class: "repo-worktree-count",
       text: count === 1 ? "1 worktree" : count + " worktrees",
     }),
-    /* Inline mode only. With no strip, a collapsed band is the one place an
-       alerting session could hide with zero signal — the worktree heads under
-       it carry an alerts cell, but a shut fold draws no worktree heads. In
-       pane mode the strip holds those rows, and a band count pointing at rows
-       that are not under it would contradict the strip's own sentence. */
-    alerts
-      ? el("span", {
-        class: "repo-alerts is-alerting mono",
-        "aria-label": alerts === 1
-          ? "1 session needs you in " + group.name
-          : alerts + " sessions need you in " + group.name,
-        text: alerts === 1 ? "1 alert" : alerts + " alerts",
-      })
-      : null,
     ...group.pullRequestUrls.map((url) => el("a", {
       class: "repo-pr",
       href: url,
       target: "_blank",
       rel: "noreferrer",
       text: pullRequestLabel(url),
-    })));
+    })),
+    programHeadRollup(bandAgents(group), null, { view: ui.view }));
 
   const section = el("section", {
     class: "repo-section" + (open ? " open" : ""),
@@ -6138,6 +6193,13 @@ function renderRepoSection(group, ui = state) {
   },
     el("h2", { class: "visually-hidden", text: group.name }),
     head);
+  /* One column header for the whole band, not one per worktree: five labels
+     that never change were painted once per checkout — ten copies over
+     fifteen rows on the measured board, the strongest repeating rhythm on the
+     page — and they labeled the worktree grain, which is exactly why eleven
+     checkouts read as eleven unrelated sections. Only while open: a shut fold
+     has no columns to label. */
+  if (open) section.append(renderAgentColumnHeader());
   // Left empty on purpose, exactly as renderProgram leaves its body: the
   // worktree subsections are reconciled in by key, so a band rebuild never
   // destroys a subsection — or a row — that has not moved.
@@ -6324,6 +6386,19 @@ function renderNeedsYouStrip(rows) {
    cross-program precisely so nothing can hide inside a collapsed parent — and
    the parent's own swarm chip takes ember ink. Opening the swarm under them
    while they read it would move the rows they were looking at. */
+/* Whether a group would draw NOTHING under its head: every admitted session is
+   pinned in the strip, and the Finished shelf (already filtered by the shelf's
+   own governor upstream) holds no records. Such a group used to render as a
+   head plus a column bar over emptiness — the "empty shell" this board stopped
+   drawing. Pane mode only: inline mode pins nothing, and History pins nothing,
+   so everywhere else this is constant false and the path is untouched. */
+function hollowInPane(agents, finished, ui) {
+  if (ui.view !== "board" || needsYouDisplayOf(ui) !== "pane") return false;
+  if (!agents.length) return false;
+  if (!agents.every((agent) => alerting(agent))) return false;
+  return !(finished || []).length;
+}
+
 function swarmOpen(agent, ui = state) {
   return ui.swarmOverrides.get(agent.id) === "open";
 }
@@ -6344,6 +6419,11 @@ function programShellSig(program, agents, ui, label = "") {
   const key = presentationLabelKey(programLabelTarget(program));
   return [
     program.id,
+    /* The head now paints differently per view (Board drops ended/session
+       tokens, slims a solo worktree, and prints "N of M shown" from the
+       ADMITTED list) — so the view and the admitted count are painted state. */
+    ui.view,
+    String(agents.length),
     programName(program, label),
     ui.labels.has(key) ? "1" : "0",
     programOpen(program, ui) ? "open" : "shut",
@@ -6375,6 +6455,9 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.contextDisplay || "",
     String(opts.depth || 0),
     String(opts.childCount || 0),
+    // The whole-board swarm size behind the chip's "of N" clause: a sibling
+    // arriving in another program changes the label with nothing else moving.
+    String(opts.fullChildCount || 0),
     // Whether this row is showing a session tag. Without it the row keeps its
     // cached node when a twin arrives or leaves, so the tag would never appear
     // and never go away. Both collision tests, matching renderAgentRow: the
@@ -6387,7 +6470,8 @@ function agentRowSig(agent, ui, opts = {}) {
     // the caret renders dead — the same failure programOverrides had.
     opts.swarmOpen ? "swarm-open" : "swarm-shut",
     opts.swarmAlerting ? "swarm-alert" : "",
-    // The strip's copy of a row carries a program chip its group copy does not.
+    // The strip's copy of a row carries the program's words in its aria-label
+    // (its group copy does not), so a relabel must rebuild the node.
     opts.programChip ? "chip:" + stripChipLabel(opts.programChip) : "",
     // Inline mode's membership mark. A hook can flip it with nothing else in
     // this signature moving, so it has to be in here or the row keeps its
@@ -6549,8 +6633,15 @@ function syncProgramList(root, visible, ui = state) {
      repo for is still one flat section keyed by its id, drawn by the same
      renderer, so nothing about that path moved. */
   const groups = repoGroups(visible);
+  /* Hollow groups plan no shell at all — not a head, not a column bar. Their
+     rows are in the strip under a heading that says exactly where they belong,
+     and `shown` still counts them below, because where a row is DRAWN never
+     changes how many sessions matched. */
+  const liveWorktrees = (group) =>
+    group.worktrees.filter(({ agents, finished }) => !hollowInPane(agents, finished, ui));
   for (const group of groups) {
     if (group.kind === "repo") {
+      if (!liveWorktrees(group).length) continue;
       sections.push({
         key: repoSectionKey(group.key),
         sig: repoShellSig(group, ui),
@@ -6558,6 +6649,7 @@ function syncProgramList(root, visible, ui = state) {
       });
       continue;
     }
+    if (hollowInPane(group.agents, group.finished, ui)) continue;
     sections.push({
       key: group.program.id,
       sig: programShellSig(group.program, group.agents, ui),
@@ -6574,7 +6666,7 @@ function syncProgramList(root, visible, ui = state) {
     const band = programBodies.get(repoSectionKey(group.key));
     if (!band) continue;
     const plan = repoOpen(group, ui)
-      ? group.worktrees.map(({ program, agents, worktreeKey, label }) => {
+      ? liveWorktrees(group).map(({ program, agents, worktreeKey, label }) => {
         const key = worktreeSectionKey(group.key, worktreeKey);
         return {
           key,
@@ -6595,23 +6687,39 @@ function syncProgramList(root, visible, ui = state) {
   const keptRows = new Set();
   const stripBody = strip.length && needsYouDisplayOf(ui) === "pane" ? programBodies.get(STRIP_ID) : null;
   if (stripBody) {
-    const plan = strip.map(({ agent, program }) => {
+    /* Grouped by program, in first-appearance order: one heading per run of
+       rows, so eight pinned sessions read as short sections under names
+       instead of eight chips fighting eight titles for the same line.
+       needsYouStrip walks `visible` per program, so a program's rows are
+       always contiguous and a run-length pass is the whole grouping. */
+    const plan = [];
+    let headFor = null;
+    for (const { agent, program } of strip) {
+      if (program.id !== headFor) {
+        headFor = program.id;
+        const label = stripChipLabel(program);
+        plan.push({
+          key: STRIP_ID + "\u001fhead:" + program.id,
+          sig: "head\u001f" + label,
+          build: () => renderStripGroupHead(program, label),
+        });
+      }
       const opts = stripRowOpts(program, board);
-      return {
+      plan.push({
         key: STRIP_ID + "\u001frow:" + agent.id,
         sig: agentRowSig(agent, ui, opts),
         build: () => renderAgentRow(agent, program, opts),
-      };
-    });
+      });
+    }
     for (const key of reconcileKeyed(stripBody, plan, agentRowCache)) keptRows.add(key);
   }
-  const rowsInto = (sectionKey, program, agents, finished) => {
+  const rowsInto = (sectionKey, program, agents, finished, banded = false) => {
     const body = programBodies.get(sectionKey);
     if (!body) return;
     // A collapsed program keeps its section but drops its rows; the row cache
     // still holds them, so re-expanding costs a move rather than a rebuild.
     const plan = programOpen(program, ui)
-      ? agentRowPlan(program, agents, ui, board, { finished }).map((item) => ({ ...item, key: sectionKey + "\u001f" + item.key }))
+      ? agentRowPlan(program, agents, ui, board, { finished, banded }).map((item) => ({ ...item, key: sectionKey + "\u001f" + item.key }))
       : [];
     for (const key of reconcileKeyed(body, plan, agentRowCache)) keptRows.add(key);
   };
@@ -6623,7 +6731,7 @@ function syncProgramList(root, visible, ui = state) {
       const open = repoOpen(group, ui);
       for (const { program, agents, finished, worktreeKey } of group.worktrees) {
         shown += agents.length;
-        if (open) rowsInto(worktreeSectionKey(group.key, worktreeKey), program, agents, finished);
+        if (open) rowsInto(worktreeSectionKey(group.key, worktreeKey), program, agents, finished, true);
       }
       continue;
     }
@@ -6632,6 +6740,22 @@ function syncProgramList(root, visible, ui = state) {
   }
   for (const key of [...agentRowCache.keys()]) if (!keptRows.has(key)) agentRowCache.delete(key);
   return shown;
+}
+
+/* The pane's own group heading: the same "repo · branch@worktree" words the
+   board section below says, as the jump control back to it. A heading rather
+   than a per-row chip, because the chip stole the title's width on every line
+   and repeated one fact per row that a run of rows shares. */
+function renderStripGroupHead(program, label) {
+  return el("button", {
+    class: "strip-group-head",
+    title: "Jump to " + label,
+    "aria-label": "Jump to program group: " + label,
+    dataset: { fkey: "strip-head:" + program.id },
+    onclick: () => jumpToProgramGroup(program),
+  },
+    el("span", { class: "strip-group-name", text: label }),
+    el("span", { class: "strip-group-go", "aria-hidden": "true", text: "↗" }));
 }
 
 /* A strip row is the same row renderAgentRow draws in a program group — same
@@ -6934,8 +7058,13 @@ function renderPrograms() {
    .program-rollup cluster A4 established. The alert count takes ember ink
    (is-alerting → --ember) only when alerts exist; calm earns no color. The
    accessible name carries the data itself, extending the drawer's aria pattern. */
-function programHeadRollup(agents, rollup = null) {
-  const cells = programRollupCells(agents, rollup);
+function programHeadRollup(agents, rollup = null, opts = {}) {
+  let cells = programRollupCells(agents, rollup);
+  /* Board is the live lens: finished work belongs to the shelf and History,
+     and the session-tokens aggregate belongs to Burn and Usage. On the
+     measured board "554 ended" was the loudest number on its line, and the
+     head's biggest figure was not summable with anything visible below it. */
+  if (opts.view === "board") cells = cells.filter((c) => c.label !== "ended" && c.label !== "session tokens");
   const label = "Program rollup: " + cells.map((c) => c.value + " " + c.label).join(", ");
   return el("span", { class: "program-rollup", "aria-label": label },
     cells.map((c) => el("span", { class: "program-rollup-cell" + (c.alert ? " is-alerting" : "") + (c.key ? " program-rollup-cell--" + c.key : "") },
@@ -6955,7 +7084,16 @@ function renderProgram(program, agents, opts = {}) {
      filter kept. Rolling up the filtered list made the header disagree with its
      own drawer — "1 agent" above a program holding 32 — because a filter is a
      lens on the board, not a change to what the program contains. */
-  const rollup = programHeadRollup(program.agents, program.rollup);
+  /* An open single-session worktree on the Board carries no rollup at all:
+     its one row IS the census, printed 30px below. */
+  const soloOpen = opts.bodyKey && state.view === "board" && program.agents.length === 1 && open;
+  const rollup = soloOpen ? null : programHeadRollup(program.agents, program.rollup, { view: state.view });
+  /* The head counts the whole program while the body lists what the filter
+     kept — say so when they differ, on the pattern the board-level scope
+     note set, instead of leaving "5 live" over one drawn row unexplained. */
+  const shownNote = state.view === "board" && agents.length < program.agents.length
+    ? el("span", { class: "head-shown", text: agents.length + " of " + program.agents.length + " shown" })
+    : null;
 
   const label = programName(program, opts.label);
   const aliased = state.aliases.has(presentationLabelKey(programLabelTarget(program)));
@@ -6992,9 +7130,17 @@ function renderProgram(program, agents, opts = {}) {
       dataset: { fkey: "prog-details:" + program.id },
       onclick: () => selectEntity({ kind: "program", id: program.id }),
     }, "Details"),
+    shownNote,
     rollup);
 
-  const section = el("section", { class: "program" + (open ? " open" : ""), "aria-label": label },
+  /* Whole literal class strings, for the orphan lint — and a real distinction:
+     a banded program is a subsection whose card chrome the band above now
+     owns, while a flat program (no resolved repo) is still its own top-level
+     section and keeps the card. Both are painted by this one renderer. */
+  const section = el("section", {
+    class: (opts.bodyKey ? "program is-banded" : "program is-flat") + (open ? " open" : ""),
+    "aria-label": label,
+  },
     el("h2", { class: "visually-hidden", text: label }),
     head);
   if (state.renaming === presentationLabelKey(programLabelTarget(program))) section.append(renderRenameForm(program));
@@ -7096,6 +7242,31 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
     seen.add(id);
     return (fullChildren.get(id) || []).reduce((total, childId) => total + 1 + descendantCount(childId, seen), 0);
   };
+  /* What the caret will actually reveal: descendants this walk draws as rows —
+     same program, filter-admitted, not pinned into the strip. `descendantCount`
+     above spans the whole board; counting IT on the chip promised rows the
+     expansion could not show, and the collapsed-swarm ember could point at a
+     child no click here reaches. The chip counts the drawable set; when the
+     full swarm is bigger, the label says so instead of lying. */
+  const drawnDescendants = (id, seen = new Set()) => {
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    let total = 0;
+    for (const child of children.get(id) || []) {
+      if (visibleIds.has(child.id) && !pinnedIds.has(child.id)) total += 1;
+      total += drawnDescendants(child.id, seen);
+    }
+    return total;
+  };
+  const hasDrawnAlertingDescendant = (id, seen = new Set()) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    for (const child of children.get(id) || []) {
+      if (visibleIds.has(child.id) && !pinnedIds.has(child.id) && alerting(child)) return true;
+      if (hasDrawnAlertingDescendant(child.id, seen)) return true;
+    }
+    return false;
+  };
 
   /* Rows that went to the strip. They are drawn there and NOT here: one row per
      session, so `agent:<id>` stays a unique focus key, arrow navigation visits
@@ -7119,7 +7290,11 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      exactly like pinnedIds and for the same reason. */
   const markAlerting = ui.view === "board" && needsYouDisplayOf(ui) === "inline";
 
-  const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
+  /* A banded worktree draws no column header of its own — the band above it
+     draws the one copy for all its worktrees. The flat path keeps its own,
+     because a flat program IS its own band. */
+  // The view is in the sig: Board and History label the fifth column differently.
+  const plan = opts.banded ? [] : [{ key: "columns", sig: "columns:" + ui.view, build: renderAgentColumnHeader }];
 
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || [])
@@ -7131,18 +7306,22 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
          subtree otherwise, so collapsed children are absent from the DOM rather
          than hidden in it — which is what takes them out of `navigableRows` and
          out of Tab order at the same time, with no second rule to keep in step. */
-      const childCount = descendantCount(agent.id);
+      const childCount = drawnDescendants(agent.id);
       const open = childCount > 0 && swarmOpen(agent, ui);
       const opts = {
         depth,
         childCount,
+        fullChildCount: descendantCount(agent.id),
         fullById,
         ambiguousNames: ambiguous,
         sharedNames: board.sharedNames,
         swarmOpen: open,
-        // Ember on the chip when something folded up inside is asking for a
-        // person. The row itself is calm; the swarm it is holding is not.
-        swarmAlerting: !open && hasAlertingDescendant(agent.id, fullChildren, fullById),
+        /* Ember on the chip when something folded up inside is asking for a
+           person — restricted to descendants this expansion can actually draw.
+           A pinned alerting child is already in plain sight in the strip, and a
+           filter-excluded one was excluded explicitly; an ember that promises
+           "open me and see" must only fire when opening shows it. */
+        swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
         alerting: markAlerting && alerting(agent),
       };
       plan.push({
@@ -7230,20 +7409,31 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
     || (fullChildren.get(agent.id) || []).some((id) => relevantIds.has(id) && !pinnedIds.has(id));
 
   for (const agent of unsectioned) appendTree(agent, 0);
-  for (const key of LIFECYCLE_SECTIONS) {
-    const drawn = buckets.get(key).filter(draws);
+  /* A divider over the only populated section divides nothing: eight of the
+     eleven dividers on the measured board sat alone over a single run of
+     rows, each spending a line to restate what every row's own status cell
+     already says. The unverified head is exempt — its sentence is a
+     disclosure about what the board can SEE, not a state word the rows
+     repeat — and any unsectioned rows above keep the divider too, because
+     then it genuinely separates two populations. */
+  const drawnSections = LIFECYCLE_SECTIONS.map((key) => [key, buckets.get(key).filter(draws)]);
+  const populated = drawnSections.filter(([, drawn]) => drawn.length).length;
+  const soloRoutine = populated === 1 && !unsectioned.filter(draws).length;
+  for (const [key, drawn] of drawnSections) {
     if (!drawn.length) continue;
-    plan.push({
-      key: "section:" + key,
-      sig: "section:" + key + ":" + drawn.length,
-      build: () => el("p", {
-        class: SECTION_HEADS[key].className,
-        // A label, not a heading: the rows below already carry their whole
-        // state in their own aria-label, and a heading level here would put a
-        // second, coarser navigation tree over the one the operator uses.
-        role: "presentation",
-      }, el("span", { text: SECTION_HEADS[key].label(drawn.length) })),
-    });
+    if (!(soloRoutine && key !== "unverified")) {
+      plan.push({
+        key: "section:" + key,
+        sig: "section:" + key + ":" + drawn.length,
+        build: () => el("p", {
+          class: SECTION_HEADS[key].className,
+          // A label, not a heading: the rows below already carry their whole
+          // state in their own aria-label, and a heading level here would put a
+          // second, coarser navigation tree over the one the operator uses.
+          role: "presentation",
+        }, el("span", { text: SECTION_HEADS[key].label(drawn.length) })),
+      });
+    }
     for (const agent of drawn) appendTree(agent, 0);
   }
 
@@ -7324,20 +7514,6 @@ function roleRank(agent) {
   return index === -1 ? ROSTER_ROLE_ORDER.length : index;
 }
 
-/* Is anything folded up under this parent asking for a person? Walks the whole
-   subtree, not just direct children: an alerting grandchild is exactly as
-   invisible behind a closed caret as an alerting child. */
-function hasAlertingDescendant(id, fullChildren, fullById, seen = new Set()) {
-  if (seen.has(id)) return false;
-  seen.add(id);
-  for (const childId of fullChildren.get(id) || []) {
-    const child = fullById.get(childId);
-    if (child && alerting(child)) return true;
-    if (hasAlertingDescendant(childId, fullChildren, fullById, seen)) return true;
-  }
-  return false;
-}
-
 function renderAgentColumnHeader() {
   // Identity on the left, the right-aligned instrument cluster on the right:
   // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
@@ -7360,11 +7536,21 @@ function renderAgentColumnHeader() {
        This is the sessionTotal disease in a different column: a true number whose
        label claims something else. The number is not wrong, so the fix is the
        word, not the maths. */
-    el("span", {
-      class: "agent-column-label ri-col-label",
-      title: "First activity to last activity, dormancy included — not time spent working",
-      text: "Span",
-    }));
+    state.view === "board"
+      /* Board: QUIET, the staleness fact the row used to whisper only into
+         its aria-label while SPAN — a number whose own tooltip disclaims it —
+         held the terminal scan position. Span stays on History, where a
+         total duration is the point. */
+      ? el("span", {
+        class: "agent-column-label ri-col-label",
+        title: "Time since the session last changed — blank means fresh",
+        text: "Quiet",
+      })
+      : el("span", {
+        class: "agent-column-label ri-col-label",
+        title: "First activity to last activity, dormancy included — not time spent working",
+        text: "Span",
+      }));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board = {}) {
@@ -7447,11 +7633,12 @@ function rowStateWords(activity, outcome, view, agent) {
     words.push(ACTIVITY_LABELS[activity] || activity);
   }
   if (outcome !== "healthy") words.push(OUTCOME_LABELS[outcome] || outcome);
-  /* An alerting row always says so. A healthy-outcome session carrying only an
-     attentionSignal reached the Needs you tab, the title badge and the notifier,
-     and its own row printed nothing — the one surface an operator is actually
-     looking at when they scan. */
-  if (!words.length && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
+  /* An alerting row always says so — even when another word got there first. A
+     healthy-outcome session that wantsHuman used to print only "Waiting": the
+     group head counted it among "6 alerts" while the row corroborated nothing,
+     which teaches the operator the count is decorative. Appended, never
+     duplicated — a needs-you outcome already put the word there. */
+  if (outcome === "healthy" && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
   return words;
 }
 
@@ -7670,25 +7857,11 @@ function renderAgentRow(agent, program, opts = {}) {
           startRename(nameTarget, { draft: displayName });
         },
       }, icon("rename")),
-      /* Only in the Needs-you strip. The strip is flat and cross-program, so
-         the program header that would otherwise say where a row came from is
-         not above it — the chip is that header, per row, down to the same
-         branch@directory words. And because the header it stands in for is
-         also where the operator would go next, the chip is the road back: a
-         button that puts the parent group on screen. */
-      opts.programChip
-        ? el("button", {
-          class: "row-program-chip",
-          title: "Jump to " + stripChipLabel(opts.programChip),
-          "aria-label": "Jump to program group: " + stripChipLabel(opts.programChip),
-          dataset: { fkey: "strip-chip:" + agent.id },
-          onclick: (e) => {
-            e.stopPropagation();
-            jumpToProgramGroup(opts.programChip);
-          },
-          text: stripChipLabel(opts.programChip),
-        })
-        : null),
+      /* No provenance chip here anymore: in the strip, the row now sits under
+         its own group heading (renderStripGroupHead) carrying the same words —
+         the fact still reaches this row's aria-label below, because a screen
+         reader arrowing row-to-row may never visit the heading between them. */
+      null),
     el("span", { class: "row-identity-tags" },
       /* Session tag, only when this row's name is not unique on the board. It
          rides the existing identity-tags line rather than adding a row, and it
@@ -7767,23 +7940,41 @@ function renderAgentRow(agent, program, opts = {}) {
          `agent:<id>` belongs to the row: a keyboard operator who opened a swarm
          would otherwise be dropped onto the row underneath the caret they just
          pressed, on the very repaint their press caused. */
-      opts.childCount
-        ? el("button", {
-          type: "button",
-          class: "swarm-chip" + (opts.swarmOpen ? " is-open" : "") + (opts.swarmAlerting ? " is-alerting" : ""),
-          "aria-expanded": String(Boolean(opts.swarmOpen)),
-          "aria-label": (opts.swarmOpen ? "Collapse " : "Expand ") + opts.childCount
-            + " subagents under " + displayName
-            + (opts.swarmAlerting ? ". One of them is asking for you." : ""),
-          title: opts.swarmAlerting
-            ? opts.childCount + " subagents in this swarm — one of them is asking for you"
-            : opts.childCount + " subagents in this swarm",
-          dataset: { fkey: "swarm:" + agent.id },
-          onclick: (e) => { e.stopPropagation(); toggleSwarm(agent); },
-        },
-          el("span", { class: "swarm-caret", "aria-hidden": "true", text: opts.swarmOpen ? "▾" : "▸" }),
-          "swarm " + opts.childCount)
-        : null),
+      (() => {
+        /* Two chips, one honesty rule: the button's number is what the caret
+           will reveal, and when the full swarm is bigger the label says so.
+           A swarm whose every member is out of view here (pinned to the strip,
+           filtered out, or in another program) keeps a non-expanding chip —
+           the relationship is true even when the rows are elsewhere — but it
+           gets no caret, because a caret that reveals nothing is the defect
+           this branch exists to remove. */
+        const fullCount = opts.fullChildCount || opts.childCount || 0;
+        const elsewhere = Math.max(0, fullCount - (opts.childCount || 0));
+        if (opts.childCount) {
+          return el("button", {
+            type: "button",
+            class: "swarm-chip" + (opts.swarmOpen ? " is-open" : "") + (opts.swarmAlerting ? " is-alerting" : ""),
+            "aria-expanded": String(Boolean(opts.swarmOpen)),
+            "aria-label": (opts.swarmOpen ? "Collapse " : "Expand ") + opts.childCount
+              + " subagents under " + displayName
+              + (elsewhere ? ". " + elsewhere + " more are not in this group's view." : "")
+              + (opts.swarmAlerting ? ". One of them is asking for you." : ""),
+            title: (elsewhere
+              ? fullCount + " subagents in this swarm — " + opts.childCount + " here; " + elsewhere + " pinned to Needs you, filtered out, or in another program"
+              : opts.childCount + " subagents in this swarm")
+              + (opts.swarmAlerting ? " — one of them is asking for you" : ""),
+            dataset: { fkey: "swarm:" + agent.id },
+            onclick: (e) => { e.stopPropagation(); toggleSwarm(agent); },
+          },
+            el("span", { class: "swarm-caret", "aria-hidden": "true", text: opts.swarmOpen ? "▾" : "▸" }),
+            "swarm " + (elsewhere ? opts.childCount + " of " + fullCount : opts.childCount));
+        }
+        if (fullCount) {
+          const where = fullCount + " subagents in this swarm — none are in this group's view (pinned to Needs you, filtered out, or in another program)";
+          return el("span", { class: "swarm-chip", title: where, "aria-label": where }, "swarm " + fullCount);
+        }
+        return null;
+      })()),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
@@ -7808,7 +7999,10 @@ function renderAgentRow(agent, program, opts = {}) {
         title: stateText,
         "aria-label": "Status: " + stateText,
       }, el("span", {
-        class: outcome !== "healthy" ? "row-state-alert" : "act-" + activity,
+        // The ink follows the words, not the outcome alone: a hook-shaped alert
+        // has a HEALTHY outcome, so "Alert" was printing in the activity's own
+        // green — the safe color, on the rows where the word is the only signal.
+        class: outcome !== "healthy" || (agent && wantsHuman(agent)) ? "row-state-alert" : "act-" + activity,
         text: words.join(" · "),
       }));
     })(),
@@ -7835,14 +8029,26 @@ function renderAgentRow(agent, program, opts = {}) {
       },
         el("span", { class: "ri-value mono", text: tokens.text }))
       : null,
-    elapsed && elapsed !== "—"
-      ? el("span", {
-        class: "ri-cell ri-elapsed",
-        "aria-label": "Span, first to last activity: " + elapsed,
-        title: "First activity to last activity, dormancy included",
-      },
-        el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
-      : null);
+    (() => {
+      if (state.view === "board") {
+        const quiet = rowQuietText(agent);
+        if (!quiet) return null;
+        return el("span", {
+          class: "ri-cell ri-elapsed is-quiet",
+          "aria-label": "Quiet: " + rowStalenessText(agent),
+          title: "No update for " + quiet + " — dormant, not necessarily stuck",
+        },
+          el("span", { class: "ri-value mono", text: quiet }));
+      }
+      return elapsed && elapsed !== "—"
+        ? el("span", {
+          class: "ri-cell ri-elapsed",
+          "aria-label": "Span, first to last activity: " + elapsed,
+          title: "First activity to last activity, dormancy included",
+        },
+          el("span", { class: "ri-value mono", dataset: elapsedDataset(agent, state.snap && state.snap.generatedAt), text: elapsed }))
+        : null;
+    })());
 
   const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
@@ -7891,7 +8097,7 @@ function renderAgentRow(agent, program, opts = {}) {
     "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
-      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip, .row-program-chip")) return;
+      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
       activate();
     },
     onkeydown: (e) => {

@@ -42,6 +42,33 @@ export const CLEANER_FAILURES = {
   CLEANER_SESSION_NOT_OBSERVED: "A workspace was requested but its session never appeared on this board. Nothing is running that we can see.",
 };
 
+/* What each refusal MEANS for the operator, which is a different question from
+   what the server said happened.
+
+   The server's message names the step that refused — "cursor-agent create-chat
+   timed out" — and that is a fact, not an explanation. Rendering it alone is the
+   same defect as a chip reading "Readings degraded": a fact on the wire, a
+   category on the screen. These say what it costs and, where the answer is
+   knowable, what to do about it.
+
+   Deliberately about THIS BOARD rather than about cleanup. A launcher that
+   cannot reserve a Cursor session has not told you cleanup is broken; it has
+   told you this board cannot spawn agents, and those are different repairs. */
+export const CLEANER_MEANINGS = {
+  METHOD_NOT_ALLOWED: "Nothing was launched, and nothing changed. This is a fault in the board, not in your repository.",
+  ORIGIN_REJECTED: "Nothing was launched. Open the board from its own address rather than through a proxy or a different host.",
+  CLEANER_UNAVAILABLE: "This board cannot launch agents at all — it was started without a launcher. Cleanup itself is fine; run the sweep from a terminal instead.",
+  CLEANER_SESSION_CREATE_FAILED: "This board cannot spawn Cursor sessions right now — usually Cursor is not signed in for this environment. Cleanup is not broken; nothing was started and nothing was removed.",
+  CLEANER_SESSION_ID_INVALID: "Cursor answered without a session this board could follow, so no workspace was requested. Nothing was started.",
+  CLEANER_CMUX_UNREACHABLE: "cmux is not answering, so no lane could be started. Start cmux and press Clean up again — Focus and Send come back with it.",
+  CLEANER_LAUNCH_FAILED: "The workspace was refused, so no Cleaner is running and nothing was removed.",
+  CLEANER_SESSION_NOT_OBSERVED: "A workspace was requested but never appeared on this board, so nothing here can follow it. Check cmux for a stray Cleaner pane before launching another.",
+};
+
+export function cleanerMeaning(code) {
+  return CLEANER_MEANINGS[code] || "";
+}
+
 /* The one failure that is not a failure.
    409 carries the id of the Cleaner already working, so a second click ADOPTS
    that lane instead of reporting an error. This is also why "double-click
@@ -87,7 +114,18 @@ export function cleanerFromResponse(body, httpOk) {
    setTimeout defect wearing a different hat. Six honest states instead of
    seven, per §2: if a state cannot be observed, it does not exist in the UI. */
 export function cleanerView(snap, cleaner = {}) {
-  if (cleaner.error) return { state: "failed", message: cleaner.error, code: cleaner.code || "" };
+  if (cleaner.error) {
+    return {
+      state: "failed",
+      message: cleaner.error,
+      code: cleaner.code || "",
+      /* Three parts, because the operator needs all three: WHICH refusal (the
+         code, so a report is greppable), WHAT the server said, and WHAT IT MEANS
+         for them. Collapsing these to the word "failed" is what sent Emilio
+         looking at a 503 with nothing on screen. */
+      meaning: cleanerMeaning(cleaner.code),
+    };
+  }
   if (cleaner.launching) return { state: "launching", message: "Starting a Cleaner lane…" };
   if (!cleaner.sessionId) return { state: "idle", message: "" };
 
@@ -109,7 +147,15 @@ export function cleanerView(snap, cleaner = {}) {
        approval control. */
     return { state: "needs-you", sessionId: cleaner.sessionId, agentId: agent.id, message: "The Cleaner is asking you something." };
   }
-  return { state: "watching", sessionId: cleaner.sessionId, agentId: agent.id, message: "The Cleaner is working." };
+  return {
+    state: "watching",
+    sessionId: cleaner.sessionId,
+    agentId: agent.id,
+    /* Names the lane, because this is also what an adopted CLEANER_ALREADY_RUNNING
+       resolves to: "one is already going" is not an error and must not read as
+       one — it points at the lane that is running. */
+    message: "The Cleaner is working. It is on the board as an ordinary lane and will ask you there before removing anything.",
+  };
 }
 
 /* The chip's own words. A count where a count is known, and never an adjective:

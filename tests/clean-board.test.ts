@@ -185,22 +185,27 @@ describe("a clean board reports clear, not empty", () => {
     const momentum = M.summaryWidgetData("momentum", snap, "live");
     const burn = M.summaryWidgetData("burn", snap, "live");
 
-    // The working count is the board's, not a literal that happens to match.
-    expect(momentum.value).toBe(String(snap.totals.working));
+    /* The headline is the ATTENTION count now (operator decision 2026-08-06);
+       a clean board is asking for nobody, and the working count moved to the
+       sub — still the board's own number, not a transcribed one. */
+    expect(momentum.value).toBe("0");
+    expect(momentum.unit).toContain("need you");
+    expect(momentum.sublabel).toContain(String(snap.totals.working) + " shipping");
 
     /* The burn value is the rate the board carries, abbreviated. Asserted as
        arithmetic on the fixture so a fixture edit cannot leave a stale
        constant behind. */
     expect(burn.value).toBe(`${Math.round(snap.pulse.burn.tokensPerMin / 1_000)}k`);
-    expect(burn.tone).toBe("ok");
+    expect(burn.tone).toBe("neutral"); // a spend rate has no healthy band to be green in
 
     /* The sublabel names the window the rate was measured over, read from
        burn.windowMs — the field this fixture used to omit, which meant the
        sublabel path was exercised by nothing at all. */
     expect(String(burn.sublabel)).toContain(`${snap.pulse.burn.windowMs / 60_000}m`);
 
-    // And the withheld counter renders as withheld rather than as a number.
-    expect(String(momentum.sublabel)).not.toMatch(/\d/);
+    // And the withheld counter renders as withheld rather than as a number —
+    // the shipping count ahead of it is the board's own number, and allowed.
+    expect(String(momentum.sublabel).split(" shipping · ")[1]).not.toMatch(/\d/);
   });
 
   test("a clean board raises no findings, and a broken one raises exactly its own", () => {

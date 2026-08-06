@@ -261,7 +261,7 @@ describe("the dashboard's burn widget separates no spend from no reading", () =>
     expect(widget.value).toBe("0");
     expect(widget.unit).toBe("/min");
     expect(widget.sublabel).toContain("$0.00 last hour");
-    expect(widget.tone).toBe("ok");
+    expect(widget.tone).toBe("neutral"); // neutral ink: a spend rate has no healthy band
   });
 
   test("an absent burn report is No data rather than a fabricated zero", () => {

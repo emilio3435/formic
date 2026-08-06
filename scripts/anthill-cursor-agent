@@ -39,6 +39,23 @@ if ! anthill_hook_shim_should_bind || [[ -z "$SESSION_ID" ]]; then
   exec "$REAL_BIN" "$@"
 fi
 
+if [[ -t 0 ]]; then
+  # A Cursor TUI must own the terminal foreground. A plain asynchronous child
+  # receives /dev/null as stdin from this non-interactive wrapper, which makes
+  # `cursor-agent agent` fall back to print mode and exit before it can wait for
+  # the operator. Job control lets us record the real child pid, foreground it,
+  # then synchronously publish its ending through the same hook store.
+  set -m
+  "$REAL_BIN" "$@" &
+  CHILD_PID=$!
+  anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "running" "$CHILD_PID" "$REAL_BIN" "$@"
+  code=0
+  fg %1 || code=$?
+  set +m
+  anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "ended" "$CHILD_PID" "$REAL_BIN" "$@"
+  exit "$code"
+fi
+
 "$REAL_BIN" "$@" &
 CHILD_PID=$!
 anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "running" "$CHILD_PID" "$REAL_BIN" "$@"

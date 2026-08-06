@@ -17,13 +17,14 @@ import { beforeAll, describe, expect, test } from "bun:test";
 interface CleanerModule {
   cleanerAgentId: (sessionId: string) => string;
   cleanerFromResponse: (body: unknown, httpOk: boolean) => { sessionId: string; code: string; error: string };
-  cleanerView: (snap: unknown, cleaner?: unknown) => { state: string; message?: string; sessionId?: string; agentId?: string; code?: string };
+  cleanerView: (snap: unknown, cleaner?: unknown) => { state: string; message?: string; sessionId?: string; agentId?: string; code?: string; meaning?: string };
   cleanupCounts: (view: unknown) => { worktrees: number; branches: number; refused: number; proposed: number } | null;
   countsSentence: (counts: unknown) => string;
   CLEANER_FAILURES: Record<string, string>;
   CLEANER_IN_FLIGHT: Set<string>;
   CLEANER_LABELS: Record<string, string>;
   cleanerLands: (previousState: string, nextState: string) => boolean;
+  cleanerMeaning: (code: string) => string;
 }
 let C: CleanerModule;
 
@@ -144,6 +145,48 @@ describe("a Cleaner that dies leaves a stated failure, never a spinner", () => {
       .toBe(C.CLEANER_FAILURES.CLEANER_LAUNCH_FAILED);
     expect(C.cleanerFromResponse(null, false).error.length).toBeGreaterThan(20);
     expect(C.cleanerFromResponse({ ok: true }, true).error.length).toBeGreaterThan(20);
+  });
+});
+
+describe("a launch refusal says the code, what happened, and what it means", () => {
+  /* Emilio hit a 503 on the demo board and the UI told him "failed" and nothing
+     else, while the server had answered with a structured code and a sentence.
+     A fact on the wire and a category on the screen — the same defect as
+     "Readings degraded", one surface over. */
+
+  test("the failed view carries all three parts", () => {
+    const bound = C.cleanerFromResponse({
+      ok: false,
+      error: { code: "CLEANER_SESSION_CREATE_FAILED", message: "cursor-agent create-chat timed out after 15s." },
+    }, false);
+    const view = C.cleanerView({ programs: [] }, bound);
+    expect(view.state).toBe("failed");
+    expect(view.code).toBe("CLEANER_SESSION_CREATE_FAILED");
+    expect(view.message).toBe("cursor-agent create-chat timed out after 15s.");
+    expect((view.meaning || "").length).toBeGreaterThan(30);
+  });
+
+  test("every code the contract lists has a MEANING, not just a restatement", () => {
+    for (const code of Object.keys(C.CLEANER_FAILURES)) {
+      const meaning = C.cleanerMeaning(code);
+      expect(meaning, code).toBeTruthy();
+      /* The meaning must add something the server sentence does not: it is a
+         different question. Identical strings would be theatre. */
+      expect(meaning, code).not.toBe(C.CLEANER_FAILURES[code]);
+    }
+  });
+
+  test("the meaning blames the board, not cleanup, when the board is what broke", () => {
+    /* On the demo board the true cause is that cursor-agent cannot authenticate
+       under a throwaway HOME. The honest sentence is that this board cannot
+       spawn agents — not that cleanup is broken. */
+    const said = C.cleanerMeaning("CLEANER_SESSION_CREATE_FAILED");
+    expect(said).toMatch(/board cannot spawn/i);
+    expect(said).toMatch(/cleanup is not broken/i);
+  });
+
+  test("an unknown code degrades to no meaning rather than a wrong one", () => {
+    expect(C.cleanerMeaning("SOMETHING_NEW")).toBe("");
   });
 });
 

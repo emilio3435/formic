@@ -189,7 +189,25 @@ export function collisionLine(collision) {
 }
 
 export function conciseText(value, limit = 88) {
-  const text = String(value || "").split("\n")[0].replace(/^(goal:|you are)\s*/i, "").trim();
+  let text = String(value || "").split("\n")[0].replace(/^(goal:|you are)\s*/i, "").trim();
+  /* The snippet is the line the operator reads to decide whether to act, and
+     it was spending its budget on transport: `[PR #21](https://github…)`
+     burned half the line saying "PR #21", and a cmux workspace UUID carries
+     zero decision value. Links keep their words, http URLs shrink to
+     host/…/tail, other schemes to their scheme, long hex runs to an
+     ellipsis. The full text stays in the drawer. */
+  text = text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\bhttps?:\/\/\S+/gi, (url) => {
+      const m = /^https?:\/\/([^/\s]+)(?:\/(\S*))?$/.exec(url.replace(/[.,;)\]}'"]+$/, ""));
+      if (!m) return url;
+      const tail = m[2] ? m[2].split(/[/?#]/).filter(Boolean).pop() : "";
+      return tail ? m[1] + "/…/" + tail : m[1];
+    })
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, (url) => url.split("://")[0] + "://…")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "…")
+    .replace(/\b[0-9a-f]{32,}\b/gi, "…")
+    .replace(/\s{2,}/g, " ");
   if (text.length <= limit) return text;
   const clipped = text.slice(0, limit - 1);
   const boundary = clipped.lastIndexOf(" ");
