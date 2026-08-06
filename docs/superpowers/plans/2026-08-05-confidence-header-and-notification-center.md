@@ -258,6 +258,12 @@ At 20:26–20:29 a Codex session (ChatGPT app, pid 47362, cwd inside this worktr
 
 Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + `tests/process-liveness.test.ts` + `tests/fixtures/process-liveness-truth-table.json`. Those three are untracked *together*, so the committed suite is self-consistent and a fresh clone is fine — they are simply a feature still being written. The owning session commits them, not us.
 
+### Rulings made during execution
+
+**R1 · `hookLifecycleAt` is a heartbeat — confirmed live, S0-T1, 20:52.** Across three collector passes ≥60s apart, sessions that *stayed* in `needsInput` had the value advance. It cannot be an entry clock, and the lane correctly refused to substitute `updatedAt`. Consequences: `blockedSince` ships only if a defensible entry signal is found in the cmux event stream (`agent.hook.Notification.occurred_at` is the live candidate); **`pulse.standbyMs` is cut unless it does** — a wire field that is permanently absent is noise wearing the costume of rigor. `pulse.blocked` (the count) ships either way, because a count is honest when a duration is not.
+
+**R2 · The board never deletes.** The header chip's Clean up action runs the sweep's **`propose` phase only**. Its output becomes a notification-center `dataflow` item listing each removable item, its rollback SHA, what was refused and why, and the exact `confirm` command to paste. **No destructive server endpoint, in this program or later.** A click in a browser is not the same gate as a person reading a plan in a terminal, and the precedent being matched is a manual pass that was careful never to delete without a human in the loop. S6-T2's confirm phase stays a terminal action.
+
 ### Lane launch — the flag goes on the command, every time
 
 | Lane | Launch |
