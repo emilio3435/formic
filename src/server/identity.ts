@@ -8,6 +8,7 @@ import type {
 import { PROVIDERS } from "../shared/types";
 import { cmuxCommand, runtimeCmuxExecutable } from "./cmux";
 import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } from "./types";
+import { livenessOfAny, processAliveFrom } from "./process-liveness";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 /* The process name each provider runs under, spelled out as a total map so the
@@ -562,13 +563,17 @@ export async function enrichCmuxIdentity(
       if (owningProcessIdsByAgent.get(key)?.size) agent.processAlive = true;
       agent.transcriptOpen = transcriptOpenAgents.has(key);
     } else if (agent.processIds?.length && agent.processAlive !== false) {
-      /* Presence of the number, for pids nothing better spoke for. Two limits:
-         it must not overturn a `false` that start-time verification already
-         reached (strictly more evidence than this has), and a number now held
-         by something that is not an agent at all buys nothing. */
-      const held = agent.processIds.filter((pid) => liveProcessIds.has(pid));
-      if (held.some((pid) => recognizedProcessIds.has(pid))) agent.processAlive = true;
-      else if (held.length === 0) agent.processAlive = false;
+      /* Stale pids nothing better spoke for. This scan has presence and command
+         names but no start times, so process-liveness.ts can reach `alive` or
+         `gone` but often lands on unknown — and an unknown must not erase a
+         verified answer the collectors already reached, so only a definite
+         verdict is written. It also must not overturn a `false`, which the
+         guard above enforces: that verdict had start times behind it. */
+      const verdict = processAliveFrom(livenessOfAny(
+        agent.processIds.map((pid) => ({ pid })),
+        { complete: true, livePids: liveProcessIds, agentPids: recognizedProcessIds },
+      ));
+      if (verdict !== undefined) agent.processAlive = verdict;
       agent.transcriptOpen = false;
     }
   }
