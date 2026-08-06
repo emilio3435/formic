@@ -517,6 +517,7 @@ describe("operator thresholds reach the collectors", () => {
           historyRetentionDays: 30,
           historyRecordLimit: 5000,
           defaultView: "needs-you",
+          showReviewWorkers: false,
         }),
       },
     );

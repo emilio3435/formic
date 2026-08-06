@@ -186,6 +186,7 @@ describe("settings v2: every tunable number validates at both edges", () => {
       historyRetentionDays: 30,
       historyRecordLimit: 5000,
       defaultView: DEFAULT_VIEW,
+      showReviewWorkers: false,
     });
   });
 
@@ -278,6 +279,27 @@ describe("settings v2: a v1 file keeps the one decision it recorded", () => {
 });
 
 describe("settings v2: the API accepts subsets and names what it refused", () => {
+  test("showReviewWorkers defaults false, round-trips booleans, and rejects other types", async () => {
+    const store = await JsonSettingsStore.open("/tmp/anthill-review-workers.json", memoryFiles().ops);
+    const initial = await handleSettingsRequest(
+      new Request("http://127.0.0.1:4701/api/settings"),
+      store,
+    );
+    const initialBody = await initial.json() as { settings: { showReviewWorkers?: unknown } };
+    expect(initialBody.settings.showReviewWorkers).toBe(false);
+
+    const accepted = await handleSettingsRequest(post({ showReviewWorkers: true }), store);
+    expect(accepted.status).toBe(200);
+    expect(store.get().showReviewWorkers).toBe(true);
+    const acceptedBody = await accepted.json() as { settings: { showReviewWorkers?: unknown } };
+    expect(acceptedBody.settings.showReviewWorkers).toBe(true);
+
+    const rejected = await handleSettingsRequest(post({ showReviewWorkers: "yes" }), store);
+    expect(rejected.status).toBe(400);
+    expect(JSON.stringify(await rejected.json())).toContain("showReviewWorkers");
+    expect(store.get().showReviewWorkers).toBe(true);
+  });
+
   test("a POST may carry any subset of the schema", async () => {
     const store = await JsonSettingsStore.open("/tmp/anthill-v2-subset.json", memoryFiles().ops);
     const response = await handleSettingsRequest(post({ activityFreshMinutes: 5, defaultView: "now" }), store);

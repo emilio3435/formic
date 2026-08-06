@@ -40,7 +40,7 @@ export const NUMERIC_SETTINGS = {
 
 export type NumericSettingKey = keyof typeof NUMERIC_SETTINGS;
 export const NUMERIC_SETTING_KEYS = Object.keys(NUMERIC_SETTINGS) as NumericSettingKey[];
-export const SETTING_KEYS = [...NUMERIC_SETTING_KEYS, "defaultView"] as const;
+export const SETTING_KEYS = [...NUMERIC_SETTING_KEYS, "defaultView", "showReviewWorkers"] as const;
 
 export interface HubSettings {
   version: typeof SETTINGS_VERSION;
@@ -58,6 +58,8 @@ export interface HubSettings {
   historyRecordLimit: number;
   /** The tab the board opens on. */
   defaultView: SettingsView;
+  /** Whether routine review sessions are shown on the Board by default. */
+  showReviewWorkers: boolean;
 }
 
 export interface SettingsThresholds {
@@ -140,6 +142,7 @@ export function normalizeSettings(value: unknown): HubSettings {
   const settings = {
     version: SETTINGS_VERSION,
     defaultView: normalizeView(record.defaultView) ?? DEFAULT_VIEW,
+    showReviewWorkers: typeof record.showReviewWorkers === "boolean" ? record.showReviewWorkers : false,
   } as HubSettings;
   for (const key of NUMERIC_SETTING_KEYS) {
     settings[key] = clampSetting(key, record[key]) ?? NUMERIC_SETTINGS[key].default;
@@ -320,6 +323,12 @@ export async function handleSettingsRequest(
       return requestError(400, "INVALID_SETTINGS", `defaultView must be one of ${SETTINGS_VIEWS.join(", ")}.`);
     }
     patch.defaultView = view;
+  }
+  if ("showReviewWorkers" in record) {
+    if (typeof record.showReviewWorkers !== "boolean") {
+      return requestError(400, "INVALID_SETTINGS", "showReviewWorkers must be a boolean.");
+    }
+    patch.showReviewWorkers = record.showReviewWorkers;
   }
   /* Checked against the MERGED result, not the patch: raising freshness alone
      can invalidate a quiet threshold the operator set weeks ago, and the pair is
