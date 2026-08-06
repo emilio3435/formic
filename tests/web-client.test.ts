@@ -441,6 +441,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     facetProvider: "",
+    facetStatus: "",
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
@@ -1648,6 +1649,47 @@ describe("views split Now from History", () => {
     }));
   });
 
+  test("the status lens narrows to one lifecycle and suppresses the finished shelf", async () => {
+    const updatedAt = new Date().toISOString();
+    const working = agent({ id: "codex:w", status: "running", updatedAt, task: "A" });
+    const waiting = agent({ id: "codex:i", status: "waiting", updatedAt, task: "B" });
+    const unverified = agent({ id: "codex:u", status: "unknown", activity: "unknown", updatedAt, task: "C" });
+    const finished = agent({ id: "codex:f", status: "archived", updatedAt, task: "D" });
+    const program = { id: "p", name: "P", agents: [working, waiting, unverified, finished] };
+
+    const lens = async (facetStatus: string, expected: string[]) => {
+      await withState({
+        view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus,
+        lookbackHours: 6, showReviewWorkers: true,
+      }, () => {
+        const shown = program.agents.filter((a) => M.currentFilter()(a, program)).map((a) => a.id);
+        expect(shown, facetStatus || "(no lens)").toEqual(expected);
+      });
+    };
+    await lens("working", ["codex:w"]);
+    await lens("waiting", ["codex:i"]);
+    await lens("unverified", ["codex:u"]);
+    // No lens: the board's own view test decides, and the finished row is out.
+    await lens("", ["codex:w", "codex:i", "codex:u"]);
+
+    /* A lifecycle lens and a shelf of finished rows are contradictory claims.
+       The shelf goes away whole rather than being emptied row by row, which is
+       what makes "Waiting" mean waiting and not "waiting, plus everything that
+       already ended". */
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "waiting",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(finished, program)).toBe(false);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(finished, program)).toBe(true);
+    });
+  });
+
   test("the empty board names every constraint that produced it", async () => {
     const reviewTask = "Review this change for security vulnerabilities.";
     const updatedAt = new Date().toISOString();
@@ -1688,6 +1730,17 @@ describe("views split Now from History", () => {
     }, () => {
       expect(M.emptyListMessage(M.state))
         .toBe("Nothing matches the current search and filters and lookback (6h) and 1 review worker hidden in this view.");
+    });
+
+    /* The facets are named, not folded into the word "filters". An operator
+       staring at an empty board needs to read WHICH lens emptied it — the chip
+       is one click away, but only if they know which chip. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      facetStatus: "waiting", lookbackHours: null, showReviewWorkers: true,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("Nothing matches the current provider (codex) and status (waiting) in this view.");
     });
 
     // Nothing narrowing the view: null hands the caller to the all-clear branch.
@@ -7004,6 +7057,28 @@ describe("FE-B: harness-backed client behavior", () => {
     }));
   });
 
+  /* The program lens is SET here and CLEARED from the Filters bar, so the two
+     halves have to agree on the id or the operator gets stuck inside a program
+     with no visible way out. */
+  test("(3f) the program drawer sets the program lens the Filters bar clears", async () => {
+    const program = { id: "p1", name: "Ridge", agents: [agent({ id: "codex:a", programId: "p1" })] };
+    await withState({ facetProgram: "" }, () => withRequests([], async () => {
+      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
+        .document.createElement("div");
+      M.renderProgramDrawer(pane, { program });
+      const button = byFkey(pane, "facet-program:p1");
+      expect(button).toBeTruthy();
+      expect(textOf(button)).toContain("Only this program");
+      await fire(button);
+      expect(M.state.facetProgram).toBe("p1");
+
+      // And the same button is the way back out, from either surface.
+      M.renderFilterBar(M.state);
+      await fire(byFkey(domById.get("filter-bar"), "program:clear"));
+      expect(M.state.facetProgram).toBe("");
+    }));
+  });
+
   /* The read half of D7. fetchSettings is private and runs once at boot, so this
      is source-level by necessity — requiredSlice still fails loudly if the
      function is renamed or the adoption is dropped. */
@@ -7022,10 +7097,13 @@ describe("FE-B: harness-backed client behavior", () => {
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
-      expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
-      expect(keys).toEqual(["lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom", "scan-window"]);
+      expect(keys).toEqual([
+        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
+        "status:working", "status:waiting", "status:unverified",
+        "scan-window",
+      ]);
     });
 
     /* The same bar over a real fleet, which is where the facet chips appear. The
@@ -7049,8 +7127,31 @@ describe("FE-B: harness-backed client behavior", () => {
         "session-kind:review",
         "provider:claude", "provider:codex",
         "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
+        "status:working", "status:waiting", "status:unverified",
         "scan-window",
       ]);
+    });
+
+    /* The program lens has no always-on chip — programs are unbounded — so its
+       clear-chip appears only while it is active, and it sits between the status
+       lens and the collection status. */
+    // (One render per withDom: the fake node's textContent setter does not drop
+    // children, so a second render into the same bar would stack onto the first.)
+    const ridge = () => {
+      const only = agent({ id: "codex:w1", provider: "codex", updatedAt: new Date().toISOString(), task: "Ship it." });
+      return snapshot({ programs: [{ id: "p", name: "Ridge", agents: [only] }] });
+    };
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge() }));
+      expect(focusKeysOf(bar())).not.toContain("program:clear");
+    });
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
+      const keys = focusKeysOf(bar());
+      expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
+      expect(keys[keys.length - 1]).toBe("scan-window");
+      // The chip names the program it is holding you inside of.
+      expect(textOf(byFkey(bar(), "program:clear"))).toContain("Ridge");
     });
 
     // One provider on the wire is no choice at all, so the axis stays absent

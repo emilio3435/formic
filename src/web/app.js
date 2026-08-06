@@ -3981,6 +3981,24 @@ function setFacetProvider(provider) {
   render();
 }
 
+function setFacetStatus(status) {
+  const next = state.facetStatus === status ? "" : status;
+  if (next === state.facetStatus) return;
+  state.facetStatus = next;
+  render();
+}
+
+/* Set from the program drawer ("Only this program"), cleared from the Filters
+   bar. Programs are unbounded, so there is no always-on chip list for them —
+   the bar carries one clear-chip while the lens is active, which is the whole
+   disclosure obligation: a narrowing is always one visible control from off. */
+function setFacetProgram(programId) {
+  const next = state.facetProgram === programId ? "" : programId;
+  if (next === state.facetProgram) return;
+  state.facetProgram = next;
+  render();
+}
+
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
@@ -3993,7 +4011,16 @@ function currentFilter() {
       Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
-    (!state.facetProvider || agent.provider === state.facetProvider);
+    (!state.facetProvider || agent.provider === state.facetProvider) &&
+    matchesStatusLens(agent, state.facetStatus);
+}
+
+/* The lifecycle lens, reusing the sections the board already draws. "working"
+   is the one name that does not match its section key — the section is `active`
+   — so the translation lives here rather than in four call sites. */
+function matchesStatusLens(agent, facetStatus) {
+  if (!facetStatus) return true;
+  return lifecycleSection(agent) === (facetStatus === "working" ? "active" : facetStatus);
 }
 
 /* The finished sessions a LIVE view has excluded — the Finished shelf's
@@ -4010,6 +4037,11 @@ function currentFilter() {
    population, and a shelf holding every row would be a collapsed view. */
 function shelfFilter() {
   if (state.view === "history") return () => false;
+  /* A lifecycle lens and a shelf of finished rows are contradictory claims: the
+     operator asked to see only what is waiting, and every row on this shelf is
+     over. Rather than show a shelf the lens excludes row by row, the shelf goes
+     away whole while a lens is on. */
+  if (state.facetStatus) return () => false;
   return (agent, program) =>
     /* Two ways to be finished, and the shelf holds both. `isTerminal` is the
        PROCESS ending. `declaredDone` is the WORK ending — a lane that reported
@@ -4180,6 +4212,14 @@ function filterChip(label, active, onclick, opts = {}) {
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
+/* The lifecycle lens chips, in the order the board stacks their sections. The
+   value is the lens; the label is the word the board already uses for it. */
+const STATUS_LENSES = [
+  ["working", "Working"],
+  ["waiting", "Waiting"],
+  ["unverified", "Unverified"],
+];
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -4280,6 +4320,31 @@ function renderFilterBar(ui = state) {
     { fkey: "lookback:custom", title: "Choose your own number of hours" },
   ));
   bar.append(lookbackGroup);
+  /* The lifecycle lens, reusing the sections the board already draws below. Board
+     only: History is a view of finished work, where "still working" is not a
+     question the rows can answer. */
+  if (ui.view === "board") {
+    const statusGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Status" });
+    for (const [value, label] of STATUS_LENSES) {
+      statusGroup.append(filterChip(label, ui.facetStatus === value, () => setFacetStatus(value), {
+        fkey: "status:" + value,
+        title: ui.facetStatus === value ? "Show every status" : "Show only " + label.toLowerCase() + " sessions",
+      }));
+    }
+    bar.append(statusGroup);
+  }
+  /* No always-on program chips — programs are unbounded and the bar would grow
+     without limit. The lens is SET from the drawer and CLEARED here, so an
+     active narrowing is still one visible control away from off. */
+  if (ui.facetProgram) {
+    const scoped = ((ui.snap && ui.snap.programs) || []).find((p) => p.id === ui.facetProgram);
+    bar.append(filterChip(
+      "Only " + (scoped ? programName(scoped) : "one program"),
+      true,
+      () => setFacetProgram(state.facetProgram),
+      { fkey: "program:clear", title: "Show every program again" },
+    ));
+  }
   /* Says who it affects, because it is the one control on this bar that is not
      about your browser. */
   bar.append(el("span", { class: "filter-note", text: "· your view only" }));
@@ -4343,8 +4408,12 @@ function renderScopeNote(shown) {
      a filter is narrowing the list, a lookback window is hiding rows, or the
      last refresh failed. Otherwise the tab bar has already said it. */
   const parts = [];
-  if (state.query || state.facetProgram || state.facetProvider) {
-    parts.push(`${shown} matching`);
+  if (state.query || state.facetProgram || state.facetProvider || state.facetStatus) {
+    /* The live region names the lenses, not just the count. "12 matching" read
+       out of a screen reader says a filter is on; it does not say which one, and
+       the operator cannot see the pressed chip to find out. */
+    const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
+    parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
   if (lookbackApplies(state.view)) {
     const scan = state.snap.scanWindowHours || state.scanWindowHours;
@@ -4864,6 +4933,7 @@ function programsPaintSig(visible, ui) {
     ui.query,
     ui.facetProgram,
     ui.facetProvider,
+    ui.facetStatus,
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
     ui.selecting ? "1" : "0",
@@ -5088,13 +5158,18 @@ function stripRowOpts(program, board) {
 function emptyListMessage(ui = state) {
   const lookbackHiding = lookbackApplies(ui.view) && ui.lookbackHours != null;
   const reviewsHidden = !ui.showReviewWorkers ? reviewWorkerCount(ui) : 0;
-  if (!ui.query && !ui.facetProgram && !ui.facetProvider && !lookbackHiding && !reviewsHidden) return null;
+  if (!ui.query && !ui.facetProgram && !ui.facetProvider && !ui.facetStatus && !lookbackHiding && !reviewsHidden) return null;
   /* One hidden reviewer is one review worker. The count is rendered into the
      sentence, so the noun and its verb have to agree with it or the disclosure
      reads as a bug in the very number it is disclosing. */
   const reviewers = reviewsHidden + " review worker" + (reviewsHidden === 1 ? "" : "s");
   const parts = [];
-  if (ui.query || ui.facetProgram || ui.facetProvider) parts.push("search and filters");
+  if (ui.query || ui.facetProgram) parts.push("search and filters");
+  /* The facets get NAMED rather than folded into "filters": an operator staring
+     at an empty board needs to read which lens emptied it, not that some lens
+     did. The chip is one click away, but only if they know which one. */
+  if (ui.facetProvider) parts.push("provider (" + ui.facetProvider + ")");
+  if (ui.facetStatus) parts.push("status (" + ui.facetStatus + ")");
   if (lookbackHiding) parts.push("lookback (" + lookbackLabel(ui.lookbackHours) + ")");
   if (reviewsHidden) parts.push(reviewers + " hidden");
   return reviewsHidden && parts.length === 1
@@ -7009,7 +7084,14 @@ function renderProgramDrawer(pane, view) {
       disabled: eligible ? null : "",
       dataset: { fkey: "prog-broadcast:" + program.id },
       onclick: () => { enterSelectMode(true); selectProgramEligible(program); },
-    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients")));
+    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients"),
+    /* Set here, cleared from the Filters bar — the drawer is where an operator
+       is already looking at one program and decides they want only it. */
+    el("button", {
+      type: "button", class: "btn dw-full",
+      dataset: { fkey: "facet-program:" + program.id },
+      onclick: () => setFacetProgram(program.id),
+    }, state.facetProgram === program.id ? "Show every program" : "Only this program")));
 
   // Once for the whole roster, not once per row: every name on it asks the same
   // fleet-wide question, and a program drawer can list thirty of them.

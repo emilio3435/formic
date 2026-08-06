@@ -34,6 +34,10 @@ export const state = {
   query: "",
   facetProgram: "",
   facetProvider: "",
+  /* The lifecycle lens: "" | working | waiting | unverified. Session-scoped like
+     the other facets — it answers "what am I looking at right now", not "what
+     should this board default to", so it does not persist and does not travel. */
+  facetStatus: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
   // Review workers are still in the snapshot and History. Board hides the
   // repetitive, non-attention rows by default, with an explicit toggle to
