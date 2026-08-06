@@ -138,6 +138,7 @@ import {
   deriveOutcome,
   deriveRollup,
   isLive,
+  isReviewWorker,
   isTerminal,
   isUnverified,
   lifecycleOf,
@@ -1251,6 +1252,7 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
+  isReviewWorker,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
@@ -1305,7 +1307,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
 /* ---------- state ---------- */
@@ -3798,11 +3800,48 @@ function findingFromQueueItem(item) {
 
 /* ---------- toolbar ---------- */
 
+/* Board is the operator's work view, not a denial of what the collector saw.
+   Review workers are hidden only when they are routine and non-attention; a
+   review that needs a person remains pinned and visible. A search is an
+   explicit request, so a matching review worker is also admitted. History
+   remains complete regardless of this Board-only presentation choice. */
+function passesReviewVisibility(agent, view, showReviewWorkers = state.showReviewWorkers, searchMatches = false) {
+  return view !== "board"
+    || showReviewWorkers
+    || !isReviewWorker(agent)
+    || alerting(agent)
+    || searchMatches;
+}
+
+function reviewWorkerCount(ui = state) {
+  if (!ui.snap || ui.view !== "board") return 0;
+  return snapshotAgents(ui.snap)
+    .map(({ agent }) => agent)
+    .filter((agent) => isReviewWorker(agent)
+      && viewMatches("board", agent)
+      && passesLookback(agent, "board", ui.lookbackHours)
+      && !alerting(agent))
+    .length;
+}
+
+function setShowReviewWorkers(show) {
+  const next = Boolean(show);
+  if (next === state.showReviewWorkers) return;
+  state.showReviewWorkers = next;
+  render();
+}
+
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
+    passesReviewVisibility(
+      agent,
+      state.view,
+      state.showReviewWorkers,
+      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+    ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
@@ -3833,6 +3872,12 @@ function shelfFilter() {
     !viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
+    passesReviewVisibility(
+      agent,
+      state.view,
+      state.showReviewWorkers,
+      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+    ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
 }
@@ -3890,34 +3935,18 @@ function renderTabs() {
     if (!countNode) continue;
     const count = state.snap
       ? agents.filter((a) =>
-          viewMatches(view, a) && passesLookback(a, view, state.lookbackHours),
+          viewMatches(view, a)
+          && passesLookback(a, view, state.lookbackHours)
+          && passesReviewVisibility(a, view, state.showReviewWorkers),
         ).length
       : null;
-    /* The lookback rides the tab it filters. History reads 37 while 388 ended
-       agents are on the wire — correct, because of the 6h window — but the scope
-       note that disclosed it renders only once you are already IN that view, so
-       from anywhere else the count silently understated by 351.
-
-       The GPT lane's §8 asked for the scope line to fall silent when no filter is
-       active and I implemented it; that was right about the restated counts and
-       wrong about the lookback, which was the one thing only that line said. The
-       disclosure belongs on the count it qualifies. (Day review 3.2.) */
-    /* A lookback qualifies a number. There is no number to qualify at zero, and
-       "Idle 0 · 6h" spends three glyphs saying a window narrowed nothing. */
-    const window = count != null && count > 0 && lookbackApplies(view) && state.lookbackHours != null
-      ? " · " + lookbackLabel(state.lookbackHours)
-      : "";
-    /* The Board tab says how much of itself it cannot vouch for. These sessions
-       are the largest population on the board and the whole reason the contract
-       exists; folding them silently into the count would hide the disclosure
-       inside the number it is about. The Unverified divider inside each program
-       group says the same thing row-by-row — this is the whole-fleet total, and
-       it is what an operator sees before they scroll. */
     const unverified = count != null && view === "board"
-      ? agents.filter((a) => isUnverified(a)).length
+      ? agents.filter((a) => passesReviewVisibility(a, view, state.showReviewWorkers) && isUnverified(a)).length
       : 0;
     const unverifiedNote = unverified > 0 ? " · " + unverified + " unverified" : "";
-    countNode.textContent = count == null ? "" : String(count) + window + unverifiedNote;
+    /* Tabs are navigation and counts. The active time window belongs to the
+       single filter bar below, so a tab never repeats it as a second toggle. */
+    countNode.textContent = count == null ? "" : String(count) + unverifiedNote;
     /* Zero counts go quiet rather than disappearing.
 
        At n=3 the navigation reads "Needs you 0 | Now 3 | Working 3 | Idle 0 |
@@ -4042,12 +4071,24 @@ function renderFilterBar(ui = state) {
   }
   bar.hidden = false;
   bar.setAttribute("aria-hidden", "false");
-  /* "Lookback" named the mechanism, not the question. Both controls here are
-     about time and neither said whose time, so the pair read as one setting
-     with two halves — which is exactly the confusion, because they act on
-     different things: this one hides rows in the browser, the next one changes
-     what the server collects. */
-  bar.append(el("span", { class: "filter-lead", text: "Show sessions from" }));
+  /* The tab strip is navigation. This is the one filter surface: the Board-only
+     review disclosure and the time lens live together here, while the collector
+     window below remains a server setting rather than a second filter. */
+  bar.append(el("span", { class: "filter-lead", text: "Filters" }));
+  const reviews = reviewWorkerCount(ui);
+  if (ui.view === "board" && reviews > 0) {
+    bar.append(filterChip(
+      ui.showReviewWorkers ? "Hide review workers" : "Show review workers (" + reviews + ")",
+      Boolean(ui.showReviewWorkers),
+      () => setShowReviewWorkers(!state.showReviewWorkers),
+      {
+        fkey: "session-kind:review",
+        title: ui.showReviewWorkers
+          ? "Hide routine review workers from the Board"
+          : "Show routine review workers on the Board. Attention rows remain visible either way.",
+      },
+    ));
+  }
   const lookbackGroup = el("div", {
     class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
   });
@@ -4658,6 +4699,7 @@ function programsPaintSig(visible, ui) {
     ui.facetProgram,
     ui.facetProvider,
     ui.lookbackHours,
+    ui.showReviewWorkers ? "1" : "0",
     ui.selecting ? "1" : "0",
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.selection].join(","),
@@ -4923,13 +4965,17 @@ function renderPrograms() {
   if (shown || !tracked) return;
 
   const lookbackHiding = lookbackApplies(state.view) && state.lookbackHours != null;
-  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding) {
+  const reviewsHidden = !state.showReviewWorkers ? reviewWorkerCount(state) : 0;
+  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding || reviewsHidden) {
     const parts = [];
     if (state.query || state.facetProgram || state.facetProvider) parts.push("search and filters");
     if (lookbackHiding) parts.push("lookback (" + lookbackLabel(state.lookbackHours) + ")");
+    if (reviewsHidden) parts.push(reviewsHidden + " review workers hidden");
     root.append(el("p", {
       class: "no-match",
-      text: "Nothing matches the current " + parts.join(" and ") + " in this view.",
+      text: reviewsHidden && parts.length === 1
+        ? reviewsHidden + " review workers are hidden from the Board. Show them from Filters."
+        : "Nothing matches the current " + parts.join(" and ") + " in this view.",
     }));
   } else {
     /* Every empty state names the constraints that produced it, including the

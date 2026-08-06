@@ -81,6 +81,25 @@ export function deriveOutcome(agent) {
   return agent.status === "attention" ? "needs-you" : "healthy";
 }
 
+/* One-shot review sessions are useful evidence, but they are not the primary
+   workstream an operator usually wants on the landing board. Classify from the
+   task/name evidence shared by every provider. The provider and model are
+   deliberately absent: Claude, Codex, Cursor, or a future collector can all
+   launch the same kind of worker. Keep this narrow enough that an ordinary
+   task mentioning security is not silently filed away. */
+const REVIEW_WORKER_PATTERNS = [
+  /\breview\s+(?:this|the)\s+(?:change|diff|patch)\s+for\s+security(?:\s+vulnerabilit(?:y|ies))?/i,
+  /\bsecurity\s+vulnerabilit(?:y|ies)\s+review\b/i,
+  /\bsecurity\s+review\b/i,
+];
+
+export function isReviewWorker(agent) {
+  const text = [agent?.task, agent?.displayName, agent?.identity?.name]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join(" ");
+  return REVIEW_WORKER_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function deriveControlState(agent) {
   if (agent.controlState) return agent.controlState;
   if (deriveActivity(agent) === "ended") return "observed-only";
@@ -510,4 +529,3 @@ export function contextUsage(tokens) {
   const rawPct = Math.max(0, Math.round((tokens.total / tokens.contextWindow) * 100));
   return { pct: Math.min(100, rawPct), text: fmtTok(tokens.total) + " of " + fmtTok(tokens.contextWindow) + " (" + rawPct + "%)" };
 }
-

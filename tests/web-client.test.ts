@@ -441,6 +441,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     facetProvider: "",
+    showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
     selecting: false,
@@ -1426,6 +1427,90 @@ describe("views split Now from History", () => {
     expect(M.withinLookback(stale, null, now)).toBe(true);
     expect(M.lookbackApplies("history")).toBe(true);
     expect(M.lookbackApplies("now")).toBe(false);
+  });
+
+  test("review-worker classification is task-based and provider-neutral", async () => {
+    const reviewTask = "Review this change for security vulnerabilities.";
+    for (const provider of ["claude", "codex", "cursor"]) {
+      expect(M.isReviewWorker(agent({ provider, task: reviewTask })), provider).toBe(true);
+    }
+    expect(M.isReviewWorker(agent({
+      provider: "codex",
+      task: "Implement the lifecycle change and add regression coverage.",
+      displayName: "Lifecycle worker",
+    }))).toBe(false);
+
+    const review = agent({ task: reviewTask, updatedAt: new Date().toISOString() });
+    expect(M.passesReviewVisibility(review, "board", false)).toBe(false);
+    expect(M.passesReviewVisibility(review, "board", true)).toBe(true);
+    expect(M.passesReviewVisibility(review, "history", false)).toBe(true);
+
+    const program = { id: "p", name: "P", agents: [review] };
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(false);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(true);
+    });
+    await withState({
+      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(review, program)).toBe(true);
+    });
+    const alertingReview = agent({
+      task: reviewTask, status: "attention", outcome: "needs-you", updatedAt: new Date().toISOString(),
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.currentFilter()(alertingReview, program)).toBe(true);
+    });
+  });
+
+  test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:review",
+      provider: "claude",
+      task: "Review this change for security vulnerabilities.",
+      displayName: "Security vulnerability review",
+      updatedAt,
+    });
+    const work = agent({
+      id: "codex:work",
+      provider: "codex",
+      task: "Implement the lifecycle change.",
+      updatedAt,
+    });
+    const program = { id: "p", name: "P", agents: [review, work] };
+    const snap = snapshot({ programs: [program], scanWindowHours: 36 });
+
+    await withState({ snap, view: "board", lookbackHours: 6, showReviewWorkers: false }, () => withDom(() => {
+      M.renderTabs();
+      expect(domById.get("count-board")!.textContent).toBe("1");
+    }));
+
+    withDom(() => {
+      M.renderFilterBar(listUi({
+        view: "board",
+        lookbackHours: 6,
+        snap,
+        showReviewWorkers: false,
+      }));
+      const bar = domById.get("filter-bar");
+      expect(textOf(bar)).toContain("Show review workers (1)");
+      expect(buttonsOf(bar).map((button: { dataset: Record<string, string> }) => button.dataset.fkey))
+        .toContain("session-kind:review");
+      expect(textOf(bar)).toContain("Last 6h");
+    });
   });
 });
 
@@ -5703,21 +5788,15 @@ describe("FE-B: harness-backed client behavior", () => {
       .toBe("↑2 done in 10m observed");
   });
 
-  /* GPT day review 3.2, which they credit to their own §8 — silencing the scope
-     note was right about the restated counts and wrong about the lookback, the
-     one thing only that line disclosed. History read 37 against 388 ended agents
-     on the wire, and the note renders only once you are already in that view. */
-  test("(3.2) a lookback-filtered tab count discloses its window", () => {
+  /* The tab count and the time lens used to be adjacent copies of the same
+     choice. The tab remains honest about its population, while the filter bar
+     is the one place that owns the active window. */
+  test("(3.2) the filter bar owns time scope without changing the lookback model", () => {
     expect(M.lookbackApplies("history")).toBe(true);
     // Board inherited the lookback along with the Waiting population it filters.
     expect(M.lookbackApplies("board")).toBe(true);
     expect(M.lookbackApplies("usage")).toBe(false);
-    // The suffix is built from the same label the filter bar uses, so the tab and
-    // the control that changes it can never name different windows.
     expect(M.lookbackLabel(6)).toBe("6h");
-    expect(source).toContain('" · " + lookbackLabel(state.lookbackHours)');
-    // Unfiltered views get no suffix — the count is the whole truth there.
-    expect(source).toContain("lookbackApplies(view) && state.lookbackHours != null");
   });
 
   /* The seam the needsYou mess came from: two derivations of one number. A

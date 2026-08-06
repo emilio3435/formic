@@ -35,6 +35,10 @@ export const state = {
   facetProgram: "",
   facetProvider: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
+  // Review workers are still in the snapshot and History. Board hides the
+  // repetitive, non-attention rows by default, with an explicit toggle to
+  // bring them back into the operator's working view.
+  showReviewWorkers: false,
   scanWindowHours: 36,
   /* Was `settingsLoaded`, which nothing ever read — written true and false and
      never consulted, so a dead /api/settings was invisible by construction.
