@@ -428,39 +428,18 @@ body.feed-frozen .programs { opacity: 0.62; }
    severities; the headline is the severity itself now, so the badge only
    printed ADVISORY underneath Advisory. The verdict chip carries the ink. */
 .verdict-advisory { color: var(--amber); }
-/* Degraded verdict's inline repair: re-pull the latest snapshot evidence.
-   A quiet mono instrument chip — the amber ink signals status without a filled
-   hospital-banner flood. */
-.reading-repair {
-  align-self: flex-start;
-  margin-top: 0.35rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.55rem;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--amber);
-  background: var(--raise);
-  border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--line-strong));
-  border-radius: 4px;
-}
-.reading-repair:hover { color: var(--ink); border-color: var(--amber); background: var(--amber-soft); }
-
-/* The health card's instruction line: the one sentence that tells an operator
-   what to do. It reads at ink weight because a remedy the eye skips is the
-   same as no remedy — the surrounding .reading-sub stays muted. */
+/* The health card's repair chip, pane toggle and instruction line stood here.
+   S2-T2 moved all three into the notification center: a control inside a
+   confidence reading is the header doing attention's job, and the header's rule
+   is that it never links and never acts. The reading-remedy rule survives
+   because summaryWidgetData still hands a remedy to other cards; the two button
+   rules are deleted rather than left orphaned. */
 .reading-remedy {
   margin: 0.3rem 0 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink);
 }
-.reading-panes { color: var(--slate); border-color: color-mix(in srgb, var(--slate) 42%, var(--line-strong)); }
-.reading-panes:hover { color: var(--ink); border-color: var(--slate); background: color-mix(in srgb, var(--slate) 10%, var(--raise)); }
 
 /* Named evidence for the instruction: which panes, and how long they have been
    quiet. Capped and scrollable so a long tail never pushes the strip open. */
@@ -2898,7 +2877,7 @@ body.feed-frozen .programs { opacity: 0.62; }
      .agent-rename has been one since this sweep was written. */
   .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename, .swarm-chip,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
-  .reading-repair, .filter-chip, .program-details,
+  .notify-act, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 
@@ -3407,6 +3386,18 @@ body.feed-frozen .programs { opacity: 0.62; }
   font: 400 0.74rem/1.4 var(--font-ui);
   color: var(--amber);
 }
+
+/* Instrument trouble, and the controls for it. Amber, and set apart from the
+   handoff rows above it: nothing here is a person waiting, but the readings in
+   the header cannot be trusted until it clears. */
+.notify-instrument {
+  padding: 0.6rem 0.95rem 0.7rem;
+  border-top: 1px solid var(--line);
+  background: var(--amber-soft);
+}
+.notify-instrument-problem { margin: 0.25rem 0 0; font: 650 0.82rem/1.35 var(--font-ui); color: var(--ink); }
+.notify-instrument-remedy { margin: 0.28rem 0 0; font: 400 0.78rem/1.4 var(--font-ui); color: var(--muted); }
+.notify-instrument-acts { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
 
 .notify-group {
   display: flex;

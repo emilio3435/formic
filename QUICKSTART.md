@@ -102,14 +102,18 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
   separately and never counted as a fault. If a collector really is *degraded*
   the line says that instead, because an empty board with a blind collector is
   an *unknown* fleet rather than an empty one.
-- **An `All clear` health card.** Not having cmux is not a fault: it collects no
-  sessions, so its absence cannot hide a row. You lose Focus and Send and
-  nothing else, and [§ Optional](#optional-enable-focus-and-send) turns them on
-  later. A row you cannot act on says so on the row itself, with the reason.
+- **A `Readings healthy` health chip.** Not having cmux is not a fault: it
+  collects no sessions, so its absence cannot hide a row. You lose Focus and Send
+  and nothing else, and [§ Optional](#optional-enable-focus-and-send) turns them
+  on later. A row you cannot act on says so on the row itself, with the reason.
 
-  You will see a **`Blocked`** card instead if cmux is *installed but not
-  running* — a control plane that should answer and does not. It offers one next
-  step: `Start cmux, then Refresh — Focus and Send come back on their own.`
+  The chip judges the **instruments**, not the fleet — whether the numbers beside
+  it can be trusted — which is why it says "Readings", not "All clear".
+
+  You will see **`Readings degraded`** instead if cmux is *installed but not
+  running* — a control plane that should answer and does not. The next step is
+  in the **Notifications** panel, which is where anything you can act on lives:
+  `Start cmux, then Refresh — Focus and Send come back on their own.`
   Its detail line counts what it found — typically `2 control-plane problems may
   limit focus, instruction, or interrupt actions.`, one for terminal discovery
   and one for notifications. The number is a count, so expect it to differ.
