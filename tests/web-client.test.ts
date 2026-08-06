@@ -457,8 +457,12 @@ function listUi(overrides: Record<string, unknown> = {}) {
     view: "now",
     query: "",
     facetProgram: "",
-    facetProvider: "",
-    facetStatus: "",
+    // The lenses are SETS now (FE-2 / amendment 1): empty = lens off.
+    facetProviders: [] as string[],
+    facetStatuses: [] as string[],
+    facetModels: [] as string[],
+    facetSpans: [] as string[],
+    facetContexts: [] as string[],
     openFilterMenu: "",
     showReviewWorkers: false,
     lookbackHours: 24,
@@ -1490,19 +1494,19 @@ describe("views split Now from History", () => {
 
     const program = { id: "p", name: "P", agents: [review] };
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.currentFilter()(review, program)).toBe(false);
     });
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: true,
     }, () => {
       expect(M.currentFilter()(review, program)).toBe(true);
     });
     await withState({
-      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      view: "board", query: "security", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.currentFilter()(review, program)).toBe(true);
@@ -1511,7 +1515,7 @@ describe("views split Now from History", () => {
       task: reviewTask, status: "attention", outcome: "needs-you", updatedAt: new Date().toISOString(),
     });
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.currentFilter()(alertingReview, program)).toBe(true);
@@ -1589,21 +1593,21 @@ describe("views split Now from History", () => {
     });
     const program = { id: "p", name: "P", agents: [review, work] };
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.shelfFilter()(review, program)).toBe(false);
       expect(M.shelfFilter()(work, program)).toBe(true);
     });
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: true,
     }, () => {
       expect(M.shelfFilter()(review, program)).toBe(true);
     });
     // A search is an explicit request: it admits the hidden review to the shelf too.
     await withState({
-      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      view: "board", query: "security", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.shelfFilter()(review, program)).toBe(true);
@@ -1623,7 +1627,7 @@ describe("views split Now from History", () => {
        never what the tab claims exists); this pins that reading so the next
        reader does not "fix" it into a bug. */
     await withState({
-      snap, view: "board", query: "security", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "security", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => withDom(() => {
       M.renderTabs();
@@ -1640,7 +1644,7 @@ describe("views split Now from History", () => {
     const snap = snapshot({ programs: [program] });
 
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      snap, view: "board", query: "", facetProgram: "", facetProviders: ["codex"],
       lookbackHours: 6, showReviewWorkers: true,
     }, () => {
       expect(M.currentFilter()(codex, program)).toBe(true);
@@ -1653,17 +1657,50 @@ describe("views split Now from History", () => {
 
     /* Toggle-to-clear: the way out is the way in. Driven through the real click
        (withRequests, because setFacetProvider repaints and render() needs a
-       document.body) rather than by calling the setter — a chip that stops
-       being wired would still pass the setter-only version. */
+       document.body) rather than by calling the setter — a control that stops
+       being wired would still pass the setter-only version.
+
+       The item now lives inside the provider MENU, so the menu is opened first —
+       and it deliberately STAYS open across the toggle: the axis holds a set,
+       and a menu that slammed shut after each pick would make assembling two
+       values cost two trips through the trigger. */
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
-      lookbackHours: 6, showReviewWorkers: true,
+      snap, view: "board", query: "", facetProgram: "", facetProviders: ["codex"],
+      lookbackHours: 6, showReviewWorkers: true, openFilterMenu: "provider",
     }, () => withRequests([], async () => {
       M.renderFilterBar(M.state);
-      const chip = byFkey(domById.get("filter-bar"), "provider:codex");
-      expect(chip.attributes["aria-pressed"]).toBe("true");
-      await fire(chip);
-      expect(M.state.facetProvider).toBe("");
+      const item = byFkey(domById.get("filter-bar"), "provider:codex");
+      expect(item.attributes.role).toBe("menuitemcheckbox");
+      expect(item.attributes["aria-checked"]).toBe("true");
+      await fire(item);
+      expect(M.state.facetProviders).toEqual([]);
+      expect(M.state.openFilterMenu).toBe("provider");
+    }));
+
+    /* And the whole point of the set: two providers UNION rather than replace.
+       The scalar this migrated from answered "show me claude and codex" with
+       "codex", silently, and there was no way to tell it had. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProviders: ["codex"],
+      lookbackHours: 6, showReviewWorkers: true, openFilterMenu: "provider",
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      await fire(byFkey(domById.get("filter-bar"), "provider:claude"));
+      expect(M.state.facetProviders).toEqual(["codex", "claude"]);
+      expect(M.currentFilter()(codex, program)).toBe(true);
+      expect(M.currentFilter()(claude, program)).toBe(true);
+    }));
+
+    // "All providers" clears the axis whatever is in it, and is checked exactly
+    // when nothing is — the empty set and "everything ticked" are one board.
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProviders: ["codex", "claude"],
+      lookbackHours: 6, showReviewWorkers: true, openFilterMenu: "provider",
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      expect(byFkey(domById.get("filter-bar"), "provider:all").attributes["aria-checked"]).toBe("false");
+      await fire(byFkey(domById.get("filter-bar"), "provider:all"));
+      expect(M.state.facetProviders).toEqual([]);
     }));
   });
 
@@ -1675,36 +1712,59 @@ describe("views split Now from History", () => {
     const finished = agent({ id: "codex:f", status: "archived", updatedAt, task: "D" });
     const program = { id: "p", name: "P", agents: [working, waiting, unverified, finished] };
 
-    const lens = async (facetStatus: string, expected: string[]) => {
+    const lens = async (facetStatuses: string[], expected: string[]) => {
       await withState({
-        view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus,
+        view: "board", query: "", facetProgram: "", facetProviders: [], facetStatuses,
         lookbackHours: 6, showReviewWorkers: true,
       }, () => {
         const shown = program.agents.filter((a) => M.currentFilter()(a, program)).map((a) => a.id);
-        expect(shown, facetStatus || "(no lens)").toEqual(expected);
+        expect(shown, facetStatuses.join("+") || "(no lens)").toEqual(expected);
       });
     };
-    await lens("working", ["codex:w"]);
-    await lens("waiting", ["codex:i"]);
-    await lens("unverified", ["codex:u"]);
+    await lens(["working"], ["codex:w"]);
+    await lens(["waiting"], ["codex:i"]);
+    await lens(["unverified"], ["codex:u"]);
     // No lens: the board's own view test decides, and the finished row is out.
-    await lens("", ["codex:w", "codex:i", "codex:u"]);
+    await lens([], ["codex:w", "codex:i", "codex:u"]);
+
+    /* Amendment 1, and the reason the scalar had to go. Within one axis the
+       members UNION, so "working AND waiting" is askable — it is the actual
+       question an operator has ("what is not making progress"), and the scalar
+       answered it by silently discarding the first pick. The union is strictly
+       LARGER than either singleton, which is the property that fails if this
+       ever regresses to a replace. */
+    await lens(["working", "waiting"], ["codex:w", "codex:i"]);
+    await lens(["working", "waiting", "unverified"], ["codex:w", "codex:i", "codex:u"]);
+    // Order of ticking does not change the board: a set, not a sequence.
+    await lens(["waiting", "working"], ["codex:w", "codex:i"]);
 
     /* A lifecycle lens and a shelf of finished rows are contradictory claims.
        The shelf goes away whole rather than being emptied row by row, which is
        what makes "Waiting" mean waiting and not "waiting, plus everything that
        already ended". */
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "waiting",
+      view: "board", query: "", facetProgram: "", facetProviders: [], facetStatuses: ["waiting"],
       lookbackHours: 6, showReviewWorkers: true,
     }, () => {
       expect(M.shelfFilter()(finished, program)).toBe(false);
     });
     await withState({
-      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "",
+      view: "board", query: "", facetProgram: "", facetProviders: [], facetStatuses: [],
       lookbackHours: 6, showReviewWorkers: true,
     }, () => {
       expect(M.shelfFilter()(finished, program)).toBe(true);
+    });
+    /* Suppression keys on NON-EMPTY, not on "the operator touched this". Ticking
+       every status and ticking none are the same board, so they must have the
+       same shelf — and turning the last one back off has to bring it back, or
+       the operator is left with a permanently amputated shelf and no control
+       that looks responsible for it. */
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProviders: [],
+      facetStatuses: ["working", "waiting", "unverified"],
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(finished, program)).toBe(false);
     });
   });
 
@@ -1721,7 +1781,7 @@ describe("views split Now from History", () => {
        4b4afa5). Whether that reachability should change is a separate ruling;
        this test states the behavior as it is rather than the behavior we want. */
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: null, showReviewWorkers: false,
     }, () => {
       expect(M.emptyListMessage(M.state))
@@ -1734,7 +1794,7 @@ describe("views split Now from History", () => {
     const second = agent({ id: "claude:r2", provider: "claude", updatedAt, task: reviewTask });
     const twoSnap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, second] }] });
     await withState({
-      snap: twoSnap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      snap: twoSnap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: null, showReviewWorkers: false,
     }, () => {
       expect(M.emptyListMessage(M.state))
@@ -1743,7 +1803,7 @@ describe("views split Now from History", () => {
 
     // Every active constraint gets named, in the order the operator would undo them.
     await withState({
-      snap, view: "board", query: "zzz", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "zzz", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false,
     }, () => {
       expect(M.emptyListMessage(M.state))
@@ -1751,19 +1811,32 @@ describe("views split Now from History", () => {
     });
 
     /* The facets are named, not folded into the word "filters". An operator
-       staring at an empty board needs to read WHICH lens emptied it — the chip
-       is one click away, but only if they know which chip. */
+       staring at an empty board needs to read WHICH lens emptied it — the control
+       is one click away, but only if they know which control. */
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
-      facetStatus: "waiting", lookbackHours: null, showReviewWorkers: true,
+      snap, view: "board", query: "", facetProgram: "", facetProviders: ["codex"],
+      facetStatuses: ["waiting"], lookbackHours: null, showReviewWorkers: true,
     }, () => {
       expect(M.emptyListMessage(M.state))
         .toBe("Nothing matches the current provider (codex) and status (waiting) in this view.");
     });
 
+    /* With sets, the MEMBERS are named too. "status (working or waiting)" is a
+       far more diagnosable sentence than "status", because on an empty board the
+       operator's next question is which of their picks is doing the excluding —
+       and with five axes available, "some filter" is a worse answer than it has
+       ever been. "or" rather than "and": within one axis the members union. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProviders: [],
+      facetStatuses: ["working", "waiting"], lookbackHours: null, showReviewWorkers: true,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("Nothing matches the current status (working or waiting) in this view.");
+    });
+
     // Nothing narrowing the view: null hands the caller to the all-clear branch.
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: null, showReviewWorkers: true,
     }, () => {
       expect(M.emptyListMessage(M.state)).toBeNull();
@@ -5711,7 +5784,7 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       view: "now",
       query: "",
       facetProgram: "",
-      facetProvider: "",
+      facetProviders: [],
       lookbackHours: 24,
       selecting: false,
       selected: null,
@@ -7120,7 +7193,7 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3c) the review-worker chip writes the shared server setting", async () => {
     const snap = reviewBoard();
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
     }, () => withRequests([
       { status: 200, json: { ok: true, settings: { showReviewWorkers: true } } },
@@ -7141,7 +7214,7 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3d) a rejected save puts the chip back where the server has it", async () => {
     const snap = reviewBoard();
     await withState({
-      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
     }, () => withRequests([new Error("connection refused")], async () => {
       M.renderFilterBar(M.state);
@@ -7197,20 +7270,22 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
-    /* Board/History: the status lens chips, then the closed Time trigger.
-       The six lookback chips are gone — time is one menu now, and a CLOSED menu
-       contributes exactly one focus stop, which is the compression the redesign
-       was for. Its preset fkeys still exist; they live on the menu items and
-       only while it is open (asserted below). */
+    /* An EMPTY board carries the Time control and nothing else, and that is the
+       lens rule doing its job rather than a gap: an axis renders only when two
+       or more of its options are actually populated, so over no sessions there
+       is nothing any lens could usefully narrow. Time is the exception because
+       it is not a lens — it is how you go and FETCH sessions, which is the one
+       thing worth offering on a board that has none.
+
+       The six lookback chips are gone too: a CLOSED menu contributes exactly one
+       focus stop, which is the compression the redesign was for. The preset
+       fkeys still exist, on the menu items, and only while it is open. */
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
-      expect(keys).toEqual([
-        "status:working", "status:waiting", "status:unverified",
-        "lookback:menu",
-      ]);
+      expect(keys).toEqual(["lookback:menu"]);
     });
 
     /* The same bar over a real fleet, which is where the facet chips appear. The
@@ -7229,23 +7304,63 @@ describe("FE-B: harness-backed client behavior", () => {
         task: "Review this change for security vulnerabilities.",
       });
       const work = agent({ id: "codex:w1", provider: "codex", updatedAt, task: "Ship it." });
-      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work] }] });
-      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap }));
+      const idle = agent({ id: "codex:w2", provider: "codex", status: "waiting", updatedAt, task: "Waiting." });
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work, idle] }] });
+      /* showReviewWorkers is TRUE here, and that is load-bearing rather than
+         incidental. Counts are working-set counts, so with the reviewer hidden
+         this fleet holds one visible provider and the Provider axis correctly
+         declines to render — a filter offering one option is the furniture this
+         rule exists to refuse. The fixture admits the reviewer so there are two
+         providers and two lifecycles to actually distinguish between. */
+      M.renderFilterBar(listUi({
+        view: "board", lookbackHours: 6, scanWindowHours: 36, snap, showReviewWorkers: true,
+      }));
       const keys = focusKeysOf(bar());
       expect(new Set(keys).size).toBe(keys.length);
+      /* CLOSED triggers, one per axis. Three focus stops where the chips took
+         nine, and the axis order is the contract: session kind, then the lenses
+         in bar order, then TIME last — the working-set control, held apart from
+         everything that merely narrows within it. */
       expect(keys).toEqual([
         "session-kind:review",
-        "provider:claude", "provider:codex",
-        "status:working", "status:waiting", "status:unverified",
+        "provider:menu",
+        "status:menu",
+        "lookback:menu",
+      ]);
+      /* Model, Span and Context are absent, and for the same reason Provider was
+         absent a moment ago: this fleet reports one model, no measured spans and
+         no context readings, so each of those axes has exactly one populated
+         option and nothing to distinguish. They are not conditional on the view;
+         they are conditional on having something to say. */
+      expect(keys.some((k: string) => k.startsWith("model:"))).toBe(false);
+      expect(keys.some((k: string) => k.startsWith("span:"))).toBe(false);
+      expect(keys.some((k: string) => k.startsWith("context:"))).toBe(false);
+    });
+
+    /* All five axes at once, over a fleet that can actually distinguish on each
+       one. This is the bar-order contract from amendment 1: Provider · Status ·
+       Model · Span · Context, flat rather than nested behind a "More" — a filter
+       you have to go looking for is one operators stop knowing they have. */
+    withDom(() => {
+      const updatedAt = new Date().toISOString();
+      const rich = [
+        agent({ id: "codex:1", provider: "codex", model: "gpt-5-codex", updatedAt, elapsedMs: 60_000,
+          tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 } }),
+        agent({ id: "claude:1", provider: "claude", model: "claude-opus-5", status: "waiting", updatedAt,
+          elapsedMs: 20 * 3_600_000,
+          tokens: { provenance: "observed", scope: "latest-turn", total: 80_000, contextWindow: 100_000 } }),
+      ];
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: rich }] });
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
+      expect(focusKeysOf(bar())).toEqual([
+        "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
         "lookback:menu",
       ]);
     });
 
-    /* The program lens has no always-on chip — programs are unbounded — so its
-       clear-chip appears only while it is active, and it sits between the status
-       lens and the collection status. */
-    // (One render per withDom: the fake node's textContent setter does not drop
-    // children, so a second render into the same bar would stack onto the first.)
+    /* The program lens has no always-on menu — programs are unbounded — so its
+       clear-chip appears only while it is active, and it sits with the lenses,
+       in front of Time. */
     const ridge = () => {
       const only = agent({ id: "codex:w1", provider: "codex", updatedAt: new Date().toISOString(), task: "Ship it." });
       return snapshot({ programs: [{ id: "p", name: "Ridge", agents: [only] }] });
@@ -7257,11 +7372,10 @@ describe("FE-B: harness-backed client behavior", () => {
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
       const keys = focusKeysOf(bar());
-      expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
       /* Time is last, and the program lens sits in front of it: the clear-chip
-         is a lens like the ones above it, and the working-set control closes the
-         bar. Anything appended after Time would have crossed the boundary this
-         layout exists to draw. */
+         is a lens like the menus beside it, and the working-set control closes
+         the bar. Anything appended after Time would have crossed the boundary
+         this layout exists to draw. */
       expect(keys[keys.length - 1]).toBe("lookback:menu");
       expect(keys[keys.length - 2]).toBe("program:clear");
       // The chip names the program it is holding you inside of.
@@ -7436,6 +7550,110 @@ describe("FE-B: harness-backed client behavior", () => {
     withDom(() => {
       openTime({ snap: null, scanWindowHours: 36 });
       expect(textOf(byClass(timeBar(), "filter-menu-note"))).not.toContain("36");
+    });
+  });
+
+  /* -------- FE-2 D3 + amendment 1: the lens axes --------------------------- */
+
+  /* The fleet the lens tests share: two providers, two models, two lifecycles,
+     two span bands, two context bands, and one row that reports none of the
+     optional readings — so every axis has something to distinguish AND an
+     Unreported population to account for. */
+  const lensFleet = () => {
+    const updatedAt = new Date().toISOString();
+    return snapshot({
+      generatedAt: updatedAt,
+      programs: [{
+        id: "p", name: "P", agents: [
+          agent({
+            id: "codex:short", provider: "codex", model: "gpt-5-codex", updatedAt,
+            elapsedMs: 30 * 60_000,                                     // under 1h
+            tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 }, // 10%
+          }),
+          agent({
+            id: "claude:long", provider: "claude", model: "claude-opus-5", status: "waiting", updatedAt,
+            elapsedMs: 30 * 3_600_000,                                  // over 24h
+            tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 }, // 90%
+          }),
+          agent({
+            id: "codex:bare", provider: "codex", model: "", updatedAt,
+            elapsedMs: null,                                            // no measured span
+            tokens: { provenance: "reported", total: 5 },               // contextUsage() → null
+          }),
+        ],
+      }],
+    });
+  };
+  const lensUi = (over: Record<string, unknown> = {}) =>
+    listUi({ view: "board", lookbackHours: null, snap: lensFleet(), showReviewWorkers: true, ...over });
+
+  test("(FE2-D3) every axis counts over the working set, and its own filter agrees with its own count", () => {
+    /* The invariant that makes the whole two-layer model checkable, asserted
+       against the AXIS TABLE rather than against five hand-written cases: for
+       every axis, and every option it offers, the number printed beside that
+       option is exactly the number of rows selecting it would leave. An axis
+       that counted by one rule and filtered by another is the original defect
+       of this bar wearing a new shape. */
+    const ui = lensUi();
+    const ws = M.workingSet(ui);
+    expect(ws.length).toBe(3);
+    for (const axis of M.LENS_AXES) {
+      for (const option of M.lensOptions(axis, ui)) {
+        const selecting = ws.filter((a: Record<string, unknown>) => axis.matches(a, option.value)).length;
+        expect(option.count, `${axis.key}:${option.value}`).toBe(selecting);
+      }
+      // And the options partition the working set — every row lands in exactly
+      // one bucket, so the counts sum to the total and nothing is orphaned.
+      const total = M.lensOptions(axis, ui).reduce((n: number, o: { count: number }) => n + o.count, 0);
+      expect(total, `${axis.key} partitions the working set`).toBe(ws.length);
+    }
+  });
+
+  test("(FE2-D3) the counts do not move when another lens narrows the board", () => {
+    /* Counts are working-set counts on purpose. If they were taken AFTER the
+       other lenses, every option would fall towards zero as the operator
+       narrowed — and a menu of zeroes cannot be used to widen back out, which is
+       the one job it has at that moment. */
+    const before = M.lensOptions(M.LENS_AXES[0], lensUi());
+    const after = M.lensOptions(M.LENS_AXES[0], lensUi({
+      facetStatuses: ["waiting"], facetModels: ["claude-opus-5"], query: "nothing-matches",
+    }));
+    expect(after.map((o: { value: string; count: number }) => [o.value, o.count]))
+      .toEqual(before.map((o: { value: string; count: number }) => [o.value, o.count]));
+  });
+
+  test("(FE2-D3) Model, Span and Context bucket what the row itself reports", () => {
+    const ui = lensUi();
+    const opts = (key: string) => {
+      const axis = M.LENS_AXES.find((a: { key: string }) => a.key === key);
+      return Object.fromEntries(M.lensOptions(axis, ui).map((o: { value: string; count: number }) => [o.value, o.count]));
+    };
+    /* Unreported is a MEMBER of each axis, not a gap. contextUsage() returns
+       null for anything that is not an observed latest-turn reading, which on a
+       real board is a large population; an axis whose buckets silently excluded
+       it would hide rows behind a filter with no item to un-hide them. */
+    expect(opts("model")).toEqual({ "claude-opus-5": 1, "gpt-5-codex": 1, "": 1 });
+    expect(opts("span")).toEqual({ "under-1h": 1, "1-8h": 0, "8-24h": 0, "over-24h": 1, "": 1 });
+    expect(opts("context")).toEqual({ "under-25": 1, "25-50": 0, "50-75": 0, "over-75": 1, "": 1 });
+  });
+
+  test("(FE2-D3) the Span lens reads the same number the SPAN cell prints", () => {
+    /* Amendment 1 said reuse the row's elapsed source rather than inventing a
+       second duration. This is that promise made checkable: the bucket boundary
+       and the cell are both liveElapsedMs, so a row cannot read "9h" in its SPAN
+       column while sitting under a filter for 1–8h. Drift correction included —
+       a running session's span advances between snapshots, and a lens computing
+       from the raw field would disagree with the cell by exactly that drift. */
+    const generatedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const running = agent({ id: "codex:r", status: "running", elapsedMs: 30 * 60_000, updatedAt: generatedAt });
+    const span = M.LENS_AXES.find((a: { key: string }) => a.key === "span");
+    return withState({ snap: snapshot({ generatedAt, programs: [{ id: "p", name: "P", agents: [running] }] }) }, () => {
+      // 30min recorded + ~2h of drift = ~2.5h, which is what the cell prints and
+      // what the lens must bucket by. "under-1h" is the un-drifted answer, and
+      // it is the answer a second, independent duration would have given.
+      expect(M.liveElapsedText(running, generatedAt)).toBe("2.5h");
+      expect(span.matches(running, "under-1h")).toBe(false);
+      expect(span.matches(running, "1-8h")).toBe(true);
     });
   });
 
@@ -11372,7 +11590,7 @@ describe("Atlas F3: hook-store liveness and the finished shelf", () => {
     recent.updatedAt = new Date(Date.now() - 30 * 60_000).toISOString();
     const program = { id: "look-prog", name: "look", agents: [old, recent] };
 
-    await withState({ view: "board", lookbackHours: 24, query: "", facetProgram: "", facetProvider: "" }, () => {
+    await withState({ view: "board", lookbackHours: 24, query: "", facetProgram: "", facetProviders: [] }, () => {
       const keep = M.shelfFilter();
       expect(keep(recent, program)).toBe(true);
       expect(keep(old, program)).toBe(false);
@@ -11381,13 +11599,13 @@ describe("Atlas F3: hook-store liveness and the finished shelf", () => {
     // An operator who turns the lookback off has asked for everything, and the
     // shelf is collapsed by default — so that costs them one line until they say
     // otherwise, which is their call to make.
-    await withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProvider: "" }, () => {
+    await withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProviders: [] }, () => {
       expect(M.shelfFilter()(old, program)).toBe(true);
     });
 
     // A search narrows the shelf exactly as it narrows the rows: a filtered
     // board must not grow a shelf of sessions that do not match it.
-    await withState({ view: "board", lookbackHours: 24, query: "nothing-matches-this", facetProgram: "", facetProvider: "" }, () => {
+    await withState({ view: "board", lookbackHours: 24, query: "nothing-matches-this", facetProgram: "", facetProviders: [] }, () => {
       expect(M.shelfFilter()(recent, program)).toBe(false);
     });
   });
@@ -11767,7 +11985,7 @@ describe("T7: a declared task state reaches the board", () => {
       id: "p", name: "disposable checkouts", path: "/x/p", groupPath: ["k-p", "wt-p"],
       agents: [done],
     };
-    const shelved = withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProvider: "" },
+    const shelved = withState({ view: "board", lookbackHours: null, query: "", facetProgram: "", facetProviders: [] },
       () => M.shelfFilter()(done, program));
     expect(await shelved).toBe(true);
 

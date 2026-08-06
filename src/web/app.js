@@ -78,6 +78,7 @@ import {
   issueTimestamp,
   issuesOf,
   lastActionFor,
+  liveElapsedMs,
   liveElapsedText,
   preferredRenameTarget,
   presentationLabelKey,
@@ -1429,6 +1430,7 @@ globalThis.TheAntHill = {
      both are reachable so "a lens never moves the tab number" can be asserted
      against the real derivation rather than against a copy of it. */
   workingSet, closeFilterMenu, lookbackValueLabel, isOfferedLookback,
+  passesEveryLens, activeLenses,
 };
 
 /* ---------- state ---------- */
@@ -4323,22 +4325,48 @@ function setShowReviewWorkers(show) {
   });
 }
 
-/* A session-scoped lens, deliberately unlike the review toggle above it: that
-   one is the fleet's shared default and goes to the server, this one is "what
-   am I looking at right now" and dies with the tab. Clicking the active chip
-   clears it, so the way out is the way in. */
-function setFacetProvider(provider) {
-  const next = state.facetProvider === provider ? "" : provider;
-  if (next === state.facetProvider) return;
-  state.facetProvider = next;
+/* Session-scoped lenses, deliberately unlike the review toggle above them: that
+   one is the fleet's shared default and goes to the server, these are "what am I
+   looking at right now" and die with the tab.
+
+   Every one is a SET. Toggling a member in or out is the whole operation, and an
+   empty set is the lens off — the way out is the way in, as it was when these
+   were chips, except that now picking a second value ADDS to the first instead
+   of replacing it. "Working and waiting" is the question this shape exists to
+   let an operator ask; the scalar form answered it with "waiting". */
+function toggleFacet(stateKey, value) {
+  const current = state[stateKey] || [];
+  state[stateKey] = current.includes(value)
+    ? current.filter((v) => v !== value)
+    : [...current, value];
   render();
 }
 
-function setFacetStatus(status) {
-  const next = state.facetStatus === status ? "" : status;
-  if (next === state.facetStatus) return;
-  state.facetStatus = next;
+/* Clear the axis. Separate from toggleFacet rather than folded into it as a
+   sentinel value, because "" is a LEGAL MEMBER of the model axis (it is how a
+   row with no reported model is stored) — overloading it as "clear everything"
+   would make the Unreported item un-unselectable. */
+function clearFacet(stateKey) {
+  if (!(state[stateKey] || []).length) return;
+  state[stateKey] = [];
   render();
+}
+
+function setFacetProvider(provider) {
+  if (provider === "") { clearFacet("facetProviders"); return; }
+  toggleFacet("facetProviders", provider);
+}
+
+function setFacetStatus(status) {
+  if (status === "") { clearFacet("facetStatuses"); return; }
+  toggleFacet("facetStatuses", status);
+}
+
+/* Does this agent pass one lens? Empty set = lens off = everything passes;
+   otherwise the members UNION. The single place that rule is written. */
+function passesLens(agent, values, matches) {
+  if (!values || !values.length) return true;
+  return values.some((value) => matches(agent, value));
 }
 
 /* Set from the program drawer ("Only this program"), cleared from the Filters
@@ -4364,8 +4392,14 @@ function currentFilter() {
       Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
-    (!state.facetProvider || agent.provider === state.facetProvider) &&
-    matchesStatusLens(agent, state.facetStatus);
+    passesEveryLens(agent, state);
+}
+
+/* Every lens axis, ANDed. Within an axis the members union (passesLens); across
+   axes they intersect, which is the rule that was already true when there were
+   two scalars and is now written once for five sets. */
+function passesEveryLens(agent, ui = state) {
+  return LENS_AXES.every((axis) => passesLens(agent, ui[axis.stateKey], axis.matches));
 }
 
 /* The lifecycle lens, reusing the sections the board already draws. "working"
@@ -4393,8 +4427,10 @@ function shelfFilter() {
   /* A lifecycle lens and a shelf of finished rows are contradictory claims: the
      operator asked to see only what is waiting, and every row on this shelf is
      over. Rather than show a shelf the lens excludes row by row, the shelf goes
-     away whole while a lens is on. */
-  if (state.facetStatus) return () => false;
+     away whole while a lens is on. Same rule in set form — NON-EMPTY suppresses,
+     so turning every status back off (the empty set) brings the shelf back, and
+     "both off" and "never touched" are correctly the same board. */
+  if (state.facetStatuses.length) return () => false;
   return (agent, program) =>
     /* Two ways to be finished, and the shelf holds both. `isTerminal` is the
        PROCESS ending. `declaredDone` is the WORK ending — a lane that reported
@@ -4414,7 +4450,12 @@ function shelfFilter() {
       Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
-    (!state.facetProvider || agent.provider === state.facetProvider);
+    /* Every lens EXCEPT status, which the early return above has already
+       answered for the whole shelf. Filtering a shelf by a lifecycle when the
+       shelf's entire population is finished would empty it row by row and say
+       nothing about why. */
+    LENS_AXES.filter((axis) => axis.key !== "status")
+      .every((axis) => passesLens(agent, state[axis.stateKey], axis.matches));
 }
 
 /* Where an arrow key inside the tab strip lands. Pure so the wrap rules are
@@ -4573,13 +4614,196 @@ function filterChip(label, active, onclick, opts = {}) {
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
-/* The lifecycle lens chips, in the order the board stacks their sections. The
-   value is the lens; the label is the word the board already uses for it. */
+/* The lifecycle lens values, in the order the board stacks their sections. The
+   value is the lens; the label SPELLS OUT what it encompasses, because "Waiting"
+   alone was a word an operator had to already know the board's meaning of. */
 const STATUS_LENSES = [
-  ["working", "Working"],
-  ["waiting", "Waiting"],
-  ["unverified", "Unverified"],
+  ["working", "Working", "running right now"],
+  ["waiting", "Waiting", "blocked on you or idle"],
+  ["unverified", "Unverified", "liveness not established"],
 ];
+
+/* Session length, bucketed over the SAME first-to-last-activity duration the
+   SPAN cell prints (liveElapsedMs) — never a second clock. Half-open ranges so
+   every measurable span lands in exactly one bucket and 8h is not counted twice. */
+const SPAN_BUCKETS = [
+  ["under-1h", "Under 1h", 0, 3_600_000],
+  ["1-8h", "1–8h", 3_600_000, 8 * 3_600_000],
+  ["8-24h", "8–24h", 8 * 3_600_000, 24 * 3_600_000],
+  ["over-24h", "Over 24h", 24 * 3_600_000, Infinity],
+];
+
+/* Context-window occupancy, over contextUsage().pct. `unreported` is a member
+   rather than a gap: contextUsage returns null for anything that is not an
+   observed latest-turn reading, which on a real board is a large population, and
+   an axis whose buckets silently exclude it would hide rows behind a filter with
+   no item to un-hide them. Same reason the board names Unverified at all. */
+const CONTEXT_BUCKETS = [
+  ["under-25", "Under 25%", 0, 25],
+  ["25-50", "25–50%", 25, 50],
+  ["50-75", "50–75%", 50, 75],
+  ["over-75", "Over 75%", 75, Infinity],
+];
+
+/* The value stored for "this row reports no model". The empty string is the
+   honest key — it is what `agent.model || ""` already yields everywhere else in
+   this client — and it is why clearFacet exists separately from toggleFacet:
+   "" is a real member here, not a sentinel for "no selection". */
+const UNREPORTED = "";
+
+/* ---------- the lens axes ----------
+
+   One table. The five menus, their counts, the filter predicate, the shelf's
+   exemption and (next) the sentence's fragments all read it, so an axis cannot
+   be filtered by one rule and described by another — which is exactly how the
+   old bar ended up with chips that narrowed the list while the number beside
+   them refused to move.
+
+   Each axis declares: where its state lives, what values the CURRENT WORKING SET
+   offers, how a value matches an agent, and how to say it in English. */
+const LENS_AXES = [
+  {
+    key: "provider",
+    stateKey: "facetProviders",
+    label: "Provider",
+    allLabel: "All providers",
+    views: null,                       // wherever the bar renders
+    options: (agents) => [...new Set(agents.map((a) => a.provider).filter(Boolean))]
+      .sort()
+      .map((provider) => ({ value: provider, label: provider })),
+    matches: (agent, value) => agent.provider === value,
+  },
+  {
+    key: "status",
+    stateKey: "facetStatuses",
+    label: "Status",
+    allLabel: "All statuses",
+    /* Board only: History is a view of finished work, where "still working" is
+       not a question the rows can answer. */
+    views: ["board"],
+    options: () => STATUS_LENSES.map(([value, label, means]) => ({
+      value, label: label + " — " + means,
+      // The sentence wants the bare word, not the gloss.
+      short: label.toLowerCase(),
+    })),
+    matches: (agent, value) => matchesStatusLens(agent, value),
+  },
+  {
+    key: "model",
+    stateKey: "facetModels",
+    label: "Model",
+    allLabel: "All models",
+    views: null,
+    options: (agents) => {
+      const named = [...new Set(agents.map((a) => a.model).filter(Boolean))].sort()
+        .map((model) => ({ value: model, fkey: model, label: modelShort(model) }));
+      return agents.some((a) => !a.model)
+        ? [...named, { value: UNREPORTED, fkey: "unreported", label: "Unreported", short: "no reported model" }]
+        : named;
+    },
+    matches: (agent, value) => (value === UNREPORTED ? !agent.model : agent.model === value),
+  },
+  {
+    key: "span",
+    stateKey: "facetSpans",
+    label: "Span",
+    allLabel: "Any length",
+    /* History too: how long a finished session ran is one of the few questions
+       History exists to answer. */
+    views: null,
+    options: (agents) => {
+      const buckets = SPAN_BUCKETS.map(([value, label]) => ({ value, label, short: label.toLowerCase() }));
+      return agents.some((a) => spanMsOf(a) == null)
+        ? [...buckets, { value: UNREPORTED, fkey: "unreported", label: "Unreported", short: "no measured span" }]
+        : buckets;
+    },
+    matches: (agent, value) => {
+      const ms = spanMsOf(agent);
+      if (value === UNREPORTED) return ms == null;
+      const bucket = SPAN_BUCKETS.find(([key]) => key === value);
+      return bucket != null && ms != null && ms >= bucket[2] && ms < bucket[3];
+    },
+  },
+  {
+    key: "context",
+    stateKey: "facetContexts",
+    label: "Context",
+    allLabel: "Any context",
+    views: null,
+    options: (agents) => {
+      const buckets = CONTEXT_BUCKETS.map(([value, label]) => ({ value, label, short: label.toLowerCase() + " context" }));
+      return agents.some((a) => contextUsage(a.tokens) == null)
+        ? [...buckets, { value: UNREPORTED, fkey: "unreported", label: "Unreported", short: "no context reading" }]
+        : buckets;
+    },
+    matches: (agent, value) => {
+      const usage = contextUsage(agent.tokens);
+      if (value === UNREPORTED) return usage == null;
+      const bucket = CONTEXT_BUCKETS.find(([key]) => key === value);
+      return bucket != null && usage != null && usage.pct >= bucket[2] && usage.pct < bucket[3];
+    },
+  },
+];
+
+/* The row's own span number, drift-corrected exactly as the SPAN cell corrects
+   it. One derivation for the cell and the lens — see liveElapsedMs. */
+function spanMsOf(agent) {
+  return liveElapsedMs(agent, state.snap && state.snap.generatedAt);
+}
+
+/* Which lenses are ON, and the English for each. The shared vocabulary: the
+   empty-state sentence and the scope sentence both read this, so an operator who
+   empties the board with one filter and then reads why is told the same words
+   twice rather than two paraphrases of one fact.
+
+   `short` where an option defines one — "working" rather than "Working — running
+   right now", which is a menu label doing a menu's job and would read as a
+   ransom note inside a sentence. */
+function activeLenses(ui = state) {
+  return LENS_AXES
+    .map((axis) => {
+      const selected = ui[axis.stateKey] || [];
+      if (!selected.length) return null;
+      const options = axis.options(workingSet(ui));
+      return {
+        axis,
+        values: selected,
+        words: selected.map((value) => {
+          const option = options.find((o) => o.value === value);
+          return (option && (option.short || option.label)) || value || "unreported";
+        }),
+      };
+    })
+    .filter(Boolean);
+}
+
+/* What one axis offers right now, each option carrying its WORKING-SET count —
+   the same population the tab number counts, so an operator reading "codex (5)"
+   beside a tab reading 21 is reading two true numbers about one board. The other
+   lenses are deliberately not applied: an option that reported its count AFTER
+   the other lenses would drop to zero as you narrowed, and a menu of zeroes
+   cannot be used to widen back out. */
+function lensOptions(axis, ui = state) {
+  const agents = workingSet(ui);
+  const selected = ui[axis.stateKey] || [];
+  return axis.options(agents).map((option) => ({
+    ...option,
+    count: agents.filter((agent) => axis.matches(agent, option.value)).length,
+    checked: selected.includes(option.value),
+  }));
+}
+
+/* Does this axis get a menu? The rule the provider chips already followed,
+   generalised: a filter whose only option is "everything" is furniture. Two or
+   more options have to be POPULATED before an axis is worth a trigger — with one
+   exception, an axis the operator has already narrowed always keeps its control,
+   because a lens with no visible way off is the one thing this bar may never
+   ship. */
+function lensApplies(axis, ui = state) {
+  if ((ui[axis.stateKey] || []).length) return true;
+  if (axis.views && !axis.views.includes(ui.view)) return false;
+  return lensOptions(axis, ui).filter((option) => option.count > 0).length >= 2;
+}
 
 /* ---------- filter menus ----------
 
@@ -4718,6 +4942,68 @@ function filterMenu(spec) {
   }
   wrap.append(menu);
   return wrap;
+}
+
+/* What the closed trigger says. The axis name alone when the lens is off; the
+   VALUE when it is on, because an operator should not have to open a menu to
+   learn what it is currently doing to their board.
+
+   Two members still fit ("Status: working+waiting"); three stop fitting and stop
+   being readable, so the trigger falls back to a count. The count is not a
+   retreat — "Model (4)" is a true and legible statement, where four elided model
+   strings would be neither. */
+function lensTriggerLabel(axis, options, selected) {
+  if (!selected.length) return axis.label;
+  const words = selected.map((value) => {
+    const option = options.find((o) => o.value === value);
+    return (option && (option.short || option.label)) || value || "unreported";
+  });
+  return words.length > 2
+    ? axis.label + " (" + words.length + ")"
+    : axis.label + ": " + words.join("+");
+}
+
+/* One lens menu. Checkbox items, because the axis holds a set: a toggle adds or
+   removes a member and the menu STAYS OPEN, so assembling "working and waiting"
+   costs one visit rather than two. "All …" clears the axis and is checked
+   exactly when nothing is selected — which is the same board as everything
+   selected, and saying it one way keeps the two from looking like rival states. */
+function lensFilterMenu(axis, ui) {
+  const options = lensOptions(axis, ui);
+  const selected = ui[axis.stateKey] || [];
+  const items = [
+    {
+      fkey: axis.key + ":all",
+      label: axis.allLabel,
+      role: "menuitemcheckbox",
+      checked: selected.length === 0,
+      title: "Stop narrowing by " + axis.label.toLowerCase(),
+      apply: () => clearFacet(axis.stateKey),
+    },
+    ...options.map((option) => ({
+      fkey: axis.key + ":" + (option.fkey ?? option.value),
+      label: option.label,
+      count: option.count,
+      role: "menuitemcheckbox",
+      checked: option.checked,
+      title: option.checked
+        ? "Stop showing " + option.label.toLowerCase() + " sessions"
+        : "Add " + option.label.toLowerCase() + " sessions to what is shown",
+      apply: () => toggleFacet(axis.stateKey, option.value),
+    })),
+  ];
+  return filterMenu({
+    menu: axis.key,
+    fkey: axis.key + ":menu",
+    label: lensTriggerLabel(axis, options, selected),
+    menuLabel: axis.label,
+    active: selected.length > 0,
+    open: ui.openFilterMenu === axis.key,
+    title: selected.length
+      ? "Narrowing by " + axis.label.toLowerCase() + ". Pick more to widen — within one filter the choices add up."
+      : "Narrow by " + axis.label.toLowerCase() + ". Counts are of the whole window, so they do not move as you filter.",
+    sections: [{ items }],
+  });
 }
 
 /* How the active window reads on the trigger. Days are STORED as hours, so this
@@ -4882,34 +5168,16 @@ function renderFilterBar(ui = state) {
       },
     ));
   }
-  /* One chip per provider actually on the wire, and only when there is a choice
-     to make: a single-provider fleet gets no chips, because a filter whose only
-     option is "everything" is furniture. Toggling the active one clears it. */
-  const providers = ui.snap
-    ? [...new Set(snapshotAgents(ui.snap).map(({ agent }) => agent.provider).filter(Boolean))].sort()
-    : [];
-  if (providers.length > 1) {
-    const providerGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Provider" });
-    for (const provider of providers) {
-      providerGroup.append(filterChip(provider, ui.facetProvider === provider, () => setFacetProvider(provider), {
-        fkey: "provider:" + provider,
-        title: ui.facetProvider === provider ? "Show every provider" : "Show only " + provider + " sessions",
-      }));
-    }
-    bar.append(providerGroup);
-  }
-  /* The lifecycle lens, reusing the sections the board already draws below. Board
-     only: History is a view of finished work, where "still working" is not a
-     question the rows can answer. */
-  if (ui.view === "board") {
-    const statusGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Status" });
-    for (const [value, label] of STATUS_LENSES) {
-      statusGroup.append(filterChip(label, ui.facetStatus === value, () => setFacetStatus(value), {
-        fkey: "status:" + value,
-        title: ui.facetStatus === value ? "Show every status" : "Show only " + label.toLowerCase() + " sessions",
-      }));
-    }
-    bar.append(statusGroup);
+  /* The lenses: Provider · Status · Model · Span · Context, in that order and in
+     one flat row. Five closed triggers stand where fifteen open chips used to,
+     which is why this stays flat instead of nesting the last three behind a
+     "More" — a filter you have to go looking for is one operators stop knowing
+     they have.
+
+     Each renders only where it has something to say: two or more populated
+     options, or a selection the operator still needs a way to switch off. */
+  for (const axis of LENS_AXES) {
+    if (lensApplies(axis, ui)) bar.append(lensFilterMenu(axis, ui));
   }
   /* No always-on program chips — programs are unbounded and the bar would grow
      without limit. The lens is SET from the drawer and CLEARED here, so an
@@ -4964,11 +5232,12 @@ function renderScopeNote(shown) {
      a filter is narrowing the list, a lookback window is hiding rows, or the
      last refresh failed. Otherwise the tab bar has already said it. */
   const parts = [];
-  if (state.query || state.facetProgram || state.facetProvider || state.facetStatus) {
+  const active = activeLenses(state);
+  if (state.query || state.facetProgram || active.length) {
     /* The live region names the lenses, not just the count. "12 matching" read
        out of a screen reader says a filter is on; it does not say which one, and
-       the operator cannot see the pressed chip to find out. */
-    const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
+       the operator cannot see the pressed trigger to find out. */
+    const lenses = active.map((lens) => lens.words.join(" or "));
     parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
   /* No unconditional lookback echo: the pressed chip already says it, and a
@@ -5487,8 +5756,11 @@ function programsPaintSig(visible, ui) {
     ui.view,
     ui.query,
     ui.facetProgram,
-    ui.facetProvider,
-    ui.facetStatus,
+    /* Every lens axis, in the table's order. A set is joined rather than
+       stringified so [working, waiting] and [waiting, working] compare equal —
+       they ARE the same board, and repainting because the operator ticked the
+       two boxes in the other order would be a strobe with no cause. */
+    LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
     ui.selecting ? "1" : "0",
@@ -5713,7 +5985,8 @@ function stripRowOpts(program, board) {
 function emptyListMessage(ui = state) {
   const lookbackHiding = lookbackApplies(ui.view) && ui.lookbackHours != null;
   const reviewsHidden = !ui.showReviewWorkers ? reviewWorkerCount(ui) : 0;
-  if (!ui.query && !ui.facetProgram && !ui.facetProvider && !ui.facetStatus && !lookbackHiding && !reviewsHidden) return null;
+  const active = activeLenses(ui);
+  if (!ui.query && !ui.facetProgram && !active.length && !lookbackHiding && !reviewsHidden) return null;
   /* One hidden reviewer is one review worker. The count is rendered into the
      sentence, so the noun and its verb have to agree with it or the disclosure
      reads as a bug in the very number it is disclosing. */
@@ -5722,9 +5995,11 @@ function emptyListMessage(ui = state) {
   if (ui.query || ui.facetProgram) parts.push("search and filters");
   /* The facets get NAMED rather than folded into "filters": an operator staring
      at an empty board needs to read which lens emptied it, not that some lens
-     did. The chip is one click away, but only if they know which one. */
-  if (ui.facetProvider) parts.push("provider (" + ui.facetProvider + ")");
-  if (ui.facetStatus) parts.push("status (" + ui.facetStatus + ")");
+     did. The control is one click away, but only if they know which one — and
+     with five axes now, "some filter" is a worse answer than it ever was. The
+     MEMBERS are named too: "status (working or waiting)" is a different and much
+     more diagnosable claim than "status". */
+  for (const lens of active) parts.push(lens.axis.key + " (" + lens.words.join(" or ") + ")");
   if (lookbackHiding) parts.push("lookback (" + lookbackLabel(ui.lookbackHours) + ")");
   if (reviewsHidden) parts.push(reviewers + " hidden");
   return reviewsHidden && parts.length === 1
@@ -10618,6 +10893,11 @@ Object.assign(globalThis.TheAntHill, {
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
+  /* The lens axis table and its two derivations. Exported because the axes are
+     now DATA — five menus, the filter predicate, the counts and the sentence all
+     read this one list — so "every axis filters by the same rule it counts by"
+     is assertable against the table rather than against five copied-out tests. */
+  LENS_AXES, lensOptions, lensApplies,
   // The exact resolver pair app.js hands the notification center, so a test can
   // drive the wired derivation rather than its unwired defaults.
   NOTIFY_DEPS,

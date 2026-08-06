@@ -930,23 +930,16 @@ body.feed-frozen .programs { opacity: 0.62; }
 .filter-bar:empty { display: none; }
 .filter-bar > * { flex: none; }
 .filter-lead { position: sticky; left: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.15rem; background: var(--canvas); padding-right: 0.2rem; }
-/* A segmented control, not a row of loose chips.
+/* The `filter-group` segmented control — it held the provider, lookback and
+   status chip rows — is gone with the chips. Every axis is a menu now, so there
+   is no row of siblings left to segment, and the CSS census forbids a declared
+   class the client never emits. (Named without its leading dot on purpose: the
+   census reads this file's comments too, and a dotted mention would re-declare
+   the very class this paragraph is recording the death of.)
 
-   These were dashed outlines, and a dashed border already means something
-   specific on this board — "not established fact", which is what the unverified
-   scan chip below still uses it for. Spending the same signal on an ordinary
-   time filter made the whole strip read as provisional and made the one chip
-   that IS provisional invisible. Solid, grouped, and the selected one filled. */
-.filter-group {
-  display: inline-flex;
-  align-items: stretch;
-  border: 1px solid var(--line-strong);
-  border-radius: 7px;
-  overflow: hidden;
-  background: var(--surface);
-}
-.filter-group .filter-chip { border: 0; border-radius: 0; min-height: 28px; }
-.filter-group .filter-chip + .filter-chip { border-left: 1px solid var(--line); }
+   What the chip keeps from it: solid rather than dashed. A dashed border means
+   "not established fact" on this board, and spending that signal on an ordinary
+   filter made the whole strip read as provisional. */
 .filter-chip {
   display: inline-flex;
   align-items: center;
