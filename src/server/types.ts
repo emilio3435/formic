@@ -46,6 +46,10 @@ export interface CollectedAgent {
   cwd?: string;
   /** The first working directory recorded, never the latest. Only naming reads it. */
   originCwd?: string;
+  /** Provider-recorded launch markers, when the transcript carries them.
+      Claude: entrypoint ("cli" | "sdk-py" | …) and promptSource ("sdk" | …).
+      Absent for providers that record nothing — absence is evidence of nothing. */
+  launch?: { entrypoint?: string; promptSource?: string };
   model?: string;
   effort?: string;
   task?: string;
