@@ -10885,3 +10885,316 @@ describe("T7: lineage the kernel contradicts, and a sender the server could not 
     expect(M.senderOf(agent({ lastUserMessage: "", task: `${HEAD} you are lane fe-states` }))).toBeNull();
   });
 });
+
+/* ---------------------------------------------------------------------------
+   S1 · the notification center.
+
+   The header is confidence and this is attention. Every test below names the
+   claim the surface makes and fails when that claim stops being true — the
+   badge is ember only when a person is the blocker, nothing resolved or
+   impact-free reaches the live list, and every route opens a real drawer.
+   ------------------------------------------------------------------------- */
+
+describe("S1: the notification center is attention, and it never aggregates", () => {
+  const blocked = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "question-pending", evidence: "Push the branch and open the PR, or hold for the reconciliation?" },
+    ...over,
+  });
+  const noticed = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "stalled-active", evidence: "Manifest says active; the hook has stayed idle." },
+    ...over,
+  });
+  const quiet = (id: string) => agent({ id, displayName: id, programId: "p", outcome: "healthy" });
+  const snapOf = (agents: unknown[], over: Record<string, unknown> = {}) =>
+    snapshot({ programs: [{ id: "p", name: "Ant Hill", agents }], ...over });
+  const NOW = Date.parse("2026-08-05T21:00:00.000Z");
+  const feed = (snap: unknown, queue: unknown[] = []) => M.notificationFeed(snap, queue, NOW, M.NOTIFY_DEPS);
+
+  const issue = (over: Record<string, unknown> = {}) => ({
+    id: "system:sources", kind: "system", severity: "warning",
+    title: "Two sources disagree", summary: "The cmux store and the transcript report different session ids.",
+    affectedAgentIds: [], ...over,
+  });
+
+  test("every live item names its kind, severity, source, lifecycle, evidence, impact and a route", () => {
+    const snap = snapOf([blocked("codex:1"), noticed("codex:2"), quiet("codex:3")], { issues: [issue()] });
+    const items = feed(snap, [{
+      issueId: "inv:1", id: "q1", state: "running", headline: "Isolate the system fault",
+      rationale: "Two collectors disagree about one surface.", createdAt: "2026-08-05T19:00:00.000Z",
+      affectedAgents: 47, affectedPrograms: 3, runModel: "luna",
+    }]);
+    // All three feeds are represented — this is the schema assertion the plan asks for.
+    expect(items.map((i: { kind: string }) => i.kind).sort())
+      .toEqual(["dataflow", "handoff", "handoff", "investigation"]);
+    for (const item of items) {
+      expect(typeof item.id, item.id).toBe("string");
+      expect(item.id.length).toBeGreaterThan(0);
+      expect(["handoff", "dataflow", "investigation"]).toContain(item.kind);
+      expect(["blocking", "warning"]).toContain(item.severity);
+      expect(typeof item.source, item.id).toBe("object");
+      expect(typeof item.lifecycle, item.id).toBe("string");
+      // Whole sentences, not field dumps: the operator reads these INSTEAD of
+      // opening the drawer, so an empty one is a row that says nothing.
+      expect(item.evidence.length, item.id).toBeGreaterThan(0);
+      expect(item.impact.length, item.id).toBeGreaterThan(0);
+      // `since` is required and nullable — "we cannot measure it" is an answer,
+      // and the one thing it may never be is a made-up zero.
+      expect(item.since === null || typeof item.since === "string", item.id).toBe(true);
+      expect(item.route.id.length, item.id).toBeGreaterThan(0);
+    }
+  });
+
+  test("every route resolves to a real drawer", () => {
+    const snap = snapOf([blocked("codex:1"), noticed("codex:2")], {
+      issues: [issue(), issue({ id: "system:hard", severity: "error" })],
+    });
+    const items = feed(snap, [{ issueId: "inv:1", id: "q1", state: "queued", headline: "H", createdAt: "2026-08-05T19:00:00.000Z" }]);
+    const kinds = new Set<string>(items.map((i: { route: { kind: string } }) => i.route.kind));
+    // Not a hand-kept list: the drawer table itself is the assertion, so a new
+    // item kind cannot ship without a drawer to open.
+    expect(M.DRAWER_KINDS.length).toBeGreaterThan(0);
+    for (const kind of kinds) expect(M.DRAWER_KINDS, kind).toContain(kind);
+    expect([...kinds].sort()).toEqual(["advisory", "agent", "intervention", "investigation"]);
+  });
+
+  test("a handoff item routes to the agent's own drawer, not to an advisory about it", () => {
+    // issuesOf mints `agent:<id>` for the same agent; the center takes that id
+    // over so the parity gate is an identity check and one thing gets one row.
+    const snap = snapOf([blocked("codex:1")]);
+    const items = feed(snap);
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("agent:codex:1");
+    expect(items[0].route).toEqual({ kind: "agent", id: "codex:1" });
+    expect(M.issuesOf(snap).map((i: { id: string }) => i.id)).toContain("agent:codex:1");
+  });
+
+  test("the ember contract: severity 'blocking' means a person is the blocker and nothing else", () => {
+    // A person waiting.
+    expect(feed(snapOf([blocked("codex:1")]))[0].severity).toBe("blocking");
+    // A watcher's observation is not a person waiting.
+    expect(feed(snapOf([noticed("codex:2")]))[0].severity).toBe("warning");
+    // Nor is an ERROR-severity collector fault, however bad it is. If the badge
+    // is ember, someone stopped and is waiting for you — that is the whole
+    // contract, and it only holds if nothing else can claim this severity.
+    const faulted = feed(snapOf([quiet("codex:3")], { issues: [issue({ severity: "error" })] }));
+    expect(faulted).toHaveLength(1);
+    expect(faulted[0].kind).toBe("dataflow");
+    expect(faulted[0].severity).toBe("warning");
+    expect(M.feedTone(faulted)).toBe("noticed");
+  });
+
+  test("the badge tone and count come off the feed, not a parallel population", () => {
+    expect(M.feedTone(feed(snapOf([blocked("codex:1"), noticed("codex:2")])))).toBe("blocked");
+    expect(M.feedTone(feed(snapOf([noticed("codex:2")])))).toBe("noticed");
+    expect(M.feedTone(feed(snapOf([quiet("codex:3")])))).toBe("clear");
+    expect(M.feedTone([])).toBe("clear");
+    // The count beside an ember button has to mean what the ember means.
+    expect(M.blockingCount(feed(snapOf([blocked("codex:1"), blocked("codex:2"), noticed("codex:3")])))).toBe(2);
+    expect(M.blockingCount(feed(snapOf([noticed("codex:3")])))).toBe(0);
+  });
+
+  test("the blocking/noticed partition is the server's word, and the client's only until it ships", () => {
+    // S0-T2's exact rule over the kinds that ARE on the wire today.
+    for (const kind of ["permission-requested", "input-requested", "fork-unresolved",
+      "handoff-stated", "question-pending", "assumption-stated"]) {
+      expect(M.attentionClassOf(agent({ attentionSignal: { kind } })), kind).toBe("blocking");
+    }
+    expect(M.attentionClassOf(agent({ attentionSignal: { kind: "stalled-active" } }))).toBe("noticed");
+    // Absence, not a third value.
+    for (const kind of ["nothing-wanted", "out-of-scope", "not-readable"]) {
+      expect(M.attentionClassOf(agent({ attentionSignal: { kind } })), kind).toBeNull();
+    }
+    expect(M.attentionClassOf(agent({}))).toBeNull();
+    // When be-dwell ships the field, the server's word wins over the derivation.
+    expect(M.attentionClassOf(agent({ attentionClass: "noticed", attentionSignal: { kind: "question-pending" } })))
+      .toBe("noticed");
+    expect(M.attentionClassOf(agent({ attentionClass: "blocking", attentionSignal: { kind: "stalled-active" } })))
+      .toBe("blocking");
+  });
+
+  test("a lane that was stood down is not blocking, and a lane that then asks re-alerts", () => {
+    // The atlas-hardening T6/T7 precedence, read and not reopened. The veto runs
+    // on the server's own word too, so the two can never disagree about it.
+    const parked = { taskState: "parked", taskStateSource: "manifest", taskStateAt: "2026-08-05T20:00:00.000Z" };
+    expect(M.attentionClassOf(agent({ ...parked, attentionSignal: { kind: "question-pending" } }))).toBeNull();
+    expect(M.attentionClassOf(agent({ ...parked, attentionClass: "blocking" }))).toBeNull();
+    expect(M.attentionClassOf(agent({ taskState: "done", taskStateSource: "manifest", taskStateAt: "2026-08-05T20:00:00.000Z", attentionSignal: { kind: "question-pending" } }))).toBeNull();
+    // …until it asks something NEWER than the declaration.
+    const asking = agent({
+      ...parked, attentionSignal: { kind: "question-pending" },
+      hookLifecycle: "needsInput", hookLifecycleAt: "2026-08-05T20:30:00.000Z",
+    });
+    expect(M.attentionClassOf(asking)).toBe("blocking");
+    expect(feed(snapOf([asking]))).toHaveLength(1);
+  });
+
+  test("an unmeasurable wait is null, never a heartbeat and never zero", () => {
+    // hookLifecycleAt is the hook store's WRITE time; S0-T1 exists because it
+    // may be a heartbeat, and a heartbeat that reset dead time would make the
+    // oldest wait on the board read as the newest.
+    const noSince = feed(snapOf([blocked("codex:1", {
+      hookLifecycleAt: "2026-08-05T20:59:00.000Z", updatedAt: "2026-08-05T20:59:30.000Z",
+    })]));
+    expect(noSince[0].since).toBeNull();
+    // It reads blockedSince, and only blockedSince.
+    const measured = feed(snapOf([blocked("codex:1", { blockedSince: "2026-08-05T19:56:00.000Z" })]));
+    expect(measured[0].since).toBe("2026-08-05T19:56:00.000Z");
+    // A server instant AHEAD of this browser is clock skew, not a negative wait.
+    const skewed = feed(snapOf([blocked("codex:1", { blockedSince: "2026-08-05T21:30:00.000Z" })]));
+    expect(skewed[0].since).toBeNull();
+  });
+
+  test("the longest wait leads, and an unmeasured wait never outranks a measured hour", () => {
+    const snap = snapOf([
+      blocked("codex:new", { blockedSince: "2026-08-05T20:49:00.000Z" }),
+      blocked("codex:none"),
+      blocked("codex:old", { blockedSince: "2026-08-05T19:56:00.000Z" }),
+      noticed("codex:watch"),
+    ]);
+    expect(feed(snap).map((i: { id: string }) => i.id))
+      .toEqual(["agent:codex:old", "agent:codex:new", "agent:codex:none", "agent:codex:watch"]);
+  });
+});
+
+describe("S1-T2: hasCurrentImpact is the only gate between live and history", () => {
+  const NOW = Date.parse("2026-08-05T21:00:00.000Z");
+  const asking = (id: string, over: Record<string, unknown> = {}) => agent({
+    id, displayName: id, programId: "p",
+    attentionSignal: { kind: "question-pending", evidence: "Which one?" }, ...over,
+  });
+  const snapOf = (agents: unknown[], over: Record<string, unknown> = {}) =>
+    snapshot({ programs: [{ id: "p", name: "Ant Hill", agents }], ...over });
+  const split = (snap: unknown, queue: unknown[] = []) => M.notificationCandidates(snap, queue, NOW, M.NOTIFY_DEPS);
+  const issue = (over: Record<string, unknown> = {}) => ({
+    id: "system:sources", kind: "system", severity: "warning",
+    title: "Two sources disagree", summary: "The cmux store and the transcript disagree.",
+    affectedAgentIds: [], ...over,
+  });
+
+  test("a person waiting outranks every demotion below it", () => {
+    const snap = snapOf([asking("codex:1")]);
+    const item = split(snap).live[0];
+    expect(item.severity).toBe("blocking");
+    expect(M.hasCurrentImpact(item, snap)).toBe(true);
+  });
+
+  test("resolved goes to history, and says so", () => {
+    const snap = snapOf([], {
+      issues: [issue({ lifecycle: { state: "resolved", openedAt: "2026-08-05T18:00:00.000Z", resolvedAt: "2026-08-05T20:00:00.000Z" } })],
+    });
+    const { live, demoted } = split(snap);
+    expect(live).toHaveLength(0);
+    expect(demoted.map((d: { id: string; reason: string }) => [d.id, d.reason]))
+      .toEqual([["system:sources", "resolved"]]);
+  });
+
+  test("verifying stays only while it points at a live agent", () => {
+    const verifying = { state: "verifying", openedAt: "2026-08-05T18:00:00.000Z", verificationStartedAt: "2026-08-05T20:00:00.000Z" };
+    const live = agent({ id: "codex:live", programId: "p" });
+    const withLive = snapOf([live], { issues: [issue({ lifecycle: verifying, affectedAgentIds: ["codex:live"] })] });
+    expect(split(withLive).live.map((i: { id: string }) => i.id)).toContain("system:sources");
+
+    // The ended session cannot be helped by verifying anything.
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const withEnded = snapOf([ended], { issues: [issue({ lifecycle: verifying, affectedAgentIds: ["codex:gone"] })] });
+    expect(split(withEnded).live.map((i: { id: string }) => i.id)).not.toContain("system:sources");
+    expect(split(withEnded).demoted[0].reason).toBe("verifying with no live affected agent");
+
+    // Verifying is the WEAKER claim, so system-wide is not enough to keep it —
+    // this is the row that distinguishes it from the stale rule below.
+    const systemWide = snapOf([], { issues: [issue({ lifecycle: verifying })] });
+    expect(split(systemWide).live).toHaveLength(0);
+  });
+
+  test("a finding whose agents are all gone is stale; one that named none is system-wide", () => {
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const stale = snapOf([ended], { issues: [issue({ affectedAgentIds: ["codex:gone"] })] });
+    expect(split(stale).live).toHaveLength(0);
+    expect(split(stale).demoted[0].reason).toBe("stale — no live affected agent");
+
+    /* The trap this row exists to avoid: "zero live affected agents" is TRUE of
+       a system-wide dataflow fault, which is precisely the item this surface
+       exists to carry. An empty list is not a stale list. */
+    const systemWide = snapOf([], { issues: [issue({ affectedAgentIds: [] })] });
+    expect(split(systemWide).live.map((i: { id: string }) => i.id)).toEqual(["system:sources"]);
+  });
+
+  test("a silent reading never becomes a handoff, and never earns the ember", () => {
+    /* "We read its closing words and nothing wants a human" is a fact about the
+       TEXT, not a request. types.ts:406 types the wire's attentionSignal.kind as
+       the seven ACTIONABLE kinds only — isActionable() gates it server-side —
+       so this row of the truth table is a defensive gate on a shape the wire
+       forbids, not a live demotion. Asserted anyway: the gate is what makes the
+       forbidding safe to rely on. */
+    for (const kind of ["nothing-wanted", "out-of-scope", "not-readable"]) {
+      const snap = snapOf([agent({ id: "codex:1", programId: "p", outcome: "healthy", attentionSignal: { kind } })]);
+      expect(M.attentionClassOf(snap.programs[0].agents[0]), kind).toBeNull();
+      expect(split(snap).live.filter((i: { kind: string }) => i.kind === "handoff"), kind).toHaveLength(0);
+      expect(M.feedTone(split(snap).live), kind).not.toBe("blocked");
+    }
+  });
+
+  test("an alerting agent with no attention class still reaches the center", () => {
+    /* The live case the row above is often confused with, and the one the parity
+       gate turns on: a FAILED session that never asked for anything. issuesOf
+       mints its finding off alerting(), so the board counts it today and nothing
+       counted today may become unreachable. It arrives as a dataflow finding
+       rather than a handoff — nobody is waiting on a person — so it is on the
+       surface and it is not ember. */
+    const failed = snapOf([agent({ id: "codex:2", programId: "p", outcome: "failed" })]);
+    expect(M.issuesOf(failed).map((i: { id: string }) => i.id)).toEqual(["agent:codex:2"]);
+    const items = split(failed).live;
+    expect(items.map((i: { id: string; kind: string; severity: string }) => [i.id, i.kind, i.severity]))
+      .toEqual([["agent:codex:2", "dataflow", "warning"]]);
+    expect(M.feedTone(items)).toBe("noticed");
+    /* The two severities are different axes and this row is where they part.
+       The ITEM is "warning" because no person is waiting; the ROUTE is the
+       intervention drawer because the BOARD called the finding an error. The
+       item's severity drives the ember, the board's drives which drawer opens,
+       and folding them would either redden the badge for a collector fault or
+       send a failed session to the wrong panel. */
+    expect(M.issuesOf(failed)[0].severity).toBe("error");
+    expect(items[0].route).toEqual({ kind: "intervention", id: "agent:codex:2" });
+  });
+
+  test("an agent that has stopped asking leaves the live list with a reason", () => {
+    const snap = snapOf([asking("codex:1")]);
+    const item = split(snap).live[0];
+    // Same item, next snapshot: it answered.
+    const answered = snapOf([agent({ id: "codex:1", programId: "p" })]);
+    expect(M.hasCurrentImpact(item, answered)).toBe(false);
+    // And gone from the snapshot entirely.
+    expect(M.hasCurrentImpact(item, snapOf([]))).toBe(false);
+  });
+
+  test("one thing gets one row: a queued investigation does not double its finding", () => {
+    const snap = snapOf([], { issues: [issue()] });
+    const queue = [{ issueId: "system:sources", id: "q1", state: "running", headline: "Isolate it", createdAt: "2026-08-05T19:00:00.000Z" }];
+    const items = split(snap, queue).live;
+    expect(items.map((i: { id: string }) => i.id)).toEqual(["system:sources"]);
+    expect(items[0].kind).toBe("dataflow");
+    // An ORPHAN queue row — its finding has left the snapshot — still surfaces.
+    const orphan = split(snapOf([]), [{ issueId: "inv:9", id: "q9", state: "running", headline: "Still running", createdAt: "2026-08-05T19:00:00.000Z" }]);
+    expect(orphan.live.map((i: { id: string; kind: string }) => [i.id, i.kind])).toEqual([["inv:9", "investigation"]]);
+  });
+
+  test("the parity gate: every finding on the board resolves to an item or a named demotion", () => {
+    const ended = agent({ id: "codex:gone", programId: "p", status: "archived" });
+    const snap = snapOf([asking("codex:1"), ended], {
+      issues: [
+        issue(),
+        issue({ id: "system:stale", affectedAgentIds: ["codex:gone"] }),
+        issue({ id: "system:done", lifecycle: { state: "resolved", openedAt: "2026-08-05T18:00:00.000Z" } }),
+      ],
+    });
+    const queue = [{ issueId: "inv:7", id: "q7", state: "queued", headline: "Q", createdAt: "2026-08-05T19:00:00.000Z" }];
+    const { live, demoted } = split(snap, queue);
+    const board = [...M.issuesOf(snap).map((i: { id: string }) => i.id), ...queue.map((q) => q.issueId)];
+    const accounted = new Set([...live, ...demoted.map((d: { item: unknown }) => d.item)].map((i: { id: string }) => i.id));
+    for (const id of board) expect(accounted.has(id), id).toBe(true);
+    // …and every demotion carries a reason a human can read in the table.
+    for (const d of demoted) expect(d.reason.length, d.id).toBeGreaterThan(0);
+  });
+});

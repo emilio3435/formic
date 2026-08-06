@@ -44,6 +44,20 @@ import {
   toggleNotifications,
 } from "./notifications.js";
 
+/* The attention surface. Its derivation is a module of its own so the big new
+   panel stays out of this contended file; what lands here is the wiring it
+   cannot do for itself — the two resolvers that live in app.js, one render call,
+   and one boot listener. */
+import {
+  attentionClassOf,
+  blockingAgentIds,
+  blockingCount,
+  feedTone,
+  hasCurrentImpact,
+  notificationCandidates,
+  notificationFeed,
+} from "./notification-center.js";
+
 import {
   actionOutcomeView,
   agentLabelEligible,
@@ -1265,6 +1279,11 @@ globalThis.TheAntHill = {
   controlOutcome,
   actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
+  // The attention surface. NOTIFY_DEPS is a `const` and stays out of this
+  // hoisted block for the same TDZ reason CONN_LABELS does; it is exported from
+  // the test seam at the foot of the file.
+  attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
+  feedTone, blockingCount, blockingAgentIds,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
@@ -3306,6 +3325,14 @@ function issueImpactLine(issue, snap = state.snap) {
   }
   return affectedImpact(issue, snap).plain;
 }
+
+/* The two resolvers notification-center.js cannot import for itself, since this
+   file is the entry point and exports almost nothing. programName applies the
+   operator's own aliases out of state.aliases; issueImpactLine prefers the
+   server's impactSummary over the local rollup. Passed rather than re-derived,
+   so the impact sentence in the notification center and the one in the drawer
+   are the same sentence by construction. */
+const NOTIFY_DEPS = { programNameFor: programName, impactFor: issueImpactLine };
 
 const IN_MOTION_KEYS = new Set(["triaging", "planned", "queued", "investigating", "verifying"]);
 
@@ -9426,6 +9453,14 @@ Object.assign(globalThis.TheAntHill, {
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
+  // The exact resolver pair app.js hands the notification center, so a test can
+  // drive the wired derivation rather than its unwired defaults.
+  NOTIFY_DEPS,
+  /* The drawer table's own keys, so "every route resolves to a real drawer" is
+     asserted against the router rather than against a list kept by hand — a new
+     notification kind cannot ship without a drawer to open. Keys only: the
+     renderers themselves are not test surface. */
+  DRAWER_KINDS: Object.keys(DRAWER_RENDERERS),
   // The module's real state object. Exported because the confirmation strip,
   // the pending set, the feedback map and the attention/triage records are all
   // written by the request functions and read by the render functions — there

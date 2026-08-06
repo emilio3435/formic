@@ -169,6 +169,14 @@ SVG meters), `text-formatters.js`, `api-client.js` (fetch + envelope handling),
 `client-catalogs.js`, `repaint.js`, `feed-freshness.js`, `transcript.js`,
 `notifications.js`, and `action-log.js`.
 
+`notification-center.js` is the attention surface's pure derivation, kept out of
+`app.js` on purpose. The header is confidence — continuous measured quantities,
+each with its own provenance — and this is attention: discrete items carrying
+kind, severity, source, lifecycle, evidence, impact and a route to a drawer. The
+seam is one line: the header never links, and the center never aggregates. It
+imports leaf modules only, so the two resolvers that live in `app.js`
+(`programName`, `issueImpactLine`) are injected rather than re-derived.
+
 `lifecycle.js` is the client's mirror of `src/server/lifecycle.ts`, and it is
 the one module here that is deliberately a copy. The server publishes
 `lifecycle` on every agent, but a snapshot can arrive without it, and when that
