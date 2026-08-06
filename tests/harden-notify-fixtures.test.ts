@@ -250,7 +250,6 @@ describe("§4.3 promotion truth table", () => {
       }
 
       if (row.expect.surface === "history" && row.expect.drawer === "resolved") {
-        // @ts-expect-error dependency-free browser module — imported dynamically below
         const pool = row.snap.recentlyResolved as Array<{ id: string }> | undefined;
         expect(pool?.some((issue) => issue.id === row.item.id)).toBe(true);
       }
