@@ -359,3 +359,48 @@ describe("S5-T1 history routes", () => {
     }
   });
 });
+
+describe("docs parity — notification-center vocabulary", () => {
+  const guide = () => readFileSync(join(import.meta.dir, "../ANT-GUIDE.md"), "utf8");
+  const design = () => readFileSync(join(import.meta.dir, "../DESIGN-LANGUAGE.md"), "utf8");
+  const cleanupDoc = () => readFileSync(join(import.meta.dir, "../docs/CLEANUP-SWEEP.md"), "utf8");
+  const notifySrc = () => readFileSync(join(import.meta.dir, "../src/web/notification-center.js"), "utf8");
+
+  test("ANT-GUIDE names the three item kinds and the blocking/noticed split", () => {
+    const g = guide();
+    expect(g).toContain("**handoff**");
+    expect(g).toContain("**dataflow**");
+    expect(g).toContain("**investigation**");
+    expect(g).toMatch(/\*\*blocking\*\*/);
+    expect(g).toMatch(/\*\*noticed\*\*/);
+    expect(g).toMatch(/Ember means a person/i);
+    expect(g).toContain("stalled-active");
+    expect(g).toContain("nothing-wanted");
+  });
+
+  test("DESIGN-LANGUAGE reserves ember fill for a person-blocker", () => {
+    const d = design();
+    expect(d).toMatch(/Notification center badge/i);
+    expect(d).toMatch(/Ember fill is reserved for severity `blocking`/);
+    expect(d).toMatch(/amber outline/i);
+    expect(d).toMatch(/never deletes/i);
+  });
+
+  test("notification-center.js still encodes the ember-means-a-person rule", () => {
+    const src = notifySrc();
+    expect(src).toMatch(/severity "blocking" means A PERSON IS THE BLOCKER/);
+    expect(src).toContain('kind: "handoff"');
+    expect(src).toContain('kind: "dataflow"');
+    expect(src).toContain('kind: "investigation"');
+  });
+
+  test("CLEANUP-SWEEP.md is the fe-notify propose contract", () => {
+    const doc = cleanupDoc().replace(/\s+/g, " ");
+    expect(doc).toMatch(/THE BOARD NEVER DELETES/);
+    expect(doc).toContain("confirmCommand");
+    expect(doc).toContain("removable");
+    expect(doc).toContain("refused");
+    expect(doc).toContain("--json");
+    expect(doc).toMatch(/No destructive server endpoint/i);
+  });
+});

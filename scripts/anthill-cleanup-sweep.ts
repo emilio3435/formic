@@ -8,14 +8,35 @@
  * evidence; confirm re-verifies and only then runs `git worktree remove` and
  * `git branch -d`. Never `-D`. Never `--force`.
  *
+ * ──────────────────────────────────────────────────────────────────────────
+ * THE BOARD NEVER DELETES.
+ *
+ * The header chip's Clean up action runs `propose` ONLY. Its JSON becomes a
+ * notification-center dataflow item listing what is removable, each rollback
+ * SHA, and the exact `confirm` command to paste in a terminal. A browser click
+ * is not the same gate as a human reading a plan in a terminal — the precedent
+ * this program matches is a manual pass that was careful never to delete
+ * without a person in the loop.
+ *
+ *   • No destructive server endpoint, ever.
+ *   • Do not wire `confirm` to a route, a button handler, or any UI click.
+ *   • Deletion stays a terminal action: the operator pastes `confirmCommand`.
+ *
+ * Contract for FE: `docs/CLEANUP-SWEEP.md` (fields the notification item needs).
+ * ──────────────────────────────────────────────────────────────────────────
+ *
  * Occupancy uses the repo's one pid→liveness home (`src/server/process-liveness.ts`)
  * plus `isRecognizedAgentProcess` from identity.ts. A pid found in the process
  * table is NOT liveness — that mistake is why process-liveness.ts exists. A live
  * or unverifiable agent cwd'd inside a worktree is a hard stop regardless of
  * operator approval (A8).
  *
+ * `propose` is read-only on the repo and process table. It is safe to run while
+ * agents are live, and safe to run twice (double-click): each run atomically
+ * replaces the plan file under a lock; nothing is deleted.
+ *
  * Usage:
- *   bun scripts/anthill-cleanup-sweep.ts propose [--repo <path>] [--out <plan.json>]
+ *   bun scripts/anthill-cleanup-sweep.ts propose [--repo <path>] [--out <plan.json>] [--json]
  *   bun scripts/anthill-cleanup-sweep.ts confirm <plan.json> [--repo <path>]
  */
 import { createHash } from "node:crypto";
@@ -28,7 +49,7 @@ import {
   type ProcessLiveness,
   type ProcessRoster,
 } from "../src/server/process-liveness";
-import { atomicWriteJson } from "./lib/atomic-json";
+import { atomicWriteJson, withFileLock } from "./lib/atomic-json";
 
 export const PLAN_VERSION = 1 as const;
 export const DEFAULT_MAIN = "main";
@@ -93,6 +114,33 @@ export interface CleanupPlan {
   proposed: ProposedRemoval[];
   /** Stable hash of the facts confirm must still observe. */
   fingerprint: string;
+  /** Absolute path this plan was written to (set by writePlan). */
+  planPath?: string;
+  /** Exact terminal command to paste — the only deletion gate. */
+  confirmCommand?: string;
+}
+
+/** Compact shape the notification-center dataflow item builds from. See docs/CLEANUP-SWEEP.md. */
+export interface CleanupNotificationView {
+  version: typeof PLAN_VERSION;
+  createdAt: string;
+  repoRoot: string;
+  mainRef: string;
+  mainTipSha: string;
+  fingerprint: string;
+  planPath: string;
+  /** Paste into a terminal. Never invoke from the board. */
+  confirmCommand: string;
+  removable: Array<{
+    kind: "worktree" | "branch";
+    target: string;
+    rollbackSha: string;
+    branch?: string | null;
+  }>;
+  refused: {
+    worktrees: Array<{ path: string; branch: string | null; reasons: string[] }>;
+    branches: Array<{ name: string; reasons: string[] }>;
+  };
 }
 
 export interface GitResult {
@@ -614,13 +662,94 @@ export function confirmCleanup(
   return { ok: true, executed, rollbacks };
 }
 
-export function writePlan(plan: CleanupPlan, outPath: string): void {
-  mkdirSync(dirname(outPath), { recursive: true });
-  atomicWriteJson(outPath, plan);
+export function confirmCommandFor(planPath: string): string {
+  return `bun scripts/anthill-cleanup-sweep.ts confirm ${planPath}`;
+}
+
+/**
+ * The fields a notification-center dataflow item needs — removable work,
+ * refusals with reasons, and the confirm command string. Derived from a plan;
+ * never a second source of truth.
+ */
+export function notificationViewFromPlan(plan: CleanupPlan, planPath: string): CleanupNotificationView {
+  const abs = resolve(planPath);
+  return {
+    version: plan.version,
+    createdAt: plan.createdAt,
+    repoRoot: plan.repoRoot,
+    mainRef: plan.mainRef,
+    mainTipSha: plan.mainTipSha,
+    fingerprint: plan.fingerprint,
+    planPath: abs,
+    confirmCommand: confirmCommandFor(abs),
+    removable: plan.proposed.map((item) => (
+      item.kind === "worktree"
+        ? {
+          kind: "worktree" as const,
+          target: item.path,
+          rollbackSha: item.rollbackSha,
+          branch: item.branch,
+        }
+        : {
+          kind: "branch" as const,
+          target: item.name,
+          rollbackSha: item.rollbackSha,
+        }
+    )),
+    refused: {
+      worktrees: plan.worktrees
+        .filter((tree) => !tree.eligible)
+        .map((tree) => ({
+          path: tree.path,
+          branch: tree.branch,
+          reasons: tree.refusals,
+        })),
+      branches: plan.branches
+        .filter((branch) => !branch.eligible)
+        .map((branch) => ({
+          name: branch.name,
+          reasons: branch.refusals,
+        })),
+    },
+  };
+}
+
+/**
+ * Write the plan under an exclusive lock + atomic rename.
+ * Safe for double-click / concurrent propose: waiters serialize; each winner
+ * replaces the file wholly. Never partial JSON. Does not delete anything.
+ */
+export function writePlan(plan: CleanupPlan, outPath: string): CleanupPlan {
+  const abs = resolve(outPath);
+  mkdirSync(dirname(abs), { recursive: true });
+  const enriched: CleanupPlan = {
+    ...plan,
+    planPath: abs,
+    confirmCommand: confirmCommandFor(abs),
+  };
+  withFileLock(`${abs}.lock`, () => {
+    atomicWriteJson(abs, enriched);
+  });
+  return enriched;
 }
 
 export function readPlan(path: string): CleanupPlan {
   return assertPlanShape(JSON.parse(readFileSync(path, "utf8")));
+}
+
+/** propose end-to-end: enumerate (read-only) then locked write. */
+export function runPropose(
+  repoRoot: string,
+  outPath: string,
+  host: SweepHost = defaultHost(),
+  mainRef = DEFAULT_MAIN,
+): { plan: CleanupPlan; notification: CleanupNotificationView } {
+  const plan = enumerateCleanup(repoRoot, host, mainRef);
+  const written = writePlan(plan, outPath);
+  return {
+    plan: written,
+    notification: notificationViewFromPlan(written, written.planPath ?? outPath),
+  };
 }
 
 function printReport(plan: CleanupPlan): void {
@@ -670,8 +799,10 @@ function printReport(plan: CleanupPlan): void {
 
 function usage(): never {
   console.error(`Usage:
-  bun scripts/anthill-cleanup-sweep.ts propose [--repo <path>] [--out <plan.json>] [--main <ref>]
-  bun scripts/anthill-cleanup-sweep.ts confirm <plan.json> [--repo <path>]`);
+  bun scripts/anthill-cleanup-sweep.ts propose [--repo <path>] [--out <plan.json>] [--main <ref>] [--json]
+  bun scripts/anthill-cleanup-sweep.ts confirm <plan.json> [--repo <path>]
+
+  propose is the only command the board may run. confirm is terminal-only.`);
   process.exit(2);
 }
 
@@ -682,6 +813,7 @@ function parseArgs(argv: string[]) {
   let repo = process.cwd();
   let out = join(process.cwd(), ".anthill", "cleanup-plan.json");
   let main = DEFAULT_MAIN;
+  let json = false;
   let planPath: string | undefined;
   if (command === "confirm") {
     planPath = args.shift();
@@ -692,22 +824,27 @@ function parseArgs(argv: string[]) {
     if (flag === "--repo") repo = args.shift() || usage();
     else if (flag === "--out") out = args.shift() || usage();
     else if (flag === "--main") main = args.shift() || usage();
+    else if (flag === "--json") json = true;
     else usage();
   }
-  return { command, repo, out, main, planPath };
+  return { command, repo, out, main, planPath, json };
 }
 
 async function main(): Promise<void> {
-  const { command, repo, out, main, planPath } = parseArgs(process.argv.slice(2));
+  const { command, repo, out, main, planPath, json } = parseArgs(process.argv.slice(2));
   const host = defaultHost();
   if (command === "propose") {
-    const plan = enumerateCleanup(repo, host, main);
-    writePlan(plan, out);
+    const { plan, notification } = runPropose(repo, out, host, main);
+    if (json) {
+      // Notification view only — what fe-notify / the dataflow item consumes.
+      console.log(JSON.stringify(notification, null, 2));
+      return;
+    }
     printReport(plan);
     console.log("");
-    console.log(`Wrote plan → ${out}`);
-    console.log("Nothing was deleted. Review the plan, then:");
-    console.log(`  bun scripts/anthill-cleanup-sweep.ts confirm ${out}`);
+    console.log(`Wrote plan → ${plan.planPath ?? out}`);
+    console.log("Nothing was deleted. THE BOARD NEVER DELETES — paste this in a terminal:");
+    console.log(`  ${plan.confirmCommand ?? confirmCommandFor(out)}`);
     return;
   }
   const plan = readPlan(planPath!);

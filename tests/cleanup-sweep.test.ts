@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -30,6 +31,9 @@ import {
   worktreeRefusals,
   writePlan,
   readPlan,
+  runPropose,
+  notificationViewFromPlan,
+  confirmCommandFor,
   type CleanupPlan,
   type GitResult,
   type OccupantEvidence,
@@ -419,5 +423,64 @@ detached
       { path: "/repo/.wt/feat", head: "123456", branch: "feat", bare: false },
       { path: "/repo/detached", head: "fedcba", branch: null, bare: false },
     ]);
+  });
+});
+
+describe("cleanup sweep — propose is board-safe", () => {
+  test("enumerate issues only read-only git verbs", () => {
+    const root = initRepo("readonly-repo");
+    addMergedWorktree(root, "feat-ro", "ro-wt");
+    const tap: string[][] = [];
+    enumerateCleanup(root, hostFor(root, { gitTap: tap }));
+    const flat = tap.map((c) => c.slice(1).join(" "));
+    for (const cmd of flat) {
+      expect(cmd).not.toMatch(/\bworktree remove\b/);
+      expect(cmd).not.toMatch(/\bbranch -[dD]\b/);
+      expect(cmd).not.toMatch(/\b--force\b/);
+      expect(cmd).not.toMatch(/\bclean\b/);
+      expect(cmd).not.toMatch(/\breset\b/);
+    }
+    expect(flat.some((c) => c.startsWith("worktree list"))).toBe(true);
+  });
+
+  test("notification view names removable, refused, and confirmCommand", () => {
+    const root = initRepo("notify-repo");
+    const wt = addMergedWorktree(root, "feat-notify", "notify-wt");
+    writeFileSync(join(wt, "dirt.txt"), "x\n"); // refuse dirty
+    const planPath = join(SCRATCH, "notify-plan.json");
+    const { plan, notification } = runPropose(root, planPath, hostFor(root));
+    expect(notification.planPath).toBe(resolve(planPath));
+    expect(notification.confirmCommand).toBe(confirmCommandFor(resolve(planPath)));
+    expect(notification.confirmCommand).toContain("confirm ");
+    expect(notification.removable.every((r) => /^[0-9a-f]{40}$/.test(r.rollbackSha))).toBe(true);
+    expect(notification.refused.worktrees.some((t) => t.reasons.some((r) => /dirty/i.test(r)))).toBe(true);
+    expect(notification.refused.worktrees.every((t) => t.reasons.length > 0)).toBe(true);
+    expect(notificationViewFromPlan(plan, planPath).fingerprint).toBe(plan.fingerprint);
+  });
+
+  test("concurrent propose writes serialize and leave valid JSON", async () => {
+    const root = initRepo("concurrent-repo");
+    addMergedWorktree(root, "feat-cc", "cc-wt");
+    const planPath = join(SCRATCH, "concurrent-plan.json");
+    const host = hostFor(root);
+    const runs = await Promise.all([
+      Promise.resolve(runPropose(root, planPath, host)),
+      Promise.resolve(runPropose(root, planPath, { ...host, nowIso: () => "2026-08-05T21:00:01.000Z" })),
+      Promise.resolve(runPropose(root, planPath, { ...host, nowIso: () => "2026-08-05T21:00:02.000Z" })),
+    ]);
+    const loaded = readPlan(planPath);
+    expect(loaded.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.confirmCommand).toContain(planPath);
+    expect(runs.every((r) => r.notification.confirmCommand.includes("confirm"))).toBe(true);
+  });
+
+  test("script header forbids wiring confirm to the board", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../scripts/anthill-cleanup-sweep.ts"),
+      "utf8",
+    );
+    expect(src).toMatch(/THE BOARD NEVER DELETES/);
+    expect(src).toMatch(/No destructive server endpoint/);
+    expect(src).toMatch(/Do not wire `confirm` to a route/);
   });
 });
