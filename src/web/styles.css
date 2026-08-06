@@ -1022,28 +1022,26 @@ body.feed-frozen .programs { opacity: 0.62; }
 .filter-menu-item:hover { background: var(--sand); color: var(--ink); }
 .filter-menu-count { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
 
-/* The fleet's review-worker policy. Deliberately NOT a filter-chip: it is a
-   shared server setting rather than this browser's lens, and dressing it as a
-   chip taught operators it was a sixth thing they were narrowing by. It reads as
-   a line of disclosure that happens to be clickable — no border, no fill, no
-   pressed state — so it sits in the bar without competing with the controls that
-   actually filter. */
-.filter-policy {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.2rem;
-  min-height: 30px;
-  font-size: 12px;
+/* The fleet's review-worker policy, now the FOOTER of the Class menu.
+
+   It was a standalone fragment in the bar, standing in the row of things that
+   narrow this board — which it is not: it is a server setting shared by every
+   browser, and a standing policy about which rows the Board is for. Inside the
+   menu it sits under the classes it governs, separated by a rule and set in the
+   quieter ink, so it reads as a statement about the fleet rather than as one
+   more class you could pick. (The `filter-policy` bar fragment it replaces is
+   gone; the CSS census forbids a declared class the client never emits, so its
+   rules could not stay behind. Named without its leading dot on purpose — the
+   census reads this file's comments too.) */
+.filter-menu-policy {
+  margin-top: 0.3rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
   font-weight: 600;
   color: var(--faint);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
 }
-.filter-policy:hover { color: var(--ink); text-decoration: underline; }
-.filter-policy.is-showing { color: var(--muted); }
-.filter-policy-mark { font-size: 12px; line-height: 1; }
+.filter-menu-policy:hover { color: var(--ink); }
 .filter-menu-item.is-active { color: var(--ink); background: var(--sand); border-color: var(--line-strong); }
 /* The caveat under the Days group, not a footnote nobody reads: it is inside the
    group it qualifies and it is that group's aria-describedby. */

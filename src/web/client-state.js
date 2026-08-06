@@ -50,13 +50,14 @@ export const state = {
      Session-scoped, all of them: they answer "what am I looking at right now",
      not "what should this board default to", so they do not persist and do not
      travel. */
+  facetClasses: [],
   facetProviders: [],
   facetStatuses: [],
   facetModels: [],
   facetSpans: [],
   facetContexts: [],
-  /* Which filter dropdown is open: "" | time | provider | status | model | span
-     | context. One at a time, deliberately — two menus hanging off the same bar
+  /* Which filter dropdown is open: "" | time | class | provider | status | model
+     | span | context. One at a time, deliberately — two menus hanging off the same bar
      would overlap, and the operator has no way to tell which one a click is
      aimed at. Session-scoped like the lenses it opens: a menu left hanging is
      not a preference. */

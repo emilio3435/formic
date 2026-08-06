@@ -458,6 +458,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     // The lenses are SETS now (FE-2 / amendment 1): empty = lens off.
+    facetClasses: [] as string[],
     facetProviders: [] as string[],
     facetStatuses: [] as string[],
     facetModels: [] as string[],
@@ -1859,19 +1860,24 @@ describe("views split Now from History", () => {
         lookbackHours: 6,
         snap,
         showReviewWorkers: false,
+        // FE-4 D3: the policy lives in the Class menu's footer now, so it is on
+        // screen only while that menu is open. Closed, the disclosure rides the
+        // trigger — pinned in the FE4-D3 tests.
+        openFilterMenu: "class",
       }));
       const bar = domById.get("filter-bar");
-      /* D4. The disclosure survives; what changed is that it stopped dressing as
-         a lens. It said "Show review workers (1)" in chip clothing at the head of
-         the filter row, which read as a sixth narrowing THIS browser was
-         applying — false twice over: it is a server setting shared by every
-         browser looking at the fleet, and it is a standing policy about which
-         rows the Board is for rather than a question about the sessions in front
-         of you. It states the count and its own reach instead. */
+      /* D4, then FE-4 D3. The disclosure survives every move; what changed each
+         time is what it is DRESSED as. It said "Show review workers (1)" in chip
+         clothing at the head of the filter row, which read as a narrowing THIS
+         browser was applying — false twice over: it is a server setting shared by
+         every browser looking at the fleet, and it is a standing policy about
+         which rows the Board is for rather than a question about the sessions in
+         front of you. It is now a separated action inside the Class menu, under
+         the classes it governs. */
       const policy = byFkey(bar, "session-kind:review");
-      expect(policy.className).toContain("filter-policy");
+      expect(policy.className).toContain("filter-menu-policy");
       expect(policy.className).not.toContain("filter-chip");
-      expect(textOf(policy)).toContain("1 reviewer hidden");
+      expect(textOf(policy)).toContain("1 hidden reviewer");
       // No pressed state: the label already says which way the fleet is set, and
       // a toggle's self-report on top of that would disagree with it half the time.
       expect(policy.attributes["aria-pressed"]).toBeUndefined();
@@ -1881,11 +1887,14 @@ describe("views split Now from History", () => {
       expect(textOf(bar)).toContain("Last 6h");
     });
 
-    // Showing them says so, and the noun agrees with the count either way.
+    // Showing them, the action is the way back — and it still says whose setting
+    // it is, because that is the half an operator cannot see from the board.
     withDom(() => {
-      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, snap, showReviewWorkers: true }));
+      M.renderFilterBar(listUi({
+        view: "board", lookbackHours: 6, snap, showReviewWorkers: true, openFilterMenu: "class",
+      }));
       expect(textOf(byFkey(domById.get("filter-bar"), "session-kind:review")))
-        .toContain("showing 1 reviewer");
+        .toContain("Hide routine reviewers — fleet-wide setting");
     });
   });
 });
@@ -7011,6 +7020,8 @@ describe("FE-B: harness-backed client behavior", () => {
     await withState({
       snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+      // FE-4 D3: the control is the Class menu's footer, so the menu is open.
+      openFilterMenu: "class",
     }, () => withRequests([
       { status: 200, json: { ok: true, settings: { showReviewWorkers: true } } },
       { status: 200, json: { ok: true, ...snap } },
@@ -7032,6 +7043,7 @@ describe("FE-B: harness-backed client behavior", () => {
     await withState({
       snap, view: "board", query: "", facetProgram: "", facetProviders: [],
       lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+      openFilterMenu: "class",
     }, () => withRequests([new Error("connection refused")], async () => {
       M.renderFilterBar(M.state);
       await fire(byFkey(domById.get("filter-bar"), "session-kind:review"));
@@ -7104,14 +7116,17 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual(["lookback:menu"]);
     });
 
-    /* The same bar over a real fleet, which is where the facet chips appear. The
+    /* The same bar over a real fleet, which is where the facet menus appear. The
        ORDER is the contract — the bar is torn down and rebuilt on every paint,
        focus restore keys on position-independent fkeys, and a screen reader
-       walks the axes in this sequence: session kind, then the lenses, then TIME
-       LAST. Time moved to the end deliberately (FE-2 D2): everything before it
-       narrows within the population, and it is the one control that decides what
-       the population is, so the two layers are separated in space as well as in
-       the markup. Updated deliberately here, never incidentally. */
+       walks the axes in this sequence: the lenses, then TIME LAST. Time moved to
+       the end deliberately (FE-2 D2): everything before it narrows within the
+       population, and it is the one control that decides what the population is,
+       so the two layers are separated in space as well as in the markup. CLASS
+       leads the lenses (FE-4 D2) because it answers who the agent is, and every
+       axis after it is a question about that same agent — and the review policy
+       is no longer a stop of its own here at all, having moved into the Class
+       menu's footer. Updated deliberately here, never incidentally. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const review = agent({
@@ -7134,15 +7149,19 @@ describe("FE-B: harness-backed client behavior", () => {
       const keys = focusKeysOf(bar());
       expect(new Set(keys).size).toBe(keys.length);
       /* CLOSED triggers, one per axis. Three focus stops where the chips took
-         nine, and the axis order is the contract: session kind, then the lenses
-         in bar order, then TIME last — the working-set control, held apart from
-         everything that merely narrows within it. */
+         nine, and the axis order is the contract: the lenses in bar order, then
+         TIME last — the working-set control, held apart from everything that
+         merely narrows within it. */
       expect(keys).toEqual([
-        "session-kind:review",
+        "class:menu",
         "provider:menu",
         "status:menu",
         "lookback:menu",
       ]);
+      /* The review policy is inside the Class menu now, so it is not a stop on
+         the closed bar. Its fkey is unchanged and it is one keystroke deeper,
+         with the ⊘ on the trigger saying so — pinned in the FE4-D3 tests. */
+      expect(keys).not.toContain("session-kind:review");
       /* Model, Span and Context are absent, and for the same reason Provider was
          absent a moment ago: this fleet reports one model, no measured spans and
          no context readings, so each of those axes has exactly one populated
@@ -7153,14 +7172,16 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys.some((k: string) => k.startsWith("context:"))).toBe(false);
     });
 
-    /* All five axes at once, over a fleet that can actually distinguish on each
-       one. This is the bar-order contract from amendment 1: Provider · Status ·
-       Model · Span · Context, flat rather than nested behind a "More" — a filter
-       you have to go looking for is one operators stop knowing they have. */
+    /* All six axes at once, over a fleet that can actually distinguish on each
+       one. This is the bar-order contract from amendment 1 with FE-4's Class at
+       its head: Class · Provider · Status · Model · Span · Context, flat rather
+       than nested behind a "More" — a filter you have to go looking for is one
+       operators stop knowing they have. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const rich = [
         agent({ id: "codex:1", provider: "codex", model: "gpt-5-codex", updatedAt, elapsedMs: 60_000,
+          role: "orchestrator",
           tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 } }),
         agent({ id: "claude:1", provider: "claude", model: "claude-opus-5", status: "waiting", updatedAt,
           elapsedMs: 20 * 3_600_000,
@@ -7169,7 +7190,7 @@ describe("FE-B: harness-backed client behavior", () => {
       const snap = snapshot({ programs: [{ id: "p", name: "P", agents: rich }] });
       M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
       expect(focusKeysOf(bar())).toEqual([
-        "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
+        "class:menu", "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
         "lookback:menu",
       ]);
     });
@@ -7371,9 +7392,9 @@ describe("FE-B: harness-backed client behavior", () => {
 
   /* -------- FE-2 D3 + amendment 1: the lens axes --------------------------- */
 
-  /* The fleet the lens tests share: two providers, two models, two lifecycles,
-     two span bands, two context bands, and one row that reports none of the
-     optional readings — so every axis has something to distinguish AND an
+  /* The fleet the lens tests share: two classes, two providers, two models, two
+     lifecycles, two span bands, two context bands, and one row that reports none
+     of the optional readings — so every axis has something to distinguish AND an
      Unreported population to account for. */
   const lensFleet = () => {
     const updatedAt = new Date().toISOString();
@@ -7382,7 +7403,11 @@ describe("FE-B: harness-backed client behavior", () => {
       programs: [{
         id: "p", name: "P", agents: [
           agent({
-            id: "codex:short", provider: "codex", model: "gpt-5-codex", updatedAt,
+            /* FE-4 D2: the Class axis needs two populated members here or the
+               table tests below would cover it with a single-bucket fixture,
+               where "the options partition the working set" is true of any
+               classification at all. */
+            id: "codex:short", provider: "codex", model: "gpt-5-codex", updatedAt, role: "orchestrator",
             elapsedMs: 30 * 60_000,                                     // under 1h
             tokens: { provenance: "observed", scope: "latest-turn", total: 10_000, contextWindow: 100_000 }, // 10%
           }),
@@ -7539,6 +7564,7 @@ describe("FE-B: harness-backed client behavior", () => {
     };
     const base = await countWith({});
     expect(base).toBe("4");
+    expect(await countWith({ facetClasses: ["orchestrator"] })).toBe(base);
     expect(await countWith({ facetProviders: ["codex"] })).toBe(base);
     expect(await countWith({ facetStatuses: ["waiting"] })).toBe(base);
     expect(await countWith({ facetModels: ["gpt-5-codex"] })).toBe(base);
@@ -7547,8 +7573,8 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(await countWith({ query: "nothing-matches-this" })).toBe(base);
     // Every lens at once, still the same number.
     expect(await countWith({
-      facetProviders: ["codex"], facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"],
-      facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
+      facetClasses: ["orchestrator"], facetProviders: ["codex"], facetStatuses: ["waiting"],
+      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
     })).toBe(base);
 
     // …and the working-set controls DO move it, which is the other half of the
@@ -7627,10 +7653,12 @@ describe("FE-B: harness-backed client behavior", () => {
        sentence is standing next to. */
     await sentence({
       snap: lensFleet(), lookbackHours: 6, showReviewWorkers: false, query: "ridge",
-      facetProgram: "p", facetProviders: ["codex"], facetStatuses: ["waiting"],
-      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"],
+      facetProgram: "p", facetClasses: ["orchestrator"], facetProviders: ["codex"],
+      facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"],
+      facetContexts: ["over-75"],
     }, 1, async () => {
       await fire(byFkey(noteOf(), "sentence:clear"));
+      expect(M.state.facetClasses).toEqual([]);
       expect(M.state.facetProviders).toEqual([]);
       expect(M.state.facetStatuses).toEqual([]);
       expect(M.state.facetModels).toEqual([]);
@@ -7662,6 +7690,17 @@ describe("FE-B: harness-backed client behavior", () => {
         expect(M.state.openFilterMenu).toBe("");
         expect(M.state.lookbackHours).toBe(6); // nothing was selected on the way out
         expect(focused).toEqual([`[data-fkey="lookback:menu"]`]);
+
+        /* …and out of EVERY lens menu, not just the three a hand-kept map
+           happened to name. Escape out of Model, Span or Context looked up
+           nothing and dropped the operator on <body>; the trigger key is derived
+           from the axis table now, so a new axis cannot arrive without one. */
+        for (const axis of M.LENS_AXES) {
+          focused.length = 0;
+          M.state.openFilterMenu = axis.key;
+          M.closeFilterMenu();
+          expect(focused, axis.key).toEqual([`[data-fkey="${axis.key}:menu"]`]);
+        }
       }));
   });
 
@@ -7715,6 +7754,176 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(M.agentClassOf(agent({}))).toBe("agent");
     expect(M.agentClassOf(agent({ role: "vibes-engineer" }))).toBe("agent");
     expect(M.agentClassOf(undefined)).toBe("agent");
+  });
+
+  /* -------- FE-4 D2/D3: the Class axis, and the policy inside it ------------ */
+
+  const classAxis = () => M.LENS_AXES.find((a: { key: string }) => a.key === "class");
+  const classUi = (over: Record<string, unknown> = {}) =>
+    listUi({ view: "board", lookbackHours: null, showReviewWorkers: true, ...over });
+  const classFleet = (...agents: unknown[]) =>
+    snapshot({ programs: [{ id: "p", name: "P", agents }] });
+
+  test("(FE4-D2) Class leads the axis table, and every class it can produce has a menu label", () => {
+    /* Class is FIRST because it answers who the agent is; provider, model, span
+       and context are all questions about the same agent once you know that. */
+    expect(M.LENS_AXES[0].key).toBe("class");
+    expect(M.LENS_AXES[0].stateKey).toBe("facetClasses");
+
+    /* The label table and the precedence are two lists of the same vocabulary,
+       and nothing in the type system keeps them together — a class the
+       precedence can return but the table has not met would be dropped from the
+       options, which breaks the partition invariant by hiding rows behind a
+       filter with no item able to un-hide them. So every branch of agentClassOf
+       is driven, and each result has to come back as a labeled option. */
+    const updatedAt = new Date().toISOString();
+    const oneOfEach = [
+      agent({ id: "a:rev", updatedAt, sessionKind: "review", task: "Review this change for security vulnerabilities." }),
+      agent({ id: "a:auto", updatedAt, role: "automation" }),
+      agent({ id: "a:orch", updatedAt, role: "orchestrator" }),
+      agent({ id: "a:fe", updatedAt, specialty: "frontend" }),
+      agent({ id: "a:be", updatedAt, specialty: "backend" }),
+      agent({ id: "a:test", updatedAt, role: "tester" }),
+      agent({ id: "a:ver", updatedAt, role: "verifier" }),
+      agent({ id: "a:work", updatedAt, role: "worker" }),
+      agent({ id: "a:mon", updatedAt, role: "monitor" }),
+      agent({ id: "a:svc", updatedAt, role: "service" }),
+      agent({ id: "a:human", updatedAt, role: "human" }),
+      agent({ id: "a:plain", updatedAt }),
+    ];
+    const ui = classUi({ snap: classFleet(...oneOfEach) });
+    const options = M.lensOptions(classAxis(), ui);
+    expect(options.length).toBe(oneOfEach.length);
+    for (const option of options) {
+      expect(typeof option.label, String(option.value)).toBe("string");
+      expect(option.label.length, String(option.value)).toBeGreaterThan(0);
+      expect(option.count, String(option.value)).toBe(1);
+    }
+    // Ordered by what the class MEANS, not alphabetically: the fleet-shaped
+    // answers first, the floor last.
+    expect(options.map((o: { value: string }) => o.value)).toEqual([
+      "reviewer", "orchestrator", "frontend", "backend", "automation",
+      "tester", "verifier", "worker", "monitor", "service", "human", "agent",
+    ]);
+  });
+
+  test("(FE4-D3) the review policy is a footer ACTION inside the Class menu, not a sixth class", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", provider: "codex", updatedAt, role: "orchestrator", task: "Ship it." });
+    const snap = classFleet(review, work);
+
+    await withState({ snap, view: "board", lookbackHours: null, showReviewWorkers: false, openFilterMenu: "class" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        const bar = domById.get("filter-bar");
+        const policy = byFkey(bar, "session-kind:review");
+        /* Same fkey it has always had — focus restore and muscle memory were
+           built on it, and the control moving one level deep is no reason to
+           make an operator's hands relearn where it is. */
+        expect(policy).toBeTruthy();
+        expect(policy.className).toContain("filter-menu-policy");
+        /* A menuitem, NOT a menuitemcheckbox. The items above it are members of
+           a set this browser narrows by; this one writes a setting on the
+           server, and announcing it as a checkbox in that group tells a screen
+           reader operator it is a sixth class. */
+        expect(policy.attributes.role).toBe("menuitem");
+        expect(policy.attributes["aria-checked"]).toBeUndefined();
+        expect(textOf(policy)).toContain("1 hidden reviewer");
+        expect(textOf(policy)).toContain("fleet-wide setting");
+        expect(policy.attributes.title).toContain("colleagues");
+      }));
+
+    // Closed, the bar carries no policy control of its own — it is inside the menu.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: false }));
+      const bar = domById.get("filter-bar");
+      expect(byFkey(bar, "session-kind:review")).toBeNull();
+      expect(byClass(bar, "filter-policy")).toBeNull();
+      /* …but the disclosure does not go with it. A hidden population one level
+         deep with nothing at the surface saying so is the same as not saying so:
+         the Class TRIGGER wears the mark, and its title carries the count and
+         the fact that the setting is the fleet's. */
+      const trigger = byFkey(bar, "class:menu");
+      expect(textOf(trigger)).toContain("Class");
+      expect(textOf(trigger)).toContain("⊘");
+      expect(trigger.attributes.title).toContain("1 reviewer");
+      expect(trigger.attributes.title).toContain("fleet");
+    });
+
+    // Showing them, the mark is gone — nothing is being withheld to disclose.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
+      expect(textOf(byFkey(domById.get("filter-bar"), "class:menu"))).not.toContain("⊘");
+    });
+  });
+
+  test("(FE4-D3) the Reviewer option appears exactly when the policy stops hiding them", () => {
+    /* The interplay needs no special case, and this is the pin that says so.
+       The working set EXCLUDES hidden reviewers, so while the policy hides them
+       the Reviewer class simply has nothing in it and is not offered; flip the
+       policy and the option appears with its count. A menu item that filtered
+       for a population the board had already removed would offer the operator a
+       guaranteed-empty board. */
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", provider: "codex", updatedAt, role: "orchestrator", task: "Ship it." });
+    const snap = classFleet(review, work);
+
+    const values = (showReviewWorkers: boolean) =>
+      M.lensOptions(classAxis(), classUi({ snap, showReviewWorkers }))
+        .map((o: { value: string; count: number }) => [o.value, o.count]);
+
+    expect(values(false)).toEqual([["orchestrator", 1]]);
+    expect(values(true)).toEqual([["reviewer", 1], ["orchestrator", 1]]);
+  });
+
+  test("(FE4-D3) the Class menu renders for the policy alone, so the disclosure cannot vanish", () => {
+    /* A one-option axis is furniture and does not render — that rule is what
+       keeps the bar honest. But the Class menu now carries the fleet's review
+       policy in its footer, and an axis that declined to render would take the
+       policy down with it: the reviewers would be hidden with no control
+       anywhere able to show them. */
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    // Hidden, the working set holds nothing at all — not one class, zero.
+    const snap = classFleet(review);
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: false }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeTruthy();
+    });
+
+    /* The mirror case, and it is not symmetric with the one above: the fleet is
+       SHOWING reviewers and there are none in the window. The policy still has
+       to be reachable, because otherwise the only way back to the fleet's
+       default would be to wait for a reviewer to appear — a setting an operator
+       turned on and cannot turn off. */
+    const plain = classFleet(agent({ id: "codex:w1", provider: "codex", updatedAt, task: "Ship it." }));
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap: plain, showReviewWorkers: true }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeTruthy();
+    });
+
+    /* And where there is no policy to state at all — the fleet is at its default
+       and there is nothing to hide — the ordinary rule holds: one class on the
+       wire is no choice, so the axis stays absent rather than rendering a control
+       whose only effect is to be turned back off. */
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap: plain, showReviewWorkers: false }));
+      expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeNull();
+    });
   });
 
   test("(3) the rename form and the usage panel keep their controls addressable", () => {

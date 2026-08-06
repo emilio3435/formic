@@ -4598,6 +4598,37 @@ function filterChip(label, active, onclick, opts = {}) {
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
+/* The class vocabulary, in the order the menu offers it, with the word each one
+   wears on screen.
+
+   Ordered by what the class MEANS rather than alphabetically: the fleet-shaped
+   answers first (who is being reviewed, who runs the fleet), then the
+   disciplines, then the remaining published roles, then the floor. The labels
+   are spelled here rather than borrowed from ROLE_LABELS because half of these
+   are not roles — `reviewer` is a session kind and `frontend`/`backend` are
+   specialties — and the two that overlap read differently on this axis:
+   "Frontend", not the roster caption "Frontend / designer".
+
+   This list and agentClassOf's precedence are two statements of one vocabulary
+   and nothing in the language keeps them together, so a test drives every branch
+   of the precedence and requires each answer to come back as a labeled option —
+   a class with no entry here would be dropped from the menu, which is a row
+   hidden behind a filter with no item able to un-hide it. */
+const AGENT_CLASSES = [
+  ["reviewer", "Reviewer"],
+  ["orchestrator", "Orchestrator"],
+  ["frontend", "Frontend"],
+  ["backend", "Backend"],
+  ["automation", "Automation"],
+  ["tester", "Tester"],
+  ["verifier", "Verifier"],
+  ["worker", "Worker"],
+  ["monitor", "Monitor"],
+  ["service", "Service"],
+  ["human", "Human"],
+  ["agent", "Agent"],
+];
+
 /* The lifecycle lens values, in the order the board stacks their sections. The
    value is the lens; the label SPELLS OUT what it encompasses, because "Waiting"
    alone was a word an operator had to already know the board's meaning of. */
@@ -4646,6 +4677,24 @@ const UNREPORTED = "";
    Each axis declares: where its state lives, what values the CURRENT WORKING SET
    offers, how a value matches an agent, and how to say it in English. */
 const LENS_AXES = [
+  {
+    /* Class leads, because it answers WHO the agent is — provider, model, span
+       and context are all questions about the same agent once you know that. It
+       also carries the fleet's review policy in its footer (see `footer`), which
+       is the one thing on this bar that is not a lens. */
+    key: "class",
+    stateKey: "facetClasses",
+    label: "Class",
+    allLabel: "All classes",
+    views: null,
+    options: (agents) => {
+      const present = new Set(agents.map((agent) => agentClassOf(agent)));
+      return AGENT_CLASSES.filter(([value]) => present.has(value))
+        .map(([value, label]) => ({ value, label, short: label.toLowerCase() }));
+    },
+    matches: (agent, value) => agentClassOf(agent) === value,
+    footer: (ui) => reviewPolicyFooter(ui),
+  },
   {
     key: "provider",
     stateKey: "facetProviders",
@@ -4789,6 +4838,12 @@ function lensOptions(axis, ui = state) {
    ship. */
 function lensApplies(axis, ui = state) {
   if ((ui[axis.stateKey] || []).length) return true;
+  /* An axis whose menu carries something OTHER than its own options renders
+     whenever that something has to be reachable. The Class menu holds the
+     fleet's review policy, and an axis that declined to render would take the
+     policy down with it — reviewers hidden with no control anywhere able to
+     show them, which is the one thing this bar may never ship. */
+  if (axis.footer && axis.footer(ui)) return true;
   if (axis.views && !axis.views.includes(ui.view)) return false;
   return lensOptions(axis, ui).filter((option) => option.count > 0).length >= 2;
 }
@@ -4799,12 +4854,20 @@ function lensApplies(axis, ui = state) {
    ("time"), the trigger carries the fkey the rest of the client addresses it by
    ("lookback:menu") — the fkey namespaces are the ones operators' focus restore
    and muscle memory were already built on, so they are kept rather than renamed
-   to match a new state field. */
-const FILTER_MENU_TRIGGERS = {
-  time: "lookback:menu",
-  provider: "provider:menu",
-  status: "status:menu",
-};
+   to match a new state field.
+
+   A lens menu's trigger is always `<axis key>:menu`, so it is DERIVED from the
+   axis table rather than listed here. This was a hand-kept map of three when the
+   bar had five lens menus, and Escape out of Model, Span or Context therefore
+   looked up nothing and dropped a keyboard operator on <body> — the one failure
+   the whole fkey contract exists to prevent. Adding Class would have made it
+   four names short of six; deriving it makes a new axis impossible to forget. */
+const FILTER_MENU_TRIGGERS = { time: "lookback:menu" };
+
+function filterMenuTriggerKey(menu) {
+  if (FILTER_MENU_TRIGGERS[menu]) return FILTER_MENU_TRIGGERS[menu];
+  return LENS_AXES.some((axis) => axis.key === menu) ? menu + ":menu" : "";
+}
 
 /* Put a keyboard operator back on the control they opened the menu from.
 
@@ -4829,7 +4892,7 @@ function setOpenFilterMenu(menu) {
 
 function closeFilterMenu() {
   if (!state.openFilterMenu) return;
-  const triggerKey = FILTER_MENU_TRIGGERS[state.openFilterMenu];
+  const triggerKey = filterMenuTriggerKey(state.openFilterMenu);
   state.openFilterMenu = "";
   render();
   focusFilterTrigger(triggerKey);
@@ -4868,9 +4931,13 @@ function filterMenuItem(triggerKey, item) {
   const role = item.role || "menuitemradio";
   return el("button", {
     type: "button",
-    class: "filter-menu-item" + (item.checked ? " is-active" : ""),
+    class: "filter-menu-item" + (item.class ? " " + item.class : "") + (item.checked ? " is-active" : ""),
     role,
-    "aria-checked": String(Boolean(item.checked)),
+    /* A plain `menuitem` is an ACTION and has no checked state to report. Giving
+       the review policy an aria-checked="false" would announce it as an unpicked
+       member of the class group it sits under — which is exactly the "it is a
+       lens" reading this whole control was moved to stop making. */
+    "aria-checked": role === "menuitem" ? null : String(Boolean(item.checked)),
     title: item.title || null,
     /* The count is a number sitting in its own column, which reads as "codex 5"
        when the accessible name is assembled from the text — a session count and
@@ -4959,6 +5026,7 @@ function lensTriggerLabel(axis, options, selected) {
 function lensFilterMenu(axis, ui) {
   const options = lensOptions(axis, ui);
   const selected = ui[axis.stateKey] || [];
+  const footer = axis.footer ? axis.footer(ui) : null;
   const items = [
     {
       fkey: axis.key + ":all",
@@ -4980,17 +5048,23 @@ function lensFilterMenu(axis, ui) {
       apply: () => toggleFacet(axis.stateKey, option.value),
     })),
   ];
+  const title = selected.length
+    ? "Narrowing by " + axis.label.toLowerCase() + ". Pick more to widen — within one filter the choices add up."
+    : "Narrow by " + axis.label.toLowerCase() + ". Counts are of the whole window, so they do not move as you filter.";
   return filterMenu({
     menu: axis.key,
     fkey: axis.key + ":menu",
-    label: lensTriggerLabel(axis, options, selected),
+    /* The mark rides on the CLOSED trigger, because the population it is about
+       is now one level deep. A menu that has to be opened before it will admit
+       that rows are missing is a menu that does not admit it. */
+    label: lensTriggerLabel(axis, options, selected) + (footer && footer.mark ? " " + footer.mark : ""),
     menuLabel: axis.label,
     active: selected.length > 0,
     open: ui.openFilterMenu === axis.key,
-    title: selected.length
-      ? "Narrowing by " + axis.label.toLowerCase() + ". Pick more to widen — within one filter the choices add up."
-      : "Narrow by " + axis.label.toLowerCase() + ". Counts are of the whole window, so they do not move as you filter.",
-    sections: [{ items }],
+    title: footer && footer.markTitle ? title + " " + footer.markTitle : title,
+    // The footer is its own section, so the divider above it is a boundary in
+    // the markup and not only in the CSS.
+    sections: footer ? [{ items }, { items: [footer.item] }] : [{ items }],
   });
 }
 
@@ -5097,34 +5171,53 @@ function timeFilterMenu(ui) {
   });
 }
 
-/* The review-worker policy, and the one control on this bar that is NOT a lens
-   and must not dress like one.
+/* The review-worker policy, and the one control on this bar that is NOT a lens.
 
-   It wore `filter-chip` and sat first in the row, so it read as a sixth
-   narrowing this browser was applying — which is false twice over. It is a
-   SERVER setting shared by every browser looking at this fleet, so turning it on
-   changes what a colleague sees; and it is a standing policy about which rows
-   the Board is for, not a question about the sessions in front of you.
+   It has been a chip and then a standalone `⊘ N reviewers hidden` fragment, and
+   in both shapes it stood in the row of things that narrow this board — which is
+   false twice over. It is a SERVER setting shared by every browser looking at
+   this fleet, so turning it on changes what a colleague sees; and it is a
+   standing policy about which rows the Board is FOR, not a question about the
+   sessions in front of you.
 
-   So it is a plain disclosure that states the count and its own reach, with a ⊘
-   rather than a pressed state: nothing here is "active" or "inactive", the fleet
-   is simply configured one way or the other. */
-function reviewPolicyControl(ui, reviews) {
+   So it moves inside the Class menu, where the population it governs is one of
+   the classes, and it renders there as a separated ACTION rather than a member
+   of the set above it. Two things keep it from simply disappearing at that
+   depth: `lensApplies` renders the Class menu whenever this footer exists, and
+   the closed trigger wears the ⊘ while anything is being withheld.
+
+   Returns null when the control would change nothing to say — no reviewers in
+   the window and the fleet already showing them. */
+function reviewPolicyFooter(ui) {
+  if (ui.view !== "board") return null;
   const showing = Boolean(ui.showReviewWorkers);
+  const reviews = reviewWorkerCount(ui);
+  if (!reviews && !showing) return null;
+  // Guarded by the line above: not showing, here, always means some are hidden.
+  const hidden = !showing;
   const noun = reviews + " reviewer" + (reviews === 1 ? "" : "s");
-  return el("button", {
-    type: "button",
-    class: "filter-policy" + (showing ? " is-showing" : ""),
-    dataset: { fkey: "session-kind:review" },
-    /* No aria-pressed. This is not a toggle reporting its own state — it is a
-       statement of the fleet's setting whose label already says which way it
-       falls, and a pressed state on top of that says it twice and disagrees
-       with itself half the time. */
-    title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
-    onclick: () => setShowReviewWorkers(!state.showReviewWorkers),
-  },
-    el("span", { class: "filter-policy-mark", "aria-hidden": "true", text: "⊘" }),
-    showing ? "showing " + noun : noun + " hidden");
+  return {
+    mark: hidden ? "⊘" : "",
+    markTitle: hidden
+      ? "⊘ " + noun + " hidden from the Board by the fleet's review setting."
+      : "",
+    item: {
+      /* The fkey it has always had. The control moved one level deep; that is no
+         reason to make an operator's hands, or their focus restore, relearn it. */
+      fkey: "session-kind:review",
+      /* A `menuitem`, not a `menuitemcheckbox`. Everything above it in this menu
+         is a member of the set the browser is narrowing by; this writes a
+         setting on the server, and announcing it as a checkbox in that group
+         would say the fleet's policy is a sixth class. */
+      role: "menuitem",
+      class: "filter-menu-policy",
+      label: (hidden
+        ? "⊘ Show " + reviews + " hidden reviewer" + (reviews === 1 ? "" : "s")
+        : "⊘ Hide routine reviewers") + " — fleet-wide setting",
+      title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
+      apply: () => setShowReviewWorkers(!state.showReviewWorkers),
+    },
+  };
 }
 
 function renderFilterBar(ui = state) {
@@ -5168,17 +5261,16 @@ function renderFilterBar(ui = state) {
   }
   bar.hidden = false;
   bar.setAttribute("aria-hidden", "false");
-  /* The tab strip is navigation. This is the one filter surface: the Board-only
-     review disclosure and the time lens live together here, while the collector
-     window below remains a server setting rather than a second filter. */
+  /* The tab strip is navigation. This is the one filter surface: the lenses and
+     the time control live together here, while the collector window below
+     remains a server setting rather than a second filter. */
   bar.append(el("span", { class: "filter-lead", text: "Filters" }));
-  const reviews = reviewWorkerCount(ui);
-  if (ui.view === "board" && reviews > 0) bar.append(reviewPolicyControl(ui, reviews));
-  /* The lenses: Provider · Status · Model · Span · Context, in that order and in
-     one flat row. Five closed triggers stand where fifteen open chips used to,
-     which is why this stays flat instead of nesting the last three behind a
-     "More" — a filter you have to go looking for is one operators stop knowing
-     they have.
+  /* The lenses: Class · Provider · Status · Model · Span · Context, in that
+     order and in one flat row. Class leads because it answers who the agent is,
+     and everything after it is a question about that same agent. Six closed
+     triggers stand where fifteen open chips used to, which is why this stays
+     flat instead of nesting the tail behind a "More" — a filter you have to go
+     looking for is one operators stop knowing they have.
 
      Each renders only where it has something to say: two or more populated
      options, or a selection the operator still needs a way to switch off. */
