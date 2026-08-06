@@ -11118,31 +11118,66 @@ describe("S1: the notification center is attention, and it never aggregates", ()
     expect(feed(snapOf([asking]))).toHaveLength(1);
   });
 
-  test("an unmeasurable wait is null, never a heartbeat and never zero", () => {
-    // hookLifecycleAt is the hook store's WRITE time; S0-T1 exists because it
-    // may be a heartbeat, and a heartbeat that reset dead time would make the
-    // oldest wait on the board read as the newest.
-    const noSince = feed(snapOf([blocked("codex:1", {
-      hookLifecycleAt: "2026-08-05T20:59:00.000Z", updatedAt: "2026-08-05T20:59:30.000Z",
-    })]));
-    expect(noSince[0].since).toBeNull();
-    // It reads blockedSince, and only blockedSince.
-    const measured = feed(snapOf([blocked("codex:1", { blockedSince: "2026-08-05T19:56:00.000Z" })]));
-    expect(measured[0].since).toBe("2026-08-05T19:56:00.000Z");
-    // A server instant AHEAD of this browser is clock skew, not a negative wait.
-    const skewed = feed(snapOf([blocked("codex:1", { blockedSince: "2026-08-05T21:30:00.000Z" })]));
-    expect(skewed[0].since).toBeNull();
+  test("a handoff carries no dead time, and no clock can sneak in as one", () => {
+    /* S0-T1's ruling, pinned so it cannot be quietly reopened.
+       docs/S0-T1-DEAD-TIME-MEASUREMENT.md measured every candidate for "when did
+       this person-block begin". hookLifecycleAt advanced 01:38:51 → 01:39:16 →
+       01:40:41 on a session that stayed needsInput the whole time — a write
+       clock. The hook notification repeated mid-wait, so it would RESET the age
+       during one block. Stop and UserPromptSubmit mark other boundaries, and the
+       cmux journal rolls away. Dead time is DROPPED, not deferred.
+
+       This test fails the moment any of those is wired in, which is the point:
+       a heartbeat here makes the oldest wait on the board read as the newest. */
+    const clocks = {
+      hookLifecycleAt: "2026-08-05T20:59:00.000Z",
+      updatedAt: "2026-08-05T20:59:30.000Z",
+      taskStateAt: "2026-08-05T20:00:00.000Z",
+      // Even if a later lane revives the field, it is not a source any more.
+      blockedSince: "2026-08-05T19:56:00.000Z",
+    };
+    const [item] = feed(snapOf([blocked("codex:1", clocks)]));
+    expect(item.since).toBeNull();
+    for (const clock of Object.values(clocks)) expect(item.since, clock).not.toBe(clock);
+    // …and nothing downstream fabricates a zero out of the absence.
+    expect(String(item.since)).not.toBe("0");
+    expect(M.notificationPanelModel(snapOf([blocked("codex:1", clocks)]), [], NOW, M.NOTIFY_DEPS))
+      .not.toHaveProperty("standby");
   });
 
-  test("the longest wait leads, and an unmeasured wait never outranks a measured hour", () => {
+  test("a record's own age survives, because that one is actually measured", () => {
+    /* The distinction the ruling turns on. A person's dead time is unobtainable;
+       a RECORD's age is a durable server fact — when the finding opened, when the
+       investigation was created — and those keep their timestamps. */
+    const withIssue = snapOf([quiet("codex:9")], {
+      issues: [issue({ lifecycle: { state: "open", openedAt: "2026-08-05T19:56:00.000Z" } })],
+    });
+    expect(feed(withIssue)[0].since).toBe("2026-08-05T19:56:00.000Z");
+    const [inv] = feed(snapOf([]), [{
+      issueId: "inv:1", id: "q1", state: "running", headline: "H",
+      createdAt: "2026-08-05T18:00:00.000Z",
+    }]);
+    expect(inv.since).toBe("2026-08-05T18:00:00.000Z");
+    // A record instant AHEAD of this browser is clock skew, not a negative age.
+    const skewed = snapOf([quiet("codex:9")], {
+      issues: [issue({ lifecycle: { state: "open", openedAt: "2026-08-05T21:30:00.000Z" } })],
+    });
+    expect(feed(skewed)[0].since).toBeNull();
+  });
+
+  test("with no wait to sort on, the order is stable rather than arbitrary", () => {
+    /* Blocking first, then the watch tier — and inside a tier, ids, because
+       every handoff now has a null `since`. Stable matters: a list that
+       reshuffled on each four-second paint would be unreadable exactly while
+       something is waiting. */
     const snap = snapOf([
-      blocked("codex:new", { blockedSince: "2026-08-05T20:49:00.000Z" }),
-      blocked("codex:none"),
-      blocked("codex:old", { blockedSince: "2026-08-05T19:56:00.000Z" }),
-      noticed("codex:watch"),
+      blocked("codex:c"), noticed("codex:watch"), blocked("codex:a"), blocked("codex:b"),
     ]);
-    expect(feed(snap).map((i: { id: string }) => i.id))
-      .toEqual(["agent:codex:old", "agent:codex:new", "agent:codex:none", "agent:codex:watch"]);
+    const once = feed(snap).map((i: { id: string }) => i.id);
+    expect(once).toEqual(["agent:codex:a", "agent:codex:b", "agent:codex:c", "agent:codex:watch"]);
+    // Same snapshot, later clock: identical order.
+    expect(M.notificationFeed(snap, [], NOW + 60_000, M.NOTIFY_DEPS).map((i: { id: string }) => i.id))
+      .toEqual(once);
   });
 });
 

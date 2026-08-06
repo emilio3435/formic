@@ -145,12 +145,23 @@ function handoffItem(agent, program, attentionClass, now, programNameFor) {
     impact: blocking
       ? `${name} is stopped and cannot continue until you answer.`
       : `${name} has gone quiet. Nothing is waiting on you; the watcher is reporting it.`,
-    /* blockedSince ONLY. hookLifecycleAt is the hook store's WRITE time and
-       S0-T1 exists precisely because it may be a heartbeat — a heartbeat that
-       reset a dead-time reading would make the oldest wait on the board look
-       like the newest. Until be-dwell measures and ships blockedSince this is
-       null and the row shows no duration. */
-    since: measuredSince(agent.blockedSince, now),
+    /* PERMANENTLY NULL, and that is a ruling rather than a gap.
+
+       docs/S0-T1-DEAD-TIME-MEASUREMENT.md measured every candidate for "when
+       did this person-block begin" and none of them is an entry edge:
+       `hookLifecycleAt` advanced 01:38:51 → 01:39:16 → 01:40:41 on a session
+       that stayed needsInput throughout, so it is a write clock; the hook
+       Notification repeats mid-wait, so it would RESET the age during a single
+       block; Stop and UserPromptSubmit mark turn and return boundaries, not
+       entry; and the cmux journal rolls away, so it is not durable history.
+
+       So dead time is dropped, not deferred. The one thing this field may never
+       become is a heartbeat, because a heartbeat here makes the oldest wait on
+       the board read as the newest — which is worse than showing no age at all.
+       An item's own age still exists where it is genuinely measured: a finding
+       has an openedAt and an investigation has a createdAt, and both are
+       durable server facts about a record rather than guesses about a person. */
+    since: null,
     route: { kind: "agent", id: agent.id },
   };
 }
@@ -385,33 +396,20 @@ export function blockingCount(items) {
 
 const VERDICT = { blocked: "Waiting on you", noticed: "Watch", clear: "All clear" };
 
-/* Total time people have been waiting, or the reason we cannot say.
+/* The standby hero the rev-2 mockup put in the largest type on this panel is
+   GONE, and no reading replaces it.
 
-   Withheld — not zeroed, not partial — the moment ANY waiting session lacks a
-   measured `blockedSince`. A sum over the sessions that happen to carry one
-   would read like a fleet total and be an arbitrary subset of it, and the
-   number sits in the largest type on the panel. `pulse.standbyMs` wins when
-   be-dwell ships it; until then this computes the same figure from the rows and
-   withholds under the same rule.
+   It was the one number here with no measurable source. S0-T1 tried every
+   candidate for the instant a person-block begins and found a write clock, a
+   notification that repeats mid-wait, two boundaries that mark something else,
+   and a journal that rolls away — so the sum of dead time across the fleet
+   cannot be computed at all, and `pulse.standbyMs` is not shipping.
 
-   The count is not withheld with it. A count is honest when a duration is
-   not. */
-function standbyReading(blocking, snap, now) {
-  const pulse = (snap && snap.pulse) || {};
-  if (Number.isFinite(pulse.standbyMs)) {
-    return { text: fmtElapsed(pulse.standbyMs), withheld: false, reason: "" };
-  }
-  const unmeasured = blocking.filter((item) => !item.since).length;
-  if (unmeasured) {
-    return {
-      text: "",
-      withheld: true,
-      reason: `Standby unmeasured on ${unmeasured} of ${blocking.length} waiting session${blocking.length === 1 ? "" : "s"} — no measured start.`,
-    };
-  }
-  const total = blocking.reduce((sum, item) => sum + Math.max(0, now - Date.parse(item.since)), 0);
-  return { text: fmtElapsed(total), withheld: false, reason: "" };
-}
+   Deliberately not replaced by a withheld-with-a-reason slot either. That was
+   the right treatment while the field was merely unmeasured; once the answer is
+   "this quantity is not obtainable from these sources", a permanent apology in
+   the hero position is furniture. The count leads instead — a count is honest
+   when a duration is not, and it is already the lede. */
 
 /* Program groups, in the order their longest wait started. The feed is already
    sorted oldest-first, so first-seen order IS that order and no second sort can
@@ -469,7 +467,6 @@ export function notificationPanelModel(snap, queueItems = [], now = Date.now(), 
       watching.length ? `${watching.length} quiet` : "",
       investigations.length ? `${investigations.length} running below` : "",
     ].filter(Boolean).join(" · "),
-    standby: standbyReading(blocking, snap, now),
     groups: groupByProgram(blocking),
     watching,
     investigations,

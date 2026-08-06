@@ -1284,7 +1284,7 @@ globalThis.TheAntHill = {
   // hoisted block for the same TDZ reason CONN_LABELS does; it is exported from
   // the test seam at the foot of the file.
   attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
-  feedTone, blockingCount, blockingAgentIds,
+  notificationPanelModel, feedTone, blockingCount, blockingAgentIds,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
@@ -2438,7 +2438,6 @@ function notifyPanelPaintSig(model, open) {
     open ? "1" : "0",
     model.tone,
     String(model.count),
-    model.standby.text + "|" + model.standby.reason,
     model.lede + "|" + model.rest,
     // Row identity AND the sentence each row is showing: an agent that changes
     // what it is asking must repaint even though the roster did not move.
@@ -2487,7 +2486,11 @@ function notifyRow(item) {
         "aria-label": item.impact + " In " + (item.source.programName || "an unnamed program") + ". Opens the session.",
         onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
       }, item.impact),
-      el("span", { class: "notify-row-time", text: notifyWaitText(item) })),
+      /* A handoff row carries no age: `since` is permanently null for one, per
+         S0-T1. The node is omitted rather than rendered empty — an empty slot
+         beside three rows reads as a missing reading, and there is no reading
+         missing. */
+      notifyWaitText(item) ? el("span", { class: "notify-row-time", text: notifyWaitText(item) }) : null),
     el("div", { class: "notify-row-meta" },
       el("span", { class: "notify-row-trace", text: trace }),
       notifyRowActions(item)),
@@ -2496,8 +2499,13 @@ function notifyRow(item) {
       : null);
 }
 
-/* The wait, or nothing. Never "0m" for a duration nobody measured — that is the
-   S0-T1 rule at the one place an operator would read it as a fact. */
+/* How long this RECORD has stood — a finding's openedAt, an investigation's
+   createdAt. Both are durable server facts about a row in a store.
+
+   Never a person's dead time: S0-T1 measured that no source can say when a
+   block began, so a handoff item's `since` is null and this returns nothing for
+   one. Never "0m" either — a zero here would be read as "just now", which is
+   the opposite of what an unmeasurable age means. */
 function notifyWaitText(item) {
   if (!item.since) return "";
   const ms = Date.now() - Date.parse(item.since);
@@ -2532,16 +2540,16 @@ function renderNotificationCenter() {
   panel.textContent = "";
   if (!open) return;
 
+  /* No standby hero. The rev-2 mockup put a fleet dead-time total in the
+     largest type here and S0-T1 measured that every candidate source for it is
+     a write clock, a mid-wait repeat, or a journal that rolls away — so the
+     number is not obtainable and the slot is gone rather than apologised for.
+     The count leads, which it already did. */
   panel.append(el("div", { class: "notify-panel-head" },
     el("div", {},
       el("span", { class: "notify-eyebrow", text: model.verdict }),
       el("h2", { id: "notify-panel-title", class: "notify-lede", text: model.lede }),
-      model.rest ? el("p", { class: "notify-rest", text: model.rest }) : null),
-    el("div", { class: "notify-hero" },
-      model.standby.withheld
-        ? el("p", { class: "notify-hero-withheld", text: model.standby.reason })
-        : el("span", { class: "notify-hero-value mono", text: model.standby.text }),
-      model.standby.withheld ? null : el("span", { class: "notify-hero-label", text: "standby" }))));
+      model.rest ? el("p", { class: "notify-rest", text: model.rest }) : null)));
 
   for (const group of model.groups) {
     panel.append(el("div", { class: "notify-group" },

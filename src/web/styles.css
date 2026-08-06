@@ -3399,20 +3399,13 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .notify-lede { margin: 0.25rem 0 0; font: 650 1rem/1.2 var(--font-ui); }
 .notify-rest { margin: 0.32rem 0 0; font: 400 0.7rem/1 var(--font-mono); color: var(--faint); }
-.notify-hero { flex: none; text-align: right; max-width: 17ch; }
-.notify-hero-value { display: block; font: 700 1.75rem/1 var(--font-mono); color: var(--ember); letter-spacing: -0.02em; }
-.notify-hero-label {
-  display: block;
-  margin-top: 0.25rem;
-  font: 600 0.56rem/1 var(--font-mono);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-/* An unmeasurable duration is withheld WITH ITS REASON, never zeroed. The
-   number that would go here is the largest type on the panel; guessing it is
-   the one mistake this surface cannot afford. */
-.notify-hero-withheld { margin: 0; font: 400 0.7rem/1.35 var(--font-ui); color: var(--faint); }
+
+/* The rev-2 mockup's standby hero stood here — a fleet dead-time total in the
+   largest type on the panel. It is gone, and its rules are deleted rather than
+   left orphaned, because S0-T1 measured that the quantity is not obtainable
+   from any source this board has: the hook clock advances mid-wait, the hook
+   notification repeats mid-wait, and the cmux journal rolls away. The head now
+   carries the verdict, the count and the tally, all of which are measured. */
 
 .notify-group {
   display: flex;
@@ -3591,16 +3584,18 @@ body.feed-frozen .programs { opacity: 0.62; }
   }
 }
 
-/* Touch has no hover, so nothing here may depend on one. The actions already
-   stand at rest; this is the narrow-window layout, where an absolutely
-   positioned 452px panel would sit half off the screen. */
+/* Touch has no hover, so nothing here may depend on one — the actions already
+   stand at rest, which is the whole reason the evidence peek and the Focus/Reply
+   pair are not hover-revealed.
+
+   The narrow layout stays ABSOLUTE rather than switching to fixed. A fixed
+   dropdown stops moving with the page, so it hangs over the board while the
+   button that opened it scrolls away — the panel and its control have to stay
+   one object. Width is already clamped to the viewport above; this only widens
+   the gutter and shortens it so it fits a phone. */
 @media (max-width: 760px) {
   .notify-panel {
-    position: fixed;
-    left: 0.75rem;
-    right: 0.75rem;
-    top: auto;
-    width: auto;
+    width: min(452px, calc(100vw - 1.5rem));
     max-height: 70vh;
   }
 }
