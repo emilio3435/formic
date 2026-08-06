@@ -175,6 +175,35 @@ function handoffItem(agent, program, attentionClass, now, programNameFor) {
   };
 }
 
+/* The one line with a FACT in it.
+
+   A degraded-source issue arrives carrying three layers of category and one
+   layer of evidence, and until now the item took a category:
+
+     title             "Cursor collection is degraded"
+     summary           "1 collection problem makes Cursor session data
+                        potentially incomplete."
+     technicalDetails  ["cursor GUI conversations: unable to open database file"]
+
+   Only the third says what is wrong. §4.2 requires evidence to be a plain-English
+   whole sentence, and shipping the summary here put a category where the evidence
+   belongs — so the operator read "Whoops" three times and never once learned that
+   a database would not open. technicalDetails rendered only in the drawer, three
+   clicks from the chip that was complaining.
+
+   Read off the FIELD, not off today's wording: the collectors are being taught to
+   phrase these as whole sentences naming the population they lost, and this picks
+   that up for free when it lands. Multiple faults join rather than truncate to the
+   first, because "which one" is exactly what a count already failed to say.
+
+   Falls back to the summary when a source ships no detail — a category is a poor
+   evidence line but an empty one is worse. */
+function faultEvidence(issue) {
+  const details = Array.isArray(issue.technicalDetails) ? issue.technicalDetails : [];
+  const said = details.filter((d) => typeof d === "string" && d.trim()).map((d) => d.trim());
+  return said.join(" · ") || issue.summary || issue.title || "";
+}
+
 function dataflowItem(issue, snap, now, programNameFor, impactFor) {
   const life = issueLifecycle(issue);
   const affected = (issue.affectedAgentIds || []).map((id) => agentsById(snap).get(id)).filter(Boolean);
@@ -192,7 +221,10 @@ function dataflowItem(issue, snap, now, programNameFor, impactFor) {
       }
       : { collector: issue.kind === "system" ? "control-plane" : "" },
     lifecycle: life.state,
-    evidence: conciseText(issue.summary || issue.title || "", EVIDENCE_LIMIT),
+    evidence: conciseText(faultEvidence(issue), EVIDENCE_LIMIT),
+    /* The pairing the raw string needs. `impact` names WHICH sessions the fault
+       costs the operator and `since` names WHEN it started, so the fault sentence
+       never stands alone as a library error with no consequence attached. */
     impact: impactFor(issue, snap),
     since: measuredSince(life.verificationStartedAt || life.openedAt, now),
     /* The same severity→drawer split findingFromIssue already uses, so an item
@@ -271,8 +303,26 @@ export function hasCurrentImpact(item, snap) {
   /* Stale-without-current-impact. An EMPTY affected list is not stale — it is
      the system-wide case ("not tied to a specific agent"), which is exactly the
      dataflow fault this surface exists to carry. Only a finding that named
-     agents and whose agents are all gone has lost its impact. */
-  if (ids.length > 0 && liveAffected === 0) return false;
+     agents and whose agents are all gone has lost its impact.
+
+     "All gone" has to mean the board CAN SEE them and they have ended — not that
+     it cannot see them at all. Measured on a board with a broken Cursor
+     collector: the issue named 91 sessions, every one absent from the snapshot
+     BECAUSE the collector that would have enumerated them had failed. That made
+     liveAffected 0, and the one item explaining the gap was filed to history by
+     the gap itself. The operator was left with a chip reading "Readings
+     degraded" and a panel with nothing in it.
+
+     So the test is agents the index KNOWS. A finding whose named agents are
+     present and terminal has genuinely outlived its subject — the abandoned
+     worktree advisory, the archived session — and is stale. A finding none of
+     whose agents the board can resolve has not outlived anything; it has lost
+     sight of the population, which for a source fault IS the impact. That is
+     the same reasoning the empty-list case above already applies, reached from
+     the other side: an unresolvable list is no more a stale list than an empty
+     one. A source that recovers leaves issuesOf and is cleared above. */
+  const knownAffected = ids.filter((id) => index.has(id)).length;
+  if (ids.length > 0 && liveAffected === 0 && knownAffected > 0) return false;
   return true;
 }
 

@@ -3533,7 +3533,24 @@ body.feed-frozen .programs { opacity: 0.62; }
   text-align: left;
 }
 .notify-quiet:hover { background: var(--sand); color: var(--ink); }
-.notify-quiet-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The clamp moved DOWN a level. This used to be the single clamped line itself;
+   it now holds the impact line and, when the row has one, the fault line beneath
+   it — so each line ellipsises on its own instead of the pair being truncated as
+   one run of text. */
+.notify-quiet-name { flex: 1; min-width: 0; }
+.notify-quiet-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The fault sentence: quieter than the consequence above it, because the
+   operator reads what it costs them first and what the collector said second. */
+.notify-quiet-fault {
+  display: block;
+  margin-top: 0.12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  color: var(--faint);
+}
+.notify-quiet:hover .notify-quiet-fault { color: var(--muted); }
 .notify-quiet-prog { font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
 .notify-quiet-time { flex: none; font: 400 0.7rem/1 var(--font-mono); color: var(--faint); white-space: nowrap; }
 

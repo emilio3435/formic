@@ -936,6 +936,30 @@ function completionWindowText(momentum) {
     + (full ? "this hour" : "in " + fmtElapsed(momentum.observedWindowMs) + " observed");
 }
 
+/* WHICH sources are down, by name, from the per-provider map the wire already
+   carries. A count answers "how many" and the operator's question is "which one",
+   because the answer decides whether the sessions they are watching are the ones
+   that went missing.
+
+   Degrades to the count when byProvider is absent rather than asserting names it
+   does not have — an older snapshot ships the tallies without the breakdown. */
+function degradedSourceNames(source) {
+  const n = source.degraded;
+  const count = `${n} degraded source${n === 1 ? "" : "s"}`;
+  const by = source && source.byProvider;
+  const down = by ? Object.keys(by).filter((p) => by[p] && by[p].healthy === false) : [];
+  if (!down.length) return count;
+  const names = down.map(providerLabel);
+  const listed = names.length === 1
+    ? names[0]
+    : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  /* Name first, count second. The count is what web-client.test.ts pins as this
+     line's contract and it is genuinely worth keeping — "how many" and "which"
+     are different questions and the operator asks both. Leading with the name is
+     what was missing. */
+  return `${listed} · ${count}`;
+}
+
 function summaryWidgetData(id, snap, conn = "live", display = "percent", queueItems = state.queueItems, fetchFailed = state.fetchFailed, queueError = state.queueError) {
   if (id === "health") {
     // Merged system + source-health + routing-health verdict. OK renders as a
@@ -1034,8 +1058,19 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
                 ? (errors === 1
                   ? control.errors[0]
                   : `${control.errors[0]} (+${errors - 1} more)`)
+              /* NAMES the source and says where the fault sentence is.
+                 This branch used to read "1 degraded source · 0 stale · 0
+                 errors" — three counts and no cause. It is the line Emilio was
+                 looking at when he said the indicator "just says Whoops": the
+                 chip knew a source was down and would not say which, while the
+                 collector's own sentence sat unrendered on the issue.
+
+                 The chip stays a qualifier and still never links — the seam
+                 holds — so it names the source and points at the surface that
+                 has the sentence, rather than leaving the operator to hunt for
+                 a panel they have no reason to suspect. */
               : source && source.degraded > 0
-                ? `${source.degraded} degraded source${source.degraded === 1 ? "" : "s"} · ${stale} stale · ${errors} error${errors === 1 ? "" : "s"}`
+                ? `${degradedSourceNames(source)} — the collector's own words are in Notifications.`
                 : "Source or control evidence needs review.",
       // An advisory is not an alarm: it takes its own tone so the strip shrinks
       // it to a micro cell instead of sizing it like a blocked control plane.
@@ -2474,9 +2509,32 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      the generic sublabel after it says cmux is unreachable twice in one line.
      Seen on the live board: "cmux unreachable — Focus and Send cannot route.
      cmux unreachable — terminal titles and Focus/Send stay offline." */
+  /* THE SPECIFIC SENTENCE WINS — which is what the comment above always said,
+     applied the right way round. This used to blank problemText whenever a
+     severityDetail existed, so the specific line lost to the generic one on every
+     degraded board. Emilio read the result as "it just says Whoops": the chip
+     printed "The board is usable; evidence needs tidying" and swallowed "Cursor
+     is not reporting cleanly — the collector's own words are in Notifications."
+
+     The duplication that rule was written for is still handled, and better: the
+     cmux case printed severityDetail AND sublabel saying the same thing twice.
+     Now exactly one sentence prints, and it is the more specific one. The generic
+     severity blurb is the fallback for a state with nothing better to say. */
+  /* ADVISORY is the one severity whose detail is a constant. blocking and stale
+     both override theirs with a sentence derived from the actual fault ("cmux
+     unreachable — Focus and Send cannot route", "Last refresh failed — showing
+     the previous good snapshot"), and those beat any sublabel. Advisory's is a
+     fixed string that describes the class and never the cause, so there it is
+     the sublabel that carries the information and the constant that should give
+     way. Blanking problemText whenever ANY severityDetail existed made the
+     generic case win too, which is what Emilio read as "it just says Whoops". */
+  const genericSeverity = data.severityKey === "advisory";
   const problemText = (remedy && remedy.problem)
-    || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
-  const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
+    || (reason ? reason.title
+      : genericSeverity
+        ? (data.sublabel || data.severityDetail)
+        : (data.severityDetail || data.sublabel));
+  const lead = "";
   /* The finding-link branch stood here — two buttons routing into the inspector,
      landed at 4bcbd84 by a concurrent lane. It is removed with the card that
      carried it, and the reason is the seam rather than the code: THE HEADER
@@ -2771,6 +2829,10 @@ function notifyWaitText(item) {
    it is the sentence read INSTEAD of opening the drawer, and it is not visible
    on this row, so it extends the name rather than contradicting it. */
 function notifyQuietRow(item) {
+  /* Evidence earns its own line only when it is not a restatement of the impact
+     the row already shows. Compared on content rather than on kind, so a future
+     item type gets the right treatment without this function learning about it. */
+  const showsFault = Boolean(item.evidence) && item.evidence.trim() !== item.impact.trim();
   const visible = (item.source.programName ? item.source.programName + " · " : "") + item.impact;
   return el("button", {
     type: "button", class: "notify-quiet",
@@ -2779,9 +2841,22 @@ function notifyQuietRow(item) {
     onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
   },
     el("span", { class: "notify-quiet-name" },
-      item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
-      item.source.programName ? " · " : null,
-      item.impact),
+      el("span", { class: "notify-quiet-line" },
+        item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
+        item.source.programName ? " · " : null,
+        item.impact),
+      /* THE FACT, on screen. A quiet row used to put evidence in the accessible
+         name only, so a dataflow item — which always lands in Watching — could
+         carry "cursor GUI conversations: unable to open database file" and show
+         the operator nothing but a consequence sentence. That is the surface
+         saying Whoops: three layers of category rendered, the one line with a
+         fault in it withheld.
+
+         Only when it ADDS something. When evidence and impact say the same thing
+         — which is every handoff row, where both derive from the same signal —
+         a second line would be the row repeating itself. A span, not a <p>:
+         this is inside a <button>, which may hold phrasing content only. */
+      showsFault ? el("span", { class: "notify-quiet-fault" }, el("q", { text: item.evidence })) : null),
     el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
 }
 
