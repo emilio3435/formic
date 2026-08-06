@@ -173,19 +173,25 @@ export const CONTEXT_SPREAD_KEY = "mtn3-contextSpread";
 
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
-  "needs-you", "momentum", "burn", "context-peak", "health",
+  "momentum", "burn", "context-peak", "health",
 ]);
 export const WIDGET_CATALOG = Object.freeze([
-  /* "Findings", not "Needs you". This card counts the whole findings collection
-     — collector faults, policy drift, and agents waiting — while the tab counts
-     agents waiting alone. Sharing one phrase across two populations is what let
-     the rail read "NEEDS YOU 1 finding" beside a tab reading "Needs you 0" and
-     a headline reading "Nothing needs you". Two populations, two words; the id
-     stays so saved layouts survive. (Render-first audit §1.) */
-  { id: "needs-you", label: "Findings", required: true },
+  /* The "Findings" card stood first here and is gone.
+     The header is CONFIDENCE — continuous measured quantities about the fleet,
+     each carrying its own provenance — and a count of to-dos is not one of
+     those. It belonged to attention, which now has a home of its own, and the
+     header's rule is the seam: it never links and it states no count of
+     problems. See RETIRED_WIDGET_IDS below for what happens to a saved layout
+     that still names it. */
   { id: "momentum", label: "Momentum" },
   { id: "burn", label: "Burn" },
   { id: "context-peak", label: "Context peak" },
   { id: "health", label: "Health" },
 ]);
+/* Ids that were real once and are not offered any more. A stored layout naming
+   one is a preference from an older build, not corruption, so it is migrated by
+   dropping the retired entry and keeping the operator's ordering of the rest —
+   the LEGACY_VIEW_ALIASES treatment above, where a saved landing view whose
+   vocabulary moved lands on the view that now contains what it asked for. */
+export const RETIRED_WIDGET_IDS = Object.freeze(["needs-you"]);
 export const WIDGET_IDS = new Set(WIDGET_CATALOG.map((widget) => widget.id));

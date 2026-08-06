@@ -1036,13 +1036,15 @@ describe("summary status and widgets", () => {
     expect(findings.length).toBe(1);
     expect(waiting.length).toBe(0);
 
-    /* The rail counts findings and must not spend the tab's phrase on them. */
-    const card = M.summaryWidgetData("needs-you", snap);
-    expect(card.value).toBe("1");
-    expect(card.unit).toBe("finding");
-    const railLabel = M.WIDGET_CATALOG.find((w: { id: string }) => w.id === "needs-you")?.label;
-    expect(railLabel).toBe("Findings");
-    expect(railLabel?.toLowerCase()).not.toContain("needs you");
+    /* The rail used to count findings under the label "Findings", chosen so it
+       would not spend the tab's phrase on a different population. S2-T1 settles
+       that argument by removing the count: the header carries no card for this
+       at all, and the finding is an item in the notification center with its own
+       evidence and route. */
+    expect(M.WIDGET_CATALOG.find((w: { id: string }) => w.id === "needs-you")).toBeUndefined();
+    const items = M.notificationFeed(snap, [], Date.now(), M.NOTIFY_DEPS);
+    expect(items.map((i: { id: string }) => i.id)).toEqual(["system:collector-errors"]);
+    expect(items[0].kind).toBe("dataflow");
 
     /* And the all-clear is gated on the COLLECTION, not on the row list. With a
        finding open it must not render, however empty the Alerts view is. */
@@ -1193,50 +1195,72 @@ describe("summary status and widgets", () => {
     expect(M.contextDisplayValue({ ...noWindow, contextWindow: 258_400 }, "percent")).toBe("18%");
   });
 
-  test("keeps the 5-widget Pulse catalog, needs-you pin, and persisted order valid", () => {
-    expect(M.DEFAULT_WIDGET_IDS).toEqual(["needs-you", "momentum", "burn", "context-peak", "health"]);
+  test("the header states no count of problems: Findings is not in the catalog", () => {
+    /* S2-T1. The header is confidence — continuous measured quantities, each
+       with its own provenance — and a count of to-dos is not one of those. The
+       Findings card is retired to the notification center, where each of those
+       findings is an item with evidence, impact and a route. */
+    expect(M.DEFAULT_WIDGET_IDS).toEqual(["momentum", "burn", "context-peak", "health"]);
     expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
-      "needs-you", "momentum", "burn", "context-peak", "health",
+      "momentum", "burn", "context-peak", "health",
     ]);
+    expect(M.WIDGET_CATALOG.some((w: { id: string }) => w.id === "needs-you")).toBe(false);
+    // Nothing is `required` any more; the pin existed only for Findings.
+    expect(M.WIDGET_CATALOG.filter((w: { required?: boolean }) => w.required)).toEqual([]);
     expect(M.WIDGET_STORAGE_KEY).toBe("mtn3-summary-widgets");
-    expect(M.parseWidgetPreference(JSON.stringify(["needs-you", "burn", "health"]))).toEqual(["needs-you", "burn", "health"]);
-    expect(M.parseWidgetPreference("not-json")).toEqual(M.DEFAULT_WIDGET_IDS);
-    // Old "system"-first stored preferences (and any preference not pinned on
-    // needs-you) fall through the existing fallback-to-defaults path — the
-    // retired ids are simply unknown to the new catalog, no bespoke migration.
+  });
+
+  test("a saved layout naming the retired card is migrated, not thrown away", () => {
+    /* The LEGACY_VIEW_ALIASES treatment: a stored preference from an older build
+       is a choice, not corruption. Resetting the whole order because ONE entry
+       retired would discard an arrangement the operator deliberately made. */
+    expect(M.parseWidgetPreference(JSON.stringify(["needs-you", "burn", "health"])))
+      .toEqual(["burn", "health"]);
+    expect(M.normalizeWidgetIds(["needs-you", "context-peak", "momentum"]))
+      .toEqual(["context-peak", "momentum"]);
+    // A layout that was ONLY the retired card has nothing left to honour.
+    expect(M.normalizeWidgetIds(["needs-you"])).toEqual(M.DEFAULT_WIDGET_IDS);
+
+    // Genuine corruption still resets: unknown ids, duplicates, non-strings, junk.
     expect(M.normalizeWidgetIds(["system", "attention", "context-peak"])).toEqual(M.DEFAULT_WIDGET_IDS);
-    expect(M.normalizeWidgetIds(["burn", "needs-you"])).toEqual(M.DEFAULT_WIDGET_IDS);
-    expect(M.normalizeWidgetIds(["needs-you", "burn", "burn"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds(["burn", "burn"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.normalizeWidgetIds([7, "burn"])).toEqual(M.DEFAULT_WIDGET_IDS);
+    expect(M.parseWidgetPreference("not-json")).toEqual(M.DEFAULT_WIDGET_IDS);
   });
 
-  test("reorders selectable widgets while keeping the needs-you verdict pinned first", () => {
+  test("every widget is movable now that nothing is pinned first", () => {
+    /* The reorder guards used to refuse index 0 because Findings was required
+       there. With the pin gone they would have silently frozen whichever widget
+       happened to land first — a rule left behind by the thing it protected. */
     const defaults = M.DEFAULT_WIDGET_IDS;
-    expect(M.reorderWidgetIds(defaults, "momentum", -1)).toEqual(defaults); // already the first movable slot
     expect(M.reorderWidgetIds(defaults, "burn", -1)).toEqual([
-      "needs-you", "burn", "momentum", "context-peak", "health",
+      "burn", "momentum", "context-peak", "health",
     ]);
-    expect(M.reorderWidgetIds(defaults, "needs-you", 1)).toEqual(defaults); // the pin never moves
-    expect(M.reorderWidgetIds(["needs-you", "momentum", "health"], "health", -1)).toEqual([
-      "needs-you", "health", "momentum",
+    expect(M.reorderWidgetIds(defaults, "momentum", 1)).toEqual([
+      "burn", "momentum", "context-peak", "health",
     ]);
+    // The ends still hold: nothing walks off either edge of the list.
+    expect(M.reorderWidgetIds(defaults, "momentum", -1)).toEqual(defaults);
+    expect(M.reorderWidgetIds(defaults, "health", 1)).toEqual(defaults);
   });
 
-  test("needs-you counts active interventions and advisories once, with a top-2 title sublabel", () => {
+  test("the retired card's data branch is gone, and asking for it yields nothing", () => {
     const snap = snapshot({
       issues: [
         { id: "system:1", kind: "system", severity: "error", title: "Control failure", summary: "s", affectedAgentIds: [] },
         { id: "system:2", kind: "system", severity: "warning", title: "Stale source", summary: "s", affectedAgentIds: [] },
       ],
     });
+    /* attentionSummary survives — the notification center and the calm predicate
+       both still need to know whether anything is open. What is gone is the
+       header CARD that turned it into a metric. */
     expect(M.attentionSummary(snap)).toEqual({ count: 2, interventions: 1, advisories: 1 });
     const data = M.summaryWidgetData("needs-you", snap);
-    expect(data).toMatchObject({ value: "2", unit: "findings", tone: "hot" });
-    expect(data.sublabel).toBe("Control failure · Stale source");
-    expect(data.findings.map((finding: { kind: string; id: string; title: string }) => [finding.kind, finding.id, finding.title]))
-      .toEqual([
-        ["intervention", "system:1", "Control failure"],
-        ["advisory", "system:2", "Stale source"],
-      ]);
+    expect(data.value).not.toBe("2");
+    expect(data.findings).toBeUndefined();
+    // And both findings are reachable where they belong.
+    const items = M.notificationFeed(snap, [], Date.now(), M.NOTIFY_DEPS);
+    expect(items.map((i: { id: string }) => i.id).sort()).toEqual(["system:1", "system:2"]);
   });
 
   test("uses explicit No data values when optional pulse/context evidence is absent", () => {
@@ -2765,8 +2789,17 @@ describe("operations canvas layout", () => {
     expect(source).not.toContain("function renderFindingRow(");
     expect(source).not.toContain("function renderPulseFindings(");
     expect(html).not.toContain('id="pulse-findings"');
-    expect(source).toContain('class: "reading-finding-link"');
-    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
+    /* S2-T1 finished the job the ledger removal started. The two finding LINKS
+       that replaced the ledger are gone too, and the rule is now absolute
+       rather than bounded: THE HEADER NEVER LINKS. A reading that routes
+       somewhere is a to-do wearing a metric's clothes, and while one existed
+       the operator had two places to look for the same finding. */
+    expect(source).not.toContain('class: "reading-finding-link"');
+    expect(source).not.toContain('selectEntity({ kind: finding.kind, id: finding.id })');
+    expect(styles).not.toContain(".reading-finding-link");
+    // No summary widget routes anywhere at all — asserted over the whole rail.
+    const rail = source.slice(source.indexOf("function renderSummaryWidget("));
+    expect(rail.slice(0, rail.indexOf("\n}\n"))).not.toContain("selectEntity(");
   });
 
   test("the inspector/drawer holds a stable 480-520px desktop pane, no 42vw overshoot", () => {
@@ -3092,11 +3125,22 @@ describe("pulse strip — verdict-first summary", () => {
     expect(broken.calm).toBe(false);         // cannot declare calm on partial evidence
     expect(broken.queueError).toBe("queue response was invalid");
 
-    // The Needs-you card is the one that means "stop and do something", so it is
-    // where the missing input has to be admitted.
-    const card = broken.cells.find((c: { id: string }) => c.id === "needs-you");
-    expect(card.data.sublabel).toContain("Triage queue unavailable");
-    expect(card.data.sublabel).toContain("queue response was invalid");
+    /* S2-T1 moved WHERE this is admitted, not whether. The Needs-you card
+       carried it; that card is retired, and the header may not carry it now
+       because the header never counts problems. The notification center does,
+       because a short list is a fact about that list — and the strip refusing
+       to go calm without saying why is precisely the apologising-without-a-
+       reason failure this project keeps closing. */
+    expect(broken.cells.some((c: { id: string }) => c.id === "needs-you")).toBe(false);
+    const panel = M.notificationPanelModel(clean, [], Date.now(), {
+      ...M.NOTIFY_DEPS, queueError: "queue response was invalid",
+    });
+    expect(panel.incomplete).toContain("Triage queue unavailable");
+    expect(panel.incomplete).toContain("queue response was invalid");
+    // An all-clear proof line cannot be shown over a population with a hole in it.
+    expect(panel.proof).toBeNull();
+    // A healthy queue says nothing extra — no permanent scold on a good board.
+    expect(M.notificationPanelModel(clean, [], Date.now(), M.NOTIFY_DEPS).incomplete).toBe("");
 
     // A healthy queue says nothing extra — no permanent scold on a good board.
     /* A healthy queue on a clean board says nothing at all now: the cell is
@@ -3156,10 +3200,19 @@ describe("pulse strip — verdict-first summary", () => {
     expect(model.findings.map((f: { id: string }) => f.id)).toEqual(["e-open", "w-open", "e-verifying"]);
     expect(model.findings.map((f: { work: { key: string } }) => f.work.key)).toEqual(["needs", "watching", "verifying"]);
 
-    // An in-motion error must never surface in the needs-you top-2 sublabel —
-    // that would contradict the strip's own "in motion" classification.
-    const data = M.summaryWidgetData("needs-you", snap);
-    expect(data.sublabel).toBe("Open error · Open advisory");
+    /* S2-T1 moved where this claim is enforced. It used to be the needs-you
+       top-2 sublabel: an in-motion error must never surface there, because that
+       would contradict the strip's own "in motion" classification. The card is
+       retired, and the notification center makes the same claim in a stronger
+       form — a verifying finding with no live affected agent is not merely
+       ranked below the open ones, it is demoted off the live surface entirely,
+       with a stated reason. */
+    const { live, demoted } = M.notificationCandidates(snap, [], Date.now(), M.NOTIFY_DEPS);
+    expect(live.map((i: { id: string }) => i.id)).toEqual(["e-open", "w-open"]);
+    expect(demoted.map((d: { id: string; reason: string }) => [d.id, d.reason]))
+      .toEqual([["e-verifying", "verifying with no live affected agent"]]);
+    // The header says nothing about any of them.
+    expect(M.summaryWidgetData("needs-you", snap).findings).toBeUndefined();
   });
 
   test("orphan queue items referencing a resolved issue are excluded; live orphans are included", () => {
@@ -6381,9 +6434,15 @@ describe("FE-B: harness-backed client behavior", () => {
       issues: [{ id: "system:pane", kind: "system", severity: "warning", title: "Two live sessions share one cmux pane", summary: "s", affectedAgentIds: [] }],
       totals: { live: 1, tracked: 1, attention: 1, working: 1, idle: 0, history: 0, sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 } },
     });
+    /* S2-T1. The overlap this guarded cannot occur any more: NEEDS YOU is
+       retired, so there is no second cell for HEALTH to collide with, and the
+       header no longer counts a fault it also describes. HEALTH now speaks for
+       itself whenever the system is at fault, including here. */
     const ids = M.pulseStripModel(overlap, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
-    expect(ids).toContain("needs-you");
-    expect(ids).not.toContain("health");
+    expect(ids).not.toContain("needs-you");
+    // The fault itself stays reachable — in the surface that owns findings.
+    expect(M.notificationFeed(overlap, [], Date.now(), M.NOTIFY_DEPS).map((i: { id: string }) => i.id))
+      .toEqual(["system:pane"]);
 
     /* Divergence must survive. A dead control plane is NOT in the issues list the
        way a pane conflict is, so HEALTH keeps its cell and speaks alone. */
@@ -6404,8 +6463,11 @@ describe("FE-B: harness-backed client behavior", () => {
       programs: [{ id: "p", name: "P", agents: [agent({ id: "x", outcome: "failed", activity: "working" })] }],
     });
     const agentIds = M.pulseStripModel(agentOnly, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
-    expect(agentIds).toContain("needs-you");
+    expect(agentIds).not.toContain("needs-you");
     expect(agentIds).not.toContain("health");
+    // …and it reaches the operator as an item rather than a tally.
+    expect(M.notificationFeed(agentOnly, [], Date.now(), M.NOTIFY_DEPS).map((i: { id: string }) => i.id))
+      .toEqual(["agent:x"]);
 
     // A wire finding with no alerting agent behind it is exactly what used to
     // make the rail disagree with the tab. It now renders no cell.
@@ -6436,17 +6498,18 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(5a) a cell with nothing to report is omitted, not rendered empty", () => {
     const quiet = snapshot({ pulse: { burn: { tokensPerMin: null, costLastHourUsd: null }, momentum: { completionsLastHour: 0, observedWindowMs: 0, stalled: 0 }, activity: { buckets: [] } } });
     const ids = M.pulseStripModel(quiet, "live", [], "percent", "").cells.map((c: { id: string }) => c.id);
-    expect(ids).not.toContain("needs-you");   // zero findings says nothing
     expect(ids).not.toContain("burn");        // no rate and no cost
     expect(ids).not.toContain("context-peak");// no live context reports
     expect(ids).not.toContain("health");      // operational is silence
 
-    // A real finding brings its cell back.
+    /* A real finding brings back no header cell at all now — it brings back a
+       notification item. The header withholds; attention speaks. */
     const busy = snapshot({ issues: [{ id: "e", kind: "system", severity: "error", title: "t", summary: "s", affectedAgentIds: [] }] });
-    expect(M.pulseStripModel(busy, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("needs-you");
+    expect(M.pulseStripModel(busy, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).not.toContain("needs-you");
+    expect(M.notificationFeed(busy, [], Date.now(), M.NOTIFY_DEPS).map((i: { id: string }) => i.id)).toEqual(["e"]);
     /* A finding alone does not degrade systemStatus — sources and control are
-       still fine — so HEALTH stays silent and NEEDS YOU carries it. HEALTH speaks
-       when the system itself is at fault. */
+       still fine — so HEALTH stays silent. HEALTH speaks when the system itself
+       is at fault. */
     const degraded = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
     expect(M.pulseStripModel(degraded, "live", [], "percent", "").cells.map((c: { id: string }) => c.id)).toContain("health");
   });

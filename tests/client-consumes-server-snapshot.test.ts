@@ -116,8 +116,8 @@ const SOURCES: Record<string, (snapshot: Record<string, unknown>) => boolean> = 
   "context-peak": (s: any) => typeof s.contextPeak === "number",
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   "momentum": (s: any) => typeof s.pulse?.momentum?.working === "number",
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  "needs-you": (s: any) => typeof s.totals?.needsYou === "number",
+  // "needs-you" was here. S2-T1 retired the card: the header states no count of
+  // problems, and those findings are items in the notification center now.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   "health": (s: any) => typeof s.totals?.sourceHealth?.total === "number",
 };
