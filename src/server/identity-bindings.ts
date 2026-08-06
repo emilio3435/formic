@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Provider } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
+import { livenessOfAny, processAliveFrom, type ProcessRoster } from "./process-liveness";
 
 /** Bindings not reconfirmed by live evidence for this long age out. */
 export const IDENTITY_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -381,6 +382,7 @@ export function bridgeAgentsWithBindings(
   agents: readonly CollectedAgent[],
   surfaces: readonly CmuxSurface[],
   liveAgentProcessIds?: readonly number[],
+  recognizedAgentProcessIds?: readonly number[],
 ): CollectedAgent[] {
   const liveSessionIds = new Set(
     surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
@@ -396,14 +398,32 @@ export function bridgeAgentsWithBindings(
     const trustworthyProcessScan = Boolean(
       trace && trace.outcome !== "probe-failed" && trace.outcome !== "no-tty" && trace.outcome !== "stale-surface",
     );
-    const processAlive = processIds?.length
-      ? liveAgentProcessIds
-        ? processIds.some((pid) => liveAgentProcessIds.includes(pid))
-        : trace?.processes.some(({ pid }) => processIds.includes(pid))
-          ? true
-          : trustworthyProcessScan
-            ? false
-            : undefined
+    /* A binding's pids were real when the scan confirmed them, and the kernel
+       recycles numbers — so "still in use" is not the same question as "still
+       ours". Measured 2026-08-05, treating them as the same put two dead
+       sessions on the board as live, one for 33 hours, on pids since taken by
+       `siriknowledged` and `sysextd`. process-liveness.ts owns the distinction;
+       this only assembles the roster it needs.
+
+       Two rosters, because callers reach this with different evidence. A scan
+       that published a live pid set answers from that; otherwise the bound
+       surface's own process list stands in, where every listed process counts
+       as an agent so behaviour for those callers is unchanged, and
+       `trustworthyProcessScan` decides whether absence means anything at all. */
+    const handles = (processIds ?? []).map((pid) => ({ pid }));
+    const roster: ProcessRoster = liveAgentProcessIds
+      ? {
+          complete: true,
+          livePids: new Set(liveAgentProcessIds),
+          agentPids: new Set(recognizedAgentProcessIds ?? liveAgentProcessIds),
+        }
+      : {
+          complete: trustworthyProcessScan,
+          livePids: new Set((trace?.processes ?? []).map(({ pid }) => pid)),
+          agentPids: new Set((trace?.processes ?? []).map(({ pid }) => pid)),
+        };
+    const processAlive = handles.length
+      ? processAliveFrom(livenessOfAny(handles, roster))
       : undefined;
     const transcriptOpen = processIds?.length && trace
       ? trace.openFileMatches.some(({ pid }) => processIds.includes(pid))
@@ -421,7 +441,11 @@ export function bridgeAgentsWithBindings(
     const withProcessEvidence: CollectedAgent = {
       ...agent,
       processIds: processIds ?? agent.processIds,
-      processAlive: processAlive ?? agent.processAlive,
+      /* NO-RESURRECT, the mirror of the rule above. The bridge may fill a gap,
+         but a stored pid still being in use cannot overturn a `false` that
+         start-time verification already reached — that answer was made with
+         strictly more evidence than a presence test has. */
+      processAlive: agent.processAlive === false ? false : processAlive ?? agent.processAlive,
       transcriptOpen: transcriptOpen ?? agent.transcriptOpen,
     };
     if (agent.recordedTarget) return withProcessEvidence;

@@ -1,0 +1,40 @@
+name: check
+
+# The repo had 2500+ tests and nothing that ran them on the way in. Everything
+# below is already available locally as `bun run check`; this only makes the
+# same gate non-optional for anything reaching main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the older run irrelevant.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # macOS on purpose: this server shells out to `/usr/sbin/lsof`, reads cmux
+    # hook stores, and is deployed under launchd. A Linux runner would be
+    # testing a platform the product never runs on.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Not plain `bun test`: a few files deliberately assert against the
+      # developer's live session history and the board on localhost, and fail
+      # rather than skip when that evidence is absent. scripts/ci-tests.sh names
+      # them and runs everything else, so a new test file is covered by default.
+      - name: Tests
+        run: bun run test:ci

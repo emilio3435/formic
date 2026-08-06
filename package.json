@@ -14,6 +14,7 @@
     "start:external": "bash scripts/anthill-start.sh --external",
     "setup:cmux": "bun scripts/setup-cmux-password.ts",
     "test": "bun test",
+    "test:ci": "bash scripts/ci-tests.sh",
     "typecheck": "bunx tsc --noEmit",
     "check": "bun run typecheck && bun test"
   },

@@ -23,6 +23,7 @@ import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
+import { livenessOf, processAliveFrom } from "./process-liveness";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 export interface CollectSessionsOptions {
@@ -1084,14 +1085,19 @@ async function collectProvider(
   return { value: agents, errors, ...(absent ? { absent: true } : {}) };
 }
 
+/* The hook store is the one source that records a start time alongside the pid,
+   so this is the strongest liveness evidence the board has. The judgement
+   itself lives in process-liveness.ts — see the header there for why it is not
+   made here, or in the three other places that used to make it. */
 function hookProcessAlive(
   record: HookSessionRecord,
   starts: ReadonlyMap<number, number> | undefined,
 ): boolean | undefined {
   if (!starts) return undefined;
-  const observedStart = starts.get(record.pid);
-  if (observedStart === undefined) return false;
-  return record.pidStartSeconds === undefined || observedStart === record.pidStartSeconds;
+  return processAliveFrom(livenessOf(
+    { pid: record.pid, startSeconds: record.pidStartSeconds },
+    { complete: true, startsByPid: starts },
+  ));
 }
 
 function attachHookFacts(
@@ -1126,7 +1132,12 @@ function attachHookFacts(
         cwd,
         hookLifecycle: record.agentLifecycle,
         ...(hookLifecycleAt ? { hookLifecycleAt } : {}),
-        processIds: [record.pid],
+        /* Only claim the pid as this session's when a start time makes it
+           checkable. An unverifiable number presented as `processIds` gets read
+           downstream as "we know its process", and identity.ts will then revive
+           it on nothing more than the number still being in use by something
+           else. Any identity-verified pids already on the agent survive. */
+        ...(record.pidStartSeconds !== undefined ? { processIds: [record.pid] } : {}),
         processAlive,
         ...(observedParentAgentId && knownAgentIds.has(observedParentAgentId)
           ? { lineage: { observedParentAgentId } }
