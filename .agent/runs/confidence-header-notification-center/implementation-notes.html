@@ -166,11 +166,29 @@ floor — which is why <code>standbyMs</code> stays absent and R1 is unaffected.
 
 <h2>Open questions</h2>
 <div class="warn">
-  <strong>The geometry test.</strong> A <code>tests/notification-center-geometry.test.ts</code> appeared, threw
-  <code>TS2322</code>, and vanished. The a11y lane has been asked which it was. A test that cannot work in this harness
-  is a legitimate <strong>NOT RUN with a reason</strong>; a test quietly abandoned while the CSS-text guard stands alone
-  is the hollow-guard problem one level up. The current guard only greps for <code>align-self: stretch</code> and does
-  <em>not</em> measure whether the panel fits on screen.
+  <strong>The geometry gate is PARKED, deliberately — <code>docs/a11y-geometry-gate/</code>.</strong>
+  It is written, validated, and <em>not running</em>. Check 6 of the a11y sweep is guarded by a CSS-text assertion only,
+  and the doc now says so.
+  <p style="margin:.6rem 0 .3rem">The finding is worth more than the test. Three mutations measured on a real board at 420px:</p>
+  <table style="margin:.3rem 0">
+    <tr><th>Mutation</th><th>Panel box</th><th>Clipped?</th><th>CSS-text guard</th></tr>
+    <tr><td>today (fixed)</td><td class="mono">32 → 388</td><td>no</td><td>green</td></tr>
+    <tr><td><strong>A</strong> anchor reverted to <code>center</code></td><td class="mono">48 → 372</td><td>no</td><td><strong>RED — false positive</strong></td></tr>
+    <tr><td><strong>B</strong> what actually shipped</td><td class="mono">−24 → 372</td><td><strong>yes</strong></td><td>RED</td></tr>
+    <tr><td><strong>C</strong> stretched anchor, clamp restored</td><td class="mono">−8 → 388</td><td><strong>yes</strong></td><td><strong>GREEN — blind</strong></td></tr>
+  </table>
+  <p style="margin:.3rem 0 0">The guard is wrong in <em>both</em> directions. Route <strong>C</strong> is the finding: the
+  shipped defect can return by another road with the guard still green. <em>The defect was never "the file lacks a
+  declaration" — it was "the panel's box leaves the window," which is a number.</em></p>
+  <p style="margin:.5rem 0 0"><strong>Why parked:</strong> it needs a real CSS layout engine. <code>devDependencies</code> is
+  <code>@types/bun</code> and <code>typescript</code>; jsdom/happy-dom do not implement layout, so
+  <code>getBoundingClientRect</code> returns zeros. In <code>tests/</code> it red-lights CI at <code>beforeAll</code>.
+  The lane explicitly <em>rejected</em> naming it <code>.test.local.ts</code> to dodge the glob — an exclusion nobody can see
+  in review is a hole, not an exclusion. It carries a guard on itself (<code>panelWidth &gt; 200</code>,
+  <code>right &gt; left</code>) because every assertion would otherwise pass against a 0×0 rect if the click silently failed.</p>
+  <p style="margin:.5rem 0 0"><strong>Next-goal candidate: <code>a11y-geometry-harness</code></strong> — add a browser harness
+  to <code>devDependencies</code> and CI, then move this file into <code>tests/</code>. Whoever takes it inherits a working,
+  validated gate rather than a TODO. Brief: <code>docs/a11y-geometry-gate/README.md</code>.</p>
 </div>
 <ul>
   <li><strong>PR #10</strong> ("Rescue two commits from branches about to be deleted") is open and not from this program. Awaiting the operator's word.</li>
