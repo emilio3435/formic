@@ -139,6 +139,7 @@ import {
   deriveRollup,
   isLive,
   isReviewWorker,
+  sessionKindOf,
   isTerminal,
   isUnverified,
   lifecycleOf,
@@ -1283,7 +1284,7 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
-  isReviewWorker,
+  isReviewWorker, sessionKindOf,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
@@ -3918,11 +3919,15 @@ function findingFromQueueItem(item) {
    Review workers are hidden only when they are routine and non-attention; a
    review that needs a person remains pinned and visible. A search is an
    explicit request, so a matching review worker is also admitted. History
-   remains complete regardless of this Board-only presentation choice. */
+   remains complete regardless of this Board-only presentation choice.
+
+   The gate reads `sessionKindOf`, not the regex directly: the kind is the
+   server's verdict from launch evidence wherever it has one, and the prose
+   patterns are now only the transition fallback beneath it. */
 function passesReviewVisibility(agent, view, showReviewWorkers = state.showReviewWorkers, searchMatches = false) {
   return view !== "board"
     || showReviewWorkers
-    || !isReviewWorker(agent)
+    || sessionKindOf(agent) !== "review"
     || alerting(agent)
     || searchMatches;
 }
@@ -3931,7 +3936,7 @@ function reviewWorkerCount(ui = state) {
   if (!ui.snap || ui.view !== "board") return 0;
   return snapshotAgents(ui.snap)
     .map(({ agent }) => agent)
-    .filter((agent) => isReviewWorker(agent)
+    .filter((agent) => sessionKindOf(agent) === "review"
       && viewMatches("board", agent)
       && passesLookback(agent, "board", ui.lookbackHours)
       && !alerting(agent))
@@ -3954,7 +3959,7 @@ function currentFilter() {
       agent,
       state.view,
       state.showReviewWorkers,
-      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+      Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
@@ -3990,7 +3995,7 @@ function shelfFilter() {
       agent,
       state.view,
       state.showReviewWorkers,
-      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+      Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);

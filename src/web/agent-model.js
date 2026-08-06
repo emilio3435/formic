@@ -100,6 +100,21 @@ export function isReviewWorker(agent) {
   return REVIEW_WORKER_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/* The server's verdict when it has one; the regex above only bridges snapshots
+   that predate `sessionKind`. It outranks the prose in BOTH directions, and the
+   direction that matters is the one that kills the false-positive class: a
+   session that merely TALKS about security review — a planning session quoting
+   the rows it is about to file away — matches the patterns and is nonetheless
+   `work`, because the server watched it launch from a terminal.
+
+   "unknown" deliberately falls through to the fallback: the server saying it
+   has no evidence is not the server saying this is not a review. */
+export function sessionKindOf(agent) {
+  const kind = agent?.sessionKind;
+  if (kind && kind !== "unknown") return kind;
+  return isReviewWorker(agent) ? "review" : "unknown";
+}
+
 export function deriveControlState(agent) {
   if (agent.controlState) return agent.controlState;
   if (deriveActivity(agent) === "ended") return "observed-only";

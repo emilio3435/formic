@@ -1499,6 +1499,62 @@ describe("views split Now from History", () => {
     });
   });
 
+  test("the server's sessionKind outranks the client regex in both directions", async () => {
+    const updatedAt = new Date().toISOString();
+
+    /* The false-positive class, killed. This task matches the prose patterns —
+       asserted, so the test cannot pass by the regex quietly stopping to match —
+       and is still `work`, because the server watched it launch from a terminal.
+       A session ABOUT reviewers is not a reviewer. */
+    const chatty = agent({
+      id: "claude:planner", provider: "claude", updatedAt,
+      sessionKind: "work", sessionKindSource: "launch-evidence",
+      task: "Investigate the repeated Security vulnerability review rows.",
+    });
+    expect(M.isReviewWorker(chatty)).toBe(true);
+    expect(M.sessionKindOf(chatty)).toBe("work");
+    expect(M.passesReviewVisibility(chatty, "board", false)).toBe(true);
+
+    // And the other direction: launch evidence needs no prose to convict.
+    const quietName = agent({
+      id: "claude:sdk-r", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Look over the diff.",
+    });
+    expect(M.isReviewWorker(quietName)).toBe(false);
+    expect(M.sessionKindOf(quietName)).toBe("review");
+    expect(M.passesReviewVisibility(quietName, "board", false)).toBe(false);
+
+    /* Two transition cases. A row with no verdict at all, and a row the server
+       classified `unknown` — "I have no evidence" is not "this is not a
+       review", so both fall through to the regex until Task 4.2 retires it. */
+    const legacy = agent({
+      id: "claude:legacy", provider: "claude", updatedAt,
+      task: "Review this change for security vulnerabilities.",
+    });
+    expect(M.sessionKindOf(legacy)).toBe("review");
+    const noEvidence = agent({
+      id: "claude:unknown", provider: "claude", updatedAt,
+      sessionKind: "unknown", sessionKindSource: "none",
+      task: "Review this change for security vulnerabilities.",
+    });
+    expect(M.sessionKindOf(noEvidence)).toBe("review");
+
+    // Only `review` is gated. Other kinds are classified, not hidden.
+    const automation = agent({
+      id: "claude:sdk-a", provider: "claude", updatedAt,
+      sessionKind: "automation", sessionKindSource: "launch-evidence",
+      task: "Summarize the changelog.",
+    });
+    expect(M.passesReviewVisibility(automation, "board", false)).toBe(true);
+
+    // The chip's count moves with the verdict, not with the prose.
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [chatty, quietName, automation] }] });
+    await withState({ snap, view: "board", lookbackHours: 6, showReviewWorkers: false }, () => {
+      expect(M.reviewWorkerCount(M.state)).toBe(1);
+    });
+  });
+
   /* The shelf carries its own copy of the review gate, and an uncovered twin of
      a filter clause is how the two drift apart. This pins the twin to the same
      three escapes the board's copy has. */
