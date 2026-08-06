@@ -1076,13 +1076,38 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   if (id === "burn") {
     const burn = snap.pulse && snap.pulse.burn;
     if (!burn) return noDataWidget("No burn data yet.");
-    // Null cost stays "cost unavailable" — never rendered as $0.
-    /* The "≥" is load-bearing, same as on the usage card: it travels with the
-       number when the sublabel is skimmed or read aloud, and it is what stops a
-       measured floor being banked as the hour's total spend. */
-    const cost = burn.costLastHourUsd != null
+    /* S4-T1. Cost renders its PROVENANCE rather than implying it.
+
+       This read the number's null-ness and inferred the rest, which is one
+       inference away from the defect it was guarding: a payload carrying
+       costProvenance "unavailable" beside a numeric 0 would have printed
+       "$0.00 last hour" — a fabricated total for an hour nobody could price.
+       The provenance field exists precisely so the card does not have to guess,
+       so it is read first and it wins.
+
+       The "≥" is load-bearing, same as the Tokens card and the usage card: it
+       travels with the number when the sublabel is skimmed or read aloud, and it
+       is what stops a measured floor being banked as the hour's total spend. */
+    const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
+    const cost = costKnown
       ? (burn.costIsFloor ? "≥$" : "$") + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
+    /* Cost is the one figure on this card that does NOT come from this board's
+       own collection cycle — BurnBar computes it over its own hour, which is why
+       the guide warns against dividing the rate by it. So the as-of is not
+       decoration: it says when that separate tool last spoke, and a cost with no
+       as-of beside it is one whose freshness the operator cannot judge.
+
+       Parenthesised ONTO the cost rather than added as its own clause. That is
+       the same rule S4-T1 enforces one line down for the rate's window: a
+       qualifier separated from its number by another number reads as qualifying
+       the wrong one, which is exactly how "36k/min · $4.20 last hour · 10m
+       average" came to cross its own sentence. Five sibling clauses on one line
+       is also simply hard to read, and binding this one to what it describes
+       costs nothing. */
+    const asOf = costKnown && burn.costAsOf && !Number.isNaN(Date.parse(burn.costAsOf))
+      ? " (" + agoText(burn.costAsOf) + ")"
+      : "";
     /* No coverage suffix. It counted ELIGIBLE LIVE agents while the rate sums
        deltas from every tracked reporter including ended ones — the same
        wrong-population defect just removed from CONTEXT PEAK, and the same
@@ -1096,11 +1121,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        and a claim of complete coverage left the operator unable to tell whether
        spend was unknown or $19.54. Only the missing half says it is missing. */
     const hasRate = burn.tokensPerMin != null;
-    const hasCost = burn.costLastHourUsd != null;
+    const hasCost = costKnown;
     /* Both missing is still "No data", but it keeps the sublabel rather than
        swapping in a generic one: "cost unavailable" is the honest phrasing for a
        failed BurnBar query and must never degrade into a rendered $0. */
-    const sub = cost + coverage + (burn.costNote ? " · " + burn.costNote : "");
+    const sub = cost + asOf + coverage + (burn.costNote ? " · " + burn.costNote : "");
     if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
     /* The rate is an average over a window the payload carries and the widget
        never printed. windowMs is 300000 here — a five-minute average shown as a

@@ -3209,10 +3209,20 @@ describe("source hygiene", () => {
   });
 
   test("the redesigned control surface exposes its structural anchors", () => {
-    for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
+    for (const id of ["health-rail", "filter-bar", "broadcast-bar",
       "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
+    }
+    /* Two anchors LEFT this list, deliberately (operator directive,
+       2026-08-05): the toolbar's Select-to-send and Action log buttons are gone.
+       Pinned as absence rather than deleted from the test, because a button
+       whose wiring calls $(id).addEventListener cannot half-exist — if the
+       markup ever comes back without the wiring, or the wiring without the
+       markup, boot() throws on null and takes the whole client down. */
+    for (const id of ["select-toggle", "actions-toggle"]) {
+      expect(html, `${id} was removed from the toolbar`).not.toContain(`id="${id}"`);
+      expect(source, `${id} wiring must go with its button`).not.toContain(`$("${id}")`);
     }
     expect(html).toContain(">Board<span");
     expect(source).toContain("function renderWidgetCustomizer()");
@@ -4917,13 +4927,15 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background");
   });
 
-  test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
-    const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toContain("color: var(--ink)");
-    expect(rule).toContain("background: var(--sand)");
-    expect(rule).toContain("border-color: var(--ink)");
-    // The old ink flood fill (ink background, surface text) is gone.
-    expect(rule).not.toContain("background: var(--ink)");
+  /* This pinned the Select button's pressed ink. The button is gone (operator
+     directive, 2026-08-05) and its rules went with it — not as tidying, but
+     because the CSS census forbids a declared class the client never emits, so
+     leaving them would have failed the build. What survives is the rule the
+     original test was really defending, applied to the controls that remain:
+     a pressed state is an outline plus a tint, never a flood fill. */
+  test("no styles survive for the toolbar buttons that were removed", () => {
+    expect(styles).not.toContain(".select-toggle");
+    expect(styles).not.toContain(".actions-toggle");
   });
 
   test("index.html seeds is-current on the default tab, and that tab is the board", () => {
@@ -12239,5 +12251,103 @@ describe("Tokens states a consumption floor with its coverage, or says nothing",
     const code = branch.slice(0, branch.indexOf('if (id === "context-peak")'))
       .replace(/\/\*[\s\S]*?\*\//g, "");
     expect(code).not.toContain("totals.tokens");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   S4 · every header number that could be partial says so.
+   ------------------------------------------------------------------------- */
+
+describe("Burn and Cost render their provenance rather than implying it", () => {
+  const withBurn = (burn: Record<string, unknown>) => snapshot({
+    pulse: {
+      burn, momentum: { working: 1, completionsLastHour: null, completionsProvenance: "not-observable" },
+      activity: { buckets: [] },
+    },
+  });
+  const sub = (burn: Record<string, unknown>) => M.summaryWidgetData("burn", withBurn(burn), "live").sublabel;
+
+  test("an unavailable cost says so, even when a number rides beside it", () => {
+    /* The defect costProvenance exists to prevent. Reading the number's
+       null-ness and inferring the rest is one inference away from printing
+       "$0.00 last hour" for an hour nobody could price — a fabricated total,
+       which is exactly what "never $0" forbids. The provenance wins. */
+    const text = sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "unavailable" });
+    expect(text).toContain("cost unavailable");
+    expect(text).not.toContain("$0");
+    expect(text).not.toContain("$0.00");
+    // A measured zero from a source that DID answer is a real reading and prints.
+    expect(sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "burnbar" }))
+      .toContain("$0.00 last hour");
+  });
+
+  test("a floor keeps its ≥, and a complete total does not borrow one", () => {
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar", costIsFloor: true }))
+      .toContain("≥$4.12 last hour");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar" }))
+      .toContain("$4.12 last hour");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar" }))
+      .not.toContain("≥");
+  });
+
+  test("the cost carries an as-of, because it comes from a different clock", () => {
+    /* BurnBar computes this over its own hour — the same reason the guide warns
+       against dividing the rate by it. A cost with no as-of beside it is one
+       whose freshness the operator cannot judge. */
+    const text = sub({
+      tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12,
+      costProvenance: "burnbar", costAsOf: new Date(Date.now() - 120_000).toISOString(),
+    });
+    /* Parenthesised onto the cost, not a sibling clause: a qualifier separated
+       from its number by another number reads as qualifying the wrong one. */
+    expect(text).toMatch(/\$4\.12 last hour \([^)]+\)/);
+    // An unavailable cost has no instant to be as-of, and does not invent one.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
+      .toContain("cost unavailable");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
+      .not.toMatch(/\(/);
+    // Nor does a malformed instant.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar", costAsOf: "not-a-date" }))
+      .not.toMatch(/last hour \(/);
+  });
+
+  test("the rate's window sits next to the RATE, never after the cost", () => {
+    /* Two fixes, each correct, once composed into a crossed sentence: the window
+       was appended last, so "36k/min · $4.20 last hour · 10m average" read as
+       qualifying the cost's hour rather than the rate's ten minutes. It only
+       became wrong when the cost came back, which is why the order is pinned. */
+    const text = sub({ tokensPerMin: 36_000, windowMs: 600_000, costLastHourUsd: 4.20, costProvenance: "burnbar" });
+    expect(text.indexOf("10m average")).toBeLessThan(text.indexOf("last hour"));
+    expect(text.startsWith("10m average")).toBe(true);
+  });
+
+  test("the rate names its blind spot only when it has one", () => {
+    // Audit §20: coverage speaks only when incomplete. `unknown` counts live
+    // agents whose provider reports no tokens at all, so they contribute zero
+    // to the rate forever — a subtotal shown as a total unless it is named.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable",
+      coverage: { reporting: 29, eligible: 29, unknown: 2 } }))
+      .toContain("2 not reporting tokens");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable",
+      coverage: { reporting: 29, eligible: 29, unknown: 0 } }))
+      .not.toContain("not reporting tokens");
+  });
+
+  test("a missing rate and a missing cost are reported separately", () => {
+    /* One being absent says nothing about the other: the rate needs completed
+       five-minute buckets, the cost comes from BurnBar. Headlining "No data"
+       over a real dollar figure left the operator unable to tell whether spend
+       was unknown or $19.54. */
+    const rateOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: 500, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
+    expect(rateOnly.value).toBe("500");
+    expect(rateOnly.sublabel).toContain("cost unavailable");
+    const costOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: 9.5, costProvenance: "burnbar" }), "live");
+    expect(costOnly.value).toBe("Token rate unavailable");
+    expect(costOnly.sublabel).toContain("$9.50 last hour");
+    // Both gone is "No data", and it KEEPS the honest cost phrasing.
+    const neither = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
+    expect(neither.value).toBe("No data");
+    expect(neither.tone).toBe("missing");
+    expect(neither.sublabel).toContain("cost unavailable");
   });
 });
