@@ -115,6 +115,23 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
   return hints;
 }
 
+/* A process that serves many sessions at once and outlives every one of them.
+   `app-server` is a subcommand meaning exactly that: I am a shared server, not
+   a conversation. Its open transcripts are proof the APP is up, never that a
+   particular session is — measured 2026-08-05, one app-server held 11 rollout
+   files open whose last writes were 6 to 10 hours old, and all 11 rows read
+   "waiting · process live" off it.
+
+   Keyed on the subcommand rather than the binary path on purpose: this board
+   has already been burned once by name matching, when `codex` -> `codex-next`
+   turned a running fleet into a wave of false "died" verdicts. A miss here is
+   safe in a way that one was not — failing to recognise a multiplexer only
+   restores the old over-reporting, and the caller downgrades liveness to
+   unknown rather than asserting death. */
+export function isSharedAgentService(command: string): boolean {
+  return /(?:^|\s)app-server(?:\s|$)/i.test(command);
+}
+
 export function isRecognizedAgentProcess(command: string): boolean {
   return new RegExp(
     `(?:^|\\s)(?:\\S*\\/)?(?:${AGENT_BINARIES})(?:\\.(?:js|mjs|cjs))?(?:\\s|$)`,
@@ -208,8 +225,10 @@ interface CommandHintResolution {
 }
 
 export interface IdentityCollectionResult extends CollectionResult<CmuxSurface[]> {
-  /** Present only when a completed process scan observed the live recognized-agent PID set. */
+  /** Every PID a completed process scan saw in use, agent or not. */
   liveAgentProcessIds?: number[];
+  /** The subset of the above running something that looks like an agent. */
+  recognizedAgentProcessIds?: number[];
   /**
    * Every attribution path this scan uses ran to completion, so "no process
    * claims this session" is an observation rather than a gap.
@@ -428,6 +447,21 @@ export async function enrichCmuxIdentity(
      (The name now understates the set; renaming it touches two more files and
      is left as a separate tidy.) */
   const liveAgentProcessIds = allProcesses.map(({ pid }) => pid);
+  /* The narrower question the two stale-pid fallbacks actually need answered.
+     `liveAgentProcessIds` says a number is in use; this says something wearing
+     an agent's name is using it. Neither proves the process is the one we
+     attributed — only a start time does that — but a stored pid now held by
+     `siriknowledged` or `sysextd` is not evidence of an agent, and both of
+     those were on the board as live sessions (one for 33 hours).
+
+     Used ONLY to withhold a liveness upgrade, never to assert death, which is
+     what keeps the `codex` -> `codex-next` regression above from recurring: an
+     unrecognised name yields unknown, and a renamed binary that is actually
+     working is carried by its transcript writes and by the hook store's
+     start-time check, neither of which reads a command name. */
+  const recognizedAgentProcessIds = allProcesses
+    .filter((process) => isRecognizedAgentProcess(process.command))
+    .map(({ pid }) => pid);
   const processes = allProcesses.filter(
     (process) => (process.tty !== undefined && ttyNames.has(process.tty)) || allAttributedPids.has(process.pid),
   );
@@ -449,13 +483,7 @@ export async function enrichCmuxIdentity(
     }
     return resolvedCommandHints.get(key) ?? {};
   };
-  const pids = [
-    ...new Set(
-      allProcesses
-        .filter((process) => isRecognizedAgentProcess(process.command))
-        .map((process) => process.pid),
-    ),
-  ];
+  const pids = [...new Set(recognizedAgentProcessIds)];
   let openFiles = new Map<number, string[]>();
   if (pids.length > 0) {
     // Absolute path: Bun/server PATH can omit /usr/sbin, which made identity
@@ -470,19 +498,39 @@ export async function enrichCmuxIdentity(
         ? "open-session identity lookup timed out"
         : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`;
       errors.push(error);
-      return { value: failedProbeSurfaces(surfaces, error), errors, liveAgentProcessIds };
+      return {
+        value: failedProbeSurfaces(surfaces, error),
+        errors,
+        liveAgentProcessIds,
+        recognizedAgentProcessIds,
+      };
     }
   }
 
   const processIdsByAgent = new Map<string, Set<number>>();
+  /* The subset of the above that actually proves THIS session is running. A
+     shared service's descriptors land in `processIdsByAgent` (they are real
+     attribution, and the inspector should still show which process serves the
+     row) but never here. */
+  const owningProcessIdsByAgent = new Map<string, Set<number>>();
   const transcriptOpenAgents = new Set<string>();
-  const addProcessEvidence = (key: string, pid: number, transcriptOpen = false): void => {
+  const addProcessEvidence = (
+    key: string,
+    pid: number,
+    { transcriptOpen = false, sessionOwned = true }: { transcriptOpen?: boolean; sessionOwned?: boolean } = {},
+  ): void => {
     if (!agentsByIdentity.has(key)) return;
     const processIds = processIdsByAgent.get(key) ?? new Set<number>();
     processIds.add(pid);
     processIdsByAgent.set(key, processIds);
+    if (sessionOwned) {
+      const owned = owningProcessIdsByAgent.get(key) ?? new Set<number>();
+      owned.add(pid);
+      owningProcessIdsByAgent.set(key, owned);
+    }
     if (transcriptOpen) transcriptOpenAgents.add(key);
   };
+  const commandByPid = new Map(allProcesses.map((process) => [process.pid, process.command]));
   for (const [pid, paths] of openFiles) {
     /* EVERY session whose transcript this pid holds open, not the "primary"
        one.
@@ -496,9 +544,13 @@ export async function enrichCmuxIdentity(
        once: measured on this machine, 24 sessions had open transcripts and
        picking a primary credited liveness to 7 of them. The other 17 read as
        having no process at all. */
+    /* ...unless the holder is a multiplexer, which never closes what it opens.
+       Then the descriptor set only grows, and it says nothing about any one of
+       the sessions in it. Still attributed, just not counted as life. */
+    const sessionOwned = !isSharedAgentService(commandByPid.get(pid) ?? "");
     for (const path of paths) {
       const hint = identityFromSessionPath(path);
-      if (hint) addProcessEvidence(identityKey(hint), pid, true);
+      if (hint) addProcessEvidence(identityKey(hint), pid, { transcriptOpen: true, sessionOwned });
     }
   }
   for (const process of allProcesses) {
@@ -508,15 +560,29 @@ export async function enrichCmuxIdentity(
     }
   }
   const liveProcessIds = new Set(liveAgentProcessIds);
+  const recognizedProcessIds = new Set(recognizedAgentProcessIds);
   for (const agent of agents) {
     const key = `${agent.provider}:${agent.sourceSessionId.toLowerCase()}`;
     const observed = processIdsByAgent.get(key);
     if (observed?.size) {
       agent.processIds = [...observed].sort((left, right) => left - right);
-      agent.processAlive = true;
+      /* Only a session-owned pid promotes to alive. When every attributed pid
+         belongs to a shared service we leave whatever better-verified answer
+         collectors already reached — normally undefined, which reads as
+         unverified now and, once a complete roster confirms nothing claims the
+         session, retires it in the quiet band. Writing `false` here instead
+         would render as "process checked and gone" beside a pid that is
+         demonstrably still running. */
+      if (owningProcessIdsByAgent.get(key)?.size) agent.processAlive = true;
       agent.transcriptOpen = transcriptOpenAgents.has(key);
-    } else if (agent.processIds?.length) {
-      agent.processAlive = agent.processIds.some((pid) => liveProcessIds.has(pid));
+    } else if (agent.processIds?.length && agent.processAlive !== false) {
+      /* Presence of the number, for pids nothing better spoke for. Two limits:
+         it must not overturn a `false` that start-time verification already
+         reached (strictly more evidence than this has), and a number now held
+         by something that is not an agent at all buys nothing. */
+      const held = agent.processIds.filter((pid) => liveProcessIds.has(pid));
+      if (held.some((pid) => recognizedProcessIds.has(pid))) agent.processAlive = true;
+      else if (held.length === 0) agent.processAlive = false;
       agent.transcriptOpen = false;
     }
   }
@@ -665,6 +731,7 @@ export async function enrichCmuxIdentity(
     }),
     errors,
     liveAgentProcessIds,
+    recognizedAgentProcessIds,
     /* The only return that reaches here has read the process table AND the open
        files without error; every earlier exit is a failure path that leaves
        this undefined. */

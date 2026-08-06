@@ -1091,7 +1091,16 @@ function hookProcessAlive(
   if (!starts) return undefined;
   const observedStart = starts.get(record.pid);
   if (observedStart === undefined) return false;
-  return record.pidStartSeconds === undefined || observedStart === record.pidStartSeconds;
+  /* A pid is not an identity — the kernel recycles the number, and a store
+     record outlives the process it names. Without a recorded start time there
+     is nothing to check the number against, so "a process with this id exists"
+     is the only true statement available, and it is not the one the board is
+     asking. Measured 2026-08-05: three records with no start time read as live
+     on `/usr/libexec/siriknowledged`, `speechmaintenanced`, and `Siri.app`, one
+     of them for 33 hours. Unknown is the honest answer; `false` would be a
+     different fabrication. */
+  if (record.pidStartSeconds === undefined) return undefined;
+  return observedStart === record.pidStartSeconds;
 }
 
 function attachHookFacts(
@@ -1126,7 +1135,12 @@ function attachHookFacts(
         cwd,
         hookLifecycle: record.agentLifecycle,
         ...(hookLifecycleAt ? { hookLifecycleAt } : {}),
-        processIds: [record.pid],
+        /* Only claim the pid as this session's when a start time makes it
+           checkable. An unverifiable number presented as `processIds` gets read
+           downstream as "we know its process", and identity.ts will then revive
+           it on nothing more than the number still being in use by something
+           else. Any identity-verified pids already on the agent survive. */
+        ...(record.pidStartSeconds !== undefined ? { processIds: [record.pid] } : {}),
         processAlive,
         ...(observedParentAgentId && knownAgentIds.has(observedParentAgentId)
           ? { lineage: { observedParentAgentId } }

@@ -788,6 +788,52 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  /* Measured on this machine 2026-08-05: three hook records sat on live pids
+     with no recorded start time, and the board called all three alive. The
+     processes actually holding those numbers were `/usr/libexec/siriknowledged`,
+     `speechmaintenanced`, and `Siri.app` — one of them "live" for 33 hours. A
+     pid is not an identity; without a start time there is nothing to check it
+     against, and the honest answer is that we cannot tell. */
+  test("a hook pid with no recorded start time is not evidence the session lives", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-nostart-"));
+    const sessions = join(home, ".codex", "sessions");
+    const hookRoot = join(home, ".cmuxterm");
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    mkdirSync(sessions, { recursive: true });
+    mkdirSync(hookRoot, { recursive: true });
+    writeFileSync(join(sessions, "session.jsonl"), `${JSON.stringify({
+      type: "session_meta",
+      timestamp: new Date().toISOString(),
+      payload: { id: sessionId },
+    })}\n`);
+    writeFileSync(join(hookRoot, "codex-hook-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: {
+        [sessionId]: {
+          sessionId,
+          surfaceId: "HOOK-SURFACE",
+          workspaceId: "HOOK-WORKSPACE",
+          cwd: home,
+          pid: 4242,
+          // pidStartSeconds deliberately absent — the defect this pins.
+          agentLifecycle: "needsInput",
+          updatedAt: 1_785_933_010.5,
+        },
+      },
+    }));
+
+    const collected = await collectSessions(home, DEFAULT_SESSION_WINDOW_MS, undefined, {
+      hookProcessStarts: () => new Map([[4242, 1_785_933_001]]),
+    });
+
+    // Unknown, not alive.
+    expect(collected.codex.value[0]?.processAlive).toBeUndefined();
+    /* And the number is not claimed as this session's process either: a pid we
+       cannot tie to the session must not later be re-read as "its process is
+       still running" by a bare presence check. */
+    expect(collected.codex.value[0]?.processIds).toBeUndefined();
+  });
+
   test("incremental collection matches a full re-read across append, rotation, truncation, and replacement", async () => {
     const home = mkdtempSync(join(tmpdir(), "mountain-collector-incremental-"));
     const sessions = join(home, ".codex", "sessions");
