@@ -78,16 +78,61 @@ Re-probed after writing the guards: applying G1+G2+G3 mutations together → **6
 ```bash
 # example: stalled-active as blocking
 # edit src/web/notification-center.js BLOCKING_KINDS / NOTICED_KINDS
-bun test tests/web-client.test.ts tests/harden-notify-fixtures.test.ts tests/notification-center-a11y.test.ts
+bun test ./tests/web-client.test.ts ./tests/harden-notify-fixtures.test.ts ./tests/notification-center-a11y.test.ts
 # revert the edit before any commit
 ```
 
-Never leave a mutation in the tree. Prefer `git diff --stat` on the mutated paths after revert.
+Never leave a mutation in the tree. Prefer `git diff --stat` on the mutated paths after revert. Restore from a pre-mutation copy when other lanes have dirty edits in the same files — do not `git checkout --` over their work.
+
+---
+
+## Round 2 — header (S2-T1 / S2-T2 / S3 / A11Y-1)
+
+**When:** after those landings merged to main. Same method: smallest false-making mutation → expect RED → revert.  
+**Product files mutated and restored:** `src/web/client-catalogs.js`, `src/web/app.js`, `src/web/styles.css` (restored byte-identical to pre-probe copies).
+
+| Claim | Test that should pin it | Mutation applied | Result |
+|---|---|---|---|
+| S2-T1 — Findings / `needs-you` stays out of the header catalog | `tests/web-client.test.ts` "the header states no count of problems…"; retired-card migration; `tests/ant-guide.test.ts` catalog parity | Put `needs-you` / Findings back in `WIDGET_CATALOG` + `DEFAULT_WIDGET_IDS`; clear `RETIRED_WIDGET_IDS` | **RED** |
+| S2-T1 — the header never links | `tests/web-client.test.ts` "the summary strip never grows its own findings ledger…" (asserts `renderSummaryWidget` has no `selectEntity`, no `.reading-finding-link`) | Append a `<button class="reading-finding-link" onclick=selectEntity(…)>` inside `renderSummaryWidget` | **RED** |
+| S2-T2 — health qualifies instruments, not the fleet | `tests/health-card.test.ts` "the chip qualifies the INSTRUMENTS…"; web-client health headline | `"Readings healthy"` → `"All clear"` | **RED** |
+| S3 — context describes the fleet, not one agent | `tests/web-client.test.ts` FE-B "(8) CONTEXT PEAK reports the server's peak and median"; "(4b) the band reasons about the same context number" | Headline `peakPct` instead of average/median | **RED** |
+| S3 — absent context withholds rather than guessing `0%` | `tests/web-client.test.ts` "uses explicit No data…"; FE-B "(5a) omitted"; "(8)" empty case | When average, median, and peak are all absent, return `{ value: "0%", … }` | **RED** |
+| S3 — spread toggle preference persists (`CONTEXT_SPREAD_KEY`) | *(none — no test named the key)* | Drop `localStorage` get/set for `CONTEXT_SPREAD_KEY`; `loadContextSpread` always `"average"` | **GREEN** |
+| A11Y-1 — panel does not clip at 420px | `tests/notification-center-a11y.test.ts` "A11Y-1: at narrow widths the panel FILLS its anchor…" | Revert `.masthead-signals` to `align-self: center` in the `@media (max-width: 760px)` block | **RED** on CSS-text assertion only |
+
+### Orchestrator probe list — answers
+
+| Probe | Result |
+|---|---|
+| Put `needs-you` back in `WIDGET_CATALOG` | **RED** — not "only deleted"; catalog + migration + ANT-GUIDE bite |
+| `renderSummaryWidget` emits `<a>`/`<button>` → `selectEntity` | **RED** — "the header never links" is guarded in the strip source assertion |
+| Health chip says `"All clear"` again | **RED** — health-card + headline weight tests |
+| Headline `contextPeak` instead of average/median | **RED** — FE-B (8)/(4b) |
+| Context card renders `"0%"` when all three readings absent | **RED** |
+| Spread toggle non-persistent (drop `CONTEXT_SPREAD_KEY`) | **GREEN** — suite stayed 553 pass / 0 fail across web-client, a11y, health, ant-guide, headless |
+| Revert `.masthead-signals` to `align-self: center` | **RED** on `/align-self:\s*stretch/` regex — **does not measure geometry** |
+
+### GREEN / hollow findings this round
+
+#### G4 · Context spread persistence was untested
+
+- **Hollow behavior:** nothing in `tests/` referenced `CONTEXT_SPREAD_KEY`, `setItem`/`getItem` for it, or the spread toggle's write path.
+- **Mutation that stayed GREEN:** remove persistence; preference resets every load.
+- **Catch:** `tests/header-hollowness-guards.test.ts` — "CONTEXT_SPREAD_KEY is written on toggle and read on boot".
+
+#### G5 · A11Y-1 regression test asserts CSS text, not on-screen fit
+
+- **What the shipped test does:** regex on the narrow media block for `align-self: stretch`, `left: 0` / `right: 0` / `width: auto`, and absence of `100vw`.
+- **What it does not do:** measure panel vs viewport geometry (no jsdom by policy; the file's own header says source assertions stand in for live measurement).
+- **Important split:** reverting **only** `align-self` to `center` while keeping fill-anchor → CSS-text **RED**, but left overhang stays **0** (panel fills the narrower island; the original 24px clip was center **+** viewport-sized width). So a green CSS-text suite is not proof the panel fits, and a red `stretch` assertion is not proof clipping returned.
+- **Catch:** `tests/header-hollowness-guards.test.ts` — pure layout model at 420px using the live-board numbers (372px island, 100vw panel → 24px left overhang); asserts the shipped strategy is stretch + fill-anchor + no viewport width + zero overhang. Re-probed: center-only fails stretch; viewport-width under stretch fails `panelFillsAnchor`; center+viewport model row expects overhang `24`.
 
 ---
 
 ## Footer
 
-- New / updated tests: `tests/harden-notify-hollowness-guards.test.ts`, parked loop in `tests/harden-notify-fixtures.test.ts`
+- Round 1 tests: `tests/harden-notify-hollowness-guards.test.ts`, parked loop in `tests/harden-notify-fixtures.test.ts`
+- Round 2 tests: `tests/header-hollowness-guards.test.ts`
 - This document: `docs/TEST-HOLLOWNESS-AUDIT.md`
-- A11y sweep remains held (not started by this audit).
+- Round 2 verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2646 pass / 0 fail**.
