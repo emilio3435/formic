@@ -21,6 +21,7 @@
    one quantity is how two surfaces come to disagree about it. */
 
 import { declaredQuiet, isLive } from "./agent-model.js";
+import { fmtElapsed } from "./text-formatters.js";
 import {
   agentName,
   agentsById,
@@ -375,6 +376,106 @@ export function feedTone(items) {
    button has to mean the same thing the ember means. */
 export function blockingCount(items) {
   return (Array.isArray(items) ? items : []).filter((item) => item.severity === "blocking").length;
+}
+
+/* ---------- the panel's model ----------
+
+   Split from the renderer the way pulseStripModel is, so the three sections,
+   the verdict and the withheld hero are all assertable without a DOM. */
+
+const VERDICT = { blocked: "Waiting on you", noticed: "Watch", clear: "All clear" };
+
+/* Total time people have been waiting, or the reason we cannot say.
+
+   Withheld — not zeroed, not partial — the moment ANY waiting session lacks a
+   measured `blockedSince`. A sum over the sessions that happen to carry one
+   would read like a fleet total and be an arbitrary subset of it, and the
+   number sits in the largest type on the panel. `pulse.standbyMs` wins when
+   be-dwell ships it; until then this computes the same figure from the rows and
+   withholds under the same rule.
+
+   The count is not withheld with it. A count is honest when a duration is
+   not. */
+function standbyReading(blocking, snap, now) {
+  const pulse = (snap && snap.pulse) || {};
+  if (Number.isFinite(pulse.standbyMs)) {
+    return { text: fmtElapsed(pulse.standbyMs), withheld: false, reason: "" };
+  }
+  const unmeasured = blocking.filter((item) => !item.since).length;
+  if (unmeasured) {
+    return {
+      text: "",
+      withheld: true,
+      reason: `Standby unmeasured on ${unmeasured} of ${blocking.length} waiting session${blocking.length === 1 ? "" : "s"} — no measured start.`,
+    };
+  }
+  const total = blocking.reduce((sum, item) => sum + Math.max(0, now - Date.parse(item.since)), 0);
+  return { text: fmtElapsed(total), withheld: false, reason: "" };
+}
+
+/* Program groups, in the order their longest wait started. The feed is already
+   sorted oldest-first, so first-seen order IS that order and no second sort can
+   disagree with the list it groups. */
+function groupByProgram(items) {
+  const groups = [];
+  const index = new Map();
+  for (const item of items) {
+    const key = item.source.programId || item.source.programName || "";
+    let group = index.get(key);
+    if (!group) {
+      group = { programId: item.source.programId || "", programName: item.source.programName || "Unassigned", items: [] };
+      index.set(key, group);
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  return groups;
+}
+
+/* A notification surface is judged on the day it has nothing to say, so All
+   clear does not go blank — it shows what the watcher is watching. "Watching,
+   found nothing" and "not watching" are the two states an empty panel is
+   otherwise ambiguous between, and only one of them is good news. */
+function proofOfWatch(snap, now) {
+  if (!snap) return null;
+  const working = snap.totals && Number.isFinite(snap.totals.working) ? snap.totals.working : null;
+  const programs = Array.isArray(snap.programs) ? snap.programs.length : null;
+  const scannedMs = Date.parse(snap.generatedAt);
+  return {
+    working,
+    programs,
+    scanAgo: Number.isFinite(scannedMs) && now >= scannedMs ? fmtElapsed(now - scannedMs) : null,
+  };
+}
+
+export function notificationPanelModel(snap, queueItems = [], now = Date.now(), deps = {}) {
+  const { live, demoted } = notificationCandidates(snap, queueItems, now, deps);
+  const blocking = live.filter((item) => item.severity === "blocking");
+  const investigations = live.filter((item) => item.kind === "investigation");
+  const watching = live.filter((item) => item.severity !== "blocking" && item.kind !== "investigation");
+  const tone = feedTone(live);
+  return {
+    tone,
+    /* The eyebrow speaks in calmVerdict's words, but it counts what THIS PANEL
+       lists rather than what the board is watching generally. A "Watch" over an
+       empty panel — the board eyeing a context peak the center has no item for —
+       would be the surface describing something it does not show. */
+    verdict: VERDICT[tone],
+    count: blocking.length,
+    lede: blocking.length
+      ? `${blocking.length} agent${blocking.length === 1 ? "" : "s"} stopped`
+      : "Nothing is stopped",
+    rest: [
+      watching.length ? `${watching.length} quiet` : "",
+      investigations.length ? `${investigations.length} running below` : "",
+    ].filter(Boolean).join(" · "),
+    standby: standbyReading(blocking, snap, now),
+    groups: groupByProgram(blocking),
+    watching,
+    investigations,
+    proof: live.length ? null : proofOfWatch(snap, now),
+    demoted,
+  };
 }
 
 /* The agents delivery is allowed to interrupt someone for.

@@ -49,6 +49,10 @@ export const state = {
   settings: null,
   settingsLoaded: false,
   settingsPanelOpen: false,
+  /* The attention panel's disclosure state. A panel the operator opened stays
+     open across the four-second repaint — closing it under them would make the
+     board unreadable while anything is actually waiting. */
+  notifyPanelOpen: false,
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,

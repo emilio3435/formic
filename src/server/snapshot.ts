@@ -286,7 +286,6 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     (input.sidebarWorkspaces ?? []).map((workspace) => [workspace.workspaceId, workspace]),
   );
   for (const source of sources) {
-    const archived = input.archiveStore.has(source.id) || source.status === "archived";
     const target = targetsById.get(source.id)!;
     const declared = declaredById.get(source.id);
     const senderVerified = input.senderTranscriptTails
@@ -409,6 +408,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const finished = verdict.lifecycle === "finished";
     const retained = scope === "retained";
     const terminal = finished || retained;
+    const snapshotStatus = statusForLifecycle(verdict.lifecycle, scope);
     const activity = activityForLifecycle(verdict.lifecycle, scope);
     const processState = retained ? undefined : processStateFor(source);
     const initialRefusal = transmitRefusal({ target, processState, archived: terminal });
@@ -454,7 +454,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? `Unread cmux notification: ${notificationSummary}`
         : finished
           ? verdict.reason
-          : source.statusReason;
+          : source.status === "archived" && snapshotStatus !== "archived"
+            ? verdict.reason
+            : source.statusReason;
     /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
        the one point a CollectedAgent becomes an AgentSnapshot, so there is a
        single boundary to test rather than a rule to remember: the snapshot is
@@ -471,7 +473,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          one field answering two different questions, and losing the first. What
          the notification means rides `attention`, its own field, where it can be
          an overlay instead of a replacement. */
-      status: statusForLifecycle(verdict.lifecycle, scope),
+      status: snapshotStatus,
       statusReason: snapshotStatusReason,
       /* Post-uniqueness, so this is the first point `identity.name` is safe to
          render. `displayName` above is deliberately left alone until the client
@@ -563,7 +565,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       controls: controlsFor(
         source,
         target,
-        archived || endEvidence === "superseded",
+        terminal,
         identityTrace,
         Boolean(input.archiveStore.unarchive) && operatorArchived,
       ),

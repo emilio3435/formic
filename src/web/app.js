@@ -56,6 +56,7 @@ import {
   hasCurrentImpact,
   notificationCandidates,
   notificationFeed,
+  notificationPanelModel,
 } from "./notification-center.js";
 
 import {
@@ -2011,11 +2012,13 @@ function render() {
   renderConn();
   renderFeedAlarm();
   renderHealthRail();
-  // The toggle now carries a snapshot-derived count, so it has to repaint with
-  // the board. It used to be painted once in boot() and on click, which was
-  // fine while the label was pure preference state — but boot() runs before the
-  // first snapshot, so the badge would have been stuck at zero forever.
-  renderNotifyToggle();
+  /* The toggle carries a snapshot-derived count, so it has to repaint with the
+     board. It used to be painted once in boot() and on click, which was fine
+     while the label was pure preference state — but boot() runs before the first
+     snapshot, so the badge would have been stuck at zero forever.
+     renderNotificationCenter paints it now, off the same feed the panel lists,
+     so the button and the panel cannot disagree about who is waiting. */
+  renderNotificationCenter();
   renderTabs();
   renderFilterBar();
   // Its own step, not a tail of the widget paint — see renderPulseStrip.
@@ -2396,6 +2399,204 @@ function renderSettingsVerdict() {
   node.hidden = true;
   node.className = "";
   node.textContent = "";
+}
+
+/* ---------- the notification center ----------
+
+   Attention's one home. The model is notification-center.js; what lives here is
+   the paint, because the row's controls have to reuse the board's OWN capability
+   gate (`capability` + `renderDockTool` + `sendControl`) and its own router
+   (`selectEntity`), and those are private to this file. A second send path
+   beside them is exactly the drift this program exists to remove. */
+
+function closeNotificationsPanel(returnFocus = true) {
+  if (!state.notifyPanelOpen) return;
+  state.notifyPanelOpen = false;
+  render();
+  if (returnFocus) $("notify-toggle")?.focus();
+}
+
+function toggleNotificationsPanel() {
+  state.notifyPanelOpen = !state.notifyPanelOpen;
+  render();
+  if (state.notifyPanelOpen) {
+    // Into the panel, not left on the button: a disclosure the operator opened
+    // is a place they meant to go.
+    const first = $("notifications-panel")?.querySelector("button:not([disabled])");
+    if (first) first.focus();
+  } else {
+    $("notify-toggle")?.focus();
+  }
+}
+
+/* The panel's OWN signature, deliberately not hung off the widgets guard.
+   That guard covers the summary rail; a panel that shared it repainted when the
+   rail happened to change and froze when it did not — the settings panel's bug,
+   and the reason renderSettingsPanel got a signature of its own. */
+function notifyPanelPaintSig(model, open) {
+  return [
+    open ? "1" : "0",
+    model.tone,
+    String(model.count),
+    model.standby.text + "|" + model.standby.reason,
+    model.lede + "|" + model.rest,
+    // Row identity AND the sentence each row is showing: an agent that changes
+    // what it is asking must repaint even though the roster did not move.
+    [...model.groups.flatMap((g) => g.items), ...model.watching, ...model.investigations]
+      .map((item) => item.id + "~" + item.since + "~" + item.evidence + "~" + item.lifecycle).join(","),
+    state.notify.enabled ? "on" : "off",
+    state.notify.permission,
+    feedFrozen() ? "held" : "",
+  ].join("\u001f");
+}
+
+/* Focus reuses the dock's tool verbatim — same capability gate, same confirm
+   strip, same busy state, same disabled reason — with an fkey prefix so focus
+   restore binds to the instance that was clicked rather than to the drawer's
+   twin. Reply does NOT: its gate is the command dock's composer, which cannot
+   be reused inside a dropdown without building a second send path. So Reply
+   takes the documented degradation and SAYS SO on the control: it opens the
+   session's inspector, where the reply box already is. */
+function notifyRowActions(item) {
+  const found = agentsById(state.snap).get(item.source.agentId);
+  const acts = el("span", { class: "notify-row-acts" });
+  if (!found) return acts;
+  const focusCap = capability(found.agent, "focus");
+  if (focusCap) acts.append(renderDockTool(found.agent, focusCap, "focus", { fkeyPrefix: "notify:" }));
+  acts.append(el("button", {
+    type: "button", class: "notify-act",
+    dataset: { fkey: "notify:reply:" + found.agent.id },
+    title: "Opens this session's inspector, where the reply box is.",
+    "aria-label": "Reply to " + agentName(found.agent) + " — opens its inspector, where the reply box is",
+    onclick: () => { closeNotificationsPanel(false); selectEntity({ kind: "agent", id: found.agent.id }); },
+  }, "Reply in inspector"));
+  return acts;
+}
+
+function notifyRow(item) {
+  const trace = [item.source.agentName, (agentsById(state.snap).get(item.source.agentId) || {}).agent?.provider]
+    .filter(Boolean).join(" · ");
+  return el("div", { class: "notify-row is-blocking" },
+    el("div", { class: "notify-row-top" },
+      /* The title line is the ROUTE. A whole-row button would have to contain
+         the Focus and Reply buttons, and a button inside a button is not a
+         thing a browser or a screen reader can make sense of. */
+      el("button", {
+        type: "button", class: "notify-row-open",
+        dataset: { fkey: "notify:open:" + item.id },
+        "aria-label": item.impact + " In " + (item.source.programName || "an unnamed program") + ". Opens the session.",
+        onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
+      }, item.impact),
+      el("span", { class: "notify-row-time", text: notifyWaitText(item) })),
+    el("div", { class: "notify-row-meta" },
+      el("span", { class: "notify-row-trace", text: trace }),
+      notifyRowActions(item)),
+    item.evidence
+      ? el("p", { class: "notify-peek" }, el("q", { text: item.evidence }))
+      : null);
+}
+
+/* The wait, or nothing. Never "0m" for a duration nobody measured — that is the
+   S0-T1 rule at the one place an operator would read it as a fact. */
+function notifyWaitText(item) {
+  if (!item.since) return "";
+  const ms = Date.now() - Date.parse(item.since);
+  return Number.isFinite(ms) && ms >= 0 ? fmtElapsed(ms) : "";
+}
+
+function notifyQuietRow(item) {
+  return el("button", {
+    type: "button", class: "notify-quiet",
+    dataset: { fkey: "notify:open:" + item.id },
+    "aria-label": item.impact + " " + item.evidence,
+    onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
+  },
+    el("span", { class: "notify-quiet-name" },
+      item.source.programName ? el("span", { class: "notify-quiet-prog", text: item.source.programName }) : null,
+      item.source.programName ? " · " : null,
+      item.impact),
+    el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
+}
+
+function renderNotificationCenter() {
+  const panel = $("notifications-panel");
+  const toggle = $("notify-toggle");
+  if (!panel || !toggle) return;
+  const open = Boolean(state.notifyPanelOpen);
+  const model = notificationPanelModel(state.snap, state.queueItems, Date.now(), NOTIFY_DEPS);
+  // One derivation, two surfaces: the badge is a reading off the same list the
+  // panel renders, so the button can never disagree with what it opens.
+  renderNotifyToggle(model.count, model.tone, open);
+  panel.hidden = !open;
+  if (paintUnchanged("notifyPanel", notifyPanelPaintSig(model, open))) return;
+  panel.textContent = "";
+  if (!open) return;
+
+  panel.append(el("div", { class: "notify-panel-head" },
+    el("div", {},
+      el("span", { class: "notify-eyebrow", text: model.verdict }),
+      el("h2", { id: "notify-panel-title", class: "notify-lede", text: model.lede }),
+      model.rest ? el("p", { class: "notify-rest", text: model.rest }) : null),
+    el("div", { class: "notify-hero" },
+      model.standby.withheld
+        ? el("p", { class: "notify-hero-withheld", text: model.standby.reason })
+        : el("span", { class: "notify-hero-value mono", text: model.standby.text }),
+      model.standby.withheld ? null : el("span", { class: "notify-hero-label", text: "standby" }))));
+
+  for (const group of model.groups) {
+    panel.append(el("div", { class: "notify-group" },
+      el("span", { class: "notify-group-name mono", text: group.programName }),
+      el("span", { class: "notify-group-count", text: group.items.length + " stopped" })));
+    for (const item of group.items) panel.append(notifyRow(item));
+  }
+
+  if (model.watching.length) {
+    panel.append(el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Watching" }),
+      el("span", { class: "notify-sect-hint", text: "nothing is waiting on you" })));
+    for (const item of model.watching) panel.append(notifyQuietRow(item));
+  }
+
+  if (model.investigations.length) {
+    panel.append(el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Running on its own" })));
+    for (const item of model.investigations) panel.append(notifyQuietRow(item));
+  }
+
+  /* All clear does not go blank. "Watching, found nothing" and "not watching"
+     are the two states an empty panel is otherwise ambiguous between, and the
+     collectors' own numbers are evidence a stalled client cannot produce. */
+  if (model.proof) {
+    const proof = [
+      model.proof.working != null ? model.proof.working + " agents working" : "",
+      model.proof.programs != null ? model.proof.programs + " programs watched" : "",
+      model.proof.scanAgo ? "last scan " + model.proof.scanAgo + " ago" : "",
+    ].filter(Boolean).join(" · ");
+    panel.append(el("p", { class: "notify-proof mono", text: proof || "No collector has reported yet." }));
+  }
+
+  panel.append(renderNotifyDeliverySwitch());
+}
+
+/* Delivery's own control, and the ONLY place permission is requested — from
+   this click and never on load. toggleNotifications is untouched; this is the
+   button that calls it, moved off the masthead where its words read as a
+   verdict about the backlog beside it. */
+function renderNotifyDeliverySwitch() {
+  const view = notifyToggleView(state.notify, undefined, 0, "clear");
+  return el("div", { class: "notify-foot" },
+    el("button", {
+      type: "button",
+      class: "notify-switch" + (view.pressed ? " is-on" : ""),
+      "aria-pressed": view.pressed ? "true" : "false",
+      disabled: view.disabled ? "" : null,
+      title: view.title,
+      dataset: { fkey: "notify:delivery" },
+      onclick: () => { toggleNotifications().then(render); },
+    },
+      el("span", { class: "notify-switch-track", "aria-hidden": "true" }),
+      "Notify me when an agent stops"),
+    el("span", { class: "notify-foot-state", text: view.label }));
 }
 
 function renderSettingsPanel() {
@@ -9328,10 +9529,25 @@ function boot() {
   loadContextSpread();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
-  renderNotifyToggle();
+  renderNotificationCenter();
   void fetchSettings();
 
-  $("notify-toggle").addEventListener("click", () => void toggleNotifications());
+  /* The masthead control opens the attention panel; DELIVERY is toggled by the
+     switch in that panel's footer, which is where toggleNotifications — and the
+     one requestPermission call in this client — is now reached. Still from a
+     click, still never on load. */
+  $("notify-toggle").addEventListener("click", toggleNotificationsPanel);
+
+  /* Outside-click closes, on the same guard the settings dialog uses: only a
+     press that BEGAN outside. A drag that starts on the evidence quote and ends
+     on the board is a selection, not a dismissal. */
+  document.addEventListener("mousedown", (e) => {
+    if (!state.notifyPanelOpen) return;
+    const panel = $("notifications-panel");
+    const toggle = $("notify-toggle");
+    if (panel?.contains(e.target) || toggle?.contains(e.target)) return;
+    closeNotificationsPanel(false);
+  });
 
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
@@ -9379,12 +9595,37 @@ function boot() {
   document.addEventListener("keydown", (e) => { handleRowNavigation(e); });
   document.addEventListener("keydown", (e) => { handleCockpitKeys(e); });
 
+  /* Up/Down walk the panel's rows while it is open. Scoped to the panel — a
+     dropdown that swallowed the board's own row navigation would be worse than
+     one that has none. */
+  document.addEventListener("keydown", (e) => {
+    if (!state.notifyPanelOpen) return;
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const panel = $("notifications-panel");
+    if (!panel || !panel.contains(document.activeElement)) return;
+    const stops = [...panel.querySelectorAll("button:not([disabled])")];
+    if (!stops.length) return;
+    e.preventDefault();
+    const at = stops.indexOf(document.activeElement);
+    const next = e.key === "ArrowDown"
+      ? stops[(at + 1) % stops.length]
+      : stops[(at <= 0 ? stops.length : at) - 1];
+    next?.focus();
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     /* Ahead of the rest: it is a modal, and a modal that ignores Escape is the
        one dismissal every operator tries first. */
     if (state.settingsPanelOpen) {
       closeSettingsPanel();
+      return;
+    }
+    /* Same rule for the attention panel, and it returns focus to the control
+       that opened it — a dismissal that strands focus on <body> loses a keyboard
+       operator their place on the board entirely. */
+    if (state.notifyPanelOpen) {
+      closeNotificationsPanel();
       return;
     }
     if (state.confirming) {

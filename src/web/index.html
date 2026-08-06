@@ -26,7 +26,13 @@
       <div class="masthead-signals">
         <!-- Opt-in out-of-page alerts. Permission is requested from this click
              and nowhere else — never on load. -->
-        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-pressed="false">Notifications off</button>
+        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-expanded="false" aria-controls="notifications-panel">Notifications</button>
+        <!-- Attention lives here. The header above the board is confidence and
+             never links; this is the one place a discrete thing that needs a
+             person is named, with its evidence and a route to it. Anchored to
+             the signals row's right edge rather than to the button, so a 452px
+             panel cannot push past the viewport on a narrow window. -->
+        <div id="notifications-panel" class="notify-panel" hidden aria-labelledby="notify-panel-title"></div>
         <!-- The board's timing thresholds, which decide what every session on
              it is called. They were compiled-in constants; an operator running
              overnight swarms had no way to say "45 minutes of silence is normal

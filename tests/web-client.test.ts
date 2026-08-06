@@ -156,6 +156,12 @@ function makeNode(tag: string): FakeNode {
       return (i >= 0 && node.parent.children[i + 1]) || null;
     },
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    /* The real DOM has it and the client uses it — the notify control removes
+       aria-pressed and disabled rather than writing a falsey value, because an
+       element carrying `aria-pressed="false"` is a toggle that happens to be
+       off, not a disclosure. A stub that silently lacked it made that a
+       TypeError only the paint path could find. */
+    removeAttribute(k: string) { delete node.attributes[k]; },
     hasAttribute(k: string) { return k in node.attributes; },
     listeners: {} as Record<string, Array<(event: unknown) => unknown>>,
     addEventListener(type: string, fn: (event: unknown) => unknown) {
@@ -8422,18 +8428,59 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
   const calm = (id: string) => agent({ id, status: "running", outcome: "healthy", displayName: id });
   const snapOf = (...agents: unknown[]) => snapshot({ programs: [{ id: "p", name: "P", agents }] });
 
-  test("(4) 'needs a human' is the board's own verdict, not a second definition", () => {
+  /* S1-T5 REWRITE. This asserted that delivery fires for the board's broad
+     alerting() population — any row that is neither healthy nor finished.
+
+     That was the defect, not the contract. alerting() is a strict SUPERSET of
+     "a person is the blocker", so the OS notification woke the operator for a
+     stalled advisory while the button beside it correctly stayed amber. The one
+     sentence this whole surface rests on — ember only when a person is the
+     blocker — broke at the exact moment the operator is not looking at the
+     screen to check it. Repointed at the blocking half of the attention
+     partition; the rows below are the ones that used to fire and no longer do. */
+  test("(4) delivery fires for a person-blocker, not for everything unhealthy", () => {
+    const asks = (id: string) => agent({
+      id, displayName: id,
+      attentionSignal: { kind: "question-pending", evidence: "Push, or hold for the reconciliation?" },
+    });
     const snap = snapOf(
-      waiting("codex:1"),
-      agent({ id: "codex:2", outcome: "blocked" }),
-      agent({ id: "codex:3", outcome: "failed" }),
-      calm("codex:4"),
+      asks("codex:1"),
+      // Unhealthy, and asking nobody anything. The board still shows all three
+      // as findings; none of them is a reason to interrupt a person elsewhere.
+      waiting("codex:2"),
+      agent({ id: "codex:3", outcome: "blocked" }),
+      agent({ id: "codex:4", outcome: "failed" }),
+      calm("codex:5"),
       // An ended session is not waiting for anyone, whatever it last reported.
-      agent({ id: "codex:5", status: "archived", outcome: "needs-you" }),
+      agent({ id: "codex:6", status: "archived", outcome: "needs-you" }),
     );
-    expect(M.needsHumanIds(snap)).toEqual(["codex:1", "codex:2", "codex:3"]);
-    expect(M.needsHumanIds(snapOf(calm("codex:4")))).toEqual([]);
+    expect(M.needsHumanIds(snap)).toEqual(["codex:1"]);
+    // The watcher's own tier never delivers: nobody is blocked, so nothing may
+    // interrupt someone who is not looking.
+    expect(M.needsHumanIds(snapOf(agent({ id: "codex:7", attentionSignal: { kind: "stalled-active" } })))).toEqual([]);
+    expect(M.needsHumanIds(snapOf(calm("codex:5")))).toEqual([]);
     expect(M.needsHumanIds(null)).toEqual([]);
+    // …and it is the same set the badge counts, not a second population.
+    expect(M.needsHumanIds(snap)).toEqual(M.blockingAgentIds(snap));
+  });
+
+  test("(4) an out-of-page notification never fires for a watcher-only board", () => {
+    /* The plan's claim in its sharpest form: a stalled-active fleet is amber on
+       the button and SILENT off it. deliverNotification is reached only through
+       a plan built from needsHumanIds, so a feed with nobody blocked cannot
+       produce one that fires. */
+    const stalled = snapOf(
+      agent({ id: "codex:1", displayName: "codex:1", attentionSignal: { kind: "stalled-active" } }),
+      agent({ id: "codex:2", displayName: "codex:2", attentionSignal: { kind: "stalled-active" } }),
+    );
+    const plan = M.notificationPlan([], M.needsHumanIds(stalled));
+    expect(plan.fire).toBe(false);
+    let built = 0;
+    class Spy { constructor() { built += 1; } }
+    expect(M.deliverNotification(plan, { enabled: true, permission: "granted" }, Spy)).not.toBe("sent");
+    expect(built).toBe(0);
+    // The badge still speaks — amber, not ember, and never a zero it has not earned.
+    expect(M.feedTone(M.notificationFeed(stalled, [], Date.now(), M.NOTIFY_DEPS))).toBe("noticed");
   });
 
   test("(4) it fires for a NEW waiter and stays silent for everything else", () => {
@@ -8528,7 +8575,9 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.notifyToggleView({ enabled: false, permission: "denied" }, true, 4).count).toBe(4);
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, false, 4).count).toBe(4);
 
-    // A quiet fleet stays quiet: no badge, no count noise in the label or title.
+    // A quiet fleet stays quiet in the WORDS. The badge itself still renders its
+    // zero — see the badge-tone test below — because an absent badge and a calm
+    // one look identical and only one of them is good news.
     const calmView = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0);
     expect(calmView.count).toBe(0);
     expect(calmView.ariaLabel).toBe("Notifications on");
@@ -8537,18 +8586,57 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1).ariaLabel)
       .toBe("Notifications off, 1 agent waiting on you");
 
-    // The badge is a real node carrying the digit, not text glued onto the label.
-    expect(source).toContain('class: "notify-badge"');
-    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.ariaLabel\)/);
+    /* The badge is a real node carrying the digit, not text glued onto the
+       label — that is what lets it take the ember fill without the count
+       entering the button's text content. Its tone class is composed from whole
+       string literals, never assembled from a runtime value, because the
+       orphan-CSS guard reads this file as text. */
+    expect(source).toContain('class: "notify-badge " + BADGE_TONE_CLASS[view.tone]');
+    expect(source).toContain('text: String(view.count)');
+    for (const cls of ["is-blocked", "is-noticed", "is-clear"]) expect(source, cls).toContain(`"${cls}"`);
+    // The disclosure's accessible name, not the delivery switch's.
+    expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.disclosureLabel\)/);
 
     /* Placement rule, not style — this is the bug the unit tests above could
        not see. The toggle used to paint once in boot() and on click, which was
        fine for pure preference state. Now that it carries a snapshot-derived
        count it MUST paint inside render(), because boot() runs before the first
        snapshot exists: the count was always 0 and the badge never appeared on
-       the real page even though every assertion above passed. */
+       the real page even though every assertion above passed.
+
+       renderNotificationCenter is the one that paints it now: it computes the
+       feed once and hands the badge its count and tone off that same list, so
+       the button cannot report a different population than the panel it opens. */
     const renderFn = source.match(/\nfunction render\(\)[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(renderFn).toContain("renderNotifyToggle()");
+    expect(renderFn).toContain("renderNotificationCenter()");
+    expect(source).toContain("renderNotifyToggle(model.count, model.tone, open)");
+  });
+
+  test("(4) the badge's ink is the verdict, and it always renders a reading", () => {
+    /* The contract the whole surface rests on: ember filled ONLY when a person
+       is the blocker. Amber outline is the watcher having something; grey
+       outline is a real, rendered zero. */
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 2, "blocked").tone).toBe("blocked");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 1, "noticed").tone).toBe("noticed");
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0, "clear").tone).toBe("clear");
+    // An unknown tone falls back to the calm one. A badge is never ember by accident.
+    expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 9, "sideways").tone).toBe("clear");
+
+    // Ember is a fill; the other two are outlines. Asserted on the stylesheet,
+    // because "filled" is the entire distinction the operator reads at a glance.
+    expect(styles).toContain(".notify-badge.is-blocked { background: var(--ember)");
+    expect(styles).toContain(".notify-badge.is-noticed { color: var(--amber)");
+    expect(styles).toContain(".notify-badge.is-clear { color: var(--faint)");
+
+    // The digit never stands alone for a screen reader.
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 3, "blocked").disclosureLabel)
+      .toBe("Notifications, 3 agents waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 1, "blocked").disclosureLabel)
+      .toBe("Notifications, 1 agent waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 2, "noticed").disclosureLabel)
+      .toBe("Notifications, 2 being watched, nobody waiting on you");
+    expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 0, "clear").disclosureLabel)
+      .toBe("Notifications, nothing waiting");
   });
 
   test("(4) permission is asked from a click and nowhere else, and denial is quiet", () => {

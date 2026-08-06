@@ -1975,6 +1975,27 @@ describe("the lifecycle verdict is published, and nothing overwrites it", () => 
     expect(agent.provenance).toBe("turn-complete");
   });
 
+  test("stale provider archive status cannot disable a turn-complete session", () => {
+    const agent = only(build([collected({
+      status: "archived",
+      statusReason: "Source recorded a session exit.",
+      updatedAt: at(10 * 60_000),
+      endEvidence: "turn-complete",
+      processAlive: true,
+      processIds: [4242],
+    })]));
+
+    expect(agent).toMatchObject({
+      status: "waiting",
+      statusReason: "Turn finished — waiting on you.",
+      lifecycle: "waiting",
+      provenance: "turn-complete",
+    });
+    expect(agent.controls.find(({ action }) => action === "archive")).toMatchObject({
+      enabled: true,
+    });
+  });
+
   test("a record the scan no longer reaches is retained, and keeps the verdict it was filed with", () => {
     const store: ArchiveStore = {
       has: () => false,
