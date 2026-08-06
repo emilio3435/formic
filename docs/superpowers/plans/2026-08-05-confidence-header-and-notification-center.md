@@ -258,7 +258,28 @@ At 20:26–20:29 a Codex session (ChatGPT app, pid 47362, cwd inside this worktr
 
 Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + `tests/process-liveness.test.ts` + `tests/fixtures/process-liveness-truth-table.json`. Those three are untracked *together*, so the committed suite is self-consistent and a fresh clone is fine — they are simply a feature still being written. The owning session commits them, not us.
 
-### Progress — tranche 1 merged to main 2026-08-05 21:28 (PR #9, `75e1ed7`, CI green)
+### Progress — four tranches, three merged (PRs #9, #11, #12 merged; #13 open)
+
+| Stage | State |
+|---|---|
+| S0 (all five tasks) | ✅ merged. T1 and T4 shipped **measurements, not code** — see the two docs below |
+| S1 (all six + parity gate) | ✅ merged |
+| S2-T1 Findings card removed · S2-T2 health becomes a qualifier | ✅ merged |
+| S2-T3 global scan-window statement | 🔄 in flight |
+| S3 context re-headline | ✅ in #13 |
+| S4 cost + burn provenance | 🔄 in flight |
+| S5 fixtures, truth tables, history routes, docs parity | ✅ merged |
+| S6-T1/T2 sweep · read-only `propose` endpoint | ✅ merged |
+| S6-T3/T4 chip spinner + result routing | ⬜ not started |
+| a11y sweep | ✅ merged — 6 defects found, A11Y-1 fixed; A11Y-2 in flight; 3–6 queued |
+| Mutation audit (2 rounds) | ✅ merged |
+
+**Standing evidence, written down because it outlived the lanes that produced it:**
+`docs/S0-T1-DEAD-TIME-MEASUREMENT.md` · `docs/S0-T4-EVIDENCE-SAMPLE.md` · `docs/S0-LIVE-FIELD-VERIFICATION.md` · `docs/A11Y-SWEEP-NOTIFICATION-CENTER.md` · `docs/TEST-HOLLOWNESS-AUDIT.md` · `docs/CLEANUP-SWEEP.md`
+
+**Open, and the reason the Tokens card has not shipped:** `totals.consumption` is implemented, tested, and **still absent on a live board**. R3 relaxed the terms gate, but the field is withheld by `sessionCollectionComplete`, which reads `sessions[provider].errors` — a *different* population from the `controlHealth.errors` that reports healthy. So the board can show five healthy sources while session collection is incomplete, and the card silently never appears. Under diagnosis; **no third fixture-green-but-live-absent round.**
+
+### Superseded — tranche 1 ledger, 2026-08-05 21:28 (PR #9, `75e1ed7`)
 
 | Stage | State |
 |---|---|
