@@ -742,6 +742,10 @@ export interface HubSnapshot {
     live: number;
     tracked: number;
     attention: number;
+    /* Complete scan-window CONSUMPTION: sessionTotal for every observed
+       session, each token counted once. Absent when the window, enumeration,
+       or any session term is incomplete; never occupancy or processed flow. */
+    consumption?: number;
     tokens?: number;
     working?: number;
     idle?: number;

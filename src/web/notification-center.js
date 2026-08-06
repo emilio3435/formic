@@ -20,7 +20,16 @@
    already uses for `nameFor`, and for the same reason: a second derivation of
    one quantity is how two surfaces come to disagree about it. */
 
-import { declaredQuiet, isLive } from "./agent-model.js";
+/* isTerminal, deliberately NOT isLive.
+
+   "Still has current impact" is "this session has not ended", and isLive is
+   narrower than that: it excludes `unverified`, a session the board can watch
+   but cannot confirm. Demoting a finding because the sessions it names are
+   unverified would bury exactly the rows the board is least sure about — and
+   styles.css already carries the scar of that conflation ("Sharing --ended's
+   clay is what made an unverifiable session LOOK finished before it was called
+   finished"). Unverified is its own state, and it is not an ending. */
+import { declaredQuiet, isTerminal } from "./agent-model.js";
 import { fmtElapsed } from "./text-formatters.js";
 import {
   agentName,
@@ -221,7 +230,7 @@ export function hasCurrentImpact(item, snap) {
 
   if (item.route.kind === "agent") {
     const found = agentsById(snap).get(item.route.id);
-    if (!found || !isLive(found.agent)) return false;
+    if (!found || isTerminal(found.agent)) return false;
     /* A person is the blocker, and nothing below outranks it.
        RE-DERIVED from the snapshot rather than read off item.severity: the
        predicate is handed a snap precisely so a row built on an earlier paint
@@ -249,7 +258,7 @@ export function hasCurrentImpact(item, snap) {
   const index = agentsById(snap);
   const liveAffected = ids.filter((id) => {
     const found = index.get(id);
-    return Boolean(found) && isLive(found.agent);
+    return Boolean(found) && !isTerminal(found.agent);
   }).length;
 
   /* Verifying is the WEAKER claim — "waiting for a fresh source snapshot to
@@ -272,7 +281,7 @@ function demotionReason(item, snap) {
   if (item.route.kind === "agent") {
     const found = agentsById(snap).get(item.route.id);
     if (!found) return "agent left the snapshot";
-    if (!isLive(found.agent)) return "session ended";
+    if (isTerminal(found.agent)) return "session ended";
     return "no longer asking";
   }
   if (item.route.kind === "investigation") return "queue row cleared";
@@ -446,6 +455,19 @@ function proofOfWatch(snap, now) {
   };
 }
 
+/* A surface that lists things has to say when its list is short.
+
+   The Findings card used to carry this: an unreachable triage queue made its
+   sublabel read "Triage queue unavailable (…) — findings may be missing", which
+   was the one place the operator learned the count below it was a floor rather
+   than a total. That card is retired, and the disclosure cannot retire with it —
+   the strip still refuses to go calm on a queue error, so without this the board
+   would apologise and never say what for.
+
+   It belongs here rather than in the header for the same reason the findings
+   did: it is a fact about THIS list. And unlike a collector fault it needs no
+   minted id, because it is not a finding to open — it is this panel admitting
+   that investigations it would otherwise show are missing. */
 export function notificationPanelModel(snap, queueItems = [], now = Date.now(), deps = {}) {
   const { live, demoted } = notificationCandidates(snap, queueItems, now, deps);
   const blocking = live.filter((item) => item.severity === "blocking");
@@ -470,7 +492,13 @@ export function notificationPanelModel(snap, queueItems = [], now = Date.now(), 
     groups: groupByProgram(blocking),
     watching,
     investigations,
-    proof: live.length ? null : proofOfWatch(snap, now),
+    incomplete: deps.queueError
+      ? `Triage queue unavailable (${deps.queueError}) — investigations may be missing from this list.`
+      : "",
+    /* The all-clear proof is withheld while the list is admittedly short. "41
+       agents working, nothing stopped" is a claim about the whole board, and it
+       cannot be made from a population we know has a hole in it. */
+    proof: live.length || deps.queueError ? null : proofOfWatch(snap, now),
     demoted,
   };
 }

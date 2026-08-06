@@ -154,7 +154,7 @@ function bandText(snapshot: HubSnapshot): string {
   for (const cell of model.cells) {
     parts.push(String(cell.data.value), String(cell.data.unit ?? ""), String(cell.data.sublabel ?? ""));
   }
-  for (const id of ["health", "needs-you", "momentum", "burn", "context-peak"]) {
+  for (const id of ["health", "momentum", "burn", "context-peak"]) {
     const data = M.summaryWidgetData(id, snapshot, "live");
     parts.push(String(data.value), String(data.unit ?? ""), String(data.sublabel ?? ""));
   }

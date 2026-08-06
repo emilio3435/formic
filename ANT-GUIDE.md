@@ -70,10 +70,17 @@ Observed live: `4 shipping · 31k tok/min · $4.81 last hour · 6 quiet 15m+ ·
 Watch`. Both are answers you can close the tab on — `Watch` means nothing is
 asking for you, not that something is wrong.
 
-When cards are showing, **only `Findings` is a to-do list** — it names both what
-is wrong and what to do about it. The rest are context, not tasks: how much is
-shipping, what it is costing, how full the fullest context window is, and whether
-the system itself is healthy.
+When cards are showing, **none of them is a to-do list**. The summary strip is
+confidence, not tasks: how much is shipping, what it is costing, how full the
+fullest context window is, and whether the system itself is healthy. Every one of
+those is a continuous measured quantity that carries its own provenance, and
+nothing in the strip links anywhere.
+
+To-dos live in **Notifications**, the control in the masthead. The strip once
+carried a `Findings` card that counted them; it was removed, because a count of
+things that need doing is not a reading about the fleet, and having it in both
+places gave the operator two surfaces to check for one finding. The seam is one
+line: **the header never links, and the notification center never aggregates.**
 
 **What the strip admits, exactly.** A session is here because it is *currently*
 blocked on a person — not because it once was. A session that asked a question
@@ -272,6 +279,13 @@ evidence remains unobserved rather than becoming a guessed relationship.
 > neither a turn nor a session figure. A blank there is the honest answer rather
 > than a fault: the record predates the distinction, so no number can be labelled
 > correctly. Read its drawer if you need the total.
+
+The fleet-wide wire reading is `totals.consumption`: `sessionTotal` summed once
+for every session in the configured scan window, including finished sessions.
+It is deliberately not the row's latest-call occupancy, processed tokens, or
+cache re-reads; those remain separate session facts. The field is absent when a
+provider scan, the scan window, or any session total is incomplete. A complete
+empty window reports `0`.
 
 ### 4. Click it, deal with it, press `Escape`
 
@@ -601,7 +615,6 @@ about this band, so it is stated for each:
 
 | Card | What it tells you | Counts what, over what |
 |---|---|---|
-| **Findings** | Everything open that a human should know about — collector faults, policy drift, and sessions waiting on you. | Findings, not agents: one finding can implicate many sessions. This card and the Needs-you strip below it are **deliberately different numbers**, and they say so in different words. The card counts all findings; the strip counts only sessions waiting on a person. The card reading `1` while the strip is clear means *something is open, but no session is waiting on you* — which is why the board says exactly that instead of "Nothing needs you". |
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
 | **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
 | **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or waiting) that report a window. Finished and unverified sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |

@@ -174,6 +174,7 @@ import {
   LOOKBACK_STORAGE_KEY,
   OPS_VIEWS,
   OUTCOME_LABELS,
+  RETIRED_WIDGET_IDS,
   ROSTER_ROLE_ORDER,
   USAGE_RANGE_PRESETS,
   VIEWS,
@@ -661,13 +662,24 @@ function defaultWidgetIds() {
   return [...DEFAULT_WIDGET_IDS];
 }
 
+/* A retired id is a MIGRATION, not corruption.
+
+   This used to demand `ids[0] === "needs-you"` — Findings was pinned first and
+   required — and returned the defaults for anything else. With that card gone,
+   both halves would be wrong: the pin names a widget that no longer exists, and
+   resetting on an unknown id would throw away the operator's whole ordering
+   because one entry in it was retired. Drop the retired entries, keep the rest
+   in the order they chose, and fall back to defaults only when nothing
+   recognisable survives. Genuine corruption — not an array, a non-string, a
+   duplicate, an id that was never real — still resets, because that is not a
+   preference to preserve. */
 function normalizeWidgetIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return defaultWidgetIds();
   const unique = new Set(ids);
-  if (ids[0] !== "needs-you" || unique.size !== ids.length || ids.some((id) => typeof id !== "string" || !WIDGET_IDS.has(id))) {
-    return defaultWidgetIds();
-  }
-  return [...ids];
+  if (unique.size !== ids.length || ids.some((id) => typeof id !== "string")) return defaultWidgetIds();
+  const kept = ids.filter((id) => !RETIRED_WIDGET_IDS.includes(id));
+  if (!kept.length || kept.some((id) => !WIDGET_IDS.has(id))) return defaultWidgetIds();
+  return kept;
 }
 
 function parseWidgetPreference(raw) {
@@ -675,11 +687,15 @@ function parseWidgetPreference(raw) {
   try { return normalizeWidgetIds(JSON.parse(raw)); } catch { return defaultWidgetIds(); }
 }
 
+/* Every widget is movable now, first slot included. The `index <= 0` and
+   `target <= 0` guards existed to hold the required Findings card at the top;
+   with it retired nothing is pinned, and leaving them would silently freeze
+   whichever widget happened to land first. */
 function reorderWidgetIds(ids, id, direction) {
   const ordered = normalizeWidgetIds(ids);
   const index = ordered.indexOf(id);
   const target = index + direction;
-  if (index <= 0 || !Number.isInteger(direction) || target <= 0 || target >= ordered.length) return ordered;
+  if (index < 0 || !Number.isInteger(direction) || target < 0 || target >= ordered.length) return ordered;
   [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
   return ordered;
 }
@@ -1021,29 +1037,15 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   if (!snap) return noDataWidget("Waiting for the first snapshot.");
 
   const totals = totalsOf(snap);
-  if (id === "needs-you") {
-    const attention = attentionSummary(snap);
-    const findings = pulseFindings(snap, queueItems).slice(0, 2);
-    const top = findings.map((f) => f.title).join(" · ");
-    /* This card is the one that means "stop reading and go do something", so a
-       missing input has to be admitted HERE rather than only in a console warning.
-       Queued triage items are part of its findings list; when the queue did not
-       answer, the count below is a floor, not a total. */
-    const queueDown = queueError
-      ? "Triage queue unavailable (" + queueError + ") — findings may be missing."
-      : "";
-    return {
-      value: String(attention.count),
-      unit: attention.count === 1 ? "finding" : "findings",
-      sublabel: queueDown || (attention.count && top ? top : "No active findings."),
-      /* Keep the compact headline, but carry the exact issue ids and evidence
-         needed to make each title actionable. The old inline ledger was removed
-         to keep the rail bounded; these two records are the compact route into
-         the existing inspector instead. */
-      findings: queueDown ? [] : findings,
-      tone: attention.count || queueDown ? "hot" : "ok",
-    };
-  }
+  /* The "needs-you" branch stood here: a count of findings, the top two titles,
+     and the ids behind them. It is gone with the card.
+
+     The header answers "can I trust this board, and what is this costing me".
+     Every reading in it is a continuous measured quantity carrying its own
+     provenance, and none of them is a to-do. A count of things that need doing
+     is attention's, and attention is the notification center — where each of
+     those findings is now one item with its own evidence, impact and route,
+     instead of two truncated titles and a number. */
   if (id === "momentum") {
     const momentum = snap.pulse && snap.pulse.momentum;
     /* "yet" promises a number that is never coming. The server withholds
@@ -2222,23 +2224,14 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   const problemText = (remedy && remedy.problem)
     || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
   const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
-  if (id === "needs-you" && data.findings && data.findings.length) {
-    const links = el("span", { class: "reading-finding-links" });
-    data.findings.forEach((finding, index) => {
-      if (index) links.append(el("span", { class: "reading-finding-separator", "aria-hidden": "true", text: " · " }));
-      links.append(el("button", {
-        type: "button",
-        class: "reading-finding-link",
-        title: finding.summary || finding.impact || finding.title,
-        "aria-label": "Open finding: " + finding.title + ". " + (finding.summary || finding.impact || "Evidence available in the inspector."),
-        dataset: { fkey: "summary-finding:" + finding.kind + ":" + finding.id },
-        onclick: () => selectEntity({ kind: finding.kind, id: finding.id }),
-      }, finding.title));
-    });
-    subNode.append(links);
-  } else {
-    subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
-  }
+  /* The finding-link branch stood here — two buttons routing into the inspector,
+     landed at 4bcbd84 by a concurrent lane. It is removed with the card that
+     carried it, and the reason is the seam rather than the code: THE HEADER
+     NEVER LINKS. A reading that routes somewhere is a to-do wearing a metric's
+     clothes, and the moment one exists an operator has two places to look for
+     the same thing. Both of those findings are in the notification center now,
+     each with its evidence sentence, its impact and its route. */
+  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
@@ -2440,7 +2433,7 @@ function notifyPanelPaintSig(model, open) {
     open ? "1" : "0",
     model.tone,
     String(model.count),
-    model.lede + "|" + model.rest,
+    model.lede + "|" + model.rest + "|" + model.incomplete,
     // Row identity AND the sentence each row is showing: an agent that changes
     // what it is asking must repaint even though the roster did not move.
     [...model.groups.flatMap((g) => g.items), ...model.watching, ...model.investigations]
@@ -2533,7 +2526,10 @@ function renderNotificationCenter() {
   const toggle = $("notify-toggle");
   if (!panel || !toggle) return;
   const open = Boolean(state.notifyPanelOpen);
-  const model = notificationPanelModel(state.snap, state.queueItems, Date.now(), NOTIFY_DEPS);
+  /* queueError rides in with the resolvers because the panel has to disclose a
+     short list, and only the app knows the fetch failed. */
+  const model = notificationPanelModel(state.snap, state.queueItems, Date.now(),
+    { ...NOTIFY_DEPS, queueError: state.queueError });
   // One derivation, two surfaces: the badge is a reading off the same list the
   // panel renders, so the button can never disagree with what it opens.
   renderNotifyToggle(model.count, model.tone, open);
@@ -2552,6 +2548,12 @@ function renderNotificationCenter() {
       el("span", { class: "notify-eyebrow", text: model.verdict }),
       el("h2", { id: "notify-panel-title", class: "notify-lede", text: model.lede }),
       model.rest ? el("p", { class: "notify-rest", text: model.rest }) : null)));
+
+  /* role=status, not a decoration: the list below is knowingly short and the
+     operator has to be told before they read it as complete. */
+  if (model.incomplete) {
+    panel.append(el("p", { class: "notify-incomplete", role: "status", text: model.incomplete }));
+  }
 
   for (const group of model.groups) {
     panel.append(el("div", { class: "notify-group" },
@@ -3707,7 +3709,6 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
      once, and an operator who learns that a counter always reads 0 stops reading
      it — which is exactly when it turns 1. */
   const speaks = (id, data) => {
-    if (id === "needs-you") return Boolean(queueError) || data.value !== "0";
     if (id === "health") return data.tone !== "ok";
     // The rest are instruments: they speak when they have a reading.
     return data.tone !== "missing" && data.value !== "No data";
@@ -3730,28 +3731,16 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
       : data.tone === "hot" ? "hot" : "normal";
     return { id, weight, data, speaks: speaks(id, data) };
   });
-  /* Audit §6: when the board's top finding IS the system fault, NEEDS YOU and
-     HEALTH are the same sentence at two altitudes — "1 finding · Two live
-     sessions share one cmux pane" beside "Advisory · 1 degraded source", the
-     second in a full-width row. attentionSummary and topSourceIssue read the same
-     issues array, so the overlap is structural rather than coincidental.
+  /* Audit §6's overlap suppression stood here. When the board's top finding WAS
+     the system fault, NEEDS YOU and HEALTH said the same sentence at two
+     altitudes, so HEALTH was suppressed and handed its remedy to the cell that
+     survived. Both halves are moot: NEEDS YOU is retired, so there is no second
+     altitude to collide with, and nothing is left to hand a remedy to.
 
-     They genuinely diverge — a dead control plane is not in the issues list, and
-     a lone agent failure leaves sources healthy — so HEALTH is suppressed only in
-     that exact overlap, and it hands its remedy to the cell that survives so the
-     "what to do about it" is not suppressed with it. */
-  const top = topSourceIssue(snap);
-  const overlap = conn === "live" && !fetchFailedNow()
-    && status.key === "degraded"
-    && !!(snap && snap.controlHealth && snap.controlHealth.cmuxReachable === true)
-    && !!top && top.kind === "system"
-    && cells.some((cell) => cell.id === "needs-you" && cell.speaks);
-  const kept = cells.filter((cell) => cell.speaks && !(overlap && cell.id === "health"));
-  if (overlap) {
-    const needs = kept.find((cell) => cell.id === "needs-you");
-    const remedy = healthRemedy(snap);
-    if (needs && remedy) needs.data = { ...needs.data, remedy };
-  }
+     The collision cannot recur, because it was never really about two cards. It
+     was one fact — a system fault — being counted in the header and described in
+     the header at the same time. The header now describes and never counts. */
+  const kept = cells.filter((cell) => cell.speaks);
   return {
     calm,
     watch: calm ? watchClauses(snap) : [],

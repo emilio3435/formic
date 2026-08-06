@@ -112,14 +112,15 @@ describe("a clean board reports clear, not empty", () => {
     const clean = cellIds(cleanBoard());
     const broken = cellIds(brokenBoard());
 
-    expect(clean).not.toContain("needs-you");
     expect(clean).not.toContain("health");
     expect(clean).toContain("momentum");
     expect(clean).toContain("burn");
 
-    // The broken board is where those two earn their place.
-    expect(broken).toContain("needs-you");
+    // The broken board is where health earns its place. ("needs-you" was the
+    // other cell here; S2-T1 retired it — the header states no count of
+    // problems, and those findings live in the notification center now.)
     expect(broken).toContain("health");
+    expect(broken).not.toContain("needs-you");
     expect(broken.length).toBeGreaterThan(clean.length);
   });
 
@@ -136,17 +137,23 @@ describe("a clean board reports clear, not empty", () => {
     expect(clean.value).not.toBe(broken.value);
   });
 
-  test("zero findings reads as an answer rather than a missing reading", () => {
-    const clean = M.summaryWidgetData("needs-you", cleanBoard(), "live");
-    const broken = M.summaryWidgetData("needs-you", brokenBoard(), "live");
+  /* S2-T1. This asserted that a zero findings COUNT rendered as an answer
+     rather than a blank. The claim was right for a card that counted to-dos in
+     the header; that card is retired, because the header is confidence and a
+     count of to-dos is attention's. The claim it becomes: the finding is still
+     reachable, and the empty case still reads as an answer — in the surface
+     that owns it. */
+  test("zero findings reads as an answer, in the surface that owns findings", () => {
+    const calm = M.notificationPanelModel(cleanBoard(), [], Date.now(), M.NOTIFY_DEPS);
+    expect(calm.verdict).toBe("All clear");
+    expect(calm.count).toBe(0);
+    // Not a blank: an all-clear panel shows what the watcher watched.
+    expect(calm.proof).not.toBeNull();
 
-    expect(clean.value).toBe("0");
-    expect(clean.tone).toBe("ok");
-    expect(String(clean.sublabel).trim().length).toBeGreaterThan(0);
-    expect(clean.tone).not.toBe("missing");
     // And it genuinely counts: the broken board moves it.
-    expect(broken.value).toBe("1");
-    expect(broken.tone).toBe("hot");
+    const alarmed = M.notificationPanelModel(brokenBoard(), [], Date.now(), M.NOTIFY_DEPS);
+    expect(alarmed.verdict).not.toBe("All clear");
+    expect(alarmed.watching.length + alarmed.groups.length).toBeGreaterThan(0);
   });
 
   test("no cell on a clean board reports a missing reading", () => {
