@@ -47,8 +47,8 @@
   <h2 style="margin-top:0;border:0">Resume Here</h2>
   <dl>
     <dt>Status</dt><dd><span class="st doing">doing</span> — 5 tranches merged to main (PRs #9, #11, #12, #13, #14). Branch <code>fix/cmux-control-health-lifecycle</code>.</dd>
-    <dt>Phase</dt><dd>Tail end: S4, S6-T3/T4, remaining a11y defects, geometry test, Board all-clear defect.</dd>
-    <dt>Next action</dt><dd>Verify <code>62a7f04</code> (A11Y-2, focus no longer stranded on <code>&lt;body&gt;</code>), then push + PR + merge tranche 6.</dd>
+    <dt>Phase</dt><dd>Tail end. All six a11y defects are fixed; the geometry gate is parked with a reason. Remaining: S4, S6-T3/T4, the Board all-clear defect.</dd>
+    <dt>Next action</dt><dd>fe-notify holds <code>app.js</code>: finish <strong>S4</strong>, then <strong>S6-T3/T4</strong>, then the Board all-clear defect. Push + PR + merge tranche 6 when S4 lands.</dd>
     <dt>Blockers</dt><dd>None. Every dependency that gated the header has cleared.</dd>
     <dt>Last validation</dt><dd><code>bunx tsc --noEmit</code> exit 0 · <code>bun run test:ci</code> 0 fail · CI green on #14 (32s) · merged.</dd>
   </dl>
@@ -79,9 +79,9 @@
   <tr><td><strong>S6-T1/T2</strong> propose-then-confirm sweep + read-only endpoint</td><td><span class="st done">done</span></td></tr>
   <tr><td><strong>S6-T3/T4</strong> Clean up chip spinner + result routed as a dataflow item</td><td><span class="st todo">todo</span></td></tr>
   <tr><td><strong>A11Y-1</strong> panel clipped 24px off the left at 420px</td><td><span class="st done">done</span></td></tr>
-  <tr><td><strong>A11Y-2</strong> focus stranded on <code>&lt;body&gt;</code></td><td><span class="st doing">doing</span> — <code>62a7f04</code>, unverified by orchestrator</td></tr>
-  <tr><td><strong>A11Y-3..6</strong> panel name, duplicate Focus names, missing program name, 32px target</td><td><span class="st todo">todo</span></td></tr>
-  <tr><td><strong>Panel geometry test</strong> — measure edges, not stylesheet text</td><td><span class="st todo">todo</span> — see Open Questions</td></tr>
+  <tr><td><strong>A11Y-2</strong> focus stranded on <code>&lt;body&gt;</code></td><td><span class="st done">done</span> — <code>62a7f04</code>, reproduced before / verified after on a live board</td></tr>
+  <tr><td><strong>A11Y-3..6</strong> panel name, duplicate Focus names, missing program name, 32px target</td><td><span class="st done">done</span> — <code>d4192ba</code>. <code>aria-labelledby</code> on a bare div computes <code>role=generic</code>, where ARIA <em>prohibits</em> a name</td></tr>
+  <tr><td><strong>Panel geometry test</strong> — measure edges, not stylesheet text</td><td><span class="st incomplete">incomplete</span> — written, validated, <strong>parked</strong> in <code>docs/a11y-geometry-gate/</code>. Needs a layout engine the package lacks. See Open Questions</td></tr>
   <tr><td><strong>Board all-clear defect</strong> — rich all-clear unreachable at every preset</td><td><span class="st todo">todo</span></td></tr>
 </table>
 
@@ -234,6 +234,11 @@ const progressEvents = [
     summary:"PR #14 merged. Scan window stated once, THEN the Tokens card — ordering kept. totals.consumption renders as a covered floor." },
   { ts:"2026-08-06T04:20:00Z", status:"doing", phase:"checkpoint", actor:"orchestrator",
     summary:"Ledger created for compaction. Remaining: S4, S6-T3/T4, A11Y-2..6, the geometry test, the Board all-clear defect. No blockers." },
+  { ts:"2026-08-06T04:33:05Z", status:"done", phase:"a11y", actor:"a11y-sweep",
+    summary:"A11Y-2..6 fixed. The lane measured its own first draft of the Focus name, found it read a home path aloud one segment at a time on every row, and narrowed it." },
+  { ts:"2026-08-06T04:38:00Z", status:"incomplete", phase:"a11y", actor:"a11y-sweep",
+    summary:"Geometry gate PARKED with evidence: the CSS-text guard is wrong in both directions — false-positive on route A, blind to the shipped defect on route C. Needs a layout engine the package lacks.",
+    evidence:["docs/a11y-geometry-gate/README.md"] },
 ];
 document.getElementById("timeline").innerHTML = progressEvents.map(e =>
   '<li><span class="ts">' + e.ts.replace("T"," ").replace("Z"," UTC") + '</span>' +
