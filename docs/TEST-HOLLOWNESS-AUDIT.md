@@ -178,6 +178,38 @@ Never leave a mutation in the tree. Prefer `git diff --stat` on the mutated path
 
 ---
 
+## Frozen delivery contract (S1-T4) — kept
+
+**Promise:** plan §S1-T4 froze `loadNotifyPreference`, `saveNotifyPreference`, `toggleNotifications`, `deliverNotification`, `NOTIFY_TAG`, `titleWithAlerts`, and permission-on-click-only for the whole program. The one authorised change was **S1-T5** — repoint `needsHumanIds` onto `attentionClass "blocking"` (targeting, not mechanics).
+
+**Method:** brace-exact body extract of each symbol in `src/web/notifications.js` at merge-base `70572a9` vs `HEAD`. Not an assertion — a diff.
+
+| Symbol | Verdict |
+|---|---|
+| `NOTIFY_TAG` (`"anthill-needs-you"`) | **UNCHANGED** |
+| `loadNotifyPreference` | **UNCHANGED** |
+| `saveNotifyPreference` | **UNCHANGED** |
+| `toggleNotifications` | **UNCHANGED** |
+| `deliverNotification` | **UNCHANGED** (sha256 of body identical; still `tag: NOTIFY_TAG`) |
+| `titleWithAlerts` | **UNCHANGED** |
+| `needsHumanIds` | **CHANGED — authorised S1-T5** (`alerting()` / `snapshotAgents` → `blockingAgentIds(snap)`) |
+
+Also unchanged (supporting, not on the frozen list): `notificationPlan`, `applyNotifications`, `NOTIFY_STORAGE_KEY`.
+
+### What was looked for
+
+| Risk | Finding |
+|---|---|
+| Permission requesting moved onto load | **Clean.** Exactly one `requestPermission(` in the client, still inside `toggleNotifications`. `boot()` does not call it. Named test: `tests/web-client.test.ts` "(4) permission is asked from a click and nowhere else…" — would catch a move into `boot`, a second call site, or removing it from `toggleNotifications`. |
+| Click wiring | Masthead `notify-toggle` now opens the panel; delivery's switch in the panel footer calls `toggleNotifications()`. Still a user click, still never on load. The named test pins placement inside `toggleNotifications` + absence from `boot`; it does **not** require the masthead button to be the click that reaches permission (and that relocation is intentional). |
+| `NOTIFY_TAG` stacking | **Clean.** Constant and `deliverNotification` ctor options unchanged — still replace, never stack. |
+| Preference load/save | **Clean.** Same key (`mtn3-notify`), same `"on"`/`"off"` values, same revoke-clears-enabled rule. |
+| `deliverNotification` mechanics beyond recipient set | **Clean.** Gates (`fire` / enabled / ctor / granted), tag, and return reasons byte-identical. Recipient set changes only via `needsHumanIds` → `applyNotifications` (S1-T5). |
+
+**Verdict:** promise kept. Diffed `src/web/notifications.js` at `70572a9..HEAD` for every frozen symbol; confirmed `requestPermission` placement against `app.js` boot wiring. Adjacent non-frozen UI (`notifyToggleView` / `renderNotifyToggle` badge tone) changed under S1-T4's badge-ink work and is outside the delivery contract.
+
+---
+
 ## Footer
 
 - Round 1 tests: `tests/harden-notify-hollowness-guards.test.ts`, parked loop in `tests/harden-notify-fixtures.test.ts`
@@ -186,3 +218,4 @@ Never leave a mutation in the tree. Prefer `git diff --stat` on the mutated path
 - This document: `docs/TEST-HOLLOWNESS-AUDIT.md`
 - Round 2 verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2646 pass / 0 fail**.
 - Round 3 verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2659 pass / 0 fail**.
+- Frozen delivery contract verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2659 pass / 0 fail**.
