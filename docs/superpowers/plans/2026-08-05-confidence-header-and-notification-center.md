@@ -260,7 +260,15 @@ Also left uncommitted deliberately, because they are not this program's to land:
 
 ### Rulings made during execution
 
-**R1 · `hookLifecycleAt` is a heartbeat — confirmed live, S0-T1, 20:52.** Across three collector passes ≥60s apart, sessions that *stayed* in `needsInput` had the value advance. It cannot be an entry clock, and the lane correctly refused to substitute `updatedAt`. Consequences: `blockedSince` ships only if a defensible entry signal is found in the cmux event stream (`agent.hook.Notification.occurred_at` is the live candidate); **`pulse.standbyMs` is cut unless it does** — a wire field that is permanently absent is noise wearing the costume of rigor. `pulse.blocked` (the count) ships either way, because a count is honest when a duration is not.
+**R1 · Dead time is dropped entirely — FINAL. Evidence: `docs/S0-T1-DEAD-TIME-MEASUREMENT.md` (`5d1fa71`).** `blockedSince` and `pulse.standbyMs` do not ship. Three findings, each measured on the live board rather than reasoned about:
+
+- `hookLifecycleAt` advanced `01:38:51.896 → 01:39:16.199 → 01:40:41.667` on a session that stayed `needsInput` and alive throughout. It is a write clock.
+- `agent.hook.Notification.occurred_at` is **not an entry edge either** — the same still-blocked session emitted seq `99281`, then seq `99477` two minutes later, while the state already held. Using it would reset dead time in the middle of a single wait.
+- The cmux journal is not durable history: `events.jsonl` + `.1` covered ~3.75 hours at measurement time, rollover replaces `.1`, restarts leave gaps, and some sessions had no matching event at all.
+
+**Consequence for the panel: the standby hero and every per-row age are REMOVED, not withheld.** A slot that explains its own absence on every paint is noise, and it implies the number is coming. It is not coming. The verdict header carries the verdict word and `pulse.blocked`, which is real and measured. Rows sort by severity → kind → program → id: stable, explainable, and never dependent on a duration. §6's truth-safety claim *"an unmeasurable duration is withheld, not zeroed"* is superseded by *"the order is stable across paints and never depends on a duration."*
+
+`pulse.blocked` still ships. A count is honest when a duration is not — and the count was always the thing the operator needed; the stopwatch was the part that could not be measured.
 
 **R2 · The board never deletes.** The header chip's Clean up action runs the sweep's **`propose` phase only**. Its output becomes a notification-center `dataflow` item listing each removable item, its rollback SHA, what was refused and why, and the exact `confirm` command to paste. **No destructive server endpoint, in this program or later.** A click in a browser is not the same gate as a person reading a plan in a terminal, and the precedent being matched is a manual pass that was careful never to delete without a human in the loop. S6-T2's confirm phase stays a terminal action.
 
