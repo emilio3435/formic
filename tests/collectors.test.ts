@@ -294,6 +294,30 @@ describe("collector identity and usage truth", () => {
     expect(agent?.effort).toBe("xhigh");
   });
 
+  test("codex parser records string launch evidence from session_meta", () => {
+    const parse = (payload: Record<string, unknown>) => parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-08-05T12:00:00.000Z",
+      payload: {
+        id: "019fd501-3322-7180-8990-b6af48404e15",
+        cwd: "/tmp/anthill-launch",
+        ...payload,
+      },
+    }), { nowMs });
+
+    expect(parse({ originator: "codex_exec", source: "exec" })?.launch).toEqual({
+      entrypoint: "codex_exec",
+      promptSource: "exec",
+    });
+    expect(parse({ originator: "codex-tui", source: "cli" })?.launch).toEqual({
+      entrypoint: "codex-tui",
+      promptSource: "cli",
+    });
+    expect(parse({ originator: "codex-tui", source: { subagent: {} } })?.launch).toEqual({
+      entrypoint: "codex-tui",
+    });
+  });
+
   test("Codex summary chooses the latest readable prose and keeps technical tail evidence separate", () => {
     const agent = parseCodexJsonl(fixture("codex-human-message-session.jsonl"), { nowMs });
 
