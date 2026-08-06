@@ -2409,7 +2409,7 @@ function cleanupAction() {
     /* R2′: the board LAUNCHES a lane; it still never deletes. The gate did not
        disappear, it moved onto the board — the Cleaner asks as an ordinary agent
        and the operator answers it the way they answer every other one. */
-    onclick: (e) => { e.stopPropagation(); void requestCleanerLaunch(); },
+    onclick: (e) => { e.stopPropagation(); void runCleanupFlow(); },
   },
     el("span", { class: "verdict-cleanup-mark", "aria-hidden": "true" }),
     label);
@@ -3056,6 +3056,25 @@ function announceCleanup(text) {
   if (region) region.textContent = text;
 }
 
+/* One press, two steps, in the order §2's state machine names them: `examining`
+   is the board's own propose sweep, `launching` is the lane it then starts.
+
+   The sweep runs FIRST because it is the only thing that produces counts,
+   refusals with their reasons, and per-item rollback SHAs — the Cleaner reports
+   its own progress through the ordinary session machinery and there is no
+   channel that returns a manifest. Skipping it would leave S4 with nothing to
+   render but an adjective.
+
+   An incomplete enumeration stops the flow. A plan missing a refusal is a plan
+   that proposes removing something it should not, and launching an agent to act
+   on one would be worse than not launching at all. */
+async function runCleanupFlow() {
+  if (state.cleanup.running || state.cleaner.launching) return;
+  await requestCleanupProposal();
+  if (state.cleanup.error) return;
+  await requestCleanerLaunch();
+}
+
 /* Launch one Cleaner lane and bind the chip to it.
 
    R2′ of the Cleaner plan: the board may start the agent, and still may not
@@ -3273,9 +3292,16 @@ function renderCleanupPlan() {
      exactly the set the sweep looked at and chose to keep, and the reasons are
      listed below, so the count is evidence rather than reassurance. */
   const examined = worktrees.length + branches.length;
+  /* S4's verdict line: a COUNT, split by kind, never an adjective. "2 worktrees,
+     1 branch proposed, 1 refused" is a fact an operator can act on; "Cleanup
+     complete!" is a mood. countsSentence also refuses the word "removed" — the
+     board observes that a sweep proposed things and that a session ended; it
+     never observes a removal, because nothing reports one. */
+  const counts = cleanupCounts(view);
+  out.push(el("p", { class: "notify-instrument-problem", text: countsSentence(counts) }));
   out.push(el("p", { class: "notify-instrument-remedy", text:
     removable.length
-      ? `${removable.length} item${removable.length === 1 ? "" : "s"} can be removed, and nothing will be until you run the command below.`
+      ? "A Cleaner will ask you here before it removes any of them. Each carries the rollback SHA that undoes it."
       : examined
         ? `Nothing to sweep. ${examined} item${examined === 1 ? " was" : "s were"} examined and every one was kept — the reasons are below.`
         : "Nothing to sweep. No worktrees or branches were eligible for removal." }));
