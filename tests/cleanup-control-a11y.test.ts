@@ -150,7 +150,11 @@ describe("CLEAN-5: the indicator is not a colour-only signal", () => {
   test("reduced motion keeps a visible marker rather than removing it", () => {
     /* NOT verified live — this project's harness cannot emulate the media
        feature (see the sweep doc's check 5). Asserted at rule level only. */
-    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)", css.indexOf(".verdict-cleanup")));
+    /* Anchored on the MARK's own rule, not on ".verdict-cleanup" — that string
+       also appears in the ≤1024px touch sweep, which sits earlier in the file
+       than the universal reduce kill, so anchoring on it walked to the wrong
+       @media block the moment this control joined the sweep. */
+    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)", css.indexOf(".verdict-cleanup-mark {")));
     expect(reduced.slice(0, 260)).toContain("animation: none");
     expect(reduced.slice(0, 260)).toMatch(/border-top-color: currentColor/);
   });

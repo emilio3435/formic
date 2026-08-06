@@ -2933,7 +2933,11 @@ body.feed-frozen .programs { opacity: 0.62; }
      measured 70x32 — and Focus is the one that moves the operator to the agent.
      The sweep already covers the same control in the verdict head; the
      notification row is the other place a .dock-tool sits inline. */
-  .notify-act, .notify-row-acts .dock-tool, .filter-chip, .program-details,
+  /* .verdict-cleanup joins the sweep here for the first time — A11Y-6 covered the
+     notification row's Focus control, never this one, and it measured 17px. It is
+     the only action the header offers, so it should not be the smallest target
+     on the board on a phone. */
+  .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 
@@ -3639,22 +3643,36 @@ body.feed-frozen .programs { opacity: 0.62; }
    and a command the operator pastes into a terminal themselves.
    ------------------------------------------------------------------------- */
 
+/* A control WITHIN a reading, so it borrows .rail-action's shape rather than
+   inventing one: muted ink and a transparent edge at rest, resolving to
+   --line-strong + --sand on hover. It used to take `color: inherit`, which made
+   it the same amber as the verdict beside it — a subordinate control wearing the
+   verdict's ink competes with the number it qualifies. No new accent: --muted is
+   the existing secondary-text token, the same one .rail-action uses.
+
+   No margin-left. .verdict-chip already sets gap: 0.45rem, so the old margin
+   stacked a second, different gap and pushed the control off the chip's rhythm. */
 .verdict-cleanup {
   appearance: none;
-  margin-left: 0.5rem;
-  padding: 0.14rem 0.4rem;
-  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--raise);
-  color: inherit;
-  font: 600 0.66rem/1 var(--font-ui);
-  cursor: pointer;
+  align-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  vertical-align: middle;
+  justify-content: center;
+  gap: 0.32rem;
+  padding: 0.24rem 0.56rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--sand);
+  color: var(--muted);
+  font: 650 0.72rem/1 var(--font-ui);
+  letter-spacing: 0.01em;
+  cursor: pointer;
 }
-.verdict-cleanup:hover { background: var(--sand); }
+.verdict-cleanup:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--raise);
+}
 /* aria-disabled rather than :disabled — the button stays focusable while a sweep
    runs, because a control that leaves the tab order mid-interaction strands the
    keyboard operator who just activated it. Styled the same either way. */
@@ -3663,16 +3681,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* The indicator states that A PROCESS IS UNDERWAY. It must never imply the
    fault is fixed, so it is a bare rotating arc with no completion affordance —
    no check, no fill, no bar that could read as progress toward a repair. */
+/* COLLAPSED at rest, not merely transparent. It was opacity: 0 with its 9px box
+   still in flow, so the label was pushed 9px + gap to the right of centre inside
+   its own button — measured, and the reason the control read as left-aligned.
+   A resting indicator must occupy nothing; it earns its space when it spins. */
 .verdict-cleanup-mark {
+  display: none;
   width: 9px;
   height: 9px;
   border-radius: 50%;
   border: 1.5px solid currentColor;
   border-top-color: transparent;
-  opacity: 0;
 }
+/* display, not opacity/width: a zero-width box still contributes its borders AND
+   the flex gap beside it — measured at 3px + 5px, which is precisely the offset
+   that made the label sit right of centre. Removed from layout, the label is
+   centred by justify-content and the indicator costs nothing until it runs. */
 .verdict-cleanup.is-running .verdict-cleanup-mark {
-  opacity: 1;
+  display: block;
   animation: cleanup-spin 900ms linear infinite;
 }
 @keyframes cleanup-spin { to { transform: rotate(360deg); } }
