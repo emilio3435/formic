@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { readableTask } from "./collectors";
+import { sessionKindFor } from "./snapshot-agent";
+import type { AgentSnapshot } from "../shared/types";
 import type { ArchiveStore, CollectedAgent } from "./types";
 
 /* The defaults, not the law. Retention and the record cap are operator settings
@@ -28,7 +30,9 @@ type ArchiveKind = "operator" | "history";
    operator was told ok: true - the request destroyed the thing it was meant to
    preserve. And 0 of 546 records carried an archive time, so it could not even
    be diagnosed afterwards. */
-type StoredAgent = CollectedAgent & { archiveKind?: ArchiveKind; archivedAt?: string };
+type StoredAgent = CollectedAgent &
+  Pick<AgentSnapshot, "sessionKind" | "sessionKindSource"> &
+  { archiveKind?: ArchiveKind; archivedAt?: string };
 
 export interface ArchiveFileOperations {
   readText(path: string): Promise<string>;
@@ -268,6 +272,10 @@ function archiveCopy(
   nowMs: number,
   existingArchivedAt?: string,
 ): StoredAgent {
+  const published = agent as CollectedAgent & Pick<AgentSnapshot, "sessionKind" | "sessionKindSource">;
+  const kind = published.sessionKind && published.sessionKindSource
+    ? { sessionKind: published.sessionKind, sessionKindSource: published.sessionKindSource }
+    : sessionKindFor({ launch: agent.launch, task: agent.task });
   return {
     id: agent.id,
     provider: agent.provider,
@@ -285,6 +293,8 @@ function archiveCopy(
     model: agent.model,
     effort: agent.effort,
     task: agent.task,
+    sessionKind: kind.sessionKind,
+    sessionKindSource: kind.sessionKindSource,
     status: "archived",
     statusReason: archiveKind === "operator" ? "Archived by operator." : "Retained session history.",
     startedAt: agent.startedAt,

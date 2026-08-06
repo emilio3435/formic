@@ -128,7 +128,7 @@ describe("a clean board reports clear, not empty", () => {
     const clean = M.summaryWidgetData("health", cleanBoard(), "live");
     const broken = M.summaryWidgetData("health", brokenBoard(), "live");
 
-    expect(clean.value).toBe("All clear");
+    expect(clean.value).toBe("Readings healthy");
     expect(clean.tone).toBe("ok");
     // "No data" and an empty string are the two ways an unexercised healthy
     // path degrades into looking broken.

@@ -127,6 +127,20 @@ const _agentRolesAreExhaustive: AgentRolesAreExhaustive = true;
 void _agentRolesAreExhaustive;
 export type RoleSource = "declared" | "observed" | "inferred";
 
+/* What kind of session this is, as an axis ORTHOGONAL to role: role says what
+   authority the agent has; kind says why the session exists. Provider-neutral:
+   collectors contribute evidence, one derivation decides. */
+export type SessionKind = "work" | "review" | "automation" | "system" | "unknown";
+export const SESSION_KINDS = ["work", "review", "automation", "system", "unknown"] as const satisfies readonly SessionKind[];
+type SessionKindsAreExhaustive = Exclude<SessionKind, (typeof SESSION_KINDS)[number]> extends never ? true : never;
+const _sessionKindsAreExhaustive: SessionKindsAreExhaustive = true;
+void _sessionKindsAreExhaustive;
+
+/* Where the kind came from. "launch-evidence" is observed (a provider-recorded
+   launch marker); "task-pattern" is inferred (prose matched a known producer's
+   prompt); "declared" is a manifest/env claim; "none" accompanies "unknown". */
+export type SessionKindSource = "launch-evidence" | "task-pattern" | "declared" | "none";
+
 export interface AgentLineage {
   observedParentAgentId: string;
 }
@@ -392,6 +406,9 @@ export interface AgentSnapshot {
   role?: AgentRole;
   /** Whether the role was declared, witnessed through lineage, or inferred from prose. */
   roleSource?: RoleSource;
+  /** Why this session exists — work, review, automation, system — with provenance. */
+  sessionKind?: SessionKind;
+  sessionKindSource?: SessionKindSource;
   /** Domain chip kept separate from role: frontend/backend describe work, not authority. */
   specialty?: AgentSpecialty;
   /* One thing the operator can do about this agent, derived from what the agent

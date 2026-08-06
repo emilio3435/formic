@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { JsonArchiveStore } from "./archive";
 import { createAgentLinkFetch } from "./agent-links";
 import { createMountainFetch } from "./app";
+import { createWorkerCleanupProposer } from "./cleanup-propose";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { runtimeCmuxExecutable } from "./cmux";
@@ -66,6 +67,7 @@ const mountainFetch = createMountainFetch({
   triageRunner,
   programAliasStore,
   settingsStore,
+  cleanupProposer: createWorkerCleanupProposer(PROJECT_ROOT),
   cmuxExecutable,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });

@@ -8,7 +8,39 @@ Owned by harden-notify (`scripts/anthill-cleanup-sweep.ts`). fe-notify builds th
 chip button, spinner, and the notification-center **dataflow** item against this
 page — not against the TypeScript source.
 
-## Invocation the UI runs
+## Board endpoint
+
+The Clean up button makes one exact-same-origin request:
+
+```http
+POST /api/cleanup/propose
+```
+
+The server runs enumeration in a worker, outside the snapshot loop. Calls that
+overlap share one in-flight run, so a double-click produces one plan. A complete
+response wraps the notification view documented below:
+
+```json
+{
+  "ok": true,
+  "complete": true,
+  "plan": {
+    "removable": [],
+    "refused": { "worktrees": [], "branches": [] },
+    "confirmCommand": "bun scripts/anthill-cleanup-sweep.ts confirm /absolute/path/to/cleanup-plan.json"
+  }
+}
+```
+
+If the process table, any recognized agent cwd, Git enumeration, or plan write
+cannot be completed, the endpoint returns HTTP 503 with `ok:false`,
+`complete:false`, an error code/message, and **no `plan` field**. A partial plan
+never reaches the client wearing a complete response.
+
+There is no cleanup-confirm endpoint. `confirmCommand` is text for the client to
+render and the operator to paste into a terminal; the board never executes it.
+
+## Terminal propose equivalent
 
 ```bash
 bun scripts/anthill-cleanup-sweep.ts propose \
@@ -24,10 +56,10 @@ bun scripts/anthill-cleanup-sweep.ts propose \
 | `--main` | `main` | Merge-base tip |
 | `--json` | off | Print the **notification view** on stdout (what the dataflow item needs) |
 
-`propose` only reads git state and the process table. It is safe while agents are
-live, and safe to click twice: writers take a lock on `<out>.lock` and replace
-the plan file atomically. Each run supersedes the previous plan; nothing is
-deleted.
+`propose` only enumerates git state and the process table, then writes the plan
+artifact. It is safe while agents are live, and safe to invoke twice: writers
+take a lock on `<out>.lock` and replace the plan file atomically. Each run
+supersedes the previous plan; nothing is deleted.
 
 ## Notification view (`--json` stdout)
 

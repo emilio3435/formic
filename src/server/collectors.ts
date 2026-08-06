@@ -354,6 +354,7 @@ function makeAgent(input: {
      not an identity. Defaults to `cwd` for the providers whose session file
      records a single directory and therefore cannot drift. */
   originCwd?: string;
+  launch?: CollectedAgent["launch"];
   model?: string;
   effort?: string;
   task?: string;
@@ -414,6 +415,7 @@ function makeAgent(input: {
   return {
     identity,
     originCwd: input.originCwd ?? input.cwd,
+    launch: input.launch,
     id: `${input.provider}:${input.sourceSessionId}`,
     callSizes: input.callSizes,
     provider: input.provider,
@@ -592,6 +594,7 @@ export function parseOmpJsonl(jsonl: string, meta: ParseMetadata = {}): Collecte
 
 function createCodexParser(): IncrementalParser {
   let sessionRow: JsonRecord | undefined;
+  let launch: CollectedAgent["launch"];
   let updatedAt: string | undefined;
   const activeTime = new ActiveTime();
   let model: string | undefined;
@@ -607,7 +610,16 @@ function createCodexParser(): IncrementalParser {
     append(rows) {
       for (const row of rows) {
         const rowIndex = index++;
-        if (!sessionRow && row.type === "session_meta") sessionRow = row;
+        if (!sessionRow && row.type === "session_meta") {
+          sessionRow = row;
+          const session = row.payload ?? row;
+          if (typeof session.originator === "string" && session.originator) {
+            launch = { ...launch, entrypoint: session.originator };
+          }
+          if (typeof session.source === "string" && session.source) {
+            launch = { ...launch, promptSource: session.source };
+          }
+        }
         const timestamp = isoTimestamp(row.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
         activeTime.observe(timestamp);
@@ -688,6 +700,7 @@ function createCodexParser(): IncrementalParser {
         provider: "codex",
         sourceSessionId: sessionId,
         cwd: typeof session.cwd === "string" ? session.cwd : undefined,
+        launch,
         model: model ?? (typeof session.model === "string" ? session.model : undefined),
         effort,
         task,
@@ -749,6 +762,7 @@ function createClaudeParser(): IncrementalParser {
      transcript is append-only, the first recorded cwd is the same on a cold
      parse and on every incremental one. */
   let originCwd: string | undefined;
+  let launch: CollectedAgent["launch"];
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
   const activeTime = new ActiveTime();
@@ -780,6 +794,12 @@ function createClaudeParser(): IncrementalParser {
         if (typeof row.cwd === "string") {
           cwd = row.cwd;
           originCwd ??= row.cwd;
+        }
+        if (launch?.entrypoint == null && typeof row.entrypoint === "string" && row.entrypoint) {
+          launch = { ...launch, entrypoint: row.entrypoint };
+        }
+        if (launch?.promptSource == null && typeof row.promptSource === "string" && row.promptSource) {
+          launch = { ...launch, promptSource: row.promptSource };
         }
         if (
           typeof row.session_id === "string" &&
@@ -864,6 +884,7 @@ function createClaudeParser(): IncrementalParser {
         runtimeSessionId,
         cwd,
         originCwd,
+        launch,
         model,
         effort,
         task,

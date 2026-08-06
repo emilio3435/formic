@@ -960,27 +960,28 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        says the board is Blocked and stops there is the symptom-without-a-remedy
        the whole rewrite exists to remove. These severities are decided here, in
        the client, so their next step is named here too. */
-    const blockingStep = !snap || conn === "offline"
-      ? "Check the hub is running, then Refresh."
-      : control && control.cmuxReachable !== true
-        ? "Start cmux, then Refresh — Focus and Send come back on their own."
-        : "";
-    /* Offline is its own status key rather than a `degraded` severity, so it
-       needs naming here too — it is the one state where the operator is most
-       stranded and least able to guess the next move. */
-    const severityStep = (severity && severity.key === "blocking") || status.key === "offline"
-      ? blockingStep
-      : severity && severity.key === "stale" ? "Refresh to re-pull the evidence."
-      : "";
-    const remedy = severityStep
-      ? { ...(derived || { problem: "", paneCount: 0, blockedCount: 0, panes: [], tidy: false }),
-          instruction: severityStep, panes: [] }
-      : derived;
+    /* The severity override moved out to instrumentRemedy(), which the
+       notification center now renders. Left inline it would have been dead code
+       here and a silent regression there: a blocked board would have offered
+       "Close 17 cmux panes" — a fix for a different problem — because
+       healthRemedy alone cannot know the control plane is down. */
+    /* S2-T2. The headline was the SEVERITY word — "All clear", "Blocked",
+       "Stale", "Advisory" — which reads as a verdict about the fleet. It is a
+       verdict about the INSTRUMENTS, and saying so is the card's whole job: a
+       confidence header whose instruments are broken must admit it, or every
+       number beside it is unqualified. "Readings degraded" cannot be mistaken
+       for "the agents are degraded"; "Stale" could, and did. */
     return {
-      value: (severity && SEVERITY_HEADLINE[severity.key])
-        || (status.key === "operational" ? "All clear" : status.label),
+      value: status.key === "operational" ? "Readings healthy"
+        : status.key === "offline" ? "Readings unavailable"
+          : "Readings degraded",
       unit: "",
-      remedy,
+      /* No remedy on the card. It is a qualifier, not a controller: the fix,
+         the finding's title and the Refresh control are in the notification
+         center, where the fault is an item with a route. A chip that both
+         states the instruments are broken AND offers three ways to act is a
+         metric again. */
+      remedy: null,
       sublabel: !snap
         ? (conn === "offline" ? "Snapshot connection unavailable." : "Waiting for the first snapshot.")
         : status.key === "operational"
@@ -1003,11 +1004,9 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
               + (unaddressable
                 ? `${unaddressable} ${unaddressable === 1 ? "session cannot" : "sessions cannot"} take commands`
                 : "controls reachable")
-              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you.")
             : (unaddressable
                 ? `${unaddressable} ${unaddressable === 1 ? "session cannot" : "sessions cannot"} take commands`
-                : "Sources and controls healthy")
-              + (remedy && remedy.tidy && remedy.paneCount ? " · tidy-up available." : " · nothing needs you."))
+                : "Sources and controls healthy"))
           : conn !== "live" ? "Live snapshot feed is not healthy."
             : fetchFailed ? "Last snapshot refresh failed — showing the previous good snapshot."
             : control && control.cmuxReachable !== true
@@ -1264,7 +1263,7 @@ globalThis.TheAntHill = {
   INVESTIGATION_STATE_VIEW, investigationView,
   usageCostReading, usageTokenReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
   systemStatus, degradedSeverity, healthRefreshAction, completionWindowText, watchClauses, unaddressableCount, calmVerdict, stalledCount, stallText, calmSpendText, bandContextPct, sparklineLabel, attentionSummary, summaryWidgetData, topSourceIssue, degradedSinceText,
-  healthRemedy,
+  healthRemedy, instrumentRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
@@ -2195,10 +2194,15 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
       }, data.spreadMode === "average" ? "avg" : "med"));
     }
   }
-  // A Degraded verdict names its reason (the top live finding) beside the chip
-  // and exposes the existing refresh control right there.
+  /* S2-T2. The card no longer names the top finding, offers a remedy, lists
+     leftover panes or carries Refresh. It is a QUALIFIER: it says whether the
+     instruments behind every other reading can be trusted, and stops. All four
+     of those moved to the notification center, where the fault is an item with
+     evidence, an impact and a route — see the instrument block in
+     renderNotificationCenter. What stays here is the since-note and the
+     snapshot age, because those qualify the reading itself. */
   const degraded = id === "health" && (data.tone === "degraded" || data.tone === "advisory");
-  const reason = degraded ? topSourceIssue(state.snap) : null;
+  const reason = null;
   const sinceNote = degraded ? degradedSinceText(state.snap) : "";
   const snapNote = id === "health" && state.snap?.generatedAt ? ` · snapshot ${agoText(state.snap.generatedAt)}` : "";
   /* The severity badge used to lead this line because the headline was the bare
@@ -2235,41 +2239,11 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
-  // Naming a remedy an operator cannot locate is only half an answer, so the
-  // panes it refers to are one click away rather than a hunt through cmux. This
-  // rides outside the `degraded` branch: on a clear board the cleanup is still
-  // offered, just without the alarm around it.
-  if (remedy && remedy.panes.length) {
-    subNode.append(el("button", {
-      type: "button",
-      class: "reading-repair reading-panes",
-      "aria-expanded": String(healthPanesOpen),
-      "aria-label": (healthPanesOpen ? "Hide" : "Show") + " the "
-        + remedy.panes.length + " leftover cmux panes",
-      dataset: { fkey: "health-panes" },
-      onclick: toggleHealthPanes,
-    }, healthPanesOpen ? "Hide panes" : "Show " + remedy.panes.length + " panes"));
-  }
-  const refresh = degraded ? healthRefreshAction() : null;
-  if (refresh) {
-    subNode.append(el("button", {
-      type: "button",
-      class: "reading-repair",
-      title: refresh.title,
-      "aria-label": reason ? refresh.label + " — " + reason.title : refresh.label,
-      dataset: { fkey: "degraded-refresh" },
-      onclick: () => recollectSnapshot(),
-    }, refresh.label));
-  }
-  if (healthPanesOpen && remedy && remedy.panes.length) {
-    subNode.append(el("ul", { class: "health-pane-list" },
-      ...remedy.panes.slice(0, 12).map((pane) => el("li", {},
-        el("span", { class: "health-pane-name", text: pane.name }),
-        el("span", { class: "health-pane-age", text: pane.updatedAt ? "quiet " + agoText(pane.updatedAt) : "" }))),
-      remedy.panes.length > 12
-        ? el("li", { class: "health-pane-more", text: "+" + (remedy.panes.length - 12) + " more" })
-        : null));
-  }
+  /* The pane disclosure and the Refresh button stood here. Both are controls,
+     and a control in the confidence header is the header doing attention's job
+     — the same rule that retired the finding links. They are in the
+     notification center's instrument block now, together, next to the sentence
+     that says what is wrong. */
   return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
 }
 
@@ -2440,6 +2414,12 @@ function notifyPanelPaintSig(model, open) {
       .map((item) => item.id + "~" + item.since + "~" + item.evidence + "~" + item.lifecycle).join(","),
     state.notify.enabled ? "on" : "off",
     state.notify.permission,
+    /* The instrument block lives in this panel, so its inputs belong in this
+       signature — otherwise a control plane that goes down while the panel is
+       open would never repaint the one place that now says so. */
+    systemStatus(state.snap, state.conn).key,
+    String((healthRemedy(state.snap) || {}).paneCount ?? ""),
+    healthPanesOpen ? "panes" : "",
     feedFrozen() ? "held" : "",
   ].join("\u001f");
 }
@@ -2562,6 +2542,8 @@ function renderNotificationCenter() {
     for (const item of group.items) panel.append(notifyRow(item));
   }
 
+  panel.append(...renderInstrumentBlock());
+
   if (model.watching.length) {
     panel.append(el("div", { class: "notify-sect" },
       el("span", { class: "notify-eyebrow", text: "Watching" }),
@@ -2588,6 +2570,105 @@ function renderNotificationCenter() {
   }
 
   panel.append(renderNotifyDeliverySwitch());
+}
+
+/* The remedy an operator should actually be given, severity-corrected.
+
+   healthRemedy() answers "what debris is there"; this answers "what should you
+   do FIRST". A blocking fault outranks any tidy-up: telling someone to close
+   panes while Focus and Send cannot route at all points them at the wrong
+   problem, and it was caught on the live board reading "3 live sessions can't
+   take commands" directly above "Close 17 cmux panes … this is tidying, not a
+   fault". Suppressing the wrong instruction must not leave none, so each
+   severity names its own next step, and the panes go with the tidy-up they
+   belong to rather than being offered as a fix for something else. */
+function instrumentRemedy(snap = state.snap, conn = state.conn, fetchFailed = state.fetchFailed) {
+  const status = systemStatus(snap, conn, fetchFailed);
+  const severity = status.key === "degraded" ? degradedSeverity(snap, conn, fetchFailed) : null;
+  const control = snap && snap.controlHealth;
+  const derived = healthRemedy(snap);
+  const blockingStep = !snap || conn === "offline"
+    ? "Check the hub is running, then Refresh."
+    : control && control.cmuxReachable !== true
+      ? "Start cmux, then Refresh — Focus and Send come back on their own."
+      : "";
+  /* Offline is its own status key rather than a `degraded` severity, so it needs
+     naming here too — it is the one state where the operator is most stranded
+     and least able to guess the next move. */
+  const severityStep = (severity && severity.key === "blocking") || status.key === "offline"
+    ? blockingStep
+    : severity && severity.key === "stale" ? "Refresh to re-pull the evidence."
+      : "";
+  if (!severityStep) return derived;
+  return {
+    ...(derived || { problem: "", paneCount: 0, blockedCount: 0, panes: [], tidy: false }),
+    instruction: severityStep,
+    panes: [],
+  };
+}
+
+/* Instrument trouble, and what to do about it — S2-T2's other half.
+
+   The header keeps a chip saying whether the readings can be trusted, because a
+   confidence header whose instruments are broken must admit it or every number
+   beside it is unqualified. What the chip may NOT keep is the acting: the top
+   finding's title, the remedy sentence, the leftover panes and Refresh were all
+   controls sitting inside a metric, which is the same defect as the finding
+   links. They live here, next to the sentence that says what is wrong.
+
+   Silent on a healthy board. This block speaks only when the instruments are
+   actually in trouble or there is real debris to clear — a permanent tidy-up
+   offer is a permanent scold, and an operator who learns a line is always there
+   stops reading it. */
+function renderInstrumentBlock() {
+  const status = systemStatus(state.snap, state.conn);
+  const degraded = status.key !== "operational";
+  const remedy = instrumentRemedy();
+  const refresh = degraded ? healthRefreshAction() : null;
+  const panes = (remedy && remedy.panes) || [];
+  if (!degraded && !(remedy && remedy.tidy && panes.length)) return [];
+
+  const top = degraded ? topSourceIssue(state.snap) : null;
+  const block = el("div", { class: "notify-instrument", role: "group", "aria-label": "Instrument trust" });
+  block.append(el("span", { class: "notify-eyebrow", text: degraded ? "Readings degraded" : "Tidy-up available" }));
+  /* The finding's TITLE, which the card deliberately stopped printing as its
+     explanation — here it labels the trouble rather than standing in for the
+     consequence, which is what it is actually good at. */
+  const problem = (remedy && remedy.problem) || (top && top.title) || status.label;
+  if (problem) block.append(el("p", { class: "notify-instrument-problem", text: problem }));
+  if (remedy && remedy.instruction) {
+    block.append(el("p", { class: "notify-instrument-remedy", text: remedy.instruction }));
+  }
+  const controls = el("div", { class: "notify-instrument-acts" });
+  if (panes.length) {
+    controls.append(el("button", {
+      type: "button", class: "notify-act",
+      "aria-expanded": String(healthPanesOpen),
+      "aria-label": (healthPanesOpen ? "Hide" : "Show") + " the " + panes.length + " leftover cmux panes",
+      dataset: { fkey: "health-panes" },
+      onclick: toggleHealthPanes,
+    }, healthPanesOpen ? "Hide panes" : "Show " + panes.length + " panes"));
+  }
+  if (refresh) {
+    controls.append(el("button", {
+      type: "button", class: "notify-act",
+      title: refresh.title,
+      "aria-label": top ? refresh.label + " — " + top.title : refresh.label,
+      dataset: { fkey: "degraded-refresh" },
+      onclick: () => recollectSnapshot(),
+    }, refresh.label));
+  }
+  if (controls.childNodes.length) block.append(controls);
+  if (healthPanesOpen && panes.length) {
+    block.append(el("ul", { class: "health-pane-list" },
+      ...panes.slice(0, 12).map((pane) => el("li", {},
+        el("span", { class: "health-pane-name", text: pane.name }),
+        el("span", { class: "health-pane-age", text: pane.updatedAt ? "quiet " + agoText(pane.updatedAt) : "" }))),
+      panes.length > 12
+        ? el("li", { class: "health-pane-more", text: "+" + (panes.length - 12) + " more" })
+        : null));
+  }
+  return [block];
 }
 
 /* Delivery's own control, and the ONLY place permission is requested — from

@@ -1270,7 +1270,7 @@ describe("summary status and widgets", () => {
       expect(M.summaryWidgetData(id, snap).sublabel, id).toBeTruthy();
     }
     expect(M.summaryWidgetData("momentum", null).value).toBe("No data");
-    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
+    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Readings unavailable");
   });
 
   test("momentum copy stays window-honest and never fabricates a zero-window readout", () => {
@@ -1497,6 +1497,64 @@ describe("views split Now from History", () => {
     }, () => {
       expect(M.currentFilter()(alertingReview, program)).toBe(true);
     });
+  });
+
+  /* The shelf carries its own copy of the review gate, and an uncovered twin of
+     a filter clause is how the two drift apart. This pins the twin to the same
+     three escapes the board's copy has. */
+  test("the shelf hides routine review workers under the same gate as the board", async () => {
+    const review = agent({
+      id: "claude:done-review", provider: "claude", status: "archived",
+      task: "Review this change for security vulnerabilities.",
+      updatedAt: new Date().toISOString(),
+    });
+    const work = agent({
+      id: "codex:done-work", status: "archived",
+      task: "Implement the lifecycle change.", updatedAt: new Date().toISOString(),
+    });
+    const program = { id: "p", name: "P", agents: [review, work] };
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(false);
+      expect(M.shelfFilter()(work, program)).toBe(true);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(true);
+    });
+    // A search is an explicit request: it admits the hidden review to the shelf too.
+    await withState({
+      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(true);
+    });
+  });
+
+  test("tab counts are population counts: a search never changes them", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", updatedAt, task: "Implement the lifecycle change." });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work] }] });
+    /* The row renders under the search escape while the count stays the no-query
+       population — counts ignore query BY DESIGN (a search changes what renders,
+       never what the tab claims exists); this pins that reading so the next
+       reader does not "fix" it into a bug. */
+    await withState({
+      snap, view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => withDom(() => {
+      M.renderTabs();
+      expect(domById.get("count-board")!.textContent).toBe("1");
+      expect(M.currentFilter()(review, snap.programs[0])).toBe(true);
+    }));
   });
 
   test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
@@ -2832,10 +2890,19 @@ describe("operations canvas layout", () => {
     });
     expect(M.topSourceIssue(degraded)?.title).toBe("CMUX control is degraded");
     expect(M.topSourceIssue(snapshot())).toBeNull();
+    /* S2-T2 moved the reason and the refresh OUT of the card and into the
+       notification center's instrument block. The claim is unchanged — a
+       degraded verdict must name what is wrong and expose the one control that
+       can fix it — only the surface that owns it moved, because a control
+       inside a confidence reading is the header doing attention's job. */
+    expect(source).toContain("function renderInstrumentBlock()");
     expect(source).toContain("topSourceIssue(state.snap)");
     expect(source).toContain('dataset: { fkey: "degraded-refresh" }');
     expect(source).toContain("onclick: () => recollectSnapshot()");
-    expect(styles).toContain(".reading-repair");
+    expect(styles).toContain(".notify-instrument");
+    // …and it is gone from the card, where it used to live.
+    const card = source.slice(source.indexOf("function renderSummaryWidget("));
+    expect(card.slice(0, card.indexOf("\n}\n"))).not.toContain("recollectSnapshot()");
   });
 
   test("the degraded Refresh forces a fresh recollect, not a cache re-serve, and never dead-ends", async () => {
@@ -5125,7 +5192,8 @@ describe("FE-A: a failed snapshot refresh is visible instead of swallowed", () =
     expect(failed.tone).toBe("degraded");
     // The card headlines the SEVERITY, not the generic verdict — a failed
     // refresh is the "Stale" kind, which is what the operator needs to read.
-    expect(failed.value).toBe("Stale");
+    expect(failed.value).toBe("Readings degraded");
+    expect(failed.severityKey).toBe("stale");
     expect(failed.sublabel).toContain("refresh failed");
     expect(M.summaryWidgetData("health", healthy, "live", "percent", [], false).sublabel).not.toContain("refresh failed");
   });
@@ -5149,7 +5217,8 @@ describe("the health card's headline agrees with its own severity", () => {
     expect(M.degradedSeverity(snap, "live", false).key).toBe("advisory");
 
     const card = M.summaryWidgetData("health", snap, "live", "percent", [], false);
-    expect(card.value).toBe("Advisory");
+    expect(card.value).toBe("Readings degraded");
+    expect(card.severityKey).toBe("advisory");
     expect(card.value).not.toBe("Degraded");
     expect(card.tone).toBe("advisory");
     // The consequence sentence travels with the data so the card can render it
@@ -5162,21 +5231,25 @@ describe("the health card's headline agrees with its own severity", () => {
   test("a blocking or stale problem keeps its full weight", () => {
     const blocked = snapshot({ controlHealth: { cmuxReachable: false, lastCheckedAt: "", errors: [], staleSources: [] } });
     const blockedCard = M.summaryWidgetData("health", blocked, "live", "percent", [], false);
-    expect(blockedCard.value).toBe("Blocked");
+    expect(blockedCard.value).toBe("Readings degraded");
+    expect(blockedCard.severityKey).toBe("blocking");
     expect(blockedCard.tone).toBe("degraded");
 
     const stale = M.summaryWidgetData("health", snapshot(), "live", "percent", [], true);
-    expect(stale.value).toBe("Stale");
+    expect(stale.value).toBe("Readings degraded");
+    expect(stale.severityKey).toBe("stale");
     expect(stale.tone).toBe("degraded");
     expect(stale.sublabel).toContain("refresh failed");
 
-    /* Offline and the healthy verdict are untouched by the severity split. The
-       healthy card now reads "All clear" rather than "Operational": the status
+    /* S2-T2: the headline is one word about the INSTRUMENTS in every state, and
+       the severity that used to be that headline rides on severityKey — so the
+       two still cannot disagree, which is what this test has always been for.
+       (Before S2-T2 the healthy card read "All clear" rather than "Operational": the status
        KEY is still `operational`, but the card speaks the operator's word for
        it instead of the system's. Only the wording moved — this test's subject,
        that blocking and stale keep their full weight, is asserted above. */
-    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Offline");
-    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("All clear");
+    expect(M.summaryWidgetData("health", null, "offline").value).toBe("Readings unavailable");
+    expect(M.summaryWidgetData("health", snapshot(), "live", "percent", [], false).value).toBe("Readings healthy");
   });
 
   test("an advisory is rendered lighter than a real degradation", () => {
@@ -5214,7 +5287,7 @@ describe("the health card's headline agrees with its own severity", () => {
       chip = M.renderSummaryWidget("health", "micro",
         M.summaryWidgetData("health", advisory(), "live", "percent", [], false));
     }));
-    expect(textOf(chip)).toContain("Advisory");
+    expect(textOf(chip)).toContain("Readings degraded");
     expect(textOf(chip)).not.toContain("AdvisoryAdvisory"); // the old duplicate badge
     // The chip itself is the only node left, so read its title directly.
     expect(chip.children[0].attributes.title).toContain("usable");
@@ -5228,7 +5301,7 @@ describe("the health card's headline agrees with its own severity", () => {
         M.summaryWidgetData("health", blocked, "live", "percent", [], false));
     }));
     const text = textOf(card);
-    expect(text).toContain("Blocked");
+    expect(text).toContain("Readings degraded");
     // The removed badge rendered the severity label a second time in caps.
     expect(text).not.toContain("BLOCKING");
     // The consequence sentence survives at full weight, in the body.

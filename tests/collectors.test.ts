@@ -294,6 +294,30 @@ describe("collector identity and usage truth", () => {
     expect(agent?.effort).toBe("xhigh");
   });
 
+  test("codex parser records string launch evidence from session_meta", () => {
+    const parse = (payload: Record<string, unknown>) => parseCodexJsonl(JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-08-05T12:00:00.000Z",
+      payload: {
+        id: "019fd501-3322-7180-8990-b6af48404e15",
+        cwd: "/tmp/anthill-launch",
+        ...payload,
+      },
+    }), { nowMs });
+
+    expect(parse({ originator: "codex_exec", source: "exec" })?.launch).toEqual({
+      entrypoint: "codex_exec",
+      promptSource: "exec",
+    });
+    expect(parse({ originator: "codex-tui", source: "cli" })?.launch).toEqual({
+      entrypoint: "codex-tui",
+      promptSource: "cli",
+    });
+    expect(parse({ originator: "codex-tui", source: { subagent: {} } })?.launch).toEqual({
+      entrypoint: "codex-tui",
+    });
+  });
+
   test("Codex summary chooses the latest readable prose and keeps technical tail evidence separate", () => {
     const agent = parseCodexJsonl(fixture("codex-human-message-session.jsonl"), { nowMs });
 
@@ -505,6 +529,40 @@ describe("collector identity and usage truth", () => {
       scope: "latest-turn",
       provenance: "observed",
     });
+  });
+
+  test("claude parser records launch evidence from the transcript envelope", () => {
+    const row = (extra: Record<string, unknown>) => JSON.stringify({
+      sessionId: "sdk-1",
+      cwd: "/tmp/anthill-launch",
+      timestamp: "2026-07-21T23:30:00.000Z",
+      uuid: "u1",
+      isSidechain: false,
+      userType: "external",
+      version: "2.0.0",
+      ...extra,
+    });
+    const sdk = parseClaudeJsonl([
+      row({
+        type: "user",
+        entrypoint: "sdk-py",
+        promptSource: "sdk",
+        message: {
+          role: "user",
+          content: "Review this change for security vulnerabilities.\n\nChanged files: x",
+        },
+      }),
+    ].join("\n"), { nowMs });
+    expect(sdk?.launch).toEqual({ entrypoint: "sdk-py", promptSource: "sdk" });
+
+    const cli = parseClaudeJsonl([
+      row({
+        type: "user",
+        entrypoint: "cli",
+        message: { role: "user", content: "Fix the flaky lifecycle test." },
+      }),
+    ].join("\n"), { nowMs });
+    expect(cli?.launch).toEqual({ entrypoint: "cli" });
   });
 
   test("Claude derives the 1M context window for supported models, undefined otherwise", () => {

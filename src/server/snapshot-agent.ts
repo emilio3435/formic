@@ -22,6 +22,8 @@ import type {
   OutcomeState,
   ProcessState,
   RoleSource,
+  SessionKind,
+  SessionKindSource,
 } from "../shared/types";
 import {
   classifyLifecycle,
@@ -228,6 +230,36 @@ export interface RoleVerdict {
   role: AgentRole;
   roleSource: RoleSource;
   specialty?: AgentSpecialty;
+}
+
+/* Producer registry: prompts we have OBSERVED a specific automation emit.
+   Anchored to the start of the task because the task IS the prompt for a
+   headless session. security-guidance plugin v2.x, verified 2026-08-05. */
+const REVIEW_TASK_PATTERNS = [
+  /^review this change for security vulnerabilit/i,
+  /^review the (?:pushed|staged) (?:commits?|changes?) for security/i,
+  /^you previously flagged these candidate vulnerabilities\b/i,
+];
+
+export function sessionKindFor(input: {
+  launch?: { entrypoint?: string; promptSource?: string };
+  task?: string;
+  declaredKind?: SessionKind;
+}): { sessionKind: SessionKind; sessionKindSource: SessionKindSource } {
+  if (input.declaredKind) return { sessionKind: input.declaredKind, sessionKindSource: "declared" };
+  const entrypoint = input.launch?.entrypoint ?? "";
+  const promptSource = input.launch?.promptSource ?? "";
+  const automatedLaunch = promptSource === "sdk" || promptSource === "exec" ||
+    entrypoint.startsWith("sdk") || entrypoint === "codex_exec";
+  const reviewTask = REVIEW_TASK_PATTERNS.some((pattern) => pattern.test((input.task ?? "").trim()));
+  if (automatedLaunch) {
+    return { sessionKind: reviewTask ? "review" : "automation", sessionKindSource: "launch-evidence" };
+  }
+  if (entrypoint === "cli" || promptSource === "cli") {
+    return { sessionKind: "work", sessionKindSource: "launch-evidence" };
+  }
+  if (reviewTask) return { sessionKind: "review", sessionKindSource: "task-pattern" };
+  return { sessionKind: "unknown", sessionKindSource: "none" };
 }
 
 function specialtyFor(agent: CollectedAgent): AgentSpecialty | undefined {

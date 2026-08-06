@@ -5,6 +5,7 @@ import type { AgentSnapshot, HubSnapshot, ProgramSnapshot, TriageQueueItem } fro
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
+import { CleanupProposeError, type CleanupProposer } from "./cleanup-propose";
 import {
   defaultAttentionStore,
   MemoryAttentionStore,
@@ -323,6 +324,7 @@ export interface MountainAppDependencies {
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
+  cleanupProposer?: CleanupProposer;
   cmuxExecutable?: string;
   now?: () => number;
   webRoot: string;
@@ -483,6 +485,22 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     }
     return recollectInFlight;
   };
+  let cleanupProposeInFlight: ReturnType<CleanupProposer> | undefined;
+  const cleanupPropose = (): ReturnType<CleanupProposer> => {
+    if (!dependencies.cleanupProposer) {
+      return Promise.reject(
+        new CleanupProposeError("CLEANUP_UNAVAILABLE", "Cleanup propose is not configured on this server."),
+      );
+    }
+    if (!cleanupProposeInFlight) {
+      const run = dependencies.cleanupProposer();
+      const tracked = run.finally(() => {
+        if (cleanupProposeInFlight === tracked) cleanupProposeInFlight = undefined;
+      });
+      cleanupProposeInFlight = tracked;
+    }
+    return cleanupProposeInFlight;
+  };
   const clients = new Set<ReadableStreamDefaultController<string>>();
   /* Streams the server closed for backpressure, as distinct from clients that
      left. Nonzero means the board is outgrowing its own delivery budget. */
@@ -636,6 +654,33 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       return Response.json(await publishState(), {
         headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
       });
+    }
+    if (url.pathname === "/api/cleanup/propose") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST to enumerate a cleanup proposal.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Cleanup proposals require an exact same-origin loopback Origin header.");
+      }
+      try {
+        return Response.json(
+          { ok: true, complete: true, plan: await cleanupPropose() },
+          { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        const candidate = error as { code?: unknown; message?: unknown };
+        return Response.json(
+          {
+            ok: false,
+            complete: false,
+            error: {
+              code: typeof candidate.code === "string" ? candidate.code : "CLEANUP_PROPOSE_FAILED",
+              message: typeof candidate.message === "string" ? candidate.message : String(error),
+            },
+          },
+          { status: 503, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      }
     }
     if (url.pathname === "/api/actions") {
       if (request.method !== "GET") return responseError(405, "METHOD_NOT_ALLOWED", "Use GET for action-log reads.");

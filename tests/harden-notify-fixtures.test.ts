@@ -313,11 +313,16 @@ describe("parked-then-asks precedence", () => {
     test(`${row.name}`, () => {
       expect(row.claim.length).toBeGreaterThan(30);
       expect(taskStateWantsHuman(row.evidence)).toBe(row.expect.wantsHuman);
-      if (row.expect.reAlert) {
-        expect(row.expect.attentionClass).toBe("blocking");
-      } else {
-        expect(row.expect.attentionClass).toBeNull();
-      }
+      /* Live path — fixture.expect.attentionClass alone is hollow (mutation:
+         disable declaredQuiet in attentionClassOf stayed GREEN here). */
+      const shaped = {
+        id: `codex:${row.name}`,
+        programId: "project",
+        ...row.evidence,
+        attentionSignal: (row.evidence as { attentionSignal?: { kind: string } }).attentionSignal
+          || { kind: "question-pending" },
+      };
+      expect(notify.attentionClassOf(shaped)).toBe(row.expect.attentionClass);
     });
   }
 });

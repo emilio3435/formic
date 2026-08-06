@@ -370,8 +370,9 @@ describe("QUICKSTART.md stays true to a first run", () => {
       cmuxErrors: ["cmux terminal discovery exited 1: connection refused"],
     });
     const blocked = M.summaryWidgetData("health", noCmux, "live", "percent", [], false);
-    expect(quickstart).toContain("`Blocked`");
-    expect(blocked.value, "a cmux-less install no longer lands on Blocked").toBe("Blocked");
+    expect(quickstart).toContain("`Readings degraded`");
+    expect(blocked.value, "a cmux-less install no longer lands on Readings degraded").toBe("Readings degraded");
+    expect(blocked.severityKey, "the severity that used to BE the headline").toBe("blocking");
     expect(blocked.sublabel, "the no-issues detail vanished; QUICKSTART describes a two-branch card")
       .toContain("cmux unreachable — terminal titles and Focus/Send stay offline.");
     /* The branch a real no-cmux machine lands on. QUICKSTART must describe the
@@ -380,10 +381,17 @@ describe("QUICKSTART.md stays true to a first run", () => {
       .toContain("control-plane ${otherCmuxErrors.length === 1 ? \"problem may\" : \"problems may\"} limit focus, instruction, or interrupt actions.");
     expect(quickstart, "QUICKSTART stopped telling the reader the detail line names a count")
       .toMatch(/control-plane problems/i);
-    expect(blocked.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
+    /* S2-T2: the next step left the card for the notification center's
+       instrument block, so the sentence QUICKSTART quotes is instrumentRemedy's
+       now. The doc-parity claim is unchanged — the words a first-run reader is
+       promised must be words the client actually renders. */
+    expect(blocked.remedy).toBeNull();
+    expect(M.instrumentRemedy(noCmux, "live", false).instruction)
+      .toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
     // And the clear case QUICKSTART promises once cmux is running.
     expect(M.summaryWidgetData("health", producedBoard({ agents: [workingAgent], cmuxReachable: true }), "live", "percent", [], false).value)
-      .toBe("All clear");
+      .toBe("Readings healthy");
+    expect(quickstart).toContain("`Readings healthy`");
     expect(quickstart).toContain("**Live**");
     expect(client).toContain('live: "Live"');
   });

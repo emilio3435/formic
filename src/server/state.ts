@@ -370,7 +370,11 @@ export class HubState {
   #nameNewSessions(agents: readonly CollectedAgent[]): void {
     const store = this.sessionNames;
     if (!store || this.#naming) return;
-    const unnamed = agents.filter((agent) => !store.has(agent.id));
+    /* SDK tasks already name their automation; the out-of-band namer is for
+       humans' untitled work sessions. */
+    const unnamed = agents.filter((agent) =>
+      !store.has(agent.id) && agent.launch?.promptSource !== "sdk"
+    );
     if (!unnamed.length) return;
     this.#naming = (async () => {
       try {

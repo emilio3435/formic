@@ -167,6 +167,15 @@ export interface SweepHost {
   realpath: (path: string) => string;
 }
 
+export class CleanupEnumerationIncompleteError extends Error {
+  readonly code = "CLEANUP_ENUMERATION_INCOMPLETE";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CleanupEnumerationIncompleteError";
+  }
+}
+
 function runGit(args: readonly string[], cwd: string): GitResult {
   const result = Bun.spawnSync(["git", ...args], {
     cwd,
@@ -200,6 +209,12 @@ function parsePsLstart(stdout: string): ProcessRow[] {
   return rows;
 }
 
+export function processTableFromPs(stdout: string): { complete: boolean; rows: ProcessRow[] } {
+  const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
+  const rows = parsePsLstart(stdout);
+  return { complete: lines.length > 0 && rows.length === lines.length, rows };
+}
+
 function listProcessesDefault(): { complete: boolean; rows: ProcessRow[] } {
   const result = Bun.spawnSync(["ps", "-axo", "pid=,lstart=,command="], {
     stdout: "pipe",
@@ -207,8 +222,7 @@ function listProcessesDefault(): { complete: boolean; rows: ProcessRow[] } {
     env: { ...process.env, LC_ALL: "C" },
   });
   if (result.exitCode !== 0) return { complete: false, rows: [] };
-  const rows = parsePsLstart(result.stdout.toString());
-  return { complete: rows.length > 0, rows };
+  return processTableFromPs(result.stdout.toString());
 }
 
 function cwdOfDefault(pids: readonly number[]): Map<number, string> {
@@ -289,9 +303,20 @@ export function occupantsForWorktrees(
   for (const path of worktreePaths) byTree.set(host.realpath(path), []);
 
   const { complete, rows } = host.listProcesses();
+  if (!complete) {
+    throw new CleanupEnumerationIncompleteError(
+      "Process table enumeration is incomplete; no cleanup plan was produced.",
+    );
+  }
   const roster = buildRoster(rows, complete);
   const agentRows = rows.filter((row) => isRecognizedAgentProcess(row.command));
   const cwds = host.cwdOf(agentRows.map((row) => row.pid));
+  const missingCwds = agentRows.filter((row) => !cwds.has(row.pid));
+  if (missingCwds.length > 0) {
+    throw new CleanupEnumerationIncompleteError(
+      `Process cwd enumeration is incomplete for ${missingCwds.length} recognized agent process(es); no cleanup plan was produced.`,
+    );
+  }
 
   for (const row of agentRows) {
     const cwd = cwds.get(row.pid);

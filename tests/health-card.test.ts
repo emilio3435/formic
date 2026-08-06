@@ -1,13 +1,22 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 
-/* The health card has to answer three questions in one glance: is anything
-   wrong, how bad is it, and what do I do about it. It used to answer only the
-   first two, and answered the second badly — a permanent tidy-up held the board
-   red, which trains an operator to stop reading it.
+/* S2-T2 SPLIT THIS CARD IN TWO, and these tests follow the split.
 
-   These tests pin the answers, not the pixels. Each one should fail if the card
-   goes back to naming a symptom, sizing an alarm by dead sessions, or inventing
-   a next step the payload cannot support. */
+   The card used to answer three questions in one glance: is anything wrong, how
+   bad is it, and what do I do about it. The third one is the problem — a
+   control living inside a reading is the confidence header doing attention's
+   job, the same defect that retired the finding links. So the header keeps a
+   QUALIFIER ("Readings healthy" / "Readings degraded"), because a confidence
+   header whose instruments are broken must say so or every number beside it is
+   unqualified, and the acting moves to the notification center.
+
+   What did NOT move is healthRemedy() itself. It still computes the problem
+   sentence, the instruction and the pane list, still sized by live impact, and
+   most of these tests drive it directly — they were always about the derivation
+   rather than the card. Each one should fail if the remedy goes back to naming a
+   symptom, sizing an alarm by dead sessions, or inventing a next step the
+   payload cannot support; and the two that read the card now assert that it
+   qualifies the instruments rather than issuing orders. */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let M: any;
@@ -55,14 +64,23 @@ const DEBRIS = {
   detail: ["cmux s-1 has conflicting open agent session files"],
 };
 
-describe("health card — is anything wrong, how bad, what do I do", () => {
-  test("a clear board says so in the operator's words, not the system's", () => {
+describe("health chip — can I trust these readings, and healthRemedy behind it", () => {
+  test("the chip qualifies the INSTRUMENTS, and cannot be read as a verdict on the fleet", () => {
     const data = M.summaryWidgetData("health", snapshot(), "live", "percent", [], false);
-    // "Operational" describes the system to itself and leaves a reader unsure
-    // whether the board is fine or merely not talking.
-    expect(data.value).toBe("All clear");
+    /* "Operational" described the system to itself. "All clear" fixed that and
+       introduced the opposite problem once the Findings card was retired: alone
+       in a header of fleet readings, it reads as "the fleet is clear" — a claim
+       this card cannot make and never could, since it only ever looked at
+       sources and the control plane. "Readings healthy" says exactly what was
+       measured. */
+    expect(data.value).toBe("Readings healthy");
     expect(data.tone).toBe("ok");
-    expect(data.sublabel).toContain("nothing needs you");
+    expect(data.value).not.toBe("Operational");
+    // It states no to-do, in either direction: no backlog, no all-clear about one.
+    expect(data.sublabel).not.toContain("nothing needs you");
+    expect(data.sublabel).toContain("sources healthy");
+    // And it carries no remedy — the header does not act.
+    expect(data.remedy).toBeNull();
   });
 
   test("leftover panes stay discoverable on a clear board instead of vanishing with the alarm", () => {
@@ -71,11 +89,17 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
     // is invisible because it stopped being an emergency.
     const tidy = snapshot({ controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [], staleSources: [], debris: DEBRIS } });
     const data = M.summaryWidgetData("health", tidy, "live", "percent", [], false);
-    expect(data.value).toBe("All clear");
-    expect(data.sublabel).toContain("tidy-up available");
-    expect(data.sublabel).not.toContain("nothing needs you");
-    expect(data.remedy.tidy).toBe(true);
-    expect(data.remedy.instruction).toBe(DEBRIS.remedy);
+    // The chip stays calm: debris is not an instrument fault.
+    expect(data.value).toBe("Readings healthy");
+    expect(data.remedy).toBeNull();
+    /* The discoverability the original claim protects is preserved, and moved.
+       healthRemedy still says a tidy-up is available with the backend's own
+       wording, and renderInstrumentBlock in the notification center renders it
+       on a CLEAR board precisely so cleanup does not become invisible the moment
+       it stops being an emergency. */
+    const remedy = M.instrumentRemedy(tidy, "live", false);
+    expect(remedy.tidy).toBe(true);
+    expect(remedy.instruction).toBe(DEBRIS.remedy);
   });
 
   test("the remedy is the backend's wording, rendered verbatim", () => {
@@ -183,27 +207,47 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
       controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: ["gone"], staleSources: [], debris: DEBRIS },
     });
     const data = M.summaryWidgetData("health", down, "live", "percent", [], false);
-    expect(data.value).toBe("Blocked");
+    // The chip says the instruments are untrustworthy; the severity detail still
+    // carries HOW badly, because that qualifies every reading beside it.
+    expect(data.value).toBe("Readings degraded");
+    expect(data.severityKey).toBe("blocking");
     expect(data.severityDetail).toContain("Focus and Send");
     /* Suppressing the wrong instruction must not leave none. Caught on the live
        board: the blocked card named the fault and stopped, which is the
        symptom-without-a-remedy this whole rewrite exists to remove. Every
        non-clear verdict carries a next step. */
-    expect(data.remedy.instruction).not.toContain("cmux panes left over");
-    expect(data.remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
-    expect(data.remedy.panes).toHaveLength(0);
+    /* instrumentRemedy, not healthRemedy: the severity correction is the whole
+       point. healthRemedy alone cannot know the control plane is down, so it
+       still reports the debris — and offering THAT here is the exact
+       wrong-fix-for-the-wrong-problem this test was written for. */
+    expect(M.healthRemedy(down).instruction).toContain("cmux panes left over");
+    const remedy = M.instrumentRemedy(down, "live", false);
+    expect(remedy.instruction).not.toContain("cmux panes left over");
+    expect(remedy.instruction).toBe("Start cmux, then Refresh — Focus and Send come back on their own.");
+    expect(remedy.panes).toHaveLength(0);
+    expect(M.healthRefreshAction({ snap: down, conn: "live", fetchFailed: false }))
+      .toEqual({ label: "Verify repair", title: "Re-probe cmux after starting it" });
   });
 
   test("every non-clear verdict carries a next step", () => {
     // The card's contract in one assertion: if it claims something is wrong, it
     // must also say what to do. A clear board is the only one allowed to be silent.
     const stale = M.summaryWidgetData("health", snapshot(), "live", "percent", [], true);
-    expect(stale.value).toBe("Stale");
-    expect(stale.remedy.instruction).toBe("Refresh to re-pull the evidence.");
+    expect(stale.value).toBe("Readings degraded");
+    expect(stale.severityKey).toBe("stale");
 
     const offline = M.summaryWidgetData("health", null, "offline", "percent", [], false);
-    expect(offline.value).toBe("Offline");
-    expect(offline.remedy.instruction).toBe("Check the hub is running, then Refresh.");
+    expect(offline.value).toBe("Readings unavailable");
+
+    /* The next step still exists for both — it is rendered by the notification
+       center's instrument block, which reaches it through healthRefreshAction. A
+       claim that something is wrong with no way to act is the
+       symptom-without-a-remedy this rewrite exists to remove; only WHERE the
+       action lives changed. */
+    expect(M.healthRefreshAction({ snap: snapshot(), conn: "live", fetchFailed: true }))
+      .toEqual({ label: "Retry snapshot", title: "Re-pull the latest snapshot evidence" });
+    expect(M.healthRefreshAction({ snap: null, conn: "offline", fetchFailed: false }))
+      .toEqual({ label: "Retry snapshot", title: "Re-pull the latest snapshot evidence" });
   });
 
   test("the card never prints a generic blurb that argues with its own problem line", () => {
@@ -226,6 +270,7 @@ describe("health card — is anything wrong, how bad, what do I do", () => {
     // The advisory blurb is still available as the severity's own detail...
     expect(data.severityDetail).toContain("board is usable");
     // ...but the problem sentence is what the operator reads, and it disagrees.
-    expect(data.remedy.problem).toContain("1 live session");
+    // It is rendered by the center's instrument block now, off the same remedy.
+    expect(M.healthRemedy(snap).problem).toContain("1 live session");
   });
 });

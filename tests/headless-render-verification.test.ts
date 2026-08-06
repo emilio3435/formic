@@ -221,7 +221,9 @@ describe("2c12ef6 — a spinner frame is not a name", () => {
 
 describe("52df8c9 + f13a730 — the summary cards answer from the payload", () => {
   test("a reachable control plane with no faults reads all clear", () => {
-    expect(client.summaryWidgetData("health", board(), "live").value).toBe("All clear");
+    // S2-T2: the chip qualifies the INSTRUMENTS. "All clear" read as a verdict
+    // on the fleet, which this card never measured.
+    expect(client.summaryWidgetData("health", board(), "live").value).toBe("Readings healthy");
   });
 
   test("an unreachable control plane does not read as clear", () => {
@@ -231,8 +233,10 @@ describe("52df8c9 + f13a730 — the summary cards answer from the payload", () =
       controlHealth: { cmuxReachable: false, lastCheckedAt: new Date().toISOString(), errors: [], staleSources: [] },
     } as Partial<HubSnapshot>), "live");
 
-    expect(blocked.value).not.toBe("All clear");
-    expect(blocked.value).toBe("Blocked");
+    expect(blocked.value).not.toBe("Readings healthy");
+    expect(blocked.value).toBe("Readings degraded");
+    // HOW badly still rides on the card (severityKey), and it qualifies every
+    // reading beside it; what left the card is the acting, not the severity.
   });
 });
 
