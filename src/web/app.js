@@ -2302,13 +2302,37 @@ function cleanupAction() {
     running ? "Examining…" : "Clean up");
 }
 
-/* Whether there is anything for a sweep to propose. The action is offered only
-   when debris exists — a permanent Clean up button on a tidy board is a standing
-   suggestion that something is wrong, which is the scold this program removes. */
+/* Whether the sweep is worth offering.
+
+   THE ORIGINAL RULE IS KEPT, because it is still half the answer: a permanent
+   Clean up button on a tidy board is a standing suggestion that something is
+   wrong, which is the scold this program removes. That is why this still returns
+   false whenever the chip reads healthy, and why there is no second entry point
+   anywhere else — one control, one home.
+
+   WIDENED 2026-08-06, because the old gate made the control unfindable. It was
+   offered only when debris had already been COUNTED (`remedy.tidy &&
+   remedy.paneCount`, from controlHealth), which is absent on most boards. So the
+   button was correct and invisible: an operator went looking for Clean up,
+   could not find it, and reasonably guessed it was the drawer's archive control.
+   A control you cannot find is a control you cannot trust, and an action nobody
+   can reach is not a quieter UI — it is a missing one.
+
+   The new gate is the chip's own verdict: offer it whenever the chip is DEGRADED
+   for ANY reason — stale source, collector error, debris, anything that makes it
+   say something other than healthy. The operator is already being told something
+   is wrong, and this is the one action they have; offering it there is help, not
+   nagging. The scold case — a healthy board — is untouched.
+
+   Still propose-only, always. R2 stands: the board never deletes. */
 function cleanupOffered() {
+  if (state.cleanup.running || state.cleanup.view || state.cleanup.error) return true;
   const remedy = healthRemedy(state.snap);
-  return Boolean(state.cleanup.running || state.cleanup.view || state.cleanup.error
-    || (remedy && remedy.tidy && remedy.paneCount));
+  if (remedy && remedy.tidy && remedy.paneCount) return true;
+  /* The same predicate renderInstrumentBlock calls `degraded`, so the button and
+     the sentence explaining why it is there can never disagree about whether the
+     instruments are in trouble. */
+  return systemStatus(state.snap, state.conn).key !== "operational";
 }
 
 function healthMicroChip(data) {
@@ -3015,10 +3039,19 @@ function renderCleanupPlan() {
   const worktrees = (view.refused && view.refused.worktrees) || [];
   const branches = (view.refused && view.refused.branches) || [];
   const out = [];
+  /* A sweep that finds nothing is a REAL ANSWER and has to read as one — not as
+     a failure, and not as silence. Same rule the all-clear panel follows:
+     "watching, found nothing" and "not watching" must not render identically, so
+     this says what was examined rather than just what was absent. `refused` is
+     exactly the set the sweep looked at and chose to keep, and the reasons are
+     listed below, so the count is evidence rather than reassurance. */
+  const examined = worktrees.length + branches.length;
   out.push(el("p", { class: "notify-instrument-remedy", text:
     removable.length
       ? `${removable.length} item${removable.length === 1 ? "" : "s"} can be removed, and nothing will be until you run the command below.`
-      : "Nothing is removable right now." }));
+      : examined
+        ? `Nothing to sweep. ${examined} item${examined === 1 ? " was" : "s were"} examined and every one was kept — the reasons are below.`
+        : "Nothing to sweep. No worktrees or branches were eligible for removal." }));
 
   if (removable.length) {
     out.push(el("ul", { class: "cleanup-list", "aria-label": "Removable, with rollback" },
@@ -3043,9 +3076,14 @@ function renderCleanupPlan() {
         el("span", { class: "cleanup-reason", text: (item.reasons || []).join(" · ") })))));
   }
 
-  out.push(el("p", { class: "cleanup-confirm" },
-    el("span", { class: "cleanup-confirm-lead", text: "Paste this to remove them:" }),
-    el("code", { class: "mono", text: view.confirmCommand || "" })));
+  /* Only when there is something to remove. A confirm command shown against an
+     empty plan invites the operator to run a removal that would remove nothing,
+     on the one surface whose entire contract is that removal is deliberate. */
+  if (removable.length) {
+    out.push(el("p", { class: "cleanup-confirm" },
+      el("span", { class: "cleanup-confirm-lead", text: "Paste this to remove them:" }),
+      el("code", { class: "mono", text: view.confirmCommand || "" })));
+  }
   if (view.planPath) {
     out.push(el("p", { class: "cleanup-plan-path mono", text: "plan: " + view.planPath }));
   }
