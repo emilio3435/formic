@@ -1007,7 +1007,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   const totals = totalsOf(snap);
   if (id === "needs-you") {
     const attention = attentionSummary(snap);
-    const top = pulseFindings(snap, queueItems).slice(0, 2).map((f) => f.title).join(" · ");
+    const findings = pulseFindings(snap, queueItems).slice(0, 2);
+    const top = findings.map((f) => f.title).join(" · ");
     /* This card is the one that means "stop reading and go do something", so a
        missing input has to be admitted HERE rather than only in a console warning.
        Queued triage items are part of its findings list; when the queue did not
@@ -1019,6 +1020,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       value: String(attention.count),
       unit: attention.count === 1 ? "finding" : "findings",
       sublabel: queueDown || (attention.count && top ? top : "No active findings."),
+      /* Keep the compact headline, but carry the exact issue ids and evidence
+         needed to make each title actionable. The old inline ledger was removed
+         to keep the rail bounded; these two records are the compact route into
+         the existing inspector instead. */
+      findings: queueDown ? [] : findings,
       tone: attention.count || queueDown ? "hot" : "ok",
     };
   }
@@ -2223,7 +2229,23 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   const problemText = (remedy && remedy.problem)
     || (reason ? reason.title : (data.severityDetail ? "" : data.sublabel));
   const lead = remedy && remedy.problem ? "" : (data.severityDetail ? data.severityDetail + " " : "");
-  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  if (id === "needs-you" && data.findings && data.findings.length) {
+    const links = el("span", { class: "reading-finding-links" });
+    data.findings.forEach((finding, index) => {
+      if (index) links.append(el("span", { class: "reading-finding-separator", "aria-hidden": "true", text: " · " }));
+      links.append(el("button", {
+        type: "button",
+        class: "reading-finding-link",
+        title: finding.summary || finding.impact || finding.title,
+        "aria-label": "Open finding: " + finding.title + ". " + (finding.summary || finding.impact || "Evidence available in the inspector."),
+        dataset: { fkey: "summary-finding:" + finding.kind + ":" + finding.id },
+        onclick: () => selectEntity({ kind: finding.kind, id: finding.id }),
+      }, finding.title));
+    });
+    subNode.append(links);
+  } else {
+    subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  }
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }

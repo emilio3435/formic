@@ -406,6 +406,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 .reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.reading-finding-links { display: inline; }
+.reading-finding-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.reading-finding-link:hover,
+.reading-finding-link:focus-visible { color: var(--ink); text-decoration-color: currentColor; }
+.reading-finding-link:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 2px; }
+.reading-finding-separator { color: var(--muted); }
 .reading-no-data { font-size: 1rem; color: var(--faint); }
 /* The uppercase severity badge that used to sit here is gone. It existed to
    qualify a headline that read the bare word "Degraded" for all three
