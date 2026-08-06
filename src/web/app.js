@@ -1422,6 +1422,13 @@ async function fetchSettings() {
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    /* Review-worker visibility is a SERVER setting, not a per-browser lens: the
+       fleet's default board should look the same from any machine. Skipped while
+       a save is in flight, so a refetch racing the operator's own toggle cannot
+       flip the chip back under their finger. */
+    if (typeof (body.settings && body.settings.showReviewWorkers) === "boolean" && !state.settingsPending) {
+      state.showReviewWorkers = body.settings.showReviewWorkers;
+    }
     state.settings = body.settings || null;
     /* The operator's landing tab, applied only on the FIRST read — after that
        they have navigated and moving them would be the board overriding a
@@ -3943,11 +3950,24 @@ function reviewWorkerCount(ui = state) {
     .length;
 }
 
+/* Optimistic: the chip flips on the click, and the POST follows.
+
+   A rejected save puts it back, because nothing else would. `fetchSettings`
+   runs once at boot, so there is no later read to correct an optimistic write —
+   without this the chip would keep asserting a visibility the server refused,
+   over a board still filtered the old way, until a reload. The guard yields to
+   a second toggle that landed while this one was in flight: the operator's
+   newer choice outranks this one's rollback. */
 function setShowReviewWorkers(show) {
   const next = Boolean(show);
   if (next === state.showReviewWorkers) return;
   state.showReviewWorkers = next;
   render();
+  void postSettings({ showReviewWorkers: next }).then((saved) => {
+    if (saved || state.showReviewWorkers !== next) return;
+    state.showReviewWorkers = !next;
+    render();
+  });
 }
 
 function currentFilter() {

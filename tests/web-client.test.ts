@@ -6908,6 +6908,78 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(rescued.className).not.toContain("is-unverified");
   });
 
+  /* D7 ruled review-worker visibility a SERVER setting rather than a per-browser
+     lens, so the fleet's default board looks the same from every machine. That
+     makes the chip a write, and these drive the real click through the real
+     handler — the toggle was source-asserted only, which is a test that cannot
+     fail when the write stops happening. */
+  const reviewBoard = () => {
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt: new Date().toISOString(),
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    return snapshot({ programs: [{ id: "p", name: "P", agents: [review] }] });
+  };
+  // The click's POST is fire-and-forget by design (the chip must not wait on the
+  // network), so the assertions need one turn of the loop to see it land.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("(3c) the review-worker chip writes the shared server setting", async () => {
+    const snap = reviewBoard();
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+    }, () => withRequests([
+      { status: 200, json: { ok: true, settings: { showReviewWorkers: true } } },
+      { status: 200, json: { ok: true, ...snap } },
+    ], async (calls) => {
+      M.renderFilterBar(M.state);
+      const chip = byFkey(domById.get("filter-bar"), "session-kind:review");
+      expect(chip).toBeTruthy();
+      await fire(chip);
+      await settle();
+      const post = calls.find((c) => c.url.includes("/api/settings") && c.method === "POST");
+      expect(post).toBeTruthy();
+      expect(post!.body).toEqual({ showReviewWorkers: true });
+      expect(M.state.showReviewWorkers).toBe(true);
+    }));
+  });
+
+  test("(3d) a rejected save puts the chip back where the server has it", async () => {
+    const snap = reviewBoard();
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+    }, () => withRequests([new Error("connection refused")], async () => {
+      M.renderFilterBar(M.state);
+      await fire(byFkey(domById.get("filter-bar"), "session-kind:review"));
+      // The optimistic flip happened...
+      expect(M.state.showReviewWorkers).toBe(true);
+      await settle();
+      /* ...and the rejection took it back, because nothing else would:
+         fetchSettings runs once at boot, so an uncorrected optimistic write
+         would leave the chip asserting a visibility the server refused, over a
+         board still filtered the old way.
+
+         Mutation-checked: dropping the rollback branch from setShowReviewWorkers
+         fails this line with `Received: true`, so it cannot pass over the bug it
+         was written for. */
+      expect(M.state.showReviewWorkers).toBe(false);
+    }));
+  });
+
+  /* The read half of D7. fetchSettings is private and runs once at boot, so this
+     is source-level by necessity — requiredSlice still fails loudly if the
+     function is renamed or the adoption is dropped. */
+  test("(3e) fetchSettings adopts the server's review-worker default", () => {
+    const fn = requiredSlice(source, /async function fetchSettings\(\)[\s\S]*?\n\}\n/, "fetchSettings");
+    expect(fn).toContain("state.showReviewWorkers = body.settings.showReviewWorkers");
+    // Guarded on the in-flight save: a refetch racing the operator's own toggle
+    // must not flip the chip back under their finger.
+    expect(fn).toMatch(/!state\.settingsPending/);
+  });
+
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
