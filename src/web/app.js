@@ -2263,6 +2263,57 @@ function widgetLabelNode(id, label) {
 
 /* Compact verdict chip — the health cell's OK form (trailing micro-chip on
    both the stressed grid and the calm line). */
+/* S6-T3 · the Clean up action, and the one thing that may move while it runs.
+
+   It lives on the instrument-trust chip because debris is what degrades the
+   INSTRUMENTS — the chip repairing itself — where Refresh acts on a finding and
+   went to the notification center with it in S2-T2.
+
+   Minimal by contract: a rotating indicator on the chip and nothing else. No
+   banner, no progress bar. The indicator states that A PROCESS IS UNDERWAY and
+   must never imply the fault is fixed, which is why the chip's own verdict word
+   is untouched while it spins and why the label reads "Examining…" rather than
+   anything in the past tense.
+
+   The tooltip names three things the operator cannot otherwise know: what is
+   running, what it is examining, and that nothing will be deleted without
+   approval. That last clause is not reassurance — it is the contract, and a
+   button labelled "Clean up" that did not say it would be read as destructive.
+
+   prefers-reduced-motion: the rotation is switched off in CSS by a media query.
+   That media feature CANNOT be emulated in this project's browser harness, so
+   the static variant is asserted at rule level only and is NOT verified live —
+   recorded here rather than implied, the way the a11y sweep records its own
+   NOT RUN row. */
+function cleanupAction() {
+  const running = state.cleanup.running;
+  return el("button", {
+    type: "button",
+    class: "verdict-cleanup" + (running ? " is-running" : ""),
+    disabled: running ? "" : null,
+    "aria-busy": running ? "true" : null,
+    /* aria-live so the transition is announced: a spinner is invisible to a
+       screen reader, and "a sweep is running" is the whole message. */
+    "aria-live": "polite",
+    title: running
+      ? "Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval."
+      : "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead panes. Nothing will be deleted without your approval — you paste the confirm command yourself.",
+    dataset: { fkey: "cleanup-propose" },
+    onclick: (e) => { e.stopPropagation(); void requestCleanupProposal(); },
+  },
+    el("span", { class: "verdict-cleanup-mark", "aria-hidden": "true" }),
+    running ? "Examining…" : "Clean up");
+}
+
+/* Whether there is anything for a sweep to propose. The action is offered only
+   when debris exists — a permanent Clean up button on a tidy board is a standing
+   suggestion that something is wrong, which is the scold this program removes. */
+function cleanupOffered() {
+  const remedy = healthRemedy(state.snap);
+  return Boolean(state.cleanup.running || state.cleanup.view || state.cleanup.error
+    || (remedy && remedy.tidy && remedy.paneCount));
+}
+
 function healthMicroChip(data) {
   /* An advisory rides at micro too, so this chip is the ONLY place its
      consequence sentence can still be read — carry it, or shrinking the cell
@@ -2273,7 +2324,8 @@ function healthMicroChip(data) {
   const detail = [data.severityDetail, data.sublabel, data.remedy && data.remedy.instruction]
     .filter(Boolean).join(" ");
   return el("span", { class: "verdict-chip verdict-" + data.tone, title: detail || data.sublabel },
-    icon(data.icon), data.value);
+    icon(data.icon), data.value,
+    cleanupOffered() ? cleanupAction() : null);
 }
 
 /* Which repair control, if any, the health cell should offer.
@@ -2314,7 +2366,8 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   let valueNode;
   if (id === "health") {
     valueNode = el("span", { class: valueClass },
-      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
+      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value,
+        cleanupOffered() ? cleanupAction() : null));
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -2582,6 +2635,11 @@ function notifyPanelPaintSig(model, open) {
     systemStatus(state.snap, state.conn).key,
     String((healthRemedy(state.snap) || {}).paneCount ?? ""),
     healthPanesOpen ? "panes" : "",
+    /* The sweep's own state, or the panel would freeze mid-run: the indicator
+       starts and the plan arrives without any snapshot value changing. */
+    state.cleanup.running ? "sweeping" : "",
+    String(state.cleanup.at),
+    state.cleanup.error,
     feedFrozen() ? "held" : "",
   ].join("\u001f");
 }
@@ -2763,6 +2821,48 @@ function renderNotificationCenter() {
   panel.append(renderNotifyDeliverySwitch());
 }
 
+/* S6-T2 · PROPOSE ONLY. The board never deletes.
+
+   One POST to /api/cleanup/propose, which enumerates git state and the process
+   table and writes a plan artifact. Deletion is a terminal paste of the plan's
+   own confirmCommand — there is no confirm route, and wiring one to a click is
+   explicitly out of bounds. The precedent is in this repo's history: the last
+   manual pass pre-recorded a rollback SHA for every branch, used `git branch -d`
+   and never -D, and verified each tree was clean and unoccupied first. A live
+   agent process inside a worktree is a hard stop regardless of approval.
+
+   Absent, not partial. A 503 carries no `plan` field at all, because a cleanup
+   plan missing a refusal is a plan that proposes deleting something it should
+   not — so an incomplete enumeration is reported as incomplete and no removable
+   is shown from it. */
+async function requestCleanupProposal() {
+  if (state.cleanup.running) return;              // overlapping calls share one run server-side
+  state.cleanup = { running: true, error: "", view: null, at: Date.now() };
+  render();
+  try {
+    const res = await apiFetch("/api/cleanup/propose", {
+      method: "POST",
+      headers: { accept: "application/json" },
+    }, 60_000);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.ok !== true || body.complete !== true || !body.plan) {
+      const why = (body && (body.error?.message || body.error?.code)) || `HTTP ${res.status}`;
+      /* Named, not swallowed. "Enumeration incomplete" is a different fact from
+         "nothing to clean up", and the operator must not read one as the other. */
+      state.cleanup = { running: false, error: "Enumeration incomplete — " + why, view: null, at: Date.now() };
+    } else {
+      state.cleanup = { running: false, error: "", view: body.plan, at: Date.now() };
+    }
+  } catch (err) {
+    state.cleanup = {
+      running: false,
+      error: "Enumeration incomplete — " + (err instanceof Error ? err.message : String(err)),
+      view: null, at: Date.now(),
+    };
+  }
+  render();
+}
+
 /* The remedy an operator should actually be given, severity-corrected.
 
    healthRemedy() answers "what debris is there"; this answers "what should you
@@ -2817,7 +2917,12 @@ function renderInstrumentBlock() {
   const remedy = instrumentRemedy();
   const refresh = degraded ? healthRefreshAction() : null;
   const panes = (remedy && remedy.panes) || [];
-  if (!degraded && !(remedy && remedy.tidy && panes.length)) return [];
+  /* Also speaks when a sweep has produced something to read. A plan that
+     arrived on a board whose instruments have since recovered is still the
+     operator's to act on, and dropping it because the chip went quiet would
+     discard the result of a run they asked for. */
+  const sweep = state.cleanup.running || state.cleanup.view || state.cleanup.error;
+  if (!degraded && !sweep && !(remedy && remedy.tidy && panes.length)) return [];
 
   const top = degraded ? topSourceIssue(state.snap) : null;
   const block = el("div", { class: "notify-instrument", role: "group", "aria-label": "Instrument trust" });
@@ -2850,6 +2955,7 @@ function renderInstrumentBlock() {
     }, refresh.label));
   }
   if (controls.childNodes.length) block.append(controls);
+  block.append(...renderCleanupPlan());
   if (healthPanesOpen && panes.length) {
     block.append(el("ul", { class: "health-pane-list" },
       ...panes.slice(0, 12).map((pane) => el("li", {},
@@ -2860,6 +2966,77 @@ function renderInstrumentBlock() {
         : null));
   }
   return [block];
+}
+
+/* S6-T4 · the sweep's result, in the notification center.
+
+   A dataflow item in every respect that matters: it names its collector, it
+   carries evidence and impact, it is severity "warning" and never ember —
+   a tidy-up is not a person waiting on you — and it lands in the panel rather
+   than the header, because the header states no count of problems.
+
+   It is rendered here inside the instrument block rather than minted as a
+   NotificationItem with a route. §4.2 requires every item's `route.kind` to be a
+   key of DRAWER_RENDERERS, and a sweep result has no server-published id to
+   route to: issuesOf's own rule is that the client may SHAPE what the server
+   sent and never mint an id the server has not published, because an invented id
+   resolves to no drawer. So the plan is shown where it is complete rather than
+   given a route that would dead-end.
+
+   Every removable carries its rollback SHA and every refusal carries its reason,
+   because those two are what make the plan reviewable rather than trusted. The
+   confirm command is rendered as text to paste — there is no confirm route and
+   no click that deletes anything. */
+function renderCleanupPlan() {
+  const { running, error, view } = state.cleanup;
+  if (running) return [];                    // the chip's indicator is the whole in-progress UX
+  if (error) {
+    /* Absent, not partial. A plan missing a refusal is a plan that proposes
+       deleting something it should not, so an incomplete enumeration shows the
+       failure and NO removables — never a subset wearing a complete answer. */
+    return [el("p", { class: "notify-instrument-remedy", role: "status", text: error + ". No plan was produced." })];
+  }
+  if (!view) return [];
+
+  const removable = Array.isArray(view.removable) ? view.removable : [];
+  const worktrees = (view.refused && view.refused.worktrees) || [];
+  const branches = (view.refused && view.refused.branches) || [];
+  const out = [];
+  out.push(el("p", { class: "notify-instrument-remedy", text:
+    removable.length
+      ? `${removable.length} item${removable.length === 1 ? "" : "s"} can be removed, and nothing will be until you run the command below.`
+      : "Nothing is removable right now." }));
+
+  if (removable.length) {
+    out.push(el("ul", { class: "cleanup-list", "aria-label": "Removable, with rollback" },
+      ...removable.slice(0, 12).map((item) => el("li", {},
+        el("span", { class: "cleanup-kind", text: item.kind }),
+        el("span", { class: "cleanup-target", text: item.target }),
+        /* The rollback SHA is the whole reason this is reviewable: it is what
+           lets the operator put back anything the sweep proposed wrongly. */
+        el("span", { class: "cleanup-sha mono", text: String(item.rollbackSha || "").slice(0, 10) }))),
+      removable.length > 12
+        ? el("li", { class: "cleanup-more", text: `+${removable.length - 12} more in the plan file` })
+        : null));
+  }
+
+  const refused = [...worktrees, ...branches];
+  if (refused.length) {
+    out.push(el("p", { class: "notify-instrument-remedy", text:
+      `${refused.length} refused — each one is a stop the sweep will not cross:` }));
+    out.push(el("ul", { class: "cleanup-list cleanup-refused", "aria-label": "Refused, with reasons" },
+      ...refused.slice(0, 8).map((item) => el("li", {},
+        el("span", { class: "cleanup-target", text: item.path || item.name }),
+        el("span", { class: "cleanup-reason", text: (item.reasons || []).join(" · ") })))));
+  }
+
+  out.push(el("p", { class: "cleanup-confirm" },
+    el("span", { class: "cleanup-confirm-lead", text: "Paste this to remove them:" }),
+    el("code", { class: "mono", text: view.confirmCommand || "" })));
+  if (view.planPath) {
+    out.push(el("p", { class: "cleanup-plan-path mono", text: "plan: " + view.planPath }));
+  }
+  return out;
 }
 
 /* Delivery's own control, and the ONLY place permission is requested — from

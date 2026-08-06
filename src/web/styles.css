@@ -3693,3 +3693,102 @@ body.feed-frozen .programs { opacity: 0.62; }
     max-height: 70vh;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   S6-T3/T4 · the Clean up action and the plan it proposes.
+
+   THE BOARD NEVER DELETES. Everything below renders a PROPOSAL: removables with
+   the rollback SHA that undoes them, refusals with the reason the sweep stopped,
+   and a command the operator pastes into a terminal themselves.
+   ------------------------------------------------------------------------- */
+
+.verdict-cleanup {
+  appearance: none;
+  margin-left: 0.5rem;
+  padding: 0.14rem 0.4rem;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  color: inherit;
+  font: 600 0.66rem/1 var(--font-ui);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  vertical-align: middle;
+}
+.verdict-cleanup:hover { background: var(--sand); }
+.verdict-cleanup:disabled { cursor: progress; opacity: 0.85; }
+
+/* The indicator states that A PROCESS IS UNDERWAY. It must never imply the
+   fault is fixed, so it is a bare rotating arc with no completion affordance —
+   no check, no fill, no bar that could read as progress toward a repair. */
+.verdict-cleanup-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0;
+}
+.verdict-cleanup.is-running .verdict-cleanup-mark {
+  opacity: 1;
+  animation: cleanup-spin 900ms linear infinite;
+}
+@keyframes cleanup-spin { to { transform: rotate(360deg); } }
+
+/* Static under reduced motion, still visibly a marker that something is running.
+   NOTE: this project's browser harness cannot emulate prefers-reduced-motion, so
+   this rule is asserted at rule level and is NOT verified live. Recorded rather
+   than implied. */
+@media (prefers-reduced-motion: reduce) {
+  .verdict-cleanup.is-running .verdict-cleanup-mark {
+    animation: none;
+    border-top-color: currentColor;
+    border-style: dashed;
+  }
+}
+
+.cleanup-list {
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.cleanup-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.16rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.cleanup-kind {
+  flex: none;
+  font: 600 0.6rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.cleanup-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The rollback SHA is what makes the proposal reviewable rather than trusted:
+   it is the string that puts back anything the sweep proposed wrongly. */
+.cleanup-sha { flex: none; font-size: 0.7rem; color: var(--faint); }
+.cleanup-reason { flex: 1; min-width: 0; color: var(--amber); font-size: 0.72rem; }
+.cleanup-refused .cleanup-target { flex: none; max-width: 40%; }
+.cleanup-more { color: var(--faint); font-size: 0.72rem; }
+
+.cleanup-confirm { margin: 0.5rem 0 0; font-size: 0.74rem; color: var(--muted); }
+.cleanup-confirm-lead { display: block; margin-bottom: 0.2rem; }
+.cleanup-confirm code {
+  display: block;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.7rem;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+.cleanup-plan-path { margin: 0.25rem 0 0; font-size: 0.66rem; color: var(--faint); overflow-wrap: anywhere; }

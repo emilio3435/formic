@@ -66,6 +66,11 @@ export const state = {
      open across the four-second repaint — closing it under them would make the
      board unreadable while anything is actually waiting. */
   notifyPanelOpen: false,
+  /* The cleanup sweep's propose run and its result. `view` is the notification
+     view documented in docs/CLEANUP-SWEEP.md — removables with rollback SHAs,
+     refusals with reasons, and the confirm command the OPERATOR pastes. The
+     board never executes it, so nothing here is ever a deletion, only a plan. */
+  cleanup: { running: false, error: "", view: null, at: 0 },
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,

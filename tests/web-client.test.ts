@@ -5078,7 +5078,18 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
     // sk-pulse is the first-paint skeleton shimmer; it is inside the universal
     // guard above like every other one, which is what this list exists to force
     // a new animation's author to confirm.
-    expect(keyframes).toEqual(["conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "sun-pulse"]);
+    /* cleanup-spin joined this list with S6-T3 — the sweep indicator on the
+       instrument-trust chip. Confirmed covered, which is what this list exists
+       to force: the universal rule above kills it like every other keyframe, and
+       a second reduced-motion block gives it a STATIC marker (dashed, closed
+       ring) so the chip still shows a process is underway rather than going
+       blank. Live verification of that variant is impossible here — the harness
+       cannot emulate prefers-reduced-motion — so it is asserted at rule level
+       and recorded as unverified rather than claimed. */
+    expect(keyframes).toEqual(["cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "sun-pulse"]);
+    const staticVariant = styles.slice(styles.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
+    expect(staticVariant).toContain(".verdict-cleanup.is-running .verdict-cleanup-mark");
+    expect(staticVariant).toContain("animation: none");
     // Every live `animation:` usage keys off one of those keyframes — none escapes.
     const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
     expect(new Set(animated)).toEqual(new Set(keyframes));
@@ -12401,5 +12412,93 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
     expect(neither.value).toBe("No data");
     expect(neither.tone).toBe("missing");
     expect(neither.sublabel).toContain("cost unavailable");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   S6-T3/T4 · the Clean up action proposes, and the board never deletes.
+   ------------------------------------------------------------------------- */
+
+describe("the cleanup sweep proposes and never executes", () => {
+  test("THE BOARD NEVER DELETES: propose is the only route the client can reach", () => {
+    /* The hard contract from docs/CLEANUP-SWEEP.md. There is no confirm
+       endpoint; confirmCommand is text the operator pastes into a terminal.
+       This test is the one that must never be relaxed — an agent deleting
+       branches with no human in the loop is the single thing the last manual
+       pass was careful never to do. */
+    expect(source).toContain('"/api/cleanup/propose"');
+    expect(source).not.toContain("/api/cleanup/confirm");
+    // No destructive verb reachable from a click anywhere in the client.
+    for (const verb of ["git branch -D", "worktree remove", "rm -rf"]) {
+      expect(source, verb).not.toContain(verb);
+    }
+    // The request is a POST and carries no plan-mutating body.
+    const fn = source.match(/async function requestCleanupProposal\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain('method: "POST"');
+    expect(fn).not.toContain("confirm");
+  });
+
+  test("an incomplete enumeration reports itself and shows no removables", () => {
+    /* Absent, not partial. A plan missing a refusal is a plan that proposes
+       deleting something it should not, so a 503 carries no `plan` field and the
+       client must not render a subset of one. */
+    const fn = source.match(/async function requestCleanupProposal\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain("body.complete !== true");
+    expect(fn).toContain("Enumeration incomplete");
+    const render = source.match(/function renderCleanupPlan\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(render).toContain("No plan was produced");
+    // The error path returns before any removable is read.
+    expect(render.indexOf("No plan was produced")).toBeLessThan(render.indexOf("view.removable"));
+  });
+
+  test("the indicator says a process is underway, never that the fault is fixed", () => {
+    const fn = source.match(/function cleanupAction\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    // Present tense while running; no completion word anywhere on the control.
+    expect(fn).toContain('"Examining…"');
+    for (const done of ["Cleaned", "Fixed", "Done", "Complete", "Repaired"]) {
+      expect(fn, done).not.toContain(done);
+    }
+    /* The tooltip names three things: what is running, what it is examining, and
+       that nothing will be deleted without approval. The third is the contract,
+       not reassurance — a button labelled "Clean up" without it reads as
+       destructive. */
+    expect(fn).toContain("Nothing will be deleted without your approval");
+    expect(fn).toContain("worktrees, branches and the process table");
+    // Minimal by contract: an indicator on the chip, and no second surface.
+    expect(source).not.toContain("cleanup-banner");
+    expect(source).not.toContain("cleanup-progress");
+  });
+
+  test("the plan carries rollback SHAs, refusals with reasons, and a paste-able command", () => {
+    const render = source.match(/function renderCleanupPlan\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    // What makes a proposal reviewable rather than trusted.
+    expect(render).toContain("item.rollbackSha");
+    expect(render).toContain("item.reasons");
+    expect(render).toContain("view.confirmCommand");
+    expect(render).toContain("view.planPath");
+    // Refusals are shown, not summarised away — each one is a stop.
+    expect(render).toContain("refused");
+    // It renders as text to paste; nothing here submits it.
+    expect(render).toContain('el("code"');
+    expect(render).not.toContain("onclick");
+  });
+
+  test("Clean up is offered only when there is something to sweep", () => {
+    // A permanent Clean up button on a tidy board is a standing suggestion that
+    // something is wrong — the scold this program removes.
+    const fn = source.match(/function cleanupOffered\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(fn).toContain("remedy.tidy");
+    expect(fn).toContain("state.cleanup.running");
+    expect(fn).toContain("state.cleanup.view");
+  });
+
+  test("the panel repaints while the sweep runs, rather than freezing mid-run", () => {
+    /* The indicator starts and the plan arrives without any snapshot value
+       changing, so the sweep's own state has to be in the signature — the same
+       class of bug as hanging a surface off the widgets guard. */
+    const sig = source.match(/function notifyPanelPaintSig\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(sig).toContain("state.cleanup.running");
+    expect(sig).toContain("state.cleanup.at");
+    expect(sig).toContain("state.cleanup.error");
   });
 });
