@@ -1,0 +1,170 @@
+{
+  "purpose": "One golden input per AttentionSignalKind. tests/harden-notify-fixtures.test.ts runs each row through detectAttentionSignal so a rewritten detector cannot silently invent a kind, drop a silent kind, or reclassify a person-blocker as a watcher notice. Absence of attentionClass on the three silent kinds is a case, not a gap — the notification center must never invent a third severity for them.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md",
+  "kindsSource": "src/server/attention-signal.ts AttentionSignalKind",
+  "cases": [
+    {
+      "name": "permission-requested — control-plane permission is a person-blocker",
+      "claim": "A cmux permission prompt means a human is the blocker. Delivery, the ember badge, and the center's Waiting-on-you verdict all depend on this kind staying blocking — never demoted to a watcher notice, never recoverable from agent-authored transcript text.",
+      "kind": "permission-requested",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "attentionNotification": "Claude needs your permission to run git push"
+      },
+      "expect": {
+        "kind": "permission-requested",
+        "nextAction": "Approve or deny the permission it is blocked on.",
+        "evidence": "Claude needs your permission to run git push"
+      }
+    },
+    {
+      "name": "input-requested — control-plane wait without naming a permission",
+      "claim": "cmux can say the agent is waiting without naming a permission. That is still a person-blocker (blocking), not a weaker advisory — the operator is the reason it stopped.",
+      "kind": "input-requested",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "attentionNotification": "Claude is waiting for your input"
+      },
+      "expect": {
+        "kind": "input-requested",
+        "nextAction": "Answer it: cmux reports it is waiting on you.",
+        "evidence": "Claude is waiting for your input"
+      }
+    },
+    {
+      "name": "fork-unresolved — named alternatives handed back",
+      "claim": "Two named options with the choice handed back is a fork, not a generic question. The center must surface a pick-one action, and the kind must stay in the blocking set so an out-of-page notification still fires.",
+      "kind": "fork-unresolved",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "lastAgentClosing": "I can either widen the lock or shard the writer queue. Which would you prefer?"
+      },
+      "expect": {
+        "kind": "fork-unresolved",
+        "nextAction": "Pick one of the options it stopped between.",
+        "evidenceContains": "shard the writer queue"
+      }
+    },
+    {
+      "name": "handoff-stated — declarative hand-back without a question mark",
+      "claim": "Most real waits end in a statement, not a question. If handoff-stated ever falls out of blocking, the center goes quiet on the common case the question detector is structurally blind to.",
+      "kind": "handoff-stated",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "lastAgentClosing": "Publishing is your call."
+      },
+      "expect": {
+        "kind": "handoff-stated",
+        "nextAction": "Take the decision it handed back.",
+        "evidence": "Publishing is your call."
+      }
+    },
+    {
+      "name": "question-pending — agent stopped on an interrogative",
+      "claim": "A closing interrogative is the classic ask. It must remain blocking so badge ink, OS delivery, and the live feed agree that a person is the blocker.",
+      "kind": "question-pending",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "lastAgentClosing": "Do you want me to land this now?"
+      },
+      "expect": {
+        "kind": "question-pending",
+        "nextAction": "Answer the question it stopped on.",
+        "evidence": "Do you want me to land this now?"
+      }
+    },
+    {
+      "name": "assumption-stated — proceeded on a stated assumption",
+      "claim": "An agent that names the assumption it proceeded on invited correction. That is still a person-blocker: silence from the operator is consent by omission, so the center must keep it blocking.",
+      "kind": "assumption-stated",
+      "attentionClass": "blocking",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "lastAgentMessage": "The spec is ambiguous about retries. I will assume three attempts with backoff unless you say otherwise. Moving on to the writer."
+      },
+      "expect": {
+        "kind": "assumption-stated",
+        "nextAction": "Confirm or correct the assumption it proceeded on.",
+        "evidenceContains": "three attempts with backoff"
+      }
+    },
+    {
+      "name": "stalled-active — watcher noticed, person is not the blocker",
+      "claim": "A manifest-active lane whose hook stayed idle too long is something the board noticed — not something a person is blocking. attentionClass is noticed (amber outline, no OS notification). Collapsing this into blocking would lie at the one place the operator cannot see the screen to check.",
+      "kind": "stalled-active",
+      "attentionClass": "noticed",
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "taskState": "active",
+        "taskStateSource": "manifest",
+        "hookLifecycle": "idle",
+        "hookLifecycleAt": "2026-08-05T12:00:00.000Z",
+        "nowMs": 1785933060000
+      },
+      "expect": {
+        "kind": "stalled-active",
+        "nextAction": "Nudge it or park it.",
+        "evidence": "Hook idle for 31 minutes; manifest declares active."
+      }
+    },
+    {
+      "name": "nothing-wanted — we read its closing words and nothing wants you",
+      "claim": "Readable closing text that asks nothing is a finding: we looked. It must carry NO attentionClass — absence, not a third severity — or the center will invent work from an honest quiet.",
+      "kind": "nothing-wanted",
+      "attentionClass": null,
+      "input": {
+        "activity": "idle",
+        "processState": "running",
+        "lastAgentClosing": "All tests pass and it is committed."
+      },
+      "expect": {
+        "kind": "nothing-wanted",
+        "nextActionAbsent": true,
+        "evidenceAbsent": true
+      }
+    },
+    {
+      "name": "out-of-scope — ended session cannot be answered",
+      "claim": "An ended row has every control disabled. Surfacing it as blocking or noticed would put a to-do on a corpse. No attentionClass; never enters the live center.",
+      "kind": "out-of-scope",
+      "attentionClass": null,
+      "input": {
+        "activity": "ended",
+        "processState": "exited",
+        "lastAgentMessage": "No security vulnerabilities identified in this diff."
+      },
+      "expect": {
+        "kind": "out-of-scope",
+        "nextActionAbsent": true,
+        "evidenceAbsent": true
+      }
+    },
+    {
+      "name": "not-readable — nothing to read is not all-clear",
+      "claim": "Blind silence is the opposite of an honest quiet. Counting it as nothing-wanted made a blind layer look disciplined. No attentionClass, and never a correct-negative on the board.",
+      "kind": "not-readable",
+      "attentionClass": null,
+      "input": {
+        "activity": "idle",
+        "processState": "running"
+      },
+      "expect": {
+        "kind": "not-readable",
+        "nextActionAbsent": true,
+        "evidenceAbsent": true
+      }
+    }
+  ]
+}

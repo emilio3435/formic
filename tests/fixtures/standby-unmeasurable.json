@@ -1,0 +1,67 @@
+{
+  "purpose": "Truth-safety after S0-T1 measurement: the hook contract has no defensible stable entry clock for blockedSince, so treat that field as one that may never arrive. Absent standbyMs and an absent dead-time hero are the EXPECTED state, not a failure. The only hard forbid is inventing zero — unmeasurable ≠ 0ms, and a missing clock must never mint a hero that pretends the wait was measured.",
+  "program": "docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md §3 S0-T1/S0-T3 and §6 Truth-safety",
+  "s0t1": {
+    "finding": "no defensible stable entry clock for blockedSince",
+    "consequence": "do not require standbyMs or a dead-time hero to exist; pulse.blocked may still count"
+  },
+  "cases": [
+    {
+      "name": "blocking agents without blockedSince — duration absent, count still honest",
+      "claim": "A count is honest when a duration is not. pulse.blocked can still say how many are waiting. standbyMs must be absent or null — never 0 — and no dead-time hero may be invented from that absence.",
+      "agents": [
+        {
+          "id": "codex:blocked-a",
+          "attentionClass": "blocking",
+          "attentionSignal": { "kind": "question-pending" }
+        },
+        {
+          "id": "codex:blocked-b",
+          "attentionClass": "blocking",
+          "attentionSignal": { "kind": "permission-requested" }
+        }
+      ],
+      "now": "2026-08-05T12:10:00.000Z",
+      "expect": {
+        "pulse": {
+          "blocked": 2
+        },
+        "standbyMs": {
+          "presenceNotRequired": true,
+          "never": 0,
+          "allowed": [null, "absent"]
+        },
+        "hero": {
+          "presenceNotRequired": true,
+          "mustNotInventZero": true
+        }
+      }
+    },
+    {
+      "name": "even a fabricated blockedSince must not force a hero — absence remains legal",
+      "claim": "S0-T1 closed the door on a required duration. A fixture must not treat a publishable standbyMs as the happy path this surface depends on. If blockedSince ever appears, inventing 0ms is still forbidden; requiring the hero is also forbidden.",
+      "agents": [
+        {
+          "id": "codex:blocked-with-clock",
+          "attentionClass": "blocking",
+          "attentionSignal": { "kind": "input-requested" },
+          "blockedSince": "2026-08-05T12:00:00.000Z"
+        }
+      ],
+      "now": "2026-08-05T12:10:00.000Z",
+      "expect": {
+        "pulse": {
+          "blocked": 1
+        },
+        "standbyMs": {
+          "presenceNotRequired": true,
+          "never": 0
+        },
+        "hero": {
+          "presenceNotRequired": true,
+          "mustNotInventZero": true
+        }
+      }
+    }
+  ]
+}
