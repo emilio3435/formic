@@ -1424,7 +1424,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, hiddenByLookback, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
@@ -5109,6 +5109,36 @@ function timeFilterMenu(ui) {
   });
 }
 
+/* The review-worker policy, and the one control on this bar that is NOT a lens
+   and must not dress like one.
+
+   It wore `filter-chip` and sat first in the row, so it read as a sixth
+   narrowing this browser was applying — which is false twice over. It is a
+   SERVER setting shared by every browser looking at this fleet, so turning it on
+   changes what a colleague sees; and it is a standing policy about which rows
+   the Board is for, not a question about the sessions in front of you.
+
+   So it is a plain disclosure that states the count and its own reach, with a ⊘
+   rather than a pressed state: nothing here is "active" or "inactive", the fleet
+   is simply configured one way or the other. */
+function reviewPolicyControl(ui, reviews) {
+  const showing = Boolean(ui.showReviewWorkers);
+  const noun = reviews + " reviewer" + (reviews === 1 ? "" : "s");
+  return el("button", {
+    type: "button",
+    class: "filter-policy" + (showing ? " is-showing" : ""),
+    dataset: { fkey: "session-kind:review" },
+    /* No aria-pressed. This is not a toggle reporting its own state — it is a
+       statement of the fleet's setting whose label already says which way it
+       falls, and a pressed state on top of that says it twice and disagrees
+       with itself half the time. */
+    title: "Routine review workers are hidden from the Board by default. This is a FLEET setting saved on the server and shared by every browser — changing it changes what your colleagues see. Reviews that need a person stay visible either way.",
+    onclick: () => setShowReviewWorkers(!state.showReviewWorkers),
+  },
+    el("span", { class: "filter-policy-mark", "aria-hidden": "true", text: "⊘" }),
+    showing ? "showing " + noun : noun + " hidden");
+}
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -5155,19 +5185,7 @@ function renderFilterBar(ui = state) {
      window below remains a server setting rather than a second filter. */
   bar.append(el("span", { class: "filter-lead", text: "Filters" }));
   const reviews = reviewWorkerCount(ui);
-  if (ui.view === "board" && reviews > 0) {
-    bar.append(filterChip(
-      ui.showReviewWorkers ? "Hide review workers" : "Show review workers (" + reviews + ")",
-      Boolean(ui.showReviewWorkers),
-      () => setShowReviewWorkers(!state.showReviewWorkers),
-      {
-        fkey: "session-kind:review",
-        title: ui.showReviewWorkers
-          ? "Hide routine review workers from the Board"
-          : "Show routine review workers on the Board. Attention rows remain visible either way.",
-      },
-    ));
-  }
+  if (ui.view === "board" && reviews > 0) bar.append(reviewPolicyControl(ui, reviews));
   /* The lenses: Provider · Status · Model · Span · Context, in that order and in
      one flat row. Five closed triggers stand where fifteen open chips used to,
      which is why this stays flat instead of nesting the last three behind a
@@ -5220,32 +5238,111 @@ function renderScopeNote(shown) {
         : "");
     return;
   }
-  if (!state.snap) { note.textContent = ""; note.hidden = true; return; }
-  /* Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
+  note.textContent = "";
+  if (!state.snap) { note.hidden = true; return; }
+  /* D5. The sentence that reconciles the two numbers on this page.
+
+     Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
      already showing Now 12 / Idle 19 / History 44 — twelve numeric occurrences
      carrying nine distinct values, with the three 12s being one set. Worse,
-     `shown` is the active tab AFTER search and facets while the tab counts omit
-     them, so the two silently disagree the moment a filter is on, and `tracked`
-     has no threshold, no change and no action attached to it.
+     `shown` counts the list AFTER every lens and the query while the tab counts
+     omit them, so the two silently disagreed the moment a filter went on.
 
-     It now renders only what CHANGES the interpretation of what is on screen —
-     a filter is narrowing the list, a lookback window is hiding rows, or the
-     last refresh failed. Otherwise the tab bar has already said it. */
-  const parts = [];
+     They still disagree, because they are measuring different things and always
+     were — that IS the two-layer model. What changed is that the disagreement is
+     now stated instead of left for the operator to discover: "8 of 21" says the
+     working set holds 21 (which is the tab number, from the same helper) and
+     your lenses have left 8 of them. The line speaks only when something is
+     narrowing or the data went stale; on an unfiltered board the tabs have
+     already said everything there is to say. */
   const active = activeLenses(state);
-  if (state.query || state.facetProgram || active.length) {
-    /* The live region names the lenses, not just the count. "12 matching" read
-       out of a screen reader says a filter is on; it does not say which one, and
-       the operator cannot see the pressed trigger to find out. */
-    const lenses = active.map((lens) => lens.words.join(" or "));
-    parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
+  const narrowing = Boolean(state.query) || Boolean(state.facetProgram) || active.length > 0;
+  if (!narrowing && !state.fetchFailed) { note.hidden = true; return; }
+  note.hidden = false;
+  if (!narrowing) {
+    note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    return;
   }
-  /* No unconditional lookback echo: the pressed chip already says it, and a
-     line that always renders is a line nobody reads. The live region speaks
-     only when something is NARROWING the list or the data went stale. */
-  if (state.fetchFailed) parts.push("last refresh failed");
-  note.textContent = parts.join(" · ");
-  note.hidden = parts.length === 0;
+
+  /* Each active lens is a real button, not a word. An operator reading "showing
+     working codex sessions" and wanting to change it should be able to act on
+     the sentence itself rather than hunt the bar for whichever trigger owns that
+     word — the sentence is where they are already looking. */
+  const line = el("span", { class: "scope-sentence" }, "Showing ");
+  for (const lens of active) {
+    line.append(el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:" + lens.axis.key },
+      title: "Open the " + lens.axis.label + " filter",
+      onclick: () => setOpenFilterMenu(lens.axis.key),
+    }, lens.words.join(" or ")), " ");
+  }
+  line.append("sessions");
+  if (state.query) {
+    line.append(" matching ", el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:query" },
+      title: "Edit the search",
+      /* No menu to open — the query's control is the search box, so this puts
+         the cursor in it. Selecting the text too: the operator clicked the word
+         they want to change, and landing them at its end to backspace through it
+         is a worse answer than handing them a replaceable selection. */
+      onclick: () => {
+        const box = $("search");
+        if (!box) return;
+        box.focus();
+        if (typeof box.select === "function") box.select();
+      },
+    }, "“" + state.query + "”"));
+  }
+  if (state.facetProgram) {
+    const scoped = ((state.snap && state.snap.programs) || []).find((p) => p.id === state.facetProgram);
+    line.append(" in ", el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:program" },
+      /* The program lens has no menu — it is set from a drawer — so its fragment
+         is the way OFF rather than a way in. Said in the title, because a button
+         that clears when its siblings open is a difference worth stating. */
+      title: "Show every program again",
+      onclick: () => setFacetProgram(state.facetProgram),
+    }, scoped ? programName(scoped) : "one program"));
+  }
+  /* The reconciliation. `shown` is what the list actually rendered; the second
+     number is the working-set count — the SAME helper renderTabs counts with, so
+     the sentence can never quote a total the tab beside it disagrees with. */
+  line.append(" — ", el("span", { class: "scope-count", text: shown + " of " + workingSet(state).length }));
+  note.append(line);
+  /* Clears the LENSES and the query, and deliberately not the two things that
+     are not lenses: the review policy belongs to the fleet rather than to this
+     browser, and the time window is the working set itself — a "clear filters"
+     that silently widened the board's reach would change the number it is
+     standing next to. */
+  note.append(" · ", el("button", {
+    type: "button",
+    class: "scope-clear",
+    dataset: { fkey: "sentence:clear" },
+    title: "Clear every filter and the search. Leaves the time window and the fleet's review setting alone.",
+    onclick: clearEveryLens,
+  }, "Clear"));
+  if (state.fetchFailed) {
+    note.append(" · ", el("span", { class: "scope-stale", text: "last refresh failed" }));
+  }
+}
+
+/* One repaint, not six. Assigning each axis through its own setter would render
+   between every one, so a five-lens board would rebuild itself five times on a
+   single click — and the intermediate boards are states the operator never asked
+   to see. */
+function clearEveryLens() {
+  for (const axis of LENS_AXES) state[axis.stateKey] = [];
+  state.facetProgram = "";
+  state.query = "";
+  const box = $("search");
+  if (box) box.value = "";
+  render();
 }
 
 /* ---------- repo → worktree grouping ----------
@@ -5978,6 +6075,37 @@ function stripRowOpts(program, board) {
   };
 }
 
+/* How many sessions the LOOKBACK — and only the lookback — is holding back.
+
+   Every other filter in currentFilter is applied, so this answers the one
+   question the all-clear cannot answer for itself: "is the board empty, or is
+   the window just short?" A bare "showing 6h" leaves an operator guessing
+   whether that matters; a count tells them.
+
+   It calls the filtering program's own predicates rather than re-deriving them.
+   passesReviewVisibility and passesEveryLens are theirs, and a second copy of
+   either would be a second answer to the same question — the defect this file
+   has a scar for in three other places. */
+function hiddenByLookback(ui = state) {
+  if (!lookbackApplies(ui.view) || ui.lookbackHours == null || !ui.snap) return 0;
+  let hidden = 0;
+  for (const { agent, program } of snapshotAgents(ui.snap)) {
+    if (passesLookback(agent, ui.view, ui.lookbackHours)) continue;   // inside the window
+    if (!viewMatches(ui.view, agent)) continue;
+    if (!matchesQuery(agent, program, ui.query)) continue;
+    if (!passesReviewVisibility(
+      agent,
+      ui.view,
+      ui.showReviewWorkers,
+      Boolean(ui.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, ui.query),
+    )) continue;
+    if (ui.facetProgram && program.id !== ui.facetProgram) continue;
+    if (!passesEveryLens(agent, ui)) continue;
+    hidden += 1;
+  }
+  return hidden;
+}
+
 /* The constrained-empty sentence, pure so the harness can reach it: renderPrograms
    is below the seam and this copy was unreachable by test — the exact shape a
    sentence drifts in. Returns null when no constraint is active, and the caller
@@ -5986,7 +6114,29 @@ function emptyListMessage(ui = state) {
   const lookbackHiding = lookbackApplies(ui.view) && ui.lookbackHours != null;
   const reviewsHidden = !ui.showReviewWorkers ? reviewWorkerCount(ui) : 0;
   const active = activeLenses(ui);
-  if (!ui.query && !ui.facetProgram && !active.length && !lookbackHiding && !reviewsHidden) return null;
+  /* THE LOOKBACK IS NOT A CONSTRAINT THE OPERATOR CHOSE.
+
+     It was in this test, and because lookbackApplies("board") is true and no
+     reachable preset is null, `lookbackHiding` was ALWAYS true on Board — so
+     this returned a sentence every time and the rich all-clear below was dead
+     code at every window an operator can pick. It was reachable only through
+     the separate Everything control. Nothing covered it: `grep "Nothing is
+     live" tests/` returned nothing at all, which is how it rotted unnoticed.
+
+     Making the branch merely reachable would have been worse than leaving it.
+     "Nothing is live" is FALSE under a 6h window: withinLookback filters on
+     updatedAt recency, so a session whose process is alive and which has been
+     waiting on a person for eight hours is live and outside it — and because
+     the filter keys on quiet time, the rows it excludes first are the ones
+     quiet longest, exactly the blocked-on-a-human population this board exists
+     to surface. A thin-but-true line would have become a rich-but-false one.
+
+     So the lookback stops forcing this sentence, and the rich state DISCLOSES
+     the window instead, carrying how many sessions it is holding back. Both
+     facts are true at once and both get said. The lookback still appears in the
+     list below when some other constraint is also active — it is a real part of
+     "why is this empty" then, just never the whole of it. */
+  if (!ui.query && !ui.facetProgram && !active.length && !reviewsHidden) return null;
   /* One hidden reviewer is one review worker. The count is rendered into the
      sentence, so the noun and its verb have to agree with it or the disclosure
      reads as a bug in the very number it is disclosing. */
@@ -6092,6 +6242,11 @@ function renderPrograms() {
 
        Zero live sessions is now said in those words, and the findings that do
        exist are named and pointed at rather than papered over. */
+    /* How many sessions the window is holding back — the number that turns
+       "showing 6h" from a fact the operator has to interpret into one they can
+       act on. Computed once here and read by both the headline and the
+       disclosure, so the two cannot disagree about it. */
+    const hiddenNow = hiddenByLookback(state);
     const openFindings = state.view === "board" ? issuesOf(state.snap) : [];
     const allClear = state.view === "board" && openFindings.length === 0;
     const wrap = el("div", { class: "no-match" + (allClear ? " is-all-clear" : "") });
@@ -6112,7 +6267,22 @@ function renderPrograms() {
          over a state that by construction has no working sessions in it. */
       wrap.append(
         ...(allClear ? [el("p", { class: "all-clear-mark", "aria-hidden": "true" }, icon("check"))] : []),
-        el("p", { class: "all-clear-head", text: "Nothing is live" }),
+        /* THE CLAIM IS QUALIFIED, NOT SOFTENED.
+
+           "Nothing is live" is false whenever the window is shorter than the
+           collectors' reach: withinLookback filters on updatedAt recency, so a
+           session whose process is alive and which has been waiting on a person
+           for eight hours is live and simply outside a 6h view. Saying it flatly
+           would conceal exactly the sessions that have been quiet longest —
+           which, because the filter keys on quiet time, are the blocked-on-a-
+           human rows this board exists to surface.
+
+           So the headline says what was actually measured: nothing is live IN
+           THE WINDOW BEING SHOWN. Unqualified only when the window is hiding
+           nothing, where the shorter sentence is the true one. */
+        el("p", { class: "all-clear-head", text: hiddenNow
+          ? "Nothing is live in the last " + lookbackLabel(state.lookbackHours)
+          : "Nothing is live" }),
         el("p", { class: "all-clear-vitals" },
           el("span", { text: `${t.tracked} tracked · ${t.live} live` }),
           /* A stalled session is neither working nor done — it is the third
@@ -6129,6 +6299,29 @@ function renderPrograms() {
             dataset: { ago: state.snap.generatedAt },
             text: "checked " + agoText(state.snap.generatedAt),
           })),
+        /* The window's own disclosure, and the escape from it.
+
+           Both facts are true at once — the board is all-clear AND it is only
+           looking back this far — so both are said. The COUNT is what makes it
+           actionable: a bare "showing 6h" leaves the operator to guess whether
+           that matters, where "8 sessions are outside it" tells them, and tells
+           them the ones most likely to be there are the ones quiet longest.
+
+           Silent when the window hides nothing, because then the headline above
+           is unqualified and true, and a standing footnote about a window that
+           is holding nothing back is the kind of permanent line that stops
+           being read. */
+        ...(hiddenNow ? [el("p", { class: "all-clear-window" },
+          el("span", {
+            text: `${hiddenNow} session${hiddenNow === 1 ? "" : "s"} `
+              + `${hiddenNow === 1 ? "is" : "are"} outside this window.`,
+          }),
+          el("button", {
+            type: "button", class: "all-clear-widen",
+            dataset: { fkey: "all-clear-widen" },
+            "aria-label": `Show everything the collectors have, not only the last ${lookbackLabel(state.lookbackHours)}`,
+            onclick: () => setLookbackHours(null),
+          }, "Show everything"))] : []),
         /* An all-clear may only render over an EMPTY findings collection, never
            over an empty row list alone. A board carrying a collector fault and
            no live agent used to render a check mark and the words "Nothing

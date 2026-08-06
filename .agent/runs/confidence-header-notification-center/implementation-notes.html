@@ -46,9 +46,9 @@
 <section class="resume">
   <h2 style="margin-top:0;border:0">Resume Here</h2>
   <dl>
-    <dt>Status</dt><dd><span class="st doing">doing</span> — 5 tranches merged to main (PRs #9, #11, #12, #13, #14). Branch <code>fix/cmux-control-health-lifecycle</code>.</dd>
-    <dt>Phase</dt><dd>Tail end. All six a11y defects are fixed; the geometry gate is parked with a reason. Remaining: S4, S6-T3/T4, the Board all-clear defect.</dd>
-    <dt>Next action</dt><dd>fe-notify holds <code>app.js</code>: finish <strong>S4</strong>, then <strong>S6-T3/T4</strong>, then the Board all-clear defect. Push + PR + merge tranche 6 when S4 lands.</dd>
+    <dt>Status</dt><dd><span class="st done">done</span> — every stage S0–S6 shipped. 7 tranches merged (#9, #11, #12, #13, #14, #15, #16); <strong>#17 is the final one, CI running</strong>.</dd>
+    <dt>Phase</dt><dd>Closing. One open item: merge <a href="https://github.com/emilio3435/the-ant-hill/pull/17">PR #17</a>.</dd>
+    <dt>Next action</dt><dd>Merge <strong>PR #17</strong> when CI goes green. Then the program is complete; the only carried-forward item is the parked geometry gate (see Open Questions).</dd>
     <dt>Blockers</dt><dd>None. Every dependency that gated the header has cleared.</dd>
     <dt>Last validation</dt><dd><code>bunx tsc --noEmit</code> exit 0 · <code>bun run test:ci</code> 0 fail · CI green on #14 (32s) · merged.</dd>
   </dl>
@@ -74,15 +74,15 @@
   <tr><td><strong>S1</strong> notification center + parity gate</td><td><span class="st done">done</span></td></tr>
   <tr><td><strong>S2</strong> Findings card removed · health becomes a qualifier · scan window stated once</td><td><span class="st done">done</span></td></tr>
   <tr><td><strong>S3</strong> Context reads the fleet (average leads, toggle to median, peak demoted)</td><td><span class="st done">done</span></td></tr>
-  <tr><td><strong>S4</strong> cost + burn provenance rendered, not implied</td><td><span class="st doing">doing</span></td></tr>
+  <tr><td><strong>S4</strong> cost + burn provenance rendered, not implied</td><td><span class="st done">done</span> — <code>6d8a567</code>. Reading null-ness was one inference from printing <code>$0.00</code> for an hour nobody could price</td></tr>
   <tr><td><strong>S5</strong> fixtures, promotion truth table, history routes, docs parity</td><td><span class="st done">done</span></td></tr>
   <tr><td><strong>S6-T1/T2</strong> propose-then-confirm sweep + read-only endpoint</td><td><span class="st done">done</span></td></tr>
-  <tr><td><strong>S6-T3/T4</strong> Clean up chip spinner + result routed as a dataflow item</td><td><span class="st todo">todo</span></td></tr>
+  <tr><td><strong>S6-T3/T4</strong> Clean up chip spinner + result routed as a dataflow item</td><td><span class="st done">done</span> — <code>69784ae</code>. Propose only; the result carries <em>no</em> route rather than a synthetic one that dead-ends</td></tr>
   <tr><td><strong>A11Y-1</strong> panel clipped 24px off the left at 420px</td><td><span class="st done">done</span></td></tr>
   <tr><td><strong>A11Y-2</strong> focus stranded on <code>&lt;body&gt;</code></td><td><span class="st done">done</span> — <code>62a7f04</code>, reproduced before / verified after on a live board</td></tr>
   <tr><td><strong>A11Y-3..6</strong> panel name, duplicate Focus names, missing program name, 32px target</td><td><span class="st done">done</span> — <code>d4192ba</code>. <code>aria-labelledby</code> on a bare div computes <code>role=generic</code>, where ARIA <em>prohibits</em> a name</td></tr>
   <tr><td><strong>Panel geometry test</strong> — measure edges, not stylesheet text</td><td><span class="st incomplete">incomplete</span> — written, validated, <strong>parked</strong> in <code>docs/a11y-geometry-gate/</code>. Needs a layout engine the package lacks. See Open Questions</td></tr>
-  <tr><td><strong>Board all-clear defect</strong> — rich all-clear unreachable at every preset</td><td><span class="st todo">todo</span></td></tr>
+  <tr><td><strong>Board all-clear defect</strong> — rich all-clear unreachable at every preset</td><td><span class="st done">done</span> — <code>9ebb698</code>, in PR #17. Written test-first. The filter keys on <em>quiet time</em>, so it excluded the blocked-on-a-human population first</td></tr>
 </table>
 
 <h2>Decisions the spec did not make</h2>
@@ -239,6 +239,12 @@ const progressEvents = [
   { ts:"2026-08-06T04:38:00Z", status:"incomplete", phase:"a11y", actor:"a11y-sweep",
     summary:"Geometry gate PARKED with evidence: the CSS-text guard is wrong in both directions — false-positive on route A, blind to the shipped defect on route C. Needs a layout engine the package lacks.",
     evidence:["docs/a11y-geometry-gate/README.md"] },
+  { ts:"2026-08-06T04:59:00Z", status:"done", phase:"tranche-6", actor:"orchestrator",
+    summary:"PR #15 merged, carrying S4. Cost now reads costProvenance FIRST rather than inferring from null-ness — one inference away from printing $0.00 for an hour nobody could price." },
+  { ts:"2026-08-06T05:21:00Z", status:"done", phase:"tranche-7", actor:"orchestrator",
+    summary:"PR #16 merged: S6-T3/T4, the last stage of the plan. Clean up proposes only; no confirm route exists in the client, and the sweep result carries no route rather than a synthetic one that dead-ends." },
+  { ts:"2026-08-06T05:26:00Z", status:"done", phase:"final", actor:"fe-notify",
+    summary:"Board all-clear fixed test-first. The finding that decided the shape: withinLookback keys on QUIET TIME, so it excluded the longest-waiting sessions first — exactly the blocked-on-a-human population the board exists to surface. Reachability alone would have shipped a lie." },
 ];
 document.getElementById("timeline").innerHTML = progressEvents.map(e =>
   '<li><span class="ts">' + e.ts.replace("T"," ").replace("Z"," UTC") + '</span>' +

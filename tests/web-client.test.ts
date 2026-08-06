@@ -1874,10 +1874,31 @@ describe("views split Now from History", () => {
         showReviewWorkers: false,
       }));
       const bar = domById.get("filter-bar");
-      expect(textOf(bar)).toContain("Show review workers (1)");
-      expect(buttonsOf(bar).map((button: { dataset: Record<string, string> }) => button.dataset.fkey))
-        .toContain("session-kind:review");
+      /* D4. The disclosure survives; what changed is that it stopped dressing as
+         a lens. It said "Show review workers (1)" in chip clothing at the head of
+         the filter row, which read as a sixth narrowing THIS browser was
+         applying — false twice over: it is a server setting shared by every
+         browser looking at the fleet, and it is a standing policy about which
+         rows the Board is for rather than a question about the sessions in front
+         of you. It states the count and its own reach instead. */
+      const policy = byFkey(bar, "session-kind:review");
+      expect(policy.className).toContain("filter-policy");
+      expect(policy.className).not.toContain("filter-chip");
+      expect(textOf(policy)).toContain("1 reviewer hidden");
+      // No pressed state: the label already says which way the fleet is set, and
+      // a toggle's self-report on top of that would disagree with it half the time.
+      expect(policy.attributes["aria-pressed"]).toBeUndefined();
+      // The title has to say it is not yours alone — that is the whole disclosure.
+      expect(policy.attributes.title).toContain("FLEET setting");
+      expect(policy.attributes.title).toContain("your colleagues");
       expect(textOf(bar)).toContain("Last 6h");
+    });
+
+    // Showing them says so, and the noun agrees with the count either way.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, snap, showReviewWorkers: true }));
+      expect(textOf(byFkey(domById.get("filter-bar"), "session-kind:review")))
+        .toContain("showing 1 reviewer");
     });
   });
 });
@@ -7665,6 +7686,152 @@ describe("FE-B: harness-backed client behavior", () => {
     });
   });
 
+  /* -------- FE-2 D5/D6: the sentence, and the count rule it exists to state ---
+     The tab number and the row count measure different populations and always
+     did. That is the two-layer model, not a bug — but it was left for the
+     operator to discover, which is why lenses "looked broken" every time they
+     failed to move the number beside the tab they were filtering. */
+
+  const noteOf = () => domById.get("scope-note")!;
+  /* The fake document lives only for the duration of withRequests, so anything
+     that clicks the rendered sentence has to run INSIDE it — render() reads
+     `document` and a fire() after the teardown throws rather than failing. */
+  const sentence = (over: Record<string, unknown>, shown: number, then: () => Promise<void> | void = () => {}) =>
+    withState({ view: "board", lookbackHours: null, showReviewWorkers: true, fetchFailed: false, ...over },
+      () => withRequests([], async () => { M.renderScopeNote(shown); await then(); }));
+
+  test("(FE2-D6) lenses and the query never move the tab count", async () => {
+    /* THE pinned rule. Tab counts are working-set counts — view × time × the
+       fleet's review policy — and the lenses narrow INSIDE that set. If a lens
+       ever moved this number, the sentence's "8 of 21" would be quoting a total
+       that had already shrunk to 8, and the reconciliation would say nothing.
+
+       Time is the control that MAY move it, and does, asserted last: that is
+       what makes this a designed boundary rather than an accident that happens
+       to hold for the filters we tested. */
+    /* The shared fleet plus one session that went quiet three hours ago. It is
+       there for the LAST assertion: without a row the time window can actually
+       exclude, "time moves the count" would pass vacuously and this test would
+       only be pinning half a boundary. */
+    const stale = agent({
+      id: "codex:stale", provider: "codex", status: "waiting",
+      updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+    });
+    const fleet = lensFleet();
+    const snap = { ...fleet, programs: [{ ...fleet.programs[0], agents: [...fleet.programs[0].agents, stale] }] };
+    const countWith = async (over: Record<string, unknown>) => {
+      let count = "";
+      await withState({ snap, view: "board", lookbackHours: null, showReviewWorkers: true, ...over },
+        () => withDom(() => { M.renderTabs(); count = domById.get("count-board")!.textContent; }));
+      return count;
+    };
+    const base = await countWith({});
+    expect(base).toBe("4");
+    expect(await countWith({ facetProviders: ["codex"] })).toBe(base);
+    expect(await countWith({ facetStatuses: ["waiting"] })).toBe(base);
+    expect(await countWith({ facetModels: ["gpt-5-codex"] })).toBe(base);
+    expect(await countWith({ facetSpans: ["under-1h"] })).toBe(base);
+    expect(await countWith({ facetContexts: ["over-75"] })).toBe(base);
+    expect(await countWith({ query: "nothing-matches-this" })).toBe(base);
+    // Every lens at once, still the same number.
+    expect(await countWith({
+      facetProviders: ["codex"], facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"],
+      facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
+    })).toBe(base);
+
+    // …and the working-set controls DO move it, which is the other half of the
+    // rule: this is a boundary, not a claim that nothing affects the count.
+    expect(await countWith({ lookbackHours: 1 })).not.toBe(base);
+  });
+
+  test("(FE2-D5) the sentence renders only the lenses that are on, and reconciles the numbers", async () => {
+    await sentence({ snap: lensFleet(), facetProviders: ["codex"], facetStatuses: ["waiting"] }, 1);
+    const note = noteOf();
+    expect(textOf(note)).toContain("Showing");
+    expect(textOf(note)).toContain("codex");
+    expect(textOf(note)).toContain("waiting");
+    /* "1 of 3": one row survived every lens, out of the three the working set
+       holds — and 3 is the tab number, from the same helper, so the sentence can
+       never quote a total the tab beside it disagrees with. */
+    expect(textOf(byClass(note, "scope-count"))).toBe("1 of 3");
+    // Only the ACTIVE axes get a fragment. Three lenses off, three absent.
+    expect(focusKeysOf(note)).toEqual(["sentence:provider", "sentence:status", "sentence:clear"]);
+  });
+
+  test("(FE2-D5) a quiet board says nothing at all", async () => {
+    // The line that always renders is the line nobody reads. With no lens, no
+    // query and fresh data, the tabs have already said everything.
+    await sentence({ snap: lensFleet() }, 3);
+    expect(noteOf().hidden).toBe(true);
+    expect(textOf(noteOf())).toBe("");
+
+    // Stale data speaks on its own, with no sentence wrapped around it.
+    await sentence({ snap: lensFleet(), fetchFailed: true }, 3);
+    expect(noteOf().hidden).toBe(false);
+    expect(textOf(noteOf())).toBe("last refresh failed");
+  });
+
+  test("(FE2-D5) each fragment reaches the control that owns it", async () => {
+    // A lens fragment opens its menu — the operator is already looking at the
+    // sentence, so they should not have to hunt the bar for the right trigger.
+    await sentence({ snap: lensFleet(), facetStatuses: ["waiting"], query: "ridge" }, 1, async () => {
+      await fire(byFkey(noteOf(), "sentence:status"));
+      expect(M.state.openFilterMenu).toBe("status");
+    });
+
+    /* The program fragment CLEARS instead of opening: programs are unbounded, so
+       there is no program menu to open, and the fragment is the way off. The
+       title says so, because a button that clears while its siblings open is a
+       difference the operator cannot see. */
+    await sentence({ snap: lensFleet(), facetProgram: "p" }, 1, async () => {
+      expect(byFkey(noteOf(), "sentence:program").attributes.title).toContain("every program");
+      await fire(byFkey(noteOf(), "sentence:program"));
+      expect(M.state.facetProgram).toBe("");
+    });
+
+    /* The query fragment has no menu either — its control is the search box —
+       so it focuses and SELECTS: the operator clicked the word they want to
+       change, and landing them at its end to backspace through it is a worse
+       answer than handing them a replaceable selection. */
+    await sentence({ snap: lensFleet(), query: "ridge" }, 1, async () => {
+      let focused = false;
+      let selected = false;
+      domById.set("search", {
+        ...newNode("input"),
+        focus: () => { focused = true; },
+        select: () => { selected = true; },
+      } as unknown as FakeNode);
+      await fire(byFkey(noteOf(), "sentence:query"));
+      expect(focused).toBe(true);
+      expect(selected).toBe(true);
+    });
+  });
+
+  test("(FE2-D5) Clear resets the lenses and the query, and nothing else", async () => {
+    /* The two exclusions are the whole point. showReviewWorkers is the FLEET's
+       setting saved on the server — a "clear filters" that silently changed what
+       a colleague sees would be the worst kind of surprise — and the time window
+       is the working set itself, so clearing it would move the very total the
+       sentence is standing next to. */
+    await sentence({
+      snap: lensFleet(), lookbackHours: 6, showReviewWorkers: false, query: "ridge",
+      facetProgram: "p", facetProviders: ["codex"], facetStatuses: ["waiting"],
+      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"],
+    }, 1, async () => {
+      await fire(byFkey(noteOf(), "sentence:clear"));
+      expect(M.state.facetProviders).toEqual([]);
+      expect(M.state.facetStatuses).toEqual([]);
+      expect(M.state.facetModels).toEqual([]);
+      expect(M.state.facetSpans).toEqual([]);
+      expect(M.state.facetContexts).toEqual([]);
+      expect(M.state.facetProgram).toBe("");
+      expect(M.state.query).toBe("");
+      // Untouched, both of them.
+      expect(M.state.lookbackHours).toBe(6);
+      expect(M.state.showReviewWorkers).toBe(false);
+    });
+  });
+
   test("(FE2-D1) Escape closes the menu without selecting, and returns focus to the trigger", async () => {
     await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
       () => withRequests([], async () => {
@@ -12726,5 +12893,74 @@ describe("the cleanup sweep proposes and never executes", () => {
     expect(sig).toContain("state.cleanup.running");
     expect(sig).toContain("state.cleanup.at");
     expect(sig).toContain("state.cleanup.error");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   The Board's rich all-clear is unreachable at every lookback an operator can
+   pick, and it would be FALSE if it were reached.
+
+   RED ON PURPOSE. These pin the two halves of a defect that is still open, and
+   they are written before the fix so that reachability cannot be declared won on
+   a branch where the branch is still dead. See
+   .agent/runs/board-all-clear-lookback-disclosure/.
+   ------------------------------------------------------------------------- */
+
+describe("the Board all-clear is reachable, and honest about its window", () => {
+  const boardUi = (over: Record<string, unknown> = {}) => listUi({
+    view: "board",
+    lookbackHours: M.DEFAULT_LOOKBACK_HOURS,
+    query: "",
+    facetProgram: "",
+    showReviewWorkers: true,
+    snap: snapshot({ programs: [{ id: "p", name: "P", agents: [] }] }),
+    ...over,
+  });
+
+  test("at the DEFAULT lookback, an unconstrained empty board reaches the rich all-clear", () => {
+    /* emptyListMessage returning non-null is what makes the rich branch dead:
+       renderPrograms prints its thin "Nothing matches…" line instead, and the
+       verdict mark, "Nothing is live", the vitals with the ticking age, the
+       open-findings disclosure and the escape into History all go with it.
+
+       lookbackApplies("board") is true, LOOKBACK_HOUR_PRESETS carries no null,
+       and DEFAULT_LOOKBACK_HOURS is 6 — so `lookbackHours != null` holds for
+       every preset an operator can pick and the thin line always wins. Only the
+       separate Everything control, which sets it to null, reaches the rich
+       state. That is why this rotted silently: `grep "Nothing is live" tests/`
+       returned nothing at all. */
+    expect(M.emptyListMessage(boardUi())).toBeNull();
+  });
+
+  test("a real constraint still speaks — this is a reachability fix, not a mute", () => {
+    // The thin line is correct when something the operator chose is hiding rows.
+    expect(M.emptyListMessage(boardUi({ query: "ridge" }))).toContain("Nothing matches");
+    expect(M.emptyListMessage(boardUi({ facetProgram: "p" }))).toContain("Nothing matches");
+  });
+
+  test("the rich all-clear may not claim 'Nothing is live' while a window hides live sessions", () => {
+    /* The second half, and the reason the fix is a DISCLOSURE rather than just
+       making the branch reachable. withinLookback filters on updatedAt recency,
+       so a session whose process is alive and which has been waiting on a person
+       for eight hours is live AND outside a 6h window.
+
+       Worse: because the filter keys on quiet time, the rows it excludes FIRST
+       are the ones quiet longest — exactly the blocked-on-a-human population
+       this program exists to surface. A flat "Nothing is live" at 6h conceals
+       precisely the rows that matter most. */
+    const eightHoursAgo = new Date(Date.now() - 8 * 3_600_000).toISOString();
+    const waiting = agent({ id: "codex:old", updatedAt: eightHoursAgo, status: "waiting" });
+    expect(M.withinLookback(waiting, 6)).toBe(false);   // hidden by the window
+    expect(M.isTerminal(waiting)).toBe(false);          // …and demonstrably live
+
+    /* So the rich state has to say BOTH facts at once: the board is all-clear,
+       and it is only looking back 6h — carrying how many sessions that window is
+       hiding, because a bare "showing 6h" leaves the operator guessing whether
+       it matters. `hiddenByLookback` is the function that must exist; this fails
+       until it does. */
+    const hidden = M.hiddenByLookback(boardUi({
+      snap: snapshot({ programs: [{ id: "p", name: "P", agents: [waiting] }] }),
+    }));
+    expect(hidden).toBe(1);
   });
 });
