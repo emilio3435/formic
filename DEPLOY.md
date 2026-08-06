@@ -77,6 +77,15 @@ mark `done` on clean exit. It never touches the server or its port.
 | `bun run setup:cmux` | One-time cmux password setup | — |
 | `bun run check` | `typecheck` then `test` — the gate `anthill-deploy.sh` runs | — |
 | `bun run test` / `typecheck` | Either half of it | — |
+| `bun run test:ci` | `scripts/ci-tests.sh` — everything except the four local-only files | — |
+
+**`test:ci` is not the gate; `check` is.** It exists because four test files
+assert against evidence that only exists on a working machine — the developer's
+live session history, and the board answering on 4701 — and they are written to
+fail rather than skip when that evidence is absent, which is correct locally and
+impossible in CI. `scripts/ci-tests.sh` names those four with a reason each and
+runs every other file, so a new test is covered without anyone remembering to
+add it. Before deploying, run `bun run check`, which still runs all of them.
 
 Two will surprise you. **`start:external` does not bind externally** — it means
 "run in this shell instead of a cmux workspace", and the server is hardcoded to
@@ -91,6 +100,7 @@ outcome; for an instance you can run alongside production use
 ```bash
 bash ~/Developer/the-mountain-main/scripts/anthill-start.sh   # what `bun start` runs
 bash ~/Developer/the-mountain-main/scripts/anthill-hygiene.sh # repairs the service
+bash ~/Developer/the-mountain-main/scripts/ci-tests.sh        # what CI runs; no ports, no service
 ```
 
 `anthill-start.sh` binds **4701** — the production port — and reuses a running

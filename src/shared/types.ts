@@ -262,6 +262,8 @@ export interface SurfaceProcessEvidence {
   pid: number;
   command: string;
   recognizedAgentProcess: boolean;
+  /** When this process started; absent when the scan could not date the row. */
+  startSeconds?: number;
 }
 
 export interface SurfaceOpenFileEvidence {
