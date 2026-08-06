@@ -118,12 +118,17 @@ itself — snapshot age, collector state — on a slower clock than the board's.
 `app.js`, which imports the rest. There is no build step — the server serves the
 files as they are on disk.
 
-The board's five ops views are `needs-you`, `now`, `waiting`, `history` and
-`usage` (`client-catalogs.js`). Membership is decided by `viewMatches` from the
-lifecycle and scope the server publishes, never from a provider status word.
-`waiting` also carries the collapsed Unverified group, which is deliberately
-exempt from the display lookback — the lookback is a recency filter, and a
-coverage disclosure that hides most of the gap is worse than none.
+The board's two ops views are `board` and `history` (`OPS_VIEWS`), and `usage`
+joins them to make the three tabs (`VIEWS`, both in `client-catalogs.js`).
+Membership is decided by `viewMatches` from the lifecycle and scope the server
+publishes, never from a provider status word. The tabs Board replaced —
+`needs-you`, `now`, `waiting` — survive as named lenses `viewMatches` still
+answers by hand: `needs-you` is the population of the pinned strip and of the
+notifier, and `LEGACY_VIEW_ALIASES` lands a stored `defaultView` naming any of
+them on the view that now holds it. `board` carries the Unverified sessions,
+which are deliberately exempt from the display lookback — the lookback is a
+recency filter, and a coverage disclosure that hides most of the gap is worse
+than none.
 
 **The board's three levels.** `repoGroups` (`app.js`) turns the server's flat
 program list into sections: a program carrying `groupPath: [repoKey,

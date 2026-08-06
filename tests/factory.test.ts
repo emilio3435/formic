@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseFactoryJsonl } from "../src/server/factory";
 import type { ParseMetadata } from "../src/server/collectors";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -116,13 +116,19 @@ describe("token usage is reported for what it is", () => {
   /* Written to a real temp file rather than injected, so the parser's own
      ".jsonl" → ".settings.json" sibling-path derivation is what gets tested. */
   const withSettings = (settings: unknown) => {
-    const path = join(tmpdir(), "factory-settings-fixture.jsonl");
+    /* A private directory per call. A fixed name under tmpdir() is shared with
+       every other run of this suite on the machine — five lanes run it here —
+       and a concurrent run reaching its `finally` first deletes the file this
+       one is about to read, which reports as "unknown" spend rather than as the
+       collision it is. */
+    const root = mkdtempSync(join(tmpdir(), "anthill-factory-settings-"));
+    const path = join(root, "session.jsonl");
     const settingsPath = path.replace(/\.jsonl$/, ".settings.json");
     writeFileSync(settingsPath, JSON.stringify(settings));
     try {
       return parseFactoryJsonl(transcript(start(), message("user", "go")), { ...meta, sourcePath: path });
     } finally {
-      rmSync(settingsPath, { force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   };
 
