@@ -195,6 +195,108 @@ describe("the toggle is a disclosure and says so", () => {
   });
 });
 
+describe("A11Y-3: the panel's container can carry the name it is given", () => {
+  /* Measured before: the AX tree reported `role: generic, name: "4 agents
+     stopped"`. ARIA prohibits an accessible name on role=generic, so the
+     aria-labelledby sitting there named a container no screen reader would
+     enter, and the panel was unreachable by rotor. Measured after: `role:
+     group, name: "Notifications"`. */
+
+  const panelTag = html.match(/<div id="notifications-panel"[^>]*>/)?.[0] ?? "";
+
+  test("it declares a role that permits naming", () => {
+    expect(panelTag).not.toBe("");
+    /* generic is the implicit role of a bare div and is name-PROHIBITED. Any of
+       these three carries a name legitimately; group is what shipped, and is
+       what the panel's own instrument block already uses one level down. */
+    expect(panelTag).toMatch(/role="(group|region|dialog)"/);
+  });
+
+  test("its name is stable across paints, not the heading that counts agents", () => {
+    expect(panelTag).toMatch(/aria-label="[^"]+"/);
+    /* The <h2> reads "4 agents stopped" and is rewritten on every paint. Naming
+       the container from it means the container is re-announced whenever the
+       count moves, which is noise rather than information. */
+    expect(panelTag).not.toContain("aria-labelledby");
+    /* …and the heading itself stays, because the panel still needs one. */
+    expect(appjs).toContain('id: "notify-panel-title"');
+  });
+});
+
+describe("A11Y-4: no two controls in the panel answer to the same name", () => {
+  /* Measured before: four buttons named exactly "Focus" in one open panel —
+     indistinguishable in a rotor or under voice control. The dock is a
+     one-agent surface where "Focus" is unambiguous; this list is the one place
+     several agents' tools coexist. Measured after: "Focus Debug schedule draft
+     generation algorithm". */
+
+  test("the panel names its Focus control for the agent it focuses", () => {
+    const region = appjs.slice(
+      appjs.indexOf("---------- the notification center ----------"),
+      appjs.indexOf("function renderSettingsPanel"),
+    );
+    expect(region).toMatch(/ariaLabel: "Focus " \+ agentName\(found\.agent\)/);
+  });
+
+  test("renderDockTool is extended, not forked, and every other call site is unchanged", () => {
+    /* The gate matters more than the label: renderDockTool is the one place the
+       capability check, confirm strip and busy state live, and a second Focus
+       button built beside it would drift from all three. The override is opt-in
+       and null when absent, so every dock tool keeps its visible label as its
+       name — and `ariaLabel` is the option name this file already uses for the
+       same job on the rename forms, rather than a new spelling. */
+    expect(appjs).toContain('"aria-label": opts.ariaLabel || null,');
+
+    /* Exactly one call site overrides the name: the notification row, which is
+       the only place several agents' tools share a list. If a second appears,
+       either it has the same ambiguity — and this test should be updated with
+       the reason — or a caller is renaming a control that was fine. */
+    /* Block comments stripped first: this file explains itself at length, and a
+       call site's options can sit a dozen prose lines below its opening paren,
+       which no fixed window would reach. */
+    const code = appjs.replace(/\/\*[\s\S]*?\*\//g, "");
+    const callSites = [...code.matchAll(/renderDockTool\(/g)]
+      .map((m) => code.slice(m.index ?? 0, (m.index ?? 0) + 200));
+    expect(callSites.length).toBeGreaterThan(1);
+    expect(callSites.filter((site) => site.includes("ariaLabel:")).length).toBe(1);
+  });
+
+  test("the destination stays a description rather than joining the name", () => {
+    /* First draft appended focusDestinationHint and measured as a name that read
+       a home path aloud, one segment at a time, on every row. */
+    expect(appjs).not.toMatch(/ariaLabel: "Focus " \+ agentName\(found\.agent\) \+ " — "/);
+    expect(appjs).toMatch(/action === "focus" \? focusDestinationHint\(agent\)/);
+  });
+});
+
+describe("A11Y-5: a quiet row's name contains everything the row visibly says", () => {
+  /* WCAG 2.5.3. Measured before — visible "the-ant-hill · Execute LANE-FE1 …",
+     name "Execute LANE-FE1 …" — the program the operator can read was missing
+     from the name that overrides it, so saying what you see matched nothing.
+     Measured after: name.includes(visibleProgram) === true. */
+
+  const quietRow = appjs.slice(
+    appjs.indexOf("function notifyQuietRow(item)"),
+    appjs.indexOf("function renderNotificationCenter"),
+  );
+
+  test("the row builds its visible prefix once and names itself with it", () => {
+    expect(quietRow.length).toBeGreaterThan(100);
+    /* The program and the separator the row RENDERS… */
+    expect(quietRow).toMatch(/class: "notify-quiet-prog", text: item\.source\.programName/);
+    /* …are the same program and separator it is NAMED by. Two expressions, so
+       the test reads both: this is the drift the defect was. */
+    expect(quietRow).toMatch(/const visible = \(item\.source\.programName \? item\.source\.programName \+ " · " : ""\) \+ item\.impact;/);
+    expect(quietRow).toMatch(/"aria-label": item\.evidence \? visible \+ " " \+ item\.evidence : visible/);
+  });
+
+  test("the blocking row still names its program too, by its own route", () => {
+    /* The row above this one never had the bug — it says "In <program>." — and
+       the fix must not quietly restyle it into agreement. */
+    expect(appjs).toMatch(/"aria-label": item\.impact \+ " In " \+ \(item\.source\.programName \|\| "an unnamed program"\)/);
+  });
+});
+
 describe("Escape returns the operator to the control that opened the panel", () => {
   /* Measured live: focus was inside the panel, Escape closed it, and
      document.activeElement was #notify-toggle — not <body>. */
@@ -216,9 +318,7 @@ describe("Escape returns the operator to the control that opened the panel", () 
 describe("a live repaint puts the operator back on the control they were using", () => {
   /* Measured live: with focus on a row's Reply and the panel's paint signature
      forced to change, render() restored focus to the same button. It does that
-     by data-fkey, so a control without one is a control the restore cannot find.
-     (The case where the control itself LEAVES the feed is an open defect — see
-     the sweep doc; it is not pinned here because it does not hold.) */
+     by data-fkey, so a control without one is a control the restore cannot find. */
 
   test("every button the panel builds carries an fkey", () => {
     const region = appjs.slice(
@@ -235,6 +335,73 @@ describe("a live repaint puts the operator back on the control they were using",
   test("render() restores focus by fkey before anything else can claim it", () => {
     expect(appjs).toMatch(/const focusKey = document\.activeElement && document\.activeElement\.dataset/);
     expect(appjs).toMatch(/const node = document\.querySelector\(`\[data-fkey="\$\{CSS\.escape\(focusKey\)\}"\]`\);/);
+  });
+});
+
+/* render()'s focus restore, isolated — from the focusKey capture to the end of
+   the function, so an assertion below cannot accidentally match a lookalike line
+   elsewhere in a 9,000-line file. */
+const restoreBlock = (() => {
+  const from = appjs.indexOf("const focusKey = document.activeElement && document.activeElement.dataset");
+  const at = appjs.indexOf("else if (focusWasInDrawer", from);
+  return from < 0 || at < 0 ? "" : appjs.slice(from, appjs.indexOf("\n}\n", at));
+})();
+
+describe("A11Y-2: a vanished row does not strand the operator on <body>", () => {
+  /* Reproduced live on 2026-08-06, twice, before the fix: focus a row's Reply,
+     make that agent stop asking exactly as the server does on the next scan,
+     call the app's own repaint() —
+
+       { rows: 4 → 3, rowGone: true, activeIsBody: true, panelOpen: true }
+
+     render() restores focus by data-fkey; when the row leaves the feed the fkey
+     goes with it, the lookup finds nothing, and focus falls to <body> — the top
+     of the document, from inside a panel that is still open. The drawer has
+     focusDrawerLead() for exactly this. The panel had no lead.
+
+     Verified fixed on the same board: activeIsBody false, activeInPanel true,
+     landing on the panel's first control. Three regressions checked alongside —
+     the fkey-survives path still holds focus, a CLOSED panel is not hijacked
+     (focus left on #search across a repaint), and Escape still returns to the
+     toggle.
+
+     Asserted against SOURCE, following tests/inspector-transition.test.ts: this
+     client has no jsdom by policy, so the DOM half of render() is pinned by
+     reading it. Each assertion names the behaviour it stands in for. */
+
+  test("the restore block is where it is expected to be", () => {
+    expect(restoreBlock.length).toBeGreaterThan(200);
+    expect(restoreBlock).toContain("CSS.escape(focusKey)");
+  });
+
+  test("render() knows whether focus was standing in the panel", () => {
+    /* Not a grep for a name: without this the fallback cannot tell "their
+       control went away" from "they were never in here", which is the same
+       distinction focusWasInDrawer exists to make one line above. */
+    expect(appjs).toMatch(
+      /const focusWasInPanel = Boolean\(document\.activeElement\s*\n?\s*&& \$\("notifications-panel"\)\?\.contains\(document\.activeElement\)\);/,
+    );
+  });
+
+  test("a lost fkey inside an open panel falls back to the panel, not to <body>", () => {
+    expect(restoreBlock).toMatch(/else if \(focusWasInPanel && state\.notifyPanelOpen\)/);
+    /* Guarded on the panel still being OPEN. Firing into a closed panel would
+       pull focus back into a surface the operator just dismissed — the same
+       reason the drawer's branch carries `&& !inspector.hidden`. */
+    expect(restoreBlock).not.toMatch(/else if \(focusWasInPanel\)\s*\{/);
+  });
+
+  test("open-focus and restore-focus choose the same lead, so they cannot drift", () => {
+    /* The real invariant, and the one a rename would break silently: the node
+       the restore lands on must be the node toggleNotificationsPanel already
+       picks when the operator opens the panel. Two different queries would mean
+       the panel had two different "first controls" depending on how you arrived
+       at it. */
+    const leadQuery = 'querySelector("button:not([disabled])")';
+    expect(appjs.indexOf('$("notifications-panel")?.' + leadQuery)).toBeGreaterThan(-1);
+    expect(restoreBlock).toContain(leadQuery);
+    /* …and a panel with no enabled control left still has somewhere to go. */
+    expect(restoreBlock).toContain('$("notify-toggle")');
   });
 });
 
@@ -271,6 +438,23 @@ describe("no control in the panel is revealed by hover", () => {
   test("the row reserves its action space at rest, so nothing shifts under a pointer", () => {
     const meta = styleRules.find((r) => r.selector === ".notify-row-meta");
     expect(meta?.body).toMatch(/min-height:/);
+  });
+
+  test("A11Y-6: both row actions clear 44px once there is no pointer", () => {
+    /* Measured before at 420px and 768px, same row, same line: Reply 115x44,
+       Focus 70x32 — and Focus is the one that moves the operator to the agent.
+       .notify-act was in the touch sweep; the .dock-tool beside it was missed
+       when the panel shipped. Measured after: 44. */
+    const sweep = styleRules.find(
+      (r) => r.selector.includes(".notify-act") && /min-height:\s*44px/.test(r.body),
+    );
+    expect(sweep).toBeDefined();
+    expect(sweep ? sweep.selector : "").toContain(".notify-row-acts .dock-tool");
+    /* …and it is the touch breakpoint that carries it, not the desktop rule. */
+    const sweepSelector = sweep ? sweep.selector : "";
+    const at = cleanCss.indexOf(sweepSelector);
+    expect(at).toBeGreaterThan(-1);
+    expect(cleanCss.lastIndexOf("@media (max-width: 1024px)", at)).toBeGreaterThan(-1);
   });
 });
 
@@ -336,6 +520,21 @@ describe("the panel fits the window it opens over", () => {
        The gutter is a function of the row's own content width, so no static
        calc() can express it. The anchor has to BE the content edge, and the
        panel has to fill it rather than measure the window. */
+    /* ⚠ THIS TEST DOES NOT GUARD THE DEFECT. It documents the intended
+       mechanism, which has value, but three mutations measured on the live board
+       at 420px show what it actually catches:
+
+         today                                     panel  32 → 388   ok
+         A  anchor reverted to align-self:center    panel  48 → 372   ok      ← RED here
+         B  centred anchor + viewport-measured w.   panel -24 → 372   CLIPPED ← RED here
+         C  anchor stretched, width clamp back      panel  -8 → 388   CLIPPED ← GREEN here
+
+       Wrong in both directions: it fires on A, which is merely a narrower panel
+       and harms nobody, and it is blind to C, which is the shipped defect
+       arriving by another route. The defect was never "the file lacks a
+       declaration" — it was "the panel's box leaves the window", which is a
+       number. tests/notification-center-geometry.test.ts measures that number;
+       this one only records what the CSS was trying to say. */
     const from = cleanCss.indexOf("@media (max-width: 760px)");
     const nextAt = cleanCss.indexOf("@media", from + 1);
     const block = cleanCss.slice(from, nextAt === -1 ? undefined : nextAt);

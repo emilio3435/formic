@@ -32,7 +32,18 @@
              person is named, with its evidence and a route to it. Anchored to
              the signals row's right edge rather than to the button, so a 452px
              panel cannot push past the viewport on a narrow window. -->
-        <div id="notifications-panel" class="notify-panel" hidden aria-labelledby="notify-panel-title"></div>
+        <!-- role="group" is load-bearing, not decoration. A bare <div> computes
+             as role=generic, where ARIA PROHIBITS an accessible name — so the
+             aria-labelledby that used to sit here named nothing a screen reader
+             would enter, measured as `role: generic, name: "4 agents stopped"`
+             in the AX tree. group is the same answer this panel's own instrument
+             block already uses one level down.
+
+             A static label rather than the <h2>: that heading reads "4 agents
+             stopped" and changes on every paint, and a container whose NAME
+             churns is re-announced for no reason. The h2 stays as the panel's
+             heading; it just no longer doubles as the container's name. -->
+        <div id="notifications-panel" class="notify-panel" hidden role="group" aria-label="Notifications"></div>
         <!-- The board's timing thresholds, which decide what every session on
              it is called. They were compiled-in constants; an operator running
              overnight swarms had no way to say "45 minutes of silence is normal

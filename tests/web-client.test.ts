@@ -126,10 +126,20 @@ export interface FakeNode {
 
 function makeNode(tag: string): FakeNode {
   const classes = new Set<string>();
+  let text = "";
   const node = {
     nodeType: 1,
     tagName: tag,
-    textContent: "",
+    /* An accessor, because `textContent = ""` is how every render function in
+       this client empties the surface it is about to rebuild — and a plain
+       property let those children survive the wipe. Tests worked around it by
+       rendering once per withDom; that workaround is what made "click the
+       control, then look at what the repaint produced" untestable, because the
+       second paint stacked onto the first and byFkey found the stale node.
+       The real DOM drops children here, so this is the harness getting less
+       wrong, not a new fiction. */
+    get textContent() { return text; },
+    set textContent(v: string) { text = String(v ?? ""); node.children.length = 0; },
     dataset: {} as Record<string, string>,
     attributes: {} as Record<string, string>,
     children: [] as FakeNode[],
@@ -449,6 +459,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     facetProgram: "",
     facetProvider: "",
     facetStatus: "",
+    openFilterMenu: "",
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
@@ -3198,10 +3209,20 @@ describe("source hygiene", () => {
   });
 
   test("the redesigned control surface exposes its structural anchors", () => {
-    for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
+    for (const id of ["health-rail", "filter-bar", "broadcast-bar",
       "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
+    }
+    /* Two anchors LEFT this list, deliberately (operator directive,
+       2026-08-05): the toolbar's Select-to-send and Action log buttons are gone.
+       Pinned as absence rather than deleted from the test, because a button
+       whose wiring calls $(id).addEventListener cannot half-exist — if the
+       markup ever comes back without the wiring, or the wiring without the
+       markup, boot() throws on null and takes the whole client down. */
+    for (const id of ["select-toggle", "actions-toggle"]) {
+      expect(html, `${id} was removed from the toolbar`).not.toContain(`id="${id}"`);
+      expect(source, `${id} wiring must go with its button`).not.toContain(`$("${id}")`);
     }
     expect(html).toContain(">Board<span");
     expect(source).toContain("function renderWidgetCustomizer()");
@@ -4906,13 +4927,15 @@ describe("toolbar on the instrument-rail language (A3)", () => {
     expect(rule).not.toContain("background");
   });
 
-  test("select-toggle pressed state is an ink outline + tint, not a flood fill (Rule 1)", () => {
-    const rule = styles.match(/\.select-toggle\[aria-pressed="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(rule).toContain("color: var(--ink)");
-    expect(rule).toContain("background: var(--sand)");
-    expect(rule).toContain("border-color: var(--ink)");
-    // The old ink flood fill (ink background, surface text) is gone.
-    expect(rule).not.toContain("background: var(--ink)");
+  /* This pinned the Select button's pressed ink. The button is gone (operator
+     directive, 2026-08-05) and its rules went with it — not as tidying, but
+     because the CSS census forbids a declared class the client never emits, so
+     leaving them would have failed the build. What survives is the rule the
+     original test was really defending, applied to the controls that remain:
+     a pressed state is an outline plus a tint, never a flood fill. */
+  test("no styles survive for the toolbar buttons that were removed", () => {
+    expect(styles).not.toContain(".select-toggle");
+    expect(styles).not.toContain(".actions-toggle");
   });
 
   test("index.html seeds is-current on the default tab, and that tab is the board", () => {
@@ -6973,60 +6996,32 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(custom.dataset.fkey).toBe("lookback:custom");
   });
 
-  /* fetchSettings' only failure record was `state.settingsLoaded = false`, and
-     nothing anywhere read that field — the flag was written and never consulted,
-     so a dead /api/settings was invisible by construction. Meanwhile the scan
-     chip printed the hard-coded 36 as "36h window", which reads as a value the
-     server reported. */
-  test("(3b) the collection status states the window without asserting an unconfirmed one", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const statusOf = (ui: Record<string, unknown>): any => withDom(() => {
-      M.renderFilterBar(listUi({ view: "board", ...ui }));
-      return byClass(domById.get("filter-bar"), "filter-status");
+  /* The collection window left the bar entirely (operator directive,
+     2026-08-05): it is the server's reach, not a lens, and the summary rail
+     already states it ambiently (renderScanWindow, pinned below at "an
+     unconfirmed scan window is withheld"). A Filters bar that mentions the
+     server's collection bound teaches operators it is one of the filters. */
+  test("(3b) the filter bar carries no collection status and no disclaimer", () => {
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 12, settingsError: "" }));
+      const bar = domById.get("filter-bar");
+      expect(byClass(bar, "filter-status")).toBeNull();
+      expect(byClass(bar, "filter-note")).toBeNull();   // "· your view only" is gone
+      expect(textOf(bar)).not.toContain("Collecting");
+      expect(textOf(bar)).not.toContain("your view only");
     });
-
-    // Settings answered: the number is reported, so state it plainly.
-    const ok = statusOf({ scanWindowHours: 12, settingsError: "" });
-    expect(textOf(ok)).toContain("Collecting last 12h");
-    expect(ok.className).not.toContain("is-unverified");
-
-    // Settings failed and no snapshot corroborates it: say so instead of
-    // passing the built-in default off as the server's answer.
-    const bad = statusOf({ scanWindowHours: 36, settingsError: "settings 500" });
-    expect(textOf(bad)).toContain("Collecting: unverified");
-    expect(textOf(bad)).not.toContain("Collecting last 36h");
-    expect(bad.className).toContain("is-unverified");
-    expect(bad.attributes.title).toContain("settings 500"); // the reason is reachable
-    expect(bad.attributes.title).toContain("36h");          // and so is the fallback used
-
-    // A snapshot IS authoritative, so it overrides a failed settings call —
-    // no false alarm once the real number has arrived by another route.
-    const rescued = statusOf({
-      scanWindowHours: 36,
-      settingsError: "settings 500",
-      snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
+    // The unverified-settings branch has no bar rendering to fall back to either.
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, settingsError: "settings 500" }));
+      expect(textOf(domById.get("filter-bar"))).not.toContain("unverified");
     });
-    expect(textOf(rescued)).toContain("Collecting last 24h");
-    expect(rescued.className).not.toContain("is-unverified");
   });
 
-  /* It stopped being an editor. Every other control on the bar changes what YOU
-     see; this one changed what the SERVER collects — sessions outside the window
-     leave the wire entirely, for every browser. Two different powers wearing the
-     same chip shape is what the apologetic "· your view only" note beside it was
-     papering over. */
-  test("(3b2) the collection window is read-only on the bar and editable in Settings", () => {
+  test("(3b2) the collection window is editable in Settings, not on the bar", () => {
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, lookbackHours: 6 }));
-      const bar = domById.get("filter-bar");
-      const status = byClass(bar, "filter-status");
-      // A span, not a button: it leaves the focus order entirely.
-      expect(status.tagName).toBe("span");
-      expect(buttonsOf(bar).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
+      expect(buttonsOf(domById.get("filter-bar")).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
         .not.toContain("scan-window");
-      // The title carries the semantics the chip never stated.
-      expect(status.attributes.title)
-        .toBe("Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.");
     });
 
     /* The editor, where the server's other knobs live — carrying the same
@@ -7139,23 +7134,30 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
-    // Board/History: Lookback presets + All + Custom, then the Scan window.
+    /* Board/History: the status lens chips, then the closed Time trigger.
+       The six lookback chips are gone — time is one menu now, and a CLOSED menu
+       contributes exactly one focus stop, which is the compression the redesign
+       was for. Its preset fkeys still exist; they live on the menu items and
+       only while it is open (asserted below). */
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
       expect(keys).toEqual([
-        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
+        "lookback:menu",
       ]);
     });
 
     /* The same bar over a real fleet, which is where the facet chips appear. The
        ORDER is the contract — the bar is torn down and rebuilt on every paint,
        focus restore keys on position-independent fkeys, and a screen reader
-       walks the axes in this sequence: session kind, provider, then time.
-       Updated deliberately here (plan §3), never incidentally. */
+       walks the axes in this sequence: session kind, then the lenses, then TIME
+       LAST. Time moved to the end deliberately (FE-2 D2): everything before it
+       narrows within the population, and it is the one control that decides what
+       the population is, so the two layers are separated in space as well as in
+       the markup. Updated deliberately here, never incidentally. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const review = agent({
@@ -7171,8 +7173,8 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual([
         "session-kind:review",
         "provider:claude", "provider:codex",
-        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
+        "lookback:menu",
       ]);
     });
 
@@ -7193,8 +7195,12 @@ describe("FE-B: harness-backed client behavior", () => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
       const keys = focusKeysOf(bar());
       expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
-      // Last, because the collection status after it is a span, not a control.
-      expect(keys[keys.length - 1]).toBe("program:clear");
+      /* Time is last, and the program lens sits in front of it: the clear-chip
+         is a lens like the ones above it, and the working-set control closes the
+         bar. Anything appended after Time would have crossed the boundary this
+         layout exists to draw. */
+      expect(keys[keys.length - 1]).toBe("lookback:menu");
+      expect(keys[keys.length - 2]).toBe("program:clear");
       // The chip names the program it is holding you inside of.
       expect(textOf(byFkey(bar(), "program:clear"))).toContain("Ridge");
     });
@@ -7215,14 +7221,180 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual(["usage-range:1h", "usage-range:24h", "usage-range:7d", "usage-range:30d", "usage-range:custom"]);
     });
 
-    // The key of the chip an operator is standing on does not move when the
-    // selection changes — otherwise focus restore finds nothing after the click.
+    /* The key of the control an operator is standing on does not move when the
+       selection changes — otherwise focus restore finds nothing after the click.
+       On "board", not the old "idle": lookbackApplies("idle") is false, so that
+       bar rendered hidden and empty and the three comparisons below were [] to
+       [] — a pin that could not fail. The Time trigger RENAMES itself on every
+       pick ("Last 6h" → "Last 24h" → "Time"), which is exactly the label-moves-
+       under-the-fkey case this guards, so it now has something to say. */
     const keyAt = (hours: number | null) => withDom(() => {
-      M.renderFilterBar(listUi({ view: "idle", lookbackHours: hours }));
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: hours }));
       return focusKeysOf(bar());
     });
+    expect(keyAt(6)).toContain("lookback:menu");
     expect(keyAt(6)).toEqual(keyAt(24));
     expect(keyAt(null)).toEqual(keyAt(6));
+  });
+
+  /* -------- FE-2 D1/D2: the time menu ---------------------------------------
+     Time stopped being six chips beside the lenses and became one menu at the
+     far end of the bar. The point is not compression: the tab count moves when
+     time moves and never when a lens moves, and a control that decides the
+     population must not dress like the controls that merely narrow it. */
+
+  const timeBar = () => domById.get("filter-bar");
+  const openTime = (over: Record<string, unknown> = {}) =>
+    M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, openFilterMenu: "time", ...over }));
+
+  test("(FE2-D2) a closed time menu is one focus stop; opening it exposes the presets", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        const trigger = byFkey(timeBar(), "lookback:menu");
+        expect(trigger.attributes["aria-haspopup"]).toBe("menu");
+        expect(trigger.attributes["aria-expanded"]).toBe("false");
+        // Closed means ABSENT, not hidden: a menu left in the tree is a dozen
+        // extra tab stops between the operator and the search box.
+        expect(byClass(timeBar(), "filter-menu")).toBeNull();
+        expect(byFkey(timeBar(), "lookback:24")).toBeNull();
+
+        await fire(trigger);
+        expect(M.state.openFilterMenu).toBe("time");
+        // The real repaint the click drove, not a second hand-run render.
+        const menu = byClass(timeBar(), "filter-menu");
+        expect(menu.attributes.role).toBe("menu");
+        expect(byFkey(timeBar(), "lookback:menu").attributes["aria-expanded"]).toBe("true");
+        expect(focusKeysOf(menu)).toEqual([
+          "lookback:1", "lookback:6", "lookback:12", "lookback:24",
+          "lookback:48", "lookback:168", "lookback:336", "lookback:720",
+          "lookback:all", "lookback:custom",
+        ]);
+
+        // Clicking the open trigger is the way back out — the way out is the way in.
+        await fire(byFkey(timeBar(), "lookback:menu"));
+        expect(M.state.openFilterMenu).toBe("");
+        expect(byClass(timeBar(), "filter-menu")).toBeNull();
+      }));
+  });
+
+  test("(FE2-D2) a day preset stores hours and closes the menu on the operator's pick", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        /* 2d is 48h in storage. The whole day group is sugar over the SAME
+           setLookbackHours the hour group calls, which is why `mtn3-lookbackHours`
+           needed no migration — if a day item ever wrote "2" instead of 48, a
+           reload would silently narrow a two-day board to two hours. */
+        await fire(byFkey(timeBar(), "lookback:48"));
+        expect(M.state.lookbackHours).toBe(48);
+        // Time is single-valued, so its menu is radio and it closes on the pick.
+        expect(M.state.openFilterMenu).toBe("");
+        expect(byFkey(timeBar(), "lookback:menu").attributes.role).toBeUndefined();
+        expect(textOf(byFkey(timeBar(), "lookback:menu"))).toContain("Last 2d");
+      }));
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        await fire(byFkey(timeBar(), "lookback:720"));
+        expect(M.state.lookbackHours).toBe(720); // 30d, not 30
+      }));
+  });
+
+  test("(FE2-D2) the items are radios that report which window is in force", () => {
+    withDom(() => {
+      openTime({ lookbackHours: 48 });
+      const checked = buttonsOf(byClass(timeBar(), "filter-menu"))
+        .filter((b: { attributes: Record<string, string> }) => b.attributes["aria-checked"] === "true")
+        .map((b: { dataset: Record<string, string> }) => b.dataset.fkey);
+      // Exactly one, because a session has exactly one lookback window. This is
+      // the line that fails if the lens axes' checkbox semantics are ever copied
+      // onto time, where "1h AND 7d" has no meaning to give an operator.
+      expect(checked).toEqual(["lookback:48"]);
+      for (const b of buttonsOf(byClass(timeBar(), "filter-menu"))) {
+        expect(b.attributes.role).toBe("menuitemradio");
+      }
+    });
+
+    // A window nobody offers is the Custom item's job to own, and the trigger
+    // states it rather than reading "Custom" and hiding the number.
+    withDom(() => {
+      openTime({ lookbackHours: 36 });
+      expect(byFkey(timeBar(), "lookback:custom").attributes["aria-checked"]).toBe("true");
+      expect(textOf(byFkey(timeBar(), "lookback:menu"))).toContain("Last 36h");
+    });
+
+    /* "Everything" is not a narrowing, so the trigger drops its pressed ink and
+       says the axis name instead of a window. The board is hiding nothing by
+       time, and a filled chip claiming otherwise is the overclaim this bar was
+       just cleaned of. */
+    withDom(() => {
+      openTime({ lookbackHours: null });
+      const trigger = byFkey(timeBar(), "lookback:menu");
+      expect(trigger.attributes["aria-pressed"]).toBe("false");
+      expect(textOf(trigger)).toContain("Time");
+      expect(byFkey(timeBar(), "lookback:all").attributes["aria-checked"]).toBe("true");
+    });
+  });
+
+  test("(FE2-D2) the 36h preset is gone, and the Days caveat is Board-only and concrete", () => {
+    withDom(() => {
+      openTime();
+      /* The 36 died deliberately: it was the SERVER's scan constant wearing a
+         filter's clothes, and an operator who learned "36h" as a lookback learned
+         that the collector's reach and their own filter were one window. */
+      expect(byFkey(timeBar(), "lookback:36")).toBeNull();
+      const note = byClass(timeBar(), "filter-menu-note");
+      expect(textOf(note)).toContain("still on the live wire");
+      // Described, not merely printed: a caveat a screen reader walks past is
+      // decoration. The Days group points at it.
+      const group = byClass(timeBar(), "filter-menu-group");
+      expect(allByClass(timeBar(), "filter-menu-group")[1].attributes["aria-describedby"])
+        .toBe(note.attributes.id);
+      expect(group).toBeTruthy();
+    });
+
+    // On History the archive IS the population, so the caveat would be false.
+    withDom(() => {
+      openTime({ view: "history" });
+      expect(byClass(timeBar(), "filter-menu-note")).toBeNull();
+    });
+
+    /* The boundary gets a NUMBER when a snapshot has carried one — "reaches only
+       the live wire" is abstract until it says how far the wire goes. */
+    withDom(() => {
+      openTime({ snap: snapshot({ scanWindowHours: 36 }) });
+      expect(textOf(byClass(timeBar(), "filter-menu-note"))).toContain("scan 36h back");
+    });
+    /* …and stays silent when none has. state.scanWindowHours holds a client-side
+       36 no server ever confirmed; printing it here as a boundary is the exact
+       overclaim renderScanWindow was fixed to stop making, in the one place an
+       operator is least able to check it. */
+    withDom(() => {
+      openTime({ snap: null, scanWindowHours: 36 });
+      expect(textOf(byClass(timeBar(), "filter-menu-note"))).not.toContain("36");
+    });
+  });
+
+  test("(FE2-D1) Escape closes the menu without selecting, and returns focus to the trigger", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        /* focusFilterTrigger looks the trigger up AFTER the repaint, because the
+           node this handler was built on is detached by then and focusing a
+           detached element is a silent no-op that lands the operator on <body>.
+           The fake document finds nothing by selector, so the lookup is stood in
+           for here — what is under test is that the close path performs it at
+           all, and against the RIGHT fkey. */
+        const focused: string[] = [];
+        (globalThis as unknown as { document: Record<string, unknown> }).document.querySelector =
+          (sel: string) => ({ focus: () => focused.push(sel) });
+
+        M.closeFilterMenu();
+        expect(M.state.openFilterMenu).toBe("");
+        expect(M.state.lookbackHours).toBe(6); // nothing was selected on the way out
+        expect(focused).toEqual([`[data-fkey="lookback:menu"]`]);
+      }));
   });
 
   test("(3) the rename form and the usage panel keep their controls addressable", () => {
@@ -12036,10 +12208,11 @@ describe("Tokens states a consumption floor with its coverage, or says nothing",
     // every card's value identical while the population underneath them moves.
     const rail = source.match(/function renderHealthRail\(\)[\s\S]*?\n\}/)?.[0] ?? "";
     expect(rail.indexOf("renderScanWindow()")).toBeLessThan(rail.indexOf('paintUnchanged("widgets"'));
-    // The board's reach and the operator's filter are different windows and are
-    // no longer printed as one setting in one line.
+    // The board's reach and the operator's filter are different windows, and
+    // the scope note now prints NEITHER: the pressed chip states the lookback,
+    // the rail states the scan window (operator directive, 2026-08-05).
     const scope = source.match(/function renderScopeNote\([\s\S]*?\n\}/)?.[0] ?? "";
-    expect(scope).toContain("lookback ");
+    expect(scope).not.toContain("lookbackLabel(");
     expect(scope).not.toContain("· scan ");
   });
 
@@ -12078,5 +12251,103 @@ describe("Tokens states a consumption floor with its coverage, or says nothing",
     const code = branch.slice(0, branch.indexOf('if (id === "context-peak")'))
       .replace(/\/\*[\s\S]*?\*\//g, "");
     expect(code).not.toContain("totals.tokens");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   S4 · every header number that could be partial says so.
+   ------------------------------------------------------------------------- */
+
+describe("Burn and Cost render their provenance rather than implying it", () => {
+  const withBurn = (burn: Record<string, unknown>) => snapshot({
+    pulse: {
+      burn, momentum: { working: 1, completionsLastHour: null, completionsProvenance: "not-observable" },
+      activity: { buckets: [] },
+    },
+  });
+  const sub = (burn: Record<string, unknown>) => M.summaryWidgetData("burn", withBurn(burn), "live").sublabel;
+
+  test("an unavailable cost says so, even when a number rides beside it", () => {
+    /* The defect costProvenance exists to prevent. Reading the number's
+       null-ness and inferring the rest is one inference away from printing
+       "$0.00 last hour" for an hour nobody could price — a fabricated total,
+       which is exactly what "never $0" forbids. The provenance wins. */
+    const text = sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "unavailable" });
+    expect(text).toContain("cost unavailable");
+    expect(text).not.toContain("$0");
+    expect(text).not.toContain("$0.00");
+    // A measured zero from a source that DID answer is a real reading and prints.
+    expect(sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "burnbar" }))
+      .toContain("$0.00 last hour");
+  });
+
+  test("a floor keeps its ≥, and a complete total does not borrow one", () => {
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar", costIsFloor: true }))
+      .toContain("≥$4.12 last hour");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar" }))
+      .toContain("$4.12 last hour");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar" }))
+      .not.toContain("≥");
+  });
+
+  test("the cost carries an as-of, because it comes from a different clock", () => {
+    /* BurnBar computes this over its own hour — the same reason the guide warns
+       against dividing the rate by it. A cost with no as-of beside it is one
+       whose freshness the operator cannot judge. */
+    const text = sub({
+      tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12,
+      costProvenance: "burnbar", costAsOf: new Date(Date.now() - 120_000).toISOString(),
+    });
+    /* Parenthesised onto the cost, not a sibling clause: a qualifier separated
+       from its number by another number reads as qualifying the wrong one. */
+    expect(text).toMatch(/\$4\.12 last hour \([^)]+\)/);
+    // An unavailable cost has no instant to be as-of, and does not invent one.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
+      .toContain("cost unavailable");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
+      .not.toMatch(/\(/);
+    // Nor does a malformed instant.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: 4.12, costProvenance: "burnbar", costAsOf: "not-a-date" }))
+      .not.toMatch(/last hour \(/);
+  });
+
+  test("the rate's window sits next to the RATE, never after the cost", () => {
+    /* Two fixes, each correct, once composed into a crossed sentence: the window
+       was appended last, so "36k/min · $4.20 last hour · 10m average" read as
+       qualifying the cost's hour rather than the rate's ten minutes. It only
+       became wrong when the cost came back, which is why the order is pinned. */
+    const text = sub({ tokensPerMin: 36_000, windowMs: 600_000, costLastHourUsd: 4.20, costProvenance: "burnbar" });
+    expect(text.indexOf("10m average")).toBeLessThan(text.indexOf("last hour"));
+    expect(text.startsWith("10m average")).toBe(true);
+  });
+
+  test("the rate names its blind spot only when it has one", () => {
+    // Audit §20: coverage speaks only when incomplete. `unknown` counts live
+    // agents whose provider reports no tokens at all, so they contribute zero
+    // to the rate forever — a subtotal shown as a total unless it is named.
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable",
+      coverage: { reporting: 29, eligible: 29, unknown: 2 } }))
+      .toContain("2 not reporting tokens");
+    expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable",
+      coverage: { reporting: 29, eligible: 29, unknown: 0 } }))
+      .not.toContain("not reporting tokens");
+  });
+
+  test("a missing rate and a missing cost are reported separately", () => {
+    /* One being absent says nothing about the other: the rate needs completed
+       five-minute buckets, the cost comes from BurnBar. Headlining "No data"
+       over a real dollar figure left the operator unable to tell whether spend
+       was unknown or $19.54. */
+    const rateOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: 500, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
+    expect(rateOnly.value).toBe("500");
+    expect(rateOnly.sublabel).toContain("cost unavailable");
+    const costOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: 9.5, costProvenance: "burnbar" }), "live");
+    expect(costOnly.value).toBe("Token rate unavailable");
+    expect(costOnly.sublabel).toContain("$9.50 last hour");
+    // Both gone is "No data", and it KEEPS the honest cost phrasing.
+    const neither = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
+    expect(neither.value).toBe("No data");
+    expect(neither.tone).toBe("missing");
+    expect(neither.sublabel).toContain("cost unavailable");
   });
 });

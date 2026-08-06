@@ -918,8 +918,15 @@ body.feed-frozen .programs { opacity: 0.62; }
 .view-tab .count.is-alerting { color: var(--ember); }
 .view-tab .count:empty { display: none; }
 
-/* filter chips (above search) — single scrolling row to spare vertical space */
-.filter-bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.4rem; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+/* filter controls (above search).
+
+   This was a single nowrap row with `overflow-x: auto`, which spared vertical
+   space when the bar held six lookback chips, three status chips and one chip
+   per provider. The menus collapsed all of that to four controls, so the scroll
+   is gone — and it HAD to go: an overflow container clips its absolutely
+   positioned descendants, so the first dropdown to open would have been scrolled
+   away inside the very bar that opened it. */
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding-bottom: 2px; }
 .filter-bar:empty { display: none; }
 .filter-bar > * { flex: none; }
 .filter-lead { position: sticky; left: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.15rem; background: var(--canvas); padding-right: 0.2rem; }
@@ -963,30 +970,74 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--ink);
 }
 .filter-chip.is-active:hover { background: var(--ink); color: var(--surface); }
-/* The collection window is not a filter and no longer pretends to be one: it
-   states what the SERVER harvests, for every browser, and it is read here and
-   edited in Settings. Quiet, unboxed, and out of the focus order — a chip shape
-   would put it back in the group of controls it does not belong to. */
-.filter-status {
-  font-size: 11.5px;
-  color: var(--faint);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0 0.15rem;
-  cursor: help;
-}
-.filter-note { font-size: 11.5px; color: var(--faint); }
-/* A value the server never confirmed. Dashed border reuses the same "this is not
-   established fact" language the unknown-liveness chip already speaks, and amber
-   keeps it advisory — an unverified default is not an intervention. */
-.filter-status.is-unverified {
-  color: var(--amber);
-  border: 1px dashed color-mix(in srgb, var(--amber) 55%, transparent);
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
-}
 
+/* ---------- filter menus ----------
+
+   The bar carries two kinds of control and they must not look alike. Provider
+   and Status are LENSES: they narrow within what the board is showing. Time is
+   the WORKING SET: it decides what the board is showing at all, which is why it
+   sits hard right with the whole bar between it and the lenses. */
+.filter-menu-wrap { position: relative; display: inline-flex; }
+.filter-menu-wrap.is-trailing { margin-left: auto; }
+.filter-menu-caret { font-size: 9px; line-height: 1; opacity: 0.65; margin-left: 0.1rem; }
+.filter-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 13rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.4);
+}
+/* The trailing menu opens leftward: anchored at left:0 it would hang off the
+   right edge of the pane, which is where its trigger lives. */
+.filter-menu-wrap.is-trailing .filter-menu { left: auto; right: 0; }
+.filter-menu-group { display: flex; flex-direction: column; gap: 0.15rem; }
+.filter-menu-group + .filter-menu-group { margin-top: 0.3rem; border-top: 1px solid var(--line); padding-top: 0.3rem; }
+.filter-menu-head {
+  margin: 0.15rem 0 0.1rem;
+  padding: 0 0.5rem;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.filter-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0.5rem;
+  min-height: 30px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+}
+.filter-menu-item:hover { background: var(--sand); color: var(--ink); }
+.filter-menu-count { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); }
+.filter-menu-item.is-active { color: var(--ink); background: var(--sand); border-color: var(--line-strong); }
+/* The caveat under the Days group, not a footnote nobody reads: it is inside the
+   group it qualifies and it is that group's aria-describedby. */
+.filter-menu-note {
+  margin: 0.25rem 0 0.1rem;
+  padding: 0 0.5rem;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--faint);
+}
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
 .search-wrap { flex: 1 1 240px; }
 #search {
@@ -2900,7 +2951,12 @@ body.feed-frozen .programs { opacity: 0.62; }
      .agent-rename has been one since this sweep was written. */
   .label-action, .rail-action, .widget-reset, .program-rename, .agent-rename, .swarm-chip,
   .verdict-action .dock-tool, .verdict-action .dw-head-action,
-  .notify-act, .filter-chip, .program-details,
+  /* .notify-row-acts .dock-tool was missed when the panel shipped, and the gap
+     was visible in one row: Reply measured 115x44 while the Focus beside it
+     measured 70x32 — and Focus is the one that moves the operator to the agent.
+     The sweep already covers the same control in the verdict head; the
+     notification row is the other place a .dock-tool sits inline. */
+  .notify-act, .notify-row-acts .dock-tool, .filter-chip, .program-details,
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 

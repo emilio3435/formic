@@ -170,7 +170,8 @@ import {
   DEFAULT_LOOKBACK_HOURS,
   DEFAULT_WIDGET_IDS,
   LEGACY_VIEW_ALIASES,
-  LOOKBACK_PRESETS,
+  LOOKBACK_DAY_PRESETS,
+  LOOKBACK_HOUR_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
   OPS_VIEWS,
@@ -1075,13 +1076,38 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
   if (id === "burn") {
     const burn = snap.pulse && snap.pulse.burn;
     if (!burn) return noDataWidget("No burn data yet.");
-    // Null cost stays "cost unavailable" — never rendered as $0.
-    /* The "≥" is load-bearing, same as on the usage card: it travels with the
-       number when the sublabel is skimmed or read aloud, and it is what stops a
-       measured floor being banked as the hour's total spend. */
-    const cost = burn.costLastHourUsd != null
+    /* S4-T1. Cost renders its PROVENANCE rather than implying it.
+
+       This read the number's null-ness and inferred the rest, which is one
+       inference away from the defect it was guarding: a payload carrying
+       costProvenance "unavailable" beside a numeric 0 would have printed
+       "$0.00 last hour" — a fabricated total for an hour nobody could price.
+       The provenance field exists precisely so the card does not have to guess,
+       so it is read first and it wins.
+
+       The "≥" is load-bearing, same as the Tokens card and the usage card: it
+       travels with the number when the sublabel is skimmed or read aloud, and it
+       is what stops a measured floor being banked as the hour's total spend. */
+    const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
+    const cost = costKnown
       ? (burn.costIsFloor ? "≥$" : "$") + burn.costLastHourUsd.toFixed(2) + " last hour"
       : "cost unavailable";
+    /* Cost is the one figure on this card that does NOT come from this board's
+       own collection cycle — BurnBar computes it over its own hour, which is why
+       the guide warns against dividing the rate by it. So the as-of is not
+       decoration: it says when that separate tool last spoke, and a cost with no
+       as-of beside it is one whose freshness the operator cannot judge.
+
+       Parenthesised ONTO the cost rather than added as its own clause. That is
+       the same rule S4-T1 enforces one line down for the rate's window: a
+       qualifier separated from its number by another number reads as qualifying
+       the wrong one, which is exactly how "36k/min · $4.20 last hour · 10m
+       average" came to cross its own sentence. Five sibling clauses on one line
+       is also simply hard to read, and binding this one to what it describes
+       costs nothing. */
+    const asOf = costKnown && burn.costAsOf && !Number.isNaN(Date.parse(burn.costAsOf))
+      ? " (" + agoText(burn.costAsOf) + ")"
+      : "";
     /* No coverage suffix. It counted ELIGIBLE LIVE agents while the rate sums
        deltas from every tracked reporter including ended ones — the same
        wrong-population defect just removed from CONTEXT PEAK, and the same
@@ -1095,11 +1121,11 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        and a claim of complete coverage left the operator unable to tell whether
        spend was unknown or $19.54. Only the missing half says it is missing. */
     const hasRate = burn.tokensPerMin != null;
-    const hasCost = burn.costLastHourUsd != null;
+    const hasCost = costKnown;
     /* Both missing is still "No data", but it keeps the sublabel rather than
        swapping in a generic one: "cost unavailable" is the honest phrasing for a
        failed BurnBar query and must never degrade into a rendered $0. */
-    const sub = cost + coverage + (burn.costNote ? " · " + burn.costNote : "");
+    const sub = cost + asOf + coverage + (burn.costNote ? " · " + burn.costNote : "");
     if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
     /* The rate is an average over a window the payload carries and the widget
        never printed. windowMs is 300000 here — a five-minute average shown as a
@@ -1339,7 +1365,7 @@ globalThis.TheAntHill = {
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
   isReviewWorker, sessionKindOf,
   agentContextPct, rosterName,
-  DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
+  DEFAULT_LOOKBACK_HOURS, LOOKBACK_HOUR_PRESETS, LOOKBACK_DAY_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
@@ -1393,6 +1419,11 @@ globalThis.TheAntHill = {
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
   currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  /* The two-layer model's own seam. `workingSet` is the population every count
+     on the page is taken over, and the menus are the surfaces that report it —
+     both are reachable so "a lens never moves the tab number" can be asserted
+     against the real derivation rather than against a copy of it. */
+  workingSet, closeFilterMenu, lookbackValueLabel, isOfferedLookback,
 };
 
 /* ---------- state ---------- */
@@ -2098,6 +2129,11 @@ function render() {
   // Whether the operator was standing INSIDE the drawer, so the restore below can
   // tell "their control went away" from "they were never in here".
   const focusWasInDrawer = Boolean(document.activeElement && inspector.contains(document.activeElement));
+  /* The same question about the attention panel, and it has to be asked
+     separately: the drawer and the panel are disjoint subtrees, so the answer
+     above says nothing about a keyboard operator standing on a notification row. */
+  const focusWasInPanel = Boolean(document.activeElement
+    && $("notifications-panel")?.contains(document.activeElement));
   // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
   // the signature. state.selected is already the new entity by this point —
   // selectEntity sets it and then calls render — so the pane's own last paint is
@@ -2156,6 +2192,27 @@ function render() {
        open: closeInspector runs its own return after its render, and stealing
        focus back into a pane on its way out would fight it. */
     else if (focusWasInDrawer && !inspector.hidden) focusDrawerLead();
+    /* The panel's own lead, for the failure the comment above describes arriving
+       from the other surface: here the fkey is gone because the ROW is gone.
+
+       That is the ordinary event on this board rather than an edge case — an
+       agent answered in its terminal stops asking, and the next snapshot drops
+       its row. Measured on the live board: focus on a row's Reply, the agent
+       stops asking, repaint — activeElement === body, with the panel still open
+       and the operator thrown to the top of the document from inside it.
+
+       Deliberately the same query toggleNotificationsPanel uses on open, so the
+       panel has ONE first control however you arrive at it; two queries here
+       would mean the answer depended on whether you opened the panel or had a
+       row vanish under you. Only while it is still open, for the reason the
+       drawer's branch carries !inspector.hidden: pulling focus back into a
+       surface the operator just dismissed is a worse failure than the one being
+       fixed. The toggle is the floor — a panel whose every control has just left
+       still has the button that opened it. */
+    else if (focusWasInPanel && state.notifyPanelOpen) {
+      const lead = $("notifications-panel")?.querySelector("button:not([disabled])");
+      (lead || $("notify-toggle"))?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -2536,7 +2593,24 @@ function notifyRowActions(item) {
   const acts = el("span", { class: "notify-row-acts" });
   if (!found) return acts;
   const focusCap = capability(found.agent, "focus");
-  if (focusCap) acts.append(renderDockTool(found.agent, focusCap, "focus", { fkeyPrefix: "notify:" }));
+  if (focusCap) {
+    acts.append(renderDockTool(found.agent, focusCap, "focus", {
+      fkeyPrefix: "notify:",
+      /* Named for the list it sits in, not for the dock it borrows: several
+         agents' Focus buttons coexist here and "Focus" alone told a screen
+         reader nothing about which one.
+
+         The agent's name and nothing else. The first draft appended
+         focusDestinationHint and was measured reading aloud as "Focus Execute
+         lane F-1 — Jump to COOPER DRAFT · F1 pane · Claude bare ·… ·
+         /Users/…/cooper-scheduler.worktrees/draft-f1" — a home path spoken one
+         segment at a time, on every row. The name has to disambiguate, which
+         the agent's name already does; the destination stays on `title`, where
+         it is a description an operator can ask for rather than one they must
+         sit through. */
+      ariaLabel: "Focus " + agentName(found.agent),
+    }));
+  }
   acts.append(el("button", {
     type: "button", class: "notify-act",
     dataset: { fkey: "notify:reply:" + found.agent.id },
@@ -2587,11 +2661,23 @@ function notifyWaitText(item) {
   return Number.isFinite(ms) && ms >= 0 ? fmtElapsed(ms) : "";
 }
 
+/* The accessible name OVERRIDES the visible text, so it has to contain it.
+
+   This row shows "<program> · <impact>" and named itself "<impact> <evidence>",
+   dropping the program the operator can see — WCAG 2.5.3 Label in Name. A voice
+   operator reading "the-ant-hill · …" off the screen and saying it got no match,
+   and a screen-reader operator heard an agent with no program on a board where
+   the same lane name recurs across several. The blocking row above already puts
+   the program in its name ("… In <program>. Opens the session."); this is the
+   same rule applied to the row that was missing it. Evidence stays on the end:
+   it is the sentence read INSTEAD of opening the drawer, and it is not visible
+   on this row, so it extends the name rather than contradicting it. */
 function notifyQuietRow(item) {
+  const visible = (item.source.programName ? item.source.programName + " · " : "") + item.impact;
   return el("button", {
     type: "button", class: "notify-quiet",
     dataset: { fkey: "notify:open:" + item.id },
-    "aria-label": item.impact + " " + item.evidence,
+    "aria-label": item.evidence ? visible + " " + item.evidence : visible,
     onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
   },
     el("span", { class: "notify-quiet-name" },
@@ -4195,18 +4281,35 @@ function handleCockpitKeys(e, ui = state) {
   return true;
 }
 
+/* ---------- the working set ----------
+
+   view × time × review policy, and deliberately nothing else.
+
+   This is the two-layer model in one function. The WORKING SET is what the board
+   is looking at: which view, how far back, and whether the fleet's shared review
+   policy admits the routine reviewers. The LENSES — provider, status, program —
+   and the search query narrow INSIDE it and are absent here on purpose.
+
+   Every number that claims to describe the board is taken over this population:
+   the tab count, the per-item counts in the provider and status menus, and the
+   "of 21" the sentence reconciles against. One helper, so those three can never
+   drift into counting three different things and calling them all the total. */
+function workingSet(ui = state, view = ui.view) {
+  if (!ui.snap) return [];
+  return snapshotAgents(ui.snap)
+    .map(({ agent }) => agent)
+    .filter((agent) =>
+      viewMatches(view, agent)
+      && passesLookback(agent, view, ui.lookbackHours)
+      && passesReviewVisibility(agent, view, ui.showReviewWorkers));
+}
+
 function renderTabs() {
   const agents = snapshotAgents(state.snap).map((x) => x.agent);
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    const count = state.snap
-      ? agents.filter((a) =>
-          viewMatches(view, a)
-          && passesLookback(a, view, state.lookbackHours)
-          && passesReviewVisibility(a, view, state.showReviewWorkers),
-        ).length
-      : null;
+    const count = state.snap ? workingSet(state, view).length : null;
     const unverified = count != null && view === "board"
       ? agents.filter((a) => passesReviewVisibility(a, view, state.showReviewWorkers) && isUnverified(a)).length
       : 0;
@@ -4304,6 +4407,248 @@ const STATUS_LENSES = [
   ["unverified", "Unverified"],
 ];
 
+/* ---------- filter menus ----------
+
+   Which trigger each open menu belongs to. `state.openFilterMenu` names the MENU
+   ("time"), the trigger carries the fkey the rest of the client addresses it by
+   ("lookback:menu") — the fkey namespaces are the ones operators' focus restore
+   and muscle memory were already built on, so they are kept rather than renamed
+   to match a new state field. */
+const FILTER_MENU_TRIGGERS = {
+  time: "lookback:menu",
+  provider: "provider:menu",
+  status: "status:menu",
+};
+
+/* Put a keyboard operator back on the control they opened the menu from.
+
+   By fkey, never by node reference: the render() that closes the menu detaches
+   every node this handler was built on, and calling focus() on a detached
+   element is a silent no-op that lands the operator on <body> — the same failure
+   the whole data-fkey contract exists to prevent. */
+function focusFilterTrigger(triggerKey) {
+  if (!triggerKey || typeof document.querySelector !== "function") return;
+  const trigger = document.querySelector(`[data-fkey="${CSS.escape(triggerKey)}"]`);
+  if (trigger && typeof trigger.focus === "function") trigger.focus({ preventScroll: true });
+}
+
+/* The trigger was clicked. One menu open at a time, deliberately: two dropdowns
+   hanging off the same 40px bar would overlap, and a click landing in the overlap
+   belongs to neither. Clicking the open trigger closes it, so the way out is the
+   way in — the same rule the lens setters follow. */
+function setOpenFilterMenu(menu) {
+  state.openFilterMenu = state.openFilterMenu === menu ? "" : menu;
+  render();
+}
+
+function closeFilterMenu() {
+  if (!state.openFilterMenu) return;
+  const triggerKey = FILTER_MENU_TRIGGERS[state.openFilterMenu];
+  state.openFilterMenu = "";
+  render();
+  focusFilterTrigger(triggerKey);
+}
+
+/* An item was chosen.
+
+   A RADIO menu closes: the operator picked the one value the setting can hold
+   and there is nothing left to do in it. A CHECKBOX menu stays open, because the
+   operator is assembling a set and a menu that slams shut after each toggle
+   makes picking two things cost two round trips through the trigger.
+
+   The close happens BEFORE the setter so that a setter which decides nothing
+   changed — "All providers" picked while every provider is already showing —
+   still puts the menu away; and the render() is unconditional for the same
+   reason, since those setters early-return without painting and would leave the
+   operator staring at a menu their click had already closed in state. */
+function chooseFilterMenuItem(triggerKey, item) {
+  const staysOpen = item.role === "menuitemcheckbox";
+  if (!staysOpen) state.openFilterMenu = "";
+  item.apply();
+  render();
+  /* Radio hands focus back to the trigger; checkbox hands it back to the ITEM,
+     which the repaint has just replaced with a new node carrying the same fkey.
+     Landing a keyboard operator on the trigger after every toggle would walk
+     them out of the menu they are still working in. */
+  focusFilterTrigger(staysOpen ? item.fkey : triggerKey);
+}
+
+function filterMenuItem(triggerKey, item) {
+  /* menuitemradio for a setting that holds ONE value (time), menuitemcheckbox
+     for a lens that holds a SET (provider, status, model, span, context). Both
+     carry aria-checked; what differs is the promise each makes about the others,
+     and picking the wrong one tells a screen-reader operator that choosing
+     "waiting" just unchose "working" when it did not. */
+  const role = item.role || "menuitemradio";
+  return el("button", {
+    type: "button",
+    class: "filter-menu-item" + (item.checked ? " is-active" : ""),
+    role,
+    "aria-checked": String(Boolean(item.checked)),
+    title: item.title || null,
+    /* The count is a number sitting in its own column, which reads as "codex 5"
+       when the accessible name is assembled from the text — a session count and
+       a version number are indistinguishable said that way. Spelled out here
+       instead, and the <span> stays in the tree rather than aria-hidden so the
+       figure is never silently withheld from anyone. */
+    "aria-label": item.count == null
+      ? null
+      : item.label + " — " + item.count + " session" + (item.count === 1 ? "" : "s"),
+    dataset: { fkey: item.fkey },
+    onclick: () => chooseFilterMenuItem(triggerKey, item),
+  }, item.label, item.count == null
+    ? null
+    : el("span", { class: "filter-menu-count", text: String(item.count) }));
+}
+
+/* One dropdown: a `filter-chip`-styled trigger plus, while it is open, the menu
+   under it. Nothing here is retained between paints — the bar is torn down every
+   four seconds, so `open` is read from state and the DOM is rebuilt around it. */
+function filterMenu(spec) {
+  const wrap = el("div", { class: "filter-menu-wrap" + (spec.trailing ? " is-trailing" : "") });
+  wrap.append(el("button", {
+    type: "button",
+    class: "filter-chip" + (spec.active ? " is-active" : ""),
+    "aria-haspopup": "menu",
+    "aria-expanded": String(Boolean(spec.open)),
+    /* Still a pressed state, because it still reports whether this axis is
+       narrowing the board. The label carries the VALUE when it is — an operator
+       should not have to open a menu to find out what it is currently doing. */
+    "aria-pressed": String(Boolean(spec.active)),
+    title: spec.title || null,
+    dataset: { fkey: spec.fkey },
+    onclick: () => setOpenFilterMenu(spec.menu),
+  }, spec.label, el("span", { class: "filter-menu-caret", "aria-hidden": "true", text: "▾" })));
+  if (!spec.open) return wrap;
+  const menu = el("div", { class: "filter-menu", role: "menu", "aria-label": spec.menuLabel || spec.label });
+  for (const section of spec.sections) {
+    if (!section.label) {
+      for (const item of section.items) menu.append(filterMenuItem(spec.fkey, item));
+      continue;
+    }
+    const group = el("div", { class: "filter-menu-group", role: "group", "aria-label": section.label });
+    /* The visual twin of the group's accessible name, hidden from the tree so a
+       screen reader announces the group once rather than twice. */
+    group.append(el("p", { class: "filter-menu-head", "aria-hidden": "true", text: section.label }));
+    for (const item of section.items) group.append(filterMenuItem(spec.fkey, item));
+    if (section.note) {
+      /* Described, not merely printed. A caveat about what a group of options
+         can actually reach is worthless to the operator who cannot see it, and a
+         <p> loose inside role="menu" is content a screen reader in menu mode
+         will walk straight past. */
+      const noteId = "filter-menu-note-" + spec.menu;
+      group.setAttribute("aria-describedby", noteId);
+      group.append(el("p", { class: "filter-menu-note", id: noteId, text: section.note }));
+    }
+    menu.append(group);
+  }
+  wrap.append(menu);
+  return wrap;
+}
+
+/* How the active window reads on the trigger. Days are STORED as hours, so this
+   is the only place that turns 48 back into the "2d" the operator picked — and
+   it does it only for the offered day presets, so a hand-typed 36 stays "36h"
+   rather than being rounded into a day count nobody chose. */
+function lookbackValueLabel(hours) {
+  if (hours == null) return "";
+  const days = hours / 24;
+  return LOOKBACK_DAY_PRESETS.includes(days) ? days + "d" : hours + "h";
+}
+
+function isOfferedLookback(hours) {
+  return hours != null
+    && (LOOKBACK_HOUR_PRESETS.includes(hours) || LOOKBACK_DAY_PRESETS.includes(hours / 24));
+}
+
+/* The caveat under the Days group: asking for 7 days does not reach 7 days back,
+   because the collectors only hold what they scan.
+
+   The number is stated when — and only when — a snapshot has carried it. It is
+   read off `snap.scanWindowHours` and never off `state.scanWindowHours`, which
+   is a client-side 36 that no server has confirmed; printing that as a boundary
+   would be the same overclaim `renderScanWindow` was fixed to stop making, in
+   the one place an operator is least able to check it. With no confirmed number
+   the sentence still stands, just without a figure it cannot vouch for. */
+function lookbackDaysNote(ui) {
+  const scanned = ui.snap && Number(ui.snap.scanWindowHours);
+  const bound = Number.isFinite(scanned) && scanned > 0
+    ? " The collectors scan " + scanned + "h back, so a longer window here reaches no further."
+    : "";
+  return "Days reach only sessions still on the live wire — History reaches the archive." + bound;
+}
+
+/* The time menu. Hours for the shift you are working, Days for the week you are
+   reconstructing, then the two escapes. It sits apart from the lens menus on the
+   bar because it is not a lens: it decides the population every count is taken
+   over, which is why moving it moves the tab number and moving a lens does not. */
+function timeFilterMenu(ui) {
+  const hourItems = LOOKBACK_HOUR_PRESETS.map((hours) => ({
+    fkey: "lookback:" + hours,
+    label: "Last " + hours + "h",
+    checked: ui.lookbackHours === hours,
+    title: `Hide sessions with no activity in the last ${hours} hours`,
+    apply: () => setLookbackHours(hours),
+  }));
+  const dayItems = LOOKBACK_DAY_PRESETS.map((days) => ({
+    fkey: "lookback:" + days * 24,
+    label: "Last " + days + "d",
+    checked: ui.lookbackHours === days * 24,
+    title: `Hide sessions with no activity in the last ${days} days`,
+    apply: () => setLookbackHours(days * 24),
+  }));
+  const sections = [
+    { label: "Hours", items: hourItems },
+    {
+      label: "Days",
+      /* Board only. On History the archive is the population, so the caveat
+         would be false there — and a caveat that is false on one tab is one the
+         operator stops believing on the other. */
+      note: ui.view === "board" ? lookbackDaysNote(ui) : "",
+      items: dayItems,
+    },
+    {
+      items: [
+        {
+          fkey: "lookback:all",
+          label: "Everything",
+          checked: ui.lookbackHours == null,
+          title: "Show every session the collectors hold, however old",
+          apply: () => setLookbackHours(null),
+        },
+        {
+          fkey: "lookback:custom",
+          label: "Custom…",
+          checked: !isOfferedLookback(ui.lookbackHours) && ui.lookbackHours != null,
+          title: "Choose your own number of hours",
+          apply: () => {
+            const raw = window.prompt(
+              "Show sessions active in the last how many hours?",
+              String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS),
+            );
+            if (raw == null) return;
+            setLookbackHours(raw);
+          },
+        },
+      ],
+    },
+  ];
+  return filterMenu({
+    menu: "time",
+    fkey: "lookback:menu",
+    /* "Time" when nothing is being hidden by it, the window itself when
+       something is. Both are the honest reading: at "Everything" the time axis
+       is not narrowing anything, so it has no value to report. */
+    label: ui.lookbackHours == null ? "Time" : "Last " + lookbackValueLabel(ui.lookbackHours),
+    menuLabel: "How far back to show sessions",
+    active: ui.lookbackHours != null,
+    open: ui.openFilterMenu === "time",
+    title: "How far back the board reaches. This sets the working set every count on the page is taken over.",
+    trailing: true,
+    sections,
+  });
+}
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -4379,31 +4724,6 @@ function renderFilterBar(ui = state) {
     }
     bar.append(providerGroup);
   }
-  const lookbackGroup = el("div", {
-    class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
-  });
-  for (const hours of LOOKBACK_PRESETS) {
-    lookbackGroup.append(filterChip(
-      "Last " + hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours),
-      { fkey: "lookback:" + hours, title: `Hide sessions with no activity in the last ${hours} hours` },
-    ));
-  }
-  lookbackGroup.append(filterChip("Everything", ui.lookbackHours == null, () => setLookbackHours(null), {
-    title: "Show every session the collectors hold, however old",
-    fkey: "lookback:all",
-  }));
-  const customActive = ui.lookbackHours != null && !LOOKBACK_PRESETS.includes(ui.lookbackHours);
-  lookbackGroup.append(filterChip(
-    customActive ? ("Last " + ui.lookbackHours + "h") : "Custom…",
-    customActive,
-    () => {
-      const raw = window.prompt("Show sessions active in the last how many hours?", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
-      if (raw == null) return;
-      setLookbackHours(raw);
-    },
-    { fkey: "lookback:custom", title: "Choose your own number of hours" },
-  ));
-  bar.append(lookbackGroup);
   /* The lifecycle lens, reusing the sections the board already draws below. Board
      only: History is a view of finished work, where "still working" is not a
      question the rows can answer. */
@@ -4429,30 +4749,21 @@ function renderFilterBar(ui = state) {
       { fkey: "program:clear", title: "Show every program again" },
     ));
   }
-  /* Says who it affects, because it is the one control on this bar that is not
-     about your browser. */
-  bar.append(el("span", { class: "filter-note", text: "· your view only" }));
-  /* The snapshot is the authoritative carrier; /api/settings is the boot path
-     that fills this in before one arrives. When neither answered, the number is
-     a hard-coded default, and printing "36h window" claims the server confirmed
-     it. Say it is unverified instead — the chip still works, it just stops
-     asserting. */
-  const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
-  const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
-  const unverified = !confirmed && !!ui.settingsError;
-  /* Read-only, and a <span> rather than a button so it leaves the focus order.
-     Every other control on this bar changes what YOU see; this one changed what
-     the server COLLECTS — sessions outside it leave the wire entirely, for every
-     browser. Two different powers wearing the same chip is what the apologetic
-     "· your view only" note beside it was there to paper over. The editor moved
-     to Settings, where the rest of the server's knobs live. */
-  bar.append(el("span", {
-    class: "filter-status" + (unverified ? " is-unverified" : ""),
-    title: unverified
-      ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Change it in Settings."
-      : "Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.",
-    text: unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
-  }));
+  /* Time goes LAST and hard right, separated from everything before it.
+     Everything to its left narrows within the population; this control decides
+     what the population is. The gap is the two-layer boundary drawn in space —
+     it is the one thing on this bar that moves the tab number, and standing it
+     shoulder to shoulder with the lenses is what taught operators the lenses
+     ought to move it too.
+
+     (Contract preference was the tab-strip row. It is here instead: `#views`
+     owns arrow-key roving tabindex over its tabs, and a dropdown inside it would
+     have to fight `handleCockpitKeys` for Left/Right — see LANE-FE2-STATUS.md.) */
+  bar.append(timeFilterMenu(ui));
+  /* Nothing else. The collection window is the server's reach, not a lens —
+     it lives in Settings (editor) and the summary rail (reading), never here.
+     And no "your view only" disclaimer: since D7 the review toggle is a shared
+     server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
 function renderScopeNote(shown) {
@@ -4486,14 +4797,9 @@ function renderScopeNote(shown) {
     const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
     parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
-  /* The lookback stays here, beside the filters that set it: it is the
-     OPERATOR's window over rows the board already has. The scan window left this
-     line for the summary rail (S2-T3) — it is the board's own reach, it
-     qualifies every reading rather than this list, and printing it twice in two
-     vocabularies is how two windows come to be read as one setting. */
-  if (lookbackApplies(state.view)) {
-    parts.push(`lookback ${lookbackLabel(state.lookbackHours)}`);
-  }
+  /* No unconditional lookback echo: the pressed chip already says it, and a
+     line that always renders is a line nobody reads. The live region speaks
+     only when something is NARROWING the list or the data went stale. */
   if (state.fetchFailed) parts.push("last refresh failed");
   note.textContent = parts.join(" · ");
   note.hidden = parts.length === 0;
@@ -8081,6 +8387,18 @@ function renderDockTool(agent, cap, action, opts = {}) {
     disabled: cap.enabled && !busy && !held ? null : "",
     "aria-busy": busy ? "true" : null,
     title: held ? "Held — the board is not current" : cap.enabled ? (action === "focus" ? focusDestinationHint(agent) : label) : "Unavailable",
+    /* OPT-IN, and null everywhere it is not passed, so every existing call site
+       keeps the visible label as its accessible name.
+
+       The dock is a one-agent surface where "Focus" is unambiguous. The
+       notification panel is the one place several agents' tools sit in one list,
+       and there it produced four buttons named exactly "Focus" — measured in the
+       AX tree, indistinguishable in a rotor or under voice control. The title
+       above carries the destination, but with text content present a title is
+       the DESCRIPTION, not the name, and plenty of operators never hear it.
+       Naming it at the call site that has the ambiguity beats forking this
+       function, which exists to be the one capability gate. */
+    "aria-label": opts.ariaLabel || null,
     dataset: { fkey },
     onclick: () => {
       if (held) return;
@@ -9941,6 +10259,23 @@ function boot() {
     closeNotificationsPanel(false);
   });
 
+  /* A press anywhere else closes the open filter menu — the dismissal every
+     dropdown has — on the same mousedown guard the panels above use, and with
+     every menu wrapper exempt: the trigger's own click already toggles, so
+     closing here first would make it reopen on the same press, and clicking a
+     SECOND trigger should switch menus rather than merely shut the first.
+
+     Closing repaints, which is why the open menu is deliberately NOT part of
+     programsPaintSig: with it in the signature, this mousedown would rebuild the
+     board's rows and the click that followed would land on a detached node —
+     dismissing the menu would silently eat the operator's next action. */
+  document.addEventListener("mousedown", (e) => {
+    if (!state.openFilterMenu) return;
+    if (e.target?.closest?.(".filter-menu-wrap")) return;
+    state.openFilterMenu = "";
+    render();
+  });
+
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
     render();
@@ -10018,6 +10353,14 @@ function boot() {
        operator their place on the board entirely. */
     if (state.notifyPanelOpen) {
       closeNotificationsPanel();
+      return;
+    }
+    /* The filter dropdown, ahead of the board's own chain: it is the most
+       recently opened thing on the screen and the smallest, so Escape means it.
+       Closes WITHOUT selecting — that is the whole point of the key — and hands
+       focus back to the trigger, as a selection does. */
+    if (state.openFilterMenu) {
+      closeFilterMenu();
       return;
     }
     if (state.confirming) {

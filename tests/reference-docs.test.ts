@@ -405,8 +405,22 @@ describe("QUICKSTART.md stays true to a first run", () => {
     expect(catalogs).toContain("DEFAULT_LOOKBACK_HOURS = 6");
     expect(quickstart).toContain("**36 hours**");
     expect(read("src/server/settings.ts")).toContain("DEFAULT_SCAN_WINDOW_HOURS = 36");
-    expect(quickstart).toContain("1h / 6h / 24h / 36h");
-    expect(catalogs).toContain("LOOKBACK_PRESETS = [1, 6, 24, 36]");
+    expect(quickstart).toContain("1h / 6h / 12h / 24h");
+    expect(catalogs).toContain("LOOKBACK_HOUR_PRESETS = [1, 6, 12, 24]");
+    expect(quickstart).toContain("2d / 7d / 14d / 30d");
+    expect(catalogs).toContain("LOOKBACK_DAY_PRESETS = [2, 7, 14, 30]");
+    /* 36 is no longer OFFERED as a lookback, and the doc must not teach it as
+       one. It was the server's scan constant sitting in the operator's filter
+       vocabulary, which is precisely the confusion the paragraph above it exists
+       to undo — the two windows are different things, and a filter preset that
+       happened to equal the scan window taught that they were the same.
+
+       Comments stripped, on the precedent the tokens card set: this file NAMES
+       the retired 36 in prose to explain why it is gone, and an assertion that
+       cannot tell code from the comment warning about it would forbid
+       documenting the trap. */
+    expect(catalogs.replace(/\/\*[\s\S]*?\*\//g, "")).not.toContain("36");
+    expect(quickstart).not.toContain("24h / 36h");
   });
 
   test("every command and file it tells a reader to run or copy exists", () => {
