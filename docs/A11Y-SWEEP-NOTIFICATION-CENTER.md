@@ -34,8 +34,13 @@ a defect asserted green stops being a defect.
 | 3 | Console clean | **PASS** — zero messages of any level across open → route → close |
 | 4 | `(hover: none)` at 420px | **PASS with 1 defect** — no hover-only affordance anywhere; the Focus control misses the codebase's own 44px touch sweep |
 | 5 | `prefers-reduced-motion` | **NOT RUN live** — `/browse` cannot emulate the media feature. Rule-level proof holds; see §5 |
-| 6 | Responsive 420 / 768 / 1280 | **FAIL at 420px** — no horizontal scroll anywhere, but the panel overflows the viewport's **left** edge by 24px and the clipped strip is unreachable |
+| 6 | Responsive 420 / 768 / 1280 | **FAIL at 420px** — no horizontal scroll anywhere, but the panel overflows the viewport's **left** edge by 24px and the clipped strip is unreachable. **Fixed in `fd34a66`; its regression guard is NOT RUN — see §6-guard** |
 | 7 | The ember contract, visually | **PASS** — measured on the live blocking board and across all three tones |
+
+⚠ **Two rows are NOT RUN, not passed.** Check 5 was never observed in a browser,
+and check 6's *guard* measures the stylesheet rather than the panel. Both are
+written up in full below rather than left as a green tick; a check nobody can see
+failing is the failure mode this document exists to prevent.
 
 **Seven defects, one environment note.** None of them is in the model — `notification-center.js`
 came through the derivation probes clean on every fixture. All seven are in the paint.
@@ -559,7 +564,7 @@ browser module, and a literal **NUL byte** in a test file that tripped
 `check-nul-files` and would have failed CI. Both were invisible to a green
 single-file run. `bunx tsc --noEmit` **and** `bun run test:ci`, every time.
 
-### Check 6's guard — where it actually stands
+### §6-guard · Check 6's regression guard — NOT RUN, and here is what it would take
 
 The `align-self: stretch` assertion in `tests/notification-center-a11y.test.ts`
 **does not guard A11Y-1**, and is now annotated in place saying so. Three
@@ -571,14 +576,24 @@ mutations measured at 420px:
 | B · centred anchor + viewport-measured width — *what shipped* | `-24 → 372` | **yes** | RED |
 | C · anchor stretched, width clamp back | `-8 → 388` | **yes** | **GREEN** (blind) |
 
-`tests/notification-center-geometry.test.ts` measures the box itself and catches
-B and C. It is written, typechecks, and passes 13/13 — **but it is not in the
-tree**, because it needs a real browser and must therefore be excluded from CI
-via `scripts/ci-tests.sh`'s `LOCAL_ONLY` list, which is another lane's file.
+A geometry test that measures the box itself, and catches both B and C, is
+written and validated — 13 pass today, 2 fail on route B at `panelLeft -24`, 2
+fail on route C at `-8`. **It is parked at `docs/a11y-geometry-gate/`, not in
+`tests/`, and it does not run.** The full reasoning, the mutation evidence and
+the four steps to un-park it are in that directory's README.
 
-**So Check 6's CI guard is text-only today, and is blind to route C.** That is a
-known, stated gap, not a covered row. It closes when the `LOCAL_ONLY` line lands;
-it becomes CI-enforceable only if a headless browser joins `devDependencies`,
-which is a browser download in a package that advertises zero dependencies.
+The short version: it needs a real CSS layout engine, and this package has none —
+`devDependencies` is `@types/bun` and `typescript`, and jsdom/happy-dom do not
+implement layout at all, so `getBoundingClientRect()` returns zeros. In `tests/`
+it would red-light CI at `beforeAll`; it needs a `LOCAL_ONLY` entry in
+`scripts/ci-tests.sh`, which belongs to another lane. A filename that dodges that
+glob was considered and rejected — `ci-tests.sh` keeps exclusions in one visible
+place on purpose.
+
+**So check 6's regression guard is text-only today, and blind to route C.** Same
+standing as the `prefers-reduced-motion` row: a stated gap, not a covered row.
+Adding the `LOCAL_ONLY` line makes it a real local gate that CI still never runs;
+only a headless browser in `devDependencies` would make panel geometry
+CI-enforceable, and that is Emilio's call, not a lane's.
 
 **Standing by for the header audit once S2–S4 land.**
