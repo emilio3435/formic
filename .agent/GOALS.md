@@ -2,7 +2,8 @@
 
 | Goal ID | Status | Relationship | Ledger |
 |---|---|---|---|
-| `confidence-header-notification-center` | active | parent of `board-all-clear-lookback-disclosure` | `.agent/runs/confidence-header-notification-center/` |
+| `confidence-header-notification-center` | **complete** | parent of `board-all-clear-lookback-disclosure` | `.agent/runs/confidence-header-notification-center/` |
+| `a11y-geometry-harness` | candidate | child of `confidence-header-notification-center` | brief: `docs/a11y-geometry-gate/README.md` |
 | `board-all-clear-lookback-disclosure` | queued | child of `confidence-header-notification-center` | `.agent/runs/board-all-clear-lookback-disclosure/` |
 
 ## board-all-clear-lookback-disclosure
@@ -20,9 +21,17 @@ disclosure, not merely the reachability. Full reasoning in the ledger.
 
 ## confidence-header-notification-center
 
-**Active.** Five tranches merged to main (PRs #9, #11, #12, #13, #14), each CI-green
-before merge. S0, S1, S2, S3, S5 and S6-T1/T2 are done; S4, S6-T3/T4, A11Y-2..6,
-the panel geometry test and the Board all-clear defect remain.
+**COMPLETE 2026-08-06 05:29 UTC.** Eight tranches merged (PRs #9, #11, #12, #13,
+#14, #15, #16, #17), each CI-green before merge. Every stage S0-S6 shipped, all six
+a11y defects fixed, and the Board all-clear defect closed — that last one was found
+mid-flight by an outside agent and was never in the plan.
+
+Final state: `main` at `97def66`, `tsc` exit 0, 2706 pass / 0 fail.
+
+One item carried forward as its own goal: `a11y-geometry-harness`. The panel geometry
+test is written and validated but needs a browser harness this package lacks, so the
+A11Y-1 guard remains CSS-text only — and the mutation audit proved that guard is wrong
+in both directions.
 
 Two findings changed the design rather than the code, and both are recorded as
 standing evidence: **dead time cannot be measured from any available source**, so
