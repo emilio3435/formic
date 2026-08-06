@@ -6215,20 +6215,72 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(html).toContain("Live multi-agent control room");
   });
 
-  /* Cockpit audit §19. Select rendered unconditionally, and on the resting board
-     it offered multi-select over zero selectable rows. A control that cannot do
-     anything is one the operator learns to skip — and it named itself rather than
-     the operation it enables. */
-  test("(19a) Select appears only when something can actually receive a broadcast", () => {
+  /* Cockpit audit §19 pinned that the toolbar's Select button appeared only when
+     something could actually receive a broadcast. The button is gone (operator
+     directive, 2026-08-05), so the gate it read is gone with it — there is no
+     toolbar control left to render conditionally.
+
+     What the audit was really protecting outlives the button and is asserted
+     here instead: a surface must never offer a broadcast to an agent that Send
+     would refuse. Selection is now entered from a program drawer, whose button
+     counts eligible recipients with the SAME predicate the broadcast bar uses,
+     and disables itself at zero. */
+  test("(19a) nothing offers a broadcast to an agent that Send would refuse", () => {
     const reachable = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
     const unreachable = agent({ id: "codex:no", status: "running", activity: "working", outcome: "healthy", controlState: "quarantined", controls: [] });
     expect(M.broadcastEligible(reachable)).toBe(true);
     expect(M.broadcastEligible(unreachable)).toBe(false);
-    // The gate the toolbar reads, expressed against the same predicate the
-    // broadcast bar itself uses — so the button cannot promise what Send refuses.
-    expect(source).toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
-    // And it names the operation rather than itself.
-    expect(source).toContain('"Select to send"');
+
+    // The entry point, over a program where nothing can receive: offered, and
+    // disabled, and saying so rather than naming a count of zero.
+    const dead = withDom(() => {
+      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
+        .document.createElement("div");
+      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [unreachable] } });
+      return byFkey(pane, "prog-broadcast:p1");
+    });
+    expect(dead.attributes.disabled).toBe("");
+    expect(textOf(dead)).toBe("No eligible recipients");
+
+    const live = withDom(() => {
+      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
+        .document.createElement("div");
+      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [reachable, unreachable] } });
+      return byFkey(pane, "prog-broadcast:p1");
+    });
+    expect(live.attributes.disabled).toBeUndefined();
+    expect(textOf(live)).toBe("Broadcast to 1 eligible"); // the eligible one only
+
+    // The toolbar's gate and its label are gone with the button they served.
+    expect(source).not.toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
+    expect(source).not.toContain('"Select to send"');
+  });
+
+  /* Removing the Select button removed the ONLY control that left selection
+     mode — it was the same button wearing its "Done selecting" label. Selection
+     is still enterable by mouse from a program drawer, so without a replacement
+     a pointer-only operator could get in and not get out; Escape alone is not an
+     exit a mouse can find. The broadcast bar carries it now. */
+  test("selection mode keeps a way out that is not the Escape key", async () => {
+    const only = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [only] }] });
+    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
+      () => withRequests([], async () => {
+        M.renderBroadcastBar();
+        const done = byFkey(domById.get("broadcast-bar"), "broadcast-done");
+        expect(textOf(done)).toBe("Done selecting");
+        await fire(done);
+        expect(M.state.selecting).toBe(false);
+      }));
+    /* And "Clear all" is NOT that exit — it empties the selection and stays in
+       the mode, which is a different operation and must remain one. */
+    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
+      () => withRequests([], async () => {
+        M.renderBroadcastBar();
+        await fire(byFkey(domById.get("broadcast-bar"), "broadcast-clear"));
+        expect(M.state.selection.size).toBe(0);
+        expect(M.state.selecting).toBe(true);
+      }));
   });
 
   /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with

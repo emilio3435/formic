@@ -1399,6 +1399,11 @@ globalThis.TheAntHill = {
   attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
   notificationPanelModel, feedTone, blockingCount, blockingAgentIds,
   programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, broadcastPaintSig, agentsById,
+  /* The broadcast bar itself, not just its signature. It now carries the only
+     pointer-reachable exit from selection mode — the toolbar button that used to
+     be it is gone — so "there is a way out" has to be assertable against the
+     rendered control rather than against a source string. */
+  renderBroadcastBar,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
   lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
@@ -4357,20 +4362,12 @@ function renderTabs() {
        standard tablist contract and what a screen-reader user already expects. */
     btn.tabIndex = isCurrent ? 0 : -1;
   }
-  const toggle = $("select-toggle");
-  if (toggle) {
-    /* Audit §19: Select rendered unconditionally and named itself rather than the
-       operation it enables. Measured on the resting board it sat there offering
-       multi-select over zero selectable rows — a control that cannot do anything
-       is a control the operator learns to skip. It speaks only when at least one
-       visible agent can actually receive a broadcast, and it says what it is for. */
-    const selectable = state.view !== "usage"
-      && snapshotAgents(state.snap).some(({ agent }) =>
-        broadcastEligible(agent) && viewMatches(state.view, agent));
-    toggle.hidden = !selectable && !state.selecting;
-    toggle.setAttribute("aria-pressed", String(state.selecting));
-    toggle.textContent = state.selecting ? "Done selecting" : "Select to send";
-  }
+  /* The Select-to-send maintenance block stood here. Its button is gone from the
+     toolbar (operator directive, 2026-08-05), so there is nothing left to keep
+     hidden, pressed, or renamed. Selection mode itself is untouched and still
+     enterable — a program drawer's "Broadcast to N eligible" turns it on — and
+     the broadcast bar now carries the "Done selecting" exit the toolbar button
+     used to be. The Action log is the one that went fully UI-unreachable. */
   const search = $("search");
   const opsRow = $("ops-toolbar-row");
   if (opsRow) opsRow.hidden = state.view === "usage";
@@ -9547,7 +9544,18 @@ function renderBroadcastBar() {
       el("strong", { text: String(eligible.length) }), ` of ${recipients.length} selected can receive it`),
     recipients.length
       ? el("button", { type: "button", class: "broadcast-clear", dataset: { fkey: "broadcast-clear" }, onclick: clearSelection }, "Clear all")
-      : null));
+      : null,
+    /* The way OUT of selection mode, and it has to live here now.
+       "Done selecting" used to be the toolbar's Select button wearing its second
+       label; that button is gone, and removing it left exactly one exit — the
+       Escape key. Select mode is still enterable by mouse from a program
+       drawer's "Broadcast to N eligible", so without this a pointer-only
+       operator could get in and not get out. "Clear all" beside it empties the
+       selection and deliberately STAYS in the mode; this is the one that leaves. */
+    el("button", {
+      type: "button", class: "broadcast-clear", dataset: { fkey: "broadcast-done" },
+      onclick: () => enterSelectMode(false),
+    }, "Done selecting")));
 
   if (recipients.length) {
     const list = el("div", { class: "broadcast-recipients" });
@@ -10286,15 +10294,19 @@ function boot() {
     if (btn && btn.dataset.view) setView(btn.dataset.view);
   });
 
-  $("select-toggle").addEventListener("click", () => enterSelectMode(!state.selecting));
+  /* Select-to-send and Action log lost their toolbar buttons here (operator
+     directive, 2026-08-05). The wiring goes with them because it cannot stay: $()
+     returns null for an element that is not in the document, and
+     null.addEventListener would throw inside boot() — taking the whole client
+     down, not merely the two features.
 
-  $("actions-toggle").addEventListener("click", () => {
-    state.actionsOpen = !state.actionsOpen;
-    // Re-read on open: another operator (or this one, in another tab) may have
-    // acted since the boot fetch.
-    if (state.actionsOpen && state.actions.available) void loadActions();
-    else render();
-  });
+     Everything BELOW the wiring survives on purpose. enterSelectMode,
+     state.selecting, renderBroadcastBar, loadActions and #actions-panel are all
+     intact. Selection keeps a real entry point (a program drawer's "Broadcast to
+     N eligible") and its exit moved into the broadcast bar; the ACTION LOG is
+     now genuinely unreachable from the UI — loadActions still runs once at boot
+     and #actions-panel still paints, but nothing can open it. That is deliberate
+     and temporary: whether the subsystem comes out is a separate ruling. */
 
   $("settings-toggle").addEventListener("click", () => {
     state.settingsPanelOpen = !state.settingsPanelOpen;
