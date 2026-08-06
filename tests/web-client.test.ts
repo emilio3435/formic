@@ -1613,6 +1613,41 @@ describe("views split Now from History", () => {
     }));
   });
 
+  test("a provider facet narrows the board and clears by clicking itself", async () => {
+    const updatedAt = new Date().toISOString();
+    const claude = agent({ id: "claude:1", provider: "claude", updatedAt, task: "A" });
+    const codex = agent({ id: "codex:1", provider: "codex", updatedAt, task: "B" });
+    const program = { id: "p", name: "P", agents: [claude, codex] };
+    const snap = snapshot({ programs: [program] });
+
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.currentFilter()(codex, program)).toBe(true);
+      expect(M.currentFilter()(claude, program)).toBe(false);
+      // The shelf wears the same facet — a filtered board must not grow a shelf
+      // of rows that do not match it.
+      const done = agent({ id: "claude:2", provider: "claude", status: "archived", updatedAt, task: "C" });
+      expect(M.shelfFilter()(done, program)).toBe(false);
+    });
+
+    /* Toggle-to-clear: the way out is the way in. Driven through the real click
+       (withRequests, because setFacetProvider repaints and render() needs a
+       document.body) rather than by calling the setter — a chip that stops
+       being wired would still pass the setter-only version. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      const chip = byFkey(domById.get("filter-bar"), "provider:codex");
+      expect(chip.attributes["aria-pressed"]).toBe("true");
+      await fire(chip);
+      expect(M.state.facetProvider).toBe("");
+    }));
+  });
+
   test("the empty board names every constraint that produced it", async () => {
     const reviewTask = "Review this change for security vulnerabilities.";
     const updatedAt = new Date().toISOString();
@@ -6991,6 +7026,40 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
       expect(keys).toEqual(["lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom", "scan-window"]);
+    });
+
+    /* The same bar over a real fleet, which is where the facet chips appear. The
+       ORDER is the contract — the bar is torn down and rebuilt on every paint,
+       focus restore keys on position-independent fkeys, and a screen reader
+       walks the axes in this sequence: session kind, provider, then time.
+       Updated deliberately here (plan §3), never incidentally. */
+    withDom(() => {
+      const updatedAt = new Date().toISOString();
+      const review = agent({
+        id: "claude:r1", provider: "claude", updatedAt,
+        sessionKind: "review", sessionKindSource: "launch-evidence",
+        task: "Review this change for security vulnerabilities.",
+      });
+      const work = agent({ id: "codex:w1", provider: "codex", updatedAt, task: "Ship it." });
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work] }] });
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap }));
+      const keys = focusKeysOf(bar());
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys).toEqual([
+        "session-kind:review",
+        "provider:claude", "provider:codex",
+        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
+        "scan-window",
+      ]);
+    });
+
+    // One provider on the wire is no choice at all, so the axis stays absent
+    // rather than rendering a chip whose only effect is to be turned back off.
+    withDom(() => {
+      const only = agent({ id: "codex:w1", provider: "codex", updatedAt: new Date().toISOString(), task: "Ship it." });
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [only] }] });
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap }));
+      expect(focusKeysOf(bar()).some((k: string) => k.startsWith("provider:"))).toBe(false);
     });
 
     // Usage: the range chips, rebuilt on the same cadence.

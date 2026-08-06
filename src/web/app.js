@@ -3970,6 +3970,17 @@ function setShowReviewWorkers(show) {
   });
 }
 
+/* A session-scoped lens, deliberately unlike the review toggle above it: that
+   one is the fleet's shared default and goes to the server, this one is "what
+   am I looking at right now" and dies with the tab. Clicking the active chip
+   clears it, so the way out is the way in. */
+function setFacetProvider(provider) {
+  const next = state.facetProvider === provider ? "" : provider;
+  if (next === state.facetProvider) return;
+  state.facetProvider = next;
+  render();
+}
+
 function currentFilter() {
   return (agent, program) =>
     viewMatches(state.view, agent) &&
@@ -4227,6 +4238,22 @@ function renderFilterBar(ui = state) {
           : "Show routine review workers on the Board. Attention rows remain visible either way.",
       },
     ));
+  }
+  /* One chip per provider actually on the wire, and only when there is a choice
+     to make: a single-provider fleet gets no chips, because a filter whose only
+     option is "everything" is furniture. Toggling the active one clears it. */
+  const providers = ui.snap
+    ? [...new Set(snapshotAgents(ui.snap).map(({ agent }) => agent.provider).filter(Boolean))].sort()
+    : [];
+  if (providers.length > 1) {
+    const providerGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Provider" });
+    for (const provider of providers) {
+      providerGroup.append(filterChip(provider, ui.facetProvider === provider, () => setFacetProvider(provider), {
+        fkey: "provider:" + provider,
+        title: ui.facetProvider === provider ? "Show every provider" : "Show only " + provider + " sessions",
+      }));
+    }
+    bar.append(providerGroup);
   }
   const lookbackGroup = el("div", {
     class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
