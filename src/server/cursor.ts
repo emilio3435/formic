@@ -2,8 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import {
   stripTimestampMarkup,
   extractLastHumanMessage,
@@ -14,6 +13,11 @@ import {
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
 import { resolveAgentName } from "./naming";
 import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
+import {
+  foreignSqliteFailureMessage,
+  readForeignSqlite,
+  verifyForeignSqlite,
+} from "./foreign-sqlite";
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,9 +29,9 @@ const cursorTrackingCache = new Map<string, { fingerprint: string; models: Map<s
 let cursorStateCache: {
   path: string;
   fingerprint: string;
-  database: Database;
   sessionCwds: Map<string, string>;
   hasComposerData: boolean;
+  composerData: Map<string, string | Uint8Array>;
   composers: Map<string, CursorStoreEvidence>;
 } | undefined;
 
@@ -509,32 +513,11 @@ function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
 export function readCursorStoreEvidence(path: string): CursorStoreEvidence {
   const fingerprint = cursorStoreFingerprint(path);
   const cached = cursorStoreCache.get(path);
-  if (fingerprint && cached?.fingerprint === fingerprint) return { ...cached.evidence };
-  let evidence: CursorStoreEvidence;
-  try {
-    const database = new Database(path, { readonly: true });
-    try {
-      evidence = readCursorStoreEvidenceFrom(database);
-    } finally {
-      database.close();
-    }
-  } catch (error) {
-    // Cursor stores are WAL-mode databases. If the read-only handle cannot
-    // create/access SQLite's shared-memory sidecar, inspect the main file as
-    // immutable evidence without ever opening the provider store writable.
-    try {
-      const database = new Database(`${pathToFileURL(path).href}?immutable=1`, {
-        readonly: true,
-      });
-      try {
-        evidence = readCursorStoreEvidenceFrom(database);
-      } finally {
-        database.close();
-      }
-    } catch {
-      throw error;
-    }
+  if (fingerprint && cached?.fingerprint === fingerprint) {
+    verifyForeignSqlite(path);
+    return { ...cached.evidence };
   }
+  const evidence = readForeignSqlite(path, readCursorStoreEvidenceFrom);
   const afterFingerprint = cursorStoreFingerprint(path);
   if (fingerprint && afterFingerprint === fingerprint) {
     cursorStoreCache.set(path, { fingerprint, evidence });
@@ -600,36 +583,57 @@ async function cursorStateEvidence(
   errors: string[],
 ): Promise<typeof cursorStateCache> {
   const path = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
-  if (!(await readableFile(path))) {
-    if (cursorStateCache?.path === path) {
-      cursorStateCache.database.close();
-      cursorStateCache = undefined;
-    }
-    return undefined;
-  }
   const fingerprint = cursorStoreFingerprint(path);
   if (fingerprint && cursorStateCache?.path === path && cursorStateCache.fingerprint === fingerprint) {
-    return cursorStateCache;
+    try {
+      verifyForeignSqlite(path);
+      return cursorStateCache;
+    } catch (error) {
+      cursorStateCache = undefined;
+      errors.push(`cursor GUI project state: ${foreignSqliteFailureMessage(
+        error,
+        "Cursor GUI session projects and models could not be enumerated for this scan",
+      )}`);
+      return undefined;
+    }
   }
-  cursorStateCache?.database.close();
   cursorStateCache = undefined;
-  let database: Database | undefined;
   try {
-    database = new Database(path, { readonly: true });
+    const evidence = readForeignSqlite(path, (database) => {
+      const hasComposerData = database
+        .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
+        .get() !== null;
+      const composerData = new Map<string, string | Uint8Array>();
+      if (hasComposerData) {
+        const rows = database
+          .query("select key, value from cursorDiskKV where key like 'composerData:%'")
+          .all() as Array<{ key?: string; value?: string | Uint8Array | null }>;
+        for (const row of rows) {
+          if (typeof row.key !== "string" || row.value === undefined || row.value === null) continue;
+          composerData.set(
+            row.key.slice("composerData:".length),
+            typeof row.value === "string" ? row.value : new Uint8Array(row.value),
+          );
+        }
+      }
+      return {
+        sessionCwds: guiSessionCwds(database),
+        hasComposerData,
+        composerData,
+      };
+    });
     cursorStateCache = {
       path,
       fingerprint: fingerprint ?? "",
-      database,
-      sessionCwds: guiSessionCwds(database),
-      hasComposerData: database
-        .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
-        .get() !== null,
+      ...evidence,
       composers: new Map(),
     };
     return cursorStateCache;
   } catch (error) {
-    database?.close();
-    errors.push(`cursor GUI project state: ${error instanceof Error ? error.message : String(error)}`);
+    errors.push(`cursor GUI project state: ${foreignSqliteFailureMessage(
+      error,
+      "Cursor GUI session projects and models could not be enumerated for this scan",
+    )}`);
     return undefined;
   }
 }
@@ -637,22 +641,23 @@ async function cursorStateEvidence(
 function cursorTrackingModels(path: string): Map<string, string> {
   const fingerprint = cursorStoreFingerprint(path);
   const cached = cursorTrackingCache.get(path);
-  if (fingerprint && cached?.fingerprint === fingerprint) return cached.models;
-  const models = new Map<string, string>();
-  const database = new Database(path, { readonly: true });
-  try {
+  if (fingerprint && cached?.fingerprint === fingerprint) {
+    verifyForeignSqlite(path);
+    return cached.models;
+  }
+  const models = readForeignSqlite(path, (database) => {
+    const result = new Map<string, string>();
     const rows = database.query(
       "select conversationId, model from ai_code_hashes where conversationId is not null and model is not null order by timestamp desc, rowid desc",
     ).iterate() as Iterable<{ conversationId?: string; model?: string }>;
     for (const row of rows) {
       if (typeof row.conversationId === "string" && typeof row.model === "string" &&
-        !models.has(row.conversationId)) {
-        models.set(row.conversationId, row.model);
+        !result.has(row.conversationId)) {
+        result.set(row.conversationId, row.model);
       }
     }
-  } finally {
-    database.close();
-  }
+    return result;
+  });
   const afterFingerprint = cursorStoreFingerprint(path);
   if (fingerprint && afterFingerprint === fingerprint) {
     cursorTrackingCache.set(path, { fingerprint, models });
@@ -687,23 +692,13 @@ function composerEffort(selectedModels: unknown): string | undefined {
    Cursor's behaviour made from a local failure to read Cursor's database, and
    the two have opposite remedies. Absence still returns {}; a failure now
    throws, so the caller records it against the cursor source instead. */
-function composerModelForSession(database: Database, sessionId: string): CursorStoreEvidence {
-  let row: { value?: string | Uint8Array } | null;
-  try {
-    row = database.query("select value from cursorDiskKV where key = ?").get(`composerData:${sessionId}`) as
-      | { value?: string | Uint8Array }
-      | null;
-  } catch (error) {
-    throw new Error(
-      `composerData lookup failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+function composerModelForSession(value: string | Uint8Array | undefined, sessionId: string): CursorStoreEvidence {
   // No row is a real answer: this session never wrote composerData.
-  if (row?.value === undefined || row.value === null) return {};
+  if (value === undefined) return {};
   let parsed: unknown;
   try {
-    const value = typeof row.value === "string" ? row.value : Buffer.from(row.value).toString("utf8");
-    parsed = JSON.parse(value);
+    const json = typeof value === "string" ? value : Buffer.from(value).toString("utf8");
+    parsed = JSON.parse(json);
   } catch (error) {
     throw new Error(
       `composerData for ${sessionId} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -724,7 +719,7 @@ function cachedComposerModel(
   if (!state?.hasComposerData) return {};
   const cached = state.composers.get(sessionId);
   if (cached) return cached;
-  const evidence = composerModelForSession(state.database, sessionId);
+  const evidence = composerModelForSession(state.composerData.get(sessionId), sessionId);
   state.composers.set(sessionId, evidence);
   return evidence;
 }
@@ -849,7 +844,6 @@ async function collectCursorGuiSessions(
   const agents: CollectedAgent[] = [];
   const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
   const conversationPath = join(globalStorage, "conversation-search.db");
-  if (!(await readableFile(conversationPath))) return { value: agents, errors };
 
   let trackingModels = new Map<string, string>();
   const trackingPath = join(home, ".cursor", "ai-tracking", "ai-code-tracking.db");
@@ -857,15 +851,16 @@ async function collectCursorGuiSessions(
     try {
       trackingModels = cursorTrackingModels(trackingPath);
     } catch (error) {
-      errors.push(`cursor GUI model tracking: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`cursor GUI model tracking: ${foreignSqliteFailureMessage(
+        error,
+        "Cursor GUI session models may be missing from this scan",
+      )}`);
     }
   }
-  let conversations: Database | undefined;
   try {
-    conversations = new Database(conversationPath, { readonly: true });
-    const rows = conversations.query(
+    const rows = readForeignSqlite(conversationPath, (database) => database.query(
       "select id, title, updated_at, is_archived from conversations where source = 'local' and updated_at >= ? order by updated_at desc",
-    ).all(nowMs - windowMs) as CursorConversationRow[];
+    ).all(nowMs - windowMs) as CursorConversationRow[]);
     for (const row of rows) {
       if (typeof row.id !== "string" || !UUID_PATTERN.test(row.id)) continue;
       const cwd = state?.sessionCwds.get(row.id);
@@ -918,9 +913,10 @@ async function collectCursorGuiSessions(
       }
     }
   } catch (error) {
-    errors.push(`cursor GUI conversations: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    conversations?.close();
+    errors.push(`cursor GUI conversations: ${foreignSqliteFailureMessage(
+      error,
+      "Cursor GUI sessions could not be enumerated for this scan",
+    )}`);
   }
   return { value: agents, errors };
 }
@@ -998,7 +994,10 @@ export async function collectCursorSessions(
       try {
         store = readCursorStoreEvidence(storePath);
       } catch (error) {
-        errors.push(`cursor ${sessionId} store: ${error instanceof Error ? error.message : String(error)}`);
+        errors.push(`cursor ${sessionId} store: ${foreignSqliteFailureMessage(
+          error,
+          "Cursor session metadata and model could not be read for this scan",
+        )}`);
       }
       if (store?.agentId && store.agentId !== sessionId) {
         errors.push(`cursor ${sessionId} store agentId mismatch: ${store.agentId}`);
@@ -1048,8 +1047,12 @@ export async function collectCursorSessions(
       if (parsed) agents.push(parsed);
     }),
   );
-  const state = await cursorStateEvidence(home, errors);
-  const gui = await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs, state, thresholds);
+  const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+  const guiStoragePresent = await pathExists(globalStorage);
+  const state = guiStoragePresent ? await cursorStateEvidence(home, errors) : undefined;
+  const gui = guiStoragePresent
+    ? await collectCursorGuiSessions(home, projectDirectories, nowMs, windowMs, state, thresholds)
+    : { value: [], errors: [] };
   errors.push(...gui.errors);
   const knownIds = new Set(agents.map((agent) => agent.id));
   for (const agent of gui.value) {

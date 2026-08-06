@@ -34,6 +34,12 @@ const FAILING: CollectionResult<CollectedAgent[]> = {
   value: [],
   errors: ["claude /Users/me/.claude/projects: EACCES: permission denied"],
 };
+const CURSOR_FAILING: CollectionResult<CollectedAgent[]> = {
+  value: [],
+  errors: [
+    "cursor GUI conversations: database is locked or busy; Cursor GUI sessions could not be enumerated for this scan.",
+  ],
+};
 
 /** Scripts what each refresh sees, so history is built by refreshing rather
     than by assignment. */
@@ -102,14 +108,14 @@ describe("byProvider carries history, which one snapshot cannot", () => {
 
   test("recovery refreshes the timestamp rather than keeping the stale one", async () => {
     // Otherwise "last healthy" would name a moment two failures ago.
-    const state = stateWith([{}, { claude: FAILING }, {}]);
+    const state = stateWith([{}, { cursor: CURSOR_FAILING }, {}]);
     await state.refresh();
-    const first = (await providerHealth(state, "claude"))!.lastHealthyAt;
+    const first = (await providerHealth(state, "cursor"))!.lastHealthyAt;
     await state.refresh();
     await new Promise((resolve) => setTimeout(resolve, 2));
     await state.refresh();
 
-    const recovered = await providerHealth(state, "claude");
+    const recovered = await providerHealth(state, "cursor");
     expect(recovered?.healthy).toBe(true);
     expect(recovered?.lastHealthyAt).not.toBe(first);
   });
