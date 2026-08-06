@@ -83,7 +83,7 @@ function boundToADeadProcess(overrides: {
       surfaceId: "PANE-ELSEWHERE",
       resolution: overrides.resolution ?? "exact",
       surfaceCwd: "/Users/me/project-B",
-      cwdMismatch: true,
+      cwdRelation: "different",
       reason: "Matched recorded cmux target IDs via a persisted identity binding.",
     },
     controls: [
@@ -171,7 +171,7 @@ describe("liveness governs the write gate, not just resolution", () => {
     expect(agent.processState).toBe("died");
     expect(agent.activity).toBe("ended");
     // And the binding it trusted is visibly pointing somewhere else.
-    expect(agent.target.cwdMismatch).toBe(true);
+    expect(agent.target.cwdRelation).toBe("different");
     expect(agent.cwd).not.toBe(agent.target.surfaceCwd);
   });
 

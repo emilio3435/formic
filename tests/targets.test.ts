@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseCmuxTerminals } from "../src/server/cmux";
 import { readHookSessionStores } from "../src/server/cmux-hook-sessions";
-import { resolveAgentTarget, resolveAgentTargetWithTrace } from "../src/server/targets";
+import { canWriteToTarget, resolveAgentTarget, resolveAgentTargetWithTrace } from "../src/server/targets";
 import type { CollectedAgent } from "../src/server/types";
 
 const surfaces = parseCmuxTerminals(
@@ -31,6 +31,56 @@ function agent(overrides: Partial<CollectedAgent>): CollectedAgent {
 }
 
 describe("safe cmux target resolution", () => {
+  test("CWD-SEM-1 exact identity reports a neutral different-directory relation without changing its routing reason", () => {
+    const target = resolveAgentTarget(
+      agent({ sourceSessionId: "exact-cwd-relation", cwd: "/repos/agent" }),
+      [{
+        workspaceId: "WORKSPACE-RELATION",
+        surfaceId: "SURFACE-RELATION",
+        cwd: "/repos/terminal",
+        sourceSessionIds: ["exact-cwd-relation"],
+      }],
+    );
+
+    expect(target).toMatchObject({
+      resolution: "exact",
+      attestation: "live",
+      cwdRelation: "different",
+      reason: "Matched source session ID recorded by cmux.",
+    });
+  });
+
+  test("CWD-SEM-2 known equal directories publish the neutral same relation", () => {
+    const target = resolveAgentTarget(
+      agent({ sourceSessionId: "same-cwd-relation", cwd: "/repos/shared/" }),
+      [{
+        surfaceId: "SURFACE-SAME",
+        cwd: "/repos/shared",
+        sourceSessionIds: ["same-cwd-relation"],
+      }],
+    );
+
+    expect(target.cwdRelation).toBe("same");
+  });
+
+  test("CWD-SEM-3 conflicting exact identity remains quarantined and unwritable", () => {
+    const target = resolveAgentTarget(
+      agent({ sourceSessionId: "conflicted-session", cwd: "/repos/shared" }),
+      [{
+        surfaceId: "SURFACE-CONFLICTED",
+        cwd: "/repos/shared",
+        sourceSessionIds: ["conflicted-session"],
+        identityConflict: "two live session files claim this pane",
+      }],
+    );
+
+    expect(target).toEqual({
+      resolution: "ambiguous",
+      reason: "cmux surface is quarantined because exact identity evidence conflicts: two live session files claim this pane",
+    });
+    expect(canWriteToTarget(target)).toBe(false);
+  });
+
   test("a live hook-store surface outranks remembered target IDs", () => {
     readHookSessionStores(join(import.meta.dir, "fixtures", "cmux-hook-sessions"));
     const hookSurface = {
@@ -104,12 +154,12 @@ describe("safe cmux target resolution", () => {
       paneId: "PANE-EXACT",
       resolution: "exact",
       surfaceCwd: "/Users/emilionunezgarcia/Developer/the-mountain",
-      cwdMismatch: true,
+      cwdRelation: "different",
     });
-    expect(target.reason).toContain("differs from session cwd");
+    expect(target.reason).toBe("Matched source session ID recorded by cmux.");
   });
 
-  test("exact session match with agreeing cwd does not flag a mismatch", () => {
+  test("exact session match with agreeing cwd publishes the same-directory relation", () => {
     const target = resolveAgentTarget(
       agent({
         sourceSessionId: "019f86c4-codex-7000-aeb8-26e2cfd0e8ec",
@@ -121,8 +171,8 @@ describe("safe cmux target resolution", () => {
     expect(target).toMatchObject({
       resolution: "exact",
       surfaceCwd: "/Users/emilionunezgarcia/Developer/the-mountain",
+      cwdRelation: "same",
     });
-    expect(target.cwdMismatch).toBeUndefined();
   });
 
   test("the only exact cwd match is allowed as an explicit fallback", () => {

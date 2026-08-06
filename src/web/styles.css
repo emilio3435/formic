@@ -1492,17 +1492,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .ri-tokens .ri-value { font-weight: 700; font-size: 13px; }
 .ri-cell.is-unknown .ri-value { color: var(--faint); font-weight: 500; font-size: 11px; }
 
-/* De-noise: the terminal / source naming tags left the row. Only a cwd mismatch
-   keeps a mark — a small ember dot (role="img" + aria-label); the full sentence
-   rides the row title + aria-label and the drawer. Indicator ink, no flood. */
-.source-mismatch-dot {
-  flex: none;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--ember);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ember) 22%, transparent);
-}
 /* Server-health mark — the server's own /api/health verdict, beside the
    connection badge that carries this browser's view. Hidden entirely while the
    server calls itself healthy, so it is a mark that only ever means trouble:
@@ -1524,9 +1513,8 @@ body.feed-frozen .programs { opacity: 0.62; }
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--failed) 22%, transparent);
 }
 
-/* Watch-only mark — the Access column's replacement. Same geometry as
-   .source-mismatch-dot so the row's dot vocabulary stays one shape; the ink
-   carries the difference. Quarantined is a problem to fix (failed ink); plain
+/* Watch-only mark — the Access column's replacement. Its compact geometry keeps
+   the row quiet; the ink carries the difference. Quarantined is a problem to fix (failed ink); plain
    watch-only is a neutral fact (clay), deliberately quiet so it reads as
    information rather than an alert. Hollow vs filled also separates them for
    anyone who cannot distinguish the hues. */
@@ -2518,17 +2506,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    because it stops a running process; remove/rerun stay neutral. */
 .triage-cancel { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
 .triage-remove, .triage-rerun { color: var(--faint); }
-/* De-noised mismatch: the quiet line keeps a visible ember dot; the full
-   sentence lives in the title tooltip. */
-.inspector-source-name.is-mismatch::before {
-  content: "";
-  display: inline-block;
-  width: 0.38rem;
-  height: 0.38rem;
-  margin-right: 0.32rem;
-  border-radius: 50%;
-  background: var(--ember);
-}
 /* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
    holds DOM order without spending a flex gap. */
 .inspector-vitals:empty { display: none; }
@@ -2761,10 +2738,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .label-copy { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
 .label-value { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .label-source { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
-.inspector-source-name.is-mismatch {
-  color: color-mix(in srgb, var(--ember) 75%, var(--ink));
-  font-weight: 650;
-}
 .label-status { margin: 0; color: var(--faint); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }

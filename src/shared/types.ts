@@ -217,13 +217,8 @@ export interface CmuxTarget {
   paneId?: string;
   /** Live cmux pane cwd when known — may differ from the provider session cwd. */
   surfaceCwd?: string;
-  /**
-   * True when an exact session/process link points at a cmux pane whose cwd
-   * disagrees with the provider session cwd (common for home-cwd orchestrators
-   * sitting inside a project-titled workspace). Controls may still be linked;
-   * display must not pretend the agent "lives" in the pane folder.
-   */
-  cwdMismatch?: boolean;
+  /** Neutral relation between provider current cwd and terminal shell cwd. */
+  cwdRelation?: "same" | "different";
   /* HOW the surface was attested, which `resolution` alone cannot say.
 
      "hook-store" — cmux's hook-session store binds this session to a surface
@@ -358,7 +353,10 @@ export interface AgentSnapshot {
      carries the old derived string until the client cuts over. */
   identity?: AgentIdentity;
   programId: string;
+  /** Provider-recorded current/tool working directory. */
   cwd?: string;
+  /** Working directory recorded by the provider hook at process launch. */
+  launchCwd?: string;
   model?: string;
   effort?: string;
   task?: string;

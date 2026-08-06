@@ -130,6 +130,31 @@ function appFetch() {
 }
 
 describe("read-only identity debug endpoint", () => {
+  test("CWD-SEM-2 debug summaries report the optional neutral directory relation", async () => {
+    const fetch = appFetch();
+    const current = snapshot();
+    current.programs[0]!.agents[0]!.target.cwdRelation = "different";
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: async () => current,
+      surfaces: () => surfaces,
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    fetch.dispose();
+    const relationFetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const response = await relationFetch(new Request("http://127.0.0.1:4701/api/debug/identity"));
+    const body = await response.json();
+
+    expect(body.agents[0]).toMatchObject({ cwdRelation: "different" });
+    expect(body.agents[1]).not.toHaveProperty("cwdRelation");
+    relationFetch.dispose();
+  });
+
   test("GET /api/debug/identity summarizes every agent with tier and conflict flags", async () => {
     const fetch = appFetch();
     const response = await fetch(new Request("http://127.0.0.1:4701/api/debug/identity"));
@@ -152,7 +177,6 @@ describe("read-only identity debug endpoint", () => {
         tier: "session",
         surfaceId: "SURFACE-HEALTH",
         quarantined: false,
-        cwdMismatch: false,
         bindingBridged: false,
       },
       {
@@ -160,7 +184,6 @@ describe("read-only identity debug endpoint", () => {
         provider: "codex",
         resolution: "ambiguous",
         quarantined: true,
-        cwdMismatch: false,
         bindingBridged: false,
       },
     ]);

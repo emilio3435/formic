@@ -563,6 +563,31 @@ describe("a record carries the verdict it was filed with", () => {
     processIds: [4242],
   };
 
+  test("CWD-PROV-1 archive retains launch cwd and strips all launch command material", async () => {
+    const { files } = virtualFiles();
+    const store = await JsonArchiveStore.open(
+      "/virtual/cwd-provenance.json",
+      files,
+      () => Date.parse("2026-08-04T11:00:00.000Z"),
+    );
+    const withSentinels = {
+      ...source,
+      launchCwd: "/repos/launch",
+      launchCommand: {
+        executablePath: "SENTINEL_EXECUTABLE_MUST_NOT_ARCHIVE",
+        arguments: ["SENTINEL_ARGUMENT_MUST_NOT_ARCHIVE"],
+        workingDirectory: "/repos/launch",
+      },
+    } as CollectedAgent;
+
+    await store.record([withSentinels]);
+    const stored = store.archivedAgents()[0];
+
+    expect(stored?.launchCwd).toBe("/repos/launch");
+    expect(JSON.stringify(stored)).not.toContain("SENTINEL_");
+    expect(stored).not.toHaveProperty("launchCommand");
+  });
+
   test("the verdict and the evidence discriminant survive a write and a reload", async () => {
     const { files } = virtualFiles();
     const now = () => Date.parse("2026-08-04T11:00:00.000Z");

@@ -289,6 +289,7 @@ function archiveCopy(
        happened to be when it was filed. */
     identity: agent.identity,
     cwd: agent.cwd,
+    launchCwd: agent.launchCwd,
     originCwd: agent.originCwd,
     model: agent.model,
     effort: agent.effort,

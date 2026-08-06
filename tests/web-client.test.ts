@@ -25,6 +25,58 @@ beforeAll(async () => {
   styles = readFileSync(join(import.meta.dir, "../src/web/styles.css"), "utf8");
 });
 
+test("CWD-COPY-1 linked controls stay exact while directory provenance is neutral and explicit", () => {
+  const linked = agent({
+    cwd: "/Users/example",
+    launchCwd: "/repos/cooper-scheduler",
+    repo: {
+      repoKey: "cooper",
+      repoName: "cooper-scheduler",
+      worktreePath: "/repos/cooper-scheduler",
+      ephemeral: false,
+    },
+    target: {
+      resolution: "exact",
+      attestation: "hook-store",
+      surfaceId: "SURFACE-CWD-COPY",
+      workspaceId: "WORKSPACE-CWD-COPY",
+      workspaceTitle: "Cooper terminal",
+      surfaceCwd: "/repos/cooper-terminal",
+      cwdRelation: "different",
+    },
+  });
+  const rendered = withDom(() => M.renderEvidence(linked));
+  const text = textOf(rendered);
+  const row = withDom(() => M.renderAgentRow(linked, { id: "cooper", name: "Cooper", agents: [linked] }));
+
+  expect(text).toContain("Agent current folder");
+  expect(text).toContain("Agent launch folder");
+  expect(text).toContain("Terminal shell folder");
+  expect(text).toContain("Target repository");
+  expect(text).toContain("Linked for Focus and Send.");
+  expect(text).toContain("Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.");
+  expect(text).not.toContain("mismatch");
+  expect(text).not.toContain("≠");
+  expect(findAll(row, (node) => node.attributes?.role === "img")).toHaveLength(0);
+});
+
+test("CWD-SEM-2 an explicit surface rename still wins when known directories differ", async () => {
+  const linked = agent({
+    surfaceTitle: "Operator pane name",
+    target: {
+      resolution: "exact",
+      surfaceId: "SURFACE-RENAMED",
+      workspaceId: "WORKSPACE-RENAMED",
+      workspaceTitle: "Workspace-generated title",
+      cwdRelation: "different",
+    },
+  });
+
+  await withState({ aliases: new Map() }, () => {
+    expect(M.agentName(linked)).toBe("Operator pane name");
+  });
+});
+
 /* The legacy status word a fixture asks for, translated into the lifecycle the
    server would actually publish beside it. Fixtures here are hand-written wire
    payloads, and the server puts `lifecycle` on every agent now — one without it
@@ -2528,7 +2580,7 @@ describe("redesigned network contracts (source-level)", () => {
     expect(M.agentName(linked)).toBe("Ridge terminal");
     expect(M.agentName({
       ...linked,
-      target: { ...linked.target, cwdMismatch: true },
+      target: { ...linked.target, cwdRelation: "different" },
     })).toBe("Codex · ridge");
 
     const program = { id: "p1", name: "P", agents: [linked] };
@@ -2800,7 +2852,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     }
   });
 
-  test("(c) naming noise leaves the row — mismatch keeps a marked, accessible indicator; detail folds to title/aria", () => {
+  test("(c) naming noise leaves the row while terminal context folds to title and aria", () => {
     const rowSrc = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(rowSrc).toBeDefined();
     // The visible "terminal: " / "source: " / "cwd differs" text tags are gone
@@ -2810,22 +2862,20 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(rowSrc).not.toContain('" · cwd differs"');
     // De-noised detail is reused from the drawer's helper, not re-forked.
     expect(rowSrc).toContain("fullSourceDetail(agent)");
-    // Executed: a cwd-mismatch session renders exactly one small marked indicator
-    // carrying an accessible label — and no naming prose survives on the row.
-    const mism = agent({
-      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true, workspaceTitle: "ridge-term" },
+    // Executed: different directories add no warning mark or visible naming prose.
+    const separate = agent({
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdRelation: "different", workspaceTitle: "ridge-term" },
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const row: any = withDom(() => M.renderAgentRow(mism, program));
-    const dot = findByClass(row, "source-mismatch-dot");
-    expect(dot).not.toBeNull();
-    expect(dot.attributes["aria-label"]).toBeTruthy();
+    const row: any = withDom(() => M.renderAgentRow(separate, program));
+    expect(findAll(row, (node) => node.attributes?.role === "img")).toHaveLength(0);
+    expect(row.attributes.title).toBe("Terminal: ridge-term");
     expect(textOf(row)).not.toContain("cwd differs");
     expect(textOf(row)).not.toContain("terminal:");
-    // A calm (non-mismatch) session shows no source mark at all on the row.
+    // A same-directory session stays equally free of source marks.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const calmRow: any = withDom(() => M.renderAgentRow(agent(), program));
-    expect(findByClass(calmRow, "source-mismatch-dot")).toBeNull();
+    expect(findAll(calmRow, (node) => node.attributes?.role === "img")).toHaveLength(0);
   });
 
   test("(c2) watch-only rows carry a dot instead of an Access column, and only when it informs", () => {
@@ -2953,9 +3003,9 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
   /* ROW DIET. The terminal breadcrumb used to ride .row-identity-tags on every
      linked row. It is a true fact and a useful one, and it is not a control-
      safety signal — knowing which pane Focus opens does not change whether an
-     instruction is safe to send, which the cwd-mismatch dot beside it does. So
-     it moved into the drawer, and these assert BOTH halves of that move: gone
-     from the row, present in Evidence, and still spoken to a screen reader. */
+     instruction is safe to send. It moved into the drawer, and these assert
+     BOTH halves of that move: gone from the row, present in Evidence, and still
+     spoken to a screen reader. */
 
   /* dtdd appends a <dd>'s value as a bare string, and this block's fake `append`
      stores it verbatim rather than wrapping it in a text node — so the shared
@@ -2995,7 +3045,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     const twoPart = clean({
       nickname: "Scout",
       cwd: "/Users/emilio",
-      target: { resolution: "unique-cwd", surfaceId: "s2", workspaceId: "w2", workspaceTitle: "CODEX · platform", surfaceCwd: "/srv/app/web", cwdMismatch: true },
+      target: { resolution: "unique-cwd", surfaceId: "s2", workspaceId: "w2", workspaceTitle: "CODEX · platform", surfaceCwd: "/srv/app/web", cwdRelation: "different" },
     });
     expect(deepText(withDom(() => M.renderRowFacts(twoPart)))).toContain("CODEX · platform · web");
 
@@ -3031,15 +3081,13 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(facts).not.toContain("Running opus where the policy says grok");
     expect(facts).toContain("role");
 
-    // The two safety-critical dots are exactly what STAYED: they change what the
-    // operator can safely do, which is the test the four departures failed.
+    // The control-safety dot stays because it changes what the operator can do.
     const risky = clean({
       controlState: "quarantined",
-      target: { resolution: "ambiguous", cwdMismatch: true },
+      target: { resolution: "ambiguous" },
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const riskyRow: any = withDom(() => M.renderAgentRow(risky, program));
-    expect(findByClass(riskyRow, "source-mismatch-dot")).not.toBeNull();
     expect(findByClass(riskyRow, "control-dot")).not.toBeNull();
   });
 
@@ -4083,9 +4131,11 @@ describe("agent drawer — Thread · Evidence", () => {
     expect(kinds.join(" ")).toContain("room");
   });
 
-  test("Evidence carries Learn-style tooltips for cwd mismatch and token scope", () => {
+  test("Evidence carries neutral directory provenance and token-scope tooltips", () => {
     const evidence = withDom(() => M.renderEvidence(agent({
       cwd: "/repos/session",
+      launchCwd: "/repos/launch",
+      repo: { repoKey: "repo", repoName: "repo", worktreePath: "/repos/target", ephemeral: false },
       target: {
         resolution: "exact",
         workspaceId: "WORKSPACE-1",
@@ -4093,7 +4143,7 @@ describe("agent drawer — Thread · Evidence", () => {
         paneId: "PANE-1",
         workspaceTitle: "Ridge",
         surfaceCwd: "/repos/pane",
-        cwdMismatch: true,
+        cwdRelation: "different",
       },
       tokens: {
         provenance: "observed",
@@ -4106,17 +4156,18 @@ describe("agent drawer — Thread · Evidence", () => {
     })));
     const hints = findAll(evidence, (node) => typeof node.attributes?.title === "string")
       .map((node) => node.attributes.title);
-    expect(hints).toContain(
-      "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).",
-    );
+    expect(hints).toContain("The current working directory reported by the provider session.");
+    expect(hints).toContain("The working directory recorded by the provider hook when the process launched.");
+    expect(hints).toContain("The current directory reported by terminal discovery.");
+    expect(hints).toContain("The resolved repository worktree that owns grouping and repository facts.");
     expect(hints).toContain(
       "Tokens for the latest model call only — not the cumulative session total.",
     );
     expect(hints).toContain(
       "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.",
     );
-    expect(textOf(evidence)).toContain("Linked to terminal: Ridge for Focus and Send");
-    expect(textOf(evidence)).toContain("session cwd ≠ pane folder");
+    expect(textOf(evidence)).toContain("Linked for Focus and Send.");
+    expect(textOf(evidence)).toContain("Claude’s tool session and the terminal shell maintain separate working directories.");
     expect(buttonsOf(evidence).map((button) => button.attributes.title)).toEqual([
       "WORKSPACE-1",
       "SURFACE-1",
@@ -4220,26 +4271,22 @@ describe("verdict head — act from the top (B2)", () => {
     expect((drawer.match(/inspector-source-name/g) || []).length).toBe(1);
     expect(drawer).toContain("quietSourceLine(agent)");
     expect(drawer).toContain("fullSourceDetail(agent)");
-    expect(drawer).not.toContain('session cwd ≠ pane folder"');
-    // The mismatch state keeps a visible ember mark on the quiet line.
-    expect(styles).toMatch(/\.inspector-source-name\.is-mismatch::before\s*\{[^}]*var\(--ember\)/);
+    expect(drawer).toContain('class: "inspector-source-name"');
   });
 
-  test("quietSourceLine goes quiet when the terminal title is the shown name; the mismatch sentence moves to fullSourceDetail", () => {
+  test("quietSourceLine keeps useful terminal context for separate directories without warning language", () => {
     // Terminal title IS the display name → no source line at all.
     const matching = agent({ target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane" } });
     expect(M.quietSourceLine(matching)).toBeNull();
     expect(M.fullSourceDetail(matching)).toBeNull();
 
-    // cwd mismatch → the quiet line is short; the explanation lives in the tooltip.
-    const mismatched = agent({
+    // Separate directories keep the terminal name as neutral destination context.
+    const separate = agent({
       cwd: "/Users/op",
-      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdMismatch: true },
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdRelation: "different" },
     });
-    expect(M.quietSourceLine(mismatched)).toBe("Terminal: ridge-pane");
-    expect(M.quietSourceLine(mismatched)).not.toContain("≠");
-    expect(M.fullSourceDetail(mismatched)).toContain("Terminal: ridge-pane");
-    expect(M.fullSourceDetail(mismatched)).toContain("Session cwd ≠ pane folder");
+    expect(M.quietSourceLine(separate)).toBe("Terminal: ridge-pane");
+    expect(M.fullSourceDetail(separate)).toBe("Terminal: ridge-pane");
 
     // No terminal title, no custom name → still quiet.
     expect(M.quietSourceLine(agent())).toBeNull();
@@ -4302,14 +4349,14 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
     expect(withDom(() => M.verdictGate(agent(), "healthy"))).toBeNull();
   });
 
-  test("cwd mismatch keeps its mark even when the shown name equals the terminal title", () => {
+  test("separate directories retain terminal context even when the shown name equals the terminal title", () => {
     const aliasLike = agent({
       nickname: "Ridge pane",
-      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdMismatch: true },
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdRelation: "different" },
     });
     expect(M.quietSourceLine(aliasLike)).toBe("Terminal: Ridge pane");
-    expect(M.fullSourceDetail(aliasLike)).toContain("Session cwd ≠ pane folder");
-    // Without the mismatch the same identity stays quiet.
+    expect(M.fullSourceDetail(aliasLike)).toBe("Terminal: Ridge pane");
+    // Without separate directories the same identity stays quiet.
     const calm = agent({
       nickname: "Ridge pane",
       target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane" },
@@ -5872,7 +5919,7 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       ["transcriptTail", { transcriptTail: "…tail" }],
       ["cwd", { cwd: "/repos/x" }],
       ["target routing", { target: { resolution: "ambiguous", surfaceId: "s1", workspaceId: "w1" } }],
-      ["cwdMismatch", { target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdMismatch: true } }],
+      ["cwdRelation", { target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", cwdRelation: "different" } }],
       ["modelPolicy", { modelPolicy: { state: "violation", summary: "off policy" } }],
       ["nextAction", { nextAction: "Review the diff" }],
       ["artifacts", { artifacts: [{ kind: "file", label: "log", path: "/tmp/a.log" }] }],
@@ -6500,11 +6547,11 @@ describe("FE-B: harness-backed client behavior", () => {
        even when the pane's folder differs from where the session runs — which
        is the normal shape of an orchestrator: parked in the home directory,
        working in a project. A WORKSPACE title is broader context and stays
-       suppressed on that mismatch, or a home-cwd orchestrator would borrow the
+       suppressed when directories differ, or a home-cwd orchestrator would borrow the
        name of whatever project it was parked beside. */
     const a = named({
       surfaceTitle: "Agent identity and naming contract",
-      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdMismatch: true },
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdRelation: "different" },
     });
     const program = { id: "p", name: "the-mountain-main", agents: [a] };
 
@@ -6514,11 +6561,11 @@ describe("FE-B: harness-backed client behavior", () => {
     });
   });
 
-  test("a workspace title still loses to the fleet's name on a cwd mismatch", async () => {
+  test("a workspace title still loses to the fleet's name when directories differ", async () => {
     // The contrast case. Without it the two tests above would pass on a client
     // that had simply started trusting every title cmux reports.
     const a = named({
-      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdMismatch: true },
+      target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Hormiga Dormida", cwdRelation: "different" },
     });
     const program = { id: "p", name: "the-mountain-main", agents: [a] };
 
@@ -8301,7 +8348,7 @@ describe("FE-B: harness-backed client behavior", () => {
       ["lastHumanMessage (row summary)", { lastHumanMessage: "ship the fix" }, {}],
       ["role chip", { role: "verifier" }, {}],
       ["model policy chip", { modelPolicy: { state: "violation", summary: "off policy" } }, {}],
-      ["cwd mismatch dot", { target: { resolution: "exact", surfaceId: "s1", cwdMismatch: true } }, {}],
+      ["cwd relation", { target: { resolution: "exact", surfaceId: "s1", cwdRelation: "different" } }, {}],
       ["terminal breadcrumb", { target: { resolution: "exact", surfaceId: "s1", workspaceTitle: "ridge" } }, {}],
       ["staleness fact", { updatedAt: new Date(Date.now() - 40 * 60_000).toISOString() }, {}],
       ["selection highlight", {}, { selectedId: "codex:a1" }],

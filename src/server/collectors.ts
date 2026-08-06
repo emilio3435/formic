@@ -755,8 +755,9 @@ function createClaudeParser(): IncrementalParser {
   let identity: JsonRecord | undefined;
   let cwd: string | undefined;
   /* Assigned once and never reassigned — that is the whole mechanism. A Claude
-     transcript records cwd per entry, so `cwd` below tracks the shell; the name
-     must not. Reproduced on the session that wrote this file: six cwd changes
+     transcript records cwd per entry, so `cwd` below tracks the provider's
+     current tool directory; the name must not. Reproduced on the session that
+     wrote this file: six cwd changes
      in four minutes from read-only `git` and `ls`, four renames, and one
      interval published under a different lane's name entirely. Because the
      transcript is append-only, the first recorded cwd is the same on a cold
@@ -1138,6 +1139,7 @@ function attachHookFacts(
       const observedAlive = hookProcessAlive(record, starts);
       const retainedAlive = agent.processIds?.includes(record.pid) ? agent.processAlive : undefined;
       const cwd = agent.cwd ?? record.cwd;
+      const launchCwd = record.launchCommand?.workingDirectory;
       const processAlive = observedAlive ?? retainedAlive;
       const observedParentAgentId = observedParents?.get(agent.id);
       const hookLifecycleAtDate = new Date(record.updatedAt * 1_000);
@@ -1153,6 +1155,7 @@ function attachHookFacts(
       return {
         ...agent,
         cwd,
+        ...(launchCwd ? { launchCwd } : {}),
         hookLifecycle: record.agentLifecycle,
         ...(hookLifecycleAt ? { hookLifecycleAt } : {}),
         /* Only claim the pid as this session's when a start time makes it

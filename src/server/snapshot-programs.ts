@@ -122,12 +122,14 @@ export function programFor(
   agent: CollectedAgent,
   hints: readonly ProgramHint[],
   surface?: CmuxSurface,
-  exactSurface = false,
+  allowSurfaceProjectEvidence = false,
   repo?: RepoIdentity,
 ): Omit<ProgramSnapshot, "agents"> {
   const configured =
-    configuredProgram(hints, [agent.cwd, agent.id]) ??
-    (exactSurface ? configuredProgram(hints, [surface?.cwd, surface?.workspaceTitle]) : undefined) ??
+    configuredProgram(hints, [agent.id]) ??
+    (repo ? configuredProgram(hints, [repo.worktreePath, repo.repoKey]) : undefined) ??
+    (allowSurfaceProjectEvidence ? configuredProgram(hints, [surface?.cwd, surface?.workspaceTitle]) : undefined) ??
+    (!repo ? configuredProgram(hints, [agent.cwd]) : undefined) ??
     configuredProgram(hints, [agent.task, agent.displayName]);
   if (configured) {
     return { id: configured.id, name: configured.name, purpose: configured.purpose, path: configured.path };
@@ -148,7 +150,7 @@ export function programFor(
       groupPath: [repo.repoKey, worktreeKey],
     };
   }
-  const cwd = exactSurface && surface?.cwd ? surface.cwd : agent.cwd;
+  const cwd = allowSurfaceProjectEvidence && surface?.cwd ? surface.cwd : agent.cwd;
   if (!cwd) return { id: `${agent.provider}-unassigned`, name: `${agent.provider.toUpperCase()} · No project` };
   /* After the configured hints, so an explicit program hint still wins — an
      operator who has named a program means it, whatever directory it ran in. */

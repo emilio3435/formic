@@ -448,6 +448,47 @@ test("a declared lane groups under its target repository instead of its non-git 
   }
 });
 
+test("CWD-GROUP-1 an unresolved declared path falls through to the sidebar repository", async () => {
+  const missingDeclaredRoot = await mkdtemp(join(tmpdir(), "anthill-missing-declared-repo-"));
+  try {
+    const source = collected({ cwd: missingDeclaredRoot, originCwd: missingDeclaredRoot });
+    const declared = { ...manifest(), repoRoot: join(missingDeclaredRoot, "gone") };
+    const sidebarRepo = resolveRepoIdentity(process.cwd());
+    expect(sidebarRepo).not.toBeNull();
+    if (!sidebarRepo) throw new Error("test checkout must be a git repository");
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        workspaceId: "WORKSPACE-CWD-FALLTHROUGH",
+        surfaceId: "SURFACE-CWD-FALLTHROUGH",
+        cwd: missingDeclaredRoot,
+        sourceSessionIds: [source.sourceSessionId],
+      }],
+      sidebarWorkspaces: [{
+        workspaceId: "WORKSPACE-CWD-FALLTHROUGH",
+        projectRootPath: process.cwd(),
+        branch: "sidebar/observed",
+        dirty: false,
+        pullRequestUrls: [],
+      }],
+      runManifests: [declared],
+      archiveStore,
+      now: new Date("2026-08-05T12:01:30.000Z"),
+    });
+    const published = snapshot.programs[0]?.agents[0];
+
+    expect(published?.repo).toMatchObject({
+      repoKey: sidebarRepo.repoKey,
+      worktreePath: sidebarRepo.worktreePath,
+      branch: "sidebar/observed",
+    });
+    expect(published?.programId).toBe("run:manifest-run");
+  } finally {
+    await rm(missingDeclaredRoot, { recursive: true, force: true });
+  }
+});
+
+
 test("an operator program hint still outranks declared run grouping", () => {
   const source = collected();
   const snapshot = buildSnapshot({

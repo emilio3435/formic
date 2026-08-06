@@ -62,6 +62,57 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("CWD-GROUP-1 launch repository groups an exact-linked home-cwd agent without weakening the link", () => {
+    const source = collected({
+      cwd: HOME_DIR,
+      launchCwd: process.cwd(),
+      sourceSessionId: "launch-repo",
+      id: "codex:launch-repo",
+    });
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        ...uniqueSurface,
+        cwd: process.cwd(),
+        sourceSessionIds: [source.sourceSessionId],
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs[0]?.agents[0];
+
+    expect(published?.repo?.worktreePath).toBe(process.cwd());
+    expect(published?.launchCwd).toBe(process.cwd());
+    expect(published?.target).toMatchObject({
+      resolution: "exact",
+      cwdRelation: "different",
+    });
+    expect(published?.controls.find(({ action }) => action === "instruct")?.enabled).toBe(true);
+  });
+
+  test("CWD-GROUP-1 current repository outranks a different terminal folder", () => {
+    const source = collected({
+      cwd: process.cwd(),
+      launchCwd: HOME_DIR,
+      sourceSessionId: "current-repo",
+      id: "codex:current-repo",
+    });
+    const snapshot = buildSnapshot({
+      agents: [source],
+      surfaces: [{
+        ...uniqueSurface,
+        cwd: HOME_DIR,
+        sourceSessionIds: [source.sourceSessionId],
+      }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs[0]?.agents[0];
+
+    expect(published?.repo?.worktreePath).toBe(process.cwd());
+    expect(published?.target.cwdRelation).toBe("different");
+  });
+
   test("publishes cmux hook lifecycle for downstream classification", () => {
     const snapshot = buildSnapshot({
       agents: [collected({ hookLifecycle: "needsInput" })],
@@ -413,7 +464,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.programs[0]?.agents[0]?.surfaceTitle).toBeUndefined();
   });
 
-  test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
+  test("exact cmux link with disagreeing pane cwd keeps home grouping and reports the relation", () => {
     const source = collected({
       cwd: HOME_DIR,
       task: "Continue the platform review.",
@@ -442,7 +493,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(agent?.cwd).toBe(HOME_DIR);
     expect(agent?.target).toMatchObject({
       resolution: "exact",
-      cwdMismatch: true,
+      cwdRelation: "different",
       workspaceTitle: "CODEX - Platform UX",
       surfaceCwd: "/Users/emilionunezgarcia/Developer/LaHormigaDormida",
     });

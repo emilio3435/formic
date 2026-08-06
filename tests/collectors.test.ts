@@ -34,6 +34,48 @@ const HOME_DIR = homedir();
 const nowMs = Date.parse("2026-07-21T23:31:00.000Z");
 
 describe("collector identity and usage truth", () => {
+  test("CWD-PROV-1 hook launch cwd is published without launch command material", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-cwd-provenance-"));
+    const sessions = join(home, ".codex", "sessions");
+    const hookRoot = join(home, ".cmuxterm");
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    const currentCwd = join(home, "current");
+    const launchCwd = join(home, "launch");
+    mkdirSync(sessions, { recursive: true });
+    mkdirSync(hookRoot, { recursive: true });
+    mkdirSync(currentCwd);
+    mkdirSync(launchCwd);
+    writeFileSync(join(sessions, "session.jsonl"), `${JSON.stringify({
+      type: "session_meta",
+      timestamp: new Date().toISOString(),
+      payload: { id: sessionId, cwd: currentCwd },
+    })}\n`);
+    writeFileSync(join(hookRoot, "codex-hook-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: {
+        [sessionId]: {
+          sessionId,
+          surfaceId: "HOOK-SURFACE",
+          workspaceId: "HOOK-WORKSPACE",
+          cwd: join(home, "hook-current"),
+          pid: 4242,
+          agentLifecycle: "running",
+          launchCommand: {
+            executablePath: "SENTINEL_EXECUTABLE_MUST_NOT_PUBLISH",
+            arguments: ["SENTINEL_ARGUMENT_MUST_NOT_PUBLISH"],
+            workingDirectory: launchCwd,
+          },
+          updatedAt: 1_785_933_010.5,
+        },
+      },
+    }));
+
+    const collected = (await collectSessions(home)).codex.value[0];
+
+    expect(collected).toMatchObject({ cwd: currentCwd, launchCwd });
+    expect(JSON.stringify(collected)).not.toContain("SENTINEL_");
+  });
+
   test("OMP exposes its final observed turn separately from the cumulative session total", () => {
     const agent = parseOmpJsonl(fixture("omp-session.jsonl"), {
       sourcePath:

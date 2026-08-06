@@ -207,8 +207,7 @@ import {
    The Access column was dropped in 9d79c76 (instrument cluster) and left no
    sighted equivalent: control state survived only in the row aria-label, so an
    operator could not see which rows are watch-only without opening a drawer.
-   This restores it as a dot, on the `source-mismatch-dot` precedent — a mark
-   plus a title/aria sentence, never a column.
+   This restores it as a compact mark plus a title/aria sentence, never a column.
 
    A dot on EVERY row carries no information, so it is shown only where it
    changes what the operator can do:
@@ -240,7 +239,6 @@ const CONTROL_HINTS = {
 const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
 const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
 const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
-const CWD_MISMATCH_HINT = "Session cwd ≠ pane folder: the provider session working directory disagrees with the cmux terminal pane folder (common when the process started in ~ and the shell later moved).";
 const GLOSSARY = {
   // Operate
   "running for": "Wall-clock time since this agent started running.",
@@ -249,8 +247,10 @@ const GLOSSARY = {
   model: "The model this agent is currently running on.",
   context: "How big the latest model call is against the model's context window.",
   // Evidence
-  "session cwd": "The folder on disk the provider session reports as its working directory.",
-  "terminal folder": CWD_MISMATCH_HINT,
+  "Agent current folder": "The current working directory reported by the provider session.",
+  "Agent launch folder": "The working directory recorded by the provider hook when the process launched.",
+  "Terminal shell folder": "The current directory reported by terminal discovery.",
+  "Target repository": "The resolved repository worktree that owns grouping and repository facts.",
   "session id": "The provider's own ID for this session, prefixed by the provider name.",
   git: "The branch and commit the agent's working copy is on; flags uncommitted changes.",
   "control link": "Which cmux terminal this session is wired to for Focus and Send, and how confidently it was matched.",
@@ -7814,8 +7814,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const terminalCrumb = terminalBreadcrumb(agent, displayName);
   const staleFact = rowStalenessText(agent);
   const sourceName = sourceAgentName(agent);
-  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  // The terminal / source / cwd-mismatch naming detail leaves the visible row.
+  // The terminal / source naming detail stays off the visible row.
   // Reuse the drawer's helper (never re-fork the naming logic) to fold the full
   // sentence into the row tooltip + aria-label; the drawer still carries it too.
   const sourceDetail = fullSourceDetail(agent);
@@ -7867,17 +7866,6 @@ function renderAgentRow(agent, program, opts = {}) {
          rides the existing identity-tags line rather than adding a row, and it
          is the same short id the drawer and the copy-id buttons speak, so an
          operator can carry it between the two. */
-      // De-noised: only the cwd-mismatch state keeps a visible mark — a small
-      // ember dot with an accessible label. The full sentence rides the row
-      // tooltip + aria-label and the drawer; no naming prose on the row.
-      cwdMismatch
-        ? el("span", {
-          class: "source-mismatch-dot",
-          role: "img",
-          "aria-label": "Working directory differs from the terminal pane. " + (sourceDetail || CWD_MISMATCH_HINT),
-          title: sourceDetail || CWD_MISMATCH_HINT,
-        })
-        : null,
       // Watch-only mark: the Access column's sighted replacement. See
       // watchOnlyMark() for why it stays silent on most rows.
       watchOnly
@@ -7894,10 +7882,9 @@ function renderAgentRow(agent, program, opts = {}) {
          that owns them.
 
          What stayed is the test: does this pixel change what the operator can
-         safely DO with this session? The two dots above pass — a cwd mismatch
-         means Focus opens a folder that is not the session's, and watch-only
-         means Send is off — so they are control-safety marks rather than
-         metadata, and GOAL.md keeps those on the row. The four that left are
+         safely DO with this session? Watch-only means Send is off, so it is a
+         control-safety mark rather than metadata, and GOAL.md keeps those on
+         the row. The four that left are
          facts ABOUT the session, true and worth reading, and none of them
          changes whether an instruction is safe to send. All four are still in
          the row's aria-label, so nothing left the row for a screen reader. */
@@ -8895,11 +8882,11 @@ function renderProgramDrawer(pane, view) {
    B4 reuses both for the other drawer types' heads. */
 function quietSourceLine(agent) {
   const terminal = terminalSourceName(agent);
-  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
+  const directoriesDiffer = agent.target && agent.target.cwdRelation === "different";
   if (terminal) {
-    // A cwd mismatch must keep its mark even when the shown name happens to
-    // equal the terminal title — only calm matching identities go quiet.
-    if (terminal === agentName(agent) && !mismatch) return null;
+    // When directories differ, keep the terminal name as useful destination
+    // context even if it happens to equal the displayed agent name.
+    if (terminal === agentName(agent) && !directoriesDiffer) return null;
     return "Terminal: " + terminal;
   }
   const hasCustomName = state.aliases.has(presentationLabelKey(preferredRenameTarget(agent)))
@@ -8908,10 +8895,7 @@ function quietSourceLine(agent) {
 }
 
 function fullSourceDetail(agent) {
-  const quiet = quietSourceLine(agent);
-  if (!quiet) return null;
-  const mismatch = Boolean(agent.target && agent.target.cwdMismatch);
-  return mismatch ? quiet + " · " + CWD_MISMATCH_HINT : quiet;
+  return quietSourceLine(agent);
 }
 
 /* Ember-outline gate chip for the verdict head — names the blocker when the
@@ -9175,7 +9159,6 @@ function renderAgentDrawer(pane, view) {
      confirm keys existing only to stop the two copies stealing each other's
      focus. */
   const sourceLine = quietSourceLine(agent);
-  const cwdMismatch = Boolean(agent.target && agent.target.cwdMismatch);
   const tag = drawerSessionTag(agent);
   const objective = drawerObjective(agent);
   /* The words only. The hex beside them is the `tag` above, printed under the
@@ -9202,7 +9185,7 @@ function renderAgentDrawer(pane, view) {
       objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
       sourceLine
         ? el("p", {
-          class: "inspector-source-name" + (cwdMismatch ? " is-mismatch" : ""),
+          class: "inspector-source-name",
           title: fullSourceDetail(agent),
           text: sourceLine,
         })
@@ -10356,17 +10339,13 @@ function controlLinkSentence(target) {
   const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
   const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
   if (target.resolution === "exact") {
-    return (terminal ? "Linked to " + terminal + " for Focus and Send" : "Linked for Focus and Send")
-      + " · " + resolution
-      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
-      + ".";
+    return "Linked for Focus and Send.";
   }
   /* A directory match routes a Focus and nothing else. Claiming "for Focus and
      Send" here is the sentence form of the same overclaim the chip made. */
   if (target.resolution === "unique-cwd") {
     return (terminal ? "Focus only, to " + terminal : "Focus only")
       + " · " + resolution + ", not attested by cmux"
-      + (target.cwdMismatch ? " · session cwd ≠ pane folder" : "")
       + ".";
   }
   if (target.resolution === "ambiguous") {
@@ -10386,7 +10365,7 @@ function renderControlLink(target) {
   const sentence = controlLinkSentence(target);
   wrap.append(el("p", {
     class: "evidence-control-sentence",
-    title: target.cwdMismatch ? CWD_MISMATCH_HINT : READY_LINKED_HINT,
+    title: READY_LINKED_HINT,
     text: sentence,
   }));
   const ids = el("div", { class: "evidence-ids" });
@@ -10512,17 +10491,10 @@ function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "session cwd", agent.cwd, { code: true });
-  const sessionCwd = (agent.cwd || "").replace(/\/+$/, "");
-  const surfaceCwd = agent.target && agent.target.surfaceCwd
-    ? String(agent.target.surfaceCwd).replace(/\/+$/, "")
-    : "";
-  if (surfaceCwd && surfaceCwd !== sessionCwd) {
-    dtdd(grid, "terminal folder", agent.target.surfaceCwd, {
-      code: true,
-      hint: CWD_MISMATCH_HINT,
-    });
-  }
+  dtdd(grid, "Agent current folder", agent.cwd, { code: true });
+  dtdd(grid, "Agent launch folder", agent.launchCwd, { code: true });
+  dtdd(grid, "Terminal shell folder", agent.target && agent.target.surfaceCwd, { code: true });
+  dtdd(grid, "Target repository", agent.repo && agent.repo.worktreePath, { code: true });
 
   dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
     ? el("span", {},
@@ -10565,6 +10537,12 @@ function renderEvidence(agent, ui = state) {
   if (grid.childNodes.length) {
     grid.dataset.evidenceSection = "paths & usage";
     panel.append(grid);
+    if (agent.target && agent.target.cwdRelation === "different") {
+      panel.append(el("p", {
+        class: "directory-relation-note",
+        text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
+      }));
+    }
   }
 
   /* Where the row diet's four chips went. They were on every row, and on a

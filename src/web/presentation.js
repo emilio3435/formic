@@ -162,7 +162,7 @@ export function operatorName(agent) {
      is how an operator finds the pane, and which went silent here only while
      the name and the title were the same string. */
   const renamed = typeof agent.surfaceTitle === "string" && agent.surfaceTitle.trim() !== "";
-  if (terminal && !declaredIdentity(agent) && (renamed || !agent.target?.cwdMismatch)) return terminal;
+  if (terminal && !declaredIdentity(agent) && (renamed || agent.target?.cwdRelation !== "different")) return terminal;
   return "";
 }
 

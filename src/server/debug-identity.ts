@@ -18,7 +18,7 @@ export interface IdentityDebugSummary {
   tier?: IdentityTraceTier;
   surfaceId?: string;
   quarantined: boolean;
-  cwdMismatch: boolean;
+  cwdRelation?: "same" | "different";
   bindingBridged: boolean;
 }
 
@@ -30,7 +30,7 @@ function summarize(agent: AgentSnapshot): IdentityDebugSummary {
     tier: agent.identityTrace?.matchedTier,
     surfaceId: agent.target.surfaceId,
     quarantined: agent.controlState === "quarantined",
-    cwdMismatch: agent.target.cwdMismatch === true,
+    cwdRelation: agent.target.cwdRelation,
     bindingBridged: Boolean(
       agent.identityTrace?.bindingBridge && agent.identityTrace.matchedTier === "recorded",
     ),

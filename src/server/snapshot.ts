@@ -305,19 +305,32 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const sidebar = target.workspaceId
       ? sidebarByWorkspace.get(target.workspaceId)
       : undefined;
-    const liveRepoCwd = sidebar?.projectRootPath ?? source.cwd ?? surface?.cwd;
-    const repoCwd = declared?.repoRoot ?? liveRepoCwd;
-    /* A manifest describes the repository the lane is working FOR. When the
-       process itself lives in an orchestrator or scratch checkout, its sidebar
-       branch, dirty bit, head and PR links belong to that other checkout and
-       must not overwrite target-repository truth. */
-    const liveRepoMatchesTarget = !declared?.repoRoot
-      || Boolean(liveRepoCwd && pathIsWithin(liveRepoCwd, declared.repoRoot));
-    const resolvedRepo = repoCwd ? resolveRepoIdentity(repoCwd) : null;
+    const repoCandidates = [
+      declared?.repoRoot,
+      sidebar?.projectRootPath,
+      source.cwd,
+      source.launchCwd,
+      !source.cwd || target.cwdRelation !== "different" ? surface?.cwd : undefined,
+    ];
+    let resolvedRepo: ReturnType<typeof resolveRepoIdentity> = null;
+    for (const candidate of repoCandidates) {
+      if (!candidate) continue;
+      resolvedRepo = resolveRepoIdentity(candidate);
+      if (resolvedRepo) break;
+    }
+    /* Live branch/dirty/PR facts belong to the resolved repository only. A
+       manifest may describe a different checkout than the pane running the
+       orchestrator, and neither one may overwrite the other's repository facts. */
+    const sidebarMatchesRepo = !resolvedRepo || Boolean(
+      sidebar?.projectRootPath && pathIsWithin(sidebar.projectRootPath, resolvedRepo.worktreePath),
+    );
+    const surfaceMatchesRepo = !resolvedRepo || Boolean(
+      surface?.cwd && pathIsWithin(surface.cwd, resolvedRepo.worktreePath),
+    );
     const repo = resolvedRepo
       ? {
           ...resolvedRepo,
-          ...(liveRepoMatchesTarget && sidebar?.branch ? { branch: sidebar.branch } : {}),
+          ...(sidebarMatchesRepo && sidebar?.branch ? { branch: sidebar.branch } : {}),
         }
       : undefined;
     const notification = target.surfaceId
@@ -339,14 +352,13 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           .sort((left, right) =>
             (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))[0]
       : undefined;
-    // Only let the cmux pane own program grouping when the session cwd agrees.
-    // Otherwise a home-cwd orchestrator in a project-titled workspace gets filed
-    // under the wrong program (the bug that made "Settings UX" look like Home).
+    // Pane titles and folders are project evidence only when known directories
+    // agree. Routing identity remains independent and may still be exact.
     const inferredProgram = programFor(
       source,
       input.programHints ?? [],
       surface,
-      target.resolution === "exact" && !target.cwdMismatch,
+      target.resolution === "exact" && target.cwdRelation !== "different",
       repo,
     );
     const operatorProgram = (input.programHints ?? []).some((hint) => hint.id === inferredProgram.id);
@@ -513,7 +525,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...(repo ? { repo } : {}),
-      ...(liveRepoMatchesTarget && sidebar?.pullRequestUrls.length
+      ...(sidebarMatchesRepo && sidebar?.pullRequestUrls.length
         ? { pullRequestUrls: sidebar.pullRequestUrls }
         : {}),
       ...recordAttention(attentionCoverage, {
@@ -557,15 +569,19 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : source.transcriptTail,
       elapsedMs: source.startedAt ? Math.max(0, elapsedEndMs - Date.parse(source.startedAt)) : undefined,
       ...(source.activeMs === undefined ? {} : { activeMs: source.activeMs }),
-      git: liveRepoMatchesTarget
-        ? sidebar || surface || repo?.branch
+      git: sidebarMatchesRepo && sidebar
+        ? {
+            branch: sidebar.branch ?? repo?.branch,
+            dirty: sidebar.dirty,
+            head: surfaceMatchesRepo ? surface?.head : undefined,
+          }
+        : surfaceMatchesRepo && surface
           ? {
-              branch: sidebar?.branch ?? surface?.branch ?? repo?.branch,
-              dirty: sidebar?.dirty ?? surface?.dirty,
-              head: surface?.head,
+              branch: surface.branch ?? repo?.branch,
+              dirty: surface.dirty,
+              head: surface.head,
             }
-          : undefined
-        : repo?.branch
+          : repo?.branch
           ? { branch: repo.branch }
           : undefined,
       target,

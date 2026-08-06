@@ -22,12 +22,9 @@ function target(
 ): CmuxTarget {
   const surfaceCwd = surface.cwd ? normalizeCwd(surface.cwd) : undefined;
   const agentCwd = agent?.cwd ? normalizeCwd(agent.cwd) : undefined;
-  const cwdMismatch = Boolean(
-    surfaceCwd &&
-    agentCwd &&
-    surfaceCwd !== agentCwd &&
-    (resolution === "exact" || resolution === "unique-cwd"),
-  );
+  const cwdRelation = surfaceCwd && agentCwd
+    ? surfaceCwd === agentCwd ? "same" as const : "different" as const
+    : undefined;
   return {
     ...(attestation ? { attestation } : {}),
     workspaceId: surface.workspaceId,
@@ -35,11 +32,9 @@ function target(
     surfaceId: surface.surfaceId,
     paneId: surface.paneId,
     surfaceCwd,
-    cwdMismatch: cwdMismatch || undefined,
+    cwdRelation,
     resolution,
-    reason: cwdMismatch
-      ? `${reason} Pane cwd (${surfaceCwd}) differs from session cwd (${agentCwd}) — treat the workspace title as the terminal, not the agent's project home.`
-      : reason,
+    reason,
   };
 }
 

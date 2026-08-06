@@ -43,7 +43,10 @@ export interface CollectedAgent {
      fleet and only snapshot.ts has it, so `name` may equal another agent's until
      that pass runs. */
   identity?: AgentIdentity;
+  /** Provider-recorded current/tool working directory. */
   cwd?: string;
+  /** Working directory recorded by the provider hook at process launch. */
+  launchCwd?: string;
   /** The first working directory recorded, never the latest. Only naming reads it. */
   originCwd?: string;
   /** Provider-recorded launch markers, when the transcript carries them.

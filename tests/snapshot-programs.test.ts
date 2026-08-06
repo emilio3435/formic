@@ -131,6 +131,35 @@ test("operator program hints outrank repository derivation", () => {
   });
 });
 
+test("CWD-GROUP-1 repository evidence selects configured paths before an unrelated raw agent cwd", () => {
+  const repo: RepoIdentity = {
+    repoKey: "cooper-repo-key",
+    repoName: "cooper-scheduler",
+    worktreePath: "/repos/cooper-scheduler",
+    ephemeral: false,
+  };
+  const hints = [
+    { id: "home-tools", name: "Home tools", match: ["/Users/example"] },
+    { id: "cooper", name: "Cooper", match: ["/repos/cooper-scheduler"] },
+  ];
+
+  expect(programFor(collected({ cwd: "/Users/example" }), hints, undefined, false, repo).id).toBe("cooper");
+});
+
+test("CWD-GROUP-1 known different surface directories cannot supply program evidence", () => {
+  const hints = [{ id: "pane-project", name: "Pane project", match: ["pane-project"] }];
+  const source = collected({ cwd: "/Users/example" });
+  const surface = {
+    surfaceId: "SURFACE-PANE-PROJECT",
+    cwd: "/repos/pane-project",
+    workspaceTitle: "pane-project",
+    sourceSessionIds: [source.sourceSessionId],
+  };
+
+  expect(programFor(source, hints, surface, false).id).not.toBe("pane-project");
+});
+
+
 test("sessions without a repository keep the existing cwd fallback", () => {
   const fallback = programFor(collected({ cwd: "/opt/work/standalone-task" }), []);
 
