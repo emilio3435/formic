@@ -1451,12 +1451,6 @@ async function fetchSettings() {
   renderFilterBar();
 }
 
-async function postScanWindow(hours) {
-  const clamped = Math.max(1, Math.min(168, Math.round(Number(hours))));
-  if (!Number.isFinite(clamped)) return;
-  await postSettings({ scanWindowHours: clamped });
-}
-
 /* One writer for every server-side setting.
 
    The server validates by rejecting rather than clamping — telling an operator
@@ -2354,12 +2348,13 @@ export function settingsPreviewText(counts) {
     + ` · ${counts.unverified} Unverified · ${counts.finished + counts.retained} History.`;
 }
 
-function settingsField(key, label, help, value, min, max) {
+function settingsField(key, label, help, value, min, max, fkey = null) {
   return el("label", { class: "settings-field" },
     el("span", { class: "settings-field-label", text: label }),
     el("input", {
       type: "number", class: "settings-input", id: "setting-" + key,
-      dataset: { setting: key }, value: String(value), min: String(min), max: String(max),
+      dataset: fkey ? { setting: key, fkey } : { setting: key },
+      value: String(value), min: String(min), max: String(max),
       oninput: () => renderSettingsPreview(),
     }),
     el("span", { class: "settings-help", text: help }));
@@ -2818,9 +2813,12 @@ function renderSettingsPanel() {
     el("p", { class: "settings-preview", id: "settings-preview" }),
     el("details", { class: "settings-advanced" },
       el("summary", { text: "Advanced" }),
+      /* Keeps the `scan-window` focus key the filter bar used to carry: the
+         control moved surfaces, and muscle memory should land on the editor
+         rather than on nothing. */
       settingsField("scanWindowHours", "Scan window",
         "How far back collectors read transcripts. Sessions older than this move to History as 'no longer watched'. Hours, 1–168.",
-        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168),
+        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168, "scan-window"),
       settingsField("historyRetentionDays", "Keep history for",
         "Finished sessions are kept this long. Lowering it permanently forgets older records. Days, 7–365.",
         s.historyRetentionDays ?? 30, 7, 365),
@@ -4196,19 +4194,18 @@ function renderTabs() {
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
-    // is-unverified marks a chip whose value the server never confirmed, so a
-    // built-in default cannot pass for a reported one.
-    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : "")
-      + (opts.className ? " " + opts.className : ""),
-    /* aria-pressed only where there is a pressed state to report. The scan
-       control opens an editor rather than toggling, and announcing it as an
-       unpressed toggle told a screen reader the opposite of what it does. */
-    ...(opts.className === "filter-setting" ? {} : { "aria-pressed": String(Boolean(active)) }),
+    class: "filter-chip" + (active ? " is-active" : ""),
+    /* Every chip on this bar is a toggle now, so every one reports a pressed
+       state. The exemption this used to carry — along with the icon, alert and
+       className options — existed for the scan control, which opened an editor
+       rather than toggling. That control is a read-only <span> here today and
+       its editor lives in Settings, so the affordances retire with it. */
+    "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
     dataset: opts.fkey ? { fkey: opts.fkey } : null,
     onclick,
-  }, opts.icon ? icon(opts.icon) : null, label);
+  }, label);
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
@@ -4356,32 +4353,19 @@ function renderFilterBar(ui = state) {
   const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
   const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
   const unverified = !confirmed && !!ui.settingsError;
-  /* Reads as a setting you are about to change, not as a filter you might
-     select. It was styled identically to the lookback chips beside it while
-     doing something entirely different — clicking it writes to the server and
-     changes what every browser sees. */
-  bar.append(filterChip(
-    unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
-    false,
-    () => {
-      const raw = window.prompt(
-        "How far back should collectors read transcripts? Hours, 1-168.\n\nThis changes what the server harvests for everyone, not just this browser.",
-        String(scanHours),
-      );
-      if (raw == null) return;
-      void postScanWindow(raw);
-    },
-    {
-      disabled: ui.settingsPending,
-      className: "filter-setting",
-      icon: "settings",
-      title: unverified
-        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Click to set it."
-        : "How far back collectors read transcripts. Sessions older than this leave the board. Click to change — affects everyone.",
-      fkey: "scan-window",
-      alert: unverified,
-    },
-  ));
+  /* Read-only, and a <span> rather than a button so it leaves the focus order.
+     Every other control on this bar changes what YOU see; this one changed what
+     the server COLLECTS — sessions outside it leave the wire entirely, for every
+     browser. Two different powers wearing the same chip is what the apologetic
+     "· your view only" note beside it was there to paper over. The editor moved
+     to Settings, where the rest of the server's knobs live. */
+  bar.append(el("span", {
+    class: "filter-status" + (unverified ? " is-unverified" : ""),
+    title: unverified
+      ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Change it in Settings."
+      : "Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.",
+    text: unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
+  }));
 }
 
 function renderScopeNote(shown) {

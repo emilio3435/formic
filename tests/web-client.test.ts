@@ -6963,22 +6963,21 @@ describe("FE-B: harness-backed client behavior", () => {
      so a dead /api/settings was invisible by construction. Meanwhile the scan
      chip printed the hard-coded 36 as "36h window", which reads as a value the
      server reported. */
-  test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
-    const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
+  test("(3b) the collection status states the window without asserting an unconfirmed one", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statusOf = (ui: Record<string, unknown>): any => withDom(() => {
       M.renderFilterBar(listUi({ view: "board", ...ui }));
-      const bar = domById.get("filter-bar");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
+      return byClass(domById.get("filter-bar"), "filter-status");
     });
 
     // Settings answered: the number is reported, so state it plainly.
-    const ok = textOfChip({ scanWindowHours: 12, settingsError: "" });
+    const ok = statusOf({ scanWindowHours: 12, settingsError: "" });
     expect(textOf(ok)).toContain("Collecting last 12h");
     expect(ok.className).not.toContain("is-unverified");
 
     // Settings failed and no snapshot corroborates it: say so instead of
     // passing the built-in default off as the server's answer.
-    const bad = textOfChip({ scanWindowHours: 36, settingsError: "settings 500" });
+    const bad = statusOf({ scanWindowHours: 36, settingsError: "settings 500" });
     expect(textOf(bad)).toContain("Collecting: unverified");
     expect(textOf(bad)).not.toContain("Collecting last 36h");
     expect(bad.className).toContain("is-unverified");
@@ -6987,13 +6986,45 @@ describe("FE-B: harness-backed client behavior", () => {
 
     // A snapshot IS authoritative, so it overrides a failed settings call —
     // no false alarm once the real number has arrived by another route.
-    const rescued = textOfChip({
+    const rescued = statusOf({
       scanWindowHours: 36,
       settingsError: "settings 500",
       snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
     });
     expect(textOf(rescued)).toContain("Collecting last 24h");
     expect(rescued.className).not.toContain("is-unverified");
+  });
+
+  /* It stopped being an editor. Every other control on the bar changes what YOU
+     see; this one changed what the SERVER collects — sessions outside the window
+     leave the wire entirely, for every browser. Two different powers wearing the
+     same chip shape is what the apologetic "· your view only" note beside it was
+     papering over. */
+  test("(3b2) the collection window is read-only on the bar and editable in Settings", () => {
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, lookbackHours: 6 }));
+      const bar = domById.get("filter-bar");
+      const status = byClass(bar, "filter-status");
+      // A span, not a button: it leaves the focus order entirely.
+      expect(status.tagName).toBe("span");
+      expect(buttonsOf(bar).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
+        .not.toContain("scan-window");
+      // The title carries the semantics the chip never stated.
+      expect(status.attributes.title)
+        .toBe("Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.");
+    });
+
+    /* The editor, where the server's other knobs live — carrying the same
+       `scan-window` focus key, so muscle memory lands on the control rather
+       than on nothing. */
+    return withState({ settingsPanelOpen: true, settings: { scanWindowHours: 48 } }, () => withDom(() => {
+      M.renderSettingsPanel();
+      const field = byFkey(domById.get("settings-panel"), "scan-window");
+      expect(field).toBeTruthy();
+      expect(field.tagName).toBe("input");
+      expect(field.attributes.max).toBe("168");
+      expect(field.value).toBe("48"); // and it opens on the server's value
+    }));
   });
 
   /* D7 ruled review-worker visibility a SERVER setting rather than a per-browser
@@ -7102,7 +7133,6 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual([
         "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
-        "scan-window",
       ]);
     });
 
@@ -7128,7 +7158,6 @@ describe("FE-B: harness-backed client behavior", () => {
         "provider:claude", "provider:codex",
         "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
-        "scan-window",
       ]);
     });
 
@@ -7149,7 +7178,8 @@ describe("FE-B: harness-backed client behavior", () => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
       const keys = focusKeysOf(bar());
       expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
-      expect(keys[keys.length - 1]).toBe("scan-window");
+      // Last, because the collection status after it is a span, not a control.
+      expect(keys[keys.length - 1]).toBe("program:clear");
       // The chip names the program it is holding you inside of.
       expect(textOf(byFkey(bar(), "program:clear"))).toContain("Ridge");
     });
