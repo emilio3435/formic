@@ -3592,8 +3592,28 @@ body.feed-frozen .programs { opacity: 0.62; }
    one object. Width is already clamped to the viewport above; this only widens
    the gutter and shortens it so it fits a phone. */
 @media (max-width: 760px) {
+  /* A11Y-1. The panel hung 24px off the LEFT edge at 420px, and body
+     overflow-x is hidden so nothing scrolled it back: "WAITING ON YOU" rendered
+     as "AITING ON YOU", "cooper-scheduler" as "ooper-scheduler", and the ember
+     rails that mean a person is the blocker were partly off-screen — on the one
+     surface whose entire job is saying who is waiting.
+
+     The cause is an origin mismatch, not a width mistake. The clamp measured
+     against the VIEWPORT (100vw) while the panel is anchored to
+     .masthead-signals, which `align-self: center` leaves 48px inside the
+     viewport's edge. 396px of panel hung off a 372px anchor overhangs by
+     exactly that gutter — and because the gutter is a function of the row's own
+     content width, no static calc() can express it.
+
+     So the anchor becomes the content edge instead of a centred island, and the
+     panel FILLS it rather than overhanging it. Deliberately still absolute: a
+     fixed dropdown stops travelling with the button that opened it, and the
+     panel and its toggle have to stay one object. */
+  .masthead-signals { align-self: stretch; justify-content: flex-end; }
   .notify-panel {
-    width: min(452px, calc(100vw - 1.5rem));
+    left: 0;
+    right: 0;
+    width: auto;
     max-height: 70vh;
   }
 }
