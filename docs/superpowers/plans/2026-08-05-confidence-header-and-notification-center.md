@@ -256,7 +256,7 @@ At 20:26–20:29 a Codex session (ChatGPT app, pid 47362, cwd inside this worktr
 
 **Spawning be-dwell into that is the collision this plan's §5 exists to prevent.** S0 does not start until that session's work is committed or abandoned. Re-check with `stat -f "%Sm" src/server/collectors.ts` before spawning.
 
-Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + its test and fixture — which are **an incomplete commit**: `tests/process-liveness.test.ts` imports a source file that is not in any commit, so a fresh clone of this branch cannot run the suite. That is the owning lane's to finish.
+Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + `tests/process-liveness.test.ts` + `tests/fixtures/process-liveness-truth-table.json`. Those three are untracked *together*, so the committed suite is self-consistent and a fresh clone is fine — they are simply a feature still being written. The owning session commits them, not us.
 
 ### Start order
 
