@@ -32,15 +32,18 @@ a defect asserted green stops being a defect.
 | 1 | AX tree with the panel open | **PASS with 3 defects** — toggle contract correct, badge count in the name; three naming defects on the panel and its rows |
 | 2 | Focus contract | **PASS with 1 defect** — Esc, Tab, Shift+Tab, outside-press all correct; focus is dropped to `<body>` when the focused row leaves the feed |
 | 3 | Console clean | **PASS** — zero messages of any level across open → route → close |
-| 4 | `(hover: none)` at 420px | **PASS with 1 defect** — no hover-only affordance anywhere; the Focus control misses the codebase's own 44px touch sweep |
-| 5 | `prefers-reduced-motion` | **NOT RUN live** — `/browse` cannot emulate the media feature. Rule-level proof holds; see §5 |
+| 4 | `(hover: none)` at 420px | **PASS with 1 defect** — no hover-only affordance anywhere; the Focus control misses the codebase's own 44px touch sweep. The media-feature emulation itself is **still NOT RUN** — see §4-emulation |
+| 5 | `prefers-reduced-motion` | ~~NOT RUN~~ → **PASS, measured live 2026-08-06 07:2x** under real emulation, both surfaces. See §5 |
 | 6 | Responsive 420 / 768 / 1280 | **FAIL at 420px** — no horizontal scroll anywhere, but the panel overflows the viewport's **left** edge by 24px and the clipped strip is unreachable. **Fixed in `fd34a66`; its regression guard is NOT RUN — see §6-guard** |
 | 7 | The ember contract, visually | **PASS** — measured on the live blocking board and across all three tones |
 
-⚠ **Two rows are NOT RUN, not passed.** Check 5 was never observed in a browser,
-and check 6's *guard* measures the stylesheet rather than the panel. Both are
-written up in full below rather than left as a green tick; a check nobody can see
-failing is the failure mode this document exists to prevent.
+⚠ **What is still not observed.** Check 5 **was closed on 2026-08-06** once the
+harness gained media emulation — it is now a measured pass, not an argument.
+What remains: check 4's `(hover: none)` *emulation* (its conclusion does not
+depend on it — §4-emulation), and check 6's *guard*, which measures the
+stylesheet rather than the panel. Both are written up in full rather than left as
+a green tick; a check nobody can see failing is the failure mode this document
+exists to prevent.
 
 **Seven defects, one environment note.** None of them is in the model — `notification-center.js`
 came through the derivation probes clean on every fixture. All seven are in the paint.
@@ -281,9 +284,31 @@ measurements:
    `text-decoration`. `.notify-row-meta` also reserves its action space with `min-height: 1.4rem`,
    so nothing reflows under a pointer.
 
-**Emulation caveat:** `(hover: none)` itself was **not emulated** — `/browse` exposes no
-`Emulation.setEmulatedMedia`. It did not need to be: emulation would only matter if something *were*
-hover-gated, and nothing is. Both measurements above are hover-independent.
+### §4-emulation · `(hover: none)` is **still NOT RUN** — and this time it is the feature, not the tool
+
+Retried on 2026-08-06 after the harness gained `Emulation.setEmulatedMedia`. **It did not take**,
+and the failure was isolated rather than assumed:
+
+```
+A  setEmulatedMedia hover=none                        -> (hover: none) false, (hover: hover) TRUE
+B  setEmulatedMedia prefers-color-scheme=dark  CONTROL -> (prefers-color-scheme: dark) TRUE
+C  setDeviceMetricsOverride {mobile:true, 420x900}     -> innerWidth 420, but hover/pointer unchanged
+```
+
+**B is the control and it is the whole argument.** The CDP method, the allowlist entry and the
+rebuilt daemon all work — a `prefers-*` feature emulates correctly on the same call. So this is
+not a broken tool: `hover` and `pointer` are derived from the emulated *input device*, not from
+the media-feature override, and C shows that mobile device metrics alone do not move them either.
+
+Closing it needs `Emulation.setTouchEmulationEnabled` (usually with
+`setEmitTouchEventsForMouse`) in the allowlist. Only four `Emulation` methods are permitted today
+— `setDeviceMetricsOverride`, `clearDeviceMetricsOverride`, `setUserAgentOverride`,
+`setEmulatedMedia` — and neither touch method is among them.
+
+**Check 4's conclusion is unaffected, and never depended on this.** "Hover-revealed" means
+*hidden at rest*, so the rest-state measurement at 420px answers it directly, and the complete
+enumeration of `:hover` rules bounds every way it could have been otherwise. What is NOT RUN is
+the media query, not the finding — recorded that way rather than quietly folded into the PASS.
 
 ### DEFECT A11Y-6 · Focus is a 32px target where its sibling Reply is 44px
 
@@ -318,14 +343,54 @@ a failure.
 
 ---
 
-## 5. `prefers-reduced-motion` — NOT RUN live
+## 5. `prefers-reduced-motion` — ~~NOT RUN~~ **PASS, measured 2026-08-06 07:2x**
 
-**Stated plainly, per the kickoff: this check could not be run as specified.** `/browse` has no
-media-emulation command and `Emulation.setEmulatedMedia` is not in its CDP allowlist
-(`~/.claude/skills/gstack/browse/src/cdp-allowlist.ts` permits only `setDeviceMetricsOverride`,
-`clearDeviceMetricsOverride`, `setUserAgentOverride`). The `reduce` branch was therefore never
-observed in a running browser. `matchMedia("(prefers-reduced-motion: reduce)").matches` was `false`
-throughout.
+**The harness changed, not the finding.** For the whole program this row was rule-level only,
+because `/browse` had no media-emulation command and `Emulation.setEmulatedMedia` was not in its
+CDP allowlist. On 2026-08-06 the allowlist gained that entry
+(`scope: tab`, `output: trusted`) and the node server bundle was rebuilt. The check is now
+observable, so it was run. **This row did not turn green because someone re-read the CSS.**
+
+⚠ The old binary is still `dist/browse` from Jul 15 and does not contain the symbol; the
+daemon that enforces the allowlist is `dist/server-node.mjs`, rebuilt 07:20. The CLI does no
+client-side validation, so a **daemon restart** is what picks the change up.
+
+**The emulation was proved to take before anything was measured**, because measuring the
+`no-preference` branch and reporting a pass would be worse than the NOT RUN it replaced:
+
+```
+before emulation   reduce false   no-preference true
+after  emulation   reduce TRUE    no-preference false
+```
+
+**Panel, open, under real `reduce`:** every transition resolved to `none` / `0s`, and an
+enumeration of *every node inside the panel* returned an empty list of animated elements.
+
+```
+.notify-row  .notify-quiet  .notify-act  .notify-switch-track
+    transition: none   transitionDuration: 0s   animationName: none
+anyAnimatedNodeInPanel: []
+```
+
+**Clean up chip, mid-sweep, under real `reduce`** — the surface that actually has a keyframe
+(`cleanup-spin`), screenshot at `docs/a11y-shots/09-cleanup-reduced-motion.png`:
+
+| Reading | Value | Means |
+|---|---|---|
+| `animationName` | `none` | `cleanup-spin` is stopped |
+| `animationDuration` | `0s` | …and not merely paused |
+| `opacity` | `1` | the marker is still **there** |
+| `borderStyle` | `dashed` | the static variant took |
+| `borderTopColor` == `borderRightColor` | `rgb(154,107,18)` | the ring is complete, not a gap pretending to spin |
+| button text | `Examining…` | the state is carried by the label too, not only the mark |
+| `aria-busy` | `true` | …and by the tree |
+
+So the chip **does not go blank** when motion is refused: it stops moving and keeps saying a
+process is underway, in three independent ways. That is what the rule intended and it is now
+observed rather than argued.
+
+The rule-level proof recorded below still holds and is what the committed tests assert; the
+live measurement corroborates it rather than replacing it.
 
 **What was measured instead — a complete enumeration, not a spot check.** Every CSS rule in every
 loaded stylesheet was walked and tested against every node in `#notify-toggle` and
@@ -555,7 +620,7 @@ fails — never by hand-editing the DOM.
 | C4 | Contract sentence in `title` | **PASS, with a caveat** — the orchestrator's suspicion was half right; see C4 |
 | C5 | Mark `aria-hidden`, colour-only signal | **PASS** |
 | C6 | Target size | **PASS via the 2.5.8 spacing exception** — 74.8 × 17px, nearest target 101px away |
-| C7 | `prefers-reduced-motion` static variant | **NOT RUN** — same harness limit as check 5 |
+| C7 | `prefers-reduced-motion` static variant | ~~NOT RUN~~ → **PASS, measured 2026-08-06 07:2x** — spin stopped, dashed marker still visible; see §5 |
 
 ### CLEAN-1 · The entire running state was unreachable — FIXED
 
