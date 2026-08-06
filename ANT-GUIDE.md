@@ -273,6 +273,13 @@ evidence remains unobserved rather than becoming a guessed relationship.
 > than a fault: the record predates the distinction, so no number can be labelled
 > correctly. Read its drawer if you need the total.
 
+The fleet-wide wire reading is `totals.consumption`: `sessionTotal` summed once
+for every session in the configured scan window, including finished sessions.
+It is deliberately not the row's latest-call occupancy, processed tokens, or
+cache re-reads; those remain separate session facts. The field is absent when a
+provider scan, the scan window, or any session total is incomplete. A complete
+empty window reports `0`.
+
 ### 4. Click it, deal with it, press `Escape`
 
 ![The drawer](docs/guide-shots/shot-4-drawer.png)

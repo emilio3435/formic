@@ -533,6 +533,8 @@ export class HubState {
       };
     };
     const sessions = sessionsResult ?? unavailableSessions();
+    const sessionCollectionComplete = sessionsResult !== undefined
+      && providers.every((provider) => sessions[provider].errors.length === 0);
     const cmux = options.cmux
       ? cmuxResult ?? { value: [], errors: [reasonFor("cmux discovery failed")] }
       : undefined;
@@ -697,6 +699,7 @@ export class HubState {
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
       scanWindowHours: this.#scanWindowHours,
+      sessionCollectionComplete,
       thresholds,
       stalledActiveMinutes: settings?.stalledActiveMinutes,
       processRosterComplete: this.#rosterComplete,

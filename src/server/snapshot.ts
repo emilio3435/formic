@@ -114,6 +114,8 @@ export interface SnapshotInput {
   triageSummaries?: readonly TriageQueueSummary[];
   now?: Date;
   scanWindowHours?: number;
+  /** Every provider session source completed its scan without an error. */
+  sessionCollectionComplete?: boolean;
   /** The operator's freshness and quiet bands; defaults when absent. */
   thresholds?: LifecycleThresholds;
   /** Idle-hook threshold for a manifest-active lane; defaults to 30 minutes. */
@@ -600,6 +602,20 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      describing what it was doing when the board last saw it, not what it is
      doing now — counting it live is the resurrection hole. */
   const observedAgents = allAgents.filter((agent) => agent.scope !== "retained");
+  const scanWindowKnown = typeof input.scanWindowHours === "number"
+    && Number.isFinite(input.scanWindowHours)
+    && input.scanWindowHours > 0;
+  const consumptionTermsComplete = observedAgents.every((agent) =>
+    agent.tokens.provenance === "observed"
+    && typeof agent.tokens.sessionTotal === "number"
+    && Number.isFinite(agent.tokens.sessionTotal)
+    && agent.tokens.sessionTotal >= 0,
+  );
+  const consumption = input.sessionCollectionComplete === true
+    && scanWindowKnown
+    && consumptionTermsComplete
+    ? observedAgents.reduce((total, agent) => total + agent.tokens.sessionTotal!, 0)
+    : undefined;
   const countLifecycle = (state: LifecycleState): number =>
     observedAgents.filter((agent) => agent.lifecycle === state).length;
   const byLifecycle = {
@@ -745,6 +761,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       live: liveAgents.length,
       tracked: allAgents.length,
       attention: observedAgents.filter((agent) => agent.attention === true).length,
+      ...(consumption === undefined ? {} : { consumption }),
       tokens: tokenValues.length ? tokenValues.reduce((total, value) => total + value, 0) : undefined,
       working: allAgents.filter((agent) => agent.activity === "working").length,
       idle: allAgents.filter((agent) => agent.activity === "idle").length,

@@ -21,6 +21,49 @@ const emptySessions = () => ({
 });
 
 describe("cmux collection time truth", () => {
+  test("production publishes consumption only from a complete session scan", async () => {
+    let collectionErrors: string[] = [];
+    const source: CollectedAgent = {
+      id: "codex:consumption",
+      provider: "codex",
+      sourceSessionId: "consumption",
+      displayName: "Consumption fixture",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date().toISOString(),
+      tokens: {
+        total: 90_000,
+        sessionTotal: 1_500,
+        sessionCachedInput: 74_000,
+        sessionProcessed: 75_500,
+        provenance: "observed",
+      },
+      artifacts: [],
+      gates: [],
+    };
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: [source], errors: collectionErrors },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const state = new HubState(runner, new MemoryArchiveStore(), [], { collectors });
+
+    expect(state.get().totals).not.toHaveProperty("consumption");
+    await state.refresh();
+    expect(state.get().totals.consumption).toBe(1_500);
+
+    collectionErrors = ["codex session enumeration failed"];
+    await state.refresh();
+    expect(state.get().totals).not.toHaveProperty("consumption");
+  });
+
   test("boot and issue decoration retain a coherent, current pulse across repeated reads", () => {
     let nowMs = 1_000;
     const now = spyOn(Date, "now").mockImplementation(() => nowMs);

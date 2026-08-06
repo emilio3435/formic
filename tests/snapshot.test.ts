@@ -513,6 +513,155 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.totals.tokenMedian).toBe(42);
   });
 
+  test("fleet consumption is scan-window sessionTotal, never occupancy, processed flow, or cache re-reads", () => {
+    const data: {
+      scanWindowHours: number;
+      sessions: Array<{
+        id: string;
+        provider: CollectedAgent["provider"];
+        endEvidence?: CollectedAgent["endEvidence"];
+        tokens: CollectedAgent["tokens"];
+      }>;
+      retained: {
+        id: string;
+        provider: CollectedAgent["provider"];
+        tokens: CollectedAgent["tokens"];
+      };
+      expected: {
+        workingOccupancy: number;
+        consumption: number;
+        processed: number;
+        cachedInput: number;
+      };
+    } = {
+      scanWindowHours: 36,
+      sessions: [
+        {
+          id: "codex:working-consumption",
+          provider: "codex",
+          tokens: {
+            total: 900_000,
+            sessionTotal: 1_500,
+            sessionCachedInput: 74_000,
+            sessionProcessed: 75_500,
+            scope: "latest-turn",
+            provenance: "observed",
+          },
+        },
+        {
+          id: "omp:finished-consumption",
+          provider: "omp",
+          endEvidence: "session-exit",
+          tokens: {
+            total: 120_000,
+            sessionTotal: 2_500,
+            sessionCachedInput: 19_500,
+            sessionProcessed: 22_000,
+            scope: "latest-turn",
+            provenance: "observed",
+          },
+        },
+      ],
+      retained: {
+        id: "claude:outside-scan-window",
+        provider: "claude",
+        tokens: {
+          total: 1_000_000,
+          sessionTotal: 9_000_000,
+          sessionCachedInput: 18_000_000,
+          sessionProcessed: 27_000_000,
+          scope: "latest-turn",
+          provenance: "observed",
+        },
+      },
+      expected: {
+        workingOccupancy: 900_000,
+        consumption: 4_000,
+        processed: 97_500,
+        cachedInput: 93_500,
+      },
+    };
+    const scanned = data.sessions.map((session) => collected({
+      ...session,
+      sourceSessionId: session.id.split(":")[1]!,
+      displayName: session.id,
+    }));
+    const retained = collected({
+      ...data.retained,
+      sourceSessionId: data.retained.id.split(":")[1]!,
+      displayName: data.retained.id,
+    });
+    const snapshot = buildSnapshot({
+      agents: scanned,
+      surfaces: [],
+      archiveStore: { ...archiveStore, archivedAgents: () => [retained] },
+      scanWindowHours: data.scanWindowHours,
+      sessionCollectionComplete: true,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const observed = snapshot.programs
+      .flatMap((program) => program.agents)
+      .filter((agent) => agent.scope === "observed");
+    const sum = (field: "sessionProcessed" | "sessionCachedInput") =>
+      observed.reduce((total, agent) => total + (agent.tokens[field] ?? 0), 0);
+
+    expect(snapshot.totals.tokens).toBe(data.expected.workingOccupancy);
+    expect(snapshot.totals.consumption).toBe(data.expected.consumption);
+    expect(sum("sessionProcessed")).toBe(data.expected.processed);
+    expect(sum("sessionCachedInput")).toBe(data.expected.cachedInput);
+    expect(new Set([
+      snapshot.totals.consumption,
+      data.expected.processed,
+      data.expected.cachedInput,
+    ]).size).toBe(3);
+  });
+
+  test("fleet consumption is absent unless the window, enumeration, and every term are complete", () => {
+    const agent = collected({
+      tokens: {
+        total: 900_000,
+        sessionTotal: 1_500,
+        sessionCachedInput: 74_000,
+        sessionProcessed: 75_500,
+        provenance: "observed",
+      },
+    });
+    const input = {
+      agents: [agent],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    };
+    const missingWindow = buildSnapshot({ ...input, sessionCollectionComplete: true });
+    const incompleteEnumeration = buildSnapshot({
+      ...input,
+      scanWindowHours: 36,
+      sessionCollectionComplete: false,
+    });
+    const missingTerm = buildSnapshot({
+      ...input,
+      agents: [collected({ tokens: { total: 900_000, provenance: "observed" } })],
+      scanWindowHours: 36,
+      sessionCollectionComplete: true,
+    });
+    const partialTerm = buildSnapshot({
+      ...input,
+      agents: [collected({ tokens: { sessionTotal: 1_500, provenance: "estimated" } })],
+      scanWindowHours: 36,
+      sessionCollectionComplete: true,
+    });
+
+    for (const snapshot of [missingWindow, incompleteEnumeration, missingTerm, partialTerm]) {
+      expect(snapshot.totals).not.toHaveProperty("consumption");
+    }
+    expect(buildSnapshot({
+      ...input,
+      agents: [],
+      scanWindowHours: 36,
+      sessionCollectionComplete: true,
+    }).totals.consumption).toBe(0);
+  });
+
   test("reports peak and median context across live agents", () => {
     const snapshot = buildSnapshot({
       agents: [
