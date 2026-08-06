@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<title>Ant Hill — notifications dropdown proposal · 2026-08-05</title>
+<style>
+  /* Tokens verbatim from src/web/styles.css (techno orchestra). Light only:
+     the console commits to one ground and the dropdown must sit on it. */
+  :root {
+    --canvas:#f3f5f7; --surface:#fbfcfd; --raise:#ffffff; --sand:#e8edf2;
+    --ink:#121820; --muted:#445260; --faint:#5a6876;
+    --line:#d4dce4; --line-strong:#aeb9c4;
+    --ember:#c23b2e; --amber:#9a6b12; --moss:#1f6b4a; --slate:#3f5f78; --clay:#64707c;
+    --ember-soft:color-mix(in srgb, var(--ember) 9%, var(--surface));
+    --amber-soft:color-mix(in srgb, var(--amber) 10%, var(--surface));
+    --moss-soft:color-mix(in srgb, var(--moss) 10%, var(--surface));
+    --signal-rail:2px;
+    --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+    --radius:8px; --radius-sm:5px;
+    --shadow-lift:0 2px 6px rgba(23,33,43,.07), 0 18px 44px rgba(23,33,43,.12);
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--canvas); color:var(--ink); font:14px/1.45 var(--font-ui); padding:2rem 2.5rem 6rem; -webkit-font-smoothing:antialiased; }
+  h1 { font-size:1.15rem; margin-bottom:.3rem; }
+  .note { color:var(--faint); font-size:.82rem; max-width:80ch; }
+  .note + .note { margin-top:.5rem; }
+  .note b { color:var(--muted); font-weight:650; }
+  .spec { font:600 .62rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:3.2rem 0 .35rem; }
+  .variant-note { font-size:.8rem; color:var(--muted); margin:.15rem 0 1rem; max-width:84ch; }
+  .variant-note em { color:var(--ink); font-style:normal; font-weight:650; }
+  hr.rule { border:0; border-top:1px solid var(--line); margin:3.4rem 0 0; }
+
+  /* ---------- app chrome the dropdown hangs from ---------- */
+  .stage { position:relative; max-width:1220px; background:var(--canvas); border:1px solid var(--line-strong); border-radius:10px; }
+  .masthead { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.85rem 1.1rem; background:var(--surface); border-bottom:1px solid var(--line); border-radius:10px 10px 0 0; }
+  .wordmark { font:700 1.15rem/1.1 var(--font-ui); letter-spacing:-.01em; }
+  .signals { display:flex; align-items:center; gap:.5rem; }
+  .btn { appearance:none; font:600 .78rem/1 var(--font-ui); color:var(--ink); background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:.55rem .7rem; cursor:pointer; display:inline-flex; align-items:center; gap:.45rem; }
+  .btn:hover { background:var(--sand); }
+  .conn { display:inline-flex; align-items:center; gap:.4rem; font:600 .7rem/1 var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--moss); border:1px solid color-mix(in srgb, var(--moss) 35%, var(--line-strong)); border-radius:99px; padding:.4rem .6rem; }
+  .conn i { width:6px; height:6px; border-radius:50%; background:var(--moss); }
+
+  .notify-wrap { position:relative; }
+  .notify-btn.is-open { background:var(--sand); border-color:var(--ink); }
+  .badge { font:700 .68rem/1 var(--font-mono); border-radius:99px; padding:.2rem .38rem; min-width:1.35em; text-align:center; }
+  .badge.stop { background:var(--ember); color:#fff; }
+  .badge.watch { background:transparent; color:var(--amber); border:1px solid color-mix(in srgb, var(--amber) 45%, var(--line-strong)); }
+  .badge.calm { background:transparent; color:var(--faint); border:1px solid var(--line-strong); }
+
+  /* faint board underneath, so the panel's scale and overlap are honest */
+  .under { padding:.9rem 1.1rem 1.2rem; min-height:34rem; }
+  .under-rail { display:flex; gap:2.2rem; align-items:baseline; padding-bottom:.9rem; border-bottom:1px solid var(--line); }
+  .u-lab { font:600 .58rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
+  .u-val { font:700 1.4rem/1 var(--font-ui); }
+  .u-val small { font:600 .72rem/1 var(--font-ui); color:var(--muted); margin-left:.3rem; }
+  .lane { display:flex; align-items:center; gap:.7rem; padding:.5rem .1rem; border-bottom:1px solid var(--line); font-size:.82rem; }
+  .lane .nm { font-weight:650; }
+  .lane .mt { color:var(--faint); font-family:var(--font-mono); font-size:.72rem; }
+  .lane .sp, .arow .sp { flex:1; }
+  .arow { display:flex; align-items:center; gap:.7rem; padding:.36rem 0 .36rem 1.1rem; border-bottom:1px solid var(--line); font-size:.78rem; color:var(--muted); }
+  .arow .mt { font:400 .68rem/1 var(--font-mono); color:var(--faint); }
+  .dim { opacity:.4; }
+  .dimmer { opacity:.28; }
+
+  /* ---------- the panel ---------- */
+  .panel { position:absolute; z-index:5; top:calc(100% + .5rem); right:0; width:452px; background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow-lift); overflow:hidden; }
+
+  /* header — the instrument hero, carrying the full tally */
+  .panel-head { padding:.85rem .95rem .8rem; border-bottom:1px solid var(--line); display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; }
+  .eyebrow { font:600 .58rem/1 var(--font-mono); letter-spacing:.15em; text-transform:uppercase; color:var(--faint); }
+  .h-lede { font:650 1rem/1.2 var(--font-ui); margin-top:.25rem; }
+  .h-rest { font:400 .7rem/1 var(--font-mono); color:var(--faint); margin-top:.32rem; }
+  .h-cost { text-align:right; flex:none; }
+  .h-cost .n { font:700 1.75rem/1 var(--font-mono); color:var(--ember); letter-spacing:-.02em; }
+  .h-cost .l { font:600 .56rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin-top:.25rem; }
+
+  /* program group header */
+  .grp { display:flex; align-items:center; gap:.6rem; padding:.5rem .95rem .3rem; background:var(--surface); border-top:1px solid var(--line); }
+  .grp .g-nm { font:600 .72rem/1 var(--font-mono); }
+  .grp .g-sp { flex:1; }
+  .grp .g-ct { font:600 .56rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
+  .grp.lit { background:var(--sand); box-shadow:inset var(--signal-rail) 0 var(--ink); }
+
+  /* row — three lines, every one of them a sentence you can read:
+     what stopped / where it is + what to do / what it actually asked */
+  .row { position:relative; display:block; width:100%; text-align:left; background:transparent; border:0; border-top:1px solid var(--line); padding:.6rem .95rem .65rem 1.05rem; cursor:pointer; font:inherit; color:inherit; }
+  .row:hover, .row.hovered { background:var(--sand); }
+  .row::before { content:""; position:absolute; left:0; top:10%; bottom:10%; width:var(--signal-rail); background:var(--rail); }
+  .row.stop { --rail:var(--ember); }
+  .r-top { display:flex; align-items:baseline; gap:.8rem; }
+  .r-title { font-weight:650; font-size:.86rem; letter-spacing:-.002em; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .r-time { font:600 .72rem/1 var(--font-mono); color:var(--ember); white-space:nowrap; }
+  /* the actions ride on the trace line — no line of their own, and the space is
+     reserved at rest so nothing shifts when they appear */
+  .r-meta { display:flex; align-items:center; gap:.8rem; margin-top:.2rem; min-height:1.4rem; }
+  .r-trace { font:400 .7rem/1.3 var(--font-mono); color:var(--faint); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acts { display:flex; gap:.35rem; flex:none; opacity:0; }
+  .row.hovered .acts, .row:hover .acts, .row:focus-within .acts { opacity:1; }
+  .act { font:600 .68rem/1 var(--font-ui); color:var(--ink); background:var(--raise); border:1px solid var(--line-strong); border-radius:var(--radius-sm); padding:.28rem .5rem; cursor:pointer; }
+  .act.primary { background:var(--ink); color:var(--raise); border-color:var(--ink); }
+  /* what the agent actually asked — standing, not hover-only. This is the line
+     that decides whether you need to open anything at all. */
+  .peek { margin:.4rem 0 0; padding:.05rem 0 .05rem .6rem; border-left:var(--signal-rail) solid var(--line); font:400 .78rem/1.45 var(--font-ui); color:var(--muted); }
+  .peek q { quotes:"\201C" "\201D"; }
+  .row:hover .peek, .row.hovered .peek { border-left-color:var(--line-strong); color:var(--ink); }
+
+  /* the log — quiet one-liners that still carry their program */
+  .sect { display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; padding:.75rem .95rem .3rem; border-top:1px solid var(--line); }
+  .sect.first { border-top:0; }
+  .sect .hint { font-size:.72rem; color:var(--faint); }
+  .quiet-row { display:flex; align-items:baseline; gap:.7rem; padding:.4rem .95rem; font-size:.78rem; color:var(--muted); cursor:pointer; }
+  .quiet-row .q-nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .quiet-row .q-pg { font-family:var(--font-mono); font-size:.72rem; color:var(--faint); }
+  .quiet-row .q-mt { font:400 .7rem/1 var(--font-mono); color:var(--faint); white-space:nowrap; }
+  .quiet-row:hover { background:var(--sand); color:var(--ink); }
+
+  .panel-foot { display:flex; align-items:center; justify-content:space-between; gap:.8rem; padding:.65rem .95rem; border-top:1px solid var(--line); background:var(--surface); }
+  .switch { display:inline-flex; align-items:center; gap:.5rem; font-size:.76rem; color:var(--muted); cursor:pointer; }
+  .switch i { width:26px; height:15px; border-radius:99px; background:var(--moss); position:relative; flex:none; }
+  .switch i::after { content:""; position:absolute; top:2px; right:2px; width:11px; height:11px; border-radius:50%; background:#fff; }
+  .linky { font:600 .74rem/1 var(--font-ui); color:var(--muted); background:none; border:0; padding:0; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+  .linky:hover { color:var(--ink); }
+
+  /* all-clear variant */
+  .h-cost.calm .n { color:var(--moss); font-size:1.35rem; }
+  .proof { padding:.7rem .95rem .8rem; font:400 .72rem/1.5 var(--font-mono); color:var(--faint); }
+
+  /* ---------- closed button ---------- */
+  .card { background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; overflow:hidden; max-width:1220px; }
+  .card h3 { font:600 .6rem/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; color:var(--faint); padding:.7rem .85rem; border-bottom:1px solid var(--line); }
+  .btn-states { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.4rem; padding:1.1rem .85rem 1rem; }
+  .btn-state .why { font-size:.79rem; color:var(--muted); margin-top:.6rem; }
+  .btn-state .why b { color:var(--ink); font-weight:650; }
+  .card-note { font-size:.78rem; color:var(--muted); padding:0 .85rem .9rem; border-top:1px solid var(--line); padding-top:.7rem; }
+
+  /* standalone panel specimens (states) */
+  .specimens { display:flex; gap:1.4rem; flex-wrap:wrap; align-items:flex-start; }
+  .specimen { position:relative; width:452px; }
+  .specimen .panel { position:static; width:452px; }
+  .specimen-cap { font:600 .58rem/1 var(--font-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin-bottom:.5rem; }
+
+  @media (prefers-reduced-motion:no-preference) { .row, .grp, .act, .quiet-row, .peek { transition:background-color .12s ease, opacity .12s ease, color .12s ease, border-color .12s ease; } }
+  @media (max-width:760px) {
+    body { padding:1.2rem 1rem 4rem; }
+    .panel { position:static; width:auto; margin:.8rem 1.1rem 1.1rem; }
+    .under { min-height:0; }
+    .specimen, .specimen .panel { width:auto; }
+    /* touch has no hover: the actions stand rather than hide */
+    .acts { opacity:1; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Notifications dropdown — proposal, revision 2</h1>
+<p class="note">Two changes from the last pass. The <b>dead-time bars are gone</b> — an unlabeled rail cost a full line per row and made you decode a picture to learn something the <b>1h 04m</b> beside the title already says in words. That line now carries <b>what the agent actually asked</b>, standing rather than hidden behind a hover. And the board-marks card is cut; marks on the workboard are a real piece of work, but they are not this panel, and pairing them here only raised the question of what they were doing in a dropdown spec.</p>
+<p class="note">So every row is three lines and each one is a sentence: <b>what stopped</b>, <b>where it is</b>, <b>what it is asking</b>. Focus and Reply ride on the middle line rather than claiming one of their own.</p>
+
+<p class="spec">The panel — open, two agents stopped</p>
+<p class="variant-note">Grouping covers the queue you act on. <em>Watching</em> and <em>Running on its own</em> fall below as quiet lines that still carry their program, because a log does not need to be navigable — it needs to be skippable.</p>
+
+<div class="stage">
+  <div class="masthead">
+    <div class="wordmark">The Ant&nbsp;Hill</div>
+    <div class="signals">
+      <div class="notify-wrap">
+        <button class="btn notify-btn is-open" aria-expanded="true">Notifications <span class="badge stop">2</span></button>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Waiting on you</div>
+              <div class="h-lede">2 agents stopped</div>
+              <div class="h-rest">1 quiet · 2 running below</div>
+            </div>
+            <div class="h-cost">
+              <div class="n">1h 15m</div>
+              <div class="l">standby</div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <span class="g-nm">the-ant-hill</span>
+            <span class="g-sp"></span>
+            <span class="g-ct">1 stopped</span>
+          </div>
+          <button class="row stop">
+            <div class="r-top">
+              <span class="r-title">Awaiting your call on push/PR</span>
+              <span class="r-time">1h 04m</span>
+            </div>
+            <div class="r-meta">
+              <span class="r-trace">model-config · frozen at 6ae884b</span>
+              <span class="acts"><span class="act">Focus</span><span class="act primary">Reply</span></span>
+            </div>
+            <div class="peek"><q>Everything is staged at 6ae884b. Push the branch and open the PR, or hold for the main reconciliation first?</q></div>
+          </button>
+
+          <div class="grp lit">
+            <span class="g-nm">cooper-scheduler</span>
+            <span class="g-sp"></span>
+            <span class="g-ct">1 stopped</span>
+          </div>
+          <button class="row stop hovered">
+            <div class="r-top">
+              <span class="r-title">Claude needs your permission</span>
+              <span class="r-time">11m</span>
+            </div>
+            <div class="r-meta">
+              <span class="r-trace">calendar-draft · claude</span>
+              <span class="acts"><span class="act">Focus</span><span class="act primary">Reply</span></span>
+            </div>
+            <div class="peek"><q>Write the calendar drafting workflow to docs/plans, or keep it in the scheduling hub README?</q></div>
+          </button>
+
+          <div class="sect">
+            <span class="eyebrow">Watching</span>
+            <span class="hint">nothing is waiting on you</span>
+          </div>
+          <div class="quiet-row">
+            <span class="q-nm"><span class="q-pg">Home</span> · FE-4 integration went quiet</span>
+            <span class="q-mt">45m</span>
+          </div>
+
+          <div class="sect">
+            <span class="eyebrow">Running on its own</span>
+          </div>
+          <div class="quiet-row">
+            <span class="q-nm">Re-establish one session identity per cmux surface</span>
+            <span class="q-mt">47 agents · 26s</span>
+          </div>
+          <div class="quiet-row">
+            <span class="q-nm">Isolate the system fault and verify recovery</span>
+            <span class="q-mt">queued · 2d</span>
+          </div>
+
+          <div class="panel-foot">
+            <span class="switch"><i></i>Notify me when an agent stops</span>
+            <button class="linky">Mute for 1 hour</button>
+          </div>
+        </div>
+      </div>
+      <button class="btn">Settings</button>
+      <span class="conn"><i></i>Live</span>
+    </div>
+  </div>
+
+  <div class="under">
+    <div class="under-rail">
+      <div><div class="u-lab">Findings</div><div class="u-val">3<small>findings</small></div></div>
+      <div><div class="u-lab">Momentum</div><div class="u-val">3<small>shipping</small></div></div>
+      <div><div class="u-lab">Burn</div><div class="u-val">0<small>/min</small></div></div>
+      <div><div class="u-lab">Context peak</div><div class="u-val">86<small>% peak window</small></div></div>
+    </div>
+    <div class="lane dim"><span class="nm">the-ant-hill</span><span class="mt">4 agents</span><span class="sp"></span><span class="mt">1h 04m</span></div>
+    <div class="arow dimmer"><span>model-config</span><span class="sp"></span><span class="mt">stopped 1h 04m</span></div>
+    <div class="arow dimmer"><span>snapshot-be</span><span class="sp"></span><span class="mt">working 40s</span></div>
+    <div class="lane dim"><span class="nm">cooper-scheduler</span><span class="mt">2 agents</span><span class="sp"></span><span class="mt">11m</span></div>
+    <div class="arow dimmer"><span>calendar-draft</span><span class="sp"></span><span class="mt">stopped 11m</span></div>
+    <div class="arow dimmer"><span>hub-api</span><span class="sp"></span><span class="mt">working 2m</span></div>
+    <div class="lane dim"><span class="nm">Home</span><span class="mt">6 agents</span><span class="sp"></span><span class="mt">45m</span></div>
+    <div class="arow dimmer"><span>fe-4-integration</span><span class="sp"></span><span class="mt">quiet 45m</span></div>
+    <div class="arow dimmer"><span>docs-sweep</span><span class="sp"></span><span class="mt">working 6m</span></div>
+    <div class="arow dimmer"><span>lane6-be</span><span class="sp"></span><span class="mt">working 12s</span></div>
+  </div>
+</div>
+
+<p class="spec">The closed button — the badge ink is the verdict</p>
+<p class="variant-note">This is the control that has to work when the panel is shut, so it carries a <em>kind</em>, not just a count. The label stays "Notifications" in every state — it names what the control governs, and it is the same word in the dropdown, the footer switch, and Settings.</p>
+
+<div class="card">
+  <h3>Three states</h3>
+  <div class="btn-states">
+    <div class="btn-state">
+      <button class="btn notify-btn">Notifications <span class="badge stop">2</span></button>
+      <p class="why"><b>Ember, filled.</b> Two agents stopped and are waiting on you. The only state that earns a solid fill.</p>
+    </div>
+    <div class="btn-state">
+      <button class="btn notify-btn">Notifications <span class="badge watch">1</span></button>
+      <p class="why"><b>Amber, outline.</b> The watcher flagged something. Nobody is blocked; it is worth a look, not a trip.</p>
+    </div>
+    <div class="btn-state">
+      <button class="btn notify-btn">Notifications <span class="badge calm">0</span></button>
+      <p class="why"><b>Grey, outline.</b> Nothing is waiting. The badge still renders, so a zero is a reading rather than an absence.</p>
+    </div>
+  </div>
+  <p class="card-note">Ember never appears for anything except a person-blocker. That is the whole contract: if the button is red, someone stopped and is waiting for you.</p>
+</div>
+
+<p class="spec">Other states</p>
+<p class="variant-note">A notification surface is judged on the day it has nothing to say. All clear does not go blank — it shows what the watcher is watching, because "watching, found nothing" and "not watching" are the two things an empty panel is otherwise ambiguous between. The eyebrow carries the verdict in the words the client already computes: <em>Waiting on you</em> → <em>Watch</em> → <em>All clear</em>.</p>
+
+<div class="specimens">
+  <div class="specimen">
+    <div class="specimen-cap">All clear</div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">All clear</div>
+          <div class="h-lede">Nothing is stopped</div>
+        </div>
+        <div class="h-cost calm">
+          <div class="n">0m</div>
+          <div class="l">standby</div>
+        </div>
+      </div>
+      <div class="proof">41 agents working · 14 programs watched<br>last scan 12s ago</div>
+      <div class="panel-foot">
+        <span class="switch"><i></i>Notify me when an agent stops</span>
+        <button class="linky">Mute for 1 hour</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="specimen">
+    <div class="specimen-cap">Watching only — nobody blocked</div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">Watch</div>
+          <div class="h-lede">Nothing is stopped</div>
+          <div class="h-rest">2 quiet · 1 running below</div>
+        </div>
+        <div class="h-cost calm">
+          <div class="n">0m</div>
+          <div class="l">standby</div>
+        </div>
+      </div>
+      <div class="sect first">
+        <span class="eyebrow">Watching</span>
+        <span class="hint">nothing is waiting on you</span>
+      </div>
+      <div class="quiet-row">
+        <span class="q-nm"><span class="q-pg">Home</span> · FE-4 integration went quiet</span>
+        <span class="q-mt">45m</span>
+      </div>
+      <div class="quiet-row">
+        <span class="q-nm"><span class="q-pg">the-ant-hill</span> · 3 sessions can't take commands</span>
+        <span class="q-mt">8m</span>
+      </div>
+      <div class="sect">
+        <span class="eyebrow">Running on its own</span>
+      </div>
+      <div class="quiet-row">
+        <span class="q-nm">Re-establish one session identity per cmux surface</span>
+        <span class="q-mt">47 agents · 26s</span>
+      </div>
+      <div class="panel-foot">
+        <span class="switch"><i></i>Notify me when an agent stops</span>
+        <button class="linky">Mute for 1 hour</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="rule">
+<p class="spec">What this commits you to</p>
+<p class="note">Two things the client does not compute yet. <b>Dead time per stopped agent</b> — how long it has been waiting on a person, which the <b>11m</b> on each row and the standby total are both read from. <b>A last-question excerpt</b> for the peek line, which the drawer already reads but the strip never did; it is now standing content, so it has to be reliable rather than best-effort. Everything else here is already on the wire.</p>
+
+</body>
+</html>
