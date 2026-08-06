@@ -356,7 +356,7 @@ describe("client request deadlines", () => {
    very paint under test. */
 async function withState<T>(patch: Record<string, unknown>, fn: () => Promise<T> | T): Promise<T> {
   const full = {
-    paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
+    paintSig: { programs: "", inspector: "", widgets: "", alarm: null, actions: null },
     ...patch,
   };
   const keys = Object.keys(full);
@@ -467,8 +467,6 @@ function listUi(overrides: Record<string, unknown> = {}) {
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
-    selecting: false,
-    selection: new Set<string>(),
     selected: null,
     selectedId: null,
     programOverrides: new Map<string, string>(),
@@ -796,22 +794,11 @@ describe("summary status and widgets", () => {
     expect(M.CONTROL_STATE_TEXT.unproven).toBe("Look only — session not proven");
     expect(M.CONTROL_STATE_TEXT.unproven).not.toBe("Ready");
 
-    /* Eligibility is read from the SERVER capability, so it fails closed on its
-       own — but the reason shown must distinguish "has a pane we cannot prove"
-       from "has no pane". */
-    const off = agent({
-      target: { surfaceId: "s1", resolution: "unique-cwd" },
-      controls: [{ action: "instruct", enabled: false, reason: "x" }],
-    });
-    expect(M.broadcastEligible ? M.broadcastEligible(off) : false).toBe(false);
-    expect(M.broadcastIneligibleReason(off)).toBe("session not proven");
-
     // The gate is a gate, not a wall: an attested row keeps everything.
     const on = agent({
       target: { surfaceId: "s1", resolution: "exact" },
       controls: [{ action: "instruct", enabled: true }],
     });
-    expect(M.broadcastIneligibleReason(on)).not.toBe("session not proven");
     expect(M.quarantineBrief(on, "linked")).toBeNull();
   });
 
@@ -2365,53 +2352,6 @@ describe("unavailable-control explanation stays plain-language", () => {
   });
 });
 
-describe("broadcast recipient eligibility", () => {
-  test("only live, instruct-capable sessions are eligible", () => {
-    const live = agent({ status: "running", controls: [{ action: "instruct", enabled: true }] });
-    expect(M.broadcastEligible(live)).toBe(true);
-  });
-
-  test("ended, observed-only, and instruction-less sessions are never eligible", () => {
-    expect(M.broadcastEligible(agent({ status: "archived", controls: [{ action: "instruct", enabled: true }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "instruct", enabled: false, reason: "Observed only." }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [{ action: "focus", enabled: true }] }))).toBe(false);
-    expect(M.broadcastEligible(agent({ status: "running", controls: [] }))).toBe(false);
-  });
-
-  test("ineligible recipients name their reason from the same state the gate reads", () => {
-    /* Four reasons where there used to be one word for four facts. "Archived"
-       covered a provider exit, an operator's decision, a dead process and a
-       record that simply aged out, so the chip explaining why a recipient was
-       unavailable told the operator nothing they could act on. */
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "operator-archive" }))).toBe("archived");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "provider-exit" }))).toBe("finished");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "finished", provenance: "process-died" }))).toBe("process died");
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "waiting", scope: "retained" }))).toBe("in history");
-    /* And an unverified session is NOT one of them. Nothing ended it, so the
-       reason it cannot be sent to — if it cannot — is about its target, not
-       about it being over. */
-    expect(M.broadcastIneligibleReason(agent({ lifecycle: "unverified", target: { resolution: "missing" } })))
-      .toBe("view only");
-    // Live-but-locked reads its control state: ambiguous target → quarantined,
-    // everything else → view only. Same fields deriveControlState consumes.
-    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "ambiguous" } }))).toBe("quarantined");
-    expect(M.broadcastIneligibleReason(agent({ status: "running", target: { resolution: "missing" } }))).toBe("view only");
-    expect(M.broadcastIneligibleReason(agent({ status: "running", controlState: "quarantined" }))).toBe("quarantined");
-    // Never the bare "unavailable" placeholder.
-    for (const a of [agent({ status: "archived" }), agent({ status: "running", target: { resolution: "missing" } }), agent({ lifecycle: "unverified" })]) {
-      expect(M.broadcastIneligibleReason(a)).not.toBe("unavailable");
-    }
-  });
-
-  test("the broadcast dock chip renders the reason word, not a bare 'unavailable'", () => {
-    const barSrc = source.match(/function renderBroadcastBar\(\) \{[\s\S]*?\n\}/)?.[0];
-    expect(barSrc).toBeDefined();
-    // The chip's resting state label is derived, never the old hard-coded string.
-    expect(barSrc).toContain('text: ok ? "ready" : broadcastIneligibleReason(agent)');
-    expect(barSrc).not.toContain('"unavailable"');
-  });
-});
-
 describe("redesigned network contracts (source-level)", () => {
   test("program rename is presentation-only via GET/POST /api/program-aliases", () => {
     expect(source).toContain('apiFetch("/api/program-aliases"');
@@ -2552,53 +2492,6 @@ describe("redesigned network contracts (source-level)", () => {
       }));
   });
 
-  /* W4-B: was five source substrings that could not fail if sendBroadcast
-     started posting every selected id, or started calling a 200 a delivery.
-     Both are now asserted from the request it makes and the results it keeps. */
-  test("broadcast posts only eligible recipients and never fabricates delivery", async () => {
-    const live = agent({ id: "codex:live", controls: [{ action: "instruct", enabled: true }] });
-    const locked = agent({ id: "codex:locked", controls: [{ action: "instruct", enabled: false, reason: "quarantined" }] });
-    const ended = agent({ id: "codex:ended", status: "archived", controls: [{ action: "instruct", enabled: true }] });
-    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [live, locked, ended] }] });
-
-    await withState({
-      snap, conn: "live", selecting: true,
-      selection: new Set([live.id, locked.id, ended.id]),
-      broadcastDraft: "rebase onto main", broadcastConfirming: true,
-      broadcastPending: false, broadcastResults: null, broadcastError: "",
-    }, async () => {
-      await withRequests([{
-        status: 200,
-        json: { ok: false, partial: true, sent: 0, failed: 1, results: [{ agentId: live.id, ok: false, error: { code: "CMUX_FAILED", message: "no pane" } }] },
-      }], async (calls) => {
-        await M.sendBroadcast();
-        // Only the eligible recipient is offered to the server; the locked and
-        // ended sessions are never counted as instructed.
-        expect(calls).toHaveLength(1);
-        expect(calls[0]!.url).toBe("/api/broadcast");
-        expect(calls[0]!.body.agentIds).toEqual([live.id]);
-        expect(calls[0]!.body.instruction).toBe("rebase onto main");
-        // A per-recipient failure is kept as a failure — never smoothed into
-        // "sent", and the composer keeps the text so it can be retried.
-        expect(M.state.broadcastResults.get(live.id).ok).toBe(false);
-        expect(M.state.broadcastDraft).toBe("rebase onto main");
-        expect(M.state.broadcastConfirming).toBe(false);
-      });
-    });
-
-    // A response with no per-recipient results is an error, not a success.
-    await withState({
-      snap, conn: "live", selecting: true, selection: new Set([live.id]),
-      broadcastDraft: "go", broadcastConfirming: true, broadcastPending: false,
-      broadcastResults: null, broadcastError: "",
-    }, async () => {
-      await withRequests([{ status: 200, json: { ok: true, sent: 1, failed: 0 } }], async () => {
-        await M.sendBroadcast();
-        expect(M.state.broadcastResults).toBeNull();
-        expect(M.state.broadcastError).toContain("Broadcast failed");
-      });
-    });
-  });
 });
 
 describe("calm program and agent list rendering", () => {
@@ -3311,7 +3204,7 @@ describe("source hygiene", () => {
   });
 
   test("the redesigned control surface exposes its structural anchors", () => {
-    for (const id of ["health-rail", "filter-bar", "broadcast-bar",
+    for (const id of ["health-rail", "filter-bar",
       "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
@@ -4594,8 +4487,8 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     expect(prHead).toBeGreaterThan(-1);
     expect(pr).toContain("programRollupLine(program)");
     expect(prHead).toBeLessThan(pr.indexOf('class: "dw-roster"'));
-    // The broadcast lever stays a body control (not promoted into the head).
-    expect(pr).toContain("prog-broadcast:");
+    // The scoping lever stays a body control (not promoted into the head).
+    expect(pr).toContain("facet-program:");
   });
 
   test("(b) regression guard: workStateBanner + impactBlock still render, logic byte-untouched", () => {
@@ -5346,25 +5239,20 @@ describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
   //     = 4.7rem = 75px ≤ 25% of the 380px min pane); depth colour + chips carry
   //     the deeper hierarchy. The cap must bind at EVERY indenting site, not just
   //     one file-wide match — so each rule is extracted and checked on its own.
-  test("(d) the cap min(var(--tree-depth), 3) binds at all five indenting sites", () => {
+  test("(d) the cap min(var(--tree-depth), 3) binds at all four indenting sites", () => {
     // 1. desktop child row indent
     const isChild = styles.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(isChild).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 2. desktop child row while selecting
-    const selecting = styles.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(selecting).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 3. connector rail (tracks the same cap so it stays aligned)
+    // 2. connector rail (tracks the same cap so it stays aligned)
     const connector = styles.match(/\.agent-row\.is-child::before\s*\{[^}]*\}/)?.[0] ?? "";
     expect(connector).toContain("(min(var(--tree-depth), 3) - 1) * 1.3rem");
-    // 4. swarm anchor indent (matches the row indent)
+    // 3. swarm anchor indent (matches the row indent)
     const anchor = styles.match(/\.swarm-anchor\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(anchor).toContain("min(var(--tree-depth), 3) * 1.3rem");
-    // 5. the ≤720px mobile step rules (smaller 0.85rem step)
+    // 4. the ≤720px mobile step rule (smaller 0.85rem step)
     const mobile = styles.slice(styles.indexOf("@media (max-width: 720px)"), styles.indexOf("@media (prefers-reduced-motion"));
     const mChild = mobile.match(/\.agent-row\.is-child\s*\{[^}]*\}/)?.[0] ?? "";
     expect(mChild).toContain("min(var(--tree-depth), 3) * 0.85rem");
-    const mSelecting = mobile.match(/\.agent-row\.is-child\.is-selecting\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(mSelecting).toContain("min(var(--tree-depth), 3) * 0.85rem");
     // Absence: no uncapped multiplier survives at any width (the ", 3)" between
     // the var and the operator means the capped form is not a false match here).
     expect(styles).not.toContain("var(--tree-depth) * 1.3rem");
@@ -5815,19 +5703,12 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
       facetProgram: "",
       facetProviders: [],
       lookbackHours: 24,
-      selecting: false,
       selected: null,
-      selection: new Set<string>(),
       programOverrides: new Map<string, string>(),
       swarmOverrides: new Map<string, string>(),
       // Same default as swarms: collapsed unless the operator opened it.
       shelfOverrides: new Map<string, string>(),
       labels: new Map<string, string>(),
-      broadcastResults: null,
-      broadcastConfirming: false,
-      broadcastPending: false,
-      broadcastError: "",
-      broadcastDraft: "",
       ...overrides,
     };
   }
@@ -5940,8 +5821,8 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     expect(M.programsPaintSig(visible, ui({ renaming: "program:p" }))).not.toBe(base);
     expect(M.programsPaintSig(visible, ui({ renamePending: true }))).not.toBe(base);
     expect(M.programsPaintSig(visible, ui({ renameError: "Save failed" }))).not.toBe(base);
-    // The rename input keeps its text across snapshots (same reasoning as the
-    // broadcast composer); every external reset of it flips renamePending.
+    // The rename input keeps its text across snapshots (the live-input rule);
+    // every external reset of it flips renamePending.
     expect(M.programsPaintSig(visible, ui({ renameDraft: "half a name" }))).toBe(base);
     // The fields the signature already covered still work.
     expect(M.programsPaintSig(visible, ui({ query: "ridge" }))).not.toBe(base);
@@ -5993,32 +5874,6 @@ describe("FE-A: paint signatures cover the state their surfaces render", () => {
     expect(empty.value).toBeUndefined();
   });
 
-  test("(3) an idle snapshot does not tear down a live broadcast composer", () => {
-    const recipients = [{ agent: agent(), program }];
-    const eligible = recipients;
-    const base = M.broadcastPaintSig(recipients, eligible, ui());
-    // Typing must not change the signature — that is what used to wipe the box
-    // every ~4s when the next SSE snapshot arrived.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastDraft: "restart the collector" }))).toBe(base);
-    // Everything the dock actually paints does change it.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastConfirming: true }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastPending: true }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({ broadcastError: "Broadcast failed (HTTP 500)" }))).not.toBe(base);
-    expect(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
-    }))).not.toBe(base);
-    // Per-recipient outcomes are distinguished, not just presence.
-    expect(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: true }]]),
-    }))).not.toBe(M.broadcastPaintSig(recipients, eligible, ui({
-      broadcastResults: new Map([["codex:a1", { agentId: "codex:a1", ok: false, error: { code: "AGENT_NOT_FOUND" } }]]),
-    })));
-    // Selection changes rebuild the recipient chips.
-    expect(M.broadcastPaintSig([], [], ui())).not.toBe(base);
-    // An agent losing eligibility mid-compose must repaint its chip.
-    const gone = [{ agent: agent({ status: "stale", controls: [] }), program }];
-    expect(M.broadcastPaintSig(gone, [], ui())).not.toBe(base);
-  });
 });
 
 /* ---------------------------------------------------------------------------
@@ -6326,74 +6181,6 @@ describe("FE-B: harness-backed client behavior", () => {
     const eyebrow = html.match(/<p class="eyebrow[^"]*">/)?.[0] ?? "";
     expect(eyebrow).toContain("visually-hidden");
     expect(html).toContain("Live multi-agent control room");
-  });
-
-  /* Cockpit audit §19 pinned that the toolbar's Select button appeared only when
-     something could actually receive a broadcast. The button is gone (operator
-     directive, 2026-08-05), so the gate it read is gone with it — there is no
-     toolbar control left to render conditionally.
-
-     What the audit was really protecting outlives the button and is asserted
-     here instead: a surface must never offer a broadcast to an agent that Send
-     would refuse. Selection is now entered from a program drawer, whose button
-     counts eligible recipients with the SAME predicate the broadcast bar uses,
-     and disables itself at zero. */
-  test("(19a) nothing offers a broadcast to an agent that Send would refuse", () => {
-    const reachable = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
-    const unreachable = agent({ id: "codex:no", status: "running", activity: "working", outcome: "healthy", controlState: "quarantined", controls: [] });
-    expect(M.broadcastEligible(reachable)).toBe(true);
-    expect(M.broadcastEligible(unreachable)).toBe(false);
-
-    // The entry point, over a program where nothing can receive: offered, and
-    // disabled, and saying so rather than naming a count of zero.
-    const dead = withDom(() => {
-      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
-        .document.createElement("div");
-      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [unreachable] } });
-      return byFkey(pane, "prog-broadcast:p1");
-    });
-    expect(dead.attributes.disabled).toBe("");
-    expect(textOf(dead)).toBe("No eligible recipients");
-
-    const live = withDom(() => {
-      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
-        .document.createElement("div");
-      M.renderProgramDrawer(pane, { program: { id: "p1", name: "P", agents: [reachable, unreachable] } });
-      return byFkey(pane, "prog-broadcast:p1");
-    });
-    expect(live.attributes.disabled).toBeUndefined();
-    expect(textOf(live)).toBe("Broadcast to 1 eligible"); // the eligible one only
-
-    // The toolbar's gate and its label are gone with the button they served.
-    expect(source).not.toContain("broadcastEligible(agent) && viewMatches(state.view, agent)");
-    expect(source).not.toContain('"Select to send"');
-  });
-
-  /* Removing the Select button removed the ONLY control that left selection
-     mode — it was the same button wearing its "Done selecting" label. Selection
-     is still enterable by mouse from a program drawer, so without a replacement
-     a pointer-only operator could get in and not get out; Escape alone is not an
-     exit a mouse can find. The broadcast bar carries it now. */
-  test("selection mode keeps a way out that is not the Escape key", async () => {
-    const only = agent({ id: "codex:ok", status: "running", activity: "working", outcome: "healthy", controlState: "linked", controls: [{ action: "instruct", enabled: true }] });
-    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [only] }] });
-    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
-      () => withRequests([], async () => {
-        M.renderBroadcastBar();
-        const done = byFkey(domById.get("broadcast-bar"), "broadcast-done");
-        expect(textOf(done)).toBe("Done selecting");
-        await fire(done);
-        expect(M.state.selecting).toBe(false);
-      }));
-    /* And "Clear all" is NOT that exit — it empties the selection and stays in
-       the mode, which is a different operation and must remain one. */
-    await withState({ snap, view: "board", selecting: true, selection: new Set(["codex:ok"]) },
-      () => withRequests([], async () => {
-        M.renderBroadcastBar();
-        await fire(byFkey(domById.get("broadcast-bar"), "broadcast-clear"));
-        expect(M.state.selection.size).toBe(0);
-        expect(M.state.selecting).toBe(true);
-      }));
   });
 
   /* Cockpit audit §15. Measured live: search was the 11th tab stop of 14, with
@@ -7884,8 +7671,8 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(textOf(table)).toContain("Recent invocations");
     /* The session-link button only exists when the invocation maps to an agent
        in state.snap, which this suite cannot set; likewise the two confirm-strip
-       Cancel buttons are gated behind state.confirming / state.broadcastConfirming.
-       All three carry an fkey now, but they are covered by inspection, not here —
+       Cancel button is gated behind state.confirming.
+       Both carry an fkey now, but they are covered by inspection, not here —
        said plainly in LANE-REPORT.md rather than faked with a vacuous loop. */
   });
 
@@ -8064,8 +7851,6 @@ describe("FE-B: harness-backed client behavior", () => {
       ["terminal breadcrumb", { target: { resolution: "exact", surfaceId: "s1", workspaceTitle: "ridge" } }, {}],
       ["staleness fact", { updatedAt: new Date(Date.now() - 40 * 60_000).toISOString() }, {}],
       ["selection highlight", {}, { selectedId: "codex:a1" }],
-      ["select mode", {}, { selecting: true }],
-      ["checkbox", {}, { selecting: true, selection: new Set(["codex:a1"]) }],
       ["rename form", {}, { renaming: M.presentationLabelKey(M.preferredRenameTarget(base)) }],
       ["rename pending", {}, { renamePending: true }],
       ["rename error", {}, { renameError: "Too long" }],
@@ -8095,7 +7880,6 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(shell([{ ...a, status: "attention" }, b])).not.toBe(base); // rollup counts
     expect(shell([a, b], { programOverrides: new Map([["p1", "closed"]]) })).not.toBe(base); // caret
     expect(shell([a, b], { labels: new Map([["program:p1", "Ridge"]]) })).not.toBe(base); // head label
-    expect(shell([a, b], { selecting: true })).not.toBe(base); // selection row
     expect(shell([a, b], { renaming: "program:p1" })).not.toBe(base); // rename form
     expect(shell([a], { })).not.toBe(base); // fewer visible agents
   });
@@ -8740,12 +8524,6 @@ describe("FE-B: harness-backed client behavior", () => {
       // the one nobody chose.
       expect(M.historyProvenance(archived).className).toContain("history-chip--archived");
       expect(M.historyProvenance(retained).className).toContain("history-chip--retained");
-
-      /* Derived from the SAME two fields broadcastIneligibleReason has been
-         reading since the naming contract landed. One model, two surfaces —
-         a second derivation here is how they would start disagreeing. */
-      expect(M.broadcastIneligibleReason(retained)).toBe("in history");
-      expect(M.broadcastIneligibleReason(archived)).toBe("archived");
     });
 
     test("a session that ended some other way claims neither", () => {
@@ -9313,19 +9091,6 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
       .not.toBe(M.inspectorPaintSig(sel, view, fresh));
   });
 
-  test("(1) a board that freezes mid-compose repaints the broadcast dock", () => {
-    const recipients = [{ agent: agent({ status: "running", controls: [{ action: "instruct", enabled: true }] }), program: { id: "p", name: "P", agents: [] } }];
-    // broadcastPaintSig reads the wall clock (it is called during a real paint),
-    // so "fresh" here has to be a snapshot generated a moment ago.
-    const fresh = { conn: "live", snap: { generatedAt: new Date().toISOString() }, broadcastResults: null, broadcastConfirming: false, broadcastPending: false, broadcastError: "" };
-    const stuck = { ...fresh, snap: { generatedAt: FROZEN_AT } };
-    // The guard exists so the dock does not strobe; it must still notice this.
-    expect(M.broadcastPaintSig(recipients, recipients, stuck))
-      .not.toBe(M.broadcastPaintSig(recipients, recipients, fresh));
-    // …and typing still must not move it (FE-A's live-input rule, unchanged).
-    expect(M.broadcastPaintSig(recipients, recipients, { ...fresh, broadcastDraft: "half a sentence" }))
-      .toBe(M.broadcastPaintSig(recipients, recipients, fresh));
-  });
 });
 
 /* ---------------------------------------------------------------------------
@@ -10827,7 +10592,7 @@ describe("W6-B: sequenced snapshot deltas stay complete", () => {
   test("the quiet-feed clock repaints the alarm without waiting for another snapshot", async () => {
     const stale = snapshot({ generatedAt: new Date(Date.now() - 61_000).toISOString() });
 
-    await withState({ snap: stale, conn: "reconnecting", selected: null, selecting: false }, async () => {
+    await withState({ snap: stale, conn: "reconnecting", selected: null }, async () => {
       await withRequests([], async (calls) => {
         M.tickFreshnessSurfaces();
 

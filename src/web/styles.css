@@ -1195,9 +1195,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .rename-form .rename-source { flex-basis: 100%; font-size: 11px; color: var(--faint); }
 .rename-error { flex-basis: 100%; margin: 0; color: var(--ember); font-size: 12.5px; }
 
-.program-select-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.9rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--moss) 5%, var(--surface)); }
-.program-select-note { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-
 .program-agents { border-top: 1px solid var(--line); }
 .program:not(.open) .program-agents { display: none; border-top: 0; }
 
@@ -1284,9 +1281,7 @@ body.feed-frozen .programs { opacity: 0.62; }
    rule uses, so keyboard focus reads identically everywhere on the board. */
 .agent-row:focus-visible { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); box-shadow: inset 0 0 0 2px var(--ember); }
 .agent-row.is-selected { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); border-left-color: var(--ink); }
-.agent-row.is-selecting { cursor: default; }
 .agent-row.is-renaming { border-bottom-color: transparent; }
-.agent-row[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 .agent-row-edit-wrap { border-bottom: 1px solid var(--line); }
 .agent-row-edit-wrap .rename-form { border-bottom: 0; }
 
@@ -1342,7 +1337,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 2px var(--ember); }
 .agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 2px var(--ember); }
 .agent-row.is-ended { opacity: 0.66; }
-.agent-row.is-checked { background: color-mix(in srgb, var(--moss) 9%, var(--surface)); }
 
 /* One shared 5-track template — identity (wide, left) + the right-aligned
    instrument cluster: status, model+ctx%, tokens, elapsed. Both the header and
@@ -1761,12 +1755,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you .row-summary { color: color-mix(in srgb, var(--ember) 65%, var(--ink)); }
 .agent-row.is-failed .row-summary { color: color-mix(in srgb, var(--failed) 65%, var(--ink)); }
 
-/* selection checkbox */
-.row-check { position: absolute; top: 0.6rem; left: 0.5rem; width: 1.2rem; height: 1.2rem; display: grid; place-items: center; border: 1.5px solid var(--line-strong); border-radius: 5px; background: var(--raise); color: transparent; }
-.agent-row.is-selecting { padding-left: 2.3rem; }
-.agent-row.is-checked .row-check { border-color: var(--moss); background: var(--moss); color: #fff; }
-.row-check .ico { width: 0.85rem; height: 0.85rem; }
-
 /* swarm tree connectors + depth accents */
 .agent-row.depth-1 { --tree-depth: 1; --tree-color: #6c8b6b; }
 .agent-row.depth-2 { --tree-depth: 2; --tree-color: #b6794f; }
@@ -1778,7 +1766,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    nesting reuses the level-3 indent; the depth colour + swarm/depth chips carry
    the rest of the hierarchy. min(var(--tree-depth), 3) caps the multiplier. */
 .agent-row.is-child { padding-left: calc(0.8rem + min(var(--tree-depth), 3) * 1.3rem); border-left-color: var(--tree-color); }
-.agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 1.3rem); }
 .agent-row.is-child::before {
   content: "";
   position: absolute;
@@ -2835,59 +2822,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .control-feedback.ok { color: var(--ok); }
 .control-feedback.err { color: var(--bad); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* ---------- broadcast dock ---------- */
-
-.broadcast-bar {
-  position: fixed;
-  left: 50%;
-  bottom: 1.1rem;
-  transform: translateX(-50%);
-  z-index: 45;
-  width: min(96vw, 46rem);
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--raise);
-  box-shadow: var(--shadow-lift);
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-.broadcast-bar[hidden] { display: none; }
-.broadcast-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.broadcast-head .ico { width: 1.15rem; height: 1.15rem; color: var(--ember); }
-.broadcast-title { font-weight: 750; font-size: 15px; }
-.broadcast-count { font-size: 12.5px; color: var(--muted); }
-.broadcast-count strong { color: var(--ink); }
-.broadcast-clear { margin-left: auto; font-size: 12.5px; color: var(--ember); font-weight: 650; }
-.broadcast-recipients { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 5rem; overflow-y: auto; }
-.recipient-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line-strong); background: var(--surface); }
-.recipient-chip.is-eligible { border-color: color-mix(in srgb, var(--moss) 45%, var(--line-strong)); color: var(--ink); }
-.recipient-chip.is-ineligible { color: var(--faint); border-style: dashed; }
-.recipient-chip .rc-state { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
-.recipient-chip.is-eligible .rc-state { color: var(--moss); }
-.recipient-result { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; }
-.recipient-result.ok { color: var(--moss); }
-.recipient-result.err { color: var(--ember); }
-.broadcast-compose { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: stretch; }
-.broadcast-compose textarea {
-  flex: 1 1 16rem;
-  min-height: 46px;
-  padding: 0.5rem 0.65rem;
-  font: inherit;
-  font-size: 13.5px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  resize: vertical;
-}
-.broadcast-send { align-self: stretch; }
-.broadcast-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.65rem; border: 1px solid color-mix(in srgb, var(--ember) 45%, transparent); border-radius: var(--radius-sm); background: var(--ember-soft); font-size: 13px; }
-.broadcast-note { font-size: 12px; color: var(--faint); }
-.broadcast-note.err { color: var(--ember); }
-.broadcast-note.is-held { color: var(--ember); font-weight: 650; }
-
 /* ---------- empty state ---------- */
 
 .empty-state { margin: 4rem auto; max-width: 26rem; text-align: center; color: var(--muted); }
@@ -3044,11 +2978,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   .agent-row:focus .row-summary,
   .agent-row.is-selected .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
   .agent-row.is-child { padding-left: calc(0.65rem + min(var(--tree-depth), 3) * 0.85rem); }
-  .agent-row.is-child.is-selecting { padding-left: calc(2.3rem + min(var(--tree-depth), 3) * 0.85rem); }
   .tri-spine { flex-direction: column; gap: 0.45rem; }
   .tri-step { flex: 1 1 auto; padding-right: 0; }
   .tri-step::before { display: none; }
-  .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch.
      (.program-details graduated to the <1024px sweep above — 44px from tablet down.) */

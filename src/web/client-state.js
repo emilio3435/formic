@@ -116,13 +116,6 @@ export const state = {
   renameDraft: "",
   renamePending: false,
   renameError: "",
-  selecting: false,            // selection/broadcast mode
-  selection: new Set(),        // selected agent ids
-  broadcastDraft: "",
-  broadcastConfirming: false,
-  broadcastPending: false,
-  broadcastError: "",
-  broadcastResults: null,      // Map agentId -> { ok, error }
   programOverrides: new Map(), // programId -> "open" | "closed"
   /* Which repositories the operator has folded up. Keyed by repoKey — the FNV
      of the git common dir, which is stable across every worktree of the repo
@@ -189,7 +182,7 @@ export const state = {
   // `alarm` and `actions` start null, not "": their calm signature IS the empty
   // string, so a "" seed would make the very first paint a no-op and leave both
   // surfaces showing whatever markup they were served with.
-  paintSig: { programs: "", inspector: "", widgets: "", broadcast: "", alarm: null, actions: null },
+  paintSig: { programs: "", inspector: "", widgets: "", alarm: null, actions: null },
 };
 
 /* WHICH entity a painted inspector signature describes — the kind and id that
