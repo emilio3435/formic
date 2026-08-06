@@ -34,6 +34,7 @@ import {
   enumerateCleanup,
   fingerprintPlan,
   occupantsForWorktrees,
+  processTableFromPs,
   parseWorktreePorcelain,
   pathInsideWorktree,
   worktreeRefusals,
@@ -463,6 +464,38 @@ detached
 });
 
 describe("cleanup sweep — propose is board-safe", () => {
+  test("a process table with any unparsed row is incomplete", () => {
+    const row = "123 Wed Aug  5 21:00:00 2026 codex resume session";
+
+    expect(processTableFromPs(`${row}\n`)).toMatchObject({
+      complete: true,
+      rows: [{ pid: 123, command: "codex resume session" }],
+    });
+    expect(processTableFromPs(`${row}\nnot a process row\n`)).toMatchObject({
+      complete: false,
+      rows: [{ pid: 123, command: "codex resume session" }],
+    });
+  });
+
+  test("an incomplete process enumeration produces no cleanup plan", () => {
+    const root = initRepo("incomplete-process-repo");
+    addMergedWorktree(root, "feat-incomplete", "incomplete-wt");
+
+    expect(() => enumerateCleanup(root, hostFor(root, { complete: false })))
+      .toThrow(/process table enumeration is incomplete/i);
+  });
+
+  test("a recognized agent whose cwd cannot be enumerated produces no cleanup plan", () => {
+    const root = initRepo("incomplete-cwd-repo");
+    addMergedWorktree(root, "feat-incomplete-cwd", "incomplete-cwd-wt");
+    const host = hostFor(root, {
+      processes: [{ pid: 8080, startSeconds: 100, command: "codex resume session" }],
+    });
+
+    expect(() => enumerateCleanup(root, host))
+      .toThrow(/process cwd enumeration is incomplete/i);
+  });
+
   test("enumerate issues only read-only git verbs", () => {
     const root = initRepo("readonly-repo");
     addMergedWorktree(root, "feat-ro", "ro-wt");

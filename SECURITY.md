@@ -23,11 +23,13 @@ separate-user broker.
   hostname. They do not identify the local process making the request.
 
 - **Exact same-origin checks on mutations.** Control, broadcast, settings,
-  attention, triage, recollect, and other state-changing routes require the
-  browser-supplied `Origin` to equal the loopback request origin. This stops a
-  hostile website opened in the operator's browser from issuing changes to Ant
-  Hill. A local process can construct the same header, so this is browser CSRF
-  protection, not local caller authentication.
+  attention, triage, recollect, cleanup proposal, and other state-changing
+  routes require the browser-supplied `Origin` to equal the loopback request
+  origin. This stops a hostile website opened in the operator's browser from
+  issuing changes to Ant Hill. A local process can construct the same header,
+  so this is browser CSRF protection, not local caller authentication. The
+  cleanup proposal route may write a plan artifact, but has no confirm or
+  deletion capability.
 
 - **Read-only GET exception.** Read-only GET endpoints that omit an `Origin`
   requirement still pass through the app-wide loopback Host gate. Browsers do
