@@ -3655,7 +3655,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   vertical-align: middle;
 }
 .verdict-cleanup:hover { background: var(--sand); }
-.verdict-cleanup:disabled { cursor: progress; opacity: 0.85; }
+/* aria-disabled rather than :disabled — the button stays focusable while a sweep
+   runs, because a control that leaves the tab order mid-interaction strands the
+   keyboard operator who just activated it. Styled the same either way. */
+.verdict-cleanup[aria-disabled="true"] { cursor: progress; opacity: 0.85; }
 
 /* The indicator states that A PROCESS IS UNDERWAY. It must never imply the
    fault is fixed, so it is a bare rotating arc with no completion affordance —

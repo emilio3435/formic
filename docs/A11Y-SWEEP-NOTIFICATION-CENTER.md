@@ -535,6 +535,151 @@ Each fix should land with the claim-shaped test that would have caught it; those
 
 ---
 
+## Second pass — the Clean up control (2026-08-06 06:5x)
+
+**Scope gap, not a re-audit.** The original sweep was scoped to `#notify-toggle` and
+`#notifications-panel`. `cleanupAction()` shipped in S6-T3 *after* it and landed in main
+without any a11y pass. It lives on the header instrument-trust chip
+(`app.js:2280`, `.verdict-cleanup`), so no check above ever touched it.
+
+Same server: `MOUNTAIN_PORT=4799`, live board, `/browse`. The board carried no debris, so
+`cleanupOffered()` was false; the control was brought on screen through its own render path
+by setting `state.cleanup.error` — a state the app reaches on its own whenever enumeration
+fails — never by hand-editing the DOM.
+
+| # | Check | Result |
+|---|---|---|
+| C1 | Does the running state reach the screen at all? | **FAIL** — the header never repaints during a sweep |
+| C2 | Focus on activation | **FAIL** — falls to `<body>` and never returns |
+| C3 | Is the transition announced? | **FAIL** — the live region is destroyed and recreated every paint |
+| C4 | Contract sentence in `title` | **PASS, with a caveat** — the orchestrator's suspicion was half right; see C4 |
+| C5 | Mark `aria-hidden`, colour-only signal | **PASS** |
+| C6 | Target size | **PASS via the 2.5.8 spacing exception** — 74.8 × 17px, nearest target 101px away |
+| C7 | `prefers-reduced-motion` static variant | **NOT RUN** — same harness limit as check 5 |
+
+### CLEAN-1 · The entire running state was unreachable — FIXED
+
+**Selector:** `app.js` `renderHealthRail()`'s paint signature (the `paintUnchanged("widgets", …)` guard).
+
+The Clean up button lives in the header rail. The rail's paint signature signs widget values,
+tones and sublabels — **and nothing about the sweep**. Not one signed input moves while a
+sweep is in flight, so the guard returns early and the button is never rebuilt.
+
+Measured on the live board, with the guard left alone:
+
+```
+resting                     text "Clean up"   disabled false  markOpacity 0
+running, guard intact       text "Clean up"   disabled false  markOpacity 0   ← no change at all
+running, guard invalidated  text "Examining…" disabled true   markOpacity 1   ← the UI is correct
+```
+
+A real activation confirmed it end to end: `running` went `true → false` while the button
+read `"Clean up"` throughout and the indicator never appeared.
+
+**What a user hits.** They press Clean up and *nothing happens*. No label change, no spinner,
+no busy state — on a control whose entire S6-T3 design is "a rotating indicator on the chip
+and nothing else". The sweep runs and its result appears in a different surface. The obvious
+next move is to press it again.
+
+**The same bug was already found and fixed one surface away.** The notification panel's
+signature signs the sweep, with a comment saying why: *"The sweep's own state, or the panel
+would freeze mid-run: the indicator starts and the plan arrives without any snapshot value
+changing."* The rail holds the **button** and never got the same treatment.
+
+**Fix:** three lines added to the rail's signature — `state.cleanup.running`, `.at`, `.error` —
+mirroring the panel's. Verified with the guard untouched: `"Examining…"`, `aria-busy="true"`,
+indicator visible.
+
+### CLEAN-2 · Focus fell to `<body>` on activation and never returned — FIXED
+
+**Selector:** `app.js:2285`, `disabled: running ? "" : null`.
+
+This is A11Y-2 by a third route, and it was **masked by CLEAN-1** — the button never actually
+disabled, so the defect could not be observed until the repaint was fixed. Measured under a
+repainting rail:
+
+```
+focus the button          activeElement = .verdict-cleanup
+sweep starts              activeElement = BODY        node replaced, new node disabled
+sweep settles             activeElement = BODY        never restored
+control vanishes          activeElement = BODY
+```
+
+`render()` restores focus by `data-fkey`. It *finds* the rebuilt node — so the `else if`
+fallbacks never run — and calls `.focus()` on it, which does nothing because the node is now
+`disabled`. On the next paint `focusKey` is read off `<body>`, which has no `fkey`, so there
+is nothing left to restore. Focus is gone for good.
+
+**What a user hits.** A keyboard operator presses Enter on Clean up and is silently returned
+to the top of the document, mid-task, with no way back except re-tabbing the whole page.
+
+**Fix:** `aria-disabled="true"` instead of `disabled`. It says the same thing to assistive
+tech while keeping the control in the tab order, and `requestCleanupProposal()` already
+refuses re-entry (`if (state.cleanup.running) return`), so nothing depends on the native
+attribute. CSS moves from `:disabled` to `[aria-disabled="true"]`. Verified: focus stays on
+`.verdict-cleanup` through running **and** settled.
+
+### CLEAN-3 · The announcement could never fire — FIXED
+
+**Selector:** `app.js:2289`, `"aria-live": "polite"` on the button itself.
+
+Measured: the button node is **replaced on every paint** (`sameNodeAsBefore: false`). A live
+region that is destroyed and recreated announces nothing — the region has to already be in
+the tree when its content changes. So the one non-visual signal this control had could never
+fire, and a spinner says nothing to a screen reader. Combined with CLEAN-1, a non-sighted
+operator got **no signal whatsoever** that a sweep had started.
+
+**This codebase already knew.** `index.html` says it in its own words about `#bar-scope-note`:
+*"an aria-live region that is destroyed and recreated announces nothing: the region has to
+already be in the tree when its content changes."*
+
+**Fix:** a static `#cleanup-status` (`role="status"`, `aria-live="polite"`, visually hidden)
+declared in `index.html` beside `#scan-window` — `renderHealthRail` only empties
+`#health-widgets`, so it survives the paint that relabels the button. `announceCleanup()`
+writes to it at both transitions; the misleading `aria-live` comes off the button. Verified on
+a real sweep: *"Cleanup sweep running…"* then *"Cleanup proposal ready…"*, with
+`regionNodeStillOriginal: true`.
+
+### C4 · The contract sentence — the suspicion was half right
+
+**Measured, not assumed.** Chrome's AX tree exposes the `title` as the accessible
+**description**, in full:
+
+```
+role: button   name: "Clean up"
+description: "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead
+              panes. Nothing will be deleted without your approval — you paste the confirm
+              command yourself."
+```
+
+So *"invisible to screen readers"* is **wrong** — it is exposed, and the contract is
+reachable. Two halves of the concern do stand: a description is announced inconsistently
+across AT and verbosity settings, and `title` needs hover, so on touch the sentence is
+**unreachable by any means**.
+
+**Not fixed, and deliberately.** Promoting it to `aria-describedby` on a visible node would
+put a 30-word sentence permanently inside a compact header chip, which is the "standing scold"
+S6-T3 removed on purpose. The honest options are a visually-hidden `aria-describedby` target
+(fixes AT, not touch) or moving the contract into the proposal surface the operator reaches
+before any command runs — which is where the confirm command already lives. **That is a
+design call, not an a11y fix, so it is written up here rather than decided by this lane.**
+
+### C5, C6, C7 — measured, no action
+
+- **`.verdict-cleanup-mark` is correctly `aria-hidden="true"`**, 9×9, `opacity: 0` at rest.
+- **Not a colour-only signal.** The state is carried by presence/absence plus a label change
+  (`Clean up` → `Examining…`), not by hue. Text contrast 4.68:1 against its composited
+  background (needs 4.5).
+- **Target 74.8 × 17px**, at 1280 *and* 420 — under WCAG 2.5.8's 24×24. **Passes via the
+  spacing exception**: the nearest other target's centre is 101px away, far outside the 24px
+  circle. Recorded as an observation, the same treatment `.notify-act` got at desktop, not
+  filed as a defect.
+- **`prefers-reduced-motion`: NOT RUN**, same harness limit as check 5. `styles.css:3671`
+  switches the rotation for a dashed static ring, and the rule is asserted at rule level only.
+  The source comment already says so, which is the right form.
+
+---
+
 ## Status — 2026-08-06 23:4x, all seven closed
 
 | # | Defect | Landed | Verified |

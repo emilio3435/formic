@@ -2282,11 +2282,16 @@ function cleanupAction() {
   return el("button", {
     type: "button",
     class: "verdict-cleanup" + (running ? " is-running" : ""),
-    disabled: running ? "" : null,
+    /* aria-disabled, NOT disabled. A disabled element leaves the tab order, and
+       this button is rebuilt on the same paint that disables it — so render()'s
+       fkey restore found the new node, called focus() on something disabled,
+       and the call did nothing. Measured: activeElement === body the instant a
+       keyboard operator activated Clean up, and it never came back, because the
+       next paint read its focusKey off <body> and had nothing to restore.
+       aria-disabled says the same thing to assistive tech while keeping the
+       control focusable; requestCleanupProposal already refuses re-entry. */
+    "aria-disabled": running ? "true" : null,
     "aria-busy": running ? "true" : null,
-    /* aria-live so the transition is announced: a spinner is invisible to a
-       screen reader, and "a sweep is running" is the whole message. */
-    "aria-live": "polite",
     title: running
       ? "Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval."
       : "Propose a cleanup: enumerate abandoned worktrees, merged branches and dead panes. Nothing will be deleted without your approval — you paste the confirm command yourself.",
@@ -2827,9 +2832,20 @@ function renderNotificationCenter() {
    plan missing a refusal is a plan that proposes deleting something it should
    not — so an incomplete enumeration is reported as incomplete and no removable
    is shown from it. */
+/* The sweep's non-visual signal, written to the static region in the rail header
+   rather than to the button. The button is rebuilt on every paint, and a live
+   region that is destroyed and recreated announces nothing — so the announcement
+   it used to carry could never fire. A spinner says nothing to a screen reader,
+   which left a non-sighted operator with no signal that anything had started. */
+function announceCleanup(text) {
+  const region = $("cleanup-status");
+  if (region) region.textContent = text;
+}
+
 async function requestCleanupProposal() {
   if (state.cleanup.running) return;              // overlapping calls share one run server-side
   state.cleanup = { running: true, error: "", view: null, at: Date.now() };
+  announceCleanup("Cleanup sweep running. Enumerating worktrees, branches and the process table. Nothing will be deleted without your approval.");
   render();
   try {
     const res = await apiFetch("/api/cleanup/propose", {
@@ -2852,6 +2868,11 @@ async function requestCleanupProposal() {
       view: null, at: Date.now(),
     };
   }
+  /* The outcome, in the same region. "Incomplete" and "ready" are different
+     facts and the operator must not read one as the other — the same rule the
+     error string above already follows. */
+  announceCleanup(state.cleanup.error
+    || "Cleanup proposal ready. Open Notifications to read it; nothing has been deleted.");
   render();
 }
 
@@ -3369,6 +3390,16 @@ function renderHealthRail() {
       const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
+    /* The sweep's own state. The notification panel's signature already signs
+       this — "or the panel would freeze mid-run" — but the rail is where the
+       Clean up BUTTON lives, and it never got the same treatment. Measured on
+       the live board: with a sweep running, the header button stayed "Clean up",
+       stayed enabled and never showed its indicator, because not one signed
+       input moves while a sweep is in flight. The entire running state was
+       unreachable from the control that starts it. */
+    state.cleanup.running ? "sweeping" : "",
+    String(state.cleanup.at),
+    state.cleanup.error,
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
