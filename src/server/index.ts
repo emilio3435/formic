@@ -3,6 +3,7 @@ import { JsonArchiveStore } from "./archive";
 import { createAgentLinkFetch } from "./agent-links";
 import { createMountainFetch } from "./app";
 import { createWorkerCleanupProposer } from "./cleanup-propose";
+import { createNativeCleanupLauncher } from "./cleanup-launch";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { runtimeCmuxExecutable } from "./cmux";
@@ -68,6 +69,16 @@ const mountainFetch = createMountainFetch({
   programAliasStore,
   settingsStore,
   cleanupProposer: createWorkerCleanupProposer(PROJECT_ROOT),
+  cleanupLauncher: createNativeCleanupLauncher({
+    repoRoot: PROJECT_ROOT,
+    cmuxExecutable,
+    runner,
+    nameSession: (agentId, name) => sessionNameStore.remember(agentId, {
+      name,
+      by: "launch-env",
+      at: new Date().toISOString(),
+    }),
+  }),
   cmuxExecutable,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });
