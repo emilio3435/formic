@@ -3214,10 +3214,16 @@ body.feed-frozen .programs { opacity: 0.62; }
 .gauge-fill { stroke: var(--moss); stroke-width: 10; stroke-linecap: round; }
 .gauge-fill.warn { stroke: var(--amber); }
 .gauge-fill.hot { stroke: var(--ember); }
-/* Ticks, not needles: the dial answers "how full is the fullest window", and a
-   second needle would read as a second fleet rather than as context for it. */
+/* Ticks, not needles: the dial answers "how full is a typical window", and a
+   second needle would read as a second fleet rather than as context for it.
+   S3 moved the peak onto this arc as a mark — it is one session's extremum, and
+   a mark is the honest weight for it beside a reading about the whole fleet. */
 .gauge-mark { stroke: var(--muted); stroke-width: 2; }
-.gauge-mark.is-average { stroke: var(--faint); stroke-dasharray: 3 2; }
+.gauge-mark.is-average, .gauge-mark.is-median { stroke: var(--faint); stroke-dasharray: 3 2; }
+/* The peak keeps a solid, slightly heavier tick in the alarm ink: it is the one
+   mark that can mean a session is about to run out of room, which is still what
+   colours the card even though it no longer leads it. */
+.gauge-mark.is-peak { stroke: var(--ember); stroke-width: 2.5; }
 .spread-toggle {
   border: 1px solid var(--line-strong);
   background: var(--surface);

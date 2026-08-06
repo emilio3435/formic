@@ -67,7 +67,12 @@ export const state = {
   usageInvocations: null,
   usageFetchedAt: 0,
   contextDisplay: "percent", // percent | tokens
-  contextSpread: "median",     // median | average — which one the gauge spells out
+  /* Which context reading LEADS the header card — S3 inverted this control, so
+     it now chooses the headline rather than which secondary reading got words.
+     Average by default: it moves with every session, where a median can sit
+     still while half the fleet climbs. Per-browser, like the lookback, because
+     it is a display preference rather than a fact about the fleet. */
+  contextSpread: "average",    // average | median
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
   labelsLoading: false,

@@ -1557,6 +1557,57 @@ describe("views split Now from History", () => {
     }));
   });
 
+  test("the empty board names every constraint that produced it", async () => {
+    const reviewTask = "Review this change for security vulnerabilities.";
+    const updatedAt = new Date().toISOString();
+    const review = agent({ id: "claude:r1", provider: "claude", updatedAt, task: reviewTask });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review] }] });
+
+    /* lookbackHours is null here, not 6, and that is not an arbitrary fixture:
+       `lookbackApplies("board")` is true, so any preset makes the lookback a
+       SECOND constraint and the sole-constraint sentence below is reachable only
+       on "Everything" (confirmed by execution — docs/EMPTY-BOARD-LOOKBACK-FINDING.md,
+       4b4afa5). Whether that reachability should change is a separate ruling;
+       this test states the behavior as it is rather than the behavior we want. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("1 review worker is hidden from the Board. Show them from Filters.");
+    });
+
+    /* The count is rendered INTO the sentence, so the noun and its verb have to
+       move with it — "1 review workers are hidden" would read as a bug in the
+       very number the sentence exists to disclose. */
+    const second = agent({ id: "claude:r2", provider: "claude", updatedAt, task: reviewTask });
+    const twoSnap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, second] }] });
+    await withState({
+      snap: twoSnap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("2 review workers are hidden from the Board. Show them from Filters.");
+    });
+
+    // Every active constraint gets named, in the order the operator would undo them.
+    await withState({
+      snap, view: "board", query: "zzz", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("Nothing matches the current search and filters and lookback (6h) and 1 review worker hidden in this view.");
+    });
+
+    // Nothing narrowing the view: null hands the caller to the all-clear branch.
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: true,
+    }, () => {
+      expect(M.emptyListMessage(M.state)).toBeNull();
+    });
+  });
+
   test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
     const updatedAt = new Date().toISOString();
     const review = agent({
@@ -5833,15 +5884,23 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(M.agentsById(null).size).toBe(0);
   });
 
-  test("(7) pulseStripModel threads the context display so a paint derives each widget once", () => {
+  test("(7) pulseStripModel derives each widget once, and the fleet reading is always a percentage", () => {
+    /* S3. The card headlined ONE session's peak, so the tokens display could
+       show that session's token count. It headlines the fleet's typical
+       occupancy now, and there is no fleet-wide token counterpart: an "average
+       token count" would be an aggregate of occupancies, the exact substitution
+       types.ts:142-158 exists to prevent. Tokens stay where a single agent is
+       the subject — the CTX column and the drawer. */
     const withCtx = snapshot({
+      contextAverage: 25,
+      contextMedian: 25,
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
     });
     const percentCell = M.pulseStripModel(withCtx, "live", [], "percent").cells.find((c: { id: string }) => c.id === "context-peak");
     const tokenCell = M.pulseStripModel(withCtx, "live", [], "tokens").cells.find((c: { id: string }) => c.id === "context-peak");
     expect(percentCell.data.value).toBe("25%");
-    expect(tokenCell.data.value).not.toBe("25%");
-    expect(tokenCell.data.value).toContain("50k");
+    expect(tokenCell.data.value).toBe("25%");
+    expect(tokenCell.data.value).not.toContain("50k");
     // Weighting is unaffected by the display — the cell the signature and the
     // renderer share is the same object either way.
     expect(percentCell.weight).toBe(tokenCell.weight);
@@ -6025,7 +6084,17 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(4b) the band reasons about the same context number it displays", () => {
     const snap = snapshot({ contextPeak: 12 });
     expect(M.bandContextPct(snap)).toBe(12);
-    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("12%");
+    /* S3. The BAND still reasons about the peak — one session about to run out
+       of room is worth reacting to. The CARD no longer leads with it, and a
+       snapshot carrying ONLY a peak has no reading that describes the fleet, so
+       it withholds rather than presenting one session's extremum as one. */
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("No data");
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").tone).toBe("missing");
+    // With a fleet reading present, the card speaks and the peak is a mark on it.
+    const full = snapshot({ contextPeak: 12, contextAverage: 4, contextMedian: 3 });
+    const data = M.summaryWidgetData("context-peak", full, "live", "percent");
+    expect(data.value).toBe("4%");
+    expect(data.gaugeMarks.map((m: { label: string }) => m.label)).toContain("Peak 12%");
     // Falls back to the client walk only when the server did not report one.
     const walked = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } })] }] });
     expect(M.bandContextPct(walked)).toBe(90);
@@ -6635,30 +6704,41 @@ describe("FE-B: harness-backed client behavior", () => {
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
     });
     const data = M.summaryWidgetData("context-peak", withCtx, "live", "percent");
-    expect(data.value).toBe("74%"); // server's number wins over the client's 25%
-    /* The headline is already "74%", so repeating "Peak 74%" here printed one
-       number twice in one tile — audit §12, the same defect the drawer's context
-       tile had fixed. The median stays: it is what the headline cannot say. */
-    expect(data.sublabel).toContain("Median 31%");
+    /* S3. The headline was `contextPeak` — ONE session's extremum standing in
+       for a reading about the fleet. Measured live while this was written: peak
+       84%, average 29%, median 25%. The header said the fleet was nearly full
+       while the typical session sat at a quarter.
+
+       The fleet's typical occupancy leads now. With no average on the wire the
+       median leads, and the peak becomes a mark on the dial. */
+    expect(data.value).toBe("31%");
+    expect(data.meterPct).toBe(31);
+    expect(data.spreadMode).toBe("median");
+    // Peak survives where it belongs — as a tick, named in the dial's own label.
+    expect(data.gaugeMarks.map((m: { label: string }) => m.label)).toContain("Peak 74%");
     expect(data.sublabel).not.toContain("Peak 74%");
-    expect(data.meterPct).toBe(74);
+    /* …and the alarm still reads the PEAK, not the headline. Demoting it from
+       the headline is not the same as ceasing to watch it: one session about to
+       run out of room is worth colouring the card for even when the fleet's
+       typical occupancy is comfortable. */
     expect(data.tone).toBe("ok");
+    expect(M.summaryWidgetData("context-peak", snapshot({ contextPeak: 91, contextMedian: 12 }), "live", "percent").tone)
+      .toBe("hot");
 
     // The card must survive a snapshot the client walk finds nothing in — the
-    // exact case that printed "No data" over a reported peak.
+    // exact case that printed "No data" over a reported reading.
     const serverOnly = snapshot({
       contextPeak: 91,
       contextMedian: 12,
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "reported", total: 10 } })] }],
     });
     const bare = M.summaryWidgetData("context-peak", serverOnly, "live", "percent");
-    expect(bare.value).toBe("91%");
+    expect(bare.value).toBe("12%");
     expect(bare.value).not.toBe("No data");
-    expect(bare.sublabel).toContain("Median 12%");
-    expect(bare.tone).toBe("hot"); // 91% is a real ceiling warning
+    expect(bare.tone).toBe("hot"); // the peak at 91% is a real ceiling warning
 
-    // Tokens display still reads the peak agent's own totals, not a percentage.
-    expect(M.summaryWidgetData("context-peak", withCtx, "live", "tokens").value).toContain("50k");
+    // The fleet reading is a percentage in either display — see (7).
+    expect(M.summaryWidgetData("context-peak", withCtx, "live", "tokens").value).toBe("31%");
 
     // No server fields and no client evidence is still an honest "No data" —
     // the card never invents a number.

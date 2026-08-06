@@ -185,7 +185,14 @@ export const WIDGET_CATALOG = Object.freeze([
      that still names it. */
   { id: "momentum", label: "Momentum" },
   { id: "burn", label: "Burn" },
-  { id: "context-peak", label: "Context peak" },
+  /* Label "Context", id `context-peak`. S3 moved the peak off the headline —
+     the card reads the fleet's typical occupancy now, because one session's
+     extremum was standing in for a reading about the whole fleet. The id does
+     not move with the label: it is a storage key that saved layouts and the
+     CONTEXT_SPREAD_KEY preference are written against. Ids are storage keys,
+     labels are copy — the same precedent the retired Findings card was named
+     under. */
+  { id: "context-peak", label: "Context" },
   { id: "health", label: "Health" },
 ]);
 /* Ids that were real once and are not offered any more. A stored layout naming
