@@ -1183,10 +1183,6 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
 }
 
 const AFFECTS_SAMPLE_LIMIT = 6;
-// At most five rows in the inline pulse expansion before a "+N more" control
-// reveals the rest in place — dense but never an unbounded wall.
-const MAX_PULSE_ROWS = 5;
-
 // Server-owned work state → the single row vocabulary (label + visual key +
 // tone). issueWorkState prefers live optimistic signals, then this map, then a
 // severity default, so the board always names who (if anyone) is on a finding.
@@ -1215,21 +1211,6 @@ const STAGE_BY_WORK = {
   triaging: 2, planned: 2, queued: 2, investigating: 2,
   verifying: 3, blocked: 3,
   cleared: 4,
-};
-const STAGE_LABELS = ["Watch", "Triage", "Verify", "Cleared"];
-
-// Each work key → row glyph shape + state-label tone + progress-rail tone. The
-// glyph/rail/st classes are styled in styles.css (.glyph.act/.warn/.run/.ok).
-const FINDING_VISUAL = {
-  needs: { glyph: "act", st: "hot", rail: "hot" },
-  watching: { glyph: "warn", st: "warm", rail: "warm" },
-  triaging: { glyph: "run", st: "cool", rail: "" },
-  planned: { glyph: "run", st: "cool", rail: "" },
-  queued: { glyph: "run", st: "cool", rail: "" },
-  investigating: { glyph: "run", st: "cool", rail: "" },
-  verifying: { glyph: "run", st: "warm", rail: "warm" },
-  blocked: { glyph: "act", st: "hot", rail: "hot" },
-  cleared: { glyph: "ok", st: "ok", rail: "ok" },
 };
 
 /* ---------- test surface ---------- */
@@ -1986,7 +1967,7 @@ function paintUnchanged(key, signature) {
 function findingPaintKey(finding) {
   return [
     finding.kind, finding.id, finding.work.key, finding.progress,
-    finding.title, finding.impact, finding.pin ? "1" : "0",
+    finding.title, finding.summary, finding.impact, finding.pin ? "1" : "0",
     state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id ? "1" : "0",
   ].join("\u001f");
 }
@@ -2155,18 +2136,6 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   if (id === "health") {
     valueNode = el("span", { class: valueClass },
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
-  } else if (id === "needs-you") {
-    // The verdict count is the strip's one expansion control: it toggles the
-    // inline findings panel in place (rows open the drawer; no triage here).
-    valueNode = el("button", {
-      type: "button",
-      class: valueClass + " pulse-verdict",
-      "aria-expanded": String(state.pulseExpanded),
-      "aria-controls": "pulse-findings",
-      dataset: { fkey: "pulse-verdict" },
-      onclick: togglePulseFindings,
-    }, data.value,
-      data.unit ? el("span", { class: "unit", text: data.unit }) : null);
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -2687,8 +2656,6 @@ function renderHealthRail() {
     model.calm ? "calm:" + (model.watch || []).join("|") : "stressed",
     state.widgetIds.join(","),
     state.widgetCustomizerOpen ? "1" : "0",
-    state.pulseExpanded ? "1" : "0",
-    state.pulseShowAll ? "1" : "0",
     buckets.map((b) => b.activeSessions).join(","),
     model.findings.map(findingPaintKey).join("|"),
     // The calm line renders momentum/burn/health regardless of which widgets
@@ -2730,7 +2697,6 @@ function renderHealthRail() {
       widgets.append(renderSummaryWidget(id, cell.weight, cell.data));
     }
   }
-  renderPulseFindings(model);
   renderWidgetCustomizer();
   /* renderSettingsPanel used to be called here, and it was the "settings do not
      stick" bug. This function returns early whenever the WIDGET paint signature
@@ -3592,78 +3558,6 @@ function findingFromQueueItem(item) {
     progress: PROGRESS_BY_WORK[work.key] ?? 50,
     pin: false,
   };
-}
-
-/* Two-line ledger row (mockup A2): full title + live summary on the first
-   line, a mono evidence line under it, and a right-aligned instrument
-   cluster — compact stage rail, state word, age. Every pixel of strip width
-   carries information; nothing stretches to fill. */
-function renderFindingRow(finding) {
-  const visual = FINDING_VISUAL[finding.work.key] || FINDING_VISUAL.watching;
-  const selected = state.selected && state.selected.kind === finding.kind && state.selected.id === finding.id;
-  const open = () => selectEntity({ kind: finding.kind, id: finding.id });
-  const stage = issueStage(finding.work.key);
-  const stageName = STAGE_LABELS[stage - 1] || finding.work.label;
-  const railClass = "stage-rail" + (visual.rail ? " " + visual.rail : "");
-  const evidence = (Array.isArray(finding.evidence) ? finding.evidence : []).filter(Boolean);
-  const sinceMs = finding.since ? Date.parse(finding.since) : NaN;
-  const age = Number.isFinite(sinceMs) ? fmtElapsed(Math.max(0, Date.now() - sinceMs)) : "";
-  return el("button", {
-    type: "button",
-    class: "finding" + (finding.pin ? " pin" : "") + (selected ? " is-selected" : ""),
-    dataset: { fkey: "finding:" + finding.kind + ":" + finding.id },
-    "aria-label": "Open " + finding.work.label + ": " + finding.title,
-    onclick: open,
-  },
-    el("span", { class: "glyph " + visual.glyph, "aria-hidden": "true" }),
-    el("span", { class: "copy" },
-      el("span", { class: "lede" },
-        el("span", { class: "title", text: finding.title }),
-        el("span", { class: "gist", text: finding.summary || finding.impact })),
-      evidence.length ? el("span", { class: "trace" },
-        evidence.map((token) => el("i", { text: token }))) : null),
-    el("span", { class: "meta" },
-      el("span", {
-        class: railClass,
-        "aria-label": "Stage: " + stageName + " (" + stage + " of 4)",
-        "data-stage": String(stage),
-      }, el("i"), el("i"), el("i"), el("i")),
-      el("span", { class: "state st-" + (visual.st || "cool"), text: finding.work.label }),
-      age ? el("span", { class: "age", text: age }) : null));
-}
-
-function togglePulseFindings() {
-  state.pulseExpanded = !state.pulseExpanded;
-  // The findings ledger and the widget customizer are both summary-strip (chrome)
-  // expansions; opening both at once could exceed the viewport, so they are
-  // mutually exclusive — opening the findings collapses the customizer.
-  if (state.pulseExpanded) state.widgetCustomizerOpen = false;
-  else state.pulseShowAll = false;
-  renderHealthRail();
-}
-
-/* Inline expansion under the strip — at most MAX_PULSE_ROWS finding rows plus
-   an in-place "+N more"/"Show less" control. Rows open the drawer; triage and
-   queue actions stay drawer-only. */
-function renderPulseFindings(model) {
-  const panel = $("pulse-findings");
-  if (!panel) return;
-  const open = !model.calm && state.pulseExpanded && model.findings.length > 0;
-  panel.hidden = !open;
-  panel.textContent = "";
-  if (!open) return;
-  const visible = state.pulseShowAll ? model.findings : model.findings.slice(0, MAX_PULSE_ROWS);
-  for (const finding of visible) panel.append(renderFindingRow(finding));
-  const more = model.findings.length - MAX_PULSE_ROWS;
-  if (more > 0) {
-    panel.append(el("button", {
-      type: "button",
-      class: "pulse-more",
-      dataset: { fkey: "pulse-more" },
-      onclick: () => { state.pulseShowAll = !state.pulseShowAll; renderHealthRail(); },
-      text: state.pulseShowAll ? "Show less" : ("+" + more + " more"),
-    }));
-  }
 }
 
 /* ---------- toolbar ---------- */
@@ -9439,9 +9333,6 @@ function boot() {
 
   $("customize-summary").addEventListener("click", () => {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
-    // Exclusive with the findings ledger (both are chrome expansions) — opening
-    // the customizer collapses the findings so the strip never exceeds the viewport.
-    if (state.widgetCustomizerOpen) state.pulseExpanded = false;
     renderHealthRail();
   });
 

@@ -139,11 +139,6 @@ export const state = {
   /* An empty triage queue and an unreachable one produce the same zero queue
      findings, and the strip called that calm. This is what tells them apart. */
   queueError: "",
-  // Inline pulse expansion. The needs-you verdict button opens a capped
-  // findings panel in place; "+N more" reveals the rest. Both are transient —
-  // not persisted, so a reload returns to the collapsed strip.
-  pulseExpanded: false,
-  pulseShowAll: false,
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
   // `alarm` and `actions` start null, not "": their calm signature IS the empty

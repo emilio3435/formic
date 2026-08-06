@@ -510,9 +510,9 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Summary choices stay compact on desktop and become a touch-sized list on
    narrow screens. The System widget is pinned first so the verdict is always
    visible even when optional widgets are changed. */
-/* Same Part-0 guard as #pulse-findings: the customizer expands inside the flex:none
-   summary strip, so it is bounded to the viewport and scrolls internally rather than
-   growing the chrome until the document scrolls. */
+/* Part-0 guard: the customizer expands inside the flex:none summary strip, so it
+   is bounded to the viewport and scrolls internally rather than growing the
+   chrome until the document scrolls. */
 .widget-customizer { border-top: 1px solid var(--line); background: var(--sand); max-height: min(50vh, 22rem); max-height: min(50dvh, 22rem); overflow-y: auto; overscroll-behavior: contain; }
 .widget-customizer-inner { max-width: var(--frame); margin: 0 auto; padding: 0.75rem 1.1rem 0.85rem; }
 .widget-customizer h2 { margin: 0; font-size: 14px; }
@@ -663,167 +663,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Activity sparkline on the calm line — sized here (the SVG carries only a
    viewBox; an unsized inline SVG would fall back to the 300×150 default). */
 .pulse-spark { flex: none; width: 6rem; height: 1.1rem; }
-
-/* Inline expansion: a bordered panel of finding rows, matching the old lane.
-   The element carries only the id (index.html markup is a fixed contract). */
-#pulse-findings {
-  max-width: var(--frame);
-  margin: 0 auto 0.15rem;
-  /* Part-0 fix: this expansion lives in the flex:none .health-rail, so without a
-     bound it grows the chrome past the viewport and the document scrolls. Cap it
-     against the viewport and scroll the ledger internally; the chrome stays put.
-     vh fallback line before dvh, matching the body's fallback discipline. */
-  max-height: min(40vh, 26rem);
-  max-height: min(40dvh, 26rem);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--raise);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  contain: layout paint;
-}
-.pulse-more {
-  appearance: none;
-  display: block;
-  width: 100%;
-  border: 0;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  font: 650 11px/1 var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 0.65rem 0.75rem;
-  cursor: pointer;
-  text-align: left;
-  min-height: 44px;
-}
-.pulse-more:hover { color: var(--ink); background: var(--surface); }
-
-/* Finding row — two-line ledger (mockup A2). Line one: full title + live
-   summary sharing the width; line two: mono evidence tokens. The right meta
-   cluster (compact stage rail, state word, age) is fixed — nothing stretches
-   to fill the strip. Pin stays the firm ember left rail. */
-.finding {
-  display: grid;
-  grid-template-columns: 0.85rem minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  align-items: center;
-  padding: 0.5rem 0.75rem;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-  min-height: 44px;
-}
-.finding:last-child { border-bottom: 0; }
-.finding:hover { background: var(--surface); }
-.finding:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
-.finding.pin { box-shadow: inset 3px 0 var(--ember); }
-.finding.is-selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
-.finding.pin.is-selected { box-shadow: inset 3px 0 var(--ember), inset 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent); }
-.finding .copy { min-width: 0; display: flex; flex-direction: column; gap: 0.16rem; }
-.finding .lede { display: flex; align-items: baseline; gap: 0.7rem; min-width: 0; overflow: hidden; }
-.finding .title {
-  flex: 0 1 auto;
-  font-size: 13px;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.finding .gist {
-  flex: 1 1 3rem;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.finding .trace {
-  display: flex;
-  gap: 1.1rem;
-  font: 400 11px/1.2 var(--font-mono);
-  color: var(--faint);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.finding .trace i { font-style: normal; }
-.finding .meta { display: flex; align-items: center; gap: 0.8rem; justify-self: end; }
-.finding .meta .stage-rail { width: 4.6rem; }
-.finding .state {
-  font: 650 10px/1.2 var(--font-mono);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.finding .state.st-hot { color: var(--ember); }
-.finding .state.st-warm { color: var(--amber); }
-.finding .state.st-cool { color: var(--slate); }
-.finding .state.st-ok { color: var(--moss); }
-.finding .age {
-  font: 400 11px/1.2 var(--font-mono);
-  color: var(--faint);
-  min-width: 3.4ch;
-  text-align: right;
-}
-.glyph {
-  width: 0.7rem;
-  height: 0.7rem;
-  border: 1.5px solid currentColor;
-  border-radius: 2px;
-  flex: none;
-}
-.glyph.act { color: var(--ember); border-color: var(--ember); }
-.glyph.warn {
-  color: var(--amber);
-  border: 0;
-  background: var(--amber);
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-}
-.glyph.run { color: var(--slate); border-radius: 50%; }
-.glyph.ok {
-  color: var(--moss);
-  border: 0;
-  background: var(--moss);
-  border-radius: 50%;
-}
-/* Four-tick workflow rail: Watch → Triage → Verify → Cleared. Active ticks
-   fill left-to-right from the finding's work stage; tone follows work key. */
-.stage-rail {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 3px;
-  align-items: center;
-  height: 6px;
-}
-.stage-rail > i {
-  display: block;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--line);
-}
-.stage-rail[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail[data-stage="4"] > i:nth-child(-n+4) { background: var(--slate); }
-.stage-rail.hot[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.hot[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.hot[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.hot[data-stage="4"] > i:nth-child(-n+4) { background: var(--ember); }
-.stage-rail.warm[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.warm[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.warm[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.warm[data-stage="4"] > i:nth-child(-n+4) { background: var(--amber); }
-.stage-rail.ok[data-stage="1"] > i:nth-child(-n+1),
-.stage-rail.ok[data-stage="2"] > i:nth-child(-n+2),
-.stage-rail.ok[data-stage="3"] > i:nth-child(-n+3),
-.stage-rail.ok[data-stage="4"] > i:nth-child(-n+4) { background: var(--moss); }
 
 /* Drawer-shared signal helpers (Impact / Technical) */
 .signal-tech summary { cursor: pointer; color: var(--faint); font-size: 11.5px; font-weight: 600; }
@@ -3122,7 +2961,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   .tri-spine { flex-direction: column; gap: 0.45rem; }
   .tri-step { flex: 1 1 auto; padding-right: 0; }
   .tri-step::before { display: none; }
-  .finding .gist, .finding .trace { display: none; }
   .broadcast-compose textarea { flex-basis: 100%; }
   .view-tab, .btn, #search, .swarm-anchor { min-height: 44px; }
   /* Per-type drawer controls stay comfortably tappable on touch.

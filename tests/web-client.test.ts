@@ -1225,6 +1225,11 @@ describe("summary status and widgets", () => {
     const data = M.summaryWidgetData("needs-you", snap);
     expect(data).toMatchObject({ value: "2", unit: "findings", tone: "hot" });
     expect(data.sublabel).toBe("Control failure · Stale source");
+    expect(data.findings.map((finding: { kind: string; id: string; title: string }) => [finding.kind, finding.id, finding.title]))
+      .toEqual([
+        ["intervention", "system:1", "Control failure"],
+        ["advisory", "system:2", "Stale source"],
+      ]);
   });
 
   test("uses explicit No data values when optional pulse/context evidence is absent", () => {
@@ -2657,14 +2662,20 @@ describe("operations canvas layout", () => {
     expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*none/);
   });
 
-  test("finding rows open the drawer; the strip never grows its own triage chrome", () => {
-    expect(source).toContain("function renderFindingRow(");
+  test("the summary strip never grows its own findings ledger or triage chrome", () => {
     expect(source).toContain("function pulseStripModel(");
-    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
     expect(source).toContain("renderTriage(issue)");
     // The strip must not grow Generate-triage chrome; the drawer keeps it.
     expect(source).not.toContain('class: "signal-primary"');
     expect(source).not.toContain('class: "signal-title-btn"');
+    /* The inline findings ledger under the summary strip is GONE (2026-08-05).
+       Attention routes through the masthead Notifications control and per-row
+       marks on the board instead, so nothing may rebuild a row list here. */
+    expect(source).not.toContain("function renderFindingRow(");
+    expect(source).not.toContain("function renderPulseFindings(");
+    expect(html).not.toContain('id="pulse-findings"');
+    expect(source).toContain('class: "reading-finding-link"');
+    expect(source).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
   });
 
   test("the inspector/drawer holds a stable 480-520px desktop pane, no 42vw overshoot", () => {
@@ -2795,7 +2806,7 @@ describe("source hygiene", () => {
 
   test("the redesigned control surface exposes its structural anchors", () => {
     for (const id of ["health-rail", "filter-bar", "select-toggle", "broadcast-bar",
-      "pulse-findings", "nest-beacon", "health-widgets", "customize-summary",
+      "nest-beacon", "health-widgets", "customize-summary",
       "widget-customizer", "widget-options", "widget-reset"]) {
       expect(html).toContain(`id="${id}"`);
     }
@@ -2955,19 +2966,21 @@ describe("source hygiene", () => {
   test("signal chrome uses techno-orchestra tokens, not hospital banner fills", () => {
     expect(styles).toContain('"Techno orchestra"');
     expect(styles).toContain("--signal-rail: 2px");
-    expect(styles).toContain(".glyph.act");
+    /* The one surviving example of the rule the token exists for: severity is
+       carried by an inked mark on a plain ground, never a filled banner. (It used
+       to be `.glyph.act`, which left with the findings ledger.) */
+    expect(styles).toMatch(/\.verdict-ok\s*\{\s*color:\s*var\(--moss\)/);
     expect(styles).not.toMatch(/#warnings-list\.signal-list\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--amber-soft\)/);
   });
 });
 
 describe("pulse strip — verdict-first summary", () => {
-  test("the verdict button and calm line carry the markup the strip depends on", () => {
-    expect(html).toContain('<div id="pulse-findings" hidden></div>');
-    expect(source).toContain('class: valueClass + " pulse-verdict"');
-    expect(source).toContain('"aria-expanded": String(state.pulseExpanded)');
-    expect(source).toContain('"aria-controls": "pulse-findings"');
-    expect(source).toContain('dataset: { fkey: "pulse-verdict" }');
-    expect(source).toContain("onclick: togglePulseFindings");
+  test("the calm line carries the markup the strip depends on, and the verdict is a reading not a toggle", () => {
+    /* NEEDS YOU reports a count and nothing else. It used to be the strip's one
+       expansion control, opening an inline findings ledger in place; that surface
+       is gone, so the number must not carry a disclosure it can no longer open. */
+    expect(source).not.toContain("pulse-verdict");
+    expect(source).not.toContain("state.pulseExpanded");
     /* The class now carries an is-watching modifier for the watch tier, so assert
        the contract (a live status region) rather than the literal attribute
        string, which was pinning a concatenation. */
@@ -3076,29 +3089,25 @@ describe("pulse strip — verdict-first summary", () => {
     expect(model.findings.map((f: { id: string }) => f.id)).toEqual(["queue:orphan"]);
   });
 
-  test("the strip renders findings and widgets with no board-level triage CTAs — triage stays drawer-only", () => {
-    const pulseFindingsPanel = source.match(/function renderPulseFindings\([\s\S]*?\n\}\n/)?.[0] ?? "";
+  test("the strip renders widgets with no board-level triage CTAs — triage stays drawer-only", () => {
     const summaryWidget = source.match(/function renderSummaryWidget\([\s\S]*?\n\}\n/)?.[0] ?? "";
     const pulseCalm = source.match(/function renderPulseCalm\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    const findingRow = source.match(/function renderFindingRow\([\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(pulseFindingsPanel).toBeTruthy();
     expect(summaryWidget).toBeTruthy();
     expect(pulseCalm).toBeTruthy();
-    expect(findingRow).toBeTruthy();
-    for (const chunk of [pulseFindingsPanel, summaryWidget, pulseCalm, findingRow]) {
+    for (const chunk of [summaryWidget, pulseCalm]) {
       expect(chunk).not.toContain("triageIssue(");
       expect(chunk).not.toContain('"Triage this finding"');
       expect(chunk).not.toContain('"Queue investigation"');
       expect(chunk).not.toContain("renderTriage(");
     }
-    expect(findingRow).toContain('selectEntity({ kind: finding.kind, id: finding.id })');
   });
 
   test("strip CSS binds to the DOM app.js actually builds", () => {
-    // The expansion panel carries only the id (the markup is a fixed contract),
-    // so a class selector would never bind — the panel must be styled by id.
-    expect(styles).toMatch(/#pulse-findings\s*\{/);
-    expect(styles).not.toMatch(/\.pulse-findings\s*\{/);
+    // The findings ledger is gone; its styling must not outlive it, or the next
+    // reader takes 100 lines of dead row chrome for a live surface.
+    expect(styles).not.toMatch(/#pulse-findings\s*\{/);
+    expect(styles).not.toMatch(/\.finding\s*\{/);
+    expect(styles).not.toMatch(/\.pulse-more\s*\{/);
     // app.js drops the one-shot pulse-cleared class on the rail, so the moss
     // wash must reach the calm line through the rail, not expect the class
     // on the (rebuilt-each-paint) calm line itself.
@@ -3172,13 +3181,15 @@ describe("state cards — two-line ledger rows, instrument brief, verdict result
   });
 
   test("state-card CSS binds to the DOM app.js builds, and the replaced chrome is gone", () => {
-    for (const selector of [".finding .lede", ".finding .gist", ".finding .trace", ".finding .meta",
-      ".finding .state.st-hot", ".tri-band", ".tri-spine", ".tri-dot", ".brf-head", ".brf-glyph",
+    for (const selector of [".tri-band", ".tri-spine", ".tri-dot", ".brf-head", ".brf-glyph",
       ".brf-routes", ".brf-route", ".brf-times"]) {
       expect(styles).toContain(selector);
     }
     for (const dead of [".triage-plan-head", ".triage-mode", ".triage-details", ".triage-steps",
-      ".triage-briefing-kicker "]) {
+      ".triage-briefing-kicker ",
+      // The A2 ledger row and its indicator vocabulary left with the strip's
+      // findings panel (2026-08-05); the drawer never used either.
+      ".finding .lede", ".finding .meta", ".glyph.act", ".stage-rail"]) {
       expect(styles).not.toContain(dead);
     }
   });
@@ -4677,8 +4688,8 @@ describe("peripheral surfaces conform to the design language (A5)", () => {
 });
 
 /* Scroll shell + sticky headers (Emilio 2026-07-23).
-   Part 0 root cause: the `flex:none` .health-rail hosts unbounded inline
-   expansions (#pulse-findings, #widget-customizer); on the fragile height:100%
+   Part 0 root cause: the `flex:none` .health-rail hosts an unbounded inline
+   expansion (#widget-customizer); on the fragile height:100%
    body box (overflow-y computes to auto) that chrome can exceed the viewport and
    the DOCUMENT scrolls, carrying masthead + summary away. The fix is a 100dvh app
    frame with bounded expansions + contained pane scrolling; sticky program/column
@@ -4704,17 +4715,13 @@ describe("scroll shell: 100dvh app frame + contained pane scrolling (Part 1)", (
     expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*scrollbar-gutter:\s*stable/);
   });
 
-  // (a) The summary strip's inline expansions are the Part-0 culprit: `flex:none`
-  //     chrome with no height bound. Each expansion gets a max-height + internal
-  //     scroll so the chrome can never push the document into scrolling.
-  test("(a) the findings + customizer expansions are height-bounded with internal scroll", () => {
-    const findings = styles.match(/#pulse-findings\s*\{[^}]*\}/)?.[0] ?? "";
-    // vh fallback line before the dvh bound, matching the body's fallback discipline.
-    expect(findings).toContain("max-height: min(40vh");
-    expect(findings).toContain("max-height: min(40dvh"); // sized against the viewport
-    expect(findings).toContain("overflow-y: auto");
-    expect(findings).not.toContain("overflow: hidden"); // the unbounded clip is replaced
+  // (a) The summary strip's inline expansion is the Part-0 culprit: `flex:none`
+  //     chrome with no height bound. It gets a max-height + internal scroll so the
+  //     chrome can never push the document into scrolling. (The findings ledger was
+  //     the second such expansion; it was deleted outright on 2026-08-05.)
+  test("(a) the customizer expansion is height-bounded with internal scroll", () => {
     const customizer = styles.match(/\.widget-customizer\s*\{[^}]*\}/)?.[0] ?? "";
+    // vh fallback line before the dvh bound, matching the body's fallback discipline.
     expect(customizer).toContain("max-height: min(50vh");
     expect(customizer).toContain("max-height: min(50dvh");
     expect(customizer).toContain("overflow-y: auto");
@@ -4818,20 +4825,19 @@ describe("scroll shell: capped tree indent for deep swarms (Part 3)", () => {
 
 /* Review fixes (2026-07-23): the fix's own edge cases. */
 describe("scroll shell: review fixes", () => {
-  // (1 Important) The findings ledger and the widget customizer are BOTH
+  // (1 Important) The findings ledger and the widget customizer were BOTH
   //   flex:none summary-strip expansions; opening both at once was 918px > 900px
-  //   at 1440×900 (clipped invisibly by body overflow-y:clip). Make them mutually
-  //   exclusive — opening either collapses the other — so combined overflow is
-  //   structurally impossible (the max-height bounds stay as belt-and-suspenders).
-  test("(1) the two summary-strip expansions are mutually exclusive", () => {
-    // Opening the findings collapses the customizer.
-    const pulse = source.match(/function togglePulseFindings\(\)\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(pulse).toContain("state.pulseExpanded = !state.pulseExpanded");
-    expect(pulse).toContain("state.widgetCustomizerOpen = false");
-    // Opening the customizer collapses the findings.
+  //   at 1440×900 (clipped invisibly by body overflow-y:clip). They were made
+  //   mutually exclusive; deleting the ledger (2026-08-05) removes the collision
+  //   at its source. The invariant that survives is the one that caused it: the
+  //   summary strip hosts exactly ONE expansion, so two can never stack again.
+  test("(1) the summary strip hosts exactly one expansion", () => {
     const handler = source.match(/"customize-summary"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{[\s\S]*?\}\);/)?.[0] ?? "";
     expect(handler).toContain("state.widgetCustomizerOpen = !state.widgetCustomizerOpen");
-    expect(handler).toContain("state.pulseExpanded = false");
+    // One expansion child inside #health-rail, and it is the customizer.
+    const rail = html.match(/<section id="health-rail"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(rail).toContain('id="widget-customizer"');
+    expect(rail.match(/\shidden(\s|>)/g)?.length ?? 0).toBe(1);
   });
 
   // (2 Important) The nowrap rollup sits inside a .program overflow:clip card, so
