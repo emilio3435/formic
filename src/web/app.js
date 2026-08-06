@@ -1424,7 +1424,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
@@ -5238,32 +5238,111 @@ function renderScopeNote(shown) {
         : "");
     return;
   }
-  if (!state.snap) { note.textContent = ""; note.hidden = true; return; }
-  /* Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
+  note.textContent = "";
+  if (!state.snap) { note.hidden = true; return; }
+  /* D5. The sentence that reconciles the two numbers on this page.
+
+     Audit §8: this line read "12 shown · 31 live · 280 tracked" beside a tab bar
      already showing Now 12 / Idle 19 / History 44 — twelve numeric occurrences
      carrying nine distinct values, with the three 12s being one set. Worse,
-     `shown` is the active tab AFTER search and facets while the tab counts omit
-     them, so the two silently disagree the moment a filter is on, and `tracked`
-     has no threshold, no change and no action attached to it.
+     `shown` counts the list AFTER every lens and the query while the tab counts
+     omit them, so the two silently disagreed the moment a filter went on.
 
-     It now renders only what CHANGES the interpretation of what is on screen —
-     a filter is narrowing the list, a lookback window is hiding rows, or the
-     last refresh failed. Otherwise the tab bar has already said it. */
-  const parts = [];
+     They still disagree, because they are measuring different things and always
+     were — that IS the two-layer model. What changed is that the disagreement is
+     now stated instead of left for the operator to discover: "8 of 21" says the
+     working set holds 21 (which is the tab number, from the same helper) and
+     your lenses have left 8 of them. The line speaks only when something is
+     narrowing or the data went stale; on an unfiltered board the tabs have
+     already said everything there is to say. */
   const active = activeLenses(state);
-  if (state.query || state.facetProgram || active.length) {
-    /* The live region names the lenses, not just the count. "12 matching" read
-       out of a screen reader says a filter is on; it does not say which one, and
-       the operator cannot see the pressed trigger to find out. */
-    const lenses = active.map((lens) => lens.words.join(" or "));
-    parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
+  const narrowing = Boolean(state.query) || Boolean(state.facetProgram) || active.length > 0;
+  if (!narrowing && !state.fetchFailed) { note.hidden = true; return; }
+  note.hidden = false;
+  if (!narrowing) {
+    note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    return;
   }
-  /* No unconditional lookback echo: the pressed chip already says it, and a
-     line that always renders is a line nobody reads. The live region speaks
-     only when something is NARROWING the list or the data went stale. */
-  if (state.fetchFailed) parts.push("last refresh failed");
-  note.textContent = parts.join(" · ");
-  note.hidden = parts.length === 0;
+
+  /* Each active lens is a real button, not a word. An operator reading "showing
+     working codex sessions" and wanting to change it should be able to act on
+     the sentence itself rather than hunt the bar for whichever trigger owns that
+     word — the sentence is where they are already looking. */
+  const line = el("span", { class: "scope-sentence" }, "Showing ");
+  for (const lens of active) {
+    line.append(el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:" + lens.axis.key },
+      title: "Open the " + lens.axis.label + " filter",
+      onclick: () => setOpenFilterMenu(lens.axis.key),
+    }, lens.words.join(" or ")), " ");
+  }
+  line.append("sessions");
+  if (state.query) {
+    line.append(" matching ", el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:query" },
+      title: "Edit the search",
+      /* No menu to open — the query's control is the search box, so this puts
+         the cursor in it. Selecting the text too: the operator clicked the word
+         they want to change, and landing them at its end to backspace through it
+         is a worse answer than handing them a replaceable selection. */
+      onclick: () => {
+        const box = $("search");
+        if (!box) return;
+        box.focus();
+        if (typeof box.select === "function") box.select();
+      },
+    }, "“" + state.query + "”"));
+  }
+  if (state.facetProgram) {
+    const scoped = ((state.snap && state.snap.programs) || []).find((p) => p.id === state.facetProgram);
+    line.append(" in ", el("button", {
+      type: "button",
+      class: "scope-lens",
+      dataset: { fkey: "sentence:program" },
+      /* The program lens has no menu — it is set from a drawer — so its fragment
+         is the way OFF rather than a way in. Said in the title, because a button
+         that clears when its siblings open is a difference worth stating. */
+      title: "Show every program again",
+      onclick: () => setFacetProgram(state.facetProgram),
+    }, scoped ? programName(scoped) : "one program"));
+  }
+  /* The reconciliation. `shown` is what the list actually rendered; the second
+     number is the working-set count — the SAME helper renderTabs counts with, so
+     the sentence can never quote a total the tab beside it disagrees with. */
+  line.append(" — ", el("span", { class: "scope-count", text: shown + " of " + workingSet(state).length }));
+  note.append(line);
+  /* Clears the LENSES and the query, and deliberately not the two things that
+     are not lenses: the review policy belongs to the fleet rather than to this
+     browser, and the time window is the working set itself — a "clear filters"
+     that silently widened the board's reach would change the number it is
+     standing next to. */
+  note.append(" · ", el("button", {
+    type: "button",
+    class: "scope-clear",
+    dataset: { fkey: "sentence:clear" },
+    title: "Clear every filter and the search. Leaves the time window and the fleet's review setting alone.",
+    onclick: clearEveryLens,
+  }, "Clear"));
+  if (state.fetchFailed) {
+    note.append(" · ", el("span", { class: "scope-stale", text: "last refresh failed" }));
+  }
+}
+
+/* One repaint, not six. Assigning each axis through its own setter would render
+   between every one, so a five-lens board would rebuild itself five times on a
+   single click — and the intermediate boards are states the operator never asked
+   to see. */
+function clearEveryLens() {
+  for (const axis of LENS_AXES) state[axis.stateKey] = [];
+  state.facetProgram = "";
+  state.query = "";
+  const box = $("search");
+  if (box) box.value = "";
+  render();
 }
 
 /* ---------- repo → worktree grouping ----------

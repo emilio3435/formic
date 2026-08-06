@@ -7686,6 +7686,152 @@ describe("FE-B: harness-backed client behavior", () => {
     });
   });
 
+  /* -------- FE-2 D5/D6: the sentence, and the count rule it exists to state ---
+     The tab number and the row count measure different populations and always
+     did. That is the two-layer model, not a bug — but it was left for the
+     operator to discover, which is why lenses "looked broken" every time they
+     failed to move the number beside the tab they were filtering. */
+
+  const noteOf = () => domById.get("scope-note")!;
+  /* The fake document lives only for the duration of withRequests, so anything
+     that clicks the rendered sentence has to run INSIDE it — render() reads
+     `document` and a fire() after the teardown throws rather than failing. */
+  const sentence = (over: Record<string, unknown>, shown: number, then: () => Promise<void> | void = () => {}) =>
+    withState({ view: "board", lookbackHours: null, showReviewWorkers: true, fetchFailed: false, ...over },
+      () => withRequests([], async () => { M.renderScopeNote(shown); await then(); }));
+
+  test("(FE2-D6) lenses and the query never move the tab count", async () => {
+    /* THE pinned rule. Tab counts are working-set counts — view × time × the
+       fleet's review policy — and the lenses narrow INSIDE that set. If a lens
+       ever moved this number, the sentence's "8 of 21" would be quoting a total
+       that had already shrunk to 8, and the reconciliation would say nothing.
+
+       Time is the control that MAY move it, and does, asserted last: that is
+       what makes this a designed boundary rather than an accident that happens
+       to hold for the filters we tested. */
+    /* The shared fleet plus one session that went quiet three hours ago. It is
+       there for the LAST assertion: without a row the time window can actually
+       exclude, "time moves the count" would pass vacuously and this test would
+       only be pinning half a boundary. */
+    const stale = agent({
+      id: "codex:stale", provider: "codex", status: "waiting",
+      updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+    });
+    const fleet = lensFleet();
+    const snap = { ...fleet, programs: [{ ...fleet.programs[0], agents: [...fleet.programs[0].agents, stale] }] };
+    const countWith = async (over: Record<string, unknown>) => {
+      let count = "";
+      await withState({ snap, view: "board", lookbackHours: null, showReviewWorkers: true, ...over },
+        () => withDom(() => { M.renderTabs(); count = domById.get("count-board")!.textContent; }));
+      return count;
+    };
+    const base = await countWith({});
+    expect(base).toBe("4");
+    expect(await countWith({ facetProviders: ["codex"] })).toBe(base);
+    expect(await countWith({ facetStatuses: ["waiting"] })).toBe(base);
+    expect(await countWith({ facetModels: ["gpt-5-codex"] })).toBe(base);
+    expect(await countWith({ facetSpans: ["under-1h"] })).toBe(base);
+    expect(await countWith({ facetContexts: ["over-75"] })).toBe(base);
+    expect(await countWith({ query: "nothing-matches-this" })).toBe(base);
+    // Every lens at once, still the same number.
+    expect(await countWith({
+      facetProviders: ["codex"], facetStatuses: ["waiting"], facetModels: ["gpt-5-codex"],
+      facetSpans: ["under-1h"], facetContexts: ["over-75"], query: "zzz",
+    })).toBe(base);
+
+    // …and the working-set controls DO move it, which is the other half of the
+    // rule: this is a boundary, not a claim that nothing affects the count.
+    expect(await countWith({ lookbackHours: 1 })).not.toBe(base);
+  });
+
+  test("(FE2-D5) the sentence renders only the lenses that are on, and reconciles the numbers", async () => {
+    await sentence({ snap: lensFleet(), facetProviders: ["codex"], facetStatuses: ["waiting"] }, 1);
+    const note = noteOf();
+    expect(textOf(note)).toContain("Showing");
+    expect(textOf(note)).toContain("codex");
+    expect(textOf(note)).toContain("waiting");
+    /* "1 of 3": one row survived every lens, out of the three the working set
+       holds — and 3 is the tab number, from the same helper, so the sentence can
+       never quote a total the tab beside it disagrees with. */
+    expect(textOf(byClass(note, "scope-count"))).toBe("1 of 3");
+    // Only the ACTIVE axes get a fragment. Three lenses off, three absent.
+    expect(focusKeysOf(note)).toEqual(["sentence:provider", "sentence:status", "sentence:clear"]);
+  });
+
+  test("(FE2-D5) a quiet board says nothing at all", async () => {
+    // The line that always renders is the line nobody reads. With no lens, no
+    // query and fresh data, the tabs have already said everything.
+    await sentence({ snap: lensFleet() }, 3);
+    expect(noteOf().hidden).toBe(true);
+    expect(textOf(noteOf())).toBe("");
+
+    // Stale data speaks on its own, with no sentence wrapped around it.
+    await sentence({ snap: lensFleet(), fetchFailed: true }, 3);
+    expect(noteOf().hidden).toBe(false);
+    expect(textOf(noteOf())).toBe("last refresh failed");
+  });
+
+  test("(FE2-D5) each fragment reaches the control that owns it", async () => {
+    // A lens fragment opens its menu — the operator is already looking at the
+    // sentence, so they should not have to hunt the bar for the right trigger.
+    await sentence({ snap: lensFleet(), facetStatuses: ["waiting"], query: "ridge" }, 1, async () => {
+      await fire(byFkey(noteOf(), "sentence:status"));
+      expect(M.state.openFilterMenu).toBe("status");
+    });
+
+    /* The program fragment CLEARS instead of opening: programs are unbounded, so
+       there is no program menu to open, and the fragment is the way off. The
+       title says so, because a button that clears while its siblings open is a
+       difference the operator cannot see. */
+    await sentence({ snap: lensFleet(), facetProgram: "p" }, 1, async () => {
+      expect(byFkey(noteOf(), "sentence:program").attributes.title).toContain("every program");
+      await fire(byFkey(noteOf(), "sentence:program"));
+      expect(M.state.facetProgram).toBe("");
+    });
+
+    /* The query fragment has no menu either — its control is the search box —
+       so it focuses and SELECTS: the operator clicked the word they want to
+       change, and landing them at its end to backspace through it is a worse
+       answer than handing them a replaceable selection. */
+    await sentence({ snap: lensFleet(), query: "ridge" }, 1, async () => {
+      let focused = false;
+      let selected = false;
+      domById.set("search", {
+        ...newNode("input"),
+        focus: () => { focused = true; },
+        select: () => { selected = true; },
+      } as unknown as FakeNode);
+      await fire(byFkey(noteOf(), "sentence:query"));
+      expect(focused).toBe(true);
+      expect(selected).toBe(true);
+    });
+  });
+
+  test("(FE2-D5) Clear resets the lenses and the query, and nothing else", async () => {
+    /* The two exclusions are the whole point. showReviewWorkers is the FLEET's
+       setting saved on the server — a "clear filters" that silently changed what
+       a colleague sees would be the worst kind of surprise — and the time window
+       is the working set itself, so clearing it would move the very total the
+       sentence is standing next to. */
+    await sentence({
+      snap: lensFleet(), lookbackHours: 6, showReviewWorkers: false, query: "ridge",
+      facetProgram: "p", facetProviders: ["codex"], facetStatuses: ["waiting"],
+      facetModels: ["gpt-5-codex"], facetSpans: ["under-1h"], facetContexts: ["over-75"],
+    }, 1, async () => {
+      await fire(byFkey(noteOf(), "sentence:clear"));
+      expect(M.state.facetProviders).toEqual([]);
+      expect(M.state.facetStatuses).toEqual([]);
+      expect(M.state.facetModels).toEqual([]);
+      expect(M.state.facetSpans).toEqual([]);
+      expect(M.state.facetContexts).toEqual([]);
+      expect(M.state.facetProgram).toBe("");
+      expect(M.state.query).toBe("");
+      // Untouched, both of them.
+      expect(M.state.lookbackHours).toBe(6);
+      expect(M.state.showReviewWorkers).toBe(false);
+    });
+  });
+
   test("(FE2-D1) Escape closes the menu without selecting, and returns focus to the trigger", async () => {
     await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
       () => withRequests([], async () => {
