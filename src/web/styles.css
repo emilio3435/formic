@@ -1508,16 +1508,13 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 600;
   color: var(--muted);
 }
-/* The one character that says "this number has a condition on it". Deliberately
-   faint and deliberately present: the qualifier used to be words on every row
-   (loud, repetitive) and before that a hover-only title (invisible). */
-.ri-scope-mark {
-  font-size: 9.5px;
-  color: var(--faint);
-  margin-left: 0.15rem;
-  vertical-align: super;
-  line-height: 1;
-}
+/* The `ri-scope-mark` glyph — one superscript character saying "this number has
+   a condition on it" — is gone (operator directive, 2026-08-05). It appeared on
+   nearly every row, and a mark that never varies distinguishes nothing while
+   still costing the eye a stop on each pass. The condition itself did not go:
+   the tokens cell's aria-label and title still carry ", latest model call", so
+   the qualification survives for screen readers and on hover. (Named without a
+   leading dot: the CSS census reads this file's comments.) */
 .row-session-tag {
   font-family: var(--font-mono);
   font-size: 10.5px;

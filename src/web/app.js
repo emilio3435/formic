@@ -7068,13 +7068,17 @@ function renderAgentRow(agent, program, opts = {}) {
         class: "ri-cell ri-tokens",
         /* The screen reader still hears the whole qualification: the mark is a
            visual shorthand, and a shorthand nobody can see is a regression. */
+        /* The QUALIFICATION survives; only its visual mark is gone (operator
+           directive, 2026-08-05). The ⓘ that used to sit here was a superscript
+           glyph on every latest-turn row, and a mark that appears on almost
+           every row stops distinguishing anything while still costing the eye a
+           stop. Screen readers and hover keep the whole sentence — this
+           aria-label and the cell title below are the qualification's real
+           carriers, and they are untouched. */
         "aria-label": "Tokens: " + tokens.text + (tokens.scopeMarked ? ", latest model call" : ""),
         title: tokens.title,
       },
-        el("span", { class: "ri-value mono", text: tokens.text }),
-        tokens.scopeMarked
-          ? el("span", { class: "ri-scope-mark", "aria-hidden": "true", text: "ⓘ" })
-          : null)
+        el("span", { class: "ri-value mono", text: tokens.text }))
       : null,
     elapsed && elapsed !== "—"
       ? el("span", {

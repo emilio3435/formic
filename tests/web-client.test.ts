@@ -1968,18 +1968,26 @@ describe("latest-turn token semantics", () => {
     expect(M.tokenSummary({ provenance: "estimated", scope: "latest-turn", total: 42_000 }).text).toBe("≈42k");
   });
 
-  test("the rendered row carries the mark, not just the summary object", () => {
+  test("the rendered row carries the qualification, with no visual mark left to carry it", () => {
     /* The regression this whole thread is about was a qualification that existed
        in a field nothing rendered. Asserting `scopeMarked` alone would repeat
-       exactly that mistake, so this reads the DOM. */
+       exactly that mistake, so this reads the DOM.
+
+       The ⓘ is gone (operator directive, 2026-08-05) and the QUALIFICATION is
+       not — which is precisely the distinction worth a test, because "remove the
+       mark" is one careless edit away from removing the sentence with it and
+       recreating the original defect. The aria-label and the title are its
+       carriers now, so they are what this asserts. */
     const row = withDom(() => M.renderAgentRow(
       agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 42_000 } }),
       { id: "p", name: "P" },
     ));
     const cell = byClass(row, "ri-tokens");
     expect(cell).not.toBeNull();
-    expect(allByClass(cell, "ri-scope-mark").length).toBe(1);
+    expect(allByClass(cell, "ri-scope-mark").length).toBe(0);
+    expect(styles).not.toContain(".ri-scope-mark");
     expect(String(cell.attributes?.["aria-label"])).toContain("latest model call");
+    expect(String(cell.attributes?.title)).toBeTruthy();
   });
 
   test("legacy tokens without a scope keep the neutral label", () => {
