@@ -106,6 +106,16 @@ export interface CollectedAgent {
   provenance?: LifecycleProvenance;
   /** Exact process IDs retained from a confirmed identity scan. */
   processIds?: number[];
+  /**
+   * When each retained PID's process was observed to start, keyed by PID.
+   *
+   * A pid alone cannot be re-checked: the kernel reuses the number, so a later
+   * scan finding it in use proves only that SOMETHING holds it. Carrying the
+   * start time alongside is what lets the next scan tell "still running" from
+   * "someone else now". Partial by nature — only pids whose start time was
+   * observed appear — so its absence is a gap, never an ending.
+   */
+  processStarts?: Record<number, number>;
   /** Current liveness of the retained process IDs; absent when no trustworthy scan checked them. */
   processAlive?: boolean;
   transcriptOpen?: boolean;

@@ -45,6 +45,8 @@ interface ProcessRow {
   pid: number;
   tty?: string;
   command: string;
+  /** When this process started. Absent when the table carried no `lstart`. */
+  startSeconds?: number;
 }
 
 interface IdentityHint {
@@ -53,6 +55,17 @@ interface IdentityHint {
   full: boolean;
 }
 
+/* `lstart` in the C locale, e.g. "Wed Aug  5 16:36:08 2026". Anchored at the
+   start of what follows the tty so a command can never be mistaken for a date
+   unless it opens with one verbatim. */
+const LSTART_PREFIX = /^([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/;
+
+/* Tolerant of a table with or without `lstart`, on purpose. The scan asks for
+   it now — a start time is the only thing that can prove a pid still refers to
+   the process we attributed rather than to whatever inherited the number — but
+   fixtures written against the older three-column output must keep parsing, and
+   a locale that renders dates differently has to degrade to "no start time"
+   rather than silently slicing the date onto the front of the command. */
 export function parseProcessTable(output: string): ProcessRow[] {
   return output.split("\n").flatMap((line) => {
     const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
@@ -60,7 +73,20 @@ export function parseProcessTable(output: string): ProcessRow[] {
     const tty = match[2] === "??" || match[2] === "?"
       ? undefined
       : match[2].replace(/^\/dev\//, "");
-    return [{ pid: Number(match[1]), tty, command: match[3] }];
+    const pid = Number(match[1]);
+    const started = match[3].match(LSTART_PREFIX);
+    if (started) {
+      const startedAtMs = Date.parse(started[1]);
+      if (Number.isFinite(startedAtMs)) {
+        return [{
+          pid,
+          tty,
+          command: started[2],
+          startSeconds: Math.floor(startedAtMs / 1_000),
+        }];
+      }
+    }
+    return [{ pid, tty, command: match[3] }];
   });
 }
 
@@ -230,6 +256,12 @@ export interface IdentityCollectionResult extends CollectionResult<CmuxSurface[]
   liveAgentProcessIds?: number[];
   /** The subset of the above running something that looks like an agent. */
   recognizedAgentProcessIds?: number[];
+  /**
+   * Start time by PID, for the rows the table dated. Partial by nature, and
+   * only ever used to CHECK a pid already known to be in use — presence stays
+   * `liveAgentProcessIds`'s job.
+   */
+  processStarts?: Record<number, number>;
   /**
    * Every attribution path this scan uses ran to completion, so "no process
    * claims this session" is an observation rather than a gap.
@@ -406,7 +438,14 @@ export async function enrichCmuxIdentity(
     };
   }
 
-  const processResult = await runner.run(["ps", "-axo", "pid=,tty=,command="], 8_000);
+  /* `lstart` so pids carry provenance, and `LC_ALL=C` so its rendering is the
+     one `parseProcessTable` is written against rather than the operator's
+     locale. Still one `ps`, not two: adding a call would shift every positional
+     expectation in the test runners that feed this function. */
+  const processResult = await runner.run(
+    ["env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,lstart=,command="],
+    8_000,
+  );
   if (processResult.timedOut || processResult.exitCode !== 0) {
     const error = processResult.timedOut
       ? "process identity lookup timed out"
@@ -446,6 +485,14 @@ export async function enrichCmuxIdentity(
      unrecognised name yields unknown, and a renamed binary that is actually
      working is carried by its transcript writes and by the hook store's
      start-time check, neither of which reads a command name. */
+  /* Provenance for every row whose start time rendered. Deliberately separate
+     from `liveAgentProcessIds`: that set answers presence and must stay
+     complete, while this one may be partial and is only ever used to CHECK a
+     pid we already know is in use. */
+  const processStartsByPid = new Map(
+    allProcesses.flatMap(({ pid, startSeconds }) =>
+      startSeconds === undefined ? [] : [[pid, startSeconds] as const]),
+  );
   const recognizedAgentProcessIds = allProcesses
     .filter((process) => isRecognizedAgentProcess(process.command))
     .map(({ pid }) => pid);
@@ -490,6 +537,7 @@ export async function enrichCmuxIdentity(
         errors,
         liveAgentProcessIds,
         recognizedAgentProcessIds,
+        processStarts: Object.fromEntries(processStartsByPid),
       };
     }
   }
@@ -553,6 +601,15 @@ export async function enrichCmuxIdentity(
     const observed = processIdsByAgent.get(key);
     if (observed?.size) {
       agent.processIds = [...observed].sort((left, right) => left - right);
+      /* Record WHEN each attributed pid started, so the next scan can tell this
+         process from whatever inherits the number. Only pids the table dated
+         appear; a pid missing here is unprovable, not dead. */
+      const starts: Record<number, number> = {};
+      for (const pid of agent.processIds) {
+        const startSeconds = processStartsByPid.get(pid);
+        if (startSeconds !== undefined) starts[pid] = startSeconds;
+      }
+      if (Object.keys(starts).length > 0) agent.processStarts = starts;
       /* Only a session-owned pid promotes to alive. When every attributed pid
          belongs to a shared service we leave whatever better-verified answer
          collectors already reached — normally undefined, which reads as
@@ -563,15 +620,22 @@ export async function enrichCmuxIdentity(
       if (owningProcessIdsByAgent.get(key)?.size) agent.processAlive = true;
       agent.transcriptOpen = transcriptOpenAgents.has(key);
     } else if (agent.processIds?.length && agent.processAlive !== false) {
-      /* Stale pids nothing better spoke for. This scan has presence and command
-         names but no start times, so process-liveness.ts can reach `alive` or
-         `gone` but often lands on unknown — and an unknown must not erase a
+      /* Stale pids nothing better spoke for. The scan now carries start times,
+         so a pid whose process started at a different moment than the one we
+         recorded is PROVEN gone rather than merely unrecognised — but these
+         retained pids arrive without the start they were observed at, so the
+         proof only bites once a caller supplies one. Unknown must not erase a
          verified answer the collectors already reached, so only a definite
-         verdict is written. It also must not overturn a `false`, which the
-         guard above enforces: that verdict had start times behind it. */
+         verdict is written; and it must not overturn a `false`, which the guard
+         above enforces. */
       const verdict = processAliveFrom(livenessOfAny(
-        agent.processIds.map((pid) => ({ pid })),
-        { complete: true, livePids: liveProcessIds, agentPids: recognizedProcessIds },
+        agent.processIds.map((pid) => ({ pid, startSeconds: agent.processStarts?.[pid] })),
+        {
+          complete: true,
+          livePids: liveProcessIds,
+          startsByPid: processStartsByPid,
+          agentPids: recognizedProcessIds,
+        },
       ));
       if (verdict !== undefined) agent.processAlive = verdict;
       agent.transcriptOpen = false;
@@ -610,6 +674,8 @@ export async function enrichCmuxIdentity(
         pid: process.pid,
         command: process.command,
         recognizedAgentProcess: isRecognizedAgentProcess(process.command),
+        // Carried so a binding confirmed from this surface can store the proof.
+        ...(process.startSeconds !== undefined ? { startSeconds: process.startSeconds } : {}),
       }));
       const openFileMatches: SurfaceOpenFileEvidence[] = surfaceProcesses.flatMap((process) =>
         (openFiles.get(process.pid) ?? []).flatMap((path) => {
@@ -723,6 +789,7 @@ export async function enrichCmuxIdentity(
     errors,
     liveAgentProcessIds,
     recognizedAgentProcessIds,
+    processStarts: Object.fromEntries(processStartsByPid),
     /* The only return that reaches here has read the process table AND the open
        files without error; every earlier exit is a failure path that leaves
        this undefined. */

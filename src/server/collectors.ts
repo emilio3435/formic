@@ -988,6 +988,8 @@ function retainProcessEvidence(
   return {
     ...agent,
     processIds: [...previous.processIds],
+    // Retained with the pids, or the next scan re-checks numbers it cannot tell apart.
+    ...(previous.processStarts ? { processStarts: { ...previous.processStarts } } : {}),
     processAlive: previous.processAlive,
     transcriptOpen: previous.transcriptOpen,
   };
@@ -1137,7 +1139,9 @@ function attachHookFacts(
            downstream as "we know its process", and identity.ts will then revive
            it on nothing more than the number still being in use by something
            else. Any identity-verified pids already on the agent survive. */
-        ...(record.pidStartSeconds !== undefined ? { processIds: [record.pid] } : {}),
+        ...(record.pidStartSeconds !== undefined
+          ? { processIds: [record.pid], processStarts: { [record.pid]: record.pidStartSeconds } }
+          : {}),
         processAlive,
         ...(observedParentAgentId && knownAgentIds.has(observedParentAgentId)
           ? { lineage: { observedParentAgentId } }

@@ -24,6 +24,17 @@ export interface IdentityBinding {
   confirmedAt: string;
   /** Exact recognized agent PIDs observed when this binding was confirmed. */
   processIds?: number[];
+  /**
+   * When each of those PIDs started, keyed by PID as a string because this
+   * record is JSON on disk.
+   *
+   * Without it a stored pid can only ever be re-checked as "is that number in
+   * use", which is how sessions rode `siriknowledged` and `sysextd` on the
+   * board for up to 33 hours. Optional, and absent from every binding written
+   * before this field existed, so a missing entry must fall back to the weaker
+   * check — never to an ending.
+   */
+  processStarts?: Record<string, number>;
   /** A candidate new surface observed while the current target still stands. */
   pendingReassignment?: {
     target: IdentityBindingTarget;
@@ -88,6 +99,13 @@ function isIdentityBinding(value: unknown): value is IdentityBinding {
     (binding.processIds === undefined ||
       (Array.isArray(binding.processIds) &&
         binding.processIds.every((pid) => Number.isInteger(pid) && pid > 0))) &&
+    (binding.processStarts === undefined ||
+      (typeof binding.processStarts === "object" &&
+        binding.processStarts !== null &&
+        !Array.isArray(binding.processStarts) &&
+        Object.entries(binding.processStarts).every(
+          ([pid, start]) => /^[1-9]\d*$/.test(pid) && typeof start === "number" && Number.isFinite(start),
+        ))) &&
     (binding.pendingReassignment === undefined ||
       (typeof binding.pendingReassignment === "object" &&
         binding.pendingReassignment !== null &&
@@ -286,6 +304,7 @@ export async function updateBindingsFromScan(
     surface: CmuxSurface;
     provider?: Provider;
     processIds: number[];
+    processStarts?: Record<string, number>;
   }>();
   const contested = new Set<string>();
   for (const surface of surfaces) {
@@ -312,10 +331,29 @@ export async function updateBindingsFromScan(
       ...commandMatches.map(({ pid }) => pid),
     ])];
     if (!provider || processIds.length === 0) continue;
-    confirmed.set(sessionId, { surface, provider, processIds });
+    /* Store WHEN each pid started, not just the number. A pid alone can only be
+       re-checked as "is it in use"; with the start time a later scan can tell
+       this process from whatever inherited the number. Only the pids this scan
+       managed to date are recorded — a gap here weakens the later check, and
+       must never strengthen it into an ending. */
+    const datedProcesses = new Map(
+      trace.processes.flatMap(({ pid, startSeconds }) =>
+        startSeconds === undefined ? [] : [[pid, startSeconds] as const]),
+    );
+    const processStarts: Record<string, number> = {};
+    for (const pid of processIds) {
+      const startSeconds = datedProcesses.get(pid);
+      if (startSeconds !== undefined) processStarts[String(pid)] = startSeconds;
+    }
+    confirmed.set(sessionId, {
+      surface,
+      provider,
+      processIds,
+      ...(Object.keys(processStarts).length > 0 ? { processStarts } : {}),
+    });
   }
   const updates: IdentityBinding[] = [];
-  for (const [sessionId, { surface, provider, processIds }] of confirmed) {
+  for (const [sessionId, { surface, provider, processIds, processStarts }] of confirmed) {
     if (contested.has(sessionId)) continue;
     const observed: IdentityBindingTarget = {
       surfaceId: surface.surfaceId,
@@ -325,7 +363,15 @@ export async function updateBindingsFromScan(
     const existing = store.get(sessionId);
     let next: IdentityBinding;
     if (!existing) {
-      next = { sessionId, provider, target: observed, firstConfirmedAt: nowIso, confirmedAt: nowIso, processIds };
+      next = {
+        sessionId,
+        provider,
+        target: observed,
+        firstConfirmedAt: nowIso,
+        confirmedAt: nowIso,
+        processIds,
+        processStarts,
+      };
     } else if (existing.target.surfaceId === observed.surfaceId) {
       next = {
         ...existing,
@@ -333,6 +379,11 @@ export async function updateBindingsFromScan(
         target: observed,
         confirmedAt: nowIso,
         processIds,
+        /* Written unconditionally alongside `processIds`. Letting the spread
+           carry an older map forward would pair this scan's pids with a
+           previous scan's start times — a check that looks like proof and is
+           not. */
+        processStarts,
         pendingReassignment: undefined,
       };
     } else {
@@ -348,6 +399,7 @@ export async function updateBindingsFromScan(
             firstConfirmedAt: nowIso,
             confirmedAt: nowIso,
             processIds,
+            processStarts,
           }
         : {
             ...existing,
@@ -383,6 +435,8 @@ export function bridgeAgentsWithBindings(
   surfaces: readonly CmuxSurface[],
   liveAgentProcessIds?: readonly number[],
   recognizedAgentProcessIds?: readonly number[],
+  /** Start time by PID from THIS scan, to check stored ones against. */
+  processStartsByPid?: ReadonlyMap<number, number>,
 ): CollectedAgent[] {
   const liveSessionIds = new Set(
     surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
@@ -410,11 +464,20 @@ export function bridgeAgentsWithBindings(
        surface's own process list stands in, where every listed process counts
        as an agent so behaviour for those callers is unchanged, and
        `trustworthyProcessScan` decides whether absence means anything at all. */
-    const handles = (processIds ?? []).map((pid) => ({ pid }));
+    /* The stored start time is the whole point: with it, a pid the scan finds
+       at a DIFFERENT start is proven to be someone else's, and the session
+       retires on evidence instead of on a command-name guess. Bindings written
+       before that field existed carry no start, and fall back to the weaker
+       check rather than to an ending. */
+    const handles = (processIds ?? []).map((pid) => ({
+      pid,
+      startSeconds: binding.processStarts?.[String(pid)],
+    }));
     const roster: ProcessRoster = liveAgentProcessIds
       ? {
           complete: true,
           livePids: new Set(liveAgentProcessIds),
+          ...(processStartsByPid ? { startsByPid: processStartsByPid } : {}),
           agentPids: new Set(recognizedAgentProcessIds ?? liveAgentProcessIds),
         }
       : {

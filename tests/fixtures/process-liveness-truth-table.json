@@ -96,6 +96,34 @@
       "handle": { "pid": 4242, "startSeconds": 1785933001 },
       "roster": { "complete": true },
       "expect": "unverifiable"
+    },
+    {
+      "name": "presence and provenance together: a matching start is alive",
+      "claim": "The shape the identity scan publishes now that its ps carries lstart — a complete presence set, plus start times for the rows it could date.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "livePids": [4242], "starts": [[4242, 1785933001]], "agentPids": [4242] },
+      "expect": "alive"
+    },
+    {
+      "name": "presence and provenance together: a disagreeing start is gone, even when an agent holds the number",
+      "claim": "The case the command-name signal gets WRONG rather than merely weak. Something agent-shaped holds the pid, so the name says alive; the start time says our process exited, and it is right.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "livePids": [4242], "starts": [[4242, 1785999999]], "agentPids": [4242] },
+      "expect": "gone"
+    },
+    {
+      "name": "a present but undated pid falls back to the presumption rather than reading as gone",
+      "claim": "`startsByPid` is partial by construction — only rows whose date parsed appear. Absence from it is a gap in provenance and must never be read as absence from the machine.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "livePids": [4242], "starts": [[99, 1785933001]], "agentPids": [4242] },
+      "expect": "alive"
+    },
+    {
+      "name": "an undated, unrecognised, present pid stays unknown beside a populated start table",
+      "claim": "The recycled-pid row as production now reaches it: in use, not datable, not agent-shaped. Still unknown, never death.",
+      "handle": { "pid": 4242 },
+      "roster": { "complete": true, "livePids": [4242], "starts": [[99, 1785933001]], "agentPids": [] },
+      "expect": "unverifiable"
     }
   ]
 }

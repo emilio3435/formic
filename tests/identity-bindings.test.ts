@@ -114,6 +114,44 @@ describe("sticky identity binding lifecycle", () => {
     });
   });
 
+  test("a confirmed binding stores when its PIDs started, not just their numbers", async () => {
+    /* Storing the number alone means a later scan can only ask "is 4242 in
+       use", which is how sessions rode recycled pids on the board for hours.
+       The start time is what makes the stored pid re-checkable at all. */
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: " 4242 ttys033 Wed Aug  5 16:36:08 2026 /Users/me/.local/bin/omp -p",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p4242",
+          "n/Users/me/.omp/agent/sessions/project/run_019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+    const surface: CmuxSurface = {
+      surfaceId: "SURFACE-HEALTH",
+      workspaceId: "WORKSPACE-HEALTH",
+      paneId: "PANE-HEALTH",
+      tty: "ttys033",
+      sourceSessionIds: [],
+    };
+    const store = new MemoryIdentityBindingStore();
+
+    const enriched = await enrichCmuxIdentity([surface], [{ ...agent }], runner);
+    await updateBindingsFromScan(store, enriched.value, "2026-07-23T06:00:00.000Z");
+
+    expect(store.get(SESSION_ID)?.processStarts).toEqual({
+      "4242": Math.floor(Date.parse("Wed Aug  5 16:36:08 2026") / 1_000),
+    });
+  });
+
   test("re-confirmation refreshes confirmedAt and clears any pending reassignment", async () => {
     const store = new MemoryIdentityBindingStore();
     await updateBindingsFromScan(store, [confirmedSurface("SURFACE-A")], "2026-07-23T06:00:00.000Z");
@@ -195,6 +233,51 @@ describe("sticky identity binding lifecycle", () => {
       processIds: [4242],
       processAlive: false,
     });
+  });
+
+  /* What a stored start time buys, and it is the case the command-name
+     heuristic gets WRONG rather than merely weak: the recycled pid is now held
+     by another AGENT process. "Something agent-shaped holds the number" says
+     alive; the start time says our process is gone, and it is right. */
+  test("a stored start time proves a recycled pid gone even when another agent holds it", async () => {
+    const store = new MemoryIdentityBindingStore();
+    await store.put({
+      sessionId: SESSION_ID,
+      provider: "omp",
+      target: { surfaceId: "SURFACE-A" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+      processIds: [4242],
+      processStarts: { "4242": 1_785_933_001 },
+    });
+    const unproven = { ...agent, processAlive: undefined, processIds: undefined };
+    const heldByAnotherAgent = new Map([[4242, 1_785_999_999]]);
+
+    const [recycled] = bridgeAgentsWithBindings(
+      store, [unproven], [], [4242], [4242], heldByAnotherAgent,
+    );
+    expect(recycled?.processAlive).toBeFalse();
+
+    // Same start time, same process: alive, now on proof rather than on a name.
+    const [intact] = bridgeAgentsWithBindings(
+      store, [unproven], [], [4242], [4242], new Map([[4242, 1_785_933_001]]),
+    );
+    expect(intact?.processAlive).toBeTrue();
+
+    /* A binding written before the field existed carries no start time. It has
+       to fall back to the weaker check, never forward to an ending. */
+    await store.put({
+      sessionId: SESSION_ID,
+      provider: "omp",
+      target: { surfaceId: "SURFACE-A" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+      processIds: [4242],
+    });
+    const [legacy] = bridgeAgentsWithBindings(
+      store, [unproven], [], [4242], [4242], heldByAnotherAgent,
+    );
+    expect(legacy?.processAlive).toBeTrue();
   });
 
   /* Measured 2026-08-05: two sessions rode a stored pid that the kernel had

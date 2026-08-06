@@ -59,10 +59,14 @@ export interface ProcessRoster {
   readonly complete: boolean;
 }
 
-/** Whether the roster can speak to this pid's presence at all. */
+/* Whether the roster can speak to this pid's presence at all.
+   `livePids` is consulted first because it is the complete set whenever both
+   are supplied: `startsByPid` carries only the rows whose start time actually
+   parsed, so reading absence from it would file a running process as gone the
+   moment its date failed to render. */
 function present(roster: ProcessRoster, pid: number): boolean | undefined {
-  if (roster.startsByPid) return roster.startsByPid.has(pid);
   if (roster.livePids) return roster.livePids.has(pid);
+  if (roster.startsByPid) return roster.startsByPid.has(pid);
   return undefined;
 }
 
