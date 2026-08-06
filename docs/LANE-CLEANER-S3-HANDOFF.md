@@ -1,4 +1,34 @@
-# Cleaner lane — S3 handoff
+# Cleaner lane — S3/S4/S5 handoff
+
+> **UPDATE 2026-08-06 09:45 — S3, S4 and S5 are COMPLETE and committed**
+> (`6dbf0aa`, `9b27807`, `1aa30c8`, `d752154`). What follows below the next rule
+> is the mid-stage note written while app.js was contended; it is kept because
+> its rulings still bind. The corrections that supersede it are here.
+>
+> **What changed from the plan, and why:**
+> - `resolving` was NOT shipped. No channel reports it — see below.
+> - The button runs **propose then launch** in one press. Repointing it straight
+>   at `/launch` left S4 with no source for counts, refusals or SHAs at all.
+> - The paint signature signs `cleanerView(...).state`, the DERIVED answer, not
+>   just `state.cleaner`. Signing the binding alone repaints on adoption and then
+>   freezes for the rest of the run — CLEAN-1 one level down.
+> - The landing beat reuses `cleanup-spin` with one iteration rather than adding
+>   a keyframe, which keeps the A6 guard's exhaustive list true without editing
+>   another lane's file.
+> - `watching` holds an `is-alive` still ring. Spinning again after landing would
+>   un-terminate the motion the beat exists to terminate.
+>
+> **Live vs fixture, stated plainly:** `idle → launching → failed` is MEASURED
+> against the real route (404 and 503, both rendering the server's own sentence,
+> neither leaving a spinner). `launching → watching → needs-you → resolved` is
+> FIXTURE-ONLY: cursor-agent cannot authenticate under the throwaway HOME that
+> makes the board degraded, so a live success needs a real-home server and means
+> spawning a Cleaner against the live repo — an outward action that is the
+> orchestrator's call, not a lane's. The S5 ring was measured in both motion
+> branches.
+
+---
+
 
 **Written 2026-08-06 09:0x, mid-stage, because `src/web/app.js` has been under
 continuous edit by the filtering program and this lane may be respawned rather
