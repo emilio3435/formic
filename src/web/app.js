@@ -170,7 +170,8 @@ import {
   DEFAULT_LOOKBACK_HOURS,
   DEFAULT_WIDGET_IDS,
   LEGACY_VIEW_ALIASES,
-  LOOKBACK_PRESETS,
+  LOOKBACK_DAY_PRESETS,
+  LOOKBACK_HOUR_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
   OPS_VIEWS,
@@ -1339,7 +1340,7 @@ globalThis.TheAntHill = {
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
   isReviewWorker, sessionKindOf,
   agentContextPct, rosterName,
-  DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
+  DEFAULT_LOOKBACK_HOURS, LOOKBACK_HOUR_PRESETS, LOOKBACK_DAY_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
@@ -1393,6 +1394,11 @@ globalThis.TheAntHill = {
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
   currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  /* The two-layer model's own seam. `workingSet` is the population every count
+     on the page is taken over, and the menus are the surfaces that report it —
+     both are reachable so "a lens never moves the tab number" can be asserted
+     against the real derivation rather than against a copy of it. */
+  workingSet, closeFilterMenu, lookbackValueLabel, isOfferedLookback,
 };
 
 /* ---------- state ---------- */
@@ -4250,18 +4256,35 @@ function handleCockpitKeys(e, ui = state) {
   return true;
 }
 
+/* ---------- the working set ----------
+
+   view × time × review policy, and deliberately nothing else.
+
+   This is the two-layer model in one function. The WORKING SET is what the board
+   is looking at: which view, how far back, and whether the fleet's shared review
+   policy admits the routine reviewers. The LENSES — provider, status, program —
+   and the search query narrow INSIDE it and are absent here on purpose.
+
+   Every number that claims to describe the board is taken over this population:
+   the tab count, the per-item counts in the provider and status menus, and the
+   "of 21" the sentence reconciles against. One helper, so those three can never
+   drift into counting three different things and calling them all the total. */
+function workingSet(ui = state, view = ui.view) {
+  if (!ui.snap) return [];
+  return snapshotAgents(ui.snap)
+    .map(({ agent }) => agent)
+    .filter((agent) =>
+      viewMatches(view, agent)
+      && passesLookback(agent, view, ui.lookbackHours)
+      && passesReviewVisibility(agent, view, ui.showReviewWorkers));
+}
+
 function renderTabs() {
   const agents = snapshotAgents(state.snap).map((x) => x.agent);
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
-    const count = state.snap
-      ? agents.filter((a) =>
-          viewMatches(view, a)
-          && passesLookback(a, view, state.lookbackHours)
-          && passesReviewVisibility(a, view, state.showReviewWorkers),
-        ).length
-      : null;
+    const count = state.snap ? workingSet(state, view).length : null;
     const unverified = count != null && view === "board"
       ? agents.filter((a) => passesReviewVisibility(a, view, state.showReviewWorkers) && isUnverified(a)).length
       : 0;
@@ -4359,6 +4382,248 @@ const STATUS_LENSES = [
   ["unverified", "Unverified"],
 ];
 
+/* ---------- filter menus ----------
+
+   Which trigger each open menu belongs to. `state.openFilterMenu` names the MENU
+   ("time"), the trigger carries the fkey the rest of the client addresses it by
+   ("lookback:menu") — the fkey namespaces are the ones operators' focus restore
+   and muscle memory were already built on, so they are kept rather than renamed
+   to match a new state field. */
+const FILTER_MENU_TRIGGERS = {
+  time: "lookback:menu",
+  provider: "provider:menu",
+  status: "status:menu",
+};
+
+/* Put a keyboard operator back on the control they opened the menu from.
+
+   By fkey, never by node reference: the render() that closes the menu detaches
+   every node this handler was built on, and calling focus() on a detached
+   element is a silent no-op that lands the operator on <body> — the same failure
+   the whole data-fkey contract exists to prevent. */
+function focusFilterTrigger(triggerKey) {
+  if (!triggerKey || typeof document.querySelector !== "function") return;
+  const trigger = document.querySelector(`[data-fkey="${CSS.escape(triggerKey)}"]`);
+  if (trigger && typeof trigger.focus === "function") trigger.focus({ preventScroll: true });
+}
+
+/* The trigger was clicked. One menu open at a time, deliberately: two dropdowns
+   hanging off the same 40px bar would overlap, and a click landing in the overlap
+   belongs to neither. Clicking the open trigger closes it, so the way out is the
+   way in — the same rule the lens setters follow. */
+function setOpenFilterMenu(menu) {
+  state.openFilterMenu = state.openFilterMenu === menu ? "" : menu;
+  render();
+}
+
+function closeFilterMenu() {
+  if (!state.openFilterMenu) return;
+  const triggerKey = FILTER_MENU_TRIGGERS[state.openFilterMenu];
+  state.openFilterMenu = "";
+  render();
+  focusFilterTrigger(triggerKey);
+}
+
+/* An item was chosen.
+
+   A RADIO menu closes: the operator picked the one value the setting can hold
+   and there is nothing left to do in it. A CHECKBOX menu stays open, because the
+   operator is assembling a set and a menu that slams shut after each toggle
+   makes picking two things cost two round trips through the trigger.
+
+   The close happens BEFORE the setter so that a setter which decides nothing
+   changed — "All providers" picked while every provider is already showing —
+   still puts the menu away; and the render() is unconditional for the same
+   reason, since those setters early-return without painting and would leave the
+   operator staring at a menu their click had already closed in state. */
+function chooseFilterMenuItem(triggerKey, item) {
+  const staysOpen = item.role === "menuitemcheckbox";
+  if (!staysOpen) state.openFilterMenu = "";
+  item.apply();
+  render();
+  /* Radio hands focus back to the trigger; checkbox hands it back to the ITEM,
+     which the repaint has just replaced with a new node carrying the same fkey.
+     Landing a keyboard operator on the trigger after every toggle would walk
+     them out of the menu they are still working in. */
+  focusFilterTrigger(staysOpen ? item.fkey : triggerKey);
+}
+
+function filterMenuItem(triggerKey, item) {
+  /* menuitemradio for a setting that holds ONE value (time), menuitemcheckbox
+     for a lens that holds a SET (provider, status, model, span, context). Both
+     carry aria-checked; what differs is the promise each makes about the others,
+     and picking the wrong one tells a screen-reader operator that choosing
+     "waiting" just unchose "working" when it did not. */
+  const role = item.role || "menuitemradio";
+  return el("button", {
+    type: "button",
+    class: "filter-menu-item" + (item.checked ? " is-active" : ""),
+    role,
+    "aria-checked": String(Boolean(item.checked)),
+    title: item.title || null,
+    /* The count is a number sitting in its own column, which reads as "codex 5"
+       when the accessible name is assembled from the text — a session count and
+       a version number are indistinguishable said that way. Spelled out here
+       instead, and the <span> stays in the tree rather than aria-hidden so the
+       figure is never silently withheld from anyone. */
+    "aria-label": item.count == null
+      ? null
+      : item.label + " — " + item.count + " session" + (item.count === 1 ? "" : "s"),
+    dataset: { fkey: item.fkey },
+    onclick: () => chooseFilterMenuItem(triggerKey, item),
+  }, item.label, item.count == null
+    ? null
+    : el("span", { class: "filter-menu-count", text: String(item.count) }));
+}
+
+/* One dropdown: a `filter-chip`-styled trigger plus, while it is open, the menu
+   under it. Nothing here is retained between paints — the bar is torn down every
+   four seconds, so `open` is read from state and the DOM is rebuilt around it. */
+function filterMenu(spec) {
+  const wrap = el("div", { class: "filter-menu-wrap" + (spec.trailing ? " is-trailing" : "") });
+  wrap.append(el("button", {
+    type: "button",
+    class: "filter-chip" + (spec.active ? " is-active" : ""),
+    "aria-haspopup": "menu",
+    "aria-expanded": String(Boolean(spec.open)),
+    /* Still a pressed state, because it still reports whether this axis is
+       narrowing the board. The label carries the VALUE when it is — an operator
+       should not have to open a menu to find out what it is currently doing. */
+    "aria-pressed": String(Boolean(spec.active)),
+    title: spec.title || null,
+    dataset: { fkey: spec.fkey },
+    onclick: () => setOpenFilterMenu(spec.menu),
+  }, spec.label, el("span", { class: "filter-menu-caret", "aria-hidden": "true", text: "▾" })));
+  if (!spec.open) return wrap;
+  const menu = el("div", { class: "filter-menu", role: "menu", "aria-label": spec.menuLabel || spec.label });
+  for (const section of spec.sections) {
+    if (!section.label) {
+      for (const item of section.items) menu.append(filterMenuItem(spec.fkey, item));
+      continue;
+    }
+    const group = el("div", { class: "filter-menu-group", role: "group", "aria-label": section.label });
+    /* The visual twin of the group's accessible name, hidden from the tree so a
+       screen reader announces the group once rather than twice. */
+    group.append(el("p", { class: "filter-menu-head", "aria-hidden": "true", text: section.label }));
+    for (const item of section.items) group.append(filterMenuItem(spec.fkey, item));
+    if (section.note) {
+      /* Described, not merely printed. A caveat about what a group of options
+         can actually reach is worthless to the operator who cannot see it, and a
+         <p> loose inside role="menu" is content a screen reader in menu mode
+         will walk straight past. */
+      const noteId = "filter-menu-note-" + spec.menu;
+      group.setAttribute("aria-describedby", noteId);
+      group.append(el("p", { class: "filter-menu-note", id: noteId, text: section.note }));
+    }
+    menu.append(group);
+  }
+  wrap.append(menu);
+  return wrap;
+}
+
+/* How the active window reads on the trigger. Days are STORED as hours, so this
+   is the only place that turns 48 back into the "2d" the operator picked — and
+   it does it only for the offered day presets, so a hand-typed 36 stays "36h"
+   rather than being rounded into a day count nobody chose. */
+function lookbackValueLabel(hours) {
+  if (hours == null) return "";
+  const days = hours / 24;
+  return LOOKBACK_DAY_PRESETS.includes(days) ? days + "d" : hours + "h";
+}
+
+function isOfferedLookback(hours) {
+  return hours != null
+    && (LOOKBACK_HOUR_PRESETS.includes(hours) || LOOKBACK_DAY_PRESETS.includes(hours / 24));
+}
+
+/* The caveat under the Days group: asking for 7 days does not reach 7 days back,
+   because the collectors only hold what they scan.
+
+   The number is stated when — and only when — a snapshot has carried it. It is
+   read off `snap.scanWindowHours` and never off `state.scanWindowHours`, which
+   is a client-side 36 that no server has confirmed; printing that as a boundary
+   would be the same overclaim `renderScanWindow` was fixed to stop making, in
+   the one place an operator is least able to check it. With no confirmed number
+   the sentence still stands, just without a figure it cannot vouch for. */
+function lookbackDaysNote(ui) {
+  const scanned = ui.snap && Number(ui.snap.scanWindowHours);
+  const bound = Number.isFinite(scanned) && scanned > 0
+    ? " The collectors scan " + scanned + "h back, so a longer window here reaches no further."
+    : "";
+  return "Days reach only sessions still on the live wire — History reaches the archive." + bound;
+}
+
+/* The time menu. Hours for the shift you are working, Days for the week you are
+   reconstructing, then the two escapes. It sits apart from the lens menus on the
+   bar because it is not a lens: it decides the population every count is taken
+   over, which is why moving it moves the tab number and moving a lens does not. */
+function timeFilterMenu(ui) {
+  const hourItems = LOOKBACK_HOUR_PRESETS.map((hours) => ({
+    fkey: "lookback:" + hours,
+    label: "Last " + hours + "h",
+    checked: ui.lookbackHours === hours,
+    title: `Hide sessions with no activity in the last ${hours} hours`,
+    apply: () => setLookbackHours(hours),
+  }));
+  const dayItems = LOOKBACK_DAY_PRESETS.map((days) => ({
+    fkey: "lookback:" + days * 24,
+    label: "Last " + days + "d",
+    checked: ui.lookbackHours === days * 24,
+    title: `Hide sessions with no activity in the last ${days} days`,
+    apply: () => setLookbackHours(days * 24),
+  }));
+  const sections = [
+    { label: "Hours", items: hourItems },
+    {
+      label: "Days",
+      /* Board only. On History the archive is the population, so the caveat
+         would be false there — and a caveat that is false on one tab is one the
+         operator stops believing on the other. */
+      note: ui.view === "board" ? lookbackDaysNote(ui) : "",
+      items: dayItems,
+    },
+    {
+      items: [
+        {
+          fkey: "lookback:all",
+          label: "Everything",
+          checked: ui.lookbackHours == null,
+          title: "Show every session the collectors hold, however old",
+          apply: () => setLookbackHours(null),
+        },
+        {
+          fkey: "lookback:custom",
+          label: "Custom…",
+          checked: !isOfferedLookback(ui.lookbackHours) && ui.lookbackHours != null,
+          title: "Choose your own number of hours",
+          apply: () => {
+            const raw = window.prompt(
+              "Show sessions active in the last how many hours?",
+              String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS),
+            );
+            if (raw == null) return;
+            setLookbackHours(raw);
+          },
+        },
+      ],
+    },
+  ];
+  return filterMenu({
+    menu: "time",
+    fkey: "lookback:menu",
+    /* "Time" when nothing is being hidden by it, the window itself when
+       something is. Both are the honest reading: at "Everything" the time axis
+       is not narrowing anything, so it has no value to report. */
+    label: ui.lookbackHours == null ? "Time" : "Last " + lookbackValueLabel(ui.lookbackHours),
+    menuLabel: "How far back to show sessions",
+    active: ui.lookbackHours != null,
+    open: ui.openFilterMenu === "time",
+    title: "How far back the board reaches. This sets the working set every count on the page is taken over.",
+    trailing: true,
+    sections,
+  });
+}
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -4434,31 +4699,6 @@ function renderFilterBar(ui = state) {
     }
     bar.append(providerGroup);
   }
-  const lookbackGroup = el("div", {
-    class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
-  });
-  for (const hours of LOOKBACK_PRESETS) {
-    lookbackGroup.append(filterChip(
-      "Last " + hours + "h", ui.lookbackHours === hours, () => setLookbackHours(hours),
-      { fkey: "lookback:" + hours, title: `Hide sessions with no activity in the last ${hours} hours` },
-    ));
-  }
-  lookbackGroup.append(filterChip("Everything", ui.lookbackHours == null, () => setLookbackHours(null), {
-    title: "Show every session the collectors hold, however old",
-    fkey: "lookback:all",
-  }));
-  const customActive = ui.lookbackHours != null && !LOOKBACK_PRESETS.includes(ui.lookbackHours);
-  lookbackGroup.append(filterChip(
-    customActive ? ("Last " + ui.lookbackHours + "h") : "Custom…",
-    customActive,
-    () => {
-      const raw = window.prompt("Show sessions active in the last how many hours?", String(state.lookbackHours || DEFAULT_LOOKBACK_HOURS));
-      if (raw == null) return;
-      setLookbackHours(raw);
-    },
-    { fkey: "lookback:custom", title: "Choose your own number of hours" },
-  ));
-  bar.append(lookbackGroup);
   /* The lifecycle lens, reusing the sections the board already draws below. Board
      only: History is a view of finished work, where "still working" is not a
      question the rows can answer. */
@@ -4484,6 +4724,17 @@ function renderFilterBar(ui = state) {
       { fkey: "program:clear", title: "Show every program again" },
     ));
   }
+  /* Time goes LAST and hard right, separated from everything before it.
+     Everything to its left narrows within the population; this control decides
+     what the population is. The gap is the two-layer boundary drawn in space —
+     it is the one thing on this bar that moves the tab number, and standing it
+     shoulder to shoulder with the lenses is what taught operators the lenses
+     ought to move it too.
+
+     (Contract preference was the tab-strip row. It is here instead: `#views`
+     owns arrow-key roving tabindex over its tabs, and a dropdown inside it would
+     have to fight `handleCockpitKeys` for Left/Right — see LANE-FE2-STATUS.md.) */
+  bar.append(timeFilterMenu(ui));
   /* Nothing else. The collection window is the server's reach, not a lens —
      it lives in Settings (editor) and the summary rail (reading), never here.
      And no "your view only" disclaimer: since D7 the review toggle is a shared
@@ -9983,6 +10234,23 @@ function boot() {
     closeNotificationsPanel(false);
   });
 
+  /* A press anywhere else closes the open filter menu — the dismissal every
+     dropdown has — on the same mousedown guard the panels above use, and with
+     every menu wrapper exempt: the trigger's own click already toggles, so
+     closing here first would make it reopen on the same press, and clicking a
+     SECOND trigger should switch menus rather than merely shut the first.
+
+     Closing repaints, which is why the open menu is deliberately NOT part of
+     programsPaintSig: with it in the signature, this mousedown would rebuild the
+     board's rows and the click that followed would land on a detached node —
+     dismissing the menu would silently eat the operator's next action. */
+  document.addEventListener("mousedown", (e) => {
+    if (!state.openFilterMenu) return;
+    if (e.target?.closest?.(".filter-menu-wrap")) return;
+    state.openFilterMenu = "";
+    render();
+  });
+
   $("search").addEventListener("input", (e) => {
     state.query = e.target.value.trim().toLowerCase();
     render();
@@ -10060,6 +10328,14 @@ function boot() {
        operator their place on the board entirely. */
     if (state.notifyPanelOpen) {
       closeNotificationsPanel();
+      return;
+    }
+    /* The filter dropdown, ahead of the board's own chain: it is the most
+       recently opened thing on the screen and the smallest, so Escape means it.
+       Closes WITHOUT selecting — that is the whole point of the key — and hands
+       focus back to the trigger, as a selection does. */
+    if (state.openFilterMenu) {
+      closeFilterMenu();
       return;
     }
     if (state.confirming) {

@@ -73,8 +73,13 @@ Cursor). A row appears within about five seconds — no refresh needed.
 shows up on its own.
 
 The board opens on a **6-hour** window even though the last **36 hours** are
-scanned. If it looks empty, widen the lookback (1h / 6h / 24h / 36h) before
-concluding nothing was collected. Both numbers are yours to change — the gear in
+scanned. If it looks empty, widen the lookback before concluding nothing was
+collected: the **Time** menu at the right end of the filter bar offers hours
+(1h / 6h / 12h / 24h), days (2d / 7d / 14d / 30d) and Everything. The two
+windows are different things and the menu says so — your lookback is what the
+board shows you, the scan window is how far back the collectors reached, and
+asking for 7 days cannot reach past what was scanned. Both numbers are yours to
+change — the gear in
 the masthead opens Settings, where the lookback lives beside the scan window and
 the two thresholds that decide what every session is called.
 

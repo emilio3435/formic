@@ -38,6 +38,11 @@ export const state = {
      the other facets — it answers "what am I looking at right now", not "what
      should this board default to", so it does not persist and does not travel. */
   facetStatus: "",
+  /* Which filter dropdown is open: "" | time | provider | status. One at a
+     time, deliberately — two menus hanging off the same bar would overlap, and
+     the operator has no way to tell which one a click is aimed at. Session-
+     scoped like the lenses it opens: a menu left hanging is not a preference. */
+  openFilterMenu: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
   // Review workers are still in the snapshot and History. Board hides the
   // repetitive, non-attention rows by default, with an explicit toggle to

@@ -126,10 +126,20 @@ export interface FakeNode {
 
 function makeNode(tag: string): FakeNode {
   const classes = new Set<string>();
+  let text = "";
   const node = {
     nodeType: 1,
     tagName: tag,
-    textContent: "",
+    /* An accessor, because `textContent = ""` is how every render function in
+       this client empties the surface it is about to rebuild — and a plain
+       property let those children survive the wipe. Tests worked around it by
+       rendering once per withDom; that workaround is what made "click the
+       control, then look at what the repaint produced" untestable, because the
+       second paint stacked onto the first and byFkey found the stale node.
+       The real DOM drops children here, so this is the harness getting less
+       wrong, not a new fiction. */
+    get textContent() { return text; },
+    set textContent(v: string) { text = String(v ?? ""); node.children.length = 0; },
     dataset: {} as Record<string, string>,
     attributes: {} as Record<string, string>,
     children: [] as FakeNode[],
@@ -449,6 +459,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     facetProgram: "",
     facetProvider: "",
     facetStatus: "",
+    openFilterMenu: "",
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
@@ -7111,23 +7122,30 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
-    // Board/History: Lookback presets + All + Custom, then the Scan window.
+    /* Board/History: the status lens chips, then the closed Time trigger.
+       The six lookback chips are gone — time is one menu now, and a CLOSED menu
+       contributes exactly one focus stop, which is the compression the redesign
+       was for. Its preset fkeys still exist; they live on the menu items and
+       only while it is open (asserted below). */
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
       expect(keys).toEqual([
-        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
+        "lookback:menu",
       ]);
     });
 
     /* The same bar over a real fleet, which is where the facet chips appear. The
        ORDER is the contract — the bar is torn down and rebuilt on every paint,
        focus restore keys on position-independent fkeys, and a screen reader
-       walks the axes in this sequence: session kind, provider, then time.
-       Updated deliberately here (plan §3), never incidentally. */
+       walks the axes in this sequence: session kind, then the lenses, then TIME
+       LAST. Time moved to the end deliberately (FE-2 D2): everything before it
+       narrows within the population, and it is the one control that decides what
+       the population is, so the two layers are separated in space as well as in
+       the markup. Updated deliberately here, never incidentally. */
     withDom(() => {
       const updatedAt = new Date().toISOString();
       const review = agent({
@@ -7143,8 +7161,8 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual([
         "session-kind:review",
         "provider:claude", "provider:codex",
-        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
         "status:working", "status:waiting", "status:unverified",
+        "lookback:menu",
       ]);
     });
 
@@ -7165,8 +7183,12 @@ describe("FE-B: harness-backed client behavior", () => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
       const keys = focusKeysOf(bar());
       expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
-      // Last, because the collection status after it is a span, not a control.
-      expect(keys[keys.length - 1]).toBe("program:clear");
+      /* Time is last, and the program lens sits in front of it: the clear-chip
+         is a lens like the ones above it, and the working-set control closes the
+         bar. Anything appended after Time would have crossed the boundary this
+         layout exists to draw. */
+      expect(keys[keys.length - 1]).toBe("lookback:menu");
+      expect(keys[keys.length - 2]).toBe("program:clear");
       // The chip names the program it is holding you inside of.
       expect(textOf(byFkey(bar(), "program:clear"))).toContain("Ridge");
     });
@@ -7187,14 +7209,180 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(keys).toEqual(["usage-range:1h", "usage-range:24h", "usage-range:7d", "usage-range:30d", "usage-range:custom"]);
     });
 
-    // The key of the chip an operator is standing on does not move when the
-    // selection changes — otherwise focus restore finds nothing after the click.
+    /* The key of the control an operator is standing on does not move when the
+       selection changes — otherwise focus restore finds nothing after the click.
+       On "board", not the old "idle": lookbackApplies("idle") is false, so that
+       bar rendered hidden and empty and the three comparisons below were [] to
+       [] — a pin that could not fail. The Time trigger RENAMES itself on every
+       pick ("Last 6h" → "Last 24h" → "Time"), which is exactly the label-moves-
+       under-the-fkey case this guards, so it now has something to say. */
     const keyAt = (hours: number | null) => withDom(() => {
-      M.renderFilterBar(listUi({ view: "idle", lookbackHours: hours }));
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: hours }));
       return focusKeysOf(bar());
     });
+    expect(keyAt(6)).toContain("lookback:menu");
     expect(keyAt(6)).toEqual(keyAt(24));
     expect(keyAt(null)).toEqual(keyAt(6));
+  });
+
+  /* -------- FE-2 D1/D2: the time menu ---------------------------------------
+     Time stopped being six chips beside the lenses and became one menu at the
+     far end of the bar. The point is not compression: the tab count moves when
+     time moves and never when a lens moves, and a control that decides the
+     population must not dress like the controls that merely narrow it. */
+
+  const timeBar = () => domById.get("filter-bar");
+  const openTime = (over: Record<string, unknown> = {}) =>
+    M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, openFilterMenu: "time", ...over }));
+
+  test("(FE2-D2) a closed time menu is one focus stop; opening it exposes the presets", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        const trigger = byFkey(timeBar(), "lookback:menu");
+        expect(trigger.attributes["aria-haspopup"]).toBe("menu");
+        expect(trigger.attributes["aria-expanded"]).toBe("false");
+        // Closed means ABSENT, not hidden: a menu left in the tree is a dozen
+        // extra tab stops between the operator and the search box.
+        expect(byClass(timeBar(), "filter-menu")).toBeNull();
+        expect(byFkey(timeBar(), "lookback:24")).toBeNull();
+
+        await fire(trigger);
+        expect(M.state.openFilterMenu).toBe("time");
+        // The real repaint the click drove, not a second hand-run render.
+        const menu = byClass(timeBar(), "filter-menu");
+        expect(menu.attributes.role).toBe("menu");
+        expect(byFkey(timeBar(), "lookback:menu").attributes["aria-expanded"]).toBe("true");
+        expect(focusKeysOf(menu)).toEqual([
+          "lookback:1", "lookback:6", "lookback:12", "lookback:24",
+          "lookback:48", "lookback:168", "lookback:336", "lookback:720",
+          "lookback:all", "lookback:custom",
+        ]);
+
+        // Clicking the open trigger is the way back out — the way out is the way in.
+        await fire(byFkey(timeBar(), "lookback:menu"));
+        expect(M.state.openFilterMenu).toBe("");
+        expect(byClass(timeBar(), "filter-menu")).toBeNull();
+      }));
+  });
+
+  test("(FE2-D2) a day preset stores hours and closes the menu on the operator's pick", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        /* 2d is 48h in storage. The whole day group is sugar over the SAME
+           setLookbackHours the hour group calls, which is why `mtn3-lookbackHours`
+           needed no migration — if a day item ever wrote "2" instead of 48, a
+           reload would silently narrow a two-day board to two hours. */
+        await fire(byFkey(timeBar(), "lookback:48"));
+        expect(M.state.lookbackHours).toBe(48);
+        // Time is single-valued, so its menu is radio and it closes on the pick.
+        expect(M.state.openFilterMenu).toBe("");
+        expect(byFkey(timeBar(), "lookback:menu").attributes.role).toBeUndefined();
+        expect(textOf(byFkey(timeBar(), "lookback:menu"))).toContain("Last 2d");
+      }));
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        await fire(byFkey(timeBar(), "lookback:720"));
+        expect(M.state.lookbackHours).toBe(720); // 30d, not 30
+      }));
+  });
+
+  test("(FE2-D2) the items are radios that report which window is in force", () => {
+    withDom(() => {
+      openTime({ lookbackHours: 48 });
+      const checked = buttonsOf(byClass(timeBar(), "filter-menu"))
+        .filter((b: { attributes: Record<string, string> }) => b.attributes["aria-checked"] === "true")
+        .map((b: { dataset: Record<string, string> }) => b.dataset.fkey);
+      // Exactly one, because a session has exactly one lookback window. This is
+      // the line that fails if the lens axes' checkbox semantics are ever copied
+      // onto time, where "1h AND 7d" has no meaning to give an operator.
+      expect(checked).toEqual(["lookback:48"]);
+      for (const b of buttonsOf(byClass(timeBar(), "filter-menu"))) {
+        expect(b.attributes.role).toBe("menuitemradio");
+      }
+    });
+
+    // A window nobody offers is the Custom item's job to own, and the trigger
+    // states it rather than reading "Custom" and hiding the number.
+    withDom(() => {
+      openTime({ lookbackHours: 36 });
+      expect(byFkey(timeBar(), "lookback:custom").attributes["aria-checked"]).toBe("true");
+      expect(textOf(byFkey(timeBar(), "lookback:menu"))).toContain("Last 36h");
+    });
+
+    /* "Everything" is not a narrowing, so the trigger drops its pressed ink and
+       says the axis name instead of a window. The board is hiding nothing by
+       time, and a filled chip claiming otherwise is the overclaim this bar was
+       just cleaned of. */
+    withDom(() => {
+      openTime({ lookbackHours: null });
+      const trigger = byFkey(timeBar(), "lookback:menu");
+      expect(trigger.attributes["aria-pressed"]).toBe("false");
+      expect(textOf(trigger)).toContain("Time");
+      expect(byFkey(timeBar(), "lookback:all").attributes["aria-checked"]).toBe("true");
+    });
+  });
+
+  test("(FE2-D2) the 36h preset is gone, and the Days caveat is Board-only and concrete", () => {
+    withDom(() => {
+      openTime();
+      /* The 36 died deliberately: it was the SERVER's scan constant wearing a
+         filter's clothes, and an operator who learned "36h" as a lookback learned
+         that the collector's reach and their own filter were one window. */
+      expect(byFkey(timeBar(), "lookback:36")).toBeNull();
+      const note = byClass(timeBar(), "filter-menu-note");
+      expect(textOf(note)).toContain("still on the live wire");
+      // Described, not merely printed: a caveat a screen reader walks past is
+      // decoration. The Days group points at it.
+      const group = byClass(timeBar(), "filter-menu-group");
+      expect(allByClass(timeBar(), "filter-menu-group")[1].attributes["aria-describedby"])
+        .toBe(note.attributes.id);
+      expect(group).toBeTruthy();
+    });
+
+    // On History the archive IS the population, so the caveat would be false.
+    withDom(() => {
+      openTime({ view: "history" });
+      expect(byClass(timeBar(), "filter-menu-note")).toBeNull();
+    });
+
+    /* The boundary gets a NUMBER when a snapshot has carried one — "reaches only
+       the live wire" is abstract until it says how far the wire goes. */
+    withDom(() => {
+      openTime({ snap: snapshot({ scanWindowHours: 36 }) });
+      expect(textOf(byClass(timeBar(), "filter-menu-note"))).toContain("scan 36h back");
+    });
+    /* …and stays silent when none has. state.scanWindowHours holds a client-side
+       36 no server ever confirmed; printing it here as a boundary is the exact
+       overclaim renderScanWindow was fixed to stop making, in the one place an
+       operator is least able to check it. */
+    withDom(() => {
+      openTime({ snap: null, scanWindowHours: 36 });
+      expect(textOf(byClass(timeBar(), "filter-menu-note"))).not.toContain("36");
+    });
+  });
+
+  test("(FE2-D1) Escape closes the menu without selecting, and returns focus to the trigger", async () => {
+    await withState({ view: "board", snap: null, lookbackHours: 6, openFilterMenu: "time" },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        /* focusFilterTrigger looks the trigger up AFTER the repaint, because the
+           node this handler was built on is detached by then and focusing a
+           detached element is a silent no-op that lands the operator on <body>.
+           The fake document finds nothing by selector, so the lookup is stood in
+           for here — what is under test is that the close path performs it at
+           all, and against the RIGHT fkey. */
+        const focused: string[] = [];
+        (globalThis as unknown as { document: Record<string, unknown> }).document.querySelector =
+          (sel: string) => ({ focus: () => focused.push(sel) });
+
+        M.closeFilterMenu();
+        expect(M.state.openFilterMenu).toBe("");
+        expect(M.state.lookbackHours).toBe(6); // nothing was selected on the way out
+        expect(focused).toEqual([`[data-fkey="lookback:menu"]`]);
+      }));
   });
 
   test("(3) the rename form and the usage panel keep their controls addressable", () => {

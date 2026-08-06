@@ -157,7 +157,21 @@ export const LEGACY_VIEW_ALIASES = {
   idle: "board",
 };
 export const LOOKBACK_STORAGE_KEY = "mtn3-lookbackHours";
-export const LOOKBACK_PRESETS = [1, 6, 24, 36];
+/* Time is a WORKING-SET control, not a lens.
+
+   It decides which sessions the board is counting at all — the tab number moves
+   with it — where provider and status only narrow inside that set. Six equal
+   chips sitting in a row beside the lens chips said the opposite, so the presets
+   are grouped into one menu here: Hours for the working shift, Days for the week
+   you are reconstructing.
+
+   Days are stored AS HOURS through the same setLookbackHours, so
+   `mtn3-lookbackHours` needs no migration and a stored 36 still renders as an
+   active "Last 36h" custom value. The old 36 preset is gone deliberately: it was
+   the server's scan constant leaked into operator vocabulary, and a filter
+   wearing the collector's number teaches that the two are the same window. */
+export const LOOKBACK_HOUR_PRESETS = [1, 6, 12, 24];
+export const LOOKBACK_DAY_PRESETS = [2, 7, 14, 30];
 export const DEFAULT_LOOKBACK_HOURS = 6;
 export const USAGE_RANGE_PRESETS = [
   { id: "1h", hours: 1, label: "1h" },
