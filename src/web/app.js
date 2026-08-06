@@ -139,6 +139,7 @@ import {
   deriveRollup,
   isLive,
   isReviewWorker,
+  sessionKindOf,
   isTerminal,
   isUnverified,
   lifecycleOf,
@@ -965,7 +966,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        here and a silent regression there: a blocked board would have offered
        "Close 17 cmux panes" — a fix for a different problem — because
        healthRemedy alone cannot know the control plane is down. */
-    /* S2-T2. The headline was the SEVERITY word — "All clear", "Blocked",
+    /* S2-T2. The headline was the SEVERITY word — "Readings healthy", "Blocked",
        "Stale", "Advisory" — which reads as a verdict about the fleet. It is a
        verdict about the INSTRUMENTS, and saying so is the card's whole job: a
        confidence header whose instruments are broken must admit it, or every
@@ -1137,62 +1138,92 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     };
   }
   if (id === "context-peak") {
-    const peak = peakContext(snap);
-    /* The server reports contextPeak/contextMedian at the top level, derived from
-       the same per-agent contextPct the CTX column reads. Prefer them: the client
-       walk below computes its own percentage from tokens.total, so two
-       derivations of one number drift, and the walk also decided whether the card
-       EXISTED — a snapshot it found nothing in printed "No data" while the server
-       had the answer sitting in the payload.
+    /* S3. The card headlined `contextPeak` — ONE session's extremum presented as
+       a reading about the fleet. Measured on the live board while this was
+       written: peak 84%, average 29%, median 25%. An operator glancing at the
+       header read "the fleet is nearly full" while the typical session sat at a
+       quarter, which is the same category error the Findings card made in the
+       other direction.
 
-       The walk is still what the tokens display and the meter's per-agent linkage
-       need, so it stays; it just no longer gets a vote on the headline. */
+       The fleet's typical occupancy leads now. Peak leaves the headline
+       entirely and survives as a tick on the dial and in the drawer, where it
+       belongs — it is a real and useful number about ONE agent, and the drawer
+       is where one agent is the subject.
+
+       The catalog id stays `context-peak` so saved layouts survive; only the
+       label becomes "Context". Ids are storage keys, labels are copy. */
+    const peak = peakContext(snap);
     const reported = Number.isFinite(snap.contextPeak) ? snap.contextPeak : null;
     const median = Number.isFinite(snap.contextMedian) ? snap.contextMedian : null;
-    if (!peak && reported == null) return noDataWidget("No live context reports.");
-    const pct = reported != null ? reported : peak.pct;
-    /* No coverage suffix. It used to read `${tokenReporting}/${tokenEligible}
-       reporting`, which counts TOKEN reporters — measured live at 8/9 while 32
-       live agents were reporting contextPct. A coverage figure for the context
-       reading that counts a different population is worse than none: it looks
-       like a completeness guarantee and is measuring something else.
-
-       Deriving one client-side would be a THIRD population, since the headline
-       comes from the server's own contextPeak over its liveAgents filter. The
-       honest fix is to stop asserting it here; if context coverage matters, the
-       server should ship contextReporting/contextEligible beside contextPeak so
-       the number and its coverage come from one derivation.
-       (GPT lane day-review 4.4, downgraded to relayed-unverified — verified
-       here, and it holds.) */
-    const coverage = "";
-    /* The headline already IS the peak percentage, so repeating "Peak 62%"
-       underneath printed one number twice about 40px apart — the same defect the
-       drawer's context tile had, whose fix never reached the band. Peak alone
-       hides the shape of the fleet, so the median stays: one agent at 90% and
-       every agent at 90% are the same headline and very different situations. */
     const average = Number.isFinite(snap.contextAverage) ? snap.contextAverage : null;
-    /* Which secondary reading the sublabel spells out. Both are always drawn on
-       the dial; this only decides which one gets words, because the pair
-       disagreeing is the informative case and two sentences would bury it. */
-    const spreadMode = state.contextSpread === "average" ? "average" : "median";
-    const chosen = spreadMode === "average" ? average : median;
-    const spread = chosen != null
-      ? `${spreadMode === "average" ? "Average" : "Median"} ${chosen}%`
-      : "Highest observed";
+    const peakPct = reported != null ? reported : (peak ? peak.pct : null);
+
+    /* Withhold rather than guess — and specifically, withhold when there is no
+       reading that DESCRIBES THE FLEET, even if a peak survives. Leading with a
+       lone peak is the defect above, so a card that could only do that does not
+       render at all: speaks() drops a missing tone. Printing 0% instead would be
+       a measurement nobody took. */
+    if (average == null && median == null) return noDataWidget("No live context reports.");
+
+    /* The existing spread toggle, kept and INVERTED. It used to choose which
+       secondary reading got words underneath a peak headline; it now chooses
+       which reading IS the headline. Same control, same CONTEXT_SPREAD_KEY, same
+       per-browser persistence. One reading leads at a time and the toggle is
+       what makes the second reachable without spending a second sentence on it.
+
+       Average leads by default: it moves with every session, where a median can
+       sit perfectly still while half the fleet climbs. */
+    const preferred = state.contextSpread === "median" ? "median" : "average";
+    /* A preference, not a promise that both exist — whichever is present leads
+       when the preferred one is missing. */
+    const headlineMode = (preferred === "median" ? median : average) != null
+      ? preferred
+      : (average != null ? "average" : "median");
+    const headline = headlineMode === "average" ? average : median;
+    const second = headlineMode === "average" ? median : average;
+
+    /* Coverage from the ONE population that has it. types.ts documents this pair
+       as existing precisely because a coverage figure over a different
+       population went wrong once already: this card could previously print token
+       reporters (measured at 8/9) beside a context reading covering 32 live
+       agents. It speaks only when incomplete — a complete reading needs no
+       footnote, and a permanent footnote stops being read. */
+    const reporting = Number.isFinite(snap.contextReporting) ? snap.contextReporting : null;
+    const eligible = Number.isFinite(snap.contextEligible) ? snap.contextEligible : null;
+    const coverage = reporting != null && eligible != null && reporting < eligible
+      ? ` · ${reporting}/${eligible} reporting`
+      : "";
+
+    const secondLabel = second != null
+      ? `${headlineMode === "average" ? "Median" : "Average"} ${second}%`
+      : "";
     return {
-      value: peak && display === "tokens" ? contextDisplayValue(peak.agent.tokens, display) : pct + "%",
-      unit: display === "tokens" && peak ? "" : "peak window",
-      sublabel: spread + coverage,
-      tone: pct >= 85 ? "hot" : "ok",
-      meterPct: pct,
-      /* Drawn as ticks on the same arc as the peak. Kept separate from
-         `meterPct` so the dial can show the fleet's shape without any of them
-         competing to be the headline. */
+      /* Always a percentage. The tokens display names ONE session's usage, which
+         has no fleet-wide counterpart — an "average token count" would be an
+         aggregate of occupancies, the exact substitution types.ts warns about.
+         Tokens stay where a single agent is the subject: the CTX column and the
+         drawer. */
+      value: headline + "%",
+      unit: headlineMode === "average" ? "average window" : "median window",
+      sublabel: (secondLabel || "Single reading") + coverage,
+      /* The alarm still reads the PEAK, not the headline. One session about to
+         run out of room is worth colouring the card for even when the fleet's
+         typical occupancy is comfortable — demoting peak from the headline is
+         not the same as ceasing to watch it. */
+      tone: peakPct != null && peakPct >= 85 ? "hot" : "ok",
+      meterPct: headline,
+      /* The dial's accessible name starts with the reading that leads, not with
+         "Peak". Every reading drawn is enumerated, so nothing on the arc is
+         visible only to someone looking at the picture. */
+      meterLabel: `${headlineMode === "average" ? "Average" : "Median"} context ${headline}%`,
       gaugeMarks: [
-        median != null ? { pct: median, cls: "is-median", label: `Median ${median}%` } : null,
-        average != null ? { pct: average, cls: "is-average", label: `Average ${average}%` } : null,
+        second != null
+          ? { pct: second, cls: headlineMode === "average" ? "is-median" : "is-average",
+              label: `${headlineMode === "average" ? "Median" : "Average"} ${second}%` }
+          : null,
+        peakPct != null ? { pct: peakPct, cls: "is-peak", label: `Peak ${peakPct}%` } : null,
       ].filter(Boolean),
-      spreadMode,
+      spreadMode: headlineMode,
       spreadToggleable: median != null && average != null,
     };
   }
@@ -1253,7 +1284,7 @@ globalThis.TheAntHill = {
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
-  isReviewWorker,
+  isReviewWorker, sessionKindOf,
   agentContextPct, rosterName,
   DEFAULT_LOOKBACK_HOURS, LOOKBACK_PRESETS,
   broadcastEligible, broadcastIneligibleReason, CONTROL_STATE_TEXT,
@@ -1308,7 +1339,7 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
-  currentFilter, passesReviewVisibility, reviewWorkerCount, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
+  currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, renderTabs, filterChip, renderFilterBar, renderLabelForm, renderTriage, renderUsagePanel,
 };
 
 /* ---------- state ---------- */
@@ -1327,14 +1358,21 @@ function elapsedTickText(base, fromIso, now, frozen) {
 }
 
 
+/* S3 flipped the default to AVERAGE. The toggle used to pick which secondary
+   reading got words under a fixed peak headline; it now picks which reading
+   LEADS, and the average is the better default because it moves with every
+   session — a median can sit perfectly still while half the fleet climbs.
+
+   An explicitly stored "median" is still honoured: it is a choice the operator
+   made, and this key exists to remember choices. Anything else falls to the
+   documented default rather than trusting a value the product may no longer
+   speak. */
 function loadContextSpread() {
   try {
     const raw = localStorage.getItem(CONTEXT_SPREAD_KEY);
-    // Anything else falls to the documented default rather than trusting a
-    // stored value the product may no longer speak.
-    state.contextSpread = raw === "average" ? "average" : "median";
+    state.contextSpread = raw === "median" ? "median" : "average";
   } catch {
-    state.contextSpread = "median";
+    state.contextSpread = "average";
   }
 }
 
@@ -1384,6 +1422,13 @@ async function fetchSettings() {
     const body = await res.json();
     const hours = Number(body.scanWindowHours ?? (body.settings && body.settings.scanWindowHours));
     if (Number.isFinite(hours)) state.scanWindowHours = hours;
+    /* Review-worker visibility is a SERVER setting, not a per-browser lens: the
+       fleet's default board should look the same from any machine. Skipped while
+       a save is in flight, so a refetch racing the operator's own toggle cannot
+       flip the chip back under their finger. */
+    if (typeof (body.settings && body.settings.showReviewWorkers) === "boolean" && !state.settingsPending) {
+      state.showReviewWorkers = body.settings.showReviewWorkers;
+    }
     state.settings = body.settings || null;
     /* The operator's landing tab, applied only on the FIRST read — after that
        they have navigated and moving them would be the board overriding a
@@ -1404,12 +1449,6 @@ async function fetchSettings() {
     state.settingsError = err && err.message ? err.message : "Settings unavailable";
   }
   renderFilterBar();
-}
-
-async function postScanWindow(hours) {
-  const clamped = Math.max(1, Math.min(168, Math.round(Number(hours))));
-  if (!Number.isFinite(clamped)) return;
-  await postSettings({ scanWindowHours: clamped });
 }
 
 /* One writer for every server-side setting.
@@ -2172,9 +2211,14 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
       trackClass: "gauge-track",
       marks: data.gaugeMarks,
       /* The accessible name carries every reading the dial draws. A gauge whose
-         label names only the needle hides the two ticks from anyone not looking
-         at it, which is most of the point of drawing them. */
-      label: [`Peak context ${data.meterPct}%`, ...(data.gaugeMarks ?? []).map((mark) => mark.label)].join(", "),
+         label names only the needle hides the ticks from anyone not looking at
+         it, which is most of the point of drawing them.
+
+         It leads with `meterLabel` rather than a hardcoded "Peak context": S3
+         moved the peak off the headline, and a label that still announced it
+         first would have kept the demoted reading in the most prominent place
+         for exactly the users who cannot see the arc. */
+      label: [data.meterLabel || `${data.meterPct}%`, ...(data.gaugeMarks ?? []).map((mark) => mark.label)].join(", "),
     }));
     /* The toggle only appears when there are two readings to choose between —
        offering it with one is a control that does nothing, which this codebase
@@ -2184,8 +2228,10 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
         type: "button",
         class: "spread-toggle",
         dataset: { fkey: "context-spread" },
-        title: "Switch the reading below between the median and the average",
-        "aria-label": `Showing the ${data.spreadMode}. Switch to the ${data.spreadMode === "average" ? "median" : "average"}.`,
+        /* Inverted by S3: this used to swap the sublabel's wording under a fixed
+           peak headline. It now swaps which reading LEADS. */
+        title: "Switch the headline between the average and the median",
+        "aria-label": `Context headline is the ${data.spreadMode}. Switch to the ${data.spreadMode === "average" ? "median" : "average"}.`,
         onclick: () => {
           state.contextSpread = state.contextSpread === "average" ? "median" : "average";
           try { localStorage.setItem(CONTEXT_SPREAD_KEY, state.contextSpread); } catch { /* private mode */ }
@@ -2302,12 +2348,13 @@ export function settingsPreviewText(counts) {
     + ` · ${counts.unverified} Unverified · ${counts.finished + counts.retained} History.`;
 }
 
-function settingsField(key, label, help, value, min, max) {
+function settingsField(key, label, help, value, min, max, fkey = null) {
   return el("label", { class: "settings-field" },
     el("span", { class: "settings-field-label", text: label }),
     el("input", {
       type: "number", class: "settings-input", id: "setting-" + key,
-      dataset: { setting: key }, value: String(value), min: String(min), max: String(max),
+      dataset: fkey ? { setting: key, fkey } : { setting: key },
+      value: String(value), min: String(min), max: String(max),
       oninput: () => renderSettingsPreview(),
     }),
     el("span", { class: "settings-help", text: help }));
@@ -2766,9 +2813,12 @@ function renderSettingsPanel() {
     el("p", { class: "settings-preview", id: "settings-preview" }),
     el("details", { class: "settings-advanced" },
       el("summary", { text: "Advanced" }),
+      /* Keeps the `scan-window` focus key the filter bar used to carry: the
+         control moved surfaces, and muscle memory should land on the editor
+         rather than on nothing. */
       settingsField("scanWindowHours", "Scan window",
         "How far back collectors read transcripts. Sessions older than this move to History as 'no longer watched'. Hours, 1–168.",
-        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168),
+        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168, "scan-window"),
       settingsField("historyRetentionDays", "Keep history for",
         "Finished sessions are kept this long. Lowering it permanently forgets older records. Days, 7–365.",
         s.historyRetentionDays ?? 30, 7, 365),
@@ -3874,11 +3924,15 @@ function findingFromQueueItem(item) {
    Review workers are hidden only when they are routine and non-attention; a
    review that needs a person remains pinned and visible. A search is an
    explicit request, so a matching review worker is also admitted. History
-   remains complete regardless of this Board-only presentation choice. */
+   remains complete regardless of this Board-only presentation choice.
+
+   The gate reads `sessionKindOf`, not the regex directly: the kind is the
+   server's verdict from launch evidence wherever it has one, and the prose
+   patterns are now only the transition fallback beneath it. */
 function passesReviewVisibility(agent, view, showReviewWorkers = state.showReviewWorkers, searchMatches = false) {
   return view !== "board"
     || showReviewWorkers
-    || !isReviewWorker(agent)
+    || sessionKindOf(agent) !== "review"
     || alerting(agent)
     || searchMatches;
 }
@@ -3887,17 +3941,59 @@ function reviewWorkerCount(ui = state) {
   if (!ui.snap || ui.view !== "board") return 0;
   return snapshotAgents(ui.snap)
     .map(({ agent }) => agent)
-    .filter((agent) => isReviewWorker(agent)
+    .filter((agent) => sessionKindOf(agent) === "review"
       && viewMatches("board", agent)
       && passesLookback(agent, "board", ui.lookbackHours)
       && !alerting(agent))
     .length;
 }
 
+/* Optimistic: the chip flips on the click, and the POST follows.
+
+   A rejected save puts it back, because nothing else would. `fetchSettings`
+   runs once at boot, so there is no later read to correct an optimistic write —
+   without this the chip would keep asserting a visibility the server refused,
+   over a board still filtered the old way, until a reload. The guard yields to
+   a second toggle that landed while this one was in flight: the operator's
+   newer choice outranks this one's rollback. */
 function setShowReviewWorkers(show) {
   const next = Boolean(show);
   if (next === state.showReviewWorkers) return;
   state.showReviewWorkers = next;
+  render();
+  void postSettings({ showReviewWorkers: next }).then((saved) => {
+    if (saved || state.showReviewWorkers !== next) return;
+    state.showReviewWorkers = !next;
+    render();
+  });
+}
+
+/* A session-scoped lens, deliberately unlike the review toggle above it: that
+   one is the fleet's shared default and goes to the server, this one is "what
+   am I looking at right now" and dies with the tab. Clicking the active chip
+   clears it, so the way out is the way in. */
+function setFacetProvider(provider) {
+  const next = state.facetProvider === provider ? "" : provider;
+  if (next === state.facetProvider) return;
+  state.facetProvider = next;
+  render();
+}
+
+function setFacetStatus(status) {
+  const next = state.facetStatus === status ? "" : status;
+  if (next === state.facetStatus) return;
+  state.facetStatus = next;
+  render();
+}
+
+/* Set from the program drawer ("Only this program"), cleared from the Filters
+   bar. Programs are unbounded, so there is no always-on chip list for them —
+   the bar carries one clear-chip while the lens is active, which is the whole
+   disclosure obligation: a narrowing is always one visible control from off. */
+function setFacetProgram(programId) {
+  const next = state.facetProgram === programId ? "" : programId;
+  if (next === state.facetProgram) return;
+  state.facetProgram = next;
   render();
 }
 
@@ -3910,10 +4006,19 @@ function currentFilter() {
       agent,
       state.view,
       state.showReviewWorkers,
-      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+      Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
-    (!state.facetProvider || agent.provider === state.facetProvider);
+    (!state.facetProvider || agent.provider === state.facetProvider) &&
+    matchesStatusLens(agent, state.facetStatus);
+}
+
+/* The lifecycle lens, reusing the sections the board already draws. "working"
+   is the one name that does not match its section key — the section is `active`
+   — so the translation lives here rather than in four call sites. */
+function matchesStatusLens(agent, facetStatus) {
+  if (!facetStatus) return true;
+  return lifecycleSection(agent) === (facetStatus === "working" ? "active" : facetStatus);
 }
 
 /* The finished sessions a LIVE view has excluded — the Finished shelf's
@@ -3930,6 +4035,11 @@ function currentFilter() {
    population, and a shelf holding every row would be a collapsed view. */
 function shelfFilter() {
   if (state.view === "history") return () => false;
+  /* A lifecycle lens and a shelf of finished rows are contradictory claims: the
+     operator asked to see only what is waiting, and every row on this shelf is
+     over. Rather than show a shelf the lens excludes row by row, the shelf goes
+     away whole while a lens is on. */
+  if (state.facetStatus) return () => false;
   return (agent, program) =>
     /* Two ways to be finished, and the shelf holds both. `isTerminal` is the
        PROCESS ending. `declaredDone` is the WORK ending — a lane that reported
@@ -3946,7 +4056,7 @@ function shelfFilter() {
       agent,
       state.view,
       state.showReviewWorkers,
-      Boolean(state.query) && isReviewWorker(agent) && matchesQuery(agent, program, state.query),
+      Boolean(state.query) && sessionKindOf(agent) === "review" && matchesQuery(agent, program, state.query),
     ) &&
     (!state.facetProgram || program.id === state.facetProgram) &&
     (!state.facetProvider || agent.provider === state.facetProvider);
@@ -4084,22 +4194,29 @@ function renderTabs() {
 function filterChip(label, active, onclick, opts = {}) {
   return el("button", {
     type: "button",
-    // is-unverified marks a chip whose value the server never confirmed, so a
-    // built-in default cannot pass for a reported one.
-    class: "filter-chip" + (active ? " is-active" : "") + (opts.alert ? " is-unverified" : "")
-      + (opts.className ? " " + opts.className : ""),
-    /* aria-pressed only where there is a pressed state to report. The scan
-       control opens an editor rather than toggling, and announcing it as an
-       unpressed toggle told a screen reader the opposite of what it does. */
-    ...(opts.className === "filter-setting" ? {} : { "aria-pressed": String(Boolean(active)) }),
+    class: "filter-chip" + (active ? " is-active" : ""),
+    /* Every chip on this bar is a toggle now, so every one reports a pressed
+       state. The exemption this used to carry — along with the icon, alert and
+       className options — existed for the scan control, which opened an editor
+       rather than toggling. That control is a read-only <span> here today and
+       its editor lives in Settings, so the affordances retire with it. */
+    "aria-pressed": String(Boolean(active)),
     disabled: opts.disabled ? "" : null,
     title: opts.title || null,
     dataset: opts.fkey ? { fkey: opts.fkey } : null,
     onclick,
-  }, opts.icon ? icon(opts.icon) : null, label);
+  }, label);
 }
 
 /* Lookback + scan-window controls for Idle/History; Usage range for Usage. */
+/* The lifecycle lens chips, in the order the board stacks their sections. The
+   value is the lens; the label is the word the board already uses for it. */
+const STATUS_LENSES = [
+  ["working", "Working"],
+  ["waiting", "Waiting"],
+  ["unverified", "Unverified"],
+];
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
@@ -4159,6 +4276,22 @@ function renderFilterBar(ui = state) {
       },
     ));
   }
+  /* One chip per provider actually on the wire, and only when there is a choice
+     to make: a single-provider fleet gets no chips, because a filter whose only
+     option is "everything" is furniture. Toggling the active one clears it. */
+  const providers = ui.snap
+    ? [...new Set(snapshotAgents(ui.snap).map(({ agent }) => agent.provider).filter(Boolean))].sort()
+    : [];
+  if (providers.length > 1) {
+    const providerGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Provider" });
+    for (const provider of providers) {
+      providerGroup.append(filterChip(provider, ui.facetProvider === provider, () => setFacetProvider(provider), {
+        fkey: "provider:" + provider,
+        title: ui.facetProvider === provider ? "Show every provider" : "Show only " + provider + " sessions",
+      }));
+    }
+    bar.append(providerGroup);
+  }
   const lookbackGroup = el("div", {
     class: "filter-group", role: "group", "aria-label": "How far back to show sessions",
   });
@@ -4184,6 +4317,31 @@ function renderFilterBar(ui = state) {
     { fkey: "lookback:custom", title: "Choose your own number of hours" },
   ));
   bar.append(lookbackGroup);
+  /* The lifecycle lens, reusing the sections the board already draws below. Board
+     only: History is a view of finished work, where "still working" is not a
+     question the rows can answer. */
+  if (ui.view === "board") {
+    const statusGroup = el("div", { class: "filter-group", role: "group", "aria-label": "Status" });
+    for (const [value, label] of STATUS_LENSES) {
+      statusGroup.append(filterChip(label, ui.facetStatus === value, () => setFacetStatus(value), {
+        fkey: "status:" + value,
+        title: ui.facetStatus === value ? "Show every status" : "Show only " + label.toLowerCase() + " sessions",
+      }));
+    }
+    bar.append(statusGroup);
+  }
+  /* No always-on program chips — programs are unbounded and the bar would grow
+     without limit. The lens is SET from the drawer and CLEARED here, so an
+     active narrowing is still one visible control away from off. */
+  if (ui.facetProgram) {
+    const scoped = ((ui.snap && ui.snap.programs) || []).find((p) => p.id === ui.facetProgram);
+    bar.append(filterChip(
+      "Only " + (scoped ? programName(scoped) : "one program"),
+      true,
+      () => setFacetProgram(state.facetProgram),
+      { fkey: "program:clear", title: "Show every program again" },
+    ));
+  }
   /* Says who it affects, because it is the one control on this bar that is not
      about your browser. */
   bar.append(el("span", { class: "filter-note", text: "· your view only" }));
@@ -4195,32 +4353,19 @@ function renderFilterBar(ui = state) {
   const confirmed = Number((ui.snap && ui.snap.scanWindowHours) || 0) || 0;
   const scanHours = confirmed || Number(ui.scanWindowHours) || 36;
   const unverified = !confirmed && !!ui.settingsError;
-  /* Reads as a setting you are about to change, not as a filter you might
-     select. It was styled identically to the lookback chips beside it while
-     doing something entirely different — clicking it writes to the server and
-     changes what every browser sees. */
-  bar.append(filterChip(
-    unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
-    false,
-    () => {
-      const raw = window.prompt(
-        "How far back should collectors read transcripts? Hours, 1-168.\n\nThis changes what the server harvests for everyone, not just this browser.",
-        String(scanHours),
-      );
-      if (raw == null) return;
-      void postScanWindow(raw);
-    },
-    {
-      disabled: ui.settingsPending,
-      className: "filter-setting",
-      icon: "settings",
-      title: unverified
-        ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Click to set it."
-        : "How far back collectors read transcripts. Sessions older than this leave the board. Click to change — affects everyone.",
-      fkey: "scan-window",
-      alert: unverified,
-    },
-  ));
+  /* Read-only, and a <span> rather than a button so it leaves the focus order.
+     Every other control on this bar changes what YOU see; this one changed what
+     the server COLLECTS — sessions outside it leave the wire entirely, for every
+     browser. Two different powers wearing the same chip is what the apologetic
+     "· your view only" note beside it was there to paper over. The editor moved
+     to Settings, where the rest of the server's knobs live. */
+  bar.append(el("span", {
+    class: "filter-status" + (unverified ? " is-unverified" : ""),
+    title: unverified
+      ? "The server did not report its scan window (" + ui.settingsError + "). Showing the built-in default of " + scanHours + "h. Change it in Settings."
+      : "Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.",
+    text: unverified ? "Collecting: unverified" : "Collecting last " + scanHours + "h",
+  }));
 }
 
 function renderScopeNote(shown) {
@@ -4247,8 +4392,12 @@ function renderScopeNote(shown) {
      a filter is narrowing the list, a lookback window is hiding rows, or the
      last refresh failed. Otherwise the tab bar has already said it. */
   const parts = [];
-  if (state.query || state.facetProgram || state.facetProvider) {
-    parts.push(`${shown} matching`);
+  if (state.query || state.facetProgram || state.facetProvider || state.facetStatus) {
+    /* The live region names the lenses, not just the count. "12 matching" read
+       out of a screen reader says a filter is on; it does not say which one, and
+       the operator cannot see the pressed chip to find out. */
+    const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
+    parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
   if (lookbackApplies(state.view)) {
     const scan = state.snap.scanWindowHours || state.scanWindowHours;
@@ -4768,6 +4917,7 @@ function programsPaintSig(visible, ui) {
     ui.query,
     ui.facetProgram,
     ui.facetProvider,
+    ui.facetStatus,
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
     ui.selecting ? "1" : "0",
@@ -4985,6 +5135,32 @@ function stripRowOpts(program, board) {
   };
 }
 
+/* The constrained-empty sentence, pure so the harness can reach it: renderPrograms
+   is below the seam and this copy was unreachable by test — the exact shape a
+   sentence drifts in. Returns null when no constraint is active, and the caller
+   falls through to the all-clear composite. */
+function emptyListMessage(ui = state) {
+  const lookbackHiding = lookbackApplies(ui.view) && ui.lookbackHours != null;
+  const reviewsHidden = !ui.showReviewWorkers ? reviewWorkerCount(ui) : 0;
+  if (!ui.query && !ui.facetProgram && !ui.facetProvider && !ui.facetStatus && !lookbackHiding && !reviewsHidden) return null;
+  /* One hidden reviewer is one review worker. The count is rendered into the
+     sentence, so the noun and its verb have to agree with it or the disclosure
+     reads as a bug in the very number it is disclosing. */
+  const reviewers = reviewsHidden + " review worker" + (reviewsHidden === 1 ? "" : "s");
+  const parts = [];
+  if (ui.query || ui.facetProgram) parts.push("search and filters");
+  /* The facets get NAMED rather than folded into "filters": an operator staring
+     at an empty board needs to read which lens emptied it, not that some lens
+     did. The chip is one click away, but only if they know which one. */
+  if (ui.facetProvider) parts.push("provider (" + ui.facetProvider + ")");
+  if (ui.facetStatus) parts.push("status (" + ui.facetStatus + ")");
+  if (lookbackHiding) parts.push("lookback (" + lookbackLabel(ui.lookbackHours) + ")");
+  if (reviewsHidden) parts.push(reviewers + " hidden");
+  return reviewsHidden && parts.length === 1
+    ? reviewers + (reviewsHidden === 1 ? " is" : " are") + " hidden from the Board. Show them from Filters."
+    : "Nothing matches the current " + parts.join(" and ") + " in this view.";
+}
+
 function renderPrograms() {
   const root = $("programs");
   const usage = $("usage-panel");
@@ -5034,19 +5210,9 @@ function renderPrograms() {
   const tracked = totalsOf(state.snap).tracked;
   if (shown || !tracked) return;
 
-  const lookbackHiding = lookbackApplies(state.view) && state.lookbackHours != null;
-  const reviewsHidden = !state.showReviewWorkers ? reviewWorkerCount(state) : 0;
-  if (state.query || state.facetProgram || state.facetProvider || lookbackHiding || reviewsHidden) {
-    const parts = [];
-    if (state.query || state.facetProgram || state.facetProvider) parts.push("search and filters");
-    if (lookbackHiding) parts.push("lookback (" + lookbackLabel(state.lookbackHours) + ")");
-    if (reviewsHidden) parts.push(reviewsHidden + " review workers hidden");
-    root.append(el("p", {
-      class: "no-match",
-      text: reviewsHidden && parts.length === 1
-        ? reviewsHidden + " review workers are hidden from the Board. Show them from Filters."
-        : "Nothing matches the current " + parts.join(" and ") + " in this view.",
-    }));
+  const constrained = emptyListMessage(state);
+  if (constrained) {
+    root.append(el("p", { class: "no-match", text: constrained }));
   } else {
     /* Every empty state names the constraints that produced it, including the
        scan window — which nothing used to mention anywhere, so an operator
@@ -6902,7 +7068,14 @@ function renderProgramDrawer(pane, view) {
       disabled: eligible ? null : "",
       dataset: { fkey: "prog-broadcast:" + program.id },
       onclick: () => { enterSelectMode(true); selectProgramEligible(program); },
-    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients")));
+    }, eligible ? "Broadcast to " + eligible + " eligible" : "No eligible recipients"),
+    /* Set here, cleared from the Filters bar — the drawer is where an operator
+       is already looking at one program and decides they want only it. */
+    el("button", {
+      type: "button", class: "btn dw-full",
+      dataset: { fkey: "facet-program:" + program.id },
+      onclick: () => setFacetProgram(program.id),
+    }, state.facetProgram === program.id ? "Show every program" : "Only this program")));
 
   // Once for the whole roster, not once per row: every name on it asks the same
   // fleet-wide question, and a program drawer can list thirty of them.
@@ -9539,7 +9712,11 @@ function renderUsagePanel(ui = state) {
           type: "button", class: "linkish",
           dataset: { fkey: "usage-session:" + row.sessionId },
           onclick: () => {
-            setView("now");
+            /* "now" has not been a view since the three live tabs collapsed into
+               Board, and setView ignores a name that is not in VIEWS — so this
+               link opened a drawer over the Usage table and left the operator
+               standing on the wrong view, silently. */
+            setView("board");
             selectEntity({ kind: "agent", id: agentId });
           },
         }, row.sessionId.slice(0, 8))

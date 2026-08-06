@@ -156,6 +156,13 @@ function makeNode(tag: string): FakeNode {
       return (i >= 0 && node.parent.children[i + 1]) || null;
     },
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    /* Same "present but finds nothing" contract fakeDocument already offers.
+       Selector matching is not implemented here on purpose — tests reach nodes
+       through byFkey/byClass, which walk the real tree. These exist so a paint
+       path that merely LOOKS for an optional node (focus restore, drawer lead
+       focus) takes its not-found branch instead of dying on a TypeError. */
+    querySelector: () => null,
+    querySelectorAll: () => [] as unknown[],
     /* The real DOM has it and the client uses it — the notify control removes
        aria-pressed and disabled rather than writing a falsey value, because an
        element carrying `aria-pressed="false"` is a toggle that happens to be
@@ -441,6 +448,7 @@ function listUi(overrides: Record<string, unknown> = {}) {
     query: "",
     facetProgram: "",
     facetProvider: "",
+    facetStatus: "",
     showReviewWorkers: false,
     lookbackHours: 24,
     contextDisplay: "percent",
@@ -1499,6 +1507,62 @@ describe("views split Now from History", () => {
     });
   });
 
+  test("the server's sessionKind outranks the client regex in both directions", async () => {
+    const updatedAt = new Date().toISOString();
+
+    /* The false-positive class, killed. This task matches the prose patterns —
+       asserted, so the test cannot pass by the regex quietly stopping to match —
+       and is still `work`, because the server watched it launch from a terminal.
+       A session ABOUT reviewers is not a reviewer. */
+    const chatty = agent({
+      id: "claude:planner", provider: "claude", updatedAt,
+      sessionKind: "work", sessionKindSource: "launch-evidence",
+      task: "Investigate the repeated Security vulnerability review rows.",
+    });
+    expect(M.isReviewWorker(chatty)).toBe(true);
+    expect(M.sessionKindOf(chatty)).toBe("work");
+    expect(M.passesReviewVisibility(chatty, "board", false)).toBe(true);
+
+    // And the other direction: launch evidence needs no prose to convict.
+    const quietName = agent({
+      id: "claude:sdk-r", provider: "claude", updatedAt,
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Look over the diff.",
+    });
+    expect(M.isReviewWorker(quietName)).toBe(false);
+    expect(M.sessionKindOf(quietName)).toBe("review");
+    expect(M.passesReviewVisibility(quietName, "board", false)).toBe(false);
+
+    /* Two transition cases. A row with no verdict at all, and a row the server
+       classified `unknown` — "I have no evidence" is not "this is not a
+       review", so both fall through to the regex until Task 4.2 retires it. */
+    const legacy = agent({
+      id: "claude:legacy", provider: "claude", updatedAt,
+      task: "Review this change for security vulnerabilities.",
+    });
+    expect(M.sessionKindOf(legacy)).toBe("review");
+    const noEvidence = agent({
+      id: "claude:unknown", provider: "claude", updatedAt,
+      sessionKind: "unknown", sessionKindSource: "none",
+      task: "Review this change for security vulnerabilities.",
+    });
+    expect(M.sessionKindOf(noEvidence)).toBe("review");
+
+    // Only `review` is gated. Other kinds are classified, not hidden.
+    const automation = agent({
+      id: "claude:sdk-a", provider: "claude", updatedAt,
+      sessionKind: "automation", sessionKindSource: "launch-evidence",
+      task: "Summarize the changelog.",
+    });
+    expect(M.passesReviewVisibility(automation, "board", false)).toBe(true);
+
+    // The chip's count moves with the verdict, not with the prose.
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [chatty, quietName, automation] }] });
+    await withState({ snap, view: "board", lookbackHours: 6, showReviewWorkers: false }, () => {
+      expect(M.reviewWorkerCount(M.state)).toBe(1);
+    });
+  });
+
   /* The shelf carries its own copy of the review gate, and an uncovered twin of
      a filter clause is how the two drift apart. This pins the twin to the same
      three escapes the board's copy has. */
@@ -1555,6 +1619,144 @@ describe("views split Now from History", () => {
       expect(domById.get("count-board")!.textContent).toBe("1");
       expect(M.currentFilter()(review, snap.programs[0])).toBe(true);
     }));
+  });
+
+  test("a provider facet narrows the board and clears by clicking itself", async () => {
+    const updatedAt = new Date().toISOString();
+    const claude = agent({ id: "claude:1", provider: "claude", updatedAt, task: "A" });
+    const codex = agent({ id: "codex:1", provider: "codex", updatedAt, task: "B" });
+    const program = { id: "p", name: "P", agents: [claude, codex] };
+    const snap = snapshot({ programs: [program] });
+
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.currentFilter()(codex, program)).toBe(true);
+      expect(M.currentFilter()(claude, program)).toBe(false);
+      // The shelf wears the same facet — a filtered board must not grow a shelf
+      // of rows that do not match it.
+      const done = agent({ id: "claude:2", provider: "claude", status: "archived", updatedAt, task: "C" });
+      expect(M.shelfFilter()(done, program)).toBe(false);
+    });
+
+    /* Toggle-to-clear: the way out is the way in. Driven through the real click
+       (withRequests, because setFacetProvider repaints and render() needs a
+       document.body) rather than by calling the setter — a chip that stops
+       being wired would still pass the setter-only version. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      const chip = byFkey(domById.get("filter-bar"), "provider:codex");
+      expect(chip.attributes["aria-pressed"]).toBe("true");
+      await fire(chip);
+      expect(M.state.facetProvider).toBe("");
+    }));
+  });
+
+  test("the status lens narrows to one lifecycle and suppresses the finished shelf", async () => {
+    const updatedAt = new Date().toISOString();
+    const working = agent({ id: "codex:w", status: "running", updatedAt, task: "A" });
+    const waiting = agent({ id: "codex:i", status: "waiting", updatedAt, task: "B" });
+    const unverified = agent({ id: "codex:u", status: "unknown", activity: "unknown", updatedAt, task: "C" });
+    const finished = agent({ id: "codex:f", status: "archived", updatedAt, task: "D" });
+    const program = { id: "p", name: "P", agents: [working, waiting, unverified, finished] };
+
+    const lens = async (facetStatus: string, expected: string[]) => {
+      await withState({
+        view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus,
+        lookbackHours: 6, showReviewWorkers: true,
+      }, () => {
+        const shown = program.agents.filter((a) => M.currentFilter()(a, program)).map((a) => a.id);
+        expect(shown, facetStatus || "(no lens)").toEqual(expected);
+      });
+    };
+    await lens("working", ["codex:w"]);
+    await lens("waiting", ["codex:i"]);
+    await lens("unverified", ["codex:u"]);
+    // No lens: the board's own view test decides, and the finished row is out.
+    await lens("", ["codex:w", "codex:i", "codex:u"]);
+
+    /* A lifecycle lens and a shelf of finished rows are contradictory claims.
+       The shelf goes away whole rather than being emptied row by row, which is
+       what makes "Waiting" mean waiting and not "waiting, plus everything that
+       already ended". */
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "waiting",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(finished, program)).toBe(false);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "", facetStatus: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(finished, program)).toBe(true);
+    });
+  });
+
+  test("the empty board names every constraint that produced it", async () => {
+    const reviewTask = "Review this change for security vulnerabilities.";
+    const updatedAt = new Date().toISOString();
+    const review = agent({ id: "claude:r1", provider: "claude", updatedAt, task: reviewTask });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review] }] });
+
+    /* lookbackHours is null here, not 6, and that is not an arbitrary fixture:
+       `lookbackApplies("board")` is true, so any preset makes the lookback a
+       SECOND constraint and the sole-constraint sentence below is reachable only
+       on "Everything" (confirmed by execution — docs/EMPTY-BOARD-LOOKBACK-FINDING.md,
+       4b4afa5). Whether that reachability should change is a separate ruling;
+       this test states the behavior as it is rather than the behavior we want. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("1 review worker is hidden from the Board. Show them from Filters.");
+    });
+
+    /* The count is rendered INTO the sentence, so the noun and its verb have to
+       move with it — "1 review workers are hidden" would read as a bug in the
+       very number the sentence exists to disclose. */
+    const second = agent({ id: "claude:r2", provider: "claude", updatedAt, task: reviewTask });
+    const twoSnap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, second] }] });
+    await withState({
+      snap: twoSnap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("2 review workers are hidden from the Board. Show them from Filters.");
+    });
+
+    // Every active constraint gets named, in the order the operator would undo them.
+    await withState({
+      snap, view: "board", query: "zzz", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("Nothing matches the current search and filters and lookback (6h) and 1 review worker hidden in this view.");
+    });
+
+    /* The facets are named, not folded into the word "filters". An operator
+       staring at an empty board needs to read WHICH lens emptied it — the chip
+       is one click away, but only if they know which chip. */
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "codex",
+      facetStatus: "waiting", lookbackHours: null, showReviewWorkers: true,
+    }, () => {
+      expect(M.emptyListMessage(M.state))
+        .toBe("Nothing matches the current provider (codex) and status (waiting) in this view.");
+    });
+
+    // Nothing narrowing the view: null hands the caller to the all-clear branch.
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: null, showReviewWorkers: true,
+    }, () => {
+      expect(M.emptyListMessage(M.state)).toBeNull();
+    });
   });
 
   test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
@@ -5833,15 +6035,23 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(M.agentsById(null).size).toBe(0);
   });
 
-  test("(7) pulseStripModel threads the context display so a paint derives each widget once", () => {
+  test("(7) pulseStripModel derives each widget once, and the fleet reading is always a percentage", () => {
+    /* S3. The card headlined ONE session's peak, so the tokens display could
+       show that session's token count. It headlines the fleet's typical
+       occupancy now, and there is no fleet-wide token counterpart: an "average
+       token count" would be an aggregate of occupancies, the exact substitution
+       types.ts:142-158 exists to prevent. Tokens stay where a single agent is
+       the subject — the CTX column and the drawer. */
     const withCtx = snapshot({
+      contextAverage: 25,
+      contextMedian: 25,
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
     });
     const percentCell = M.pulseStripModel(withCtx, "live", [], "percent").cells.find((c: { id: string }) => c.id === "context-peak");
     const tokenCell = M.pulseStripModel(withCtx, "live", [], "tokens").cells.find((c: { id: string }) => c.id === "context-peak");
     expect(percentCell.data.value).toBe("25%");
-    expect(tokenCell.data.value).not.toBe("25%");
-    expect(tokenCell.data.value).toContain("50k");
+    expect(tokenCell.data.value).toBe("25%");
+    expect(tokenCell.data.value).not.toContain("50k");
     // Weighting is unaffected by the display — the cell the signature and the
     // renderer share is the same object either way.
     expect(percentCell.weight).toBe(tokenCell.weight);
@@ -6025,7 +6235,17 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(4b) the band reasons about the same context number it displays", () => {
     const snap = snapshot({ contextPeak: 12 });
     expect(M.bandContextPct(snap)).toBe(12);
-    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("12%");
+    /* S3. The BAND still reasons about the peak — one session about to run out
+       of room is worth reacting to. The CARD no longer leads with it, and a
+       snapshot carrying ONLY a peak has no reading that describes the fleet, so
+       it withholds rather than presenting one session's extremum as one. */
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").value).toBe("No data");
+    expect(M.summaryWidgetData("context-peak", snap, "live", "percent").tone).toBe("missing");
+    // With a fleet reading present, the card speaks and the peak is a mark on it.
+    const full = snapshot({ contextPeak: 12, contextAverage: 4, contextMedian: 3 });
+    const data = M.summaryWidgetData("context-peak", full, "live", "percent");
+    expect(data.value).toBe("4%");
+    expect(data.gaugeMarks.map((m: { label: string }) => m.label)).toContain("Peak 12%");
     // Falls back to the client walk only when the server did not report one.
     const walked = snapshot({ programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 90_000, contextWindow: 100_000 } })] }] });
     expect(M.bandContextPct(walked)).toBe(90);
@@ -6635,30 +6855,41 @@ describe("FE-B: harness-backed client behavior", () => {
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 } })] }],
     });
     const data = M.summaryWidgetData("context-peak", withCtx, "live", "percent");
-    expect(data.value).toBe("74%"); // server's number wins over the client's 25%
-    /* The headline is already "74%", so repeating "Peak 74%" here printed one
-       number twice in one tile — audit §12, the same defect the drawer's context
-       tile had fixed. The median stays: it is what the headline cannot say. */
-    expect(data.sublabel).toContain("Median 31%");
+    /* S3. The headline was `contextPeak` — ONE session's extremum standing in
+       for a reading about the fleet. Measured live while this was written: peak
+       84%, average 29%, median 25%. The header said the fleet was nearly full
+       while the typical session sat at a quarter.
+
+       The fleet's typical occupancy leads now. With no average on the wire the
+       median leads, and the peak becomes a mark on the dial. */
+    expect(data.value).toBe("31%");
+    expect(data.meterPct).toBe(31);
+    expect(data.spreadMode).toBe("median");
+    // Peak survives where it belongs — as a tick, named in the dial's own label.
+    expect(data.gaugeMarks.map((m: { label: string }) => m.label)).toContain("Peak 74%");
     expect(data.sublabel).not.toContain("Peak 74%");
-    expect(data.meterPct).toBe(74);
+    /* …and the alarm still reads the PEAK, not the headline. Demoting it from
+       the headline is not the same as ceasing to watch it: one session about to
+       run out of room is worth colouring the card for even when the fleet's
+       typical occupancy is comfortable. */
     expect(data.tone).toBe("ok");
+    expect(M.summaryWidgetData("context-peak", snapshot({ contextPeak: 91, contextMedian: 12 }), "live", "percent").tone)
+      .toBe("hot");
 
     // The card must survive a snapshot the client walk finds nothing in — the
-    // exact case that printed "No data" over a reported peak.
+    // exact case that printed "No data" over a reported reading.
     const serverOnly = snapshot({
       contextPeak: 91,
       contextMedian: 12,
       programs: [{ id: "p", name: "P", agents: [agent({ tokens: { provenance: "reported", total: 10 } })] }],
     });
     const bare = M.summaryWidgetData("context-peak", serverOnly, "live", "percent");
-    expect(bare.value).toBe("91%");
+    expect(bare.value).toBe("12%");
     expect(bare.value).not.toBe("No data");
-    expect(bare.sublabel).toContain("Median 12%");
-    expect(bare.tone).toBe("hot"); // 91% is a real ceiling warning
+    expect(bare.tone).toBe("hot"); // the peak at 91% is a real ceiling warning
 
-    // Tokens display still reads the peak agent's own totals, not a percentage.
-    expect(M.summaryWidgetData("context-peak", withCtx, "live", "tokens").value).toContain("50k");
+    // The fleet reading is a percentage in either display — see (7).
+    expect(M.summaryWidgetData("context-peak", withCtx, "live", "tokens").value).toBe("31%");
 
     // No server fields and no client evidence is still an honest "No data" —
     // the card never invents a number.
@@ -6739,22 +6970,21 @@ describe("FE-B: harness-backed client behavior", () => {
      so a dead /api/settings was invisible by construction. Meanwhile the scan
      chip printed the hard-coded 36 as "36h window", which reads as a value the
      server reported. */
-  test("(3b) the scan chip stops asserting a window the server never confirmed", () => {
-    const textOfChip = (ui: Record<string, unknown>) => withDom(() => {
+  test("(3b) the collection status states the window without asserting an unconfirmed one", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statusOf = (ui: Record<string, unknown>): any => withDom(() => {
       M.renderFilterBar(listUi({ view: "board", ...ui }));
-      const bar = domById.get("filter-bar");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (bar as any).children.find((c: any) => c.dataset?.fkey === "scan-window");
+      return byClass(domById.get("filter-bar"), "filter-status");
     });
 
     // Settings answered: the number is reported, so state it plainly.
-    const ok = textOfChip({ scanWindowHours: 12, settingsError: "" });
+    const ok = statusOf({ scanWindowHours: 12, settingsError: "" });
     expect(textOf(ok)).toContain("Collecting last 12h");
     expect(ok.className).not.toContain("is-unverified");
 
     // Settings failed and no snapshot corroborates it: say so instead of
     // passing the built-in default off as the server's answer.
-    const bad = textOfChip({ scanWindowHours: 36, settingsError: "settings 500" });
+    const bad = statusOf({ scanWindowHours: 36, settingsError: "settings 500" });
     expect(textOf(bad)).toContain("Collecting: unverified");
     expect(textOf(bad)).not.toContain("Collecting last 36h");
     expect(bad.className).toContain("is-unverified");
@@ -6763,13 +6993,139 @@ describe("FE-B: harness-backed client behavior", () => {
 
     // A snapshot IS authoritative, so it overrides a failed settings call —
     // no false alarm once the real number has arrived by another route.
-    const rescued = textOfChip({
+    const rescued = statusOf({
       scanWindowHours: 36,
       settingsError: "settings 500",
       snap: { schemaVersion: 1, programs: [], scanWindowHours: 24 },
     });
     expect(textOf(rescued)).toContain("Collecting last 24h");
     expect(rescued.className).not.toContain("is-unverified");
+  });
+
+  /* It stopped being an editor. Every other control on the bar changes what YOU
+     see; this one changed what the SERVER collects — sessions outside the window
+     leave the wire entirely, for every browser. Two different powers wearing the
+     same chip shape is what the apologetic "· your view only" note beside it was
+     papering over. */
+  test("(3b2) the collection window is read-only on the bar and editable in Settings", () => {
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", scanWindowHours: 36, lookbackHours: 6 }));
+      const bar = domById.get("filter-bar");
+      const status = byClass(bar, "filter-status");
+      // A span, not a button: it leaves the focus order entirely.
+      expect(status.tagName).toBe("span");
+      expect(buttonsOf(bar).map((b: { dataset: Record<string, string> }) => b.dataset.fkey))
+        .not.toContain("scan-window");
+      // The title carries the semantics the chip never stated.
+      expect(status.attributes.title)
+        .toBe("Server-side collection bound: sessions with no activity in this window leave the wire entirely, for every browser. Change it in Settings.");
+    });
+
+    /* The editor, where the server's other knobs live — carrying the same
+       `scan-window` focus key, so muscle memory lands on the control rather
+       than on nothing. */
+    return withState({ settingsPanelOpen: true, settings: { scanWindowHours: 48 } }, () => withDom(() => {
+      M.renderSettingsPanel();
+      const field = byFkey(domById.get("settings-panel"), "scan-window");
+      expect(field).toBeTruthy();
+      expect(field.tagName).toBe("input");
+      expect(field.attributes.max).toBe("168");
+      expect(field.value).toBe("48"); // and it opens on the server's value
+    }));
+  });
+
+  /* D7 ruled review-worker visibility a SERVER setting rather than a per-browser
+     lens, so the fleet's default board looks the same from every machine. That
+     makes the chip a write, and these drive the real click through the real
+     handler — the toggle was source-asserted only, which is a test that cannot
+     fail when the write stops happening. */
+  const reviewBoard = () => {
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt: new Date().toISOString(),
+      sessionKind: "review", sessionKindSource: "launch-evidence",
+      task: "Review this change for security vulnerabilities.",
+    });
+    return snapshot({ programs: [{ id: "p", name: "P", agents: [review] }] });
+  };
+  // The click's POST is fire-and-forget by design (the chip must not wait on the
+  // network), so the assertions need one turn of the loop to see it land.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("(3c) the review-worker chip writes the shared server setting", async () => {
+    const snap = reviewBoard();
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+    }, () => withRequests([
+      { status: 200, json: { ok: true, settings: { showReviewWorkers: true } } },
+      { status: 200, json: { ok: true, ...snap } },
+    ], async (calls) => {
+      M.renderFilterBar(M.state);
+      const chip = byFkey(domById.get("filter-bar"), "session-kind:review");
+      expect(chip).toBeTruthy();
+      await fire(chip);
+      await settle();
+      const post = calls.find((c) => c.url.includes("/api/settings") && c.method === "POST");
+      expect(post).toBeTruthy();
+      expect(post!.body).toEqual({ showReviewWorkers: true });
+      expect(M.state.showReviewWorkers).toBe(true);
+    }));
+  });
+
+  test("(3d) a rejected save puts the chip back where the server has it", async () => {
+    const snap = reviewBoard();
+    await withState({
+      snap, view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false, settingsPending: false,
+    }, () => withRequests([new Error("connection refused")], async () => {
+      M.renderFilterBar(M.state);
+      await fire(byFkey(domById.get("filter-bar"), "session-kind:review"));
+      // The optimistic flip happened...
+      expect(M.state.showReviewWorkers).toBe(true);
+      await settle();
+      /* ...and the rejection took it back, because nothing else would:
+         fetchSettings runs once at boot, so an uncorrected optimistic write
+         would leave the chip asserting a visibility the server refused, over a
+         board still filtered the old way.
+
+         Mutation-checked: dropping the rollback branch from setShowReviewWorkers
+         fails this line with `Received: true`, so it cannot pass over the bug it
+         was written for. */
+      expect(M.state.showReviewWorkers).toBe(false);
+    }));
+  });
+
+  /* The program lens is SET here and CLEARED from the Filters bar, so the two
+     halves have to agree on the id or the operator gets stuck inside a program
+     with no visible way out. */
+  test("(3f) the program drawer sets the program lens the Filters bar clears", async () => {
+    const program = { id: "p1", name: "Ridge", agents: [agent({ id: "codex:a", programId: "p1" })] };
+    await withState({ facetProgram: "" }, () => withRequests([], async () => {
+      const pane = (globalThis as unknown as { document: { createElement(t: string): FakeNode } })
+        .document.createElement("div");
+      M.renderProgramDrawer(pane, { program });
+      const button = byFkey(pane, "facet-program:p1");
+      expect(button).toBeTruthy();
+      expect(textOf(button)).toContain("Only this program");
+      await fire(button);
+      expect(M.state.facetProgram).toBe("p1");
+
+      // And the same button is the way back out, from either surface.
+      M.renderFilterBar(M.state);
+      await fire(byFkey(domById.get("filter-bar"), "program:clear"));
+      expect(M.state.facetProgram).toBe("");
+    }));
+  });
+
+  /* The read half of D7. fetchSettings is private and runs once at boot, so this
+     is source-level by necessity — requiredSlice still fails loudly if the
+     function is renamed or the adoption is dropped. */
+  test("(3e) fetchSettings adopts the server's review-worker default", () => {
+    const fn = requiredSlice(source, /async function fetchSettings\(\)[\s\S]*?\n\}\n/, "fetchSettings");
+    expect(fn).toContain("state.showReviewWorkers = body.settings.showReviewWorkers");
+    // Guarded on the in-flight save: a refetch racing the operator's own toggle
+    // must not flip the chip back under their finger.
+    expect(fn).toMatch(/!state\.settingsPending/);
   });
 
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
@@ -6779,10 +7135,69 @@ describe("FE-B: harness-backed client behavior", () => {
     withDom(() => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36 }));
       const keys = focusKeysOf(bar());
-      expect(keys.length).toBe(7); // 1h, 6h, 24h, 36h, All, Custom, Scan
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
-      expect(keys).toEqual(["lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom", "scan-window"]);
+      expect(keys).toEqual([
+        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
+        "status:working", "status:waiting", "status:unverified",
+      ]);
+    });
+
+    /* The same bar over a real fleet, which is where the facet chips appear. The
+       ORDER is the contract — the bar is torn down and rebuilt on every paint,
+       focus restore keys on position-independent fkeys, and a screen reader
+       walks the axes in this sequence: session kind, provider, then time.
+       Updated deliberately here (plan §3), never incidentally. */
+    withDom(() => {
+      const updatedAt = new Date().toISOString();
+      const review = agent({
+        id: "claude:r1", provider: "claude", updatedAt,
+        sessionKind: "review", sessionKindSource: "launch-evidence",
+        task: "Review this change for security vulnerabilities.",
+      });
+      const work = agent({ id: "codex:w1", provider: "codex", updatedAt, task: "Ship it." });
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work] }] });
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap }));
+      const keys = focusKeysOf(bar());
+      expect(new Set(keys).size).toBe(keys.length);
+      expect(keys).toEqual([
+        "session-kind:review",
+        "provider:claude", "provider:codex",
+        "lookback:1", "lookback:6", "lookback:24", "lookback:36", "lookback:all", "lookback:custom",
+        "status:working", "status:waiting", "status:unverified",
+      ]);
+    });
+
+    /* The program lens has no always-on chip — programs are unbounded — so its
+       clear-chip appears only while it is active, and it sits between the status
+       lens and the collection status. */
+    // (One render per withDom: the fake node's textContent setter does not drop
+    // children, so a second render into the same bar would stack onto the first.)
+    const ridge = () => {
+      const only = agent({ id: "codex:w1", provider: "codex", updatedAt: new Date().toISOString(), task: "Ship it." });
+      return snapshot({ programs: [{ id: "p", name: "Ridge", agents: [only] }] });
+    };
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge() }));
+      expect(focusKeysOf(bar())).not.toContain("program:clear");
+    });
+    withDom(() => {
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap: ridge(), facetProgram: "p" }));
+      const keys = focusKeysOf(bar());
+      expect(keys.indexOf("program:clear")).toBe(keys.indexOf("status:unverified") + 1);
+      // Last, because the collection status after it is a span, not a control.
+      expect(keys[keys.length - 1]).toBe("program:clear");
+      // The chip names the program it is holding you inside of.
+      expect(textOf(byFkey(bar(), "program:clear"))).toContain("Ridge");
+    });
+
+    // One provider on the wire is no choice at all, so the axis stays absent
+    // rather than rendering a chip whose only effect is to be turned back off.
+    withDom(() => {
+      const only = agent({ id: "codex:w1", provider: "codex", updatedAt: new Date().toISOString(), task: "Ship it." });
+      const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [only] }] });
+      M.renderFilterBar(listUi({ view: "board", lookbackHours: 6, scanWindowHours: 36, snap }));
+      expect(focusKeysOf(bar()).some((k: string) => k.startsWith("provider:"))).toBe(false);
     });
 
     // Usage: the range chips, rebuilt on the same cadence.
@@ -6853,6 +7268,26 @@ describe("FE-B: harness-backed client behavior", () => {
     // A genuinely empty range must still read as empty, not as a failure.
     const empty = withDom(() => M.renderUsageSeriesChart({ available: true, points: [] }));
     expect(textOf(empty)).toContain("No series points in this range.");
+  });
+
+  /* The link called setView("now"), and "now" stopped being a view when the
+     three live tabs collapsed into Board. setView ignores a name outside VIEWS,
+     so the drawer opened over the Usage table and the operator was left standing
+     on the wrong view with no error anywhere. */
+  test("a usage session link lands the operator on the Board it opened", async () => {
+    const linked = agent({ id: "codex:s1", sourceSessionId: "sess1234", updatedAt: new Date().toISOString() });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [linked] }] });
+    await withState({ snap, view: "usage", selected: null }, () => withRequests([], async () => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: true, invocations: [{ sessionId: "sess1234", provider: "codex", tokens: 10 }] },
+      });
+      await fire(byFkey(domById.get("usage-panel"), "usage-session:sess1234"));
+      expect(M.state.view).toBe("board");
+      expect(M.state.selected).toMatchObject({ kind: "agent", id: "codex:s1" });
+    }));
   });
 
   test("an unavailable invocations query says so instead of reporting zero activity", () => {

@@ -34,6 +34,10 @@ export const state = {
   query: "",
   facetProgram: "",
   facetProvider: "",
+  /* The lifecycle lens: "" | working | waiting | unverified. Session-scoped like
+     the other facets — it answers "what am I looking at right now", not "what
+     should this board default to", so it does not persist and does not travel. */
+  facetStatus: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
   // Review workers are still in the snapshot and History. Board hides the
   // repetitive, non-attention rows by default, with an explicit toggle to
@@ -67,7 +71,12 @@ export const state = {
   usageInvocations: null,
   usageFetchedAt: 0,
   contextDisplay: "percent", // percent | tokens
-  contextSpread: "median",     // median | average — which one the gauge spells out
+  /* Which context reading LEADS the header card — S3 inverted this control, so
+     it now chooses the headline rather than which secondary reading got words.
+     Average by default: it moves with every session, where a median can sit
+     still while half the fleet climbs. Per-browser, like the lookback, because
+     it is a display preference rather than a fact about the fleet. */
+  contextSpread: "average",    // average | median
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
   labelsLoading: false,

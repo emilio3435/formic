@@ -949,19 +949,28 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--ink);
 }
 .filter-chip.is-active:hover { background: var(--ink); color: var(--surface); }
-/* The scan-window control is not a filter — it opens an editor and changes a
-   server setting. Given its own affordance so it stops reading as the sixth
-   option in a group of five. */
-.filter-setting { gap: 0.4rem; font-weight: 600; }
-.filter-setting .ico { width: 0.8rem; height: 0.8rem; opacity: 0.75; }
+/* The collection window is not a filter and no longer pretends to be one: it
+   states what the SERVER harvests, for every browser, and it is read here and
+   edited in Settings. Quiet, unboxed, and out of the focus order — a chip shape
+   would put it back in the group of controls it does not belong to. */
+.filter-status {
+  font-size: 11.5px;
+  color: var(--faint);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.15rem;
+  cursor: help;
+}
 .filter-note { font-size: 11.5px; color: var(--faint); }
 /* A value the server never confirmed. Dashed border reuses the same "this is not
    established fact" language the unknown-liveness chip already speaks, and amber
    keeps it advisory — an unverified default is not an intervention. */
-.filter-chip.is-unverified {
+.filter-status.is-unverified {
   color: var(--amber);
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--amber) 55%, transparent);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
 }
 
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; }
@@ -3214,10 +3223,16 @@ body.feed-frozen .programs { opacity: 0.62; }
 .gauge-fill { stroke: var(--moss); stroke-width: 10; stroke-linecap: round; }
 .gauge-fill.warn { stroke: var(--amber); }
 .gauge-fill.hot { stroke: var(--ember); }
-/* Ticks, not needles: the dial answers "how full is the fullest window", and a
-   second needle would read as a second fleet rather than as context for it. */
+/* Ticks, not needles: the dial answers "how full is a typical window", and a
+   second needle would read as a second fleet rather than as context for it.
+   S3 moved the peak onto this arc as a mark — it is one session's extremum, and
+   a mark is the honest weight for it beside a reading about the whole fleet. */
 .gauge-mark { stroke: var(--muted); stroke-width: 2; }
-.gauge-mark.is-average { stroke: var(--faint); stroke-dasharray: 3 2; }
+.gauge-mark.is-average, .gauge-mark.is-median { stroke: var(--faint); stroke-dasharray: 3 2; }
+/* The peak keeps a solid, slightly heavier tick in the alarm ink: it is the one
+   mark that can mean a session is about to run out of room, which is still what
+   colours the card even though it no longer leads it. */
+.gauge-mark.is-peak { stroke: var(--ember); stroke-width: 2.5; }
 .spread-toggle {
   border: 1px solid var(--line-strong);
   background: var(--surface);
@@ -3586,8 +3601,28 @@ body.feed-frozen .programs { opacity: 0.62; }
    one object. Width is already clamped to the viewport above; this only widens
    the gutter and shortens it so it fits a phone. */
 @media (max-width: 760px) {
+  /* A11Y-1. The panel hung 24px off the LEFT edge at 420px, and body
+     overflow-x is hidden so nothing scrolled it back: "WAITING ON YOU" rendered
+     as "AITING ON YOU", "cooper-scheduler" as "ooper-scheduler", and the ember
+     rails that mean a person is the blocker were partly off-screen — on the one
+     surface whose entire job is saying who is waiting.
+
+     The cause is an origin mismatch, not a width mistake. The clamp measured
+     against the VIEWPORT (100vw) while the panel is anchored to
+     .masthead-signals, which `align-self: center` leaves 48px inside the
+     viewport's edge. 396px of panel hung off a 372px anchor overhangs by
+     exactly that gutter — and because the gutter is a function of the row's own
+     content width, no static calc() can express it.
+
+     So the anchor becomes the content edge instead of a centred island, and the
+     panel FILLS it rather than overhanging it. Deliberately still absolute: a
+     fixed dropdown stops travelling with the button that opened it, and the
+     panel and its toggle have to stay one object. */
+  .masthead-signals { align-self: stretch; justify-content: flex-end; }
   .notify-panel {
-    width: min(452px, calc(100vw - 1.5rem));
+    left: 0;
+    right: 0;
+    width: auto;
     max-height: 70vh;
   }
 }

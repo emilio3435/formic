@@ -310,16 +310,45 @@ describe("nothing in the panel animates when the operator asks for no motion", (
 });
 
 describe("the panel fits the window it opens over", () => {
-  /* Measured live: no horizontal document scroll at 420, 768 or 1280. The
-     420px LEFT overflow is a separate, open defect — recorded in the sweep doc,
-     deliberately not pinned here, because pinning a defect green is how it
-     stops being a defect. */
+  /* Measured live: no horizontal document scroll at 420, 768 or 1280. The 420px
+     LEFT overflow was left unpinned here when the sweep found it, because
+     pinning a defect green is how it stops being a defect. A11Y-1 fixed it, so
+     it is pinned now — measured after the fix at 420px: panel left 32, right
+     388, flush with its anchor, nothing clipped on either edge, scrollWidth 420
+     against a 420 viewport. */
 
   test("the panel clamps its own width rather than trusting the viewport", () => {
     const panel = styleRules.find((r) => r.selector === ".notify-panel");
     expect(panel?.body).toMatch(/width:\s*min\(452px,/);
     expect(panel?.body).toMatch(/max-height:\s*min\(/);
     expect(panel?.body).toMatch(/overflow-y:\s*auto/);
+  });
+
+  test("A11Y-1: at narrow widths the panel FILLS its anchor instead of overhanging it", () => {
+    /* The defect was an origin mismatch, not a width mistake. The clamp measured
+       against the viewport (100vw) while the panel is anchored to
+       .masthead-signals, which `align-self: center` left 48px inside the
+       viewport edge — so 396px of panel hung off a 372px anchor and overhung by
+       exactly that gutter. body overflow-x is hidden, so the clipped strip was
+       unreachable: "WAITING ON YOU" read "AITING ON YOU" and the ember rails
+       that mean a person is the blocker were partly off-screen.
+
+       The gutter is a function of the row's own content width, so no static
+       calc() can express it. The anchor has to BE the content edge, and the
+       panel has to fill it rather than measure the window. */
+    const from = cleanCss.indexOf("@media (max-width: 760px)");
+    const nextAt = cleanCss.indexOf("@media", from + 1);
+    const block = cleanCss.slice(from, nextAt === -1 ? undefined : nextAt);
+    // The anchor stops being a centred island.
+    expect(block).toMatch(/\.masthead-signals\s*\{[^}]*align-self:\s*stretch/);
+    // …and the panel fills it, rather than sizing itself off the viewport.
+    expect(block).toMatch(/\.notify-panel\s*\{[^}]*left:\s*0/);
+    expect(block).toMatch(/\.notify-panel\s*\{[^}]*right:\s*0/);
+    expect(block).toMatch(/\.notify-panel\s*\{[^}]*width:\s*auto/);
+    /* The specific regression: a viewport-measured width here is the bug
+       returning, because the origin it measures from is not the viewport edge. */
+    const panelNarrow = block.slice(block.indexOf(".notify-panel"));
+    expect(panelNarrow).not.toContain("100vw");
   });
 
   test("the narrow layout stays absolute, so the panel travels with its button", () => {

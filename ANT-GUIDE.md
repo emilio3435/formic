@@ -281,11 +281,15 @@ evidence remains unobserved rather than becoming a guessed relationship.
 > correctly. Read its drawer if you need the total.
 
 The fleet-wide wire reading is `totals.consumption`: `sessionTotal` summed once
-for every session in the configured scan window, including finished sessions.
-It is deliberately not the row's latest-call occupancy, processed tokens, or
-cache re-reads; those remain separate session facts. The field is absent when a
-provider scan, the scan window, or any session total is incomplete. A complete
-empty window reports `0`.
+for each reporting session in the configured scan window, including finished
+sessions. It is deliberately not the row's latest-call occupancy, processed
+tokens, or cache re-reads; those remain separate session facts. Its coverage is
+`consumptionReporting/consumptionEligible`, counted over the same observed,
+non-retained population as the sum. When reporting is incomplete,
+`consumptionIsFloor:true` means the client prints a leading `≥`; the number is a
+known floor, never a total in disguise. The aggregate and its coverage are all
+absent when a provider scan or the scan window is incomplete. A complete empty
+window reports `0` with `0/0` coverage and no floor flag.
 
 ### 4. Click it, deal with it, press `Escape`
 
@@ -617,7 +621,7 @@ about this band, so it is stated for each:
 |---|---|---|
 | **Momentum** | How many are shipping, and how many have gone quiet. | "Shipping" is live sessions whose transcript was written **in the last 3 minutes** — it means recently active, not making progress. "Quiet" is **15+ minutes** since last activity. |
 | **Burn** | A token rate, and spend if cost data is available. | Summed across every session that reported, **including ended ones**. It names its own averaging window when it knows it (`5m average`) and says nothing when it does not — so a rate with no window beside it is one you cannot size. It also names how many live sessions report no tokens at all, because they contribute zero to it forever. Spend comes from a separate tool over its own hour: **do not divide one by the other**, they share no denominator. |
-| **Context peak** | How full the fullest session's context window is, plus the median. | The highest and middle `ctx%` across **live sessions only** (working or waiting) that report a window. Finished and unverified sessions are excluded. A high peak means one session is near its limit — the median tells you whether it is one or all of them. |
+| **Context** | How full a typical session's context window is. The average leads; the toggle beside it switches the headline to the median, and that choice is remembered per browser. | The mean (or median) `ctx%` across **live sessions only** (working or waiting) that report a window; finished and unverified sessions are excluded, and the card says `29/32 reporting` when the reading does not cover every eligible session. The **peak** is a tick on the dial and is named in the dial's accessible label — it used to be the headline, which presented one session's extremum as a reading about the fleet: measured live at peak 84% while the typical session sat at 25%. It still decides the card's alarm colour, because one session about to run out of room is worth reacting to. With no fleet reading at all the card does not render, rather than printing `0%`. |
 | **Health** | One verdict for the whole system. | Not a count. See the health section below. |
 
 Hide, show, and reorder these with **Customize summary**.
