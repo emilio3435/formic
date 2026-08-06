@@ -7665,6 +7665,58 @@ describe("FE-B: harness-backed client behavior", () => {
       }));
   });
 
+  /* -------- FE-4 D1: the class of an agent ----------------------------------
+     WHO the agent is, as one word, over the fields the server publishes. The
+     board already carries role, specialty and sessionKind and asks the operator
+     to hold all three in their head; this collapses them into a single axis.
+
+     One class per agent, because the lens axes must PARTITION the working set —
+     an agent in two buckets makes the counts sum to more than the board holds,
+     which is the invariant (FE2-D3) that lets a menu of counts be trusted at
+     all. So the classification is a precedence, and these pin the order rather
+     than the individual answers: any test that only checked "an orchestrator is
+     an orchestrator" would pass over a table that ranked specialty first. */
+
+  test("(FE4-D1) agentClassOf is a precedence over the published fields, not a set of tags", () => {
+    // 1. Review kind outranks everything, including a role the session declared.
+    expect(M.agentClassOf(agent({ sessionKind: "review", role: "orchestrator" }))).toBe("reviewer");
+    /* …including the prose fallback, so a snapshot from a server that predates
+       sessionKind classifies the same way it filters (sessionKindOf, not a
+       second reading of the task text). */
+    expect(M.agentClassOf(agent({ task: "Review this change for security vulnerabilities." })))
+      .toBe("reviewer");
+
+    // 2. Automation, from either carrier — the kind or the role.
+    expect(M.agentClassOf(agent({ sessionKind: "automation" }))).toBe("automation");
+    expect(M.agentClassOf(agent({ role: "automation" }))).toBe("automation");
+    // But a review that happens to run under automation is still a review.
+    expect(M.agentClassOf(agent({ sessionKind: "review", role: "automation" }))).toBe("reviewer");
+
+    /* 3 before 4. An orchestrator that also declares a frontend specialty is an
+       ORCHESTRATOR: what it does to the fleet outranks what it works on, and
+       filing it under Frontend would hide the fleet's coordinators inside a
+       discipline bucket. */
+    expect(M.agentClassOf(agent({ role: "orchestrator", specialty: "frontend" }))).toBe("orchestrator");
+    expect(M.agentClassOf(agent({ role: "orchestrator" }))).toBe("orchestrator");
+
+    // 4. Specialty outranks the remaining roles: a frontend worker is Frontend.
+    expect(M.agentClassOf(agent({ specialty: "frontend", role: "worker" }))).toBe("frontend");
+    expect(M.agentClassOf(agent({ specialty: "backend", role: "worker" }))).toBe("backend");
+
+    // 5. Every other published role carries through verbatim.
+    for (const role of ["tester", "verifier", "worker", "monitor", "service", "human"]) {
+      expect(M.agentClassOf(agent({ role })), role).toBe(role);
+    }
+
+    /* 6. And the floor. A row with no role, and a row carrying a word that is
+       not in the wire's vocabulary, are both simply an agent — guessing a class
+       from an unrecognised string is how "any other published role" would turn
+       into re-deriving from prose. */
+    expect(M.agentClassOf(agent({}))).toBe("agent");
+    expect(M.agentClassOf(agent({ role: "vibes-engineer" }))).toBe("agent");
+    expect(M.agentClassOf(undefined)).toBe("agent");
+  });
+
   test("(3) the rename form and the usage panel keep their controls addressable", () => {
     const target = { kind: "program", programId: "p1" };
     const form = withDom(() => M.renderLabelForm(target, {

@@ -115,6 +115,49 @@ export function sessionKindOf(agent) {
   return isReviewWorker(agent) ? "review" : "unknown";
 }
 
+/* The published roles the class axis carries through verbatim: every member of
+   AgentRole (src/shared/types.ts) that the precedence below has not already
+   answered. `monitor` and `service` are in the wire's vocabulary too — carrying
+   them is what "any other published role" means, and filing a monitor under
+   `agent` would be an erasure the operator has no menu item to undo. */
+const CLASS_ROLES = ["tester", "verifier", "worker", "monitor", "service", "human"];
+
+/* WHO this agent is, in one word.
+
+   The board publishes three overlapping answers — `role` (what authority it
+   has), `specialty` (what it works on) and `sessionKind` (why the session
+   exists) — and asked the operator to hold all three at once. This is the one
+   axis that stands for them.
+
+   ONE class per agent, and that is a hard requirement rather than a
+   simplification: the lens axes must PARTITION the working set (FE2-D3), or the
+   counts beside the menu items sum to more rows than the board holds and stop
+   being trustworthy. So the reading is a PRECEDENCE, in this order:
+
+     1. a review session is a reviewer, whatever else it declares — the fleet's
+        review policy is about exactly this population, and a reviewer filed
+        under its role would be invisible to the control that hides it;
+     2. automation, from either carrier (the kind, or the role);
+     3. orchestrator — what it does to the FLEET outranks what it works on, so a
+        coordinator with a frontend specialty is not filed under a discipline;
+     4. the specialty, for everyone else;
+     5. any other published role, verbatim;
+     6. otherwise: an agent.
+
+   Published fields only. `sessionKindOf` rather than `agent.sessionKind` so the
+   pre-`sessionKind` fallback keeps working and this classifies the same rows the
+   review policy filters; nothing here re-reads the task prose on its own. */
+export function agentClassOf(agent) {
+  const kind = sessionKindOf(agent);
+  if (kind === "review") return "reviewer";
+  const role = agent && agent.role;
+  if (kind === "automation" || role === "automation") return "automation";
+  if (role === "orchestrator") return "orchestrator";
+  const specialty = agent && agent.specialty;
+  if (specialty === "frontend" || specialty === "backend") return specialty;
+  return CLASS_ROLES.includes(role) ? role : "agent";
+}
+
 export function deriveControlState(agent) {
   if (agent.controlState) return agent.controlState;
   if (deriveActivity(agent) === "ended") return "observed-only";
