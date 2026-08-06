@@ -153,9 +153,9 @@ export const state = {
   transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 },
   // Persistent operator journal (GET /api/actions). `available` latches false on
   // a build with no such route so a missing endpoint is asked for once, not
-  // every five seconds forever.
+  // every five seconds forever. The panel that listed it is gone; what reads it
+  // now is the command dock's "last action" fact.
   actions: { loading: false, error: "", available: true, items: [], fetchedAt: 0 },
-  actionsOpen: false,
   // Operator attention verdicts (POST /api/attention). The snapshot carries the
   // effect, never the record, so the server's own answer is kept here to name
   // what was done. An expired snooze is dropped by attentionRecord(), which is
@@ -179,10 +179,10 @@ export const state = {
   queueError: "",
   // Paint signatures — skip wipe-and-rebuild when a surface's meaningful
   // content is unchanged across SSE snapshots (stops the 4s strobe).
-  // `alarm` and `actions` start null, not "": their calm signature IS the empty
-  // string, so a "" seed would make the very first paint a no-op and leave both
-  // surfaces showing whatever markup they were served with.
-  paintSig: { programs: "", inspector: "", widgets: "", alarm: null, actions: null },
+  // `alarm` starts null, not "": its calm signature IS the empty string, so a ""
+  // seed would make the very first paint a no-op and leave the surface showing
+  // whatever markup it was served with.
+  paintSig: { programs: "", inspector: "", widgets: "", alarm: null },
 };
 
 /* WHICH entity a painted inspector signature describes — the kind and id that

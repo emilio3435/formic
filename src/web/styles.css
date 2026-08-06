@@ -2990,51 +2990,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 /* ---------- usage tab ---------- */
 
-/* ---------- action log ----------
-   A ledger, not a feed: fixed columns so outcome is scannable down one edge and
-   a page of failures cannot hide among the successes. */
-
-.actions-panel { padding: 0 1.1rem 1.1rem; }
-.actions-panel[hidden] { display: none; }
-.action-log { display: flex; flex-direction: column; gap: 0.5rem; }
-.action-log-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
-.action-log-title {
-  margin: 0;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
-}
-.action-log-note { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--faint); }
-.action-log-note.err { color: var(--ember); }
-.action-rows {
-  display: flex; flex-direction: column;
-  border: 1px solid var(--line); border-radius: 4px;
-  background: var(--raise);
-  max-height: 24rem; overflow: auto;
-}
-.action-row {
-  display: grid;
-  grid-template-columns: 5rem 5.5rem minmax(6rem, 1fr) 9rem minmax(0, 1.4fr);
-  gap: 0.6rem; align-items: baseline;
-  padding: 0.4rem 0.65rem;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-}
-.action-row:last-child { border-bottom: 0; }
-.action-when, .action-kind { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
-.action-kind { color: var(--muted); font-weight: 650; }
-.action-who { color: var(--muted); overflow-wrap: anywhere; }
-.action-outcome { font-weight: 650; color: var(--muted); }
-.action-detail { color: var(--faint); overflow-wrap: anywhere; }
-.action-row[data-tone="ok"] .action-outcome { color: var(--moss); }
-.action-row[data-tone="warn"] .action-outcome { color: var(--amber); }
-.action-row[data-tone="err"] .action-outcome { color: var(--ember); }
+/* The command dock's "did I already send this?" crumb — the one surviving
+   reader of the operator journal after the action-log panel came out. */
 .command-dock-last { margin: 0 0 0.4rem; font-size: 11.5px; color: var(--faint); }
 .command-dock-last[data-tone="err"] { color: var(--ember); }
 .command-dock-last[data-tone="warn"] { color: var(--amber); }
-
-@media (max-width: 720px) {
-  .action-row { grid-template-columns: 1fr 1fr; }
-}
 
 .usage-panel {
   display: grid;

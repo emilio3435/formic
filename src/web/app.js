@@ -18,12 +18,9 @@ import {
 } from "./feed-freshness.js";
 import {
   ACTION_KIND_LABELS,
-  actionRecipients,
   loadActions,
   normalizeActions,
   refreshActions,
-  renderActionLog,
-  renderActionsPanel,
 } from "./action-log.js";
 import {
   loadTranscript,
@@ -1392,7 +1389,7 @@ globalThis.TheAntHill = {
   transcriptFailureText, transcriptWindow, renderTranscriptPanel,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
-  actionOutcomeView, actionRecipients, lastActionFor, renderActionLog,
+  actionOutcomeView, lastActionFor,
   needsHumanIds, notificationPlan, titleWithAlerts, notifyToggleView, deliverNotification,
   // The attention surface. NOTIFY_DEPS is a `const` and stays out of this
   // hoisted block for the same TDZ reason CONN_LABELS does; it is exported from
@@ -2156,7 +2153,6 @@ function render() {
   // Its own step, not a tail of the widget paint — see renderPulseStrip.
   renderSettingsPanel();
   renderPrograms();
-  renderActionsPanel();
   renderInspector();
   renderSkeleton();
   renderEmpty();
@@ -9932,30 +9928,6 @@ async function submitRename(target) {
 
 
 
-/* ---------- action log ----------
-
-   What was sent, to whom, and whether it landed lived only in client memory and
-   died on reload. instruct is fire-and-forget text typed into a terminal, so
-   after a refresh the operator could not tell which lanes received an
-   instruction, which came back TEXT_STAGED_NOT_SUBMITTED, or whether they had
-   already sent it — and the natural recovery is to send it again,
-   double-instructing lanes that already got it.
-
-   Contract (GET /api/actions?limit=<n>, built in a parallel lane):
-     { ok, actions: [{ id, at, kind, agentIds, outcome, detail }] }   // newest first
-   This is an OPERATOR log, not a transcript: it never carries agent output. */
-
-
-
-
-
-
-
-
-
-
-
-
 /* ---------- misc UI ---------- */
 
 let toastTimer = null;
@@ -10667,12 +10639,6 @@ function boot() {
     const btn = e.target.closest(".view-tab");
     if (btn && btn.dataset.view) setView(btn.dataset.view);
   });
-
-  /* The Action log lost its toolbar button here (operator directive,
-     2026-08-05). Its wiring went with it because it could not stay: $() returns
-     null for an element that is not in the document, and null.addEventListener
-     would throw inside boot() — taking the whole client down, not merely the
-     one feature. loadActions and #actions-panel are still intact below. */
 
   $("settings-toggle").addEventListener("click", () => {
     state.settingsPanelOpen = !state.settingsPanelOpen;

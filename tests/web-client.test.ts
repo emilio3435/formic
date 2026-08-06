@@ -9373,53 +9373,12 @@ describe("FE-C: operator actions survive a reload, failures included", () => {
     expect(M.actionOutcomeView(undefined).label).toBe("unknown");
   });
 
-  test("(3) the log renders newest-first with failures and staged fully visible", () => {
-    const items = [ACT.delivered, ACT.staged, ACT.failed, ACT.partial];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const panel: any = withDom(() => M.renderActionLog(actionsUi({ items }), (id: string) => (id === "codex:a1" ? "Ridge worker" : null)));
-    const rows = allByClass(panel, "action-row");
-    expect(rows).toHaveLength(4);
-    // Contract order is newest-first; the view must not resort and lose it. The
-    // detail strings are unique, so this pins position, not just membership.
-    expect(rows.map((r: unknown) => textOf(r).includes(ACT.delivered.detail))).toEqual([true, false, false, false]);
-    expect(items.map((a) => a.detail).every((d, i) => textOf(rows[i]).includes(d))).toBe(true);
-    const text = textOf(panel);
-    expect(text).toContain("Delivered");
-    expect(text).toContain("not submitted");
-    expect(text).toContain("Failed");
-    expect(text).toContain("Partly delivered");
-    // The failure's own words survive — "0 of 4 recipients delivered" is the
-    // whole point, and a log that dropped it would read as four successes.
-    expect(text).toContain("0 of 4 recipients delivered");
-    // Recipients resolve to names where the snapshot still knows them, and a
-    // fan-out collapses to a count instead of a wall of session ids.
-    expect(text).toContain("Ridge worker");
-    expect(text).toContain("4 sessions");
-    // Outcome tone rides a data attribute so one column is scannable.
-    expect(rows.map((r: { dataset: { tone: string } }) => r.dataset.tone)).toEqual(["ok", "warn", "err", "warn"]);
-  });
-
-  test("(3) recipients degrade honestly rather than dropping unknown sessions", () => {
-    expect(M.actionRecipients({ agentIds: [] }, () => "x")).toBe("no recipients");
-    // An agent gone from the snapshot keeps its raw id — never silently omitted
-    // from the record of who was instructed.
-    expect(M.actionRecipients({ agentIds: ["codex:gone"] }, () => null)).toBe("codex:gone");
-    expect(M.actionRecipients({ agentIds: ["a", "b", "c"] }, (id: string) => id.toUpperCase())).toBe("A, B, C");
-    expect(M.actionRecipients({ agentIds: ["a", "b", "c", "d"] }, () => "n")).toBe("4 sessions");
-  });
-
-  test("(3) an empty log, a loading log and a missing endpoint each read differently", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const render = (over: Record<string, unknown>): any => withDom(() => M.renderActionLog(actionsUi(over)));
-    // Empty is empty — and says what WILL appear, including the failures.
-    const empty = textOf(render({}));
-    expect(empty).toContain("No operator actions recorded yet");
-    expect(empty).toContain("including the ones that fail");
-    expect(textOf(render({ loading: true }))).toContain("Reading the action log");
-    // A build without the route says so; it never renders as "nothing happened".
-    const missing = textOf(render({ error: "The action log is not available in this build." }));
-    expect(missing).toContain("not available in this build");
-    expect(missing).not.toContain("No operator actions recorded yet");
+  /* The panel that showed these three states is gone (operator directive,
+     2026-08-05), but the sentences are not decoration: loadActions still writes
+     them into state.actions.error, and a build without the route must latch
+     available=false rather than let the dock's "last action" crumb read as
+     "nothing was ever sent to this agent". */
+  test("(3) a missing route, an unreachable server and a server fault each say so", () => {
     expect(M.actionsFailureText(404, null)).toBe("The action log is not available in this build.");
     expect(M.actionsFailureText(0, null)).toContain("Could not reach the server");
     expect(M.actionsFailureText(500, { error: { code: "LOG_CORRUPT" } })).toContain("LOG_CORRUPT");
@@ -10231,7 +10190,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     });
   });
 
-  test("(3) the live action-log route loads and renders every real outcome", async () => {
+  test("(3) the live action-log route loads every real outcome, refusals included", async () => {
     // Verbatim from :4792 after two refused control attempts. A journal that
     // showed only successes would read as proof the instruction landed.
     const live = {
@@ -10265,17 +10224,17 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
         expect(M.state.actions.fetchedAt).toBeGreaterThan(0);
         expect(M.state.actions.items).toHaveLength(2);
 
-        const panel = withDom(() => M.renderActionLog(M.state, null));
-        expect(byClass(panel, "action-log-note")).toBeNull();
-        expect(allByClass(panel, "action-row")).toHaveLength(2);
-        const first = allByClass(panel, "action-row")[0];
-        expect(textOf(byClass(first, "action-kind"))).toBe("Interrupt");
-        expect(textOf(byClass(first, "action-outcome"))).toBe("Failed");
-        // The server's own reason survives to the screen, not summarised away.
-        expect(textOf(byClass(first, "action-detail"))).toBe(live.actions[0]!.detail);
-        // An agent the snapshot no longer names keeps its raw id rather than
-        // vanishing from the record of who was instructed.
-        expect(textOf(byClass(first, "action-who"))).toBe("codex:w5b-probe-not-a-real-agent");
+        // Newest-first order is the contract, and normalizeActions must not
+        // resort it: the dock reads items[0] as "the last thing I did here".
+        const first = M.state.actions.items[0];
+        expect(first.id).toBe(live.actions[0]!.id);
+        expect(first.kind).toBe("interrupt");
+        expect(M.actionOutcomeView(first.outcome).label).toBe("Failed");
+        // The server's own reason survives normalization, not summarised away.
+        expect(first.detail).toBe(live.actions[0]!.detail);
+        // A refused attempt is kept as a refusal — a journal that dropped these
+        // two would read as proof the interrupt landed.
+        expect(M.state.actions.items.map((a: { outcome: string }) => a.outcome)).toEqual(["failed", "failed"]);
       });
     });
   });
