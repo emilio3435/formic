@@ -507,6 +507,40 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("claude parser records launch evidence from the transcript envelope", () => {
+    const row = (extra: Record<string, unknown>) => JSON.stringify({
+      sessionId: "sdk-1",
+      cwd: "/tmp/anthill-launch",
+      timestamp: "2026-07-21T23:30:00.000Z",
+      uuid: "u1",
+      isSidechain: false,
+      userType: "external",
+      version: "2.0.0",
+      ...extra,
+    });
+    const sdk = parseClaudeJsonl([
+      row({
+        type: "user",
+        entrypoint: "sdk-py",
+        promptSource: "sdk",
+        message: {
+          role: "user",
+          content: "Review this change for security vulnerabilities.\n\nChanged files: x",
+        },
+      }),
+    ].join("\n"), { nowMs });
+    expect(sdk?.launch).toEqual({ entrypoint: "sdk-py", promptSource: "sdk" });
+
+    const cli = parseClaudeJsonl([
+      row({
+        type: "user",
+        entrypoint: "cli",
+        message: { role: "user", content: "Fix the flaky lifecycle test." },
+      }),
+    ].join("\n"), { nowMs });
+    expect(cli?.launch).toEqual({ entrypoint: "cli" });
+  });
+
   test("Claude derives the 1M context window for supported models, undefined otherwise", () => {
     const row = (model: string) => JSON.stringify({
       type: "assistant",
