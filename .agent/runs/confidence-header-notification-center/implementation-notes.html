@@ -1,0 +1,227 @@
+<meta charset="utf-8">
+<title>Confidence header + notification center — implementation notes</title>
+<style>
+  :root { --ink:#1b1f23; --muted:#5b6570; --faint:#8b949e; --line:#d8dee4; --bg:#fbfbfa;
+          --ember:#c23b2e; --amber:#9a6b12; --moss:#1f6b4a; --slate:#3f5f78; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e6edf3; --muted:#9aa4ae; --faint:#6e7781; --line:#30363d; --bg:#0d1117;
+            --ember:#e5674f; --amber:#d9a441; --moss:#4bb389; --slate:#7fa6c4; }
+  }
+  html { background: var(--bg); }
+  body { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 6rem;
+         font: 400 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.1rem; margin: 2.4rem 0 .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: .95rem; margin: 1.4rem 0 .4rem; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; }
+  .resume { border: 1px solid var(--line); border-left: 3px solid var(--ember); border-radius: 6px;
+            padding: 1rem 1.25rem; background: color-mix(in srgb, var(--ember) 4%, transparent); }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: .5rem 0 0; }
+  dt { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; padding-top: .15rem; }
+  dd { margin: 0; }
+  ul { padding-left: 1.15rem; margin: .4rem 0; }
+  li { margin: .25rem 0; }
+  .st { display: inline-block; font-size: .72rem; font-weight: 600; letter-spacing: .04em;
+        text-transform: uppercase; padding: .05rem .4rem; border-radius: 3px; border: 1px solid currentColor; }
+  .done { color: var(--moss); } .doing { color: var(--amber); } .todo { color: var(--slate); }
+  .blocked { color: var(--ember); } .incomplete { color: var(--ember); }
+  table { border-collapse: collapse; width: 100%; margin: .6rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  .note { color: var(--muted); font-size: .9rem; }
+  .warn { border-left: 3px solid var(--amber); padding: .5rem .9rem; margin: .8rem 0;
+          background: color-mix(in srgb, var(--amber) 6%, transparent); }
+  #timeline { list-style: none; padding-left: 0; }
+  #timeline li { border-left: 2px solid var(--line); padding: .1rem 0 .8rem 1rem; margin: 0; }
+  #timeline .ts { color: var(--faint); font-size: .78rem; }
+  #timeline .sm { display: block; }
+  #timeline .ph { color: var(--muted); font-size: .8rem; }
+</style>
+
+<h1>Confidence header + notification center</h1>
+<p class="sub">Goal <code>confidence-header-notification-center</code> · plan
+<code>docs/superpowers/plans/2026-08-05-confidence-header-and-notification-center.md</code></p>
+
+<section class="resume">
+  <h2 style="margin-top:0;border:0">Resume Here</h2>
+  <dl>
+    <dt>Status</dt><dd><span class="st doing">doing</span> — 5 tranches merged to main (PRs #9, #11, #12, #13, #14). Branch <code>fix/cmux-control-health-lifecycle</code>.</dd>
+    <dt>Phase</dt><dd>Tail end: S4, S6-T3/T4, remaining a11y defects, geometry test, Board all-clear defect.</dd>
+    <dt>Next action</dt><dd>Verify <code>62a7f04</code> (A11Y-2, focus no longer stranded on <code>&lt;body&gt;</code>), then push + PR + merge tranche 6.</dd>
+    <dt>Blockers</dt><dd>None. Every dependency that gated the header has cleared.</dd>
+    <dt>Last validation</dt><dd><code>bunx tsc --noEmit</code> exit 0 · <code>bun run test:ci</code> 0 fail · CI green on #14 (32s) · merged.</dd>
+  </dl>
+
+  <h3>Validate exactly this way</h3>
+  <p class="note"><code>bunx tsc --noEmit</code> <strong>and</strong> <code>bun run test:ci</code>. CI typechecks
+  <em>before</em> tests, so a green <code>bun test</code> is not sufficient — that has nearly shipped a red CI twice.
+  <code>test:ci</code> (not plain <code>bun test</code>) excludes four suites that deliberately assert against this
+  developer's machine.</p>
+
+  <h3>Protected — do not edit</h3>
+  <ul>
+    <li><code>src/web/app.js</code>, <code>styles.css</code>, <code>notification-center.js</code>, <code>tests/web-client.test.ts</code> — <strong>fe-notify's</strong> for the whole program.</li>
+    <li>A second program (<em>unified provider-neutral filtering</em>, <code>docs/superpowers/plans/2026-08-05-unified-filtering.md</code>) shares this branch and edits <code>agent-model.js</code>, <code>app.js</code>, <code>client-catalogs.js</code>, <code>tests/web-client.test.ts</code>. Leave code you do not recognise alone; never revert or restyle it.</li>
+    <li>Ports: <strong>4701 is the operator's live board — never restart it.</strong> 4799 belongs to the a11y lane. Use a port you own, and <strong>kill the PID you started, never the port</strong> (killing by port already destroyed another lane's server and browser once).</li>
+  </ul>
+</section>
+
+<h2>Finishing criteria</h2>
+<table>
+  <tr><th>Item</th><th>State</th></tr>
+  <tr><td><strong>S0</strong> wire truth — <code>attentionClass</code>, <code>pulse.blocked</code>, <code>totals.consumption</code>, two measurement docs</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S1</strong> notification center + parity gate</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S2</strong> Findings card removed · health becomes a qualifier · scan window stated once</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S3</strong> Context reads the fleet (average leads, toggle to median, peak demoted)</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S4</strong> cost + burn provenance rendered, not implied</td><td><span class="st doing">doing</span></td></tr>
+  <tr><td><strong>S5</strong> fixtures, promotion truth table, history routes, docs parity</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S6-T1/T2</strong> propose-then-confirm sweep + read-only endpoint</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>S6-T3/T4</strong> Clean up chip spinner + result routed as a dataflow item</td><td><span class="st todo">todo</span></td></tr>
+  <tr><td><strong>A11Y-1</strong> panel clipped 24px off the left at 420px</td><td><span class="st done">done</span></td></tr>
+  <tr><td><strong>A11Y-2</strong> focus stranded on <code>&lt;body&gt;</code></td><td><span class="st doing">doing</span> — <code>62a7f04</code>, unverified by orchestrator</td></tr>
+  <tr><td><strong>A11Y-3..6</strong> panel name, duplicate Focus names, missing program name, 32px target</td><td><span class="st todo">todo</span></td></tr>
+  <tr><td><strong>Panel geometry test</strong> — measure edges, not stylesheet text</td><td><span class="st todo">todo</span> — see Open Questions</td></tr>
+  <tr><td><strong>Board all-clear defect</strong> — rich all-clear unreachable at every preset</td><td><span class="st todo">todo</span></td></tr>
+</table>
+
+<h2>Decisions the spec did not make</h2>
+
+<h3>R1 · Dead time is dropped entirely — not withheld</h3>
+<p>The panel was designed around a standby hero: how long each agent has been waiting. <strong>That number does not exist.</strong>
+Measured live (<code>docs/S0-T1-DEAD-TIME-MEASUREMENT.md</code>): <code>hookLifecycleAt</code> advanced
+<code>01:38:51 → 01:39:16 → 01:40:41</code> on a session that stayed <code>needsInput</code> throughout, so it is a write
+clock. The fallback candidate died too — <code>agent.hook.Notification.occurred_at</code> repeats mid-wait
+(seq <code>99281</code> then <code>99477</code> while the state held), so it would <em>reset</em> the age inside a single wait.
+The cmux journal rolls over, so the history to reconstruct it is not there either.</p>
+<p>So the hero and every per-row age were <strong>deleted, not rendered as withheld-with-a-reason</strong>. Withholding was right
+while the field was merely unmeasured; once the answer is "this cannot be obtained from these sources", a permanent
+apology in the largest type on the panel is furniture that implies the number is coming. The count leads instead.
+<code>pulse.blocked</code> ships; <code>standbyMs</code> and <code>blockedSince</code> do not.</p>
+
+<h3>R2 · The board never deletes</h3>
+<p>The Clean up chip runs the sweep's <code>propose</code> phase only. Its output becomes a notification item listing each
+removable item, its rollback SHA, every refusal with its reason, and the exact <code>confirm</code> command to paste.
+<strong>No destructive server endpoint, now or later.</strong> A click in a browser is not the same gate as a person reading a
+plan in a terminal. Enforced structurally: a test reads <code>app.ts</code>, <code>cleanup-propose.ts</code>, the worker and
+<code>index.ts</code> as source text and asserts <code>confirmCleanup</code>, <code>worktree remove</code>,
+<code>branch -d/-D</code> and <code>--force</code> appear in none of them, then fetches <code>/api/cleanup/confirm</code>
+and asserts 404.</p>
+
+<h3>R3 · Consumption publishes as a covered floor</h3>
+<p>The all-terms-observed gate would have withheld the Tokens card <em>permanently</em> — 40 of 384 sessions never report
+tokens (38 Cursor), three of them live. A card that can never render is worse than no card. But the rule was never
+"withhold when incomplete"; it is <strong>"never present a partial as if it were complete"</strong>. Two precedents already
+existed in this codebase: Burn publishes its rate with <code>coverage{reporting,eligible,unknown}</code>, and Cost publishes
+with <code>costIsFloor</code> rendering <code>≥</code>. So consumption publishes the covered subtotal, carries
+<code>consumptionReporting/consumptionEligible</code>, and marks itself a floor. A <em>duration</em> for one agent cannot be a
+floor — which is why <code>standbyMs</code> stays absent and R1 is unaffected.</p>
+
+<h3>Other decisions</h3>
+<ul>
+  <li><strong>Cleanup sweep model → Grok 4.5 High Fast</strong>, not GPT 5.6 Luna. The routing table puts mechanical sweeps on Grok; Luna is for read-only investigation.</li>
+  <li><strong>Cleanup autonomy → propose-then-confirm.</strong> Per-item rollback SHAs, occupancy evidence, <code>git branch -d</code> never <code>-D</code>, and a live agent process inside a worktree is a hard stop regardless of approval.</li>
+  <li><strong>Board-side marks → a separate plan.</strong> Not this program.</li>
+  <li><strong>The scan-window statement lives in the summary rail's header</strong>, not the toolbar's <code>#scope-note</code> — that line vanishes on Usage and is a live region that changes with filters, and putting a stable board-wide fact into a volatile filter line makes the stable fact inherit the volatility.</li>
+  <li><strong>S0-T4 shipped nothing.</strong> <code>attentionSignal.evidence</code> fails as the ask in 3 of 5 live blocking sessions, but the remedy (<code>blockedAsk</code>) was proven only synthetically. A clipped evidence line <em>degrades</em>; a reconstructed ask is <em>wrong</em>. Recorded as a limitation, not patched with a guessed field.</li>
+</ul>
+
+<h2>Changes made because the repo disagreed with the plan</h2>
+<ul>
+  <li>The plan's §6 claim <em>"an unmeasurable duration is withheld, not zeroed"</em> is <strong>superseded</strong> by <em>"the order is stable across paints and never depends on a duration"</em> (R1).</li>
+  <li>The plan assumed one PR. The branch is shared with a second program, so work shipped as <strong>five tranches</strong>, each verified green and merged separately.</li>
+  <li>A concurrent lane's finding-links feature was <strong>landed first and credited</strong> (<code>4bcbd84</code>) so S2-T1 could remove it in a commit that names it, rather than silently reverting it.</li>
+  <li>A stalled <code>snapshot.ts</code> fix from another lane was landed (<code>6cc27bc</code>) because leaving it dirty forced a lane to weaken a wire type to route around a fixture it was fenced out of.</li>
+</ul>
+
+<h2>Tradeoffs and things worth knowing</h2>
+<ul>
+  <li><strong>Consumption is legitimately absent until the first session scan completes.</strong> A freshly started board shows no Tokens card for a minute or two. This is correct — do not add a loading state implying otherwise, and never fall back to <code>totals.tokens</code> (occupancy).</li>
+  <li><strong>An absence proves nothing until you know the process.</strong> I twice concluded consumption was broken; both readings were against a server that either predated the change or had not finished its first scan. Record the PID and its start time before drawing a conclusion.</li>
+  <li><strong>Shared-worktree git:</strong> <code>git add &lt;paths&gt; &amp;&amp; git commit</code> commits the <em>whole index</em>, including other agents' staged hunks. It buried 835 insertions of another lane's work under a server-fix message once. Always <code>git commit -F - -- &lt;paths&gt;</code>, and check <code>git diff --cached --stat</code> first.</li>
+  <li><strong><code>controlHealth</code> has a blind spot.</strong> It can report five healthy sources while <code>sessionCollectionComplete</code> is false, because they read different populations. The operator reads that chip as "instruments fine". Worth its own work.</li>
+</ul>
+
+<h2>Validation status</h2>
+<table>
+  <tr><th>Gate</th><th>Result</th></tr>
+  <tr><td><code>bunx tsc --noEmit</code></td><td>exit 0</td></tr>
+  <tr><td><code>bun run test:ci</code></td><td>0 fail (~2,680 tests)</td></tr>
+  <tr><td>CI on PRs #9, #11, #12, #13, #14</td><td>all green before merge</td></tr>
+  <tr><td>S1 parity gate</td><td>standing test, re-verified after the S2 removals</td></tr>
+  <tr><td>Mutation audit, 3 rounds</td><td>6 hollow tests found and closed; <code>docs/TEST-HOLLOWNESS-AUDIT.md</code></td></tr>
+  <tr><td>Frozen delivery contract</td><td>brace-exact diff vs <code>70572a9</code>: unchanged but the one authorised retarget</td></tr>
+  <tr><td>Live field verification</td><td><code>consumption</code> 75,776,215 over 349/389, floor-marked, 82.74× occupancy; <code>pulse.blocked</code> 6 matches <code>attentionClass</code> exactly; <code>standbyMs</code>/<code>blockedSince</code> absent</td></tr>
+</table>
+
+<h2>Standing evidence (outlived the lanes that produced it)</h2>
+<ul>
+  <li><code>docs/S0-T1-DEAD-TIME-MEASUREMENT.md</code> — why dead time does not exist. <em>Shipped no code; changed the design.</em></li>
+  <li><code>docs/S0-T4-EVIDENCE-SAMPLE.md</code> — evidence-as-the-ask, 3 of 5 fail. <em>Shipped no code, deliberately.</em></li>
+  <li><code>docs/S0-LIVE-FIELD-VERIFICATION.md</code> — the shipped fields, measured on a real board</li>
+  <li><code>docs/A11Y-SWEEP-NOTIFICATION-CENTER.md</code> — 6 defects, 12 screenshots, one honest NOT RUN</li>
+  <li><code>docs/TEST-HOLLOWNESS-AUDIT.md</code> — 3 mutation rounds</li>
+  <li><code>docs/CLEANUP-SWEEP.md</code> — propose/confirm contract</li>
+</ul>
+
+<h2>Open questions</h2>
+<div class="warn">
+  <strong>The geometry test.</strong> A <code>tests/notification-center-geometry.test.ts</code> appeared, threw
+  <code>TS2322</code>, and vanished. The a11y lane has been asked which it was. A test that cannot work in this harness
+  is a legitimate <strong>NOT RUN with a reason</strong>; a test quietly abandoned while the CSS-text guard stands alone
+  is the hollow-guard problem one level up. The current guard only greps for <code>align-self: stretch</code> and does
+  <em>not</em> measure whether the panel fits on screen.
+</div>
+<ul>
+  <li><strong>PR #10</strong> ("Rescue two commits from branches about to be deleted") is open and not from this program. Awaiting the operator's word.</li>
+  <li><code>aeb8cec</code> (provider-neutral review filters) merged in tranche 1 and is not from this program. Coherent and tested; recorded so nobody later attributes it to this plan.</li>
+</ul>
+
+<h2>Orchestration</h2>
+<table>
+  <tr><th>Lane</th><th>cmux</th><th>Model</th><th>Territory</th></tr>
+  <tr><td>fe-notify</td><td><code>workspace:94</code></td><td>Opus 5 xhigh</td><td><code>src/web/**</code>, <code>tests/web-client.test.ts</code></td></tr>
+  <tr><td>harden-notify</td><td><code>workspace:95</code></td><td>Grok 4.5 High Fast</td><td>fixtures, <code>scripts/**</code>, docs, audits — <em>stood down</em></td></tr>
+  <tr><td>be-dwell</td><td><code>workspace:96</code></td><td>GPT 5.6 SOL MAX</td><td><code>src/server/**</code>, <code>src/shared/types.ts</code> — <em>territory complete</em></td></tr>
+  <tr><td>a11y-sweep</td><td><code>workspace:101</code></td><td>Opus 5 xhigh</td><td>a11y defects, live browser (routing exception: needs <code>/browse</code>)</td></tr>
+</table>
+<p class="note">Launch flags go on the command, never in machine config: <code>cursor-agent --model grok-4.5 --force</code> ·
+<code>codex -a never --sandbox workspace-write -m gpt-5.6-sol -c model_reasoning_effort=max</code> ·
+<code>claude --model opus --effort xhigh --permission-mode auto</code>. Spawning the first two from inside Claude Code is
+denied by the auto-mode classifier; launch without the flag, say the lane will stall, and hand it to the operator.</p>
+
+<h2>Progress Timeline</h2>
+<ul id="timeline"></ul>
+
+<script>
+const progressEvents = [
+  { ts:"2026-08-06T01:30:00Z", status:"done", phase:"ratify", actor:"orchestrator",
+    summary:"Plan ratified; A5/A7/A8 closed. Base landed in credited commits — another lane's finding-links work committed FIRST so S2-T1 could remove it by name." },
+  { ts:"2026-08-06T02:28:50Z", status:"done", phase:"tranche-1", actor:"orchestrator",
+    summary:"PR #9 merged. Ledger deleted, notification center model + gate, attentionClass + pulse.blocked, cleanup sweep. CI green.",
+    evidence:["docs/S0-T1-DEAD-TIME-MEASUREMENT.md"] },
+  { ts:"2026-08-06T02:52:00Z", status:"done", phase:"measurement", actor:"be-dwell",
+    summary:"R1 FINAL: dead time dropped. hookLifecycleAt is a write clock; the Notification event repeats mid-wait; the journal rolls over. Hero and per-row ages removed, not withheld." },
+  { ts:"2026-08-06T03:30:12Z", status:"done", phase:"tranche-3", actor:"orchestrator",
+    summary:"PR #12 merged. Read-only propose endpoint with destructive verbs unreachable-by-test; a11y sweep found 6 defects incl. one shipped; mutation audit round 1.",
+    evidence:["docs/A11Y-SWEEP-NOTIFICATION-CENTER.md","docs/TEST-HOLLOWNESS-AUDIT.md"] },
+  { ts:"2026-08-06T03:52:14Z", status:"done", phase:"tranche-4", actor:"orchestrator",
+    summary:"PR #13 merged. Context reads the fleet. Audit round 2 proved 'the header never links' is genuinely guarded — and that the A11Y-1 guard only greps a stylesheet string." },
+  { ts:"2026-08-06T03:56:00Z", status:"done", phase:"correction", actor:"orchestrator",
+    summary:"My diagnosis was wrong: consumption was never broken. Both readings hit a server that predated the change or had not finished its first scan. Verified live afterwards at 75,776,215 over 349/389.",
+    evidence:["docs/S0-LIVE-FIELD-VERIFICATION.md"] },
+  { ts:"2026-08-06T04:08:00Z", status:"done", phase:"audit", actor:"harden-notify",
+    summary:"Round 3 on the destructive path: confirm-route guard bites, but the unverifiable-occupant hard stop was untested (fail-OPEN) and the fingerprint check passed for the wrong reason. Both closed. Frozen delivery contract verified unchanged." },
+  { ts:"2026-08-06T04:16:00Z", status:"done", phase:"tranche-5", actor:"orchestrator",
+    summary:"PR #14 merged. Scan window stated once, THEN the Tokens card — ordering kept. totals.consumption renders as a covered floor." },
+  { ts:"2026-08-06T04:20:00Z", status:"doing", phase:"checkpoint", actor:"orchestrator",
+    summary:"Ledger created for compaction. Remaining: S4, S6-T3/T4, A11Y-2..6, the geometry test, the Board all-clear defect. No blockers." },
+];
+document.getElementById("timeline").innerHTML = progressEvents.map(e =>
+  '<li><span class="ts">' + e.ts.replace("T"," ").replace("Z"," UTC") + '</span>' +
+  ' <span class="st ' + e.status + '">' + e.status + '</span>' +
+  '<span class="sm">' + e.summary + '</span>' +
+  '<span class="ph">' + e.phase + ' · ' + e.actor +
+  (e.evidence ? ' · ' + e.evidence.join(", ") : "") + '</span></li>'
+).join("");
+</script>
