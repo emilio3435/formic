@@ -277,7 +277,18 @@ Also left uncommitted deliberately, because they are not this program's to land:
 **Standing evidence, written down because it outlived the lanes that produced it:**
 `docs/S0-T1-DEAD-TIME-MEASUREMENT.md` · `docs/S0-T4-EVIDENCE-SAMPLE.md` · `docs/S0-LIVE-FIELD-VERIFICATION.md` · `docs/A11Y-SWEEP-NOTIFICATION-CENTER.md` · `docs/TEST-HOLLOWNESS-AUDIT.md` · `docs/CLEANUP-SWEEP.md`
 
-**Open, and the reason the Tokens card has not shipped:** `totals.consumption` is implemented, tested, and **still absent on a live board**. R3 relaxed the terms gate, but the field is withheld by `sessionCollectionComplete`, which reads `sessions[provider].errors` — a *different* population from the `controlHealth.errors` that reports healthy. So the board can show five healthy sources while session collection is incomplete, and the card silently never appears. Under diagnosis; **no third fixture-green-but-live-absent round.**
+**`totals.consumption` — VERIFIED LIVE 2026-08-05 22:56, and the Tokens card is unblocked.** Measured on a server owned and timestamped by the orchestrator (pid 2162, started 22:53:44, well after R3 at 22:35:57), sole holder of its port:
+
+```
+consumption       75,776,215
+coverage          349 of 389 sessions        consumptionIsFloor: true
+occupancy tokens     915,805                 → consumption is 82.74× occupancy
+pulse.blocked     6                          standbyMs: absent ✓
+```
+
+The magnitude sits exactly where it must: far above occupancy (which sums one call each, over working agents only) and far below processed. R3's shape — publish the covered subtotal, carry `consumptionReporting/consumptionEligible`, mark it a floor — is correct and live.
+
+⚠ **The earlier "`sessionCollectionComplete` is the blocker" diagnosis in this file was WRONG, and the error is worth keeping.** It was the orchestrator's, not a lane's. Two things produced it: a first measurement against a server process that predated R3, and a second against a fresh one that had **not yet completed its first full session scan** — consumption needs a completed scan before it can publish, and ~2 minutes of polling was not enough. Both readings said "absent" and neither was evidence about the rule. A field that is legitimately absent until a scan completes looks identical to a field that is broken; the only thing that distinguishes them is knowing your process's start time and giving it a full cycle. **Record the PID and its start time before drawing a conclusion from an absence.**
 
 ### Superseded — tranche 1 ledger, 2026-08-05 21:28 (PR #9, `75e1ed7`)
 
