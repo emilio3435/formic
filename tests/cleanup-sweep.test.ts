@@ -1,3 +1,11 @@
+/**
+ * Hermetic by construction — safe for `bun run test:ci`.
+ *
+ * Every git operation targets a temp repo under SCRATCH. Every SweepHost stubs
+ * listProcesses/cwdOf (never the production host factory, never this machine's
+ * process table or worktree list). No machine home dirs or localhost. The
+ * branch name "main" exists only because initRepo creates it inside the temp clone.
+ */
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   mkdirSync,
@@ -44,24 +52,44 @@ import { livenessOf } from "../src/server/process-liveness";
 import { isRecognizedAgentProcess } from "../src/server/identity";
 
 const SCRATCH = mkdtempSync(join(tmpdir(), "anthill-cleanup-sweep-"));
+const REPO_ROOT = resolve(import.meta.dir, "..");
+
+/** Git env that cannot see the developer's global config or home repos. */
+function hermeticGitEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    PATH: process.env.PATH ?? "/usr/bin:/bin",
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    LC_ALL: "C",
+    HOME: SCRATCH,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "sweep",
+    GIT_AUTHOR_EMAIL: "sweep@example.com",
+    GIT_COMMITTER_NAME: "sweep",
+    GIT_COMMITTER_EMAIL: "sweep@example.com",
+    ...extra,
+  };
+}
 
 afterAll(() => {
   rmSync(SCRATCH, { recursive: true, force: true });
 });
 
+function underScratch(path: string): boolean {
+  const root = realpath(SCRATCH);
+  const abs = realpath(path);
+  return abs === root || abs.startsWith(`${root}/`);
+}
+
 function git(cwd: string, args: string[]): string {
+  if (!underScratch(cwd)) {
+    throw new Error(`git cwd escapes SCRATCH: ${cwd}`);
+  }
   const result = Bun.spawnSync(["git", ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
-    env: {
-      ...process.env,
-      LC_ALL: "C",
-      GIT_AUTHOR_NAME: "sweep",
-      GIT_AUTHOR_EMAIL: "sweep@example.com",
-      GIT_COMMITTER_NAME: "sweep",
-      GIT_COMMITTER_EMAIL: "sweep@example.com",
-    },
+    env: hermeticGitEnv(),
   });
   if (result.exitCode !== 0) {
     throw new Error(`git ${args.join(" ")}: ${result.stderr.toString() || result.stdout.toString()}`);
@@ -74,6 +102,8 @@ function initRepo(name: string): string {
   rmSync(root, { recursive: true, force: true });
   mkdirSync(root, { recursive: true });
   git(root, ["init", "-b", "main"]);
+  git(root, ["config", "user.name", "sweep"]);
+  git(root, ["config", "user.email", "sweep@example.com"]);
   writeFileSync(join(root, "README.md"), `# ${name}\n`);
   git(root, ["add", "README.md"]);
   git(root, ["commit", "-m", "init"]);
@@ -119,12 +149,15 @@ function hostFor(
   const commands: string[][] = extras.gitTap ?? [];
   return {
     git: (args, cwd) => {
+      if (!underScratch(cwd)) {
+        throw new Error(`SweepHost.git cwd escapes SCRATCH: ${cwd}`);
+      }
       commands.push(["git", ...args]);
       const result = Bun.spawnSync(["git", ...args], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, LC_ALL: "C" },
+        env: hermeticGitEnv(),
       });
       return {
         exitCode: result.exitCode,
@@ -354,11 +387,14 @@ describe("cleanup sweep — propose then confirm", () => {
             stderr: `error: the branch '${args[2]}' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D ${args[2]}'\n`,
           };
         }
+        if (!underScratch(cwd)) {
+          throw new Error(`failingHost git cwd escapes SCRATCH: ${cwd}`);
+        }
         const result = Bun.spawnSync(["git", ...args], {
           cwd,
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, LC_ALL: "C" },
+          env: hermeticGitEnv(),
         });
         return {
           exitCode: result.exitCode,
@@ -482,5 +518,27 @@ describe("cleanup sweep — propose is board-safe", () => {
     expect(src).toMatch(/THE BOARD NEVER DELETES/);
     expect(src).toMatch(/No destructive server endpoint/);
     expect(src).toMatch(/Do not wire `confirm` to a route/);
+  });
+});
+
+describe("cleanup sweep — hermeticity pins", () => {
+  test("SCRATCH is outside this repo and HOME-independent", () => {
+    expect(resolve(SCRATCH).startsWith(resolve(REPO_ROOT))).toBe(false);
+    expect(SCRATCH.startsWith(tmpdir()) || resolve(SCRATCH).includes("/tmp") || resolve(SCRATCH).includes("T/")).toBe(true);
+  });
+
+  test("this file never imports the production host factory or machine paths", () => {
+    const src = readFileSync(join(import.meta.dir, "cleanup-sweep.test.ts"), "utf8");
+    // Import line only — the symbol name of scripts/anthill-cleanup-sweep.ts's live host.
+    expect(src).not.toMatch(/import\s*\{[^}]*\bdefaultHost\b/);
+    expect(src).not.toMatch(/~\/\.cmuxterm/);
+    expect(src).not.toMatch(/~\/\.anthill/);
+    expect(src).not.toMatch(/127\.0\.0\.1/);
+    expect(src).not.toMatch(/localhost:\d+/);
+  });
+
+  test("SweepHost refuses a git cwd outside SCRATCH", () => {
+    const host = hostFor(join(SCRATCH, "unused"));
+    expect(() => host.git(["status"], REPO_ROOT)).toThrow(/escapes SCRATCH/);
   });
 });

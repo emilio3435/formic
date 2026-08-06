@@ -5,6 +5,9 @@
  * be-dwell's — the client falls back to attentionSignal.kind until it lands.
  * standbyMs / dead-time hero are never required: S0-T1 found no defensible
  * stable entry clock for blockedSince.
+ *
+ * Hermetic — safe for `bun run test:ci`. Reads only in-repo fixtures and docs
+ * via import.meta.dir. No ~/.cmuxterm, ~/.anthill, localhost, or live git state.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
