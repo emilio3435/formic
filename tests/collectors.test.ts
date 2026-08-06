@@ -11,7 +11,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   claudeContextWindow,
@@ -24,6 +24,12 @@ import {
 
 const fixture = (name: string): string =>
   readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
+
+/* These rows are about a session running AT THE HOME DIRECTORY, which is what
+   makes "Home" the honest card name. Spelling one developer's home path here
+   asserted that only where that developer ran it, so the naming rule went
+   unchecked on every other machine — including CI, where it failed. */
+const HOME_DIR = homedir();
 
 const nowMs = Date.parse("2026-07-21T23:31:00.000Z");
 
@@ -338,7 +344,7 @@ describe("collector identity and usage truth", () => {
         timestamp: "2026-07-21T23:00:00.000Z",
         payload: {
           id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
-          cwd: "/Users/emilionunezgarcia",
+          cwd: HOME_DIR,
         },
       }),
       JSON.stringify({
@@ -392,7 +398,7 @@ describe("collector identity and usage truth", () => {
         timestamp: "2026-07-21T23:00:00.000Z",
         payload: {
           id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
-          cwd: "/Users/emilionunezgarcia",
+          cwd: HOME_DIR,
           source: {
             subagent: {
               thread_spawn: {
@@ -429,7 +435,7 @@ describe("collector identity and usage truth", () => {
       payload: {
         id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
         parent_thread_id: "019f8650-960c-7dc0-b75a-68dda4a57a1b",
-        cwd: "/Users/emilionunezgarcia",
+        cwd: HOME_DIR,
         source: { subagent: { other: "guardian" } },
       },
     }), { nowMs });
@@ -443,7 +449,7 @@ describe("collector identity and usage truth", () => {
       timestamp: "2026-07-21T23:00:00.000Z",
       payload: {
         id: "019f87f0-6961-78e2-b6ae-0e310751dda2",
-        cwd: "/Users/emilionunezgarcia",
+        cwd: HOME_DIR,
       },
     }), { nowMs });
 
@@ -455,7 +461,7 @@ describe("collector identity and usage truth", () => {
     const agent = parseCodexJsonl([
       JSON.stringify({
         type: "session_meta",
-        payload: { id: "019f87f0-6961-78e2-b6ae-0e310751dda2", cwd: "/Users/emilionunezgarcia" },
+        payload: { id: "019f87f0-6961-78e2-b6ae-0e310751dda2", cwd: HOME_DIR },
       }),
       JSON.stringify({
         type: "event_msg",
@@ -607,14 +613,14 @@ describe("collector identity and usage truth", () => {
       JSON.stringify({
         type: "user",
         sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
-        cwd: "/Users/emilionunezgarcia",
+        cwd: HOME_DIR,
         timestamp: "2026-07-21T23:00:00.000Z",
         message: { role: "user", content: "<recommended_plugins>...</recommended_plugins>" },
       }),
       JSON.stringify({
         type: "user",
         sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
-        cwd: "/Users/emilionunezgarcia",
+        cwd: HOME_DIR,
         timestamp: "2026-07-21T23:00:01.000Z",
         message: { role: "user", content: "Mission: Redesign the Platforms operating room." },
       }),
@@ -632,7 +638,7 @@ describe("collector identity and usage truth", () => {
     const claudeUser = (content: string, at: string) => JSON.stringify({
       type: "user",
       sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
-      cwd: "/Users/emilionunezgarcia",
+      cwd: HOME_DIR,
       timestamp: at,
       message: { role: "user", content },
     });
@@ -660,7 +666,7 @@ describe("collector identity and usage truth", () => {
     const agent = parseClaudeJsonl(JSON.stringify({
       type: "user",
       sessionId: "c7754d67-b9cd-4050-9ab4-76e4851e318d",
-      cwd: "/Users/emilionunezgarcia",
+      cwd: HOME_DIR,
       timestamp: "2026-07-21T23:00:00.000Z",
       message: {
         role: "user",

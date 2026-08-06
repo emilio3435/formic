@@ -32,5 +32,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Not plain `bun test`: a few files deliberately assert against the
+      # developer's live session history and the board on localhost, and fail
+      # rather than skip when that evidence is absent. scripts/ci-tests.sh names
+      # them and runs everything else, so a new test file is covered by default.
       - name: Tests
-        run: bun test
+        run: bun run test:ci

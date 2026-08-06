@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PROVIDERS } from "../src/shared/types";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   buildSnapshot,
@@ -22,6 +23,10 @@ import type { HubPulse, IssueLifecycle, LifecycleState, OperatorIssue } from "..
 
 const fixture = (name: string): string =>
   readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
+
+/* Home-cwd grouping is the behaviour under test, so the path has to actually be
+   this machine's home. A literal home path only asserted that on one machine. */
+const HOME_DIR = homedir();
 
 const archiveStore: ArchiveStore = {
   has: () => false,
@@ -85,10 +90,10 @@ describe("snapshot control safety and SSE deduplication", () => {
   test.each([
     {
       label: "ambiguous",
-      cwd: "/Users/emilionunezgarcia",
+      cwd: HOME_DIR,
       surfaces: [
-        { ...uniqueSurface, surfaceId: "SURFACE-A", cwd: "/Users/emilionunezgarcia" },
-        { ...uniqueSurface, surfaceId: "SURFACE-B", cwd: "/Users/emilionunezgarcia" },
+        { ...uniqueSurface, surfaceId: "SURFACE-A", cwd: HOME_DIR },
+        { ...uniqueSurface, surfaceId: "SURFACE-B", cwd: HOME_DIR },
       ],
     },
     {
@@ -347,7 +352,7 @@ describe("snapshot control safety and SSE deduplication", () => {
        carry different claims: the pane title names this session, the workspace
        title only names where it is parked — which is why the client may trust
        one across a cwd mismatch and not the other. */
-    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const source = collected({ cwd: HOME_DIR });
     const snapshot = buildSnapshot({
       agents: [source],
       surfaces: [{
@@ -370,7 +375,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     // The contrast case: `surfaceTitle` must stay absent rather than falling
     // back to the workspace name, or the client's cwd-mismatch rule above would
     // let every workspace title through under the pane title's authority.
-    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const source = collected({ cwd: HOME_DIR });
     const snapshot = buildSnapshot({
       agents: [source],
       surfaces: [{
@@ -391,7 +396,7 @@ describe("snapshot control safety and SSE deduplication", () => {
        Publishing one hands it the authority of a rename, which on the live
        board meant a pane titled after its own directory outranking the name
        the fleet had distilled for that session. */
-    const source = collected({ cwd: "/Users/emilionunezgarcia" });
+    const source = collected({ cwd: HOME_DIR });
     const snapshot = buildSnapshot({
       agents: [source],
       surfaces: [{
@@ -409,7 +414,7 @@ describe("snapshot control safety and SSE deduplication", () => {
 
   test("exact cmux link with disagreeing pane cwd keeps home grouping and flags the mismatch", () => {
     const source = collected({
-      cwd: "/Users/emilionunezgarcia",
+      cwd: HOME_DIR,
       task: "Continue the platform review.",
     });
     const snapshot = buildSnapshot({
@@ -433,7 +438,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     // Session still lives at ~ — do not file it under Hormiga just because the
     // cmux pane title/folder says so.
     expect(snapshot.programs[0]?.name).toBe("Home");
-    expect(agent?.cwd).toBe("/Users/emilionunezgarcia");
+    expect(agent?.cwd).toBe(HOME_DIR);
     expect(agent?.target).toMatchObject({
       resolution: "exact",
       cwdMismatch: true,
@@ -448,13 +453,13 @@ describe("snapshot control safety and SSE deduplication", () => {
         collected({
           id: "codex:hd-task",
           sourceSessionId: "hd-task",
-          cwd: "/Users/emilionunezgarcia",
+          cwd: HOME_DIR,
           task: "Verify /Users/emilionunezgarcia/Developer/hd-settings-cockpit-layout-store-20260721.",
         }),
         collected({
           id: "codex:personal-task",
           sourceSessionId: "personal-task",
-          cwd: "/Users/emilionunezgarcia",
+          cwd: HOME_DIR,
           task: "Update my resume.",
         }),
       ],
