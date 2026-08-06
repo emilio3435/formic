@@ -129,8 +129,13 @@ import {
 import { classifyLifecycle, evidenceFromAgent } from "./lifecycle.js";
 /* The Cleaner's whole derivation. app.js keeps the fetch and the paint; which
    state the chip is in is decided in cleaner.js against the live session. */
+/* The previous derived state, so the landing beat can fire on the transition
+   rather than on a clock. Module-scoped: it describes this board's last paint,
+   not any one render call. */
+let cleanerLastState = "idle";
 import {
   cleanerFromResponse,
+  cleanerLands,
   cleanerView,
   cleanupCounts,
   countsSentence,
@@ -2384,11 +2389,24 @@ function cleanupAction() {
      which step refused and that sentence is what the operator reads. */
   const failed = !examining && view.state === "failed";
   const asking = !examining && view.state === "needs-you";
+  /* S5: the ring lands on an OBSERVED edge — the paint where the lane the board
+     asked for first appears on it. cleanerLastState is the previous derived
+     answer, so this cannot re-fire on a repaint, and it cannot fire at all
+     without a session having actually shown up. */
+  const landing = cleanerLands(cleanerLastState, view.state);
+  cleanerLastState = view.state;
   const running = busy;
   return el("button", {
     type: "button",
     class: "verdict-cleanup"
-      + (busy ? " is-running" : "")
+      /* Spin only while genuinely waiting with nothing to show; land once when
+         the lane appears; then hold the landed ring while it works. A ring that
+         resumed spinning after landing would un-terminate its own motion, and
+         once the Cleaner is on the board the board's ROW is where progress
+         lives — this chip has handed off to it. */
+      + (landing ? " is-landing"
+        : examining || view.state === "launching" ? " is-running"
+          : view.state === "watching" ? " is-alive" : "")
       + (failed ? " is-failed" : "")
       + (asking ? " is-asking" : ""),
     /* aria-disabled, NOT disabled. A disabled element leaves the tab order, and

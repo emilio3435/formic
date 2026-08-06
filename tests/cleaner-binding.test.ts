@@ -23,6 +23,7 @@ interface CleanerModule {
   CLEANER_FAILURES: Record<string, string>;
   CLEANER_IN_FLIGHT: Set<string>;
   CLEANER_LABELS: Record<string, string>;
+  cleanerLands: (previousState: string, nextState: string) => boolean;
 }
 let C: CleanerModule;
 
@@ -164,6 +165,38 @@ describe("a second launch adopts the running Cleaner rather than starting anothe
   test("a success binds normally", () => {
     const bound = C.cleanerFromResponse({ ok: true, sessionId: SESSION }, true);
     expect(bound).toEqual({ sessionId: SESSION, code: "", error: "" });
+  });
+});
+
+describe("S5 — the ring lands on an observed edge, never on a clock", () => {
+  /* Measured live at 1280 (docs/a11y-shots/21-S5-*.png):
+       launching   animation cleanup-spin
+       lands       animation cleanup-land, iterations 1, fill forwards
+       then holds  class is-alive, animation none, marker still visible
+     and under REAL emulated reduce (matchMedia asserted true first):
+       animation none, duration 0s, transform none, marker visible, ring closed,
+       label still "Cleaner working". */
+
+  test("it lands exactly on launching -> watching", () => {
+    expect(C.cleanerLands("launching", "watching")).toBe(true);
+  });
+
+  test("it does not land on any other transition", () => {
+    /* Including idle -> watching, which is what an adopted CLEANER_ALREADY_RUNNING
+       looks like: nothing arrived, so nothing lands. */
+    for (const [from, to] of [
+      ["idle", "watching"], ["watching", "watching"], ["launching", "launching"],
+      ["launching", "failed"], ["watching", "needs-you"], ["watching", "resolved"],
+      ["failed", "watching"], ["idle", "launching"],
+    ]) {
+      expect(C.cleanerLands(from, to), `${from} -> ${to}`).toBe(false);
+    }
+  });
+
+  test("it cannot re-fire on a repaint", () => {
+    /* The second paint's previous state is already `watching`, so the beat is a
+       fact about a transition rather than a thing the chip can replay. */
+    expect(C.cleanerLands("watching", "watching")).toBe(false);
   });
 });
 

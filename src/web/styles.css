@@ -3748,6 +3748,31 @@ body.feed-frozen .programs { opacity: 0.62; }
   display: block;
   animation: cleanup-spin 900ms linear infinite;
 }
+/* S5 — the launch has a beat: the ring completes ONE rotation and lands.
+
+   Motion that terminates reads as competence; motion that repeats reads as
+   waiting. The looping spin above is honest while the board is genuinely
+   waiting on a lane it can see; this is the moment the Cleaner is confirmed
+   alive, and it resolves rather than keeps turning.
+
+   `forwards` matters as much as the count: without it the ring would snap back
+   to its start angle after landing, which is a bounce, and nothing bounces. */
+.verdict-cleanup.is-landing .verdict-cleanup-mark {
+  display: block;
+  /* The SAME keyframe as the spin, run exactly once and held. A landing is not a
+     different motion from a rotation — it is a rotation that stops — so this
+     needs no new @keyframes, and the A6 guard's exhaustive animation list stays
+     true without being edited. `forwards` is what makes it land rather than snap
+     back to its start angle, and nothing bounces. */
+  animation: cleanup-spin 620ms cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+  border-top-color: currentColor;
+}
+/* After the landing, while the Cleaner works: a closed, still ring. The lane is
+   alive and visible on the board, and that row is the progress indicator now. */
+.verdict-cleanup.is-alive .verdict-cleanup-mark {
+  display: block;
+  border-top-color: currentColor;
+}
 @keyframes cleanup-spin { to { transform: rotate(360deg); } }
 
 /* Static under reduced motion, still visibly a marker that something is running.
@@ -3755,10 +3780,17 @@ body.feed-frozen .programs { opacity: 0.62; }
    this rule is asserted at rule level and is NOT verified live. Recorded rather
    than implied. */
 @media (prefers-reduced-motion: reduce) {
-  .verdict-cleanup.is-running .verdict-cleanup-mark {
+  .verdict-cleanup.is-running .verdict-cleanup-mark,
+  /* The landing beat obeys the setting too, and lands in its FINISHED state
+     rather than being removed: the ring is closed and solid, which is what the
+     animation was travelling towards. Refusing the motion must not refuse the
+     meaning. */
+  .verdict-cleanup.is-landing .verdict-cleanup-mark,
+  .verdict-cleanup.is-alive .verdict-cleanup-mark {
     animation: none;
     border-top-color: currentColor;
     border-style: dashed;
+    transform: none;
   }
 }
 

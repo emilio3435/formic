@@ -129,6 +129,21 @@ export const CLEANER_LABELS = {
    permanent spinner is the exact failure §6 tests for. */
 export const CLEANER_IN_FLIGHT = new Set(["launching", "watching"]);
 
+/* S5 — the beat, and WHEN it is allowed to play.
+
+   The ring lands at the moment the lane is confirmed alive: the transition from
+   launching (asked for, not yet seen) to watching (its session is on this
+   board). That is an observed edge, not an elapsed time — the same rule the rest
+   of this file keeps. A landing played on a timer would be a celebration of
+   nothing, which is worse than no celebration.
+
+   It plays once per binding. `lands` is a fact about a transition, so the caller
+   holds the previous state and asks; it cannot re-fire on a repaint because the
+   previous state is then already `watching`. */
+export function cleanerLands(previousState, nextState) {
+  return previousState === "launching" && nextState === "watching";
+}
+
 /* Counts, from the plan the sweep produced.
 
    Stated as PROPOSED rather than removed. The board observes that a Cleaner

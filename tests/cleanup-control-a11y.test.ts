@@ -217,7 +217,11 @@ describe("CLEAN-5: the indicator is not a colour-only signal", () => {
        than the universal reduce kill, so anchoring on it walked to the wrong
        @media block the moment this control joined the sweep. */
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)", css.indexOf(".verdict-cleanup-mark {")));
-    expect(reduced.slice(0, 260)).toContain("animation: none");
-    expect(reduced.slice(0, 260)).toMatch(/border-top-color: currentColor/);
+    /* Widened from a fixed 260-char window: the block gained the landing beat's
+       selector and its comment, and a window that clips the declarations reports
+       a false failure about a rule that is present. */
+    const block = reduced.slice(0, reduced.indexOf("}", reduced.indexOf("{", 40)) + 1);
+    expect(block).toContain("animation: none");
+    expect(block).toMatch(/border-top-color: currentColor/);
   });
 });
