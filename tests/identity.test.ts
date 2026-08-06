@@ -409,6 +409,115 @@ describe("TTY and open-session identity evidence", () => {
     expect(child).toMatchObject({ processIds: [202], processAlive: true });
   });
 
+  /* The shared-app-server population, measured on this machine 2026-08-05: one
+     `codex ... app-server` (started 08:58) held 11 rollout transcripts open,
+     with mtimes spanning 09:24-13:07, at 19:25. It never closes a transcript
+     for the life of the process, so its open descriptors only accumulate — they
+     prove the APP is running, never that any one session is. Thirteen board
+     rows read "waiting · process live" off that single pid. */
+  test("a shared app-server's open transcripts attribute a process without proving the session lives", async () => {
+    const desktop = (id: string): CollectedAgent => ({
+      ...agent,
+      provider: "codex",
+      id: `codex:${id}`,
+      sourceSessionId: id,
+      processIds: undefined,
+      processAlive: undefined,
+      transcriptOpen: undefined,
+    });
+    const first = desktop("019f86c4-1558-7000-aeb8-26e2cfd0e8ec");
+    const second = desktop("11111111-2222-3333-4444-555555555555");
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "9644 ?? /Applications/ChatGPT.app/Contents/Resources/codex app-server --analytics-default-enabled",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p9644",
+          "n/Users/me/.codex/sessions/2026/08/05/rollout-2026-08-05T09-24-00-019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+          "n/Users/me/.codex/sessions/2026/08/05/rollout-2026-08-05T13-07-00-11111111-2222-3333-4444-555555555555.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    await enrichCmuxIdentity([surface], [first, second], runner);
+
+    for (const served of [first, second]) {
+      /* The descriptor is real and stays on the row as evidence... */
+      expect(served.processIds).toEqual([9644]);
+      expect(served.transcriptOpen).toBeTrue();
+      /* ...but it is not a claim that this session is alive. Unknown, not dead:
+         asserting `false` here with a pid attached would read as "process
+         checked and gone", which is the opposite lie. */
+      expect(served.processAlive).toBeUndefined();
+    }
+  });
+
+  test("a dedicated agent process still proves life for every session it serves", async () => {
+    /* The guard above must key on the multiplexer, not on fan-out: a plain
+       codex CLI legitimately holds a parent and its child transcript open, and
+       measured here so does a real desktop-independent codex (2 apiece). */
+    const dedicated = (id: string): CollectedAgent => ({
+      ...agent,
+      provider: "codex",
+      id: `codex:${id}`,
+      sourceSessionId: id,
+      processIds: undefined,
+      processAlive: undefined,
+    });
+    const parent = dedicated("019f86c4-1558-7000-aeb8-26e2cfd0e8ec");
+    const child = dedicated("11111111-2222-3333-4444-555555555555");
+    const runner = new SequenceRunner([
+      { exitCode: 0, stdout: "202 ttys033 /Users/me/.local/bin/codex", stderr: "", timedOut: false },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-00-00-019f86c4-1558-7000-aeb8-26e2cfd0e8ec.jsonl",
+          "n/Users/me/.codex/sessions/2026/07/21/rollout-2026-07-21T23-01-00-11111111-2222-3333-4444-555555555555.jsonl",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    await enrichCmuxIdentity([surface], [parent, child], runner);
+
+    expect(parent).toMatchObject({ processIds: [202], processAlive: true });
+    expect(child).toMatchObject({ processIds: [202], processAlive: true });
+  });
+
+  /* Measured 2026-08-05: a claude session recorded pid 90614, whose start time
+     no longer matches — the number now belongs to `sysextd`. The hook layer
+     verified that and answered "gone", and this loop overturned it purely
+     because some process still holds the number. */
+  test("a recycled pid that is merely present does not overturn a start-time verdict of gone", async () => {
+    const reused: CollectedAgent = {
+      ...agent,
+      provider: "claude",
+      processIds: [90614],
+      processAlive: false,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "90614 ?? /System/Library/Frameworks/SystemExtensions.framework/Versions/A/Helpers/sysextd",
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    await enrichCmuxIdentity([surface], [reused], runner);
+
+    expect(reused.processAlive).toBeFalse();
+  });
+
   test("cmux process attribution recovers exact identity when terminal discovery omits the tty", async () => {
     const parent: CollectedAgent = {
       ...agent,

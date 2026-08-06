@@ -197,6 +197,46 @@ describe("sticky identity binding lifecycle", () => {
     });
   });
 
+  /* Measured 2026-08-05: two sessions rode a stored pid that the kernel had
+     since handed to `/usr/libexec/siriknowledged` and `sysextd`. The bridge saw
+     the number in use and called them live — one for 33 hours. */
+  test("a stored PID recycled by a non-agent process is unknown, not alive", async () => {
+    const store = new MemoryIdentityBindingStore();
+    await store.put({
+      sessionId: SESSION_ID,
+      provider: "omp",
+      target: { surfaceId: "SURFACE-A" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+      processIds: [4242],
+    });
+
+    /* Its own copy: `enrichCmuxIdentity` mutates the agents it is handed, and
+       the shared fixture above picks up a `processAlive: true` from an earlier
+       test in this file. This assertion is about what the bridge concludes, not
+       about what leaked into it. */
+    const unproven = { ...agent, processAlive: undefined, processIds: undefined };
+
+    /* In use, but by something that is not an agent: the number tells us
+       nothing about the session, so the board must not claim it is running. */
+    expect(bridgeAgentsWithBindings(store, [unproven], [], [4242], [])[0]).toMatchObject({
+      processIds: [4242],
+    });
+    expect(bridgeAgentsWithBindings(store, [unproven], [], [4242], [])[0]?.processAlive).toBeUndefined();
+
+    // Held by a recognised agent, it is still the proof it always was.
+    expect(bridgeAgentsWithBindings(store, [unproven], [], [4242], [4242])[0]).toMatchObject({
+      processAlive: true,
+    });
+
+    /* And a verdict already reached by start-time verification is not
+       overturned by the number merely being in use. */
+    const known = { ...unproven, processAlive: false };
+    expect(bridgeAgentsWithBindings(store, [known], [], [4242], [4242])[0]).toMatchObject({
+      processAlive: false,
+    });
+  });
+
   test("live evidence outranks a binding: a linked or reclaimed surface never gets bridged", async () => {
     const store = new MemoryIdentityBindingStore();
     await updateBindingsFromScan(store, [confirmedSurface("SURFACE-A")], "2026-07-23T06:00:00.000Z");

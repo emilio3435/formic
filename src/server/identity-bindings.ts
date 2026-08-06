@@ -381,6 +381,7 @@ export function bridgeAgentsWithBindings(
   agents: readonly CollectedAgent[],
   surfaces: readonly CmuxSurface[],
   liveAgentProcessIds?: readonly number[],
+  recognizedAgentProcessIds?: readonly number[],
 ): CollectedAgent[] {
   const liveSessionIds = new Set(
     surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
@@ -396,9 +397,24 @@ export function bridgeAgentsWithBindings(
     const trustworthyProcessScan = Boolean(
       trace && trace.outcome !== "probe-failed" && trace.outcome !== "no-tty" && trace.outcome !== "stale-surface",
     );
+    /* A binding's pids were real when the scan confirmed them, and the kernel
+       recycles numbers. So "still in use" splits three ways rather than two: in
+       use by an agent is life, in use by nothing is death, and in use by
+       something that is not an agent is a recycled number we cannot resolve —
+       unknown, not alive. Measured 2026-08-05, that middle case put two dead
+       sessions on the board as live, one of them for 33 hours, on pids since
+       taken by `siriknowledged` and `sysextd`.
+
+       Falls back to the old presence test when no recognised set was supplied,
+       so a caller that cannot answer the narrower question is no worse off. */
+    const agentProcessIds = recognizedAgentProcessIds ?? liveAgentProcessIds;
     const processAlive = processIds?.length
       ? liveAgentProcessIds
-        ? processIds.some((pid) => liveAgentProcessIds.includes(pid))
+        ? agentProcessIds?.some((pid) => processIds.includes(pid))
+          ? true
+          : processIds.some((pid) => liveAgentProcessIds.includes(pid))
+            ? undefined
+            : false
         : trace?.processes.some(({ pid }) => processIds.includes(pid))
           ? true
           : trustworthyProcessScan
@@ -421,7 +437,11 @@ export function bridgeAgentsWithBindings(
     const withProcessEvidence: CollectedAgent = {
       ...agent,
       processIds: processIds ?? agent.processIds,
-      processAlive: processAlive ?? agent.processAlive,
+      /* NO-RESURRECT, the mirror of the rule above. The bridge may fill a gap,
+         but a stored pid still being in use cannot overturn a `false` that
+         start-time verification already reached — that answer was made with
+         strictly more evidence than a presence test has. */
+      processAlive: agent.processAlive === false ? false : processAlive ?? agent.processAlive,
       transcriptOpen: transcriptOpen ?? agent.transcriptOpen,
     };
     if (agent.recordedTarget) return withProcessEvidence;
