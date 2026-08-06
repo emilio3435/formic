@@ -726,7 +726,18 @@ function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
 const DEGRADED_SEVERITY = {
   blocking: { key: "blocking", label: "Blocking", detail: "Operator actions are unavailable." },
   stale: { key: "stale", label: "Stale", detail: "Numbers on screen may no longer be true." },
-  advisory: { key: "advisory", label: "Advisory", detail: "The board is usable; evidence needs tidying." },
+  /* DESCRIBES THE STATE, never a remedy. It used to read "evidence needs
+     tidying", which asserts a fix — and on a live board whose actual fault was
+     `cursor GUI conversations: unable to open database file`, tidying fixes
+     nothing. A surface stating a conclusion its evidence does not support is the
+     defect class this whole program removes; a severity label is the last place
+     it should reappear, because it qualifies every reading beside it.
+
+     The other six strings in this function were checked for the same mistake and
+     are clean: they each name a condition ("Operator actions are unavailable",
+     "showing the previous good snapshot") or a condition and its consequence
+     ("cmux unreachable — Focus and Send cannot route"). None prescribes. */
+  advisory: { key: "advisory", label: "Advisory", detail: "The board is usable; some evidence is incomplete." },
 };
 
 function degradedSeverity(snap, conn = "live", fetchFailed = state.fetchFailed) {
@@ -2455,7 +2466,10 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
   /* The generic severity blurb and a specific problem sentence contradict each
      other when both print: "The board is usable; evidence needs tidying. 3 live
      sessions can't take commands." is the same self-disagreement the headline
-     used to have with its own badge. The specific sentence wins outright. */
+     used to have with its own badge. The specific sentence wins outright.
+     (That advisory string now reads "some evidence is incomplete" — it stopped
+     prescribing a remedy that may not fit the fault. The rule here is unchanged:
+     a specific sentence still beats any generic one.) */
   /* The severity's own detail already IS the consequence sentence, so printing
      the generic sublabel after it says cmux is unreachable twice in one line.
      Seen on the live board: "cmux unreachable — Focus and Send cannot route.
