@@ -9712,7 +9712,11 @@ function renderUsagePanel(ui = state) {
           type: "button", class: "linkish",
           dataset: { fkey: "usage-session:" + row.sessionId },
           onclick: () => {
-            setView("now");
+            /* "now" has not been a view since the three live tabs collapsed into
+               Board, and setView ignores a name that is not in VIEWS — so this
+               link opened a drawer over the Usage table and left the operator
+               standing on the wrong view, silently. */
+            setView("board");
             selectEntity({ kind: "agent", id: agentId });
           },
         }, row.sessionId.slice(0, 8))

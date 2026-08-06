@@ -156,6 +156,13 @@ function makeNode(tag: string): FakeNode {
       return (i >= 0 && node.parent.children[i + 1]) || null;
     },
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    /* Same "present but finds nothing" contract fakeDocument already offers.
+       Selector matching is not implemented here on purpose — tests reach nodes
+       through byFkey/byClass, which walk the real tree. These exist so a paint
+       path that merely LOOKS for an optional node (focus restore, drawer lead
+       focus) takes its not-found branch instead of dying on a TypeError. */
+    querySelector: () => null,
+    querySelectorAll: () => [] as unknown[],
     /* The real DOM has it and the client uses it — the notify control removes
        aria-pressed and disabled rather than writing a falsey value, because an
        element carrying `aria-pressed="false"` is a toggle that happens to be
@@ -7261,6 +7268,26 @@ describe("FE-B: harness-backed client behavior", () => {
     // A genuinely empty range must still read as empty, not as a failure.
     const empty = withDom(() => M.renderUsageSeriesChart({ available: true, points: [] }));
     expect(textOf(empty)).toContain("No series points in this range.");
+  });
+
+  /* The link called setView("now"), and "now" stopped being a view when the
+     three live tabs collapsed into Board. setView ignores a name outside VIEWS,
+     so the drawer opened over the Usage table and the operator was left standing
+     on the wrong view with no error anywhere. */
+  test("a usage session link lands the operator on the Board it opened", async () => {
+    const linked = agent({ id: "codex:s1", sourceSessionId: "sess1234", updatedAt: new Date().toISOString() });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [linked] }] });
+    await withState({ snap, view: "usage", selected: null }, () => withRequests([], async () => {
+      M.renderUsagePanel({
+        usageLoading: false, usageError: "", usageWard: null,
+        usageSummary: { available: true, processedTokens: 10, invocations: 1, costKnown: false, burnRateTokensPerHour: null },
+        usageSeries: { available: true, points: [] },
+        usageInvocations: { available: true, invocations: [{ sessionId: "sess1234", provider: "codex", tokens: 10 }] },
+      });
+      await fire(byFkey(domById.get("usage-panel"), "usage-session:sess1234"));
+      expect(M.state.view).toBe("board");
+      expect(M.state.selected).toMatchObject({ kind: "agent", id: "codex:s1" });
+    }));
   });
 
   test("an unavailable invocations query says so instead of reporting zero activity", () => {
