@@ -102,7 +102,7 @@ Kind is provider-neutral by construction; "provider" appears in this matrix only
 | **Empty state** | — | "N review workers are hidden from the Board. Show them from Filters." when sole constraint; named among `parts` otherwise | — | — | — |
 | **Loading (no snapshot)** | counts `null`, chip absent (`reviewWorkerCount` requires `snap`), bar renders lookback from defaults | — | — | — | — |
 
-Operator actions: toggling the kind chip repaints (paint-sig threaded) and **persists** (Phase 0); changing lookback persists (existing); facets do not persist (session-scoped lenses); search never persists; scan-window edits go through Settings → server → snapshot refresh, and the read-only status re-renders from `snap.scanWindowHours` (server-confirmed value wins over the local default, unverified state marked — existing `:4125-4127` logic).
+Operator actions: toggling the kind chip repaints (paint-sig threaded) and **persists as a server setting shared across browsers** (D7, Task 1.5; session-scoped until Phase 1 deploys); changing lookback persists per-browser (existing); facets do not persist (session-scoped lenses); search never persists; scan-window edits go through Settings → server → snapshot refresh, and the read-only status re-renders from `snap.scanWindowHours` (server-confirmed value wins over the local default, unverified state marked — existing `:4125-4127` logic).
 
 ## 5. Data and API contract
 
@@ -174,7 +174,7 @@ Threading (the 11-step list from the pipeline map, applied): type → claude par
 
 **No new `totals.*` field in Phases 1-3** (avoids the `published-fields-can-vary` registry); the client computes chip counts from rows, as the slice already does. `totals.byKind` is deferred to decision D5.
 
-**No API endpoint changes.** `/api/settings` contract untouched; the scan-window UI change is client-only.
+**One settings-contract addition (D7):** `HubSettings.showReviewWorkers: boolean` (default `false`), returned by GET and accepted by POST with a boolean type check — full spec in Task 1.5. No other endpoint changes; the scan-window UI change is client-only.
 
 **Migration:** field is optional; old snapshots (and retained archive rows written before Phase 1) lack it — client treats absent/`unknown` as "fall back to regex" during Phase 2, and as plain `unknown` (visible) after Phase 4 removes the fallback. Retained rows will not be re-classified (collector never re-reads them) — acceptable: History never hides by kind anyway.
 
@@ -351,47 +351,9 @@ Expected: all pass (476 + the new ones). The CSS census and source-hygiene suite
 git commit -m "refactor(web): extract emptyListMessage so the empty-state copy is testable" -- src/web/app.js tests/web-client.test.ts
 ```
 
-### Task 0.3: Persist the review-worker toggle
+### Task 0.3: ~~Persist the toggle in localStorage~~ — SUPERSEDED by D7
 
-**Files:**
-- Modify: `src/web/client-catalogs.js` (beside `LOOKBACK_STORAGE_KEY` at `:159`), `src/web/app.js` (beside `loadLookback` at `:1340`, `setShowReviewWorkers` at `:3827`, `boot()` at `:9582`)
-- Test: `tests/web-client.test.ts`
-
-**Interfaces:**
-- Produces: `REVIEW_WORKERS_STORAGE_KEY = "mtn3-showReviewWorkers"`; `loadShowReviewWorkers()`, `saveShowReviewWorkers()` mirroring the lookback pair exactly.
-
-- [ ] **Step 1: Implement** — `client-catalogs.js`: `export const REVIEW_WORKERS_STORAGE_KEY = "mtn3-showReviewWorkers";`. In `app.js`:
-
-```js
-function loadShowReviewWorkers() {
-  try { state.showReviewWorkers = localStorage.getItem(REVIEW_WORKERS_STORAGE_KEY) === "on"; }
-  catch { /* storage unavailable: keep the default (hidden) */ }
-}
-function saveShowReviewWorkers() {
-  try { localStorage.setItem(REVIEW_WORKERS_STORAGE_KEY, state.showReviewWorkers ? "on" : "off"); }
-  catch { /* best-effort, like every other mtn3-* write */ }
-}
-```
-
-Call `saveShowReviewWorkers()` inside `setShowReviewWorkers` before `render()`; call `loadShowReviewWorkers()` in `boot()` beside `loadLookback()`. Match the import line for the new catalog constant.
-
-- [ ] **Step 2: Test** — source-level, matching the persistence idiom used for lookback:
-
-```ts
-test("the review toggle persists like the lookback does", () => {
-  expect(source).toContain('REVIEW_WORKERS_STORAGE_KEY = "mtn3-showReviewWorkers"');
-  const setter = requiredSlice(source, /function setShowReviewWorkers\([\s\S]*?\n\}/, "setShowReviewWorkers");
-  expect(setter).toContain("saveShowReviewWorkers()");
-});
-```
-
-- [ ] **Step 3: Run + commit**
-
-Run: `bun test tests/web-client.test.ts` → PASS.
-
-```bash
-git commit -m "feat(web): persist the show-review-workers toggle" -- src/web/app.js src/web/client-catalogs.js tests/web-client.test.ts
-```
+D7 ruled the toggle a **server setting** shared across browsers, not a per-browser lens. No localStorage key, no `client-catalogs.js` change. Persistence lands as Task 1.5 (server side + client adoption). Until Phase 1 deploys, `showReviewWorkers` is session-scoped — it reverts to hidden on reload, which is acceptable for the interim because the chip discloses the hidden count on every paint.
 
 ### Task 0.4: Land the slice
 
@@ -463,6 +425,20 @@ with `let launch: CollectedAgent["launch"];` in the parser's closure state, firs
 
 - [ ] **Step 4: Run** → PASS. Also run `bun test tests/collectors.test.ts tests/atlas-collectors-golden.test.ts` — the golden fixtures must not shift (they carry no `entrypoint` field, so `launch` stays absent — assert nothing broke).
 - [ ] **Step 5: Commit:** `git commit -m "feat(collectors): capture claude launch evidence (entrypoint, promptSource)" -- src/server/collectors.ts tests/collectors.test.ts`
+
+### Task 1.2b: Catalogue Codex/Cursor launch markers (D6 — parallel BE lane)
+
+**Files:**
+- Investigate: `~/.codex/sessions/**` (one real `codex exec` rollout vs one interactive TUI session), `~/.cursor/chats/**` (one background-composer transcript vs one interactive)
+- Modify (conditional): `src/server/collectors.ts` (`parseCodexJsonl` session_meta handling near `:675-686`), `src/server/cursor.ts` (`:249-334` / the transcript walker)
+- Test: `tests/collectors.test.ts`, `tests/cursor.test.ts`
+
+**Interfaces:**
+- Produces: `CollectedAgent.launch` populated for codex/cursor **iff** a deterministic recorded marker exists (candidates: codex `session_meta.originator` / `source` fields; cursor composer-mode metadata). Same `{ entrypoint?, promptSource? }` shape — map provider-specific values into it verbatim (e.g. `entrypoint: "codex-exec"`), never invent a value the file does not record.
+
+- [ ] **Step 1:** Generate/locate one sample of each launch mode per provider; diff the session-file headers field-by-field. Record findings (field name, values, which modes distinguishable) in this plan under §2 as an evidence addendum.
+- [ ] **Step 2:** If a marker exists: wire it exactly per Task 1.2's pattern (first-seen capture, inline-row test asserting both modes, golden suites unmoved). If not: record "no recorded marker; kind stays pattern/`unknown` for this provider" — that sentence is the deliverable, and `sessionKindFor` needs no change either way.
+- [ ] **Step 3:** `bun test tests/collectors.test.ts tests/cursor.test.ts tests/atlas-collectors-golden.test.ts` → green. Commit path-scoped.
 
 ### Task 1.3: Derive and publish `sessionKind`
 
@@ -553,7 +529,36 @@ curl -s http://127.0.0.1:4701/api/snapshot | jq '
 
 Acceptance: the ~469 review sessions report `sessionKind: "review"` with `sessionKindSource: "launch-evidence"`; interactive sessions report `work`; **this plan's own session reports `work`, not `review`** (the false-positive control, live). Expect `unknown` for retained rows archived before this deploy — correct, not a bug.
 
+### Task 1.5: `showReviewWorkers` becomes a server setting (D7)
+
+**Files:**
+- Modify: `src/server/settings.ts` (`HubSettings` at `:53-54`, defaults, `SETTING_KEYS`, the POST validation in `handleSettingsRequest` `:262-347`, `normalizeSettings` `:136-157`), `src/web/app.js` (`fetchSettings` `:1379-1406`, `setShowReviewWorkers` `:3827`), `src/web/client-state.js` (comment only — the field's source of truth changes)
+- Test: the settings contract suite (locate by grepping tests for `"Unknown settings"`), `tests/web-client.test.ts`
+
+**Interfaces:**
+- Produces: `HubSettings.showReviewWorkers: boolean` (default `false`); `/api/settings` GET returns it, POST accepts it with a type check (booleans bypass `clampSetting` — model the validation branch on `defaultView`'s enum handling at `settings.ts:20-22`/`:28-43`, not on the numeric table); `normalizeSettings` fills the default so old `data/settings.json` files load clean (no `SETTINGS_VERSION` bump — additive with default).
+- Consumes: the existing `postSettings(patch)` client plumbing (`app.js:1420-1458`) — error toast, pending state, snapshot refetch all come free.
+
+- [ ] **Step 1: Server test first** — in the settings contract suite: GET includes `showReviewWorkers: false` by default; `POST {"showReviewWorkers": true}` round-trips; `POST {"showReviewWorkers": "yes"}` → 400 `INVALID_SETTINGS` with a message naming the key; unknown-key rejection unchanged.
+- [ ] **Step 2: Implement server** — field + default + validation branch + normalize. Run the suite → green.
+- [ ] **Step 3: Client adoption** — in `fetchSettings`, after the `scanWindowHours` adoption: `if (typeof body.settings?.showReviewWorkers === "boolean" && !state.settingsPending) state.showReviewWorkers = body.settings.showReviewWorkers;`. Rewrite `setShowReviewWorkers`:
+
+```js
+function setShowReviewWorkers(show) {
+  const next = Boolean(show);
+  if (next === state.showReviewWorkers) return;
+  state.showReviewWorkers = next;      // optimistic — the chip flips now
+  render();
+  void postSettings({ showReviewWorkers: next });  // shared default; errors toast + refetch restores truth
+}
+```
+
+- [ ] **Step 4: Client test** — source-level: the setter slice contains `postSettings({ showReviewWorkers` (use `requiredSlice`); plus a `fetchSettings` adoption assertion. Run `bun test tests/web-client.test.ts` → green.
+- [ ] **Step 5:** `bun run check` → green; deploy rides the Phase 1 restart. Commit path-scoped.
+
 ### Phase 2 — Client cutover to the server verdict
+
+**Precondition (D1 — Task 2.0):** run the cross-project-dir census before cutover: for every `~/.claude/projects/*/`, count `sdk-py` transcripts and how many carry a known review prompt (the Task 4.3 script, promoted here). If material non-review automation volume appears, bring the numbers back to Emilio to re-rule D1 (hide `automation` too vs review-only) **before** Task 2.1's gate wording ships. Review-only hiding proceeds regardless; the census only decides whether the gate widens.
 
 ### Task 2.1: `sessionKindOf` with transition fallback
 
@@ -712,11 +717,25 @@ test("a provider facet narrows the board and discloses itself", async () => {
 
 Preconditions: Phase 1 deployed ≥ one full `historyRetentionDays` cycle **or** Emilio accepts that pre-deploy retained rows read `unknown` (they are only in History, which never hides — no visible change). Then: delete `REVIEW_WORKER_PATTERNS`/`isReviewWorker` from `agent-model.js`, collapse `sessionKindOf` to the server field, update the two Phase-0-era tests that feed kind-less fixtures (give them explicit `sessionKind`), remove the seam export. One commit. This closes the loop on the false-positive class permanently.
 
-### Task 4.3: Ops evidence for D1-D3 (no repo changes)
+### Task 4.3: Ops evidence ledger (no repo changes)
 
-- [ ] Mine `sg-reviewed-shas` across repo roots: reviews run vs `vulns_found > 0`, per repo, per hook type if distinguishable — a scratch script, results into the decision doc.
-- [ ] BurnBar join: `sessionProcessed` vs BurnBar per-session totals for the 469 (join on `sourceSessionId`) → a dollar figure for D2.
-- [ ] Census other project dirs for non-review `sdk-py` sessions → D1's automation-hiding decision.
+- [ ] Mine `sg-reviewed-shas` across repo roots: reviews run vs `vulns_found > 0`, per repo, per hook type if distinguishable — a scratch script, results into the decision doc. This is the baseline the D2 trim is judged against (before/after finding-yield must not collapse).
+- [ ] BurnBar join: `sessionProcessed` vs BurnBar per-session totals for the 469 (join on `sourceSessionId`) → the dollar figure for the D2 record.
+- [ ] Duplicate-SHA count across worktree roots of one repo (cooper-scheduler is the natural sample) → closes the D3 record.
+- [ ] (The cross-dir census moved to Task 2.0 per D1.)
+
+### Task 4.4: Trim the Stop-hook review path (D2 ruling)
+
+Commit/push reviews stay (publication gates); the per-turn Stop review is the volume driver to remove.
+
+- [ ] **Step 1: Find the supported switch.** Read `security-guidance/2.0.6/hooks/extensibility.py` and the plugin README for a config/env that scopes the LLM review to commit/push only (the pattern-warning path on edits is cheap and stays). Do **not** hand-edit `hooks.json` in the plugin cache — it is overwritten on plugin update, and a silently-reverted trim is worse than none.
+- [ ] **Step 2a (switch exists):** set it machine-wide (launchd env / `~/.zshenv`, so every lane inherits), then verify: next Stop on a lane spawns no `sdk-py` review session (watch `~/.claude/projects/<dir>/` or the Board's new `sessionKind` counts), while a `git commit` still does.
+- [ ] **Step 2b (no switch):** fold the ask into the Task 4.5 upstream issue ("configurable trigger scope: stop | commit | push"), and leave triggers unchanged locally.
+- [ ] **Step 3: After one normal working day**, re-run the Task 4.3 yield ledger; record review-count delta and finding-yield delta next to the D2 ruling in §9.
+
+### Task 4.5: File the upstream issue (D4 ruling)
+
+- [ ] One issue on the security-guidance plugin repo (anthropics/claude-plugins-official), from §1's evidence: (a) **stamp child sessions with the parent session id** (the hook knows it — its state files are keyed by it) so fleet dashboards can group reviews under the lane that triggered them; (b) if Task 4.4 found no switch, **configurable trigger scope**; (c) optionally note the cross-worktree dedup gap (D3) as a minor. Link the census numbers (469 sessions / 33M tokens on one machine) as motivation. Publication gate: Emilio approves the issue text before it is posted (external action).
 
 ## 8. Test and rollout strategy
 
@@ -737,17 +756,17 @@ Preconditions: Phase 1 deployed ≥ one full `historyRetentionDays` cycle **or**
 
 **Rollback:** every phase is independently revertible (client phases are static files — `git revert` + reload; server phases — revert + restart). `sessionKind` is optional on the wire, so a server rollback strands no client (fallback regex remains until Task 4.2, which is why 4.2 is last).
 
-## 9. Open decisions
+## 9. Decisions — RESOLVED by Emilio, 2026-08-05
 
-| # | Decision | Owner | Evidence needed | Default if unresolved |
-|---|---|---|---|---|
-| D1 | Hide `automation` kind on Board by default too, or review-only? | Emilio | Census of non-review `sdk-py` sessions across project dirs (Task 4.3); today this repo has zero | Review-only (ship as planned) |
-| D2 | Downgrade `SECURITY_REVIEW_MODEL` from `claude-opus-4-7`, and/or trim Stop-hook reviews to commit/push-only? | Emilio | `vulns_found` yield ledger + BurnBar dollar join (Task 4.3) | No change — measure first |
-| D3 | Point multi-worktree repos at a shared `SECURITY_WARNINGS_STATE_DIR` to dedupe cross-worktree re-reviews? | Emilio (+ upstream issue) | Count of duplicate SHAs reviewed across worktree roots of one repo | No change |
-| D4 | Upstream request: security-guidance stamps its child sessions with the parent session id | Emilio → plugin repo issue | This plan's §1 evidence suffices for the issue text | Board publishes kind, no fabricated lineage |
-| D5 | Publish `totals.byKind` for fleet telemetry, or keep counts client-computed? | Emilio | Whether any surface outside the browser needs the number (cron reports? TODAY.md?) | Client-computed only |
-| D6 | Codex/Cursor launch-evidence: do their session files record an exec/composer marker usable as `launch`? | next BE lane | One sample `codex exec` rollout + one cursor background-composer transcript, fields inspected | They stay pattern/`unknown` — symmetric contract already holds |
-| D7 | `defaultView`/settings: should `showReviewWorkers` ever become a server setting (shared across browsers) like `defaultView`? | Emilio | Whether a second operator/browser ever wants a different default | localStorage only |
+| # | Decision | Ruling | Follow-through in this plan |
+|---|---|---|---|
+| D1 | Hide `automation` kind on Board by default too? | **Census first, then decide** | The cross-dir `sdk-py` census is promoted from Task 4.3 to a Phase 2 precondition (Task 2.0). Board ships review-only hiding either way until the census re-opens the question. |
+| D2 | Reviewer spend | **Trim Stop-hook reviews** (keep commit/push reviews) | Task 4.4: find the supported switch for disabling the Stop-review path; upstream issue if none exists. The yield ledger (Task 4.3) still runs — it is the evidence the trim is judged against. |
+| D3 | Shared `SECURITY_WARNINGS_STATE_DIR` across worktrees? | **No change** | Duplicate-SHA count still measured in Task 4.3 for the record; no local experiment. |
+| D4 | Upstream parent-lineage request | **File the issue** | Task 4.5: issue text from §1 evidence; fold in the D2 Stop-toggle ask if Task 4.4 finds no supported switch. |
+| D5 | `totals.byKind` fleet telemetry? | **Client-computed only** | No server totals field; `published-fields-can-vary` untouched. Stands as planned. |
+| D6 | Codex/Cursor launch-evidence markers | **Spawn the BE lane now** | Task 1.2b added: catalogue markers from real `codex exec` / Cursor composer transcripts and wire them in the same pass as Claude's. |
+| D7 | Toggle persistence scope | **Server setting** | Task 0.3 (localStorage) is superseded — struck below. Task 1.5 adds `HubSettings.showReviewWorkers` with GET/POST plumbing; every browser shares the default. Until Phase 1 lands, the toggle is session-scoped. |
 
 ---
 
