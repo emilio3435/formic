@@ -1,0 +1,101 @@
+{
+  "purpose": "The pid-to-liveness contract, written once and executed as a table. Every combination of (roster complete?, pid in use?, start time recorded?, start time matches?, pid looks like an agent?) has a row here, so a case cannot be handled by accident or forgotten in a refactor. tests/process-liveness.test.ts runs these through src/server/process-liveness.ts and separately asserts the table is exhaustive.",
+  "invariants": [
+    "`gone` is only ever reached from evidence about THIS process: the number is unused, or a recorded start time disagrees with the observed one. Never from failing to recognise a command.",
+    "An unrecorded start time can only produce `alive` or `unverifiable`, never `gone`. Weak evidence may keep a session on the board; it may never bury one.",
+    "An incomplete roster answers `unverifiable` for everything, whatever else is known."
+  ],
+  "cases": [
+    {
+      "name": "an incomplete roster cannot speak, even about a pid it saw",
+      "claim": "A probe that did not finish is a gap, not an observation. This outranks every other row.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": false, "starts": [[4242, 1785933001]], "agentPids": [4242] },
+      "expect": "unverifiable"
+    },
+    {
+      "name": "an incomplete roster does not bury a pid that is missing from it",
+      "claim": "The dangerous half of the row above: absence in a partial scan must not read as death.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": false, "starts": [], "agentPids": [] },
+      "expect": "unverifiable"
+    },
+    {
+      "name": "a number nothing holds is gone",
+      "claim": "The strongest ending evidence there is, and the only one that depends on recognising nothing.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "starts": [[99, 1785933001]], "agentPids": [99] },
+      "expect": "gone"
+    },
+    {
+      "name": "a number nothing holds is gone even with no start time recorded",
+      "claim": "Provenance is needed to tell processes apart, not to notice that none exists.",
+      "handle": { "pid": 4242 },
+      "roster": { "complete": true, "starts": [], "agentPids": [] },
+      "expect": "gone"
+    },
+    {
+      "name": "a matching start time is alive",
+      "claim": "The one path that actually proves the number still refers to what we attributed.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "starts": [[4242, 1785933001]], "agentPids": [4242] },
+      "expect": "alive"
+    },
+    {
+      "name": "a mismatched start time is gone, however agent-like the holder",
+      "claim": "Our process exited and the kernel handed the number on. A fact about this session, so it may say gone.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "starts": [[4242, 1785999999]], "agentPids": [4242] },
+      "expect": "gone"
+    },
+    {
+      "name": "a mismatched start time is gone when a daemon holds the number",
+      "claim": "Measured: pid 90614, recorded by a claude session, later `sysextd`. This is the row that retires it honestly.",
+      "handle": { "pid": 90614, "startSeconds": 1785919454 },
+      "roster": { "complete": true, "starts": [[90614, 1785965768]], "agentPids": [] },
+      "expect": "gone"
+    },
+    {
+      "name": "no start time plus an agent holding the number is presumed alive",
+      "claim": "Coverage was 55/86 claude and 21/55 codex records, so refusing this path would mass-retire a live fleet. Weak, and deliberately only ever positive.",
+      "handle": { "pid": 4242 },
+      "roster": { "complete": true, "starts": [[4242, 1785933001]], "agentPids": [4242] },
+      "expect": "alive"
+    },
+    {
+      "name": "no start time and a non-agent holding the number is unknown, not dead",
+      "claim": "Measured: pid 59458, recorded by a claude session, later `/usr/libexec/siriknowledged`, live on the board for 33 hours. Unknown, because nothing witnessed the ending and the number is genuinely in use.",
+      "handle": { "pid": 59458 },
+      "roster": { "complete": true, "starts": [[59458, 1785900000]], "agentPids": [] },
+      "expect": "unverifiable"
+    },
+    {
+      "name": "no start time and no way to tell what holds the number is unknown",
+      "claim": "A roster that lists presence but not commands cannot support the presumption either way.",
+      "handle": { "pid": 4242 },
+      "roster": { "complete": true, "livePids": [4242] },
+      "expect": "unverifiable"
+    },
+    {
+      "name": "a recorded start time the roster cannot corroborate falls back to the agent presumption",
+      "claim": "Presence-only rosters (identity.ts has no start times) must still work, and must not read a missing corroboration as disagreement.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "livePids": [4242], "agentPids": [4242] },
+      "expect": "alive"
+    },
+    {
+      "name": "a recorded start time the roster cannot corroborate, held by a non-agent, is unknown",
+      "claim": "The recycled-pid case as it reaches the stale-pid fallbacks, which have presence but no start times.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true, "livePids": [4242], "agentPids": [] },
+      "expect": "unverifiable"
+    },
+    {
+      "name": "a roster that knows nothing at all cannot answer",
+      "claim": "Neither presence nor starts. Complete in the sense that the scan finished, but it enumerated nothing usable.",
+      "handle": { "pid": 4242, "startSeconds": 1785933001 },
+      "roster": { "complete": true },
+      "expect": "unverifiable"
+    }
+  ]
+}
