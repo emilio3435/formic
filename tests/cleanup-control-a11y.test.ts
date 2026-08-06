@@ -21,6 +21,14 @@ const appjs = readFileSync(join(WEB, "app.js"), "utf8");
 const html = readFileSync(join(WEB, "index.html"), "utf8");
 const css = readFileSync(join(WEB, "styles.css"), "utf8");
 
+/* Comments carry braces and prose that would land in a selector capture, and this
+   stylesheet is more comment than rule by design. Strip once, then split: the
+   regex cannot cross a brace, so @media wrappers are skipped and their contents
+   matched individually. */
+const cleanCss = css.replace(/\/\*[\s\S]*?\*\//g, "");
+const styleRules = [...cleanCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .map(([, selector, body]) => ({ selector: selector.trim(), body }));
+
 /* The control's own factory, isolated, so an assertion cannot match a lookalike
    line elsewhere in a 9,000-line file. */
 const cleanupButton = appjs.slice(
@@ -131,6 +139,57 @@ describe("CLEAN-3: the sweep is announced from a region that survives the paint"
     expect(appjs).toMatch(/function announceCleanup\(text\)/);
     expect(appjs).toMatch(/announceCleanup\("Cleanup sweep running\./);
     expect(appjs).toMatch(/announceCleanup\(state\.cleanup\.error\s*\n?\s*\|\| "Cleanup proposal ready\./);
+  });
+});
+
+describe("S6: the control sits with the fault it acts on", () => {
+  /* Measured live at 1280 and 420 (docs/a11y-shots/18-S6-detail-line-*.png):
+     inDetailLine true, notInHeading true, centred on the detail row to within
+     1.5px, flush with the card's content edge, 44px and no horizontal scroll at
+     420. Geometry itself needs a browser; these pin the STRUCTURE that produces
+     it, which is what a later edit would break. */
+
+  test("it is no longer appended to the verdict heading", () => {
+    /* At verdict type size, immediately after "Readings degraded", it parsed as
+       a badge on the heading — and badges do not get pressed. */
+    const healthValue = appjs.slice(
+      appjs.indexOf('el("span", { class: "verdict-chip verdict-" + data.tone }'),
+      appjs.indexOf("const subNode"),
+    );
+    expect(healthValue.length).toBeGreaterThan(20);
+    expect(healthValue).not.toContain("cleanupAction()");
+  });
+
+  test("it is appended to the detail line, which is where the fault is named", () => {
+    expect(appjs).toMatch(/subNode\.append\(cleanupAction\(\)\);/);
+    /* …and only on the health cell, and only when there is something to offer.
+       Every other reading's sub is plain text and must stay that way. */
+    expect(appjs).toMatch(/if \(id === "health" && cleanupOffered\(\)\) \{/);
+  });
+
+  test("the detail row anchors it to the card edge rather than to the copy", () => {
+    /* Its x used to drift with the length of the verdict word, so nothing in the
+       card was aligned to it. margin-left:auto against a flex row pins it. */
+    const rule = styleRules.find((r) => r.selector === ".reading-sub-action");
+    expect(rule?.body).toMatch(/display:\s*flex/);
+    expect(rule?.body).toMatch(/align-items:\s*center/);
+    const pin = styleRules.find((r) => r.selector === ".reading-sub-action .verdict-cleanup");
+    expect(pin?.body).toMatch(/margin-left:\s*auto/);
+    expect(pin?.body).toMatch(/flex:\s*none/);
+  });
+
+  test("the sentence keeps the room it needs beside it", () => {
+    const text = styleRules.find((r) => r.selector === ".reading-sub-action .reading-sub-text");
+    expect(text?.body).toMatch(/flex:\s*1/);
+    expect(text?.body).toMatch(/min-width:\s*0/);
+  });
+
+  test("the row is scoped by what it is, not by which widget it belongs to", () => {
+    /* .widget-health is built as "widget-" + id and never appears literally in
+       the client, so the orphan-CSS guard flags it. Scoping on the row's own
+       role is both guard-visible and the better description. */
+    expect(cleanCss).not.toContain(".widget-health");
+    expect(appjs).toContain('subNode.classList.add("reading-sub-action")');
   });
 });
 

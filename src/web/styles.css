@@ -3669,6 +3669,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 
    No margin-left. .verdict-chip already sets gap: 0.45rem, so the old margin
    stacked a second, different gap and pushed the control off the chip's rhythm. */
+/* The health cell's detail line becomes the action's row: the sentence takes the
+   space it needs, the control is pinned to the card's right edge, and both sit on
+   one centre line. Scoped to the health cell — every other reading's sub is plain
+   text and must not become a flex row. */
+.reading-sub-action {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.reading-sub-action .reading-sub-text { flex: 1; min-width: 0; }
+/* Pinned to the edge rather than trailing the copy: a control whose x drifts with
+   the length of a verdict word has no anchor, which is half of why this read
+   wrong appended to the heading. */
+.reading-sub-action .verdict-cleanup { flex: none; margin-left: auto; }
+
 .verdict-cleanup {
   appearance: none;
   align-self: center;

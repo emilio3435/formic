@@ -2432,9 +2432,16 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
     .filter(Boolean).join(" ");
   let valueNode;
   if (id === "health") {
+    /* The Clean up control USED to sit here, appended to the verdict.
+       S6 of the Cleaner plan moved it to the end of the detail line below. Three
+       reasons, and the third is the cause: at verdict type size, immediately
+       after "Readings degraded", it parsed as a BADGE on the heading — and
+       badges do not get pressed; it had no anchor, so its x moved with the
+       length of the verdict word; and it acts on the sentence BELOW it, since
+       the fault is named in the detail line. It was a control one line above
+       its own subject. */
     valueNode = el("span", { class: valueClass },
-      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value,
-        cleanupOffered() ? cleanupAction() : null));
+      el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -2542,7 +2549,21 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      clothes, and the moment one exists an operator has two places to look for
      the same thing. Both of those findings are in the notification center now,
      each with its evidence sentence, its impact and its route. */
-  subNode.append(el("span", { text: lead + problemText + sinceNote + snapNote }));
+  subNode.append(el("span", { class: "reading-sub-text", text: lead + problemText + sinceNote + snapNote }));
+  /* The action, with the sentence it acts on, anchored to the card's right edge.
+     The fault is described on THIS line; the control belongs beside its subject
+     rather than beside the verdict, and the edge gives it a fixed x instead of
+     one that drifts with the copy.
+
+     The row takes a class of its own rather than being styled off `.widget-health`:
+     the widget class is built as "widget-" + id and never appears literally in
+     the source, so the orphan-CSS guard cannot see it — and scoping by what the
+     row IS (a detail line carrying an action) beats scoping by which reading it
+     happens to belong to. */
+  if (id === "health" && cleanupOffered()) {
+    subNode.classList.add("reading-sub-action");
+    subNode.append(cleanupAction());
+  }
   if (remedy && remedy.instruction) {
     subNode.append(el("p", { class: "reading-remedy", text: remedy.instruction }));
   }
