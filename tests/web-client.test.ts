@@ -1499,6 +1499,64 @@ describe("views split Now from History", () => {
     });
   });
 
+  /* The shelf carries its own copy of the review gate, and an uncovered twin of
+     a filter clause is how the two drift apart. This pins the twin to the same
+     three escapes the board's copy has. */
+  test("the shelf hides routine review workers under the same gate as the board", async () => {
+    const review = agent({
+      id: "claude:done-review", provider: "claude", status: "archived",
+      task: "Review this change for security vulnerabilities.",
+      updatedAt: new Date().toISOString(),
+    });
+    const work = agent({
+      id: "codex:done-work", status: "archived",
+      task: "Implement the lifecycle change.", updatedAt: new Date().toISOString(),
+    });
+    const program = { id: "p", name: "P", agents: [review, work] };
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(false);
+      expect(M.shelfFilter()(work, program)).toBe(true);
+    });
+    await withState({
+      view: "board", query: "", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: true,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(true);
+    });
+    // A search is an explicit request: it admits the hidden review to the shelf too.
+    await withState({
+      view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => {
+      expect(M.shelfFilter()(review, program)).toBe(true);
+    });
+  });
+
+  test("tab counts are population counts: a search never changes them", async () => {
+    const updatedAt = new Date().toISOString();
+    const review = agent({
+      id: "claude:r1", provider: "claude", updatedAt,
+      task: "Review this change for security vulnerabilities.",
+    });
+    const work = agent({ id: "codex:w1", updatedAt, task: "Implement the lifecycle change." });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [review, work] }] });
+    /* The row renders under the search escape while the count stays the no-query
+       population — counts ignore query BY DESIGN (a search changes what renders,
+       never what the tab claims exists); this pins that reading so the next
+       reader does not "fix" it into a bug. */
+    await withState({
+      snap, view: "board", query: "security", facetProgram: "", facetProvider: "",
+      lookbackHours: 6, showReviewWorkers: false,
+    }, () => withDom(() => {
+      M.renderTabs();
+      expect(domById.get("count-board")!.textContent).toBe("1");
+      expect(M.currentFilter()(review, snap.programs[0])).toBe(true);
+    }));
+  });
+
   test("tabs do not repeat the lookback and the Board exposes hidden reviews", async () => {
     const updatedAt = new Date().toISOString();
     const review = agent({
