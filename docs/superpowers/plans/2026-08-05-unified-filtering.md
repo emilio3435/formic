@@ -64,6 +64,15 @@ All measurements taken 2026-08-05 ~21:20 CDT (2026-08-06 UTC) against the live b
 
 Root cause, one sentence: **a per-lane, per-Stop/commit security-review automation multiplied by a many-lane fleet produces hundreds of legitimate, useful, but operationally uninteresting sessions, and the board currently has no session-kind axis to file them under — so they land as peers of the operator's work.**
 
+### Evidence addendum — 2026-08-05 22:10, lane EV-1 (full report: `docs/LANE-EV1-REPORT.md`)
+
+- **Codex launch markers (Task 1.2b): confirmed deterministic.** Every rollout opens with a `session_meta` row; `payload.originator`/`payload.source` are `codex_exec`/`exec` for headless `codex exec` vs `codex-tui`/`cli` for the interactive TUI (censused across 4,248 rollouts). Subagent rollouts carry `source: { subagent: … }` (an object — the string-typeof guard skips it). Wired verbatim into `CollectedAgent.launch`.
+- **Cursor launch markers: confirmed absent.** `~/.cursor/chats/**` meta and agent transcripts record no launch-mode field; kind stays pattern/`unknown` for cursor.
+- **Cross-dir census (Task 2.0, D1 gate): 823 transcripts, 651 sdk-py, 649 review-prompt.** The 2 non-review sdk-py rows are the same plugin's *follow-up* sessions (`"You previously flagged these candidate vulnerabilities:"`) — no third-party automation exists on this machine. D1 needs no re-ruling; the follow-up prompt joins the producer registry so 651/651 classify `review`.
+- **Yield ledger (Task 4.3): 2 of 1,352 retained reviews found vulns (0.15%).** `sg-reviewed-shas` lives at `<git-common-dir>/sg-reviewed-shas`, capped at 500 entries; the-mountain's 500 retained entries carry **zero** findings. Lifetime yield beyond the caps: unknown. Dollar figure: unknown (BurnBar join unreachable from files).
+- **Duplicate-SHA across worktrees (D3): 0 by construction.** Linked worktrees share the common git dir's ledger; the D3 re-review concern applies only to separate clones (none observed).
+- **Stop-trim switch (Task 4.4): exists and is supported.** `ENABLE_STOP_REVIEW=0` disables only the Stop-hook diff review, keeping commit/push reviews (`security_reminder_hook.py:160-162`, gate at `:1910`); the README recommends it for exactly this multi-lane shared-worktree setup.
+
 ## 3. Unified filter information architecture
 
 **Navigation (tab strip, `#views`):** Board / History / Usage. Tabs carry population counts only (no window suffix — already removed in the slice). Nothing else ever becomes a tab.
@@ -760,9 +769,9 @@ Commit/push reviews stay (publication gates); the per-turn Stop review is the vo
 
 | # | Decision | Ruling | Follow-through in this plan |
 |---|---|---|---|
-| D1 | Hide `automation` kind on Board by default too? | **Census first, then decide** | The cross-dir `sdk-py` census is promoted from Task 4.3 to a Phase 2 precondition (Task 2.0). Board ships review-only hiding either way until the census re-opens the question. |
-| D2 | Reviewer spend | **Trim Stop-hook reviews** (keep commit/push reviews) | Task 4.4: find the supported switch for disabling the Stop-review path; upstream issue if none exists. The yield ledger (Task 4.3) still runs — it is the evidence the trim is judged against. |
-| D3 | Shared `SECURITY_WARNINGS_STATE_DIR` across worktrees? | **No change** | Duplicate-SHA count still measured in Task 4.3 for the record; no local experiment. |
+| D1 | Hide `automation` kind on Board by default too? | **Census first, then decide** | **CLOSED 2026-08-05 22:10 (EV-1 census):** 2/651 non-review sdk-py, both the plugin's own follow-ups — no material automation volume; review-only hiding stands and the follow-up prompt joins the producer registry. |
+| D2 | Reviewer spend | **Trim Stop-hook reviews** (keep commit/push reviews) | **Switch found (EV-1):** `ENABLE_STOP_REVIEW=0`, supported and documented for multi-lane setups. Yield baseline recorded: 2/1,352 retained reviews with findings. Application is operator-gated (classifier blocks agent edits to shell init); Step 3 re-ledger after one working day. |
+| D3 | Shared `SECURITY_WARNINGS_STATE_DIR` across worktrees? | **No change** | **CLOSED (EV-1):** duplicate-SHA across linked worktrees = 0 by construction (shared common-git-dir ledger); ruling validated, no experiment needed. |
 | D4 | Upstream parent-lineage request | **File the issue** | Task 4.5: issue text from §1 evidence; fold in the D2 Stop-toggle ask if Task 4.4 finds no supported switch. |
 | D5 | `totals.byKind` fleet telemetry? | **Client-computed only** | No server totals field; `published-fields-can-vary` untouched. Stands as planned. |
 | D6 | Codex/Cursor launch-evidence markers | **Spawn the BE lane now** | Task 1.2b added: catalogue markers from real `codex exec` / Cursor composer transcripts and wire them in the same pass as Claude's. |
