@@ -139,6 +139,61 @@ describe("PulseTracker", () => {
     expect(tracker.report(now).momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["silent"] });
   });
 
+  test("pulse.blocked counts live person-blockers once and publishes no dead-time field", () => {
+    const now = base + HOUR_MS;
+    const tracker = new PulseTracker(undefined, base);
+    tracker.observe(snapshot([
+      agent({
+        id: "question",
+        lifecycle: "waiting",
+        activity: "idle",
+        attentionSignal: { kind: "question-pending" },
+      }),
+      agent({
+        id: "re-alerted",
+        lifecycle: "waiting",
+        activity: "idle",
+        taskState: "done",
+        taskStateAt: iso(now - 2_000),
+        hookLifecycle: "needsInput",
+        hookLifecycleAt: iso(now - 1_000),
+      }),
+      agent({
+        id: "noticed",
+        lifecycle: "waiting",
+        activity: "idle",
+        attentionSignal: { kind: "stalled-active" },
+      }),
+      agent({
+        id: "stood-down",
+        lifecycle: "waiting",
+        activity: "idle",
+        attentionSignal: { kind: "question-pending" },
+        taskState: "parked",
+        taskStateAt: iso(now),
+        hookLifecycle: "needsInput",
+        hookLifecycleAt: iso(now - 1_000),
+      }),
+      agent({
+        id: "finished",
+        lifecycle: "finished",
+        activity: "ended",
+        attentionSignal: { kind: "question-pending" },
+      }),
+      agent({
+        id: "retained",
+        lifecycle: "waiting",
+        activity: "idle",
+        scope: "retained",
+        attentionSignal: { kind: "question-pending" },
+      }),
+    ]), now);
+
+    const report = tracker.report(now);
+    expect(report.blocked).toBe(2);
+    expect(report).not.toHaveProperty("standbyMs");
+  });
+
   test("derives token rate from observed deltas, excludes Cursor, and never subtracts after a reset", () => {
     const tracker = new PulseTracker(undefined, base);
     const codexAt = (minutes: number, sessionTotal: number): AgentSnapshot => agent({

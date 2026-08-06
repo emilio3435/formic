@@ -23,6 +23,7 @@ export type AgentStatus = "running" | "waiting" | "attention" | "stale" | "archi
 export type ActivityState = "working" | "idle" | "ended" | "unknown";
 export type HookLifecycle = "idle" | "running" | "needsInput" | "ended" | "unknown";
 export type TaskState = "active" | "parked" | "done";
+export type AttentionClass = "blocking" | "noticed";
 export const TASK_STATES = ["active", "parked", "done"] as const satisfies readonly TaskState[];
 export type TaskStateSource = "manifest";
 /* Where an agent's name came from, in precedence order. Published so a surface
@@ -414,6 +415,8 @@ export interface AgentSnapshot {
       | "stalled-active";
     evidence?: string;
   };
+  /** Stable severity for attention consumers; absent when no class is warranted. */
+  attentionClass?: AttentionClass;
   parentAgentId?: string;
   /** The next session observed for this manifest lane. */
   succeededBy?: string;
@@ -641,6 +644,8 @@ export interface PulseActivityBucket {
 }
 
 export interface HubPulse {
+  /** Live sessions currently blocked on a person; emitted by PulseTracker. */
+  blocked: number;
   momentum: PulseMomentum;
   burn: PulseBurn;
   activity: {

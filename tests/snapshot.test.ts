@@ -1359,6 +1359,7 @@ describe("snapshot control safety and SSE deduplication", () => {
       now: new Date("2026-07-21T23:00:34.000Z"),
     });
     const pulse: HubPulse = {
+      blocked: 0,
       momentum: {
         working: 1,
         completionsLastHour: null,

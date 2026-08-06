@@ -27,7 +27,11 @@
 import type {
   ActivityState,
   AgentSnapshot,
+  AttentionClass,
+  CollectionScope,
   HookLifecycle,
+  HubSnapshot,
+  LifecycleState,
   OperatorControlState,
   OutcomeState,
   ProcessState,
@@ -35,6 +39,7 @@ import type {
   TaskStateSource,
 } from "../shared/types";
 import { stripTimestampMarkup } from "./human-message";
+import { hookInputWantsHuman, taskStateWantsHuman } from "./task-state";
 
 export type AttentionSignalKind =
   /** cmux says the agent is blocked on an explicit permission prompt. */
@@ -71,6 +76,64 @@ export interface AttentionSignal {
   nextAction?: string;
   /** The source evidence behind the reading, so the row can show why it fired. */
   evidence?: string;
+}
+
+export interface AttentionClassEvidence {
+  activity?: ActivityState;
+  lifecycle?: LifecycleState;
+  scope?: CollectionScope;
+  taskState?: TaskState;
+  taskStateAt?: string;
+  hookLifecycle?: HookLifecycle;
+  hookLifecycleAt?: string;
+  attentionSignal?: { kind: AttentionSignalKind };
+}
+
+export function attentionClassForKind(kind: AttentionSignalKind | undefined): AttentionClass | undefined {
+  switch (kind) {
+    case "permission-requested":
+    case "input-requested":
+    case "fork-unresolved":
+    case "handoff-stated":
+    case "question-pending":
+    case "assumption-stated":
+      return "blocking";
+    case "stalled-active":
+      return "noticed";
+    case "nothing-wanted":
+    case "out-of-scope":
+    case "not-readable":
+    case undefined:
+      return undefined;
+  }
+}
+
+export function attentionClassFor(evidence: AttentionClassEvidence): AttentionClass | undefined {
+  if (
+    evidence.activity === "ended"
+    || evidence.lifecycle === "finished"
+    || evidence.scope === "retained"
+  ) return undefined;
+  if (hookInputWantsHuman(evidence)) return "blocking";
+  const attentionClass = attentionClassForKind(evidence.attentionSignal?.kind);
+  if (!attentionClass || !taskStateWantsHuman(evidence)) return undefined;
+  return attentionClass;
+}
+
+export function withAttentionClasses(snapshot: HubSnapshot): HubSnapshot {
+  return {
+    ...snapshot,
+    programs: snapshot.programs.map((program) => ({
+      ...program,
+      agents: program.agents.map((agent) => {
+        const attentionClass = attentionClassFor(agent);
+        if (attentionClass) return { ...agent, attentionClass };
+        if (agent.attentionClass === undefined) return agent;
+        const { attentionClass: _stale, ...withoutAttentionClass } = agent;
+        return withoutAttentionClass;
+      }),
+    })),
+  };
 }
 
 export interface AttentionSignalInput {

@@ -84,6 +84,13 @@ it. A question it asks *after* is a live one, and it comes straight back in.
 That is the only way back, and it is deliberate: standing a lane down silences
 its old request, never a new one.
 
+The wire names this distinction as `attentionClass: "blocking" | "noticed"`.
+Permission and input requests, unresolved forks, stated handoffs, pending
+questions, and stated assumptions are `blocking`; `stalled-active` is
+`noticed`. Quiet, out-of-scope, and unreadable findings carry no class at all.
+`pulse.blocked` counts only the live `blocking` set; no waiting-time field is
+published because the current data cannot establish when that wait began.
+
 ### 2. The board opens on `Board`
 
 ![The tabs and the board](docs/guide-shots/shot-2-board.png)

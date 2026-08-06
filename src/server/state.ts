@@ -16,6 +16,7 @@ import {
   type CmuxEventsRuntime,
 } from "./cmux-events";
 import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
+import { withAttentionClasses } from "./attention-signal";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
 import type {
@@ -199,7 +200,7 @@ export class HubState {
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = this.settingsReader?.();
     this.#scanWindowHours = bootSettings?.scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
-    const initialSnapshot = this.#withSourceHealth(buildSnapshot({
+    const initialSnapshot = withAttentionClasses(this.#withSourceHealth(buildSnapshot({
       agents: [],
       surfaces: [],
       archiveStore,
@@ -214,7 +215,7 @@ export class HubState {
       scanWindowHours: this.#scanWindowHours,
       thresholds: bootSettings ? lifecycleThresholds(bootSettings) : undefined,
       stalledActiveMinutes: bootSettings?.stalledActiveMinutes,
-    }));
+    })));
     this.#snapshot = withPulse(initialSnapshot, this.#pulse.report(Date.now()));
   }
 
@@ -703,10 +704,11 @@ export class HubState {
       if (issue.lifecycle) nextLifecycle.set(issue.id, issue.lifecycle);
     }
     this.#issueLifecycle = nextLifecycle;
+    const published = withAttentionClasses(built);
     const pulseNowMs = Date.now();
-    this.#pulse.observe(built, pulseNowMs);
+    this.#pulse.observe(published, pulseNowMs);
     this.#pulse.maybeRefreshBurnCost();
-    this.#snapshot = withPulse(built, this.#pulse.report(pulseNowMs));
+    this.#snapshot = withPulse(published, this.#pulse.report(pulseNowMs));
     for (const listener of this.#listeners) listener(this.#snapshot);
     this.#nameNewSessions(publishedAgents);
     return this.#snapshot;
