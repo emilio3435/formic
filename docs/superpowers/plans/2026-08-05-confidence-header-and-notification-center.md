@@ -258,6 +258,18 @@ At 20:26–20:29 a Codex session (ChatGPT app, pid 47362, cwd inside this worktr
 
 Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + `tests/process-liveness.test.ts` + `tests/fixtures/process-liveness-truth-table.json`. Those three are untracked *together*, so the committed suite is self-consistent and a fresh clone is fine — they are simply a feature still being written. The owning session commits them, not us.
 
+### Lane launch — the flag goes on the command, every time
+
+| Lane | Launch |
+|---|---|
+| fe-notify | `claude --model opus --effort xhigh --permission-mode auto` |
+| be-dwell | `codex -a never --sandbox workspace-write -m gpt-5.6-sol -c model_reasoning_effort=max` |
+| harden-notify | `cursor-agent --model grok-4.5 --force` |
+
+`--force` is Run Everything and is not optional — without it the cursor lane stalls on its first per-command approval and does nothing while nobody is watching. It belongs on the launch, not in `~/.cursor/cli-config.json`; a machine-wide `approvalMode` would apply to every cursor session, including ones no one is orchestrating.
+
+⚠ **Spawning these from inside a Claude Code session is denied** — the auto-mode classifier reads `--force` and `-a never` as bypass flags. Both lanes here launched without them and stalled. The recovery is the operator's: `shift+tab` (Run Everything) in the pane, or a Bash permission rule so the flag survives the next spawn. Do not answer a lane's approval prompt on the operator's behalf.
+
 ### Start order
 
 1. **fe-notify → S1** now. New file `src/web/notification-center.js` plus the three named `app.js` regions; no overlap with the live server work. Builds against fixtures behind gated tests, per §3.
