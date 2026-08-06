@@ -345,6 +345,20 @@ body.feed-frozen .programs { opacity: 0.62; }
   justify-content: space-between;
   gap: 0.75rem;
 }
+
+/* The board's scan window, stated once for every reading in the rail below it.
+   Quiet by design: it is a standing condition rather than news, and a permanent
+   line that shouts stops being read. `margin-right: auto` pushes Customize to
+   the far edge, so the statement reads as a qualifier on the heading beside it
+   rather than as a third control. */
+.scan-window {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  margin-left: 0.6rem;
+  margin-right: auto;
+}
 .rail-heading {
   color: var(--faint);
   font-size: 10px;

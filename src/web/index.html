@@ -61,6 +61,13 @@
   <section id="health-rail" class="health-rail" aria-label="Fleet health">
     <div class="rail-header">
       <span class="rail-heading">Summary</span>
+      <!-- S2-T3. The board states its scan window ONCE, here, because every
+           reading below is an aggregate over the sessions that window contains.
+           It sits with the readings rather than under the toolbar: the toolbar's
+           line is about the operator's own filter, which is a different window,
+           and mixing a stable board-wide fact into a volatile filter line makes
+           the stable fact inherit the volatility. -->
+      <span id="scan-window" class="scan-window" hidden></span>
       <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
     </div>
     <div id="health-widgets" class="rail-inner"></div>

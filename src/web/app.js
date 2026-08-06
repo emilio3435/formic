@@ -1137,6 +1137,59 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       tone: hasRate ? "ok" : "missing",
     };
   }
+  if (id === "tokens") {
+    /* CONSUMPTION over the scan window, and never occupancy.
+
+       `totals.tokens` sums `agent.tokens.total` over WORKING agents only, and
+       `tokens.total` is documented as "latest call's prompt+completion size,
+       cache reads INCLUDED — occupancy". Summing an occupancy across agents and
+       labelling it total usage is the defect types.ts:142-158 was written to
+       prevent: it is what once put 394M tokens on a single session against a 1M
+       window. Measured on the live board the two differ by 82.74x — 75,776,215
+       consumed against 915,805 occupancy — so a fallback would not merely be
+       imprecise, it would be a different quantity by two orders of magnitude.
+       There is deliberately no fallback here for that reason.
+
+       This is also NOT processed flow (`sessionProcessed`, cache re-reads
+       included, typically 2.6-16.9x larger) or cache re-reads. Both stay
+       reachable in the drawer and neither is ever folded into this number. */
+    const totals = snap.totals || {};
+    const consumed = Number.isFinite(totals.consumption) ? totals.consumption : null;
+    /* The whole group is absent until the server completes a full session scan,
+       which on a freshly started board takes a couple of minutes. That absence
+       is correct and it is load-bearing: it means "we cannot count this
+       completely", never zero. So the card withholds — no number, and no loading
+       state either, because a spinner would promise an arrival the server has
+       not committed to. */
+    if (consumed == null) return noDataWidget("No complete token count yet.");
+
+    const reporting = Number.isFinite(totals.consumptionReporting) ? totals.consumptionReporting : null;
+    const eligible = Number.isFinite(totals.consumptionEligible) ? totals.consumptionEligible : null;
+    /* A floor keeps its ≥, exactly as Cost does for costIsFloor. The sign is the
+       whole disclosure: without it a subtotal reads as a total. */
+    const floor = totals.consumptionIsFloor === true;
+    /* Coverage speaks only when incomplete — the rule Burn uses for
+       coverage.unknown. A complete reading needs no footnote, and a permanent
+       one stops being read. */
+    const missing = reporting != null && eligible != null ? eligible - reporting : 0;
+    const coverage = missing > 0
+      ? `${missing} session${missing === 1 ? "" : "s"} not reporting`
+      : "";
+    return {
+      value: (floor ? "≥ " : "") + fmtTok(consumed),
+      /* "consumed", named on the card, because the word is what separates this
+         from the two other token quantities the board can show. No per-card
+         window tag: the scan window is stated once in the rail header, and an
+         aggregate carrying its own population statement while its neighbours do
+         not is how the board came to have five windows and one explanation. */
+      unit: "consumed",
+      /* Silent when complete. Not even a reassuring "every session in the scan
+         window": that would restate the population this card is forbidden to
+         tag, one line under the statement that already says it once. */
+      sublabel: coverage,
+      tone: "ok",
+    };
+  }
   if (id === "context-peak") {
     /* S3. The card headlined `contextPeak` — ONE session's extremum presented as
        a reading about the fleet. Measured on the live board while this was
@@ -3003,6 +3056,32 @@ let pulseNeedsYouWas = 0;
 /* The Pulse strip — one verdict-first surface. Calm collapses to a single
    line; anything urgent re-weights the fixed-order cells instead of
    reordering them. */
+/* S2-T3. The board's scan window, stated once.
+
+   Every reading in this rail is an aggregate over the sessions the collectors
+   harvested, so the window that decides which sessions exist AT ALL qualifies
+   all of them at once. It used to ride as a per-card tag on the one card that
+   remembered to carry it, which is how an aggregate ends up with an unstated
+   population everywhere else.
+
+   Two different kinds of window, and only one of them belongs here. The SCAN
+   window is how far back sources are harvested — a fact about the board's
+   reach, identical for every card, so it is said once. Each reading's OWN
+   measurement window (Burn's "10m average", Cost's "last hour") stays on the
+   reading, because it qualifies that number and no other.
+
+   Withheld, not guessed, when the server has not confirmed it: `state
+   .scanWindowHours` carries a client-side default of 36, and printing that as
+   though a server had said it is the exact overclaim this program removes. */
+function renderScanWindow() {
+  const node = $("scan-window");
+  if (!node) return;
+  const reported = state.snap && Number(state.snap.scanWindowHours);
+  const hours = Number.isFinite(reported) && reported > 0 ? reported : null;
+  node.hidden = hours == null;
+  node.textContent = hours == null ? "" : `sessions seen in the last ${hours}h`;
+}
+
 function renderHealthRail() {
   const widgets = $("health-widgets");
   if (!widgets) return;
@@ -3031,6 +3110,14 @@ function renderHealthRail() {
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
   ].join("\u001f");
+  /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
+     and does not belong behind a widget signature: it changes when Settings
+     change, which can leave every card's value identical while the population
+     underneath them moves. Hanging it off that guard is the bug the settings
+     panel had — a surface that repaints when something unrelated changes and
+     freezes when its own input does. It is one text assignment, so running it
+     every paint costs nothing. */
+  renderScanWindow();
   if (paintUnchanged("widgets", sig)) return;
 
   const rail = $("health-rail");
@@ -4399,9 +4486,13 @@ function renderScopeNote(shown) {
     const lenses = [state.facetProvider, state.facetStatus].filter(Boolean);
     parts.push(`${shown} matching` + (lenses.length ? " (" + lenses.join(", ") + ")" : ""));
   }
+  /* The lookback stays here, beside the filters that set it: it is the
+     OPERATOR's window over rows the board already has. The scan window left this
+     line for the summary rail (S2-T3) — it is the board's own reach, it
+     qualifies every reading rather than this list, and printing it twice in two
+     vocabularies is how two windows come to be read as one setting. */
   if (lookbackApplies(state.view)) {
-    const scan = state.snap.scanWindowHours || state.scanWindowHours;
-    parts.push(`lookback ${lookbackLabel(state.lookbackHours)} · scan ${scan}h`);
+    parts.push(`lookback ${lookbackLabel(state.lookbackHours)}`);
   }
   if (state.fetchFailed) parts.push("last refresh failed");
   note.textContent = parts.join(" · ");

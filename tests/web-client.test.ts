@@ -1208,9 +1208,9 @@ describe("summary status and widgets", () => {
        with its own provenance — and a count of to-dos is not one of those. The
        Findings card is retired to the notification center, where each of those
        findings is an item with evidence, impact and a route. */
-    expect(M.DEFAULT_WIDGET_IDS).toEqual(["momentum", "burn", "context-peak", "health"]);
+    expect(M.DEFAULT_WIDGET_IDS).toEqual(["momentum", "burn", "tokens", "context-peak", "health"]);
     expect(M.WIDGET_CATALOG.map((widget: { id: string }) => widget.id)).toEqual([
-      "momentum", "burn", "context-peak", "health",
+      "momentum", "burn", "tokens", "context-peak", "health",
     ]);
     expect(M.WIDGET_CATALOG.some((w: { id: string }) => w.id === "needs-you")).toBe(false);
     // Nothing is `required` any more; the pin existed only for Findings.
@@ -1242,10 +1242,10 @@ describe("summary status and widgets", () => {
        happened to land first — a rule left behind by the thing it protected. */
     const defaults = M.DEFAULT_WIDGET_IDS;
     expect(M.reorderWidgetIds(defaults, "burn", -1)).toEqual([
-      "burn", "momentum", "context-peak", "health",
+      "burn", "momentum", "tokens", "context-peak", "health",
     ]);
     expect(M.reorderWidgetIds(defaults, "momentum", 1)).toEqual([
-      "burn", "momentum", "context-peak", "health",
+      "burn", "momentum", "tokens", "context-peak", "health",
     ]);
     // The ends still hold: nothing walks off either edge of the list.
     expect(M.reorderWidgetIds(defaults, "momentum", -1)).toEqual(defaults);
@@ -5247,10 +5247,18 @@ describe("scroll shell: review fixes", () => {
   test("(1) the summary strip hosts exactly one expansion", () => {
     const handler = source.match(/"customize-summary"\)\.addEventListener\("click",\s*\(\)\s*=>\s*\{[\s\S]*?\}\);/)?.[0] ?? "";
     expect(handler).toContain("state.widgetCustomizerOpen = !state.widgetCustomizerOpen");
-    // One expansion child inside #health-rail, and it is the customizer.
+    /* One expansion inside #health-rail, and it is the customizer — counted by
+       the control that opens one rather than by `hidden`. Counting hidden nodes
+       was a proxy, and it held only while the customizer was the sole hidden
+       thing in the rail: S2-T3 added the scan-window statement, which hides when
+       the server has not confirmed a window and is a QUALIFIER on the readings,
+       not a second expansion. "How many things here expand" is the claim; "how
+       many are hidden" was a way of guessing at it. */
     const rail = html.match(/<section id="health-rail"[\s\S]*?<\/section>/)?.[0] ?? "";
     expect(rail).toContain('id="widget-customizer"');
-    expect(rail.match(/\shidden(\s|>)/g)?.length ?? 0).toBe(1);
+    expect(rail.match(/aria-controls="/g)?.length ?? 0).toBe(1);
+    expect(rail).toContain('aria-controls="widget-customizer"');
+    expect(rail.match(/aria-expanded="/g)?.length ?? 0).toBe(1);
   });
 
   // (2 Important) The nowrap rollup sits inside a .program overflow:clip card, so
@@ -11969,5 +11977,106 @@ describe("S1-T2: hasCurrentImpact is the only gate between live and history", ()
     for (const id of board) expect(accounted.has(id), id).toBe(true);
     // …and every demotion carries a reason a human can read in the table.
     for (const d of demoted) expect(d.reason.length, d.id).toBeGreaterThan(0);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   S2-T3 + S0-T5 · the Tokens card, and the one global scan-window statement
+   that had to land before it could ship.
+   ------------------------------------------------------------------------- */
+
+describe("Tokens states a consumption floor with its coverage, or says nothing", () => {
+  const withTotals = (over: Record<string, unknown>) => snapshot({
+    totals: {
+      live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0,
+      byLifecycle: { working: 1, waiting: 0, unverified: 0, finished: 0 },
+      retained: 0, sourceHealth: { healthy: 2, degraded: 0, absent: 0, total: 2 },
+      ...over,
+    },
+  });
+
+  test("a floor keeps its ≥, and the coverage says how many are missing", () => {
+    /* Measured on a live board: 75,776,215 consumed across 349 of 389 eligible
+       sessions, consumptionIsFloor true. The ≥ follows Cost's costIsFloor
+       precedent rather than inventing a third idiom for the same fact. */
+    const data = M.summaryWidgetData("tokens", withTotals({
+      consumption: 75_776_215, consumptionReporting: 349,
+      consumptionEligible: 389, consumptionIsFloor: true,
+    }));
+    expect(data.value).toBe("≥ 75.8M");
+    expect(data.unit).toBe("consumed");
+    expect(data.sublabel).toBe("40 sessions not reporting");
+  });
+
+  test("a complete reading says nothing about coverage and drops the ≥", () => {
+    // Burn's rule for coverage.unknown: speak only when incomplete. A permanent
+    // footnote stops being read, and a ≥ on a total is a lie in the other direction.
+    const data = M.summaryWidgetData("tokens", withTotals({
+      consumption: 1_000_000, consumptionReporting: 12, consumptionEligible: 12,
+    }));
+    expect(data.value).toBe("1.0M");
+    expect(data.value).not.toContain("≥");
+    expect(data.sublabel).toBe("");
+  });
+
+  test("the card carries no window tag of its own — the board states it once", () => {
+    /* The whole reason S2-T3 had to land first. An aggregate with an unstated
+       population is the failure this program exists to remove, so the scan
+       window is stated once, ambiently, above every reading it qualifies. */
+    const data = M.summaryWidgetData("tokens", withTotals({
+      consumption: 5_000, consumptionReporting: 3, consumptionEligible: 3,
+    }));
+    for (const tag of ["36h", "last 36", "24h", "scan"]) {
+      expect(`${data.value} ${data.unit} ${data.sublabel}`, tag).not.toContain(tag);
+    }
+    // …and the statement exists, once, in the rail rather than on a card.
+    expect(html).toContain('id="scan-window"');
+    expect(source).toContain("sessions seen in the last ");
+    // It is not behind the widgets paint guard: a settings change can leave
+    // every card's value identical while the population underneath them moves.
+    const rail = source.match(/function renderHealthRail\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(rail.indexOf("renderScanWindow()")).toBeLessThan(rail.indexOf('paintUnchanged("widgets"'));
+    // The board's reach and the operator's filter are different windows and are
+    // no longer printed as one setting in one line.
+    const scope = source.match(/function renderScopeNote\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(scope).toContain("lookback ");
+    expect(scope).not.toContain("· scan ");
+  });
+
+  test("an unconfirmed scan window is withheld rather than defaulted to 36", () => {
+    // state.scanWindowHours carries a client-side 36. Printing that as though a
+    // server had confirmed it is the overclaim this program removes.
+    const speak = source.match(/function renderScanWindow\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(speak).toContain("state.snap && Number(state.snap.scanWindowHours)");
+    expect(speak).not.toContain("state.scanWindowHours");
+  });
+
+  test("absent consumption withholds the card — never 0, never occupancy", () => {
+    /* The group is absent until the server finishes a full session scan, which
+       on a fresh board takes a couple of minutes. Absence means "we cannot count
+       this completely", so the card does not render: speaks() drops a missing
+       tone. Observed live — the API returned no consumption during the pre-scan
+       window and the populated figure after. */
+    const bare = withTotals({ tokens: 915_805 });
+    const data = M.summaryWidgetData("tokens", bare);
+    expect(data.tone).toBe("missing");
+    expect(data.value).toBe("No data");
+    expect(M.pulseStripModel(bare, "live", [], "percent", "").cells.map((c: { id: string }) => c.id))
+      .not.toContain("tokens");
+
+    /* And it NEVER falls back to totals.tokens. That field sums a per-call
+       occupancy over working agents only; measured live the two differ by 83x
+       (75.8M consumed against 0.9M occupancy). Substituting one for the other is
+       the defect the token comments in types.ts were written to prevent, and it
+       would be wrong by two orders of magnitude rather than merely imprecise. */
+    expect(data.value).not.toContain("915");
+    expect(data.value).not.toBe("0");
+    const branch = source.slice(source.indexOf('if (id === "tokens")'));
+    /* Comments stripped: this file NAMES totals.tokens in prose to explain why
+       it is never read, and an assertion that cannot tell code from the comment
+       warning about it would forbid documenting the trap. */
+    const code = branch.slice(0, branch.indexOf('if (id === "context-peak")'))
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(code).not.toContain("totals.tokens");
   });
 });
