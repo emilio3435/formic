@@ -130,9 +130,59 @@ Never leave a mutation in the tree. Prefer `git diff --stat` on the mutated path
 
 ---
 
+## Round 3 — cleanup sweep + propose endpoint (PR #12)
+
+**When:** after cleanup propose/confirm landed; neither had been mutation-audited. Same method.  
+**Product files mutated and restored:** `scripts/anthill-cleanup-sweep.ts`, `src/server/app.ts` (byte-identical to pre-probe copies).  
+**Why this round matters:** these are the only paths in the program that can destroy work. A hollow guard here is worth more than a hollow guard anywhere else.
+
+| Claim | Test that should pin it | Mutation applied | Result |
+|---|---|---|---|
+| Propose endpoint never wires confirm / deletion | `tests/cleanup-propose-endpoint.test.ts` "the route can reach propose only…" | Add `"/api/cleanup/confirm"` route in `app.ts` that references `confirmCleanup` | **RED** |
+| Confirm uses `git branch -d`, never `-D` | `tests/cleanup-sweep.test.ts` happy path + "git branch -d refusal is surfaced, never escalated to -D" | Change `git branch -d` → `-D` in `confirmCleanup` | **RED** |
+| Internal throw if `--force`/`-f` reaches worktree-remove args | *(none reachable — args hardcoded above the throw)* | Delete the `--force`/`-f` throw | **GREEN** |
+| Unverifiable occupant is a hard stop (fail-closed) | *(none — "name every hard stop" lists alive, not unverifiable-only)* | Drop the unverifiable arm in `worktreeRefusals` | **GREEN** |
+| Confirm re-checks fingerprint before acting | `tests/cleanup-sweep.test.ts` "fingerprint changes when occupants appear…" *(message `/stale/i`)*; named "plan file that went stale…" | Skip fingerprint re-check; trust the plan file | **soft — see below** |
+| Incomplete enumeration produces no plan (never a refusal-free propose) | `tests/cleanup-sweep.test.ts` incomplete process/cwd cases; `tests/cleanup-propose-endpoint.test.ts` incomplete enumeration | Incomplete process/cwd enum → empty roster instead of throw | **RED** |
+
+### Orchestrator probe list — answers
+
+| Probe | Result |
+|---|---|
+| 1. Add `/api/cleanup/confirm` calling `confirmCleanup` | **RED** — source-text guard in `cleanup-propose-endpoint.test.ts` bites. This is the gate against wiring deletion to a web route. |
+| 2. `git branch -d` → `-D` | **RED** — happy path + `-d` refusal tests. |
+| 3. Delete worktree-remove `--force`/`-f` throw | **GREEN** — suite stayed green (28 pass). Throw is unreachable decoration: `removeArgs` is hardcoded `["worktree", "remove", path]` immediately above. |
+| 4. Drop "unverifiable occupant" refusal (fail-OPEN) | **GREEN** — suite stayed green. `worktreeRefusals` with unverifiable-only → `[]` / eligible. Existing coverage: alive cwd, `blockingOccupants` membership, "name every hard stop" without unverifiable. Missing-entry softness confirmed. |
+| 5. Skip fingerprint re-check; trust plan file | **Nuanced.** Named "plan file that went stale…" stayed **GREEN** — saved by HEAD-moved (`…; plan stale`), not the fingerprint check. Occupant-after-propose failed only on `/stale/i` message mismatch while still `ok: false` via eligibility. A forged fingerprint with an otherwise-identical eligible tree proceeds to delete — fingerprint check itself was soft. |
+| 6. Incomplete enum → refusal-free plan | **RED** — incomplete process/cwd enumeration tests throw; propose endpoint keeps incomplete explicit. Probe 6 was not soft. |
+
+### GREEN / hollow findings this round
+
+#### G6 · Worktree `--force` throw is unreachable decoration
+
+- **Hollow behavior:** the throw can never fire while `removeArgs` is a hardcoded three-element array with no force flags. Deleting it changes no runtime path.
+- **Mutation that stayed GREEN:** remove the `removeArgs.includes("--force") \|\| … "-f"` throw.
+- **Catch:** `tests/cleanup-hollowness-guards.test.ts` — source assertion that `confirmCleanup` still contains the force check + throw (and the sibling `-D` branch throw).
+
+#### G7 · Unverifiable-occupant fail-closed was untested
+
+- **Hollow behavior:** nothing drove `worktreeRefusals` with an unverifiable-only occupant. Dropping that arm makes a clean merged occupied-but-unverifiable worktree eligible.
+- **Mutation that stayed GREEN:** delete the unverifiable refusal arm.
+- **Catch:** `tests/cleanup-hollowness-guards.test.ts` — unverifiable-only → refusal matching `/unverifiable/i` (gone-only still empty); source still names the arm.
+
+#### G8 · Fingerprint re-check was not uniquely pinned by the stale-plan test
+
+- **Hollow behavior:** "plan file that went stale…" dirties HEAD, so `/stale/i` matches the HEAD-moved message even when the fingerprint gate is gone. Skipping the fingerprint check lets a forged-fingerprint plan confirm successfully.
+- **Mutation that stayed GREEN on the named stale-plan test:** skip fingerprint re-check.
+- **Catch:** `tests/cleanup-hollowness-guards.test.ts` — forge `plan.fingerprint` only; confirm must refuse `/stale between propose and confirm/i` and leave the worktree on disk. Re-probed: skip-fingerprint → `ok: true` (destructive); stale-plan test still passes.
+
+---
+
 ## Footer
 
 - Round 1 tests: `tests/harden-notify-hollowness-guards.test.ts`, parked loop in `tests/harden-notify-fixtures.test.ts`
 - Round 2 tests: `tests/header-hollowness-guards.test.ts`
+- Round 3 tests: `tests/cleanup-hollowness-guards.test.ts`
 - This document: `docs/TEST-HOLLOWNESS-AUDIT.md`
 - Round 2 verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2646 pass / 0 fail**.
+- Round 3 verify: `bunx tsc --noEmit` exit 0 · `bun run test:ci` **2659 pass / 0 fail**.
