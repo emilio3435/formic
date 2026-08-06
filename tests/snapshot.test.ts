@@ -12,6 +12,7 @@ import {
   withPulse,
 } from "../src/server/snapshot";
 import { parseOmpJsonl } from "../src/server/collectors";
+import { MemoryArchiveStore } from "../src/server/archive";
 import {
   bridgeAgentsWithBindings,
   MemoryIdentityBindingStore,
@@ -2291,5 +2292,131 @@ describe("the lifecycle verdict is published, and nothing overwrites it", () => 
         thresholds: { freshMs: 2 * 60_000, quietMs: 15 * 60_000 },
       }).programs[0]!.agents[0]!.lifecycle,
     ).toBe("unverified");
+  });
+});
+
+describe("session kind is published with provenance, and evidence beats prose", () => {
+  const NOW = new Date("2026-08-05T12:00:00.000Z");
+  const buildFrom = (agent: CollectedAgent) => buildSnapshot({
+    agents: [agent],
+    surfaces: [],
+    archiveStore,
+    now: NOW,
+  });
+  const agentIn = (snapshot: ReturnType<typeof buildSnapshot>, id: string) =>
+    snapshot.programs.flatMap((program) => program.agents).find((agent) => agent.id === id)!;
+
+  test("an sdk-launched review prompt is a review worker, observed", () => {
+    const snapshot = buildFrom(collected({
+      id: "claude:sdk-r",
+      provider: "claude",
+      sourceSessionId: "sdk-r",
+      launch: { entrypoint: "sdk-py", promptSource: "sdk" },
+      task: "Review this change for security vulnerabilities.\n\nChanged files: x",
+    }));
+    const agent = agentIn(snapshot, "claude:sdk-r");
+    expect(agent.sessionKind).toBe("review");
+    expect(agent.sessionKindSource).toBe("launch-evidence");
+    expect(agent).not.toHaveProperty("launch");
+  });
+
+  test("a cli session that merely talks about security review is work", () => {
+    const snapshot = buildFrom(collected({
+      id: "claude:cli-w",
+      provider: "claude",
+      sourceSessionId: "cli-w",
+      launch: { entrypoint: "cli" },
+      task: "Plan a fix for the repeated Security vulnerability review rows.",
+    }));
+    expect(agentIn(snapshot, "claude:cli-w").sessionKind).toBe("work");
+    expect(agentIn(snapshot, "claude:cli-w").sessionKindSource).toBe("launch-evidence");
+  });
+
+  test("no evidence and no known prompt is unknown, never a guess", () => {
+    const snapshot = buildFrom(collected({
+      id: "codex:mystery",
+      sourceSessionId: "mystery",
+      task: "Ship the thing.",
+    }));
+    expect(agentIn(snapshot, "codex:mystery").sessionKind).toBe("unknown");
+    expect(agentIn(snapshot, "codex:mystery").sessionKindSource).toBe("none");
+  });
+
+  test("an sdk launch with an unrecognized prompt is automation, not review", () => {
+    const snapshot = buildFrom(collected({
+      id: "claude:sdk-a",
+      provider: "claude",
+      sourceSessionId: "sdk-a",
+      launch: { entrypoint: "sdk-py", promptSource: "sdk" },
+      task: "Summarize the changelog.",
+    }));
+    expect(agentIn(snapshot, "claude:sdk-a").sessionKind).toBe("automation");
+  });
+
+  test("a codex exec session is observed automation", () => {
+    const snapshot = buildFrom(collected({
+      id: "codex:exec-a",
+      sourceSessionId: "exec-a",
+      launch: { entrypoint: "codex_exec", promptSource: "exec" },
+      task: "Summarize the release notes.",
+    }));
+    expect(agentIn(snapshot, "codex:exec-a").sessionKind).toBe("automation");
+    expect(agentIn(snapshot, "codex:exec-a").sessionKindSource).toBe("launch-evidence");
+  });
+
+  test("a codex tui session is observed work", () => {
+    const snapshot = buildFrom(collected({
+      id: "codex:tui-w",
+      sourceSessionId: "tui-w",
+      launch: { entrypoint: "codex-tui", promptSource: "cli" },
+      task: "Implement the release note view.",
+    }));
+    expect(agentIn(snapshot, "codex:tui-w").sessionKind).toBe("work");
+    expect(agentIn(snapshot, "codex:tui-w").sessionKindSource).toBe("launch-evidence");
+  });
+
+  test("the sdk follow-up producer prompt remains review, not generic automation", () => {
+    const snapshot = buildFrom(collected({
+      id: "claude:sdk-follow-up",
+      provider: "claude",
+      sourceSessionId: "sdk-follow-up",
+      launch: { entrypoint: "sdk-py", promptSource: "sdk" },
+      task: "You previously flagged these candidate vulnerabilities:\n\n- unsafe redirect",
+    }));
+    expect(agentIn(snapshot, "claude:sdk-follow-up").sessionKind).toBe("review");
+    expect(agentIn(snapshot, "claude:sdk-follow-up").sessionKindSource).toBe("launch-evidence");
+  });
+
+  test("a kind change moves the fingerprint", () => {
+    const base = collected({
+      id: "claude:fp",
+      provider: "claude",
+      sourceSessionId: "fp",
+      launch: { entrypoint: "cli" },
+      task: "Fix it.",
+    });
+    const a = snapshotFingerprint(buildFrom(base));
+    const b = snapshotFingerprint(buildFrom({
+      ...base,
+      launch: { entrypoint: "sdk-py", promptSource: "sdk" },
+    }));
+    expect(a).not.toBe(b);
+  });
+
+  test("an archived row keeps the verdict observed before launch evidence was stripped", async () => {
+    const store = new MemoryArchiveStore();
+    await store.record([collected({
+      id: "claude:archived-review",
+      provider: "claude",
+      sourceSessionId: "archived-review",
+      launch: { entrypoint: "sdk-py", promptSource: "sdk" },
+      task: "Review this change for security vulnerabilities.\n\nChanged files: x",
+    })]);
+
+    const snapshot = buildSnapshot({ agents: [], surfaces: [], archiveStore: store, now: NOW });
+    const agent = agentIn(snapshot, "claude:archived-review");
+    expect(agent.sessionKind).toBe("review");
+    expect(agent.sessionKindSource).toBe("launch-evidence");
+    expect(agent).not.toHaveProperty("launch");
   });
 });

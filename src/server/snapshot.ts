@@ -51,6 +51,7 @@ import {
   outcomeFor,
   processStateFor,
   roleFor2,
+  sessionKindFor,
   statusForLifecycle,
 } from "./snapshot-agent";
 import type { LifecycleThresholds } from "./lifecycle";
@@ -450,6 +451,10 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       declaredRole: declared?.role,
       observedChildren: childCounts.get(source.id) ?? 0,
     });
+    const archivedKind = source as CollectedAgent & Pick<AgentSnapshot, "sessionKind" | "sessionKindSource">;
+    const kind = archivedKind.sessionKind && archivedKind.sessionKindSource
+      ? { sessionKind: archivedKind.sessionKind, sessionKindSource: archivedKind.sessionKindSource }
+      : sessionKindFor({ launch: source.launch, task: source.task });
     const snapshotStatusReason = retained
       ? verdict.reason
       : notificationSummary
@@ -466,7 +471,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
        stale 2.23MB), and the largest session on this machine has 1,575 calls.
        It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */
-    const { callSizes: _callSizes, ...publishable } = source;
+    const { callSizes: _callSizes, launch: _launch, ...publishable } = source;
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
       programId: runKey ?? (program.groupPath ? `repo:${program.groupPath[0]}` : program.id),
@@ -503,6 +508,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       outcome,
       controlState,
       ...role,
+      sessionKind: kind.sessionKind,
+      sessionKindSource: kind.sessionKindSource,
       effort: effortFor(source),
       ...(contextPct === undefined ? {} : { contextPct }),
       ...(repo ? { repo } : {}),

@@ -93,6 +93,8 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `program-aliases.ts`, `settings.ts` | Operator-set names and the scan window, persisted under `data/` |
 | `command.ts` | The child-process runner every shell probe goes through; its timeout always settles |
 
+`snapshot-agent.ts` also classifies provider-neutral `sessionKind` with provenance from recorded launch evidence and a narrow producer-prompt registry.
+
 **Faults versus debris.** `controlHealth.errors` holds only what impairs
 operation *now*; anything the operator cannot act on, or that costs nothing
 until they do, goes to `controlHealth.debris` instead. The distinction matters
