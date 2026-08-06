@@ -258,6 +258,29 @@ At 20:26–20:29 a Codex session (ChatGPT app, pid 47362, cwd inside this worktr
 
 Also left uncommitted deliberately, because they are not this program's to land: `src/server/snapshot.ts` + `tests/snapshot.test.ts` (a stalled BE change), and the untracked `src/server/process-liveness.ts` + `tests/process-liveness.test.ts` + `tests/fixtures/process-liveness-truth-table.json`. Those three are untracked *together*, so the committed suite is self-consistent and a fresh clone is fine — they are simply a feature still being written. The owning session commits them, not us.
 
+### Progress — tranche 1 merged to main 2026-08-05 21:28 (PR #9, `75e1ed7`, CI green)
+
+| Stage | State |
+|---|---|
+| S0-T1 measure dead time | ✅ measured; **no defensible clock** — `docs/S0-T1-DEAD-TIME-MEASUREMENT.md` |
+| S0-T2 `attentionClass` | ✅ merged |
+| S0-T3 `pulse.blocked` | ✅ merged (count only; `standbyMs` cut, see R1) |
+| S0-T4 confirm evidence sentence | ⬜ not started — measurement only, may ship nothing |
+| S0-T5 fleet token consumption | 🔄 in flight — **blocks the Tokens card and S2-T3's second half** |
+| S1-T1…T6 + parity gate | ✅ merged, gate passed |
+| S2-T1 remove `needs-you` · S2-T2 trust chip | 🔄 in flight |
+| S2-T3 global scan-window statement | ⬜ first half free; second half blocked on S0-T5 |
+| S3 context re-headline | ⬜ not started |
+| S4 cost + burn provenance | ⬜ not started |
+| S5-T1/T2 history routes, fixtures, docs parity | ✅ merged |
+| S6-T1/T2 cleanup sweep | ✅ merged |
+| S6-T3/T4 chip spinner + result routing | ⬜ not started |
+| a11y sweep | ⬜ held until S2 is auditable |
+
+**Lane health.** be-dwell and harden-notify both ran to ~89% of a 258K window and were retired with handoff docs committed first (`docs/S0-T1-DEAD-TIME-MEASUREMENT.md`, `docs/HARDEN-NOTIFY-STATE.md`). The lesson worth keeping: **the expensive artifact is the measurement and the reasoning, not the code** — write it to `docs/` before the window closes, or the next lane re-derives it from nothing. fe-notify's 1M window carries S2–S4 and S6-T3/T4 without a handoff.
+
+**Not from this program, on the branch and merged in tranche 1:** `aeb8cec` "feat(web): add provider-neutral review filters". Coherent and tested, authored outside the three lanes. Recorded here so a later reader does not attribute it to this plan.
+
 ### Rulings made during execution
 
 **R1 · Dead time is dropped entirely — FINAL. Evidence: `docs/S0-T1-DEAD-TIME-MEASUREMENT.md` (`5d1fa71`).** `blockedSince` and `pulse.standbyMs` do not ship. Three findings, each measured on the live board rather than reasoned about:
