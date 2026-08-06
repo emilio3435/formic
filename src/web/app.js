@@ -2098,6 +2098,11 @@ function render() {
   // Whether the operator was standing INSIDE the drawer, so the restore below can
   // tell "their control went away" from "they were never in here".
   const focusWasInDrawer = Boolean(document.activeElement && inspector.contains(document.activeElement));
+  /* The same question about the attention panel, and it has to be asked
+     separately: the drawer and the panel are disjoint subtrees, so the answer
+     above says nothing about a keyboard operator standing on a notification row. */
+  const focusWasInPanel = Boolean(document.activeElement
+    && $("notifications-panel")?.contains(document.activeElement));
   // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
   // the signature. state.selected is already the new entity by this point —
   // selectEntity sets it and then calls render — so the pane's own last paint is
@@ -2156,6 +2161,27 @@ function render() {
        open: closeInspector runs its own return after its render, and stealing
        focus back into a pane on its way out would fight it. */
     else if (focusWasInDrawer && !inspector.hidden) focusDrawerLead();
+    /* The panel's own lead, for the failure the comment above describes arriving
+       from the other surface: here the fkey is gone because the ROW is gone.
+
+       That is the ordinary event on this board rather than an edge case — an
+       agent answered in its terminal stops asking, and the next snapshot drops
+       its row. Measured on the live board: focus on a row's Reply, the agent
+       stops asking, repaint — activeElement === body, with the panel still open
+       and the operator thrown to the top of the document from inside it.
+
+       Deliberately the same query toggleNotificationsPanel uses on open, so the
+       panel has ONE first control however you arrive at it; two queries here
+       would mean the answer depended on whether you opened the panel or had a
+       row vanish under you. Only while it is still open, for the reason the
+       drawer's branch carries !inspector.hidden: pulling focus back into a
+       surface the operator just dismissed is a worse failure than the one being
+       fixed. The toggle is the floor — a panel whose every control has just left
+       still has the button that opened it. */
+    else if (focusWasInPanel && state.notifyPanelOpen) {
+      const lead = $("notifications-panel")?.querySelector("button:not([disabled])");
+      (lead || $("notify-toggle"))?.focus({ preventScroll: true });
+    }
   }
 }
 

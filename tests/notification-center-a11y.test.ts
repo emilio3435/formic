@@ -216,9 +216,7 @@ describe("Escape returns the operator to the control that opened the panel", () 
 describe("a live repaint puts the operator back on the control they were using", () => {
   /* Measured live: with focus on a row's Reply and the panel's paint signature
      forced to change, render() restored focus to the same button. It does that
-     by data-fkey, so a control without one is a control the restore cannot find.
-     (The case where the control itself LEAVES the feed is an open defect — see
-     the sweep doc; it is not pinned here because it does not hold.) */
+     by data-fkey, so a control without one is a control the restore cannot find. */
 
   test("every button the panel builds carries an fkey", () => {
     const region = appjs.slice(
@@ -235,6 +233,73 @@ describe("a live repaint puts the operator back on the control they were using",
   test("render() restores focus by fkey before anything else can claim it", () => {
     expect(appjs).toMatch(/const focusKey = document\.activeElement && document\.activeElement\.dataset/);
     expect(appjs).toMatch(/const node = document\.querySelector\(`\[data-fkey="\$\{CSS\.escape\(focusKey\)\}"\]`\);/);
+  });
+});
+
+/* render()'s focus restore, isolated — from the focusKey capture to the end of
+   the function, so an assertion below cannot accidentally match a lookalike line
+   elsewhere in a 9,000-line file. */
+const restoreBlock = (() => {
+  const from = appjs.indexOf("const focusKey = document.activeElement && document.activeElement.dataset");
+  const at = appjs.indexOf("else if (focusWasInDrawer", from);
+  return from < 0 || at < 0 ? "" : appjs.slice(from, appjs.indexOf("\n}\n", at));
+})();
+
+describe("A11Y-2: a vanished row does not strand the operator on <body>", () => {
+  /* Reproduced live on 2026-08-06, twice, before the fix: focus a row's Reply,
+     make that agent stop asking exactly as the server does on the next scan,
+     call the app's own repaint() —
+
+       { rows: 4 → 3, rowGone: true, activeIsBody: true, panelOpen: true }
+
+     render() restores focus by data-fkey; when the row leaves the feed the fkey
+     goes with it, the lookup finds nothing, and focus falls to <body> — the top
+     of the document, from inside a panel that is still open. The drawer has
+     focusDrawerLead() for exactly this. The panel had no lead.
+
+     Verified fixed on the same board: activeIsBody false, activeInPanel true,
+     landing on the panel's first control. Three regressions checked alongside —
+     the fkey-survives path still holds focus, a CLOSED panel is not hijacked
+     (focus left on #search across a repaint), and Escape still returns to the
+     toggle.
+
+     Asserted against SOURCE, following tests/inspector-transition.test.ts: this
+     client has no jsdom by policy, so the DOM half of render() is pinned by
+     reading it. Each assertion names the behaviour it stands in for. */
+
+  test("the restore block is where it is expected to be", () => {
+    expect(restoreBlock.length).toBeGreaterThan(200);
+    expect(restoreBlock).toContain("CSS.escape(focusKey)");
+  });
+
+  test("render() knows whether focus was standing in the panel", () => {
+    /* Not a grep for a name: without this the fallback cannot tell "their
+       control went away" from "they were never in here", which is the same
+       distinction focusWasInDrawer exists to make one line above. */
+    expect(appjs).toMatch(
+      /const focusWasInPanel = Boolean\(document\.activeElement\s*\n?\s*&& \$\("notifications-panel"\)\?\.contains\(document\.activeElement\)\);/,
+    );
+  });
+
+  test("a lost fkey inside an open panel falls back to the panel, not to <body>", () => {
+    expect(restoreBlock).toMatch(/else if \(focusWasInPanel && state\.notifyPanelOpen\)/);
+    /* Guarded on the panel still being OPEN. Firing into a closed panel would
+       pull focus back into a surface the operator just dismissed — the same
+       reason the drawer's branch carries `&& !inspector.hidden`. */
+    expect(restoreBlock).not.toMatch(/else if \(focusWasInPanel\)\s*\{/);
+  });
+
+  test("open-focus and restore-focus choose the same lead, so they cannot drift", () => {
+    /* The real invariant, and the one a rename would break silently: the node
+       the restore lands on must be the node toggleNotificationsPanel already
+       picks when the operator opens the panel. Two different queries would mean
+       the panel had two different "first controls" depending on how you arrived
+       at it. */
+    const leadQuery = 'querySelector("button:not([disabled])")';
+    expect(appjs.indexOf('$("notifications-panel")?.' + leadQuery)).toBeGreaterThan(-1);
+    expect(restoreBlock).toContain(leadQuery);
+    /* …and a panel with no enabled control left still has somewhere to go. */
+    expect(restoreBlock).toContain('$("notify-toggle")');
   });
 });
 
@@ -336,6 +401,21 @@ describe("the panel fits the window it opens over", () => {
        The gutter is a function of the row's own content width, so no static
        calc() can express it. The anchor has to BE the content edge, and the
        panel has to fill it rather than measure the window. */
+    /* ⚠ THIS TEST DOES NOT GUARD THE DEFECT. It documents the intended
+       mechanism, which has value, but three mutations measured on the live board
+       at 420px show what it actually catches:
+
+         today                                     panel  32 → 388   ok
+         A  anchor reverted to align-self:center    panel  48 → 372   ok      ← RED here
+         B  centred anchor + viewport-measured w.   panel -24 → 372   CLIPPED ← RED here
+         C  anchor stretched, width clamp back      panel  -8 → 388   CLIPPED ← GREEN here
+
+       Wrong in both directions: it fires on A, which is merely a narrower panel
+       and harms nobody, and it is blind to C, which is the shipped defect
+       arriving by another route. The defect was never "the file lacks a
+       declaration" — it was "the panel's box leaves the window", which is a
+       number. tests/notification-center-geometry.test.ts measures that number;
+       this one only records what the CSS was trying to say. */
     const from = cleanCss.indexOf("@media (max-width: 760px)");
     const nextAt = cleanCss.indexOf("@media", from + 1);
     const block = cleanCss.slice(from, nextAt === -1 ? undefined : nextAt);
