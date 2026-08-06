@@ -8686,14 +8686,18 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(new Set(keys).size).toBe(keys.length);
       expect(keys.filter((k) => k === "agent:codex:a-alert")).toHaveLength(1);
 
-      // Alpha keeps a note saying where its missing session went, so the two
-      // places an operator might look for it agree instead of one omitting it.
+      /* The placeholder that used to restate the strip inside each group is
+         gone: the group header's own "alerts" rollup cell already says a
+         session is asking, and the strip row's chip says where it came from.
+         Restating it as a body row doubled the vertical noise for no new
+         information. */
       const alphaBody = alphaSection.children[alphaSection.children.length - 1];
-      expect(textOf(alphaBody)).toContain("1 session from this program is in Needs you");
+      expect(textOf(alphaBody)).not.toContain("in Needs you");
       expect(textOf(alphaBody)).not.toContain("Alert");
-      // Beta had nothing but the alerting row, so its group is note-only.
+      // Beta had nothing but the alerting row, so its body is the column
+      // header alone — no note row either.
       const betaBody = betaSection.children[betaSection.children.length - 1];
-      expect(textOf(betaBody)).toContain("in Needs you");
+      expect(textOf(betaBody)).not.toContain("in Needs you");
     });
 
     test("acknowledging an alert returns the row to its lifecycle section", () => {
@@ -8860,6 +8864,323 @@ describe("FE-B: harness-backed client behavior", () => {
       // And the strip row keeps the ordinary key.
       const stripRow = root.children[0].children[root.children[0].children.length - 1].children[0];
       expect(stripRow.dataset.fkey).toBe("agent:codex:parent");
+    });
+
+    test("a strip row's chip names the worktree, and is a jump control", () => {
+      const worker = asking({
+        id: "codex:wt-alert",
+        repo: { repoKey: "r1", repoName: "cooper", worktreePath: "/lanes/ev2-g1", branch: "feat/ev2-g1", ephemeral: false },
+      });
+      const program = { id: "p-g1", name: "cooper", groupPath: ["r1", "wt-g1"], agents: [worker] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      /* A repo name alone is ambiguous across that repo's checkouts — the chip
+         carries the same branch@directory words the group header says, so the
+         operator can match the two surfaces by reading either one. */
+      const chip = byClass(root.children[0], "row-program-chip");
+      expect(chip.tagName).toBe("button");
+      expect(textOf(chip)).toBe("cooper · feat/ev2-g1@ev2-g1");
+      expect(chip.dataset.fkey).toBe("strip-chip:codex:wt-alert");
+      /* The row's own aria-label says the same words: a nested control inside
+         a role=button row is unreachable to some screen readers, so the row
+         must not depend on the button being read. */
+      const row = byFkey(root.children[0], "agent:codex:wt-alert");
+      expect(row.attributes["aria-label"]).toContain("cooper · feat/ev2-g1@ev2-g1");
+    });
+
+    test("the chip's jump clears a closed fold and leaves the row unselected", async () => {
+      const worker = asking({
+        id: "codex:wt-alert",
+        repo: { repoKey: "r1", repoName: "cooper", worktreePath: "/lanes/ev2-g1", branch: "feat/ev2-g1", ephemeral: false },
+      });
+      const program = { id: "p-g1", name: "cooper", groupPath: ["r1", "wt-g1"], agents: [worker] };
+      const visible = [{ program, agents: program.agents }];
+      const realCSS = G.CSS;
+      const realLS = G.localStorage;
+      const store = new Map<string, string>();
+      G.CSS = { escape: (s: string) => s };
+      G.localStorage = {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => { store.set(k, String(v)); },
+        removeItem: (k: string) => { store.delete(k); },
+      };
+      try {
+        await withState({
+          snap: { schemaVersion: 1, programs: [program] },
+          view: "board",
+          selectedId: null,
+          selected: null,
+          repoOverrides: new Map([["r1", "closed"]]),
+          programOverrides: new Map([["p-g1", "closed"]]),
+        }, () => withDom(async () => {
+          // The jump repaints the whole page, and renderInspector toggles a
+          // class on document.body — give the fake document one, the same way
+          // withRequests does.
+          (globalThis as unknown as { document: any }).document.body = newNode("body");
+          const root = newNode("div");
+          M.syncProgramList(root, visible, M.state);
+          const chip = byClass(root.children[0], "row-program-chip");
+          await fire(chip, "click");
+          /* The fold the operator closed is re-opened by REMOVING the override:
+             open is the computed default for a group holding an alerting row,
+             and the jump must not persist a choice the operator never made. */
+          expect(M.state.repoOverrides.has("r1")).toBe(false);
+          expect(M.state.programOverrides.has("p-g1")).toBe(false);
+          // The chip is not the row: jumping must not open the inspector.
+          expect(M.state.selectedId).toBe(null);
+        }));
+      } finally {
+        G.CSS = realCSS;
+        G.localStorage = realLS;
+      }
+    });
+
+    test("the jump scrolls to the group's own caret after the repaint", () => {
+      /* The scroll cannot be observed in this DOM-less harness, so the
+         sequencing is pinned at the source: overrides first, one synchronous
+         repaint, THEN the scroll — issued after render() has restored
+         main.scrollTop, so the jump owns the final position. */
+      const fn = source.match(/function jumpToProgramGroup\(program\)[\s\S]*?\n\}/)?.[0] ?? "";
+      expect(fn).toContain("render();");
+      expect(fn.indexOf("render();")).toBeLessThan(fn.indexOf("scrollIntoView"));
+      expect(fn).toContain('"prog:"');
+      expect(fn).toContain("scrollIntoView?.(");
+      expect(fn).toContain("focus?.(");
+    });
+  });
+
+  /* ------------------------------------------------------------------------
+     The Needs-you display preference: where alerting rows are drawn.
+     --------------------------------------------------------------------- */
+  describe("needs-you display preference", () => {
+    test("the preference persists the way the context spread does", () => {
+      // Same storage shape, same failure handling, its own key — and the loader
+      // runs at boot, or a stored "inline" would be forgotten on every reload.
+      expect(source).toContain('NEEDS_YOU_DISPLAY_KEY = "mtn3-needs-you-display"');
+      const fn = source.match(/function loadNeedsYouDisplay\(\)[\s\S]*?\n\}/)?.[0] ?? "";
+      expect(fn).toContain("localStorage.getItem(NEEDS_YOU_DISPLAY_KEY)");
+      expect(fn).toContain('raw === "inline"');
+      expect(source).toContain("loadNeedsYouDisplay();");
+      const setter = source.match(/function setNeedsYouDisplay\(mode\)[\s\S]*?\n\}/)?.[0] ?? "";
+      expect(setter).toContain("saveNeedsYouDisplay()");
+      expect(setter).toContain("render()");
+    });
+
+    test("stored inline is honoured; anything else falls to the pane", () => {
+      const G = globalThis as unknown as Record<string, any>;
+      const realLS = G.localStorage;
+      const store = new Map<string, string>();
+      G.localStorage = {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => { store.set(k, String(v)); },
+        removeItem: (k: string) => { store.delete(k); },
+      };
+      try {
+        store.set("mtn3-needs-you-display", "inline");
+        M.loadNeedsYouDisplay();
+        expect(M.state.needsYouDisplay).toBe("inline");
+        // A value this client never wrote falls to the pane — the behavior
+        // every operator has already learned — rather than being trusted.
+        store.set("mtn3-needs-you-display", "garbage");
+        M.loadNeedsYouDisplay();
+        expect(M.state.needsYouDisplay).toBe("pane");
+        store.delete("mtn3-needs-you-display");
+        M.loadNeedsYouDisplay();
+        expect(M.state.needsYouDisplay).toBe("pane");
+      } finally {
+        G.localStorage = realLS;
+      }
+    });
+
+    test("needsYouDisplayOf answers inline only on the exact word", () => {
+      expect(M.needsYouDisplayOf({ needsYouDisplay: "inline" })).toBe("inline");
+      expect(M.needsYouDisplayOf({ needsYouDisplay: "pane" })).toBe("pane");
+      // Test fixtures (listUi) and old storage carry no field at all.
+      expect(M.needsYouDisplayOf({})).toBe("pane");
+      expect(M.needsYouDisplayOf({ needsYouDisplay: "INLINE" })).toBe("pane");
+    });
+  });
+
+  /* ------------------------------------------------------------------------
+     Inline mode: the strip disappears and the rows stand where they live.
+     --------------------------------------------------------------------- */
+  describe("needs-you display modes", () => {
+    const inlineUi = (over: Record<string, unknown> = {}) =>
+      listUi({ view: "board", lookbackHours: null, needsYouDisplay: "inline", ...over });
+    const asking = (over: Record<string, unknown> = {}) =>
+      agent({ status: "attention", outcome: "needs-you", lifecycle: "waiting", ...over });
+
+    test("inline mode draws no strip and returns every row to its group", () => {
+      const alpha = {
+        id: "alpha",
+        name: "Alpha",
+        agents: [agent({ id: "codex:a-work", status: "running" }), asking({ id: "codex:a-alert" })],
+      };
+      const beta = { id: "beta", name: "Beta", agents: [asking({ id: "codex:b-alert" })] };
+      const visible = [
+        { program: alpha, agents: alpha.agents },
+        { program: beta, agents: beta.agents },
+      ];
+      const snap = { schemaVersion: 1, programs: [alpha, beta] };
+
+      const inlineRoot = newNode("div");
+      const shownInline = withDom(() => M.syncProgramList(inlineRoot, visible, inlineUi({ snap })));
+      // No strip node at all — not even the calm empty state.
+      expect(allByClass(inlineRoot, "needs-strip")).toHaveLength(0);
+      expect(inlineRoot.children.length).toBe(2);
+      // The alerting rows are ordinary rows in their own groups, still wearing
+      // the inline alert treatment (ember rail, tinted background)...
+      const alphaBody = inlineRoot.children[0].children[inlineRoot.children[0].children.length - 1];
+      const alertRow = byFkey(alphaBody, "agent:codex:a-alert");
+      expect(alertRow).not.toBe(null);
+      expect(alertRow.className).toContain("is-needs-you");
+      // ...under their lifecycle section head, which pane mode would have
+      // suppressed for an all-pinned section.
+      const betaBody = inlineRoot.children[1].children[inlineRoot.children[1].children.length - 1];
+      expect(byFkey(betaBody, "agent:codex:b-alert")).not.toBe(null);
+      expect(allByClass(betaBody, "lifecycle-section")).toHaveLength(1);
+      // ...and every session is drawn exactly once.
+      const keys = findAll(inlineRoot, (n) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
+        .map((n) => n.dataset.fkey as string);
+      expect(new Set(keys).size).toBe(keys.length);
+
+      /* The count the scope note reports is a population fact — where a row is
+         DRAWN must never move it. Same fixture, both modes, same number. */
+      const paneRoot = newNode("div");
+      const shownPane = withDom(() => M.syncProgramList(paneRoot, visible, inlineUi({ snap, needsYouDisplay: "pane" })));
+      expect(shownInline).toBe(shownPane);
+    });
+
+    test("inline mode marks every row the strip would have taken, whatever its shape", () => {
+      /* The live set is dominated by hook-needsInput rows whose outcome is
+         healthy — no is-needs-you ink. With the strip off, membership itself
+         must mark the row, or six sessions asking for a person render as six
+         ordinary Waiting rows. */
+      const hookShaped = agent({ id: "codex:hook", status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+      const outcomeShaped = asking({ id: "codex:outcome" });
+      const calm = agent({ id: "codex:calm", status: "running" });
+      const program = { id: "p", name: "P", agents: [hookShaped, outcomeShaped, calm] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const body = root.children[0].children[root.children[0].children.length - 1];
+      expect(byFkey(body, "agent:codex:hook").className).toContain("is-alerting");
+      expect(byFkey(body, "agent:codex:outcome").className).toContain("is-alerting");
+      expect(byFkey(body, "agent:codex:calm").className).not.toContain("is-alerting");
+
+      // Pane mode: the strip is the signal; its rows do not double-mark.
+      const paneRoot = newNode("div");
+      withDom(() => M.syncProgramList(paneRoot, visible, inlineUi({
+        snap: { schemaVersion: 1, programs: [program] }, needsYouDisplay: "pane",
+      })));
+      const stripRow = byFkey(paneRoot.children[0], "agent:codex:hook");
+      expect(stripRow.className).not.toContain("is-alerting");
+    });
+
+    test("inline mode still flags an alerting child folded inside a swarm", () => {
+      const parent = agent({ id: "codex:parent", status: "running" });
+      const child = asking({ id: "codex:child", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, child] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      /* Pane mode's guarantee was the strip: a collapsed swarm could hide
+         nothing, because the alerting child was pinned in plain sight. Inline
+         mode has no strip, so the fold itself must say what is inside it —
+         the parent's swarm chip takes ember ink, exactly as it does when the
+         strip holds the child. */
+      expect(allByClass(root, "needs-strip")).toHaveLength(0);
+      const body = root.children[0].children[root.children[0].children.length - 1];
+      expect(byFkey(body, "agent:codex:child")).toBe(null);
+      const chipNode = byClass(body, "swarm-chip");
+      expect(chipNode.className).toContain("is-alerting");
+      expect(chipNode.attributes["aria-expanded"]).toBe("false");
+    });
+
+    test("inline mode draws an alerting parent as its own row, not an anchor", () => {
+      const parent = asking({ id: "codex:parent" });
+      const child = agent({ id: "codex:child", status: "running", parentAgentId: "codex:parent" });
+      const program = { id: "p", name: "P", agents: [parent, child] };
+      const visible = [{ program, agents: program.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      // The anchor exists to hold a place for a row that went to the strip.
+      // Inline, the row never left, so the anchor must not appear beside it.
+      expect(allByClass(root, "needs-strip")).toHaveLength(0);
+      const body = root.children[0].children[root.children[0].children.length - 1];
+      expect(byClass(body, "swarm-anchor")).toBe(null);
+      expect(byFkey(body, "agent:codex:parent")).not.toBe(null);
+    });
+
+    test("flipping the mode repaints the list", () => {
+      const program = { id: "p", name: "P", agents: [asking({ id: "codex:x" })] };
+      const visible = [{ program, agents: program.agents }];
+      const pane = M.programsPaintSig(visible, inlineUi({ needsYouDisplay: "pane" }));
+      const inline = M.programsPaintSig(visible, inlineUi());
+      expect(pane).not.toBe(inline);
+    });
+
+    test("inline mode marks a repo band that holds an alerting session", () => {
+      const repo = { repoKey: "k-band", repoName: "cooper", worktreePath: "/lanes/g1", branch: "feat/g1", ephemeral: false };
+      const program = {
+        id: "repo:k-band:worktree:wt-g1", name: "cooper", path: "/lanes/g1",
+        groupPath: ["k-band", "wt-g1"],
+        agents: [asking({ id: "codex:band-alert", repo })],
+      };
+      const visible = [{ program, agents: program.agents }];
+      const snap = { schemaVersion: 1, programs: [program] };
+
+      /* Collapsed is the reachability case: with no strip and the fold shut,
+         the band head is the only surface left that can say a session inside
+         is asking. The worktree heads carry an alerts cell already; the band
+         head carried nothing. */
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, inlineUi({
+        snap, repoOverrides: new Map([["k-band", "closed"]]),
+      })));
+      const marker = byClass(root.children[0], "repo-alerts");
+      expect(marker).not.toBe(null);
+      expect(textOf(marker)).toBe("1 alert");
+      expect(marker.attributes["aria-label"]).toContain("cooper");
+
+      /* Pane mode: the strip holds the row, and a band count pointing at rows
+         that are NOT under it would contradict the strip's own sentence. */
+      const paneRoot = newNode("div");
+      withDom(() => M.syncProgramList(paneRoot, visible, inlineUi({ snap, needsYouDisplay: "pane" })));
+      expect(byClass(paneRoot, "repo-alerts")).toBe(null);
+    });
+
+    test("an alert arriving repaints the band head marker", () => {
+      /* The band's shell signature carried no alert data at all, so without
+         this the marker would neither appear nor clear until something
+         unrelated (a PR link, a worktree count) repainted the band — the
+         documented mutates-only-itself failure class. */
+      const repo = { repoKey: "k-sig", repoName: "cooper", worktreePath: "/lanes/s", branch: "feat/s", ephemeral: false };
+      const programOf = (agents: Record<string, unknown>[]) => ({
+        id: "repo:k-sig:worktree:w", name: "cooper", path: "/lanes/s",
+        groupPath: ["k-sig", "w"], agents,
+      });
+      const root = newNode("div");
+      const calm = programOf([agent({ id: "codex:sig-x", status: "running", repo })]);
+      withDom(() => M.syncProgramList(root, [{ program: calm, agents: calm.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [calm] },
+      })));
+      expect(byClass(root, "repo-alerts")).toBe(null);
+
+      const loud = programOf([asking({ id: "codex:sig-x", repo })]);
+      withDom(() => M.syncProgramList(root, [{ program: loud, agents: loud.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [loud] },
+      })));
+      expect(byClass(root, "repo-alerts")).not.toBe(null);
     });
   });
 
@@ -11084,6 +11405,53 @@ describe("the lifecycle contract on the board itself", () => {
       const node = domById.get("settings-verdict");
       expect(node ? String(node.textContent ?? "") : "").not.toContain("Saved");
     }));
+  });
+
+  test("the needs-you display control lives in Settings and applies instantly", async () => {
+    /* Every other field in this panel is a fleet-shared server setting behind
+       Save. This one is a per-browser display preference: it applies on click,
+       writes localStorage rather than POSTing, and Save must not touch it. */
+    const realLS = G.localStorage;
+    const store = new Map<string, string>();
+    G.localStorage = {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+    };
+    try {
+      await withState({
+        settingsPanelOpen: true,
+        settings: { version: 2, activityFreshMinutes: 3, activityQuietMinutes: 45 },
+        settingsSavedAt: 0,
+        settingsSaveError: "",
+        needsYouDisplay: "pane",
+        snap: null,
+      }, () => withRequests([], async (calls) => {
+        M.renderSettingsPanel();
+        const panel = domById.get("settings-panel")!;
+        const paneRadio = byFkey(panel, "needs-you-display-pane");
+        const inlineRadio = byFkey(panel, "needs-you-display-inline");
+        expect(paneRadio).not.toBe(null);
+        expect(inlineRadio).not.toBe(null);
+        expect(paneRadio.attributes.checked).toBe("");
+        expect(inlineRadio.hasAttribute("checked")).toBe(false);
+        expect(textOf(panel)).toContain("this browser only");
+
+        await fire(inlineRadio, "change");
+        expect(M.state.needsYouDisplay).toBe("inline");
+        expect(store.get("mtn3-needs-you-display")).toBe("inline");
+        // No server round-trip: the pref is not a setting the fleet shares.
+        expect(calls).toHaveLength(0);
+        /* And the panel repainted itself: the pref is in its paint signature,
+           so the radio the operator just clicked reads as chosen — without
+           this the form would keep the stale checkmark until a server value
+           changed. */
+        const rebuilt = byFkey(domById.get("settings-panel")!, "needs-you-display-inline");
+        expect(rebuilt.attributes.checked).toBe("");
+      }));
+    } finally {
+      G.localStorage = realLS;
+    }
   });
 
   test("the preview sentence names all four states in the operator's words", () => {

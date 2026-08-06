@@ -106,6 +106,10 @@ export const state = {
      still while half the fleet climbs. Per-browser, like the lookback, because
      it is a display preference rather than a fact about the fleet. */
   contextSpread: "average",    // average | median
+  /* Where alerting rows are drawn on the board: "pane" collects them in the
+     Needs-you strip, "inline" leaves them in their program groups. Per-browser,
+     same reasoning as contextSpread. */
+  needsYouDisplay: "pane",     // pane | inline
   labels: new Map(),           // stable presentation target key -> label
   aliases: null,               // compatibility name for the existing program-alias seam
   labelsLoading: false,

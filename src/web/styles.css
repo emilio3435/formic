@@ -1189,6 +1189,15 @@ body.feed-frozen .programs { opacity: 0.62; }
 .program-rollup-cell.is-alerting { flex-shrink: 0; }   /* alerts shrink last, never clipped */
 .program-rollup-value { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .program-rollup-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
+/* Inline-mode reachability: the one alert signal a COLLAPSED repo band has.
+   Ember for the same reason the rollup's alerts cell is ember — it is the
+   band-level count of sessions asking for a person. */
+.repo-alerts {
+  font-size: 11.5px;
+  color: var(--ember);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .program-rollup-cell.is-alerting .program-rollup-value { color: var(--ember); font-weight: 700; }
 
 /* inline rename editor */
@@ -1338,9 +1347,13 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
 .agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
+/* Needs-you MEMBERSHIP (inline display mode) — same treatment as is-needs-you,
+   different fact: a hook-needsInput row is in the set with a healthy outcome. */
+.agent-row.is-alerting { background: color-mix(in srgb, var(--ember) 6%, transparent); }
 .agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
 .agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
 .agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
+.agent-row.is-alerting:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
 /* The alert rails above ride the same box-shadow property as the :focus-visible
    ring; at (0,3,0) they outrank the (0,2,0) ring, so keyboard focus went invisible
    on exactly the alert rows. Combine both layers at (0,4,0) so the rail keeps its
@@ -1348,6 +1361,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 2px var(--ember); }
 .agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--blocked), inset 0 0 0 2px var(--ember); }
 .agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--failed), inset 0 0 0 2px var(--ember); }
+.agent-row.is-alerting:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--needs), inset 0 0 0 2px var(--ember); }
 .agent-row.is-ended { opacity: 0.66; }
 
 /* One shared 5-track template — identity (wide, left) + the right-aligned
@@ -1643,17 +1657,23 @@ body.feed-frozen .programs { opacity: 0.62; }
 .swarm-chip.is-open { border-style: solid; }
 .swarm-chip.is-alerting { color: var(--ember); border-color: var(--ember); }
 .swarm-caret { font-size: 8.5px; line-height: 1; }
-/* Which program a strip row came from. The strip is flat and cross-program, so
-   this carries the one fact the missing program header would have. */
+/* Which program a strip row came from — repo plus branch@directory, the same
+   words its group header says. A button, because the strip is flat and
+   cross-program: this chip is the road back to the group it names. */
 .row-program-chip {
   flex: none;
+  font: inherit;
   font-size: 10.5px;
   color: var(--faint);
   background: var(--sand);
+  border: 0;
   border-radius: 3px;
   padding: 0 0.3rem;
   white-space: nowrap;
+  cursor: pointer;
 }
+.row-program-chip:hover { color: var(--ink); }
+.row-program-chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 /* The two endings a history record can have, and they are typeset apart because
    they are different facts. Solid outline for the one an operator chose; dashed
    for the one nobody chose — the board simply stopped watching, and a dashed
@@ -3219,6 +3239,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 .settings-preview { margin: 0; padding: 0.5rem 0.65rem; border-left: var(--signal-rail) solid var(--working); background: var(--moss-soft); font-size: 0.85rem; }
 .settings-advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
 .settings-advanced[open] { display: grid; gap: 0.75rem; }
+/* The per-browser section, ruled off from the server fields above it because
+   it answers to a different authority: this browser, not the fleet. */
+.settings-local { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+.settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
+.settings-radio { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; }
 .settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-actions .settings-spacer { flex: 1; }
 /* The half-circle context dial and its median/average ticks. */
@@ -3329,16 +3354,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
-}
-/* What a program group says about the rows the strip took. Dim, because it is
-   an explanation of an absence rather than a thing to act on — but present,
-   because a group that silently omitted a session would make the two places an
-   operator looks for it disagree. */
-.pinned-note {
-  margin: 0.3rem 0 0;
-  padding: 0 0.85rem 0 0.8rem;
-  font-size: 11.5px;
-  color: var(--faint);
 }
 /* The empty board's closing line: the constraint that produced the emptiness,
    under the verdict rather than inside it. */

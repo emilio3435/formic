@@ -173,6 +173,7 @@ import {
   LOOKBACK_HOUR_PRESETS,
   CONTEXT_SPREAD_KEY,
   LOOKBACK_STORAGE_KEY,
+  NEEDS_YOU_DISPLAY_KEY,
   OPS_VIEWS,
   OUTCOME_LABELS,
   RETIRED_WIDGET_IDS,
@@ -1447,6 +1448,10 @@ globalThis.TheAntHill = {
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
   lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
+  // The Needs-you display preference: where alerting rows are drawn.
+  needsYouDisplayOf, loadNeedsYouDisplay, setNeedsYouDisplay,
+  // The strip chip's words and its jump, assertable without a DOM.
+  stripChipLabel, jumpToProgramGroup,
   swarmOpen, toggleSwarm, historyProvenance, historyChips, renderRowFacts,
   boardIndex, sharedRowNames, rowDisplayName, landingView, LEGACY_VIEW_ALIASES,
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
@@ -1504,6 +1509,39 @@ function loadContextSpread() {
   } catch {
     state.contextSpread = "average";
   }
+}
+
+/* Where the board draws its alerting rows. "pane" is the strip at the top;
+   "inline" leaves them in their program groups. Only the exact other word is
+   honoured — a value this client never wrote falls back to the pane, which is
+   the behavior every operator has already learned. The accessor takes a ui so
+   the list helpers stay drivable without the module's state, and an absent
+   field (every existing test fixture) reads as the default. */
+function needsYouDisplayOf(ui = state) {
+  return ui.needsYouDisplay === "inline" ? "inline" : "pane";
+}
+
+function loadNeedsYouDisplay() {
+  try {
+    const raw = localStorage.getItem(NEEDS_YOU_DISPLAY_KEY);
+    state.needsYouDisplay = raw === "inline" ? "inline" : "pane";
+  } catch {
+    state.needsYouDisplay = "pane";
+  }
+}
+
+function saveNeedsYouDisplay() {
+  try {
+    localStorage.setItem(NEEDS_YOU_DISPLAY_KEY, state.needsYouDisplay);
+  } catch { /* storage unavailable */ }
+}
+
+function setNeedsYouDisplay(mode) {
+  const next = mode === "inline" ? "inline" : "pane";
+  if (next === state.needsYouDisplay) return;
+  state.needsYouDisplay = next;
+  saveNeedsYouDisplay();
+  render();
 }
 
 function loadLookback() {
@@ -3249,6 +3287,9 @@ function renderSettingsPanel() {
     state.settingsPanelOpen ? "1" : "0",
     JSON.stringify(state.settings ?? null),
     state.settingsPending ? "1" : "0",
+    /* The local display pref rebuilds the panel too, or the radio the operator
+       just clicked would keep the stale checkmark until a server value moved. */
+    state.needsYouDisplay || "",
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:
@@ -3307,6 +3348,28 @@ function renderSettingsPanel() {
       settingsField("historyRecordLimit", "History record cap",
         "At most this many History records are kept. 100–50000.",
         s.historyRecordLimit ?? 5000, 100, 50000)),
+    /* Per-browser display preference, deliberately OUTSIDE the Save flow: every
+       field above is a fleet-shared server setting, this one is where THIS
+       browser draws the board's alerting rows. It applies the moment it is
+       clicked, writes localStorage rather than POSTing, and Save and Reset
+       leave it alone. */
+    el("fieldset", { class: "settings-local" },
+      el("legend", { text: "Needs-you display" }),
+      el("p", { class: "settings-help", text: "Saved in this browser only. Applies immediately — Save below does not affect it." }),
+      ...[
+        ["pane", "Pinned pane", "Alerting sessions are collected in the strip at the top of the board."],
+        ["inline", "Inline", "Alerting sessions stay in their program groups, marked in place."],
+      ].map(([value, label, help]) => el("label", { class: "settings-radio" },
+        el("input", {
+          type: "radio",
+          name: "needs-you-display",
+          value,
+          checked: state.needsYouDisplay === value ? "" : null,
+          dataset: { fkey: "needs-you-display-" + value },
+          onchange: () => setNeedsYouDisplay(value),
+        }),
+        el("span", { text: label }),
+        el("span", { class: "settings-help", text: help })))),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -5736,6 +5799,22 @@ function worktreeLabel(program) {
   return base || branch || (program ? program.name : "");
 }
 
+/* What a strip row's chip SAYS. A flat program's name is its whole identity,
+   but a worktree program's server name is the repository — one word shared by
+   every checkout of it, which is exactly the ambiguity the strip suffered
+   from. So the chip speaks both axes: the repo, then the same branch@directory
+   words the group header below says, so the operator can match the two
+   surfaces by reading either one. */
+function stripChipLabel(program) {
+  if (!program) return "";
+  if (!Array.isArray(program.groupPath)) return programName(program);
+  const repo = repoOf(program);
+  const repoName = (repo && repo.repoName) || "";
+  const label = worktreeLabel(program);
+  if (repoName && label && label !== repoName) return repoName + " · " + label;
+  return repoName || label || programName(program);
+}
+
 /* The board's sections, in server order: a repo group takes the position of its
    first worktree, and everything without a groupPath stays exactly where it
    was as its own program entry. Pure — it reads the visible list and nothing
@@ -5808,6 +5887,45 @@ function toggleRepo(group) {
   render();
 }
 
+/* The strip chip's destination: put the parent group on screen. Explicit
+   "closed" overrides are REMOVED rather than overwritten — open is already the
+   computed default for a group holding an alerting row, so deleting the fold
+   restores it, and writing "open" would persist a choice the operator never
+   made. The repaint runs synchronously so the scroll that follows it owns the
+   final position: render() saves and restores main.scrollTop inside the call,
+   and the next paint re-saves whatever scrollIntoView left. Focus lands on the
+   group's own caret, whose `prog:` focus key is what render()'s restore
+   preserves across later repaints. Optional calls, because the test harness's
+   nodes have neither scrollIntoView nor focus. */
+function jumpToProgramGroup(program) {
+  if (!program) return;
+  const repoKey = Array.isArray(program.groupPath) ? String(program.groupPath[0] || "") : "";
+  if (repoKey && state.repoOverrides.get(repoKey) === "closed") {
+    state.repoOverrides.delete(repoKey);
+    saveRepoOverrides();
+  }
+  if (state.programOverrides.get(program.id) === "closed") {
+    state.programOverrides.delete(program.id);
+    saveOverrides();
+  }
+  render();
+  const head = document.querySelector(`[data-fkey="${CSS.escape("prog:" + program.id)}"]`);
+  if (!head) return;
+  head.scrollIntoView?.({ block: "center" });
+  head.focus?.({ preventScroll: true });
+}
+
+/* How many sessions in this band are asking for a person — over the FULL
+   population of each worktree program, the same convention the worktree
+   rollup uses, so the band and the heads under it can never disagree. */
+function repoAlertCount(group) {
+  let count = 0;
+  for (const { program } of group.worktrees) {
+    count += program.agents.filter((agent) => alerting(agent)).length;
+  }
+  return count;
+}
+
 /* Everything the repo BAND paints, and nothing its worktrees paint: the name,
    the caret, the worktree count and the PR links. A row ticking inside one of
    its worktrees must leave this node alone, or the band rebuild would take
@@ -5819,6 +5937,10 @@ function repoShellSig(group, ui) {
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
+    /* The inline-mode alert marker is painted on this head, and nothing else
+       in this signature moves when a session starts or stops asking — the
+       documented mutates-only-itself failure class. */
+    needsYouDisplayOf(ui) === "inline" ? "alerts:" + repoAlertCount(group) : "",
   ].join("\u001f");
 }
 
@@ -5833,6 +5955,7 @@ function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
+  const alerts = needsYouDisplayOf(ui) === "inline" ? repoAlertCount(group) : 0;
   /* A band, not a second card: no rollup, no rename, no details. The worktree
      heads below already carry all three, and stacking two full program headers
      over one row of work is how a hierarchy turns into chrome. */
@@ -5851,6 +5974,20 @@ function renderRepoSection(group, ui = state) {
       class: "repo-worktree-count mono",
       text: count === 1 ? "1 worktree" : count + " worktrees",
     }),
+    /* Inline mode only. With no strip, a collapsed band is the one place an
+       alerting session could hide with zero signal — the worktree heads under
+       it carry an alerts cell, but a shut fold draws no worktree heads. In
+       pane mode the strip holds those rows, and a band count pointing at rows
+       that are not under it would contradict the strip's own sentence. */
+    alerts
+      ? el("span", {
+        class: "repo-alerts is-alerting mono",
+        "aria-label": alerts === 1
+          ? "1 session needs you in " + group.name
+          : alerts + " sessions need you in " + group.name,
+        text: alerts === 1 ? "1 alert" : alerts + " alerts",
+      })
+      : null,
     ...group.pullRequestUrls.map((url) => el("a", {
       class: "repo-pr",
       href: url,
@@ -6115,7 +6252,11 @@ function agentRowSig(agent, ui, opts = {}) {
     opts.swarmOpen ? "swarm-open" : "swarm-shut",
     opts.swarmAlerting ? "swarm-alert" : "",
     // The strip's copy of a row carries a program chip its group copy does not.
-    opts.programChip ? "chip:" + programName(opts.programChip) : "",
+    opts.programChip ? "chip:" + stripChipLabel(opts.programChip) : "",
+    // Inline mode's membership mark. A hook can flip it with nothing else in
+    // this signature moving, so it has to be in here or the row keeps its
+    // cached, unmarked node.
+    opts.alerting ? "alert-mark" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -6158,6 +6299,10 @@ function programsPaintSig(visible, ui) {
     LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
+    /* Fifth instance of the mutates-only-itself failure class: the settings
+       radio writes needsYouDisplay and nothing else, so without this the strip
+       would neither leave nor return until something unrelated repainted. */
+    needsYouDisplayOf(ui),
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
     /* Third instance of the same failure class: toggleRepo mutates nothing else
@@ -6252,8 +6397,10 @@ function syncProgramList(root, visible, ui = state) {
   const sections = [];
   /* Board only, and only over a board that has something on it: History is a
      record rather than a request, and an empty board says its own sentence
-     below rather than pinning "no session is asking" over nothing. */
-  if (ui.view === "board" && visible.length) {
+     below rather than pinning "no session is asking" over nothing. In inline
+     mode there is no strip at all — not even the calm empty state, because a
+     surface whose whole job the operator turned off has nothing true to say. */
+  if (ui.view === "board" && visible.length && needsYouDisplayOf(ui) === "pane") {
     sections.push({
       key: STRIP_ID,
       sig: "strip\u001f" + (strip.length ? stripSig(strip) : "clear"),
@@ -6310,7 +6457,7 @@ function syncProgramList(root, visible, ui = state) {
 
   let shown = 0;
   const keptRows = new Set();
-  const stripBody = strip.length ? programBodies.get(STRIP_ID) : null;
+  const stripBody = strip.length && needsYouDisplayOf(ui) === "pane" ? programBodies.get(STRIP_ID) : null;
   if (stripBody) {
     const plan = strip.map(({ agent, program }) => {
       const opts = stripRowOpts(program, board);
@@ -6822,25 +6969,21 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      Board only, and that is not a stylistic choice: the strip renders on Board,
      so on any other view this would remove a row from the only place it is
      drawn. A finished session whose process is somehow still running satisfies
-     alerting(), and it would have silently disappeared out of History. */
-  const pinnedIds = ui.view === "board"
+     alerting(), and it would have silently disappeared out of History. Pane
+     mode only, for the same reason: inline mode draws no strip, so pinning a
+     row away here would remove it from the only place it is drawn. */
+  const pinnedIds = ui.view === "board" && needsYouDisplayOf(ui) === "pane"
     ? new Set(agents.filter((agent) => alerting(agent)).map((agent) => agent.id))
     : new Set();
 
+  /* Inline mode's row-level signal. The strip used to BE the signal; with it
+     off, membership itself must mark the row — outcome ink alone misses the
+     hook-needsInput shape that dominates the live set, and six sessions asking
+     for a person would render as six ordinary Waiting rows. Board only,
+     exactly like pinnedIds and for the same reason. */
+  const markAlerting = ui.view === "board" && needsYouDisplayOf(ui) === "inline";
+
   const plan = [{ key: "columns", sig: "columns", build: renderAgentColumnHeader }];
-  if (pinnedIds.size) {
-    const n = pinnedIds.size;
-    plan.push({
-      key: "pinned-note",
-      sig: "pinned:" + n,
-      build: () => el("p", { class: "pinned-note" },
-        el("span", {
-          text: n === 1
-            ? "1 session from this program is in Needs you, above"
-            : n + " sessions from this program are in Needs you, above",
-        })),
-    });
-  }
 
   const appendTree = (agent, depth) => {
     const visibleDescendants = (fullChildren.get(agent.id) || [])
@@ -6864,6 +7007,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
         // Ember on the chip when something folded up inside is asking for a
         // person. The row itself is calm; the swarm it is holding is not.
         swarmAlerting: !open && hasAlertingDescendant(agent.id, fullChildren, fullById),
+        alerting: markAlerting && alerting(agent),
       };
       plan.push({
         key: "row:" + agent.id,
@@ -7392,13 +7536,21 @@ function renderAgentRow(agent, program, opts = {}) {
       }, icon("rename")),
       /* Only in the Needs-you strip. The strip is flat and cross-program, so
          the program header that would otherwise say where a row came from is
-         not above it — the chip is that header, per row. In a program group the
-         header IS above it and the chip would restate it on every line. */
+         not above it — the chip is that header, per row, down to the same
+         branch@directory words. And because the header it stands in for is
+         also where the operator would go next, the chip is the road back: a
+         button that puts the parent group on screen. */
       opts.programChip
-        ? el("span", {
+        ? el("button", {
           class: "row-program-chip",
-          title: "Program: " + programName(opts.programChip),
-          text: programName(opts.programChip),
+          title: "Jump to " + stripChipLabel(opts.programChip),
+          "aria-label": "Jump to program group: " + stripChipLabel(opts.programChip),
+          dataset: { fkey: "strip-chip:" + agent.id },
+          onclick: (e) => {
+            e.stopPropagation();
+            jumpToProgramGroup(opts.programChip);
+          },
+          text: stripChipLabel(opts.programChip),
         })
         : null),
     el("span", { class: "row-identity-tags" },
@@ -7564,6 +7716,10 @@ function renderAgentRow(agent, program, opts = {}) {
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
     (outcome !== "healthy" ? " is-" + outcome : "") +
+    /* Needs-you membership, not outcome: inline mode's stand-in for the strip.
+       A row can be in the set with a healthy outcome (hook needsInput), so
+       this mark and is-needs-you are two different facts. */
+    (opts.alerting ? " is-alerting" : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
@@ -7596,10 +7752,10 @@ function renderAgentRow(agent, program, opts = {}) {
        to LOOK at, not quieter to listen to. Program, role,
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${programName(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
     dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
     onclick: (e) => {
-      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
+      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip, .row-program-chip")) return;
       activate();
     },
     onkeydown: (e) => {
@@ -10911,6 +11067,7 @@ function boot() {
   loadWidgetPreferences();
   loadLookback();
   loadContextSpread();
+  loadNeedsYouDisplay();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
   renderNotificationCenter();
