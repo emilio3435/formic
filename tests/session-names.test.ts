@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   JsonSessionNameStore,
   cleanModelTitle,
@@ -9,7 +12,8 @@ import {
   type SessionNameFileOperations,
 } from "../src/server/session-names";
 import { buildSnapshot } from "../src/server/snapshot";
-import type { ArchiveStore, CollectedAgent } from "../src/server/types";
+import { HubState, type HubCollectors } from "../src/server/state";
+import type { ArchiveStore, CollectedAgent, CommandRunner } from "../src/server/types";
 
 /* Naming puts a model in the path of what every row on the board is called, so
    what is worth testing is not that it works — it is what happens when it does
@@ -273,6 +277,67 @@ describe("naming degrades instead of failing", () => {
     ]);
     expect(prompt).not.toContain("recommended_plugins");
     expect(prompt).toContain("Fix the renderer races");
+  });
+});
+
+describe("hub naming candidates", () => {
+  test("sdk-launched sessions bypass out-of-band naming while cli work is still named", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "anthill-session-kind-naming-"));
+    const transcript = join(directory, "session.jsonl");
+    writeFileSync(transcript, JSON.stringify({
+      type: "user",
+      sessionId: "fixture",
+      message: { role: "user", content: "Fix the lifecycle settings contract." },
+    }));
+    const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      response: "Fix lifecycle settings contract",
+    })));
+
+    try {
+      const agent = (id: string, launch: CollectedAgent["launch"]): CollectedAgent => ({
+        id,
+        provider: "claude",
+        sourceSessionId: id.split(":")[1]!,
+        displayName: "Claude · fixture",
+        launch,
+        task: "Fix the lifecycle settings contract.",
+        status: "running",
+        statusReason: "Fixture activity is recent.",
+        updatedAt: new Date().toISOString(),
+        tokens: { provenance: "unknown" },
+        artifacts: [{ label: "CLAUDE transcript", path: transcript, kind: "transcript" }],
+        gates: [],
+      });
+      const sdk = agent("claude:sdk-review", { entrypoint: "sdk-py", promptSource: "sdk" });
+      const cli = agent("claude:cli-work", { entrypoint: "cli" });
+      const collectors: HubCollectors = {
+        sessions: async () => ({
+          omp: { value: [], errors: [] },
+          codex: { value: [], errors: [] },
+          claude: { value: [sdk, cli], errors: [] },
+          cursor: { value: [], errors: [] },
+          factory: { value: [], errors: [] },
+        }),
+        cmux: async () => ({ value: [], errors: [] }),
+        notifications: async () => ({ value: [], errors: [] }),
+        enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+      };
+      const runner: CommandRunner = {
+        run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+      };
+      const names = await JsonSessionNameStore.open(PATH, memoryFiles().files);
+      const archive: ArchiveStore = { has: () => false, archive: async () => {} };
+      const state = new HubState(runner, archive, [], { collectors, sessionNames: names });
+
+      await state.refresh();
+      for (let attempt = 0; attempt < 50 && !names.has(cli.id); attempt += 1) await Bun.sleep(1);
+
+      expect(names.has(cli.id)).toBe(true);
+      expect(names.has(sdk.id)).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
