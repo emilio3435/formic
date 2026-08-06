@@ -4678,8 +4678,12 @@ const LENS_AXES = [
     allLabel: "All models",
     views: null,
     options: (agents) => {
+      /* modelShort() returns null for placeholder strings ("<synthetic>") that
+         are nonetheless truthy on live rows — fall back to the raw value or the
+         label is null and the menu render dies on .toLowerCase(). Measured
+         live 2026-08-06: the board failed to paint on exactly this. */
       const named = [...new Set(agents.map((a) => a.model).filter(Boolean))].sort()
-        .map((model) => ({ value: model, fkey: model, label: modelShort(model) }));
+        .map((model) => ({ value: model, fkey: model, label: modelShort(model) || model }));
       return agents.some((a) => !a.model)
         ? [...named, { value: UNREPORTED, fkey: "unreported", label: "Unreported", short: "no reported model" }]
         : named;

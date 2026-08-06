@@ -7425,6 +7425,31 @@ describe("FE-B: harness-backed client behavior", () => {
     }
   });
 
+  test("(FE2-D3) a model the shortener refuses still gets a labeled option, not a crash", () => {
+    /* Live regression, 2026-08-06 06:15: the fleet carries model "<synthetic>"
+       (a truthy string, so it passes filter(Boolean)) and modelShort() returns
+       NULL for it by design (placeholder guard). The option's label came out
+       null, lensFilterMenu called .toLowerCase() on it, and render() threw
+       before the board ever painted — the page was down. The label falls back
+       to the raw string: honest, filterable, and render survives. */
+    const updatedAt = new Date().toISOString();
+    const snap = snapshot({
+      programs: [{ id: "p", name: "P", agents: [
+        agent({ id: "claude:syn", provider: "claude", model: "<synthetic>", updatedAt, task: "A" }),
+        agent({ id: "codex:m", provider: "codex", model: "gpt-5.6-sol", updatedAt, task: "B" }),
+      ] }],
+    });
+    const ui = listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true });
+    const modelAxis = M.LENS_AXES.find((a: { key: string }) => a.key === "model")!;
+    const labels = M.lensOptions(modelAxis, ui).map((o: { label: unknown }) => o.label);
+    for (const label of labels) expect(typeof label, String(label)).toBe("string");
+    expect(labels).toContain("<synthetic>");
+    // And the whole bar renders over this fleet — the crash site was render().
+    withDom(() => {
+      expect(() => M.renderFilterBar(ui)).not.toThrow();
+    });
+  });
+
   test("(FE2-D3) the counts do not move when another lens narrows the board", () => {
     /* Counts are working-set counts on purpose. If they were taken AFTER the
        other lenses, every option would fall towards zero as the operator
