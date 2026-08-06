@@ -125,13 +125,12 @@ export function renderActionLog(ui = state, nameFor = null) {
 
 export function renderActionsPanel() {
   const panel = $("actions-panel");
-  const toggle = $("actions-toggle");
   if (!panel) return;
+  /* The toggle's pressed/is-open maintenance stood here and went with the button
+     (operator directive, 2026-08-05). `state.actionsOpen` has no writer left, so
+     this panel now paints closed forever — dormant, not deleted, pending the
+     ruling on whether the subsystem comes out entirely. */
   const open = state.actionsOpen && state.view !== "usage";
-  if (toggle) {
-    toggle.setAttribute("aria-pressed", open ? "true" : "false");
-    toggle.classList.toggle("is-open", open);
-  }
   const log = state.actions;
   // Same rule as the alarm: visibility every paint, rebuild only on change.
   panel.hidden = !open;

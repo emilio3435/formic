@@ -443,13 +443,29 @@ export function lastActionFor(actions, agentId) {
    snapshot still knows; an agent that has since disappeared keeps its raw id
    rather than being silently dropped from the record. */
 
-export function liveElapsedText(agent, generatedAt) {
-  if (agent.elapsedMs == null) return "—";
+/* The SPAN reading as a NUMBER — first activity to last, dormancy included, with
+   the same live drift correction the cell applies so a running session's span
+   does not freeze between snapshots.
+
+   Split out of liveElapsedText because the Span lens buckets sessions by this
+   duration, and a lens that computed its own would be a second definition of
+   "how long has this been going" sitting one column away from the first. They
+   would agree until the day they did not, and the disagreement would show up as
+   a row that reads 9h sitting under a filter for "1–8h". One number, two
+   renderings. Returns null when the span is unmeasurable, which is a real state
+   and not a zero. */
+export function liveElapsedMs(agent, generatedAt) {
+  if (agent.elapsedMs == null) return null;
   if (deriveActivity(agent) !== "ended" && generatedAt) {
     const drift = Date.now() - Date.parse(generatedAt);
-    if (Number.isFinite(drift) && drift > 0) return fmtElapsed(agent.elapsedMs + drift);
+    if (Number.isFinite(drift) && drift > 0) return agent.elapsedMs + drift;
   }
-  return fmtElapsed(agent.elapsedMs);
+  return agent.elapsedMs;
+}
+
+export function liveElapsedText(agent, generatedAt) {
+  const ms = liveElapsedMs(agent, generatedAt);
+  return ms == null ? "—" : fmtElapsed(ms);
 }
 
 /* modelPolicyView() stood here, turning agent.modelPolicy into a compliance

@@ -33,15 +33,33 @@ export const state = {
   view: "board",
   query: "",
   facetProgram: "",
-  facetProvider: "",
-  /* The lifecycle lens: "" | working | waiting | unverified. Session-scoped like
-     the other facets — it answers "what am I looking at right now", not "what
-     should this board default to", so it does not persist and does not travel. */
-  facetStatus: "",
-  /* Which filter dropdown is open: "" | time | provider | status. One at a
-     time, deliberately — two menus hanging off the same bar would overlap, and
-     the operator has no way to tell which one a click is aimed at. Session-
-     scoped like the lenses it opens: a menu left hanging is not a preference. */
+  /* The lenses, and every one of them is a SET.
+
+     They were scalars — one provider, one lifecycle — which quietly made every
+     axis a radio button: choosing "waiting" un-chose "working", so the one
+     question an operator actually asks a board ("show me everything that is not
+     making progress") could not be asked at all. Within an axis the members are
+     a UNION (working OR waiting); across axes they still AND.
+
+     Empty means the lens is OFF and everything passes. That is the same
+     statement as "no filter", so there is no separate off-flag to keep in sync —
+     and `.length` is the only truthiness test any reader should use, because
+     [""] is a real one-member set (the model axis stores "no model reported" as
+     the empty string).
+
+     Session-scoped, all of them: they answer "what am I looking at right now",
+     not "what should this board default to", so they do not persist and do not
+     travel. */
+  facetProviders: [],
+  facetStatuses: [],
+  facetModels: [],
+  facetSpans: [],
+  facetContexts: [],
+  /* Which filter dropdown is open: "" | time | provider | status | model | span
+     | context. One at a time, deliberately — two menus hanging off the same bar
+     would overlap, and the operator has no way to tell which one a click is
+     aimed at. Session-scoped like the lenses it opens: a menu left hanging is
+     not a preference. */
   openFilterMenu: "",
   lookbackHours: DEFAULT_LOOKBACK_HOURS, // null = all collected
   // Review workers are still in the snapshot and History. Board hides the
@@ -66,6 +84,11 @@ export const state = {
      open across the four-second repaint — closing it under them would make the
      board unreadable while anything is actually waiting. */
   notifyPanelOpen: false,
+  /* The cleanup sweep's propose run and its result. `view` is the notification
+     view documented in docs/CLEANUP-SWEEP.md — removables with rollback SHAs,
+     refusals with reasons, and the confirm command the OPERATOR pastes. The
+     board never executes it, so nothing here is ever a deletion, only a plan. */
+  cleanup: { running: false, error: "", view: null, at: 0 },
   usageRangeId: "24h",
   usageCustomHours: 24,
   usageLoading: false,

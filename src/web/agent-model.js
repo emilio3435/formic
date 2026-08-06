@@ -528,10 +528,18 @@ export function tokenSummary(tokens) {
      words on every one of 250 rows to say something that is true of nearly all
      of them.
 
-     `scopeMarked` keeps what mattered — something VISIBLE that says "this
-     number has a condition on it" — and spends one character on it instead of
-     eleven. The full sentence is one hover away, and now there is a mark that
-     tells you to hover. */
+     `scopeMarked` then spent one superscript character on it instead of eleven.
+     That character is gone too (operator directive, 2026-08-05): being true of
+     nearly every row, it never varied, so it distinguished nothing while still
+     costing the eye a stop on each pass — the same "true of nearly all of them"
+     objection that retired the printed words, applied to their shorthand.
+
+     The FIELD stays and is still read. It no longer decides whether to draw a
+     glyph; it decides whether the tokens cell's aria-label and title carry the
+     ", latest model call" clause. So the qualification is exactly where it was
+     at the very start — in the accessible name and on hover — with one
+     difference that is the whole point: the row's number is now the tokens
+     figure alone, and nothing on screen implies the two scopes are comparable. */
   const text = tokens.total != null
     ? marks[tokens.provenance] + fmtTok(tokens.total)
     : marks[tokens.provenance] + parts.join(" · ");
