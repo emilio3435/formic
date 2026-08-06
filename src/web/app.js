@@ -5220,16 +5220,35 @@ function reviewPolicyFooter(ui) {
   };
 }
 
+/* Empty the bar around the one node that must SURVIVE the repaint.
+
+   Every control here is rebuilt on every paint, but the sentence's live region
+   (`#bar-scope-note`, declared in index.html) cannot be: an aria-live element
+   that is destroyed and recreated announces nothing, because the region has to
+   already be in the tree when its content changes. */
+function clearFilterBar(bar, keep) {
+  for (const child of [...(bar.childNodes || [])]) {
+    if (child !== keep && typeof child.remove === "function") child.remove();
+  }
+}
+
 function renderFilterBar(ui = state) {
   const bar = $("filter-bar");
   if (!bar) return;
-  bar.textContent = "";
+  const note = $("bar-scope-note");
+  clearFilterBar(bar, note);
+  /* Everything that belongs in FRONT of the sentence goes in with insertBefore
+     rather than append, or the one surviving node would keep the position it
+     held before the rebuild and every control would land behind it. A document
+     built without the note takes insertBefore(node, null), which appends —
+     exactly the old behaviour. */
+  const place = (node) => { if (node) bar.insertBefore(node, note); };
   if (ui.view === "usage") {
     bar.hidden = false;
     bar.setAttribute("aria-hidden", "false");
-    bar.append(el("span", { class: "filter-lead", text: "Range" }));
+    place(el("span", { class: "filter-lead", text: "Range" }));
     for (const preset of USAGE_RANGE_PRESETS) {
-      bar.append(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
+      place(filterChip(preset.label, ui.usageRangeId === preset.id, () => {
         state.usageRangeId = preset.id;
         state.usageCustomHours = preset.hours;
         void loadUsageData(true);
@@ -5237,7 +5256,7 @@ function renderFilterBar(ui = state) {
       }, { fkey: "usage-range:" + preset.id }));
     }
     const customActive = ui.usageRangeId === "custom";
-    bar.append(filterChip(
+    place(filterChip(
       customActive ? ("Custom " + ui.usageCustomHours + "h") : "Custom",
       customActive,
       () => {
@@ -5264,7 +5283,7 @@ function renderFilterBar(ui = state) {
   /* The tab strip is navigation. This is the one filter surface: the lenses and
      the time control live together here, while the collector window below
      remains a server setting rather than a second filter. */
-  bar.append(el("span", { class: "filter-lead", text: "Filters" }));
+  place(el("span", { class: "filter-lead", text: "Filters" }));
   /* The lenses: Class · Provider · Status · Model · Span · Context, in that
      order and in one flat row. Class leads because it answers who the agent is,
      and everything after it is a question about that same agent. Six closed
@@ -5275,20 +5294,25 @@ function renderFilterBar(ui = state) {
      Each renders only where it has something to say: two or more populated
      options, or a selection the operator still needs a way to switch off. */
   for (const axis of LENS_AXES) {
-    if (lensApplies(axis, ui)) bar.append(lensFilterMenu(axis, ui));
+    if (lensApplies(axis, ui)) place(lensFilterMenu(axis, ui));
   }
   /* No always-on program chips — programs are unbounded and the bar would grow
      without limit. The lens is SET from the drawer and CLEARED here, so an
      active narrowing is still one visible control away from off. */
   if (ui.facetProgram) {
     const scoped = ((ui.snap && ui.snap.programs) || []).find((p) => p.id === ui.facetProgram);
-    bar.append(filterChip(
+    place(filterChip(
       "Only " + (scoped ? programName(scoped) : "one program"),
       true,
       () => setFacetProgram(state.facetProgram),
       { fkey: "program:clear", title: "Show every program again" },
     ));
   }
+  /* The sentence stands here, between the lenses it summarises and the control
+     that decides the population it counts against — which is also what it says.
+     It is already a child of the bar in the markup; this only has work to do in
+     a document that was built without it. */
+  if (note && ![...(bar.childNodes || [])].includes(note)) bar.append(note);
   /* Time goes LAST and hard right, separated from everything before it.
      Everything to its left narrows within the population; this control decides
      what the population is. The gap is the two-layer boundary drawn in space —
@@ -5306,11 +5330,31 @@ function renderFilterBar(ui = state) {
      server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
+/* Two slots, one line at a time.
+
+   D4: the board's sentence moved INTO the filter bar row, between the lenses and
+   the working-set control — it reconciles those two layers, so it stands between
+   them, and it fills the gap that made the right-aligned Time trigger read as
+   stranded. Usage keeps the old line below the search box: it has no lenses and
+   no working set, only a range, so there is no two-layer gap there to stand in.
+
+   Whichever slot is not speaking is emptied AND hidden. Both halves matter: a
+   leftover sentence in the other slot would be a second, stale answer to the
+   same question, and a slot left carrying the hidden flag it picked up on the
+   other view is how a quiet board followed by a switch to Usage produced a range
+   line that was written and never shown. */
 function renderScopeNote(shown) {
-  const note = $("scope-note");
+  const usage = state.view === "usage";
+  const note = usage ? $("scope-note") : $("bar-scope-note");
+  const idle = usage ? $("bar-scope-note") : $("scope-note");
+  if (idle) {
+    idle.textContent = "";
+    idle.hidden = true;
+  }
   if (!note) return;
-  if (state.view === "usage") {
+  if (usage) {
     const range = usageRangeHours();
+    note.hidden = false;
     note.textContent = state.usageLoading
       ? "Loading BurnBar usage…"
       : `Usage range ${range}h · source BurnBar` + (state.usageSummary && state.usageSummary.available === false

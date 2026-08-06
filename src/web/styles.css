@@ -927,7 +927,11 @@ body.feed-frozen .programs { opacity: 0.62; }
    positioned descendants, so the first dropdown to open would have been scrolled
    away inside the very bar that opened it. */
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding-bottom: 2px; }
-.filter-bar:empty { display: none; }
+/* The `:empty` fallback is gone with FE-4 D4: the bar now always carries the
+   sentence's live region as a permanent child, so it is never empty and the rule
+   could never match again. Hiding it was never that rule's job anyway —
+   `[hidden] { display: none !important }` at the top of this file does it, which
+   is what `bar.hidden = true` has always been relying on. */
 .filter-bar > * { flex: none; }
 .filter-lead { position: sticky; left: 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-right: 0.15rem; background: var(--canvas); padding-right: 0.2rem; }
 /* The `filter-group` segmented control — it held the provider, lookback and
@@ -1076,6 +1080,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* The board's sentence, in the filter bar row. It TAKES the slack between the
+   lenses and the right-aligned Time trigger, which is both its meaning (lenses
+   left, working-set control right, the reconciliation between them) and what
+   stops that alignment reading as stranded.
+
+   `flex` with `min-width: 0` rather than a fixed width: on a narrow bar the
+   sentence wraps to its own line and the controls stay put. It must never widen
+   the bar, because this bar cannot recover with `overflow-x` — an overflow
+   container clips the dropdowns that hang off it. */
+.scope-note.is-inline { flex: 1 1 14rem; min-width: 0; margin-left: 0.35rem; }
 /* The self-writing line. Its lens fragments are real buttons styled as emphasis
    inside the sentence — an operator reading "showing working codex sessions"
    should be able to act on the words rather than hunt the bar for whichever

@@ -7529,7 +7529,10 @@ describe("FE-B: harness-backed client behavior", () => {
      operator to discover, which is why lenses "looked broken" every time they
      failed to move the number beside the tab they were filtering. */
 
-  const noteOf = () => domById.get("scope-note")!;
+  /* FE-4 D4 moved the board's sentence into the filter bar row; `#scope-note`
+     below the search box is now the Usage line's slot alone. The render target
+     changed, the behaviour these pin did not. */
+  const noteOf = () => domById.get("bar-scope-note")!;
   /* The fake document lives only for the duration of withRequests, so anything
      that clicks the rendered sentence has to run INSIDE it — render() reads
      `document` and a fire() after the teardown throws rather than failing. */
@@ -7924,6 +7927,72 @@ describe("FE-B: harness-backed client behavior", () => {
       M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap: plain, showReviewWorkers: false }));
       expect(byFkey(domById.get("filter-bar"), "class:menu")).toBeNull();
     });
+  });
+
+  /* -------- FE-4 D4: the sentence moves into the filter bar row ------------- */
+
+  test("(FE4-D4) the sentence sits between the lenses and the working-set control", async () => {
+    /* Where it is IS what it says. The lenses narrow within a population; Time
+       decides what the population is; the sentence reconciles those two numbers,
+       and it now stands in the gap between the two layers rather than on a line
+       of its own below the search box — which also fills the void that made the
+       right-aligned Time trigger read as stranded. */
+    await withState({
+      view: "board", lookbackHours: null, showReviewWorkers: true, fetchFailed: false,
+      snap: lensFleet(), facetProviders: ["codex"],
+    }, () => withRequests([], async () => {
+      M.renderFilterBar(M.state);
+      M.renderScopeNote(1);
+      const bar = domById.get("filter-bar")!;
+      const note = domById.get("bar-scope-note")!;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const slots = (bar as any).children.map((child: any) =>
+        child === note ? "sentence" : (focusKeysOf(child)[0] || child.className));
+      expect(slots[0]).toBe("filter-lead");
+      expect(slots[slots.length - 1]).toBe("lookback:menu");
+      expect(slots[slots.length - 2]).toBe("sentence");
+      // Every lens trigger is in front of it, none behind.
+      expect(slots.indexOf("class:menu")).toBeLessThan(slots.indexOf("sentence"));
+      expect(slots.indexOf("provider:menu")).toBeLessThan(slots.indexOf("sentence"));
+
+      expect(note.hidden).toBe(false);
+      expect(textOf(note)).toContain("codex");
+      expect(textOf(byClass(note, "scope-count"))).toBe("1 of 3");
+      /* Still a live region, and still the SAME one across paints. It is
+         declared in the markup rather than built by renderFilterBar because an
+         aria-live element that is destroyed and recreated announces nothing —
+         the region has to be in the tree before its content changes. */
+      expect(html).toContain('id="bar-scope-note"');
+      expect(note.attributes["aria-live"] ?? "polite").toBe("polite");
+      M.renderFilterBar(M.state);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((bar as any).children.filter((c: unknown) => c === note).length).toBe(1);
+      expect(domById.get("bar-scope-note")).toBe(note);
+
+      // The old slot below the search box is emptied, not left holding a stale
+      // copy of a sentence that now lives somewhere else.
+      expect(textOf(domById.get("scope-note"))).toBe("");
+      expect(domById.get("scope-note")!.hidden).toBe(true);
+    }));
+  });
+
+  test("(FE4-D4) Usage keeps its own line below the search box", async () => {
+    /* Usage has no lenses and no working set — only a range — so there is no
+       two-layer gap for a sentence to stand in. Its line stays where it was, and
+       the bar's region goes quiet rather than carrying a leftover board
+       sentence into a view that cannot have one. */
+    await withState({ view: "usage", usageRangeId: "24h", usageCustomHours: 24, usageLoading: false, snap: lensFleet() },
+      () => withRequests([], async () => {
+        M.renderFilterBar(M.state);
+        M.renderScopeNote(0);
+        expect(textOf(domById.get("scope-note"))).toContain("Usage range 24h");
+        /* And it is VISIBLE. Leaving the board's hidden flag on this element was
+           how a quiet board followed by a switch to Usage produced a range line
+           that was written and never shown. */
+        expect(domById.get("scope-note")!.hidden).toBe(false);
+        expect(textOf(domById.get("bar-scope-note"))).toBe("");
+        expect(domById.get("bar-scope-note")!.hidden).toBe(true);
+      }));
   });
 
   test("(3) the rename form and the usage panel keep their controls addressable", () => {
