@@ -143,8 +143,14 @@ describe("identities that must hold whatever window you ask for", () => {
        it is routed, and two fixes to this family have now passed it without
        touching it. It flips to a hard failure the moment the scalar and the
        breakdown are computed over the same rows, which is the signal to remove
-       this marker rather than the test. */
-    if (!available) return;
+       this marker rather than the test.
+
+       Unreadable BurnBar THROWS here rather than returning quietly. The quiet
+       return is correct for the plain tests around it, but under `.failing`
+       quiet means passing, and bun reports a passing `.failing` test as "marked
+       as failing but it passed" — so an unreadable database would announce that
+       the $1.17 gap had been closed. */
+    expect(available).toBe(true);
     const gaps = WINDOWS.map(({ label }) => `${label}=${round(providerCost(label) - (at(label).measuredCostUsd ?? 0))}`);
 
     /* Counted, because an identity that never meets a non-zero case passes
