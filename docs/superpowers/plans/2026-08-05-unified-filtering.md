@@ -780,3 +780,30 @@ Commit/push reviews stay (publication gates); the per-turn Stop review is the vo
 ---
 
 **Execution options** (per superpowers): **(1) Subagent-driven** — dispatch a fresh subagent per task with review between tasks (recommended; tasks are sized for it), or **(2) Inline** — `superpowers:executing-plans` batch execution with checkpoints. Phase 0 can start immediately; Phase 1 needs a server restart window.
+
+---
+
+## Execution record — 2026-08-05, cmux lane swarm (orchestrator: Fable session; lanes: BE-1 = GPT 5.6 SOL, FE-1 = Opus 5 xhigh, EV-1 = Grok 4.5)
+
+| Task | Commit | Notes |
+|---|---|---|
+| 0.1 | `4d4abb7` | FE-1; hunk-level staged around 11 foreign hunks |
+| 0.2 | `5345c59` (buried) | Content swept into the Context-card lane's commit by an index-wide co-tenant commit; verified in HEAD verbatim, not re-attributed. Test fixture diverges from plan (lookback `null`) — the plan's `lookbackHours: 6` cannot yield the sole-constraint sentence (see `4b4afa5`) |
+| 1.1 | `0036ec6` | BE-1 via orchestrator commit (codex sandbox cannot take the linked-worktree lock) |
+| 1.2 | `f48ba66` | " |
+| 1.2b | `691a719` + in `dfa75fd` | Codex markers confirmed (`codex_exec/exec` vs `codex-tui/cli`); cursor: no recorded marker, stays pattern/`unknown` |
+| 1.3 | `dfa75fd` | Includes archive-time fallback derivation (improvement over plan) + ARCHITECTURE.md sentence + fingerprint control |
+| 1.4 | deployed 22:25 CDT | launchd kickstart; live census: 484/484 review-prompt sessions → `review`; this planning session → `work/launch-evidence`; codex exec→`automation`, tui→`work` |
+| 1.5 | `a046394` (server) + `399514b` (client) | Client diverges from plan: failure ROLLBACK instead of refetch (fetchSettings is boot-only); mutation-checked |
+| 2.0 | `dd54225` (evidence) | Census: 651 sdk-py fleet-wide, 649 review, 2 plugin follow-ups — D1 closed, no widening |
+| 2.1 | `6939ccf` | Cutover; regex retained as transition fallback only |
+| 3.1 | `321b42b` | Provider chips; fkey pin extended deliberately |
+| 3.2 | `2b9a239` | Status lenses + program clear-chip; shelf suppressed whole under a lens |
+| 3.3 | `5d2a8b8` + `78aa54e` | Diverges from plan: reused the existing Settings `scanWindowHours` field instead of a second save path; `postScanWindow` + `filterChip` icon/alert options removed as orphans. `setView("now")` fix in `78aa54e` |
+| 4.1 | `da4f4b9` | SDK sessions skipped by the namer |
+| 4.3 | in `dd54225` | Yield: 2/1352 retained reviews with findings; $ unknown (BurnBar join unreachable); dup-SHA across linked worktrees = 0 by construction |
+| 4.4 | Step 1 done | `ENABLE_STOP_REVIEW=0` found; **application pending operator** (classifier gates shell-init edits); Step 3 re-ledger due after one working day |
+| 4.5 | draft ready | `docs/UPSTREAM-ISSUE-DRAFT-security-guidance.md`, awaiting Emilio's approval; trigger-scope ask dropped (switch exists) |
+| 4.2 | **open** | Gated: one retention cycle post-deploy, or Emilio accepts pre-deploy retained rows reading `unknown` |
+
+Exit gate: `bunx tsc --noEmit` clean, `bun test` 2786/2786, deployed server healthy. Unowned adjacent finding parked for a ruling: the Board's rich all-clear is unreachable under every lookback preset (`4b4afa5`, `docs/EMPTY-BOARD-LOOKBACK-FINDING.md`).

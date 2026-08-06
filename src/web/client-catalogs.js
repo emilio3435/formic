@@ -173,7 +173,7 @@ export const CONTEXT_SPREAD_KEY = "mtn3-contextSpread";
 
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
-  "momentum", "burn", "context-peak", "health",
+  "momentum", "burn", "tokens", "context-peak", "health",
 ]);
 export const WIDGET_CATALOG = Object.freeze([
   /* The "Findings" card stood first here and is gone.
@@ -185,6 +185,11 @@ export const WIDGET_CATALOG = Object.freeze([
      that still names it. */
   { id: "momentum", label: "Momentum" },
   { id: "burn", label: "Burn" },
+  /* Consumption over the scan window, not occupancy. It pairs with Cost beside
+     it — it is the figure that answers "what did this cost" — and it carries no
+     window tag of its own, because the board states its scan window once in the
+     rail header (S2-T3). */
+  { id: "tokens", label: "Tokens" },
   /* Label "Context", id `context-peak`. S3 moved the peak off the headline —
      the card reads the fleet's typical occupancy now, because one session's
      extremum was standing in for a reading about the whole fleet. The id does

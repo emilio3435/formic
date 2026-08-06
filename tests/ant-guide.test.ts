@@ -51,8 +51,9 @@ describe("ANT-GUIDE.md stays true to the product", () => {
        "Findings" — a canary that dies with the thing it guards tells you
        nothing extra. */
     expect(cardLabels).toContain("Momentum");
-    // Four since S2-T1 retired Findings: the header states no count of problems.
-    expect(cardLabels.length).toBe(4);
+    /* Four after S2-T1 retired Findings; five once S0-T5 put a real consumption
+       aggregate on the wire and the Tokens card could ship honestly. */
+    expect(cardLabels.length).toBe(5);
     expect(cardLabels).not.toContain("Findings");
     for (const label of cardLabels) {
       expect(guide, `guide never describes the ${label} card`).toContain(`**${label}**`);
