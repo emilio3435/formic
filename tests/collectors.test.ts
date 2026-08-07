@@ -174,6 +174,33 @@ describe("collector identity and usage truth", () => {
     });
   });
 
+  test("bookkeeping rows appended to a dormant session do not refresh its activity", () => {
+    /* Measured 2026-08-06: restarting one Claude session made Claude Code
+       append untimestamped metadata (ai-title / last-prompt / mode /
+       file-history-snapshot) to OTHER projects' dormant transcripts, and the
+       mtime-vs-timestamp max promoted each to "working" for the fresh
+       window — ghost sessions loading into the Working queue on every app
+       restart, and re-loading on every session-list refresh. updatedAt is
+       the last timestamped record; mtime is only the no-timestamps fallback,
+       so the ghosts also age out of the lookback window like anything else. */
+    const dormantNow = Date.parse("2026-08-06T21:00:00.000Z");
+    const sessionId = "99999999-8888-7777-6666-555555555555";
+    const agent = parseClaudeJsonl([
+      JSON.stringify({
+        type: "user",
+        timestamp: "2026-08-05T12:20:52.323Z",
+        sessionId,
+        cwd: "/Users/me/project",
+        message: { role: "user", content: "spin up the lanes and orchestrate" },
+      }),
+      // What the session-list enumeration appends: no timestamps anywhere.
+      JSON.stringify({ type: "ai-title", aiTitle: "Inbox UX Overhaul", sessionId }),
+      JSON.stringify({ type: "file-history-snapshot", messageId: "m1", snapshot: {}, isSnapshotUpdate: false }),
+    ].join("\n"), { nowMs: dormantNow, mtimeMs: dormantNow });
+    expect(agent?.updatedAt).toBe("2026-08-05T12:20:52.323Z");
+    expect(agent?.status).not.toBe("running");
+  });
+
   test("Codex clean completion applies only to the latest turn", () => {
     const sessionId = "11111111-2222-3333-4444-555555555555";
     const row = (type: string, payload: object) => JSON.stringify({

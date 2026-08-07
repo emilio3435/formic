@@ -890,7 +890,17 @@ function createClaudeParser(): IncrementalParser {
         effort,
         task,
         startedAt,
-        updatedAt: updatedAt && updatedAt > fallback ? updatedAt : fallback,
+        /* The last TIMESTAMPED record, never max(timestamp, mtime). Claude
+           Code appends untimestamped bookkeeping rows (ai-title, last-prompt,
+           mode, file-history-snapshot) to DORMANT sessions when its session
+           list is enumerated — measured 2026-08-06: restarting one session
+           touched two other projects' transcripts within 2 seconds, and the
+           mtime max promoted both to "working" for the fresh window. A live
+           session writes timestamped rows continuously, so mtime can only
+           win where it lies. Same convention as the codex/cursor parsers
+           above; mtime remains the fallback for a transcript that carries no
+           timestamps at all. */
+        updatedAt: updatedAt ?? fallback,
         tokens: latestUsage
           ? {
               input: latestUsage.input,
