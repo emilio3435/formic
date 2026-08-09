@@ -12,6 +12,17 @@ import {
   type HumanMessageCandidate,
 } from "./human-message";
 import { MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import type { TokenUsage } from "../shared/types";
+import { MODEL_CONFIG } from "./model-config";
+function cursorContextWindow(model: string | undefined): number | undefined {
+  if (!model) return undefined;
+  const low = model.toLowerCase();
+  for (const [needle, w] of Object.entries(MODEL_CONFIG.claudeContextWindows)) {
+    if (low.includes(needle.toLowerCase())) return w;
+  }
+  return undefined;
+}
+
 import { resolveAgentName } from "./naming";
 import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
 import {
@@ -73,6 +84,7 @@ export interface CursorSessionInput {
   allowCwdFallback?: boolean;
   nowMs?: number;
   thresholds?: LifecycleThresholds;
+  tokens?: TokenUsage;
 }
 
 export interface CursorChildSessionInput {
@@ -86,6 +98,7 @@ export interface CursorChildSessionInput {
   updatedAtMs: number;
   nowMs?: number;
   thresholds?: LifecycleThresholds;
+  tokens?: TokenUsage;
 }
 
 interface CursorConversationRow {
@@ -251,6 +264,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   const displayName = genericCursorName(input.store?.name)
     ? cwdIdentity || taskName || "Cursor session"
     : input.store!.name!.trim();
+  const tokens = tokensWithWindow(input.tokens, input.store?.model);
   return {
     id: `cursor:${input.sessionId}`,
     provider: "cursor",
@@ -281,7 +295,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     statusReason,
     startedAt: Number.isFinite(createdAtMs) ? new Date(createdAtMs).toISOString() : undefined,
     updatedAt: new Date(validUpdatedAtMs).toISOString(),
-    tokens: { scope: "unknown", provenance: "unknown" },
+    tokens,
     cost: null,
     subagentCount: input.subagentCount,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
@@ -375,7 +389,7 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     status,
     statusReason,
     updatedAt: new Date(input.updatedAtMs).toISOString(),
-    tokens: { scope: "unknown", provenance: "unknown" },
+    tokens: tokensWithWindow(input.tokens, input.model),
     cost: null,
     parentSourceSessionId: input.parentSessionId,
     threadDepth: 1,
@@ -475,6 +489,57 @@ function contentPartModelName(content: unknown): string | undefined {
     if (modelName) return modelName;
   }
   return undefined;
+}
+
+function asNonNegativeInt(v: unknown): number | undefined {
+  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : undefined;
+}
+
+function pickUsage(obj: Record<string, unknown>): { input?: number; output?: number; total?: number; cached?: number } | undefined {
+  const u = asRecord(obj.usage) ?? asRecord(obj.tokenCount) ?? obj;
+  const input = asNonNegativeInt(u.inputTokens ?? u.input_tokens ?? u.promptTokens ?? u.prompt_tokens ?? u.input);
+  const output = asNonNegativeInt(u.outputTokens ?? u.output_tokens ?? u.completionTokens ?? u.completion_tokens ?? u.output);
+  const total = asNonNegativeInt(u.totalTokens ?? u.total_tokens ?? u.total);
+  const cached = asNonNegativeInt(u.cachedTokens ?? u.cached_tokens ?? u.cacheReadTokens);
+  if (input === undefined && output === undefined && total === undefined) return undefined;
+  return { input, output, total, cached };
+}
+
+function cursorTokensFromDatabase(database: Database): TokenUsage | undefined {
+  const rows = database.query("select data from blobs order by rowid desc limit 300").all() as Array<{ data: Uint8Array }>;
+  for (const { data } of rows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(data).toString("utf8"));
+    } catch {
+      continue;
+    }
+    const rec = asRecord(parsed);
+    if (!rec) continue;
+    if (rec.role !== "assistant") continue;
+    const usage = pickUsage(rec);
+    if (!usage) continue;
+    const input = usage.input ?? 0;
+    const output = usage.output ?? 0;
+    const cached = usage.cached;
+    const total = usage.total ?? input + output + (cached ?? 0);
+    return { input, output, cachedInput: cached, total, scope: "latest-turn", provenance: "observed" };
+  }
+  return undefined;
+}
+
+function tryReadCursorTokens(path: string): TokenUsage | undefined {
+  try {
+    return readForeignSqlite(path, cursorTokensFromDatabase);
+  } catch {
+    return undefined;
+  }
+}
+
+function tokensWithWindow(tokens: TokenUsage | undefined, model: string | undefined): TokenUsage {
+  if (!tokens) return { scope: "unknown", provenance: "unknown", contextWindow: cursorContextWindow(model) };
+  return { ...tokens, contextWindow: cursorContextWindow(model) ?? tokens.contextWindow };
 }
 
 function readCursorStoreEvidenceFrom(database: Database): CursorStoreEvidence {
@@ -1034,6 +1099,7 @@ export async function collectCursorSessions(
           errors.push(`cursor ${sessionId} transcript: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
+      const parsedTokens = tryReadCursorTokens(storePath);
       const parsed = parseCursorSession({
         sessionId,
         metaJson,
@@ -1044,6 +1110,7 @@ export async function collectCursorSessions(
         storeDbMtimeMs,
         subagentCount,
         store,
+        tokens: parsedTokens,
         nowMs,
         thresholds,
       });

@@ -32,6 +32,7 @@ const empty = (): SessionsResult => ({
   claude: { value: [], errors: [] },
   cursor: { value: [], errors: [] },
   factory: { value: [], errors: [] },
+      prime: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */

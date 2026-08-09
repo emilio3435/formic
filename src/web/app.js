@@ -5121,12 +5121,21 @@ const LENS_AXES = [
   {
     key: "provider",
     stateKey: "facetProviders",
-    label: "Provider",
-    allLabel: "All providers",
-    views: null,                       // wherever the bar renders
-    options: (agents) => [...new Set(agents.map((a) => a.provider).filter(Boolean))]
-      .sort()
-      .map((provider) => ({ value: provider, label: provider })),
+    label: "Harness",
+    allLabel: "All harnesses",
+    views: null,
+    options: (agents) => {
+      // Enumerate from the snapshot's healthy harnesses so Codex/Cursor/Factory appear even when 0 live in the current view
+      // Fallback to agents present when snapshot not yet loaded (initial skeleton)
+      const fromHealth = state.snap?.totals?.sourceHealth?.byProvider ? Object.keys(state.snap.totals.sourceHealth.byProvider) : [];
+      const fromAgents = [...new Set(agents.map((a) => a.provider).filter(Boolean))];
+      const all = [...new Set([...fromHealth, ...fromAgents])].sort();
+      return all.map((provider) => {
+        const hKey = provider.toLowerCase();
+        const label = (HARNESS_MARK[hKey]?.label || providerLabel(provider) || provider);
+        return { value: provider, label };
+      });
+    },
     matches: (agent, value) => agent.provider === value,
   },
   {
@@ -7516,15 +7525,18 @@ function roleRank(agent) {
 
 function renderAgentColumnHeader() {
   // Identity on the left, the right-aligned instrument cluster on the right:
-  // status word, model + ctx%, tokens, elapsed. (Access folds into each row's
-  // aria-label; the terminal/source naming tags fold into the tooltip + drawer.)
+  // status, harness, model, ctx%, tokens, elapsed. Harness is text-labeled
+  // (not icon-only) so the column is scannable and filterable.
   return el("div", {
     class: "agent-grid agent-column-header",
     "aria-label": "Agent list columns",
+    "aria-colcount": "7",
   },
     el("span", { class: "agent-column-label", text: "Agent/message" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Status" }),
-    el("span", { class: "agent-column-label ri-col-label", text: "Model · Ctx" }),
+    el("span", { class: "agent-column-label ri-col-label", title: "Where this session ran (harness \u2260 agent)", text: "Harness" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Model" }),
+    el("span", { class: "agent-column-label ri-col-label", text: "Ctx" }),
     el("span", { class: "agent-column-label ri-col-label", text: "Tokens" }),
     /* "Span", not "Elapsed". The value is updatedAt − startedAt: first touch to
        last touch, with every dormant hour inside it. One agent reads 87.1 days
@@ -7568,7 +7580,7 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
     onclick: () => selectAgent(agent.id),
     "aria-label": `${agentName(agent)} parent session. ${where} ${activeChildren} visible child sessions. Open parent details.`,
   },
-    providerMark(agent),
+    harnessAgentMarks(agent),
     /* The name its own row would print. The anchor stands in for a parent that
        is off screen, so it is frequently the ONLY place that name appears — and
        it was printing `identity.name`, hex and all, beside rows that print the
@@ -7579,6 +7591,13 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
+  // B2 heartbeat — the TL;DR summary rides transcriptTail (MAX_TRANSCRIPT_TAIL_CHARS=800).
+  // For Prime the orchestrator's freshest prose lives ONLY in transcriptTail (humanMessages=[]),
+  // so without this the row would keep showing the stale initial task while the TL;DR sits on the wire.
+  // Surface it on the row when it carries the B2 marker so renderAgentRow proves the wire→pixel path.
+  if (typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")) {
+    return conciseText(agent.transcriptTail.trim(), 120);
+  }
   const message = formatLastHumanMessage(agent);
   if (message !== NO_READABLE_MESSAGE) return message;
   // The task is where the envelope actually lands for a freshly spawned lane —
@@ -7592,16 +7611,86 @@ function rowSummary(agent) {
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
-  openai: { src: "/icons/codex.png", raster: true },
+  openai: { src: "/icons/openai.svg" },
   claude: { src: "/icons/claude.svg" },
+  spark: { src: "/icons/meta.svg" },
   grok: { src: "/icons/grok.svg" },
   cursor: { src: "/icons/cursor.svg" },
+  prime: { src: "/icons/prime-orch.svg" },
+  factory: { src: "/icons/factory.svg" },
+  omp: { src: "/icons/omp.svg" },
 };
 
+/* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
+   This keeps the harness visible even when the model overrides the icon (the old spark/grok swap hid the harness). */
+const HARNESS_MARK = {
+  codex: { src: "/icons/codex.svg", label: "Codex" },
+  claude: { src: "/icons/claude-code.svg", label: "Claude Code" },
+  cursor: { src: "/icons/cursor.svg", label: "Cursor" },
+  factory: { src: "/icons/factory.svg", label: "Factory" },
+  prime: { src: "/icons/prime-orch.svg", label: "Prime" },
+  omp: { src: "/icons/omp.svg", label: "OMP" },
+  omni: { src: "/icons/omp.svg", label: "OMP" },
+};
+const AGENT_MARK = {
+  spark: { src: "/icons/meta.svg", label: "Spark" },
+  grok: { src: "/icons/grok.svg", label: "Grok" },
+  claude: { src: "/icons/claude.svg", label: "Claude" },
+  openai: { src: "/icons/openai.svg", label: "OpenAI" },
+  cursor: { src: "/icons/cursor.svg", label: "Cursor" },
+  sol: { src: "/icons/openai.svg", label: "Sol" },
+  luna: { src: "/icons/openai.svg", label: "Luna" },
+};
+
+function harnessKeyOf(agent) {
+  const p = (agent.provider || "").toLowerCase();
+  if (p === "codex") return "codex";
+  if (p === "claude") return "claude";
+  if (p === "cursor") return "cursor";
+  if (p === "factory") return "factory";
+  if (p === "prime") return "prime";
+  if (p === "omp") return "omp";
+  return p || "claude";
+}
+function agentKeyOf(agent) {
+  const m = (agent.model || "").toLowerCase();
+  if (/grok/i.test(m)) return "grok";
+  if (/muse-spark|spark/i.test(m)) return "spark";
+  if (/fable|opus|sonnet|haiku/i.test(m)) return "claude";
+  if (/composer/i.test(m)) return "cursor";
+  if (/sol|luna/i.test(m)) return "sol";
+  if (/codex|openai/i.test(m)) return "openai";
+  return "";
+}
+function harnessMark(agent) {
+  const key = harnessKeyOf(agent);
+  const meta = HARNESS_MARK[key];
+  const label = meta?.label || providerLabel(agent.provider);
+  const mark = meta;
+  if (!mark || !mark.src) return el("span", { class: "provider-mark provider-mark-text harness-mark", title: label, "aria-label": "Harness " + label, text: label.slice(0, 1) });
+  return el("img", { class: "provider-mark harness-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: "Harness " + label });
+}
+function agentMark(agent) {
+  const key = agentKeyOf(agent);
+  if (!key) return el("span", { class: "provider-mark provider-mark-text agent-mark is-empty", title: "no agent model", "aria-label": "Agent not reported", text: "?" });
+  const meta = AGENT_MARK[key];
+  const mark = PROVIDER_MARK[key] || meta;
+  const label = meta?.label || key;
+  if (!mark || !mark.src) return el("span", { class: "provider-mark provider-mark-text agent-mark", title: label, "aria-label": "Agent " + label, text: label.slice(0, 1) });
+  return el("img", { class: "provider-mark agent-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: "Agent " + label });
+}
+function harnessAgentMarks(agent) {
+  const h = harnessMark(agent);
+  const a = agentMark(agent);
+  return el("span", { class: "dual-marks", role: "group", "aria-label": "Harness " + (HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider)) + ", Agent " + (modelShort(agent.model) || "not reported") }, h, a);
+}
+
 function providerMark(agent) {
+  // Legacy single-badge path — kept for old snapshots/tests. The row now uses harnessAgentMarks().
   const grok = /grok/i.test(agent.model || "");
-  const key = grok ? "grok" : agent.provider === "codex" ? "openai" : agent.provider;
-  const label = grok ? "Grok" : agent.provider === "codex" ? "OpenAI Codex" : agent.provider === "claude" ? "Anthropic Claude" : providerLabel(agent.provider);
+  const spark = /muse-spark|spark/i.test(agent.model || "");
+  const key = grok ? "grok" : spark ? "spark" : agent.provider === "codex" ? "openai" : agent.provider;
+  const label = grok ? "Grok" : spark ? "Meta Spark" : agent.provider === "codex" ? "OpenAI Codex" : agent.provider === "claude" ? "Anthropic Claude" : providerLabel(agent.provider);
   const mark = PROVIDER_MARK[key];
   if (!mark) {
     return el("span", { class: "provider-mark provider-mark-text", title: label, "aria-label": label, text: label.slice(0, 1) });
@@ -7829,8 +7918,8 @@ function renderAgentRow(agent, program, opts = {}) {
 
   const activate = () => { selectAgent(agent.id); };
 
-  const identity = el("span", { class: "row-identity" },
-    providerMark(agent),
+  const identity = el("span", { class: "row-identity has-dual-marks" },
+    harnessAgentMarks(agent),
     el("span", { class: "agent-name-wrap" },
       el("span", { class: "agent-name", text: rosterName(visibleName, program) }),
       /* The disambiguator rides the loud line. It used to sit on the tag row
@@ -7971,7 +8060,9 @@ function renderAgentRow(agent, program, opts = {}) {
   const ctxUsage = contextUsage(agent.tokens);
   const modelText = modelShort(agent.model) || "not reported";
   const ctxPct = agentContextPct(agent);
-  const modelCtx = ctxPct != null ? modelText + " · " + ctxPct + "%" : modelText;
+  const harnessLabel = (HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider) || "");
+  const harnessUnknown = !agent.provider || !harnessLabel;
+  const harnessText = harnessUnknown ? "\u2014" : harnessLabel;
   const tokens = tokenSummary(agent.tokens);
 
   const instruments = el("span", { class: "row-instruments" },
@@ -7994,11 +8085,23 @@ function renderAgentRow(agent, program, opts = {}) {
       }));
     })(),
     el("span", {
-      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
-      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
-      title: ctxUsage ? ctxUsage.text : modelText,
+      class: "ri-cell ri-harness" + (harnessUnknown ? " is-unknown" : ""),
+      "aria-label": "Harness: " + (harnessUnknown ? "not reported" : harnessText),
+      title: harnessUnknown ? "Provider not recorded for this session" : "Harness " + harnessText,
     },
-      el("span", { class: "ri-value mono", text: modelCtx })),
+      el("span", { class: "ri-value mono", text: harnessText })),
+    el("span", {
+      class: "ri-cell ri-model" + (modelText === "not reported" ? " is-unknown" : ""),
+      "aria-label": "Model: " + modelText,
+      title: agent.model || modelText,
+    },
+      el("span", { class: "ri-value mono", text: modelText })),
+    el("span", {
+      class: "ri-cell ri-ctx" + (ctxPct == null ? " is-unknown" : ""),
+      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
+      title: ctxUsage ? ctxUsage.text : "Context window not reported for this model",
+    },
+      el("span", { class: "ri-value mono", text: ctxPct != null ? ctxPct + "%" : "\u2014" })),
     tokens.known
       ? el("span", {
         class: "ri-cell ri-tokens",
@@ -8323,6 +8426,7 @@ function inspectorPaintSig(sel, view, ui) {
     queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
     triage ? triage.generatedAt + ":" + triage.headline : "",
     triagePending,
+    ui.drawerTab || "chat",
     ui.evidenceOpen ? "1" : "0",
     agent ? agentRecordSig(agent) : "",
     agent ? lineagePaintSig(agent, ui.snap) : "",
@@ -9218,36 +9322,65 @@ function renderAgentDrawer(pane, view) {
      `activity === "ended"` dressed as advice. A directive that is the same
      sentence on nine agents out of ten is not a directive. */
 
-  // Vitals promoted to an instrument band directly under the verdict head —
-  // the numbers an operator acts on, no longer buried in the Evidence shelf.
-  // The mount always holds this DOM position (after next-action, before the
-  // shelf); renderVitalsBand omit-empties, and :empty hides the mount when the
-  // source reports nothing, so no flex gap is spent on a blank band.
-  const vitalsMount = el("div", { class: "inspector-vitals" });
-  const vitalsBand = renderVitalsBand(agent);
-  if (vitalsBand) vitalsMount.append(vitalsBand);
-  pane.append(vitalsMount);
+  // Single-panel drawer — Chat + Evidence stacked, no tabs (user has space on right)
+  // Header vitals for 5s scan: Harness | Model | Ctx | Tokens | Status · Last message · Elapsed — sticky under title
+  const _hLabel = (typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label) || providerLabel(agent.provider) || "—";
+  const _mText = modelShort(agent.model) || "not reported";
+  const _ctxPct = agentContextPct(agent);
+  const _ctxText = _ctxPct != null ? _ctxPct + "%" : "—";
+  const _tokText = (() => { const t = tokenSummary(agent.tokens); return t.known ? t.text : "—"; })();
+  const _tokKnown = _tokText !== "—";
+  const _statusActivity = deriveActivity(agent);
+  const _statusOutcome = deriveOutcome(agent);
+  const _statusText = (_statusActivity ? (ACTIVITY_LABELS[_statusActivity] || _statusActivity) : "—") + (_statusOutcome !== "healthy" ? " · " + (_statusOutcome) : "");
+  const _lastWhen = agent.updatedAt ? agoText(agent.updatedAt) : "—";
+  const _pulse = _statusActivity === "working" ? " pulse" : "";
+  const _hMark = (() => { try { return harnessMark(agent); } catch { return icon("box", { label: "" }); } })();
+  const _aMark = (() => { try { return agentMark(agent); } catch { return icon("cpu", { label: "" }); } })();
+  const _headerVitals = el("div", { class: "drawer-header-vitals", role: "group", "aria-label": "Vitals at a glance" },
+    el("span", { class: "hv-pill hv-harness", title: "Harness " + _hLabel }, _hMark, _hLabel),
+    el("span", { class: "hv-pill hv-model", title: _mText }, _aMark, _mText),
+    el("span", { class: "hv-pill hv-ctx" + (_ctxPct == null ? " is-empty" : ""), title: _ctxPct != null ? _ctxText + " of window" : "Context not reported" }, _ctxPct != null ? svgGauge(_ctxPct, { size: 16 }) : icon("gauge", { label: "" }), _ctxText),
+    el("span", { class: "hv-pill hv-tokens" + (_tokKnown ? "" : " is-empty"), title: "Tokens " + _tokText }, icon("hash", { label: "" }), _tokText, _tokKnown ? el("span", { class: "hv-tok-bar", style: _ctxPct != null ? "width:" + Math.min(100, _ctxPct) + "%" : "width:0" }) : null),
+    el("span", { class: "hv-pill hv-status" + _pulse, title: _statusText + " · " + _lastWhen }, el("span", { class: "hv-pulse" + _pulse, "aria-hidden": "true" }), _statusText, el("span", { class: "hv-dot", text: "·" }), _lastWhen),
+  );
+  pane.append(_headerVitals);
 
-  // Horizontal bookshelf: Operate and Chat stay open side by side (the showcase);
-  // Evidence — vitals, paths, routing, transcript — collapses into a caterpillar
-  // rail that progressively reveals as a third column.
-  pane.append(el("div", {
-    class: "drawer-shelf" + (state.evidenceOpen ? " is-evidence-open" : ""),
-    "aria-label": "Agent sections",
-  },
-    renderShelfSection({
-      key: "thread",
-      title: "Thread",
-      open: true,
-      body: renderChat(agent),
-    }),
-    renderEvidenceShelf(agent)));
+  // Design A — Document (1.55fr: Task + Transcript bubbles, last 3 expandable) + Desk (380px: Evidence uncollapsed)
+  const _roleView = roleView(agent.role);
+  const fullTask = String(agent.task || "").trim();
+  const _taskBlock = fullTask
+    ? el("div", { class: "drawer-chat-task" },
+        el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:6px" },
+          el("h3", { class: "section-title", style: "margin:0" }, icon("file-text", { label: "" }), "Task", el("span", { class: "rule", "aria-hidden": "true" })),
+          el("span", { class: "badge role-" + _roleView.key, style: "font:700 10px var(--mono);padding:2px 6px;border-radius:999px;border:1px solid var(--line);background:var(--raise)" }, _roleView.label)),
+        el("p", { class: "drawer-task-full", text: fullTask }))
+    : el("div", { class: "drawer-chat-task", style: "padding:8px 0" },
+        el("span", { class: "badge role-" + _roleView.key }, _roleView.label));
+  const chatBody = renderChat(agent);
+  const transcriptPanel = renderTranscriptPanel(agent);
+  const transcriptWrap = el("details", { class: "drawer-transcript", open: "" },
+    el("summary", { class: "drawer-transcript-summary" }, icon("scroll-text", { label: "" }), " Transcript — last 3 turns (expand for full)", el("span", { class: "rule", "aria-hidden": "true" })),
+    transcriptPanel);
+  const doc = el("div", { class: "drawer-doc", "aria-label": "Task and transcript" },
+    _taskBlock,
+    el("div", { class: "drawer-chat" }, chatBody, transcriptWrap));
 
-  // Lineage spine demoted below the shelf — context, not action.
-  pane.append(renderLineageSpine(agent));
+  // Desk — uncollapsed Evidence + Lineage, dense 380px at >860px
+  const desk = el("div", { class: "drawer-desk", "aria-label": "Evidence and lineage" });
+  // Desk head: sticky 800 11px mono + rule, uncollapsed signal
+  desk.append(el("div", { class: "drawer-section-head sticky-head" },
+    el("h3", { class: "section-title", style: "margin:0;flex:1" }, icon("folder-open", { label: "" }), "Evidence", el("span", { class: "rule", "aria-hidden": "true" }))));
+  desk.append(renderEvidence(agent));
+  desk.append(renderLineageSpine(agent));
 
-  // Control feedback renders inside the dock, above the composer.
-  pane.append(renderCommandDock(agent, control));
+  const grid = el("div", { class: "drawer-grid" }, doc, desk);
+  pane.append(grid);
+
+  // Controls strip — sticky bottom, outside grid so it spans full drawer
+  const dock = renderCommandDock(agent, control);
+  dock.classList.add("drawer-controls-strip");
+  pane.append(dock);
 }
 
 /* Bookshelf section — Operate/Chat stay open; Evidence uses the cog variant. */
@@ -9256,7 +9389,7 @@ function renderShelfSection({ key, title, open, body }) {
     class: "shelf-section" + (open ? " is-open" : ""),
     dataset: { shelf: key },
   });
-  section.append(el("h3", { class: "shelf-title", text: title }));
+  section.append(el("h3", { class: "shelf-title" }, title, el("span", { class: "rule", "aria-hidden": "true" })));
   const panel = el("div", {
     class: "shelf-body inspector-panel",
     id: "shelf-" + key,
@@ -9320,6 +9453,9 @@ function renderEvidenceShelf(agent) {
     const summary = sections.length
       ? "Open evidence — " + sections.join(", ")
       : "Open evidence — nothing reported for this session";
+    const labelText = sections.length
+      ? "Evidence — " + sections.length + " sections · " + sections.join(", ")
+      : "Evidence — nothing reported for this session";
     return el("button", {
       type: "button",
       class: "shelf-evidence-rail",
@@ -9330,15 +9466,14 @@ function renderEvidenceShelf(agent) {
       dataset: { fkey: "shelf:evidence:open" },
       onclick: () => { state.evidenceOpen = true; render(); },
     },
-      icon("gear", { label: "" }),
-      el("span", { class: "shelf-rail-label", text: "Evidence" }),
-      /* An empty drawer says so, because a count of zero and a missing count
-         look identical and only one of them means "do not bother". */
-      el("span", {
-        class: "shelf-rail-count" + (sections.length ? "" : " is-empty"),
-        "aria-hidden": "true",
-        text: sections.length ? String(sections.length) : "—",
-      }));
+      el("span", { class: "shelf-rail-label" }, icon("folder-open", { label: "" }), labelText),
+      el("span", { style: "display:flex;align-items:center;gap:8px" },
+        el("span", {
+          class: "shelf-rail-count" + (sections.length ? "" : " is-empty"),
+          "aria-hidden": "true",
+          text: sections.length ? String(sections.length) : "—",
+        }),
+        icon("chevron", { label: "" })) );
   }
 
   // Evidence holds paths, routing, and the transcript tail. The vitals
@@ -9350,7 +9485,7 @@ function renderEvidenceShelf(agent) {
     dataset: { shelf: "evidence" },
   });
   section.append(el("div", { class: "shelf-evidence-head" },
-    el("h3", { class: "shelf-title", text: "Evidence" }),
+    el("h3", { class: "shelf-title" }, icon("folder-open", { label: "" }), "Evidence"),
     el("button", {
       type: "button",
       class: "shelf-cog is-active",
@@ -9359,7 +9494,7 @@ function renderEvidenceShelf(agent) {
       title: "Tuck evidence away",
       dataset: { fkey: "shelf:evidence:close" },
       onclick: () => { state.evidenceOpen = false; render(); },
-    }, icon("gear", { label: "Hide evidence" }))));
+    }, icon("chevron", { label: "Hide evidence" }))));
   body.id = "shelf-evidence";
   body.classList.add("shelf-body");
   section.append(body);
@@ -9484,6 +9619,7 @@ function renderControlBanner(agent, control) {
     class: "control-banner-link",
     dataset: { fkey: "control-evidence:" + agent.id },
     onclick: () => {
+      state.drawerTab = "evidence";
       state.evidenceOpen = true;
       if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
       else render();
@@ -9604,12 +9740,12 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     const input = el("input", {
       type: "text",
       placeholder: held
-        ? "Held until the feed catches up…"
+        ? "⏳ Held until the feed catches up…"
         : instructCap.enabled
-          ? "Instruct this agent…"
+          ? "✦ Message Prime · spark 1.2…  (⌘↵ to send)"
           : (control === "quarantined"
-            ? "Resolve identity conflict to instruct…"
-            : "Instruction unavailable"),
+            ? "⚠️ Resolve identity conflict to instruct…"
+            : "— Instruction unavailable"),
       disabled: sendable ? null : "",
       value: state.drafts.get(agent.id) || "",
       "aria-label": "Instruction for " + agentName(agent),
@@ -9885,13 +10021,15 @@ function renderNamesDisclosure(agent) {
   }
 
   const editingHere = targets.some((item) => state.renaming === presentationLabelKey(item.target));
-  return el("details", {
+  const disclosure = el("details", {
     class: "names-disclosure",
     // Stay open while a rename form is live so re-render does not tuck it away.
     open: editingHere || state.labelsLoading || state.labelLoadError ? "" : null,
   },
-    el("summary", { text: "Names" }),
+    el("summary", {}, icon("shield", { label: "" }), " Names"),
     body);
+  disclosure.dataset.evidenceSection = "names";
+  return disclosure;
 }
 
 /* ---------- inspector: Operate · Chat · Evidence ---------- */
@@ -9926,10 +10064,7 @@ function renderRowFacts(agent) {
   const provenance = historyProvenance(agent);
   const source = roleSourceView(agent.roleSource);
   const rows = [
-    /* The confidence rides as the hint rather than as a second row: "role:
-       Orchestrator" and "how we know: inferred" are one fact, and splitting them
-       is how a detail list turns into a field dump. */
-    role.key !== "agent" ? ["role", role.label, source ? { hint: source.title } : {}] : null,
+    // Role removed here — rendered as badge in Evidence grid (content crit: ROLE as badge, not row)
     specialtyLabel(agent) ? ["specialty", specialtyLabel(agent), {}] : null,
     (() => {
       const crumb = terminalBreadcrumb(agent, agentName(agent));
@@ -10208,8 +10343,15 @@ function renderChat(agent, ui = state) {
      dedupe, not after: dedupeTurns compares prose to decide what repeats, and
      two turns carrying the same message under different addressing are the same
      message. Stripping first is what lets that comparison see it. */
+  // B2: transcriptTail carries the [TL;DR] heartbeat for Prime (humanMessages=[]), and for
+  // other harnesses it is still the freshest tail. Include it as an assistant candidate
+  // when it carries the B2 marker so the drawer Chat proves the same wire→pixel path as the row.
+  const tldrTail = typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")
+    ? agent.transcriptTail.trim()
+    : "";
   const candidates = [
     { role: "assistant", text: agent.lastAgentMessage },
+    { role: "assistant", text: tldrTail },
     { role: "user", text: agent.lastUserMessage },
     { role: "task", text: drawerObjective(agent) ? "" : agent.task },
   ].map((turn) => {
@@ -10309,7 +10451,7 @@ function renderLineageSpine(agent) {
     el("span", { class: "dw-lin-name dw-cur-name" }, displayNameWithTag(agent, board), lineageMeta("· this"))));
 
   const spine = el("div", { class: "dw-spine", "aria-label": "Lineage" },
-    el("div", { class: "dw-spine-label", text: "Lineage" }),
+    el("div", { class: "dw-spine-label" }, icon("git-merge", { label: "" }), "Lineage"),
     lin);
 
   if (children.length) {
@@ -10388,7 +10530,7 @@ function renderIdentityBlock(agent, ui = state) {
   if (!view.steps.length && !view.reason && !view.bridge) return null;
 
   const wrap = el("div", { class: "identity-block" },
-    el("h3", { class: "section-title", text: "Identity resolution" }));
+    el("h3", { class: "section-title" }, icon("shield", { label: "" }), "Identity resolution"));
 
   const verdict = view.matchedTier
     ? "Bound by " + (IDENTITY_TIER_LABELS[view.matchedTier] || view.matchedTier).toLowerCase()
@@ -10491,44 +10633,44 @@ function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
 
-  dtdd(grid, "Agent current folder", agent.cwd, { code: true });
-  dtdd(grid, "Agent launch folder", agent.launchCwd, { code: true });
-  dtdd(grid, "Terminal shell folder", agent.target && agent.target.surfaceCwd, { code: true });
-  dtdd(grid, "Target repository", agent.repo && agent.repo.worktreePath, { code: true });
+  // — Where: Workspace / Repo / Git — deduped, 14px icons per Evidence row (Design A) —
+  const _cwd = typeof agent.cwd === "string" ? agent.cwd.trim() : "";
+  const _repoPath = agent.repo && typeof agent.repo.worktreePath === "string" ? agent.repo.worktreePath.trim() : "";
+  const _repoName = agent.repo && typeof agent.repo.repoName === "string" ? agent.repo.repoName.trim() : "";
+  const _samePath = _cwd && _repoPath && _cwd === _repoPath;
+  if (_samePath) {
+    dtdd(grid, "Workspace", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: _cwd }), el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
+  } else {
+    if (_cwd) dtdd(grid, "Workspace", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: _cwd })), { code: true });
+    const _repoLabel = _repoName || _repoPath;
+    if (_repoLabel) dtdd(grid, "Repository", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder", { label: "" }), el("code", { text: _repoLabel })), { code: true });
+  }
+  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: agent.launchCwd })), { code: true });
+  dtdd(grid, "Terminal shell folder", agent.target && agent.target.surfaceCwd ? el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("terminal", { label: "" }), el("code", { text: agent.target.surfaceCwd })) : null, { code: true });
 
-  dtdd(grid, "git", agent.git && (agent.git.branch || agent.git.head)
-    ? el("span", {},
+  const _gitLight = !agent.git ? "⚪" : agent.git.dirty ? "🟡" : "🟢";
+  const _gitLightTitle = !agent.git ? "no git" : agent.git.dirty ? "dirty — uncommitted changes" : "clean";
+  dtdd(grid, "Git", agent.git && (agent.git.branch || agent.git.head)
+    ? el("span", { style: "display:flex;align-items:center;gap:6px" },
+        icon("git-branch", { label: "" }),
+        el("span", { title: _gitLightTitle, text: _gitLight }),
         el("code", { text: agent.git.branch || "(detached)" }),
-        agent.git.dirty ? el("span", { class: "git-dirty", text: " · uncommitted changes" }) : null,
-        agent.git.head ? el("code", { text: " @ " + agent.git.head.slice(0, 9) }) : null)
-    : null);
+        agent.git.dirty ? el("span", { class: "git-dirty", style: "color:var(--amber);font:600 11px var(--mono)", text: "● uncommitted" }) : el("span", { style: "color:var(--teal);font:600 11px var(--mono)", text: "● clean" }),
+        agent.git.head ? el("code", { text: "@" + agent.git.head.slice(0, 7) }) : null)
+    : el("span", { style: "color:var(--faint)", text: "— no git" }));
 
-  const t = agent.tokens || {};
-  if (t.scope === "latest-turn" && (t.total != null || t.input != null || t.output != null)) {
-    const parts = [];
-    if (t.input != null) parts.push("in " + fmtTok(t.input));
-    if (t.output != null) parts.push("out " + fmtTok(t.output));
-    if (t.cachedInput != null) parts.push("cached " + fmtTok(t.cachedInput));
-    if (t.total != null) parts.push("total " + fmtTok(t.total));
-    dtdd(grid, "latest call", el("span", {
-      class: "mono",
-      text: parts.join(" · ") + (t.provenance ? " · " + provenanceLabel(t.provenance) : ""),
-    }), { hint: LATEST_CALL_HINT });
+  // — Last message only (Status lives in header vitals sticky + board — deduped) —
+  const _lastRaw = typeof agent.lastAgentMessage === "string" && agent.lastAgentMessage.trim() ? agent.lastAgentMessage : (typeof agent.lastUserMessage === "string" ? agent.lastUserMessage : "");
+  const _lastWho = typeof agent.lastAgentMessage === "string" && agent.lastAgentMessage.trim() ? (agent.model ? agent.model : (agent.provider || "Agent")) : "You";
+  if (_lastRaw && _lastRaw.trim()) {
+    const _snippet = conciseText(_lastRaw.replace(/\s+/g, " ").trim(), 110);
+    const _when = agent.updatedAt ? agoText(agent.updatedAt) : "";
+    dtdd(grid, "Last message", el("span", { style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap" }, icon("activity", { label: "" }), el("span", { text: _lastWho + (_when ? " · " + _when : "") }), el("span", { class: "mono", text: '  "' + _snippet + '"' })));
   }
-  if (t.sessionTotal != null) {
-    dtdd(grid, "session total", el("span", {
-      class: "mono",
-      text: fmtTok(t.sessionTotal) + " tokens · cumulative this session",
-    }), { hint: SESSION_TOTAL_HINT });
+  const _rv = roleView(agent.role);
+  if (_rv.key !== "agent") {
+    dtdd(grid, "Role", el("span", { class: "badge role-" + _rv.key, text: _rv.label }));
   }
-
-  /* Wide, because this value is a sentence plus a row of buttons rather than a
-     figure: in the Evidence shelf the 8rem label gutter left it 178px, which is
-     one copy button per line, and the third one landed past the shelf's own
-     floor. Measured at 1440 in a browser, where "Copy pane" rendered 35px below
-     it and was sliced by the section's border. */
-  const link = renderControlLink(agent.target);
-  if (link) dtdd(grid, "control link", link, { wide: true });
 
   /* Each block tags itself with what it is. The collapsed rail needs to say
      what is in here without a second copy of these conditions to drift out of
@@ -10536,7 +10678,8 @@ function renderEvidence(agent, ui = state) {
      evidenceInventory reads them back off a built panel. */
   if (grid.childNodes.length) {
     grid.dataset.evidenceSection = "paths & usage";
-    panel.append(grid);
+    const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage");
+    panel.append(pathsHead, grid);
     if (agent.target && agent.target.cwdRelation === "different") {
       panel.append(el("p", {
         class: "directory-relation-note",
@@ -10554,7 +10697,8 @@ function renderEvidence(agent, ui = state) {
   const facts = renderRowFacts(agent);
   if (facts) {
     facts.dataset.evidenceSection = "row facts";
-    panel.append(facts);
+    const factsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "row facts" } }, icon("activity", { label: "" }), "Row facts");
+    panel.append(factsHead, facts);
   }
 
   const identity = renderIdentityBlock(agent);
@@ -10563,15 +10707,11 @@ function renderEvidence(agent, ui = state) {
     panel.append(identity);
   }
 
-  const names = renderNamesDisclosure(agent);
-  if (names) {
-    names.dataset.evidenceSection = "names";
-    panel.append(names);
-  }
+  // Names blank field removed — empty pill looks broken, settings affordance not evidence (content crit §3.6)
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
-      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" }, text: "Artifacts" }),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" } }, icon("paperclip", { label: "" }), "Artifacts"),
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
@@ -10584,15 +10724,7 @@ function renderEvidence(agent, ui = state) {
           }, "Copy path")))));
   }
 
-  if (agent.transcriptTail) {
-    panel.append(
-      el("h3", { class: "section-title", dataset: { evidenceSection: "transcript" }, text: "Transcript tail" }),
-      el("pre", { class: "transcript", tabindex: "0", text: agent.transcriptTail }));
-  }
-
-  // The 800-char tail above is whatever the snapshot happened to carry; this is
-  // the part an operator can actually read a decision out of.
-  panel.append(renderTranscriptPanel(agent, ui));
+  // Transcript lives in Chat tab (Full Task + Transcript expandable) — not duplicated in Evidence (content crit §3.3/§3.4 triple redundancy)
 
   if (!panel.childNodes.length) {
     panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));

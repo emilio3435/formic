@@ -27,6 +27,7 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   claude: "claude",
   cursor: "cursor-agent",
   factory: "droid",
+  prime: "prime-agent",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");

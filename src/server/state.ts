@@ -166,6 +166,7 @@ export class HubState {
     claude: { healthy: false, lastHealthyAt: null },
     cursor: { healthy: false, lastHealthyAt: null },
     factory: { healthy: false, lastHealthyAt: null },
+    prime: { healthy: false, lastHealthyAt: null },
   };
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
@@ -533,6 +534,7 @@ export class HubState {
         codex: { value: [], errors: [reason] },
         claude: { value: [], errors: [reason] },
         cursor: { value: [], errors: [reason] },
+        prime: { value: [], errors: [reason] },
         factory: { value: [], errors: [reason] },
       };
     };

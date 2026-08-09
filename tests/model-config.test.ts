@@ -26,6 +26,8 @@ describe("model knowledge config", () => {
       "gpt-5.6-luna": "luna 5.6",
       "gpt-5.6-sol": "sol 5.6",
       "grok-4.5": "grok 4.5",
+      "spark-1.2": "spark 1.2",
+      "muse-spark-1.2": "spark 1.2",
     });
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("gpt-5.6-sol-max", config)).toBe("gpt-5.6-sol");

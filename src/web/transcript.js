@@ -10,7 +10,7 @@
    inversion is what let this come out — with a direct render() call it dragged
    in ~3,800 lines of dependency closure instead of 133. */
 
-import { el } from "./dom-primitives.js";
+import { el, icon } from "./dom-primitives.js";
 import { state } from "./client-state.js";
 import { repaint } from "./repaint.js";
 import {
@@ -111,7 +111,7 @@ export function renderTranscriptPanel(agent, ui = state) {
   const view = (ui && ui.transcript) || {};
   const mine = view.agentId === agent.id;
   const section = el("section", { class: "transcript-view" },
-    el("h3", { class: "section-title", text: "Transcript" }));
+    el("h3", { class: "section-title" }, icon("book", { label: "" }), "Transcript"));
 
   if (!mine) {
     section.append(el("button", {

@@ -3,6 +3,7 @@ import type { CollectedAgent } from "./types";
 import type { IncrementalParser, ParseMetadata } from "./collectors";
 import type { TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
+import { MODEL_CONFIG } from "./model-config";
 
 /* Factory (droid) sessions.
 
@@ -130,13 +131,23 @@ export function createFactoryParser(): IncrementalParser {
   const total = [input, output].some((value) => value !== undefined)
     ? (input ?? 0) + (output ?? 0)
     : undefined;
+  const modelStr = text(settings.model);
+  const win = (() => {
+    if (!modelStr) return undefined;
+    const low = modelStr.toLowerCase();
+    for (const [needle, w] of Object.entries(MODEL_CONFIG.claudeContextWindows)) {
+      if (low.includes(needle.toLowerCase())) return w;
+    }
+    return undefined;
+  })();
   const tokens: TokenUsage = total === undefined
-    ? { provenance: "unknown" }
+    ? { provenance: "unknown", contextWindow: win }
     : {
       total,
       input,
       output,
       cachedInput,
+      contextWindow: win,
       /* Factory's settings file accumulates across the whole session rather
          than reporting the latest call, so this is `session` — the field the
          board uses to decide whether a number may be added to a rollup. */

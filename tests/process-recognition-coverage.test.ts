@@ -51,6 +51,10 @@ const SAMPLES: Record<Provider, { path: string; command: string }> = {
     path: `/Users/me/.factory/sessions/-Users-me-project/${ID}.jsonl`,
     command: `droid -r ${ID}`,
   },
+  prime: {
+    path: `/Users/me/.prime/agent/sessions/${ID}.jsonl`,
+    command: `prime-agent --resume ${ID}`,
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {

@@ -518,6 +518,7 @@ test("the cmux refresh tick supplies manifests and workspace env to the snapshot
       claude: { value: [], errors: [] },
       cursor: { value: [], errors: [] },
       factory: { value: [], errors: [] },
+      prime: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

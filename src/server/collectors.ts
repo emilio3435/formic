@@ -21,6 +21,7 @@ import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
+import { createPrimeParser, parsePrimeJsonl } from "./prime";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
@@ -75,6 +76,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   claude: "Claude",
   cursor: "Cursor",
   factory: "Factory",
+  prime: "Prime",
 };
 
 const NON_TASK_PREFIXES = [
@@ -124,6 +126,7 @@ function parserFor(
   if (provider === "codex") return createCodexParser();
   if (provider === "claude") return createClaudeParser();
   if (provider === "factory") return createFactoryParser();
+  if (provider === "prime") return createPrimeParser();
   /* Reached only by a provider added to the union without an incremental parser
      — which does NOT fail the build, because collectProvider takes the one-shot
      parser as an argument and this lookup happens at run time. Factory did
@@ -293,6 +296,7 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   claude: "claude-subagent",
   cursor: "cursor-composer",
   factory: "factory-title",
+  prime: "prime-title",
 };
 
 function statusFrom(
@@ -556,6 +560,7 @@ function createOmpParser(): IncrementalParser {
             sessionTotal,
             sessionCachedInput,
             sessionProcessed,
+            contextWindow: claudeContextWindow(model),
             scope: "latest-turn",
             /* Not "observed": at least one record was skipped, so the totals are
                a floor rather than a measurement. Everything downstream that
@@ -563,7 +568,7 @@ function createOmpParser(): IncrementalParser {
                declines to use them, which is the point. */
             provenance: usageUnreadable ? "estimated" : "observed",
           }
-          : { scope: "unknown", provenance: "unknown" },
+          : { scope: "unknown", provenance: "unknown", contextWindow: claudeContextWindow(model) },
         transcriptTail: tail,
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
@@ -1193,18 +1198,19 @@ export async function collectSessions(
   options: CollectSessionsOptions = {},
 ): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
   const hookRecords = readHookSessionStores(join(home, ".cmuxterm"));
-  const [omp, codex, claude, cursor, factory] = await Promise.all([
+  const [omp, codex, claude, cursor, factory, prime] = await Promise.all([
     collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
     collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
     collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs, thresholds),
     collectCursorSessions(home, Date.now(), windowMs, thresholds),
     collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds),
+    collectProvider("prime", join(home, ".prime/agent/sessions"), 1, parsePrimeJsonl, windowMs, thresholds),
   ]);
   const recordsBySession = new Map(
     hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
   );
   const knownAgentIds = new Set(
-    [omp, codex, claude, cursor, factory].flatMap((result) => result.value.map((agent) => agent.id)),
+    [omp, codex, claude, cursor, factory, prime].flatMap((result) => result.value.map((agent) => agent.id)),
   );
   const processLineage = hookRecords.length > 0
     && (options.processLineageExec !== undefined || !options.hookProcessStarts)
@@ -1218,6 +1224,7 @@ export async function collectSessions(
     codex: attachHookFacts(codex, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
     claude: attachHookFacts(claude, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
     cursor,
-    factory,
+    factory: attachHookFacts(factory, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
+    prime: attachHookFacts(prime, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
   };
 }

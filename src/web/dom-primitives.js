@@ -83,6 +83,22 @@ const ICON_PATHS = {
   interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
   // archive: tray
   archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y: 12, x2: 15, y2: 12 }]],
+  // drawer evidence — per-row 14px icons (stroke 1.6, rounded)
+  folder: [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3.2l2 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z" }]],
+  "folder-open": [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v1.5H4v-3.5z" }], ["path", { d: "M4 12.5v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" }]],
+  "git-branch": [["circle", { cx: 7.5, cy: 5.5, r: 2 }], ["circle", { cx: 7.5, cy: 18.5, r: 2 }], ["circle", { cx: 16.5, cy: 12, r: 2 }], ["path", { d: "M7.5 7.5v9M11 10.2a4 4 0 0 1 3.5 1.8" }]],
+  terminal: [["rect", { x: 3, y: 5, width: 18, height: 14, rx: 2 }], ["polyline", { points: "7 10 10 13 7 16" }], ["line", { x1: 12, y1: 16, x2: 17, y2: 16 }]],
+  activity: [["path", { d: "M3 13h3l2.5-7 4 14 2.5-7H21" }]],
+  shield: [["path", { d: "M12 3 5 6.5v5c0 4.1 2.9 7.2 7 8.5 4.1-1.3 7-4.4 7-8.5v-5z" }]],
+  "shield-alert": [["path", { d: "M12 3 5 6.5v5c0 4.1 2.9 7.2 7 8.5 4.1-1.3 7-4.4 7-8.5v-5z" }], ["line", { x1: 12, y1: 8, x2: 12, y2: 12 }], ["circle", { cx: 12, cy: 16, r: 0.9, fill: "currentColor", stroke: "none" }]],
+  "file-text": [["path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" }], ["path", { d: "M14 3v5h5" }], ["line", { x1: 9, y1: 13, x2: 15, y2: 13 }], ["line", { x1: 9, y1: 16.5, x2: 15, y2: 16.5 }]],
+  "scroll-text": [["path", { d: "M8 4h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" }], ["line", { x1: 9, y1: 9, x2: 15, y2: 9 }], ["line", { x1: 9, y1: 13, x2: 15, y2: 13 }], ["line", { x1: 9, y1: 17, x2: 13, y2: 17 }]],
+  paperclip: [["path", { d: "M9 15.5V9a3 3 0 0 1 6 0v7.5a4.5 4.5 0 0 1-9 0V8a6 6 0 0 1 12 0v8.5a7 7 0 0 1-14 0V10" }]],
+  file: [["path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" }], ["path", { d: "M14 3v5h5" }]],
+  "git-merge": [["circle", { cx: 7, cy: 6, r: 2 }], ["circle", { cx: 17, cy: 6, r: 2 }], ["circle", { cx: 12, cy: 18, r: 2 }], ["path", { d: "M7 8v4a4 4 0 0 0 4 4h1M17 8v4a4 4 0 0 1-4 4h-1" }]],
+  "link-2": [["path", { d: "M9 12h6" }], ["path", { d: "M10 8H8a3 3 0 0 0 0 6h2" }], ["path", { d: "M14 8h2a3 3 0 0 1 0 6h-2" }]],
+  chevron: [["polyline", { points: "9 6 15 12 9 18" }]],
+  book: [["path", { d: "M4 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5z" }], ["path", { d: "M8 7h6" }], ["path", { d: "M8 11h6" }]],
 };
 
 export function icon(name, opts = {}) {

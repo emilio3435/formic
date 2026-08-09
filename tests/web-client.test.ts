@@ -49,11 +49,11 @@ test("CWD-COPY-1 linked controls stay exact while directory provenance is neutra
   const text = textOf(rendered);
   const row = withDom(() => M.renderAgentRow(linked, { id: "cooper", name: "Cooper", agents: [linked] }));
 
-  expect(text).toContain("Agent current folder");
-  expect(text).toContain("Agent launch folder");
+  expect(text).toContain("Workspace");
+  expect(text).toContain("Launch folder");
   expect(text).toContain("Terminal shell folder");
-  expect(text).toContain("Target repository");
-  expect(text).toContain("Linked for Focus and Send.");
+  expect(text).toContain("Repository");
+  expect(text).not.toContain("Linked for Focus and Send.");
   expect(text).toContain("Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.");
   expect(text).not.toContain("mismatch");
   expect(text).not.toContain("≠");
@@ -2627,7 +2627,7 @@ describe("calm program and agent list rendering", () => {
     // The default (Board) lens labels the fifth column QUIET — time since the
     // last update, the question a live lens is actually asked. Span stays on
     // History, where a total duration is the point.
-    for (const label of ["Agent/message", "Status", "Model · Ctx", "Tokens", "Quiet"]) {
+    for (const label of ["Agent/message", "Status", "Harness", "Model", "Ctx", "Tokens", "Quiet"]) {
       expect(textOf(header)).toContain(label);
     }
     expect(source).not.toContain('rowFact("Effort"');
@@ -2847,8 +2847,10 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       expect(modelCell).not.toBeNull();
       expect(textOf(modelCell)).not.toContain(placeholder);
       expect(textOf(modelCell)).toContain("not reported");
-      // The measured context percentage is real and survives the guard.
-      expect(textOf(modelCell)).toContain("20%");
+      // The measured context percentage is real and now lives in its own Ctx column.
+      const ctxCell = findByClass(row, "ri-ctx");
+      expect(ctxCell).not.toBeNull();
+      expect(textOf(ctxCell)).toContain("20%");
     }
   });
 

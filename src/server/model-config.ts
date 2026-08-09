@@ -14,6 +14,21 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "opus-4-7": 1_000_000,
     "sonnet-5": 1_000_000,
     "fable-5": 1_000_000,
+    spark: 1_000_000,
+    "spark-1.2": 1_000_000,
+    "muse-spark": 1_000_000,
+    "muse-spark-1.2": 1_000_000,
+    grok: 500_000,
+    "grok-4.5": 500_000,
+    composer: 131_072,
+    "composer-2": 131_072,
+    "composer-2.5": 131_072,
+    sol: 258_400,
+    luna: 258_400,
+    "gpt-5.4": 131_072,
+    "gpt-5.6-sol": 258_400,
+    "gpt-5.6-luna": 258_400,
+    prime: 1_000_000,
   },
   modelFamilyAliases: {
     "grok-4.5": ["grok-4.5", "cursor-grok-4.5"],
@@ -21,6 +36,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "composer-2.5": ["composer-2.5"],
     "gpt-5.6-sol": ["gpt-5.6-sol"],
     "claude-fable-5": ["claude-fable-5", "fable-5"],
+    "spark-1.2": ["spark-1.2", "muse-spark-1.2", "muse-spark", "spark"],
   },
   modelDisplayLabels: {
     "claude-fable-5": "fable 5",
@@ -31,6 +47,8 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "gpt-5.6-luna": "luna 5.6",
     "gpt-5.6-sol": "sol 5.6",
     "grok-4.5": "grok 4.5",
+    "spark-1.2": "spark 1.2",
+    "muse-spark-1.2": "spark 1.2",
   },
 };
 

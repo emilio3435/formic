@@ -317,6 +317,7 @@ describe("hub naming candidates", () => {
           claude: { value: [sdk, cli], errors: [] },
           cursor: { value: [], errors: [] },
           factory: { value: [], errors: [] },
+      prime: { value: [], errors: [] },
         }),
         cmux: async () => ({ value: [], errors: [] }),
         notifications: async () => ({ value: [], errors: [] }),

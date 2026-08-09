@@ -406,6 +406,7 @@ describe("binding wiring through the refresh engine", () => {
         claude: { value: [], errors: [] },
         cursor: { value: [], errors: [] },
         factory: { value: [], errors: [] },
+      prime: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [scans[Math.min(scanNumber, scans.length - 1)]], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

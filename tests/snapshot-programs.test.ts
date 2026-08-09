@@ -213,6 +213,7 @@ test("the cmux tick keeps sidebar repo facts and they outrank spawned git branch
       claude: { value: [], errors: [] },
       cursor: { value: [], errors: [] },
       factory: { value: [], errors: [] },
+      prime: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

@@ -242,11 +242,11 @@ describe("synthetic API payload rendered by the real browser client", () => {
 
     const evidence = withDom(() => client.renderEvidence(agent));
     const rendered = textOf(evidence);
-    expect(rendered).toContain("Agent current folder");
-    expect(rendered).toContain("Agent launch folder");
+    expect(rendered).toContain("Workspace");
     expect(rendered).toContain("Terminal shell folder");
-    expect(rendered).toContain("Target repository");
-    expect(rendered).toContain("Linked for Focus and Send.");
+    // Repository collapsed when folder == repo (content crit: distinct not identical) — shows "folder = repo"
+    expect(rendered).toMatch(/Workspace|Repository/);
+    expect(rendered).not.toContain("Linked for Focus and Send.");
     expect(rendered).toContain("Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.");
     expect(rendered).not.toMatch(/mismatch|session cwd|≠/i);
 
@@ -263,7 +263,8 @@ describe("synthetic API payload rendered by the real browser client", () => {
 
     const evidence = withDom(() => client.renderEvidence(legacy));
     const rendered = textOf(evidence);
-    expect(rendered).toContain("Linked for Focus and Send.");
+    // Control link sentence lives in banner, not Evidence (content crit §3.5 removed duplicate)
+    expect(rendered).not.toContain("Linked for Focus and Send.");
     expect(rendered).not.toContain("maintain separate working directories");
     expect(rendered).not.toMatch(/mismatch|session cwd|≠/i);
     expect(client.quietSourceLine(legacy)).toBeNull();

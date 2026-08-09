@@ -1,0 +1,13 @@
+# The image installs its own Linux dependencies; the host's macOS-built
+# node_modules would both bloat the context and shadow them.
+node_modules
+.git
+.worktrees
+.agent
+.anthill
+.lane-evidence
+dist
+docs/a11y-shots
+docs/rhs-shots
+mockups
+*.log

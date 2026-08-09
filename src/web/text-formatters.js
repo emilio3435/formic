@@ -65,6 +65,20 @@ export function modelShort(m) {
     const ver = low.slice(grokAt + 4).match(/^-(\d+(?:\.\d+)*)/);
     return ver ? "grok " + ver[1] : "grok";
   }
+  // Meta Spark (Muse): muse-spark-1.2 variants → "spark 1.2", bare "spark" → "spark".
+  // Keep dotted version, drop effort/fast qualifiers (e.g. muse-spark-1.2-high-fast → "spark 1.2").
+  const sparkAt = low.indexOf("spark");
+  if (sparkAt !== -1) {
+    const ver = low.slice(sparkAt + 5).match(/^[-_]?(\d+(?:[\.\-_]\d+)*)/);
+    if (ver) return "spark " + ver[1].replace(/[-_]/g, ".");
+    return "spark";
+  }
+  // Bare "muse" without spark (e.g. muse-1.2) — still surface as muse label.
+  if (low.includes("muse")) {
+    const ver = low.match(/muse[-_]?(\d+(?:[\.\-_]\d+)*)/);
+    if (ver) return "muse " + ver[1].replace(/[-_]/g, ".");
+    return "muse";
+  }
   // Cursor-native Composer: flatten to "composer <version> <qualifier>" within
   // the 18-char bound (e.g. composer-2.5-fast → "composer 2.5 fast").
   const composerAt = low.indexOf("composer");
@@ -76,5 +90,7 @@ export function modelShort(m) {
   return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
 }
 
-export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP" };
+export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP", factory: "Factory", prime: "Prime" };
+export const HARNESS_LABELS = PROVIDER_LABELS;
 export const providerLabel = (p) => PROVIDER_LABELS[p] || p;
+export const harnessLabel = providerLabel;

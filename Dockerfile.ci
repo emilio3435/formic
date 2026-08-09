@@ -1,0 +1,45 @@
+# Local CI — the hermetic tier, on Linux, in seconds.
+#
+# This does NOT replace .github/workflows/check.yml, and it must not be allowed
+# to. That workflow runs on macos-latest on purpose: the server shells out to
+# /usr/sbin/lsof, reads cmux hook stores under ~/Library/Application Support,
+# and is deployed under launchd. A Linux runner cannot speak for any of that.
+#
+# What this IS: a gate that answers "did I break the hermetic majority?" without
+# waiting on GitHub's macOS runner queue, which has sat at 20+ minutes. It runs
+# the same scripts/ci-tests.sh, so a file excluded there is excluded here too,
+# and anything Linux additionally cannot judge is named in scripts/docker-ci.sh
+# rather than silently skipped.
+#
+#   docker build -f Dockerfile.ci -t anthill-ci .
+#   docker run --rm anthill-ci
+#
+# A green run here means the hermetic tier is sound. It does NOT mean CI passes.
+FROM oven/bun:1.3.14-alpine
+
+# git, because several suites shell out to it against temp repos they create
+# themselves; bash, because ci-tests.sh is bash and alpine ships ash.
+RUN apk add --no-cache git bash
+
+WORKDIR /app
+
+# Dependencies first so a source-only change reuses the cached layer.
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
+
+COPY . .
+
+# A bare HOME on purpose. Any suite that quietly depends on the developer's
+# machine fails here rather than passing for the wrong reason — the same
+# technique that proved the cleanup-sweep suite hermetic.
+# Run as a NON-ROOT user. This is not hygiene, it is correctness: several suites
+# assert that an unreadable directory is reported as a collection error, and root
+# can read anything, so as root those tests pass for the wrong reason — or fail
+# for one. A container that cannot tell "permission denied" from "fine" cannot
+# judge a codebase whose whole discipline is that unreadable never reads as empty.
+# The base image already ships a non-root `bun` user at uid 1000.
+RUN chown -R bun:bun /app
+USER bun
+ENV HOME=/home/bun
+
+CMD ["bash", "scripts/docker-ci.sh"]

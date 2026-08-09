@@ -82,6 +82,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
   claude: "Claude",
   cursor: "Cursor",
   factory: "Factory",
+  prime: "Prime",
 };
 
 /* Strings that arrive in a name-shaped field but are not names. Each was

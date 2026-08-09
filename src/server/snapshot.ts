@@ -566,7 +566,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         : source.task ?? source.statusReason ?? null,
       transcriptTail: notification?.body
         ? `${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`.slice(-MAX_TRANSCRIPT_TAIL_CHARS)
-        : source.transcriptTail,
+        : source.transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
       elapsedMs: source.startedAt ? Math.max(0, elapsedEndMs - Date.parse(source.startedAt)) : undefined,
       ...(source.activeMs === undefined ? {} : { activeMs: source.activeMs }),
       git: sidebarMatchesRepo && sidebar

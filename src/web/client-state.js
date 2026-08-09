@@ -145,13 +145,15 @@ export const state = {
   shelfOverrides: new Map(), // programId -> "open"
   selectedId: null,
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
+  drawerTab: "chat",        // chat | evidence — drawer tabs (Chat: Task+Transcript, Evidence: desk)
+  drawerChatExpanded: true, // Chat tab: transcript expandable below Task
   /* data-fkey of whatever the operator was standing on when they opened the
      drawer, so closing it can put them back. closeInspector used to return focus
      via `agent-<selectedId>`, and selectedId is null for every kind that is not
      an agent — so closing a program or finding drawer destroyed the focused
      Close button and dropped a keyboard operator on <body>. */
   selectionOrigin: null,
-  evidenceOpen: false,     // Bookshelf drawer: Operate + Chat stay open; Evidence is opt-in (cog).
+  evidenceOpen: false,     // Legacy: kept for paint-sig compat; use drawerTab instead.
   // Terminal-level identity evidence for the open drawer. The pids, commands
   // and open-file matches that say "ttys082 has both of these sessions open"
   // live on CmuxSurface, which /api/snapshot does not carry — so they are
