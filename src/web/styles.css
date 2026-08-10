@@ -2462,6 +2462,11 @@ body.feed-frozen .programs { opacity: 0.62; }
     width: auto;
     max-width: none;
   }
+  /* On desktop the page is the outer scroll owner. The nested transcript releases
+     its boundary wheel here so operators need not hunt for empty chrome. */
+  body.inspector-open .dw-agent.pane-inspector {
+    overscroll-behavior: auto;
+  }
   body.inspector-open .agent-grid,
   body.inspector-open .agent-column-header {
     grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
@@ -4651,7 +4656,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   flex: 1 1 16rem;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* Keep the transcript independently scrollable, then hand boundary wheel
+     input to the drawer/document instead of trapping it inside the mini-app. */
+  overscroll-behavior: auto;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
