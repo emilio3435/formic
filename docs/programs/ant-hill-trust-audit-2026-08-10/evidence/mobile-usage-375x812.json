@@ -1,0 +1,67 @@
+{
+  "head": "e7d4ab6",
+  "url": "http://127.0.0.1:4711/",
+  "selectedView": "true",
+  "viewport": {
+    "width": 375,
+    "height": 812,
+    "devicePixelRatio": 1
+  },
+  "document": {
+    "clientWidth": 375,
+    "scrollWidth": 439,
+    "overflowX": "visible"
+  },
+  "body": {
+    "clientWidth": 375,
+    "scrollWidth": 439,
+    "left": 0,
+    "right": 375,
+    "width": 375,
+    "overflowX": "hidden"
+  },
+  "main": {
+    "clientWidth": 311,
+    "scrollWidth": 407,
+    "left": 32,
+    "right": 343,
+    "width": 311,
+    "overflowX": "visible"
+  },
+  "panel": {
+    "selector": "#usage-panel",
+    "clientWidth": 290,
+    "scrollWidth": 397,
+    "left": 42.390625,
+    "right": 332.609375,
+    "width": 290.21875,
+    "overflowX": "visible"
+  },
+  "kpis": {
+    "selector": ".usage-kpis",
+    "clientWidth": 397,
+    "scrollWidth": 397,
+    "left": 42.390625,
+    "right": 438.96875,
+    "width": 396.578125,
+    "overflowX": "visible"
+  },
+  "recent": {
+    "selector": ".usage-section:has(.usage-table)",
+    "clientWidth": 395,
+    "scrollWidth": 395,
+    "left": 42.390625,
+    "right": 438.96875,
+    "width": 396.578125,
+    "overflowX": "visible"
+  },
+  "table": {
+    "selector": ".usage-table",
+    "clientWidth": 367,
+    "scrollWidth": 367,
+    "left": 56.984375,
+    "right": 424.375,
+    "width": 367.390625,
+    "overflowX": "visible"
+  }
+}

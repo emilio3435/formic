@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { executeControl } from "../src/server/control";
 import {
   enrichCmuxIdentity,
   identityFromSessionPath,
   parseProcessTable,
   isRecognizedAgentProcess,
 } from "../src/server/identity";
-import { resolveAgentTarget } from "../src/server/targets";
+import { controlsFor } from "../src/server/snapshot-agent";
+import { canWriteToTarget, resolveAgentTarget } from "../src/server/targets";
+import type { AgentSnapshot } from "../src/shared/types";
 import type {
   CmuxSurface,
   CollectedAgent,
@@ -170,6 +173,76 @@ describe("TTY and open-session identity evidence", () => {
       processAlive: true,
       transcriptOpen: true,
     });
+  });
+
+  test("Claude evidence cannot authorize an active Codex session with the same UUID", async () => {
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const claude: CollectedAgent = {
+      ...agent,
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+    };
+    const codex: CollectedAgent = {
+      ...agent,
+      id: `codex:${collisionId}`,
+      provider: "codex",
+      sourceSessionId: collisionId,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/claude",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          `n/Users/me/.claude/projects/project/${collisionId}.jsonl`,
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [claude, codex], runner);
+    const claudeTarget = resolveAgentTarget(claude, enriched.value, [claude, codex]);
+    const codexTarget = resolveAgentTarget(codex, enriched.value, [claude, codex]);
+
+    expect(claudeTarget).toMatchObject({ resolution: "exact", attestation: "live" });
+    expect(canWriteToTarget(claudeTarget)).toBeTrue();
+    expect(codexTarget).toMatchObject({ resolution: "missing" });
+    expect(canWriteToTarget(codexTarget)).toBeFalse();
+    const controls = controlsFor(codex, codexTarget, false);
+    expect(controls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "instruct", enabled: false }),
+      expect.objectContaining({ action: "interrupt", enabled: false }),
+    ]));
+    const commands: string[][] = [];
+    const snapshot: AgentSnapshot = {
+      ...codex,
+      programId: "fixture",
+      lastHumanMessage: null,
+      target: codexTarget,
+      controls,
+    };
+    const control = await executeControl(
+      { agentId: codex.id, action: "instruct", instruction: "do not send" },
+      snapshot,
+      {
+        runner: {
+          run: async (command) => {
+            commands.push([...command]);
+            return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+          },
+        },
+        archiveStore: { has: () => false, archive: async () => {} },
+      },
+    );
+    expect(control.status).toBe(409);
+    expect(commands).toEqual([]);
   });
 
   test("partial allowlisted lsof output remains usable when a target PID races away", async () => {

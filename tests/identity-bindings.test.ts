@@ -13,6 +13,7 @@ import {
   type IdentityBinding,
 } from "../src/server/identity-bindings";
 import { resolveAgentTargetWithTrace } from "../src/server/targets";
+import type { Provider } from "../src/shared/types";
 import type {
   CmuxSurface,
   CollectedAgent,
@@ -45,19 +46,24 @@ const agent: CollectedAgent = {
   gates: [],
 };
 
-function confirmedSurface(surfaceId: string, sessionId = SESSION_ID): CmuxSurface {
+function confirmedSurface(
+  surfaceId: string,
+  sessionId = SESSION_ID,
+  provider: Provider = "omp",
+): CmuxSurface {
   return {
     surfaceId,
     workspaceId: `WORKSPACE-${surfaceId}`,
     paneId: `PANE-${surfaceId}`,
     tty: "ttys033",
+    sourceSessionClaims: [{ provider, sessionId }],
     sourceSessionIds: [sessionId],
     identityTrace: {
       surfaceId,
       tty: "ttys033",
-      processes: [{ pid: 4242, command: "omp -p", recognizedAgentProcess: true }],
+      processes: [{ pid: 4242, command: `${provider} -p`, recognizedAgentProcess: true }],
       openFileMatches: [
-        { pid: 4242, path: `/Users/me/.omp/agent/sessions/p/run_${sessionId}.jsonl`, provider: "omp", sessionId },
+        { pid: 4242, path: `/provider/${provider}/${sessionId}.jsonl`, provider, sessionId },
       ],
       commandHints: [],
       outcome: "open-file-match",
@@ -337,6 +343,156 @@ describe("sticky identity binding lifecycle", () => {
     expect(bridgeAgentsWithBindings(store, [stale], [silentSurface("SURFACE-A")])[0].recordedTarget).toBeUndefined();
   });
 
+  test("provider-qualified bindings with the same UUID coexist and bridge only their provider", async () => {
+    const store = new MemoryIdentityBindingStore();
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await updateBindingsFromScan(store, [
+      confirmedSurface("SURFACE-CLAUDE", collisionId, "claude"),
+      confirmedSurface("SURFACE-CODEX", collisionId, "codex"),
+    ], "2026-07-23T06:00:00.000Z");
+
+    expect(store.list()).toHaveLength(2);
+    expect(store.getForProvider("claude", collisionId)?.target.surfaceId).toBe("SURFACE-CLAUDE");
+    expect(store.getForProvider("codex", collisionId)?.target.surfaceId).toBe("SURFACE-CODEX");
+    expect(store.get(collisionId)).toBeUndefined();
+
+    const claude: CollectedAgent = {
+      ...agent,
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+      recordedTarget: undefined,
+    };
+    const codex: CollectedAgent = {
+      ...agent,
+      id: `codex:${collisionId}`,
+      provider: "codex",
+      sourceSessionId: collisionId,
+      recordedTarget: undefined,
+    };
+    const bridged = bridgeAgentsWithBindings(
+      store,
+      [claude, codex],
+      [silentSurface("SURFACE-CLAUDE"), silentSurface("SURFACE-CODEX")],
+    );
+
+    expect(bridged[0]?.recordedTarget?.surfaceId).toBe("SURFACE-CLAUDE");
+    expect(bridged[1]?.recordedTarget?.surfaceId).toBe("SURFACE-CODEX");
+  });
+
+  test("an unqualified legacy binding stays inert across active provider collisions", async () => {
+    const store = new MemoryIdentityBindingStore();
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await store.put({
+      sessionId: collisionId,
+      target: { surfaceId: "SURFACE-LEGACY" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+    });
+    const claude: CollectedAgent = {
+      ...agent,
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+      recordedTarget: undefined,
+    };
+    const codex: CollectedAgent = {
+      ...agent,
+      id: `codex:${collisionId}`,
+      provider: "codex",
+      sourceSessionId: collisionId,
+      recordedTarget: undefined,
+    };
+
+    const bridged = bridgeAgentsWithBindings(
+      store,
+      [claude, codex],
+      [silentSurface("SURFACE-LEGACY")],
+    );
+
+    expect(bridged[0]?.recordedTarget).toBeUndefined();
+    expect(bridged[1]?.recordedTarget).toBeUndefined();
+  });
+
+  test("an unqualified legacy binding stays inert when the colliding provider is stale but process-alive", async () => {
+    const store = new MemoryIdentityBindingStore();
+    const collisionId = "ffffffff-aaaa-4bbb-8ccc-dddddddddddd";
+    await store.put({
+      sessionId: collisionId,
+      target: { surfaceId: "SURFACE-LEGACY" },
+      firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+      confirmedAt: "2026-07-23T06:00:00.000Z",
+    });
+    const codex: CollectedAgent = {
+      ...agent,
+      id: `codex:${collisionId}`,
+      provider: "codex",
+      sourceSessionId: collisionId,
+      recordedTarget: undefined,
+    };
+    const staleClaude: CollectedAgent = {
+      ...agent,
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+      status: "stale",
+      processAlive: true,
+      recordedTarget: undefined,
+    };
+
+    const [bridged] = bridgeAgentsWithBindings(
+      store,
+      [codex, staleClaude],
+      [silentSurface("SURFACE-LEGACY")],
+    );
+
+    expect(bridged?.recordedTarget).toBeUndefined();
+  });
+
+  test("binding bridges preindex source providers instead of rescanning agents per binding", async () => {
+    const store = new MemoryIdentityBindingStore();
+    const secondId = "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb";
+    const first = { ...agent };
+    const second: CollectedAgent = {
+      ...agent,
+      id: `codex:${secondId}`,
+      provider: "codex",
+      sourceSessionId: secondId,
+    };
+    await store.putMany([
+      {
+        sessionId: first.sourceSessionId,
+        provider: first.provider,
+        target: { surfaceId: "SURFACE-FIRST" },
+        firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+        confirmedAt: "2026-07-23T06:00:00.000Z",
+      },
+      {
+        sessionId: second.sourceSessionId,
+        provider: second.provider,
+        target: { surfaceId: "SURFACE-SECOND" },
+        firstConfirmedAt: "2026-07-23T06:00:00.000Z",
+        confirmedAt: "2026-07-23T06:00:00.000Z",
+      },
+    ]);
+    const sources = [first, second];
+    let sourceReads = 0;
+    const guardedAgents = new Proxy(sources, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) {
+          sourceReads += 1;
+          if (sourceReads > sources.length * 2) {
+            throw new Error("bridge rescanned agents while resolving a binding");
+          }
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(() => bridgeAgentsWithBindings(store, guardedAgents, [])).not.toThrow();
+    expect(sourceReads).toBeLessThanOrEqual(sources.length * 2);
+  });
+
   test("reassignment demotes the old binding only after 2 consecutive scans agree", async () => {
     const store = new MemoryIdentityBindingStore();
     await updateBindingsFromScan(store, [confirmedSurface("SURFACE-A")], "2026-07-23T06:00:00.000Z");
@@ -490,6 +646,47 @@ describe("durable binding store", () => {
     expect(reopened.get(SESSION_ID)).toEqual(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
   });
 
+  test("provider-qualified records sharing a UUID survive reopen independently", async () => {
+    const { files } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    const now = () => Date.parse("2026-07-23T06:00:00.000Z");
+    const store = await JsonIdentityBindingStore.open(path, files, now);
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const confirmedAt = "2026-07-23T06:00:00.000Z";
+
+    await store.putMany([
+      { ...binding(collisionId, confirmedAt), provider: "claude", target: { surfaceId: "SURFACE-CLAUDE" } },
+      { ...binding(collisionId, confirmedAt), provider: "codex", target: { surfaceId: "SURFACE-CODEX" } },
+    ]);
+    const reopened = await JsonIdentityBindingStore.open(path, files, now);
+
+    expect(reopened.list()).toHaveLength(2);
+    expect(reopened.getForProvider("claude", collisionId)?.target.surfaceId).toBe("SURFACE-CLAUDE");
+    expect(reopened.getForProvider("codex", collisionId)?.target.surfaceId).toBe("SURFACE-CODEX");
+    expect(reopened.get(collisionId)).toBeUndefined();
+  });
+
+  test("provider-qualified lookup uses composite keys without enumerating every binding", async () => {
+    const { files } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    const now = () => Date.parse("2026-07-23T06:00:00.000Z");
+    const store = await JsonIdentityBindingStore.open(path, files, now);
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const confirmedAt = "2026-07-23T06:00:00.000Z";
+
+    await store.putMany([
+      { ...binding(collisionId, confirmedAt), provider: "codex", target: { surfaceId: "SURFACE-CODEX" } },
+      { ...binding(collisionId, confirmedAt), provider: undefined, target: { surfaceId: "SURFACE-LEGACY" } },
+      binding("unrelated-session", confirmedAt),
+    ]);
+    store.list = () => {
+      throw new Error("provider lookup enumerated the binding store");
+    };
+
+    expect(store.getForProvider("codex", collisionId)?.target.surfaceId).toBe("SURFACE-CODEX");
+    expect(store.getForProvider("claude", collisionId)?.target.surfaceId).toBe("SURFACE-LEGACY");
+  });
+
   test("a session's first disambiguator survives binding rewrites and reopen", async () => {
     const { files } = virtualFiles();
     const path = "/virtual/identity-bindings.json";
@@ -573,10 +770,12 @@ describe("durable binding store", () => {
 
     await store.put(binding(SESSION_ID, new Date(confirmedAtMs).toISOString()));
     expect(store.get(SESSION_ID)).toBeDefined();
+    expect(store.getForProvider("omp", SESSION_ID)).toBeDefined();
     expect(store.list()).toHaveLength(1);
 
     // Nothing writes in this window; only the clock crosses the TTL.
     nowMs = confirmedAtMs + IDENTITY_BINDING_TTL_MS + 60_000;
+    expect(store.getForProvider("omp", SESSION_ID)).toBeUndefined();
     expect(store.get(SESSION_ID)).toBeUndefined();
     expect(store.list()).toEqual([]);
   });

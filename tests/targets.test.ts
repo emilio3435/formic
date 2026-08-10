@@ -159,6 +159,101 @@ describe("safe cmux target resolution", () => {
     expect(target.reason).toBe("Matched source session ID recorded by cmux.");
   });
 
+  test("an unqualified legacy session claim fails closed across active providers", () => {
+    const collisionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const codex = agent({ sourceSessionId: collisionId });
+    const claude = agent({
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+    });
+    const legacySurface = {
+      surfaceId: "SURFACE-LEGACY-COLLISION",
+      sourceSessionIds: [collisionId],
+    };
+
+    for (const source of [codex, claude]) {
+      const target = resolveAgentTarget(source, [legacySurface], [codex, claude]);
+      expect(target.resolution).toBe("missing");
+      expect(canWriteToTarget(target)).toBeFalse();
+    }
+  });
+
+  test("an unqualified legacy claim stays unwritable when the colliding provider is stale but process-alive", () => {
+    const collisionId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+    const codex = agent({ sourceSessionId: collisionId });
+    const staleClaude = agent({
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+      status: "stale",
+      processAlive: true,
+    });
+    const legacySurface = {
+      surfaceId: "SURFACE-LEGACY-STALE-COLLISION",
+      sourceSessionIds: [collisionId],
+    };
+
+    const target = resolveAgentTarget(codex, [legacySurface], [codex, staleClaude]);
+
+    expect(target.resolution).toBe("missing");
+    expect(canWriteToTarget(target)).toBeFalse();
+  });
+
+  test("one parsed surface claiming the same UUID for Codex and Claude authorizes neither provider", () => {
+    const collisionId = "cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa";
+    const [surface] = parseCmuxTerminals(JSON.stringify({
+      terminals: [{
+        surface_id: "SURFACE-QUALIFIED-CONFLICT",
+        codex_session_id: collisionId,
+        claude_session_id: collisionId,
+      }],
+    }));
+    const codex = agent({ sourceSessionId: collisionId });
+    const claude = agent({
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+    });
+
+    expect(surface?.sourceSessionClaims).toEqual([
+      { provider: "codex", sessionId: collisionId },
+      { provider: "claude", sessionId: collisionId },
+    ]);
+    for (const source of [codex, claude]) {
+      const target = resolveAgentTarget(source, [surface!], [codex, claude]);
+      expect(target.resolution).toBe("missing");
+      expect(canWriteToTarget(target)).toBeFalse();
+    }
+  });
+
+  test("a provider-qualified parsed claim routes only its provider across UUID reuse", () => {
+    const collisionId = "eeeeeeee-ffff-4aaa-8bbb-cccccccccccc";
+    const [surface] = parseCmuxTerminals(JSON.stringify({
+      terminals: [{
+        surface_id: "SURFACE-CODEX-QUALIFIED",
+        codex_session_id: collisionId,
+      }],
+    }));
+    const codex = agent({ sourceSessionId: collisionId });
+    const claude = agent({
+      id: `claude:${collisionId}`,
+      provider: "claude",
+      sourceSessionId: collisionId,
+    });
+
+    const codexTarget = resolveAgentTarget(codex, [surface!], [codex, claude]);
+    const claudeTarget = resolveAgentTarget(claude, [surface!], [codex, claude]);
+    expect(codexTarget).toMatchObject({
+      surfaceId: "SURFACE-CODEX-QUALIFIED",
+      resolution: "exact",
+      attestation: "live",
+    });
+    expect(canWriteToTarget(codexTarget)).toBeTrue();
+    expect(claudeTarget.resolution).toBe("missing");
+    expect(canWriteToTarget(claudeTarget)).toBeFalse();
+  });
+
   test("exact session match with agreeing cwd publishes the same-directory relation", () => {
     const target = resolveAgentTarget(
       agent({

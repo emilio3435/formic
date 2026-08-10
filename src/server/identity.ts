@@ -1,5 +1,6 @@
 import type {
   Provider,
+  SessionIdentityClaim,
   SurfaceCommandHintEvidence,
   SurfaceIdentityTrace,
   SurfaceOpenFileEvidence,
@@ -220,9 +221,13 @@ function parseCmuxProcessAttribution(output: string): Map<string, Set<number>> {
   return attributed;
 }
 
-function uniqueIdentity(hints: readonly IdentityHint[]): string | undefined {
-  const identities = [...new Set(hints.map((hint) => `${hint.provider}:${hint.value}`))];
-  return identities.length === 1 ? identities[0].split(":", 2)[1] : undefined;
+function uniqueIdentity(hints: readonly IdentityHint[]): IdentityHint | undefined {
+  const identities = new Map(hints.map((hint) => [identityKey(hint), hint]));
+  return identities.size === 1 ? [...identities.values()][0] : undefined;
+}
+
+function sessionClaim(hint: IdentityHint): SessionIdentityClaim {
+  return { provider: hint.provider, sessionId: hint.value };
 }
 
 function identityKey(hint: IdentityHint): string {
@@ -354,6 +359,7 @@ function baseTrace(
 function failedProbeSurfaces(surfaces: readonly CmuxSurface[], error: string): CmuxSurface[] {
   return surfaces.map((surface) => ({
     ...surface,
+    sourceSessionClaims: [],
     sourceSessionIds: [],
     identityConflict: error,
     identityTrace: {
@@ -385,6 +391,7 @@ export async function enrichCmuxIdentity(
         surface.runtimeSurfaceReady === false
           ? {
               ...surface,
+              sourceSessionClaims: [],
               sourceSessionIds: [],
               identityConflict: undefined,
               identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
@@ -454,6 +461,7 @@ export async function enrichCmuxIdentity(
         surface.runtimeSurfaceReady === false
           ? {
               ...surface,
+              sourceSessionClaims: [],
               sourceSessionIds: [],
               identityConflict: undefined,
               identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
@@ -673,6 +681,7 @@ export async function enrichCmuxIdentity(
       if (surface.runtimeSurfaceReady === false) {
         return {
           ...surface,
+          sourceSessionClaims: [],
           sourceSessionIds: [],
           identityConflict: undefined,
           identityTrace: { ...baseTrace(surface, "stale-surface"), sourceSessionIds: [], identityConflict: undefined },
@@ -749,6 +758,7 @@ export async function enrichCmuxIdentity(
         errors.push(identityConflict);
         return {
           ...surface,
+          sourceSessionClaims: [],
           sourceSessionIds: [],
           identityConflict,
           identityTrace: trace("open-file-conflict", [], identityConflict, attributionNotes),
@@ -764,6 +774,7 @@ export async function enrichCmuxIdentity(
         ];
         return {
           ...surface,
+          sourceSessionClaims: [sessionClaim(openIdentity)],
           sourceSessionIds: [openIdentity.value],
           identityConflict: undefined,
           identityTrace: trace(
@@ -784,6 +795,7 @@ export async function enrichCmuxIdentity(
         errors.push(identityConflict);
         return {
           ...surface,
+          sourceSessionClaims: [],
           sourceSessionIds: [],
           identityConflict,
           identityTrace: trace("command-hint-conflict", [], identityConflict, attributionNotes),
@@ -795,6 +807,7 @@ export async function enrichCmuxIdentity(
         errors.push(identityConflict);
         return {
           ...surface,
+          sourceSessionClaims: [],
           sourceSessionIds: [],
           identityConflict,
           identityTrace: trace("command-hint-conflict", [], identityConflict, attributionNotes),
@@ -803,9 +816,10 @@ export async function enrichCmuxIdentity(
       return commandIdentity
         ? {
             ...surface,
-            sourceSessionIds: [commandIdentity],
+            sourceSessionClaims: [sessionClaim(commandIdentity)],
+            sourceSessionIds: [commandIdentity.value],
             identityConflict: undefined,
-            identityTrace: trace("command-hint-match", [commandIdentity], undefined, attributionNotes),
+            identityTrace: trace("command-hint-match", [commandIdentity.value], undefined, attributionNotes),
           }
         : {
             ...surface,

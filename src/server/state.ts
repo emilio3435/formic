@@ -31,6 +31,8 @@ import type {
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
+import { controlsFor, lifecycleFor } from "./snapshot-agent";
+import { resolveAgentTarget } from "./targets";
 import {
   applyProcessWitness,
   currentBootId,
@@ -227,6 +229,124 @@ export class HubState {
 
   surfaces(): readonly CmuxSurface[] {
     return this.#surfaces;
+  }
+
+  #quarantineRetainedIdentityEvidence(): void {
+    /* Keep the last panes for diagnostics, but withdraw every claim that could
+       authorize a control or re-mint process liveness. A failed current scan
+       says nothing about whether the old session still owns the pane or
+       whether the old PID still names the same process. `#surfaces` also feeds
+       durable focus links directly, so quarantining only the published
+       snapshot would leave that second route writable. */
+    this.#surfaces = this.#surfaces.map((surface) => ({
+      ...surface,
+      runtimeSurfaceReady: false,
+      sourceSessionIds: [],
+      /* Provider-qualified claims carry the same authority as legacy IDs, so
+         they age out at the same boundary. */
+      sourceSessionClaims: [],
+      identityConflict: undefined,
+      identityTrace: {
+        surfaceId: surface.surfaceId,
+        ...(surface.tty ? { tty: surface.tty } : {}),
+        processes: [],
+        openFileMatches: [],
+        commandHints: [],
+        outcome: "stale-surface",
+        sourceSessionIds: [],
+      },
+    }));
+    this.#liveAgentProcessIds = undefined;
+    this.#recognizedAgentProcessIds = undefined;
+    this.#processStartsByPid = undefined;
+  }
+
+  #publishQuarantinedRoutingEvidence(agentIds?: ReadonlySet<string>): void {
+    const reason = "Current collection evidence no longer supports this published terminal target; wait for refresh completion.";
+    this.#snapshot = {
+      ...this.#snapshot,
+      controlHealth: {
+        ...this.#snapshot.controlHealth,
+        cmuxReachable: this.#cmuxReachable,
+        lastCheckedAt: this.#cmuxLastCheckedAt,
+        errors: [...this.#cmuxErrors],
+      },
+      programs: this.#snapshot.programs.map((program) => ({
+        ...program,
+        agents: program.agents.map((agent) =>
+          agentIds && !agentIds.has(agent.id)
+            ? agent
+            : {
+                ...agent,
+                controlState: "observed-only",
+                target: { resolution: "missing", reason },
+                controls: agent.controls.map((control) =>
+                  control.action === "focus" || control.action === "instruct" || control.action === "interrupt"
+                    ? { ...control, enabled: false, reason }
+                    : control
+                ),
+              }
+        ),
+      })),
+    };
+    for (const listener of this.#listeners) listener(this.#snapshot);
+  }
+
+  #quarantineDisprovedPublishedAuthority(
+    agents: readonly CollectedAgent[],
+    surfaces: readonly CmuxSurface[],
+    options: {
+      processRosterComplete: boolean;
+      thresholds?: ReturnType<typeof lifecycleThresholds>;
+    },
+  ): void {
+    const currentById = new Map(agents.map((agent) => [agent.id, agent]));
+    const invalid = new Set<string>();
+    const nowMs = Date.now();
+    for (const published of this.#snapshot.programs.flatMap((program) => program.agents)) {
+      const enabledTerminalActions = published.controls
+        .filter((control) =>
+          control.enabled
+          && (control.action === "focus" || control.action === "instruct" || control.action === "interrupt")
+        )
+        .map(({ action }) => action);
+      if (enabledTerminalActions.length === 0) continue;
+      const current = currentById.get(published.id);
+      if (!current) {
+        invalid.add(published.id);
+        continue;
+      }
+      const target = resolveAgentTarget(current, surfaces, agents);
+      const operatorArchived = this.archiveStore.has(current.id);
+      const terminal = lifecycleFor(current, {
+        operatorArchived,
+        scope: "observed",
+        nowMs,
+        thresholds: options.thresholds,
+        processRosterComplete: options.processRosterComplete,
+        persisted: current.lifecycle
+          ? { lifecycle: current.lifecycle, provenance: current.provenance }
+          : operatorArchived
+            ? { lifecycle: "finished", provenance: "operator-archive" }
+            : undefined,
+      }).lifecycle === "finished";
+      const currentControls = new Map(
+        controlsFor(
+          current,
+          target,
+          terminal,
+          undefined,
+          Boolean(this.archiveStore.unarchive) && operatorArchived,
+        ).map((control) => [control.action, control.enabled]),
+      );
+      if (
+        target.surfaceId !== published.target.surfaceId
+        || enabledTerminalActions.some((action) => currentControls.get(action) !== true)
+      ) {
+        invalid.add(published.id);
+      }
+    }
+    if (invalid.size > 0) this.#publishQuarantinedRoutingEvidence(invalid);
   }
 
   subscribe(listener: (snapshot: HubSnapshot) => void): () => void {
@@ -570,6 +690,7 @@ export class HubState {
       this.#cmuxReachable = cmux.errors.length === 0;
       let identityErrors: string[] = [];
       let bindingErrors: string[] = [];
+      let routingEvidenceQuarantined = false;
       /* Cleared before the attempt, restored only by a scan that completed.
          A degraded refresh must not keep answering "nothing claims this
          session" on the strength of a scan that already finished — that is the
@@ -590,17 +711,36 @@ export class HubState {
             : undefined;
           this.#rosterComplete = identityResult.rosterComplete === true;
           identityErrors = identityResult.errors;
+          const currentAuthorityAgents = this.bindingStore
+            ? bridgeAgentsWithBindings(
+                this.bindingStore,
+                collectedAgents,
+                this.#surfaces,
+                this.#liveAgentProcessIds,
+                this.#recognizedAgentProcessIds,
+                this.#processStartsByPid,
+              )
+            : collectedAgents;
+          this.#quarantineDisprovedPublishedAuthority(currentAuthorityAgents, this.#surfaces, {
+            processRosterComplete: this.#rosterComplete,
+            thresholds,
+          });
+          // Only completed identity scans confirm bindings; a failed write is
+          // an operator-visible error, never a silent skip or broken refresh.
+          bindingErrors = this.bindingStore
+            ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
+            : [];
         } else if (cmux.errors.length === 0) {
           identityErrors = [
             collectionErrors.find((error) => error.startsWith("cmux identity enrichment failed")) ?? deadlineError,
           ];
+          this.#quarantineRetainedIdentityEvidence();
+          routingEvidenceQuarantined = true;
         }
-        // Only completed identity scans confirm bindings; a failed write is an
-        // operator-visible error, never a silent skip or a broken refresh loop.
-        bindingErrors = this.bindingStore
-          ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
-          : [];
         if (this.#superseded(generation)) return this.#snapshot;
+      } else {
+        this.#quarantineRetainedIdentityEvidence();
+        routingEvidenceQuarantined = true;
       }
       if (notifications && notifications.errors.length === 0) {
         this.#notifications = notifications.value;
@@ -623,6 +763,7 @@ export class HubState {
         ...bindingErrors,
         ...collectionErrors,
       ])];
+      if (routingEvidenceQuarantined) this.#publishQuarantinedRoutingEvidence();
     }
     /* Bridged FIRST, then recorded, then published — one set of agents through
        all three. The history write used to run before the bindings bridge, so a
@@ -645,6 +786,10 @@ export class HubState {
     const publishedAgents = this.witnessStore
       ? applyProcessWitness(bridgedAgents, this.witnessStore, this.#bootId)
       : bridgedAgents;
+    this.#quarantineDisprovedPublishedAuthority(publishedAgents, this.#surfaces, {
+      processRosterComplete: this.#rosterComplete,
+      thresholds,
+    });
     const senderTranscriptTailsPromise = senderTranscriptTailsFor(
       [...(this.archiveStore.archivedAgents?.() ?? []), ...publishedAgents],
       readBoundedTranscriptTail,

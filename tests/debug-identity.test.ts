@@ -83,6 +83,10 @@ const surfaces: CmuxSurface[] = [
     workspaceId: "WORKSPACE-HEALTH",
     paneId: "PANE-HEALTH",
     tty: "ttys033",
+    sourceSessionClaims: [{
+      provider: "claude",
+      sessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    }],
     sourceSessionIds: ["019f86c4-1558-7000-aeb8-26e2cfd0e8ec"],
     identityTrace: {
       surfaceId: "SURFACE-HEALTH",
@@ -212,8 +216,12 @@ describe("read-only identity debug endpoint", () => {
       surfaceId: "SURFACE-HEALTH",
       routeObservation: {
         reportedSessionIds: ["019f86c4-1558-7000-aeb8-26e2cfd0e8ec"],
+        reportedSessionClaims: [{
+          provider: "claude",
+          sessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+        }],
         sessionIdMatched: true,
-        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported source session 019f86c4-1558-7000-aeb8-26e2cfd0e8ec.",
+        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec.",
       },
       identityTrace: {
         outcome: "open-file-match",
@@ -226,11 +234,65 @@ describe("read-only identity debug endpoint", () => {
       sourceSessionIds: [],
       routeObservation: {
         reportedSessionIds: [],
+        reportedSessionClaims: [],
         sessionIdMatched: false,
         reason: "Pane PANE-CONFLICT (surface SURFACE-CONFLICT, ttys005) reported no source session IDs; source session 019f86c4-1558-7000-aeb8-26e2cfd0e8ec could not match.",
       },
     });
     expect(JSON.stringify(body)).not.toContain("super-secret");
+    fetch.dispose();
+  });
+
+  test("retained stale panes stay visible as non-authoritative debug evidence", async () => {
+    const current = snapshot();
+    const staleSurface: CmuxSurface = {
+      ...surfaces[0]!,
+      runtimeSurfaceReady: false,
+      sourceSessionClaims: [],
+      sourceSessionIds: [],
+      identityTrace: {
+        surfaceId: "SURFACE-HEALTH",
+        tty: "ttys033",
+        processes: [],
+        openFileMatches: [],
+        commandHints: [],
+        outcome: "stale-surface",
+        sourceSessionIds: [],
+      },
+    };
+    const state: MountainAppState = {
+      get: () => current,
+      subscribe: () => () => {},
+      refresh: async () => current,
+      surfaces: () => [staleSurface],
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const fetch = createMountainFetch({ state, runner, archiveStore, webRoot: import.meta.dir });
+
+    const response = await fetch(
+      new Request(`http://127.0.0.1:4701/api/debug/identity?agent=${encodeURIComponent(AGENT_ID)}`),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.relatedSurfaces).toEqual([
+      expect.objectContaining({
+        surfaceId: "SURFACE-HEALTH",
+        runtimeSurfaceReady: false,
+        sourceSessionClaims: [],
+        sourceSessionIds: [],
+        identityTrace: expect.objectContaining({
+          outcome: "stale-surface",
+          processes: [],
+          openFileMatches: [],
+          commandHints: [],
+          sourceSessionIds: [],
+        }),
+      }),
+    ]);
     fetch.dispose();
   });
 
@@ -254,9 +316,13 @@ describe("read-only identity debug endpoint", () => {
         paneId: "PANE-HEALTH",
         tty: "ttys033",
         reportedSessionIds: ["019f86c4-1558-7000-aeb8-26e2cfd0e8ec"],
+        reportedSessionClaims: [{
+          provider: "claude",
+          sessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+        }],
         sessionIdMatched: false,
         cwdMatched: false,
-        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported session ID 019f86c4-1558-7000-aeb8-26e2cfd0e8ec; none equals source session 33333333-3333-4333-8333-333333333333.",
+        reason: "Pane PANE-HEALTH (surface SURFACE-HEALTH, ttys033) reported claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec; none safely matches codex:33333333-3333-4333-8333-333333333333.",
       },
       {
         workspaceId: "WORKSPACE-CONFLICT",
@@ -264,6 +330,7 @@ describe("read-only identity debug endpoint", () => {
         paneId: "PANE-CONFLICT",
         tty: "ttys005",
         reportedSessionIds: [],
+        reportedSessionClaims: [],
         sessionIdMatched: false,
         cwdMatched: false,
         reason: "Pane PANE-CONFLICT (surface SURFACE-CONFLICT, ttys005) reported no source session IDs; source session 33333333-3333-4333-8333-333333333333 could not match.",

@@ -44,6 +44,20 @@ describe("parseCmuxTerminals — the surface rename becomes the terminal title",
     const [glyphOnly] = parseCmuxTerminals(discovery({ surface_title: "⠂ " }));
     expect(glyphOnly?.title).toBeUndefined();
   });
+
+  test("preserves provider qualification beside legacy session fields", () => {
+    const sessionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const [surface] = parseCmuxTerminals(discovery({
+      session_id: sessionId,
+      claude_session_id: sessionId,
+    }));
+
+    expect(surface?.sourceSessionIds).toEqual([sessionId]);
+    expect(surface?.sourceSessionClaims).toEqual([
+      { sessionId },
+      { provider: "claude", sessionId },
+    ]);
+  });
 });
 
 describe("runtime cmux executable", () => {

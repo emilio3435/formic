@@ -3,6 +3,11 @@ import { dirname } from "node:path";
 import type { Provider } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 import { livenessOfAny, processAliveFrom, type ProcessRoster } from "./process-liveness";
+import {
+  indexSessionIdentityProviders,
+  sourceSessionHasProviderCollision,
+  surfaceClaimsSourceSession,
+} from "./targets";
 
 /** Bindings not reconfirmed by live evidence for this long age out. */
 export const IDENTITY_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -45,6 +50,8 @@ export interface IdentityBinding {
 
 export interface IdentityBindingStore {
   get(sessionId: string): IdentityBinding | undefined;
+  /** Provider-qualified lookup; optional for legacy/custom stores. */
+  getForProvider?(provider: Provider, sessionId: string): IdentityBinding | undefined;
   list(): readonly IdentityBinding[];
   put(binding: IdentityBinding): Promise<void>;
   putMany(bindings: readonly IdentityBinding[]): Promise<void>;
@@ -76,6 +83,23 @@ const nodeFileOperations: BindingFileOperations = {
 };
 
 const PROVIDERS: readonly Provider[] = ["codex", "omp", "claude", "cursor"];
+
+function bindingKey(binding: Pick<IdentityBinding, "provider" | "sessionId">): string {
+  return binding.provider
+    ? `${binding.provider}:${binding.sessionId.toLowerCase()}`
+    : `legacy:${binding.sessionId.toLowerCase()}`;
+}
+
+function bindingForProvider(
+  store: IdentityBindingStore,
+  provider: Provider,
+  sessionId: string,
+): IdentityBinding | undefined {
+  const binding = store.getForProvider?.(provider, sessionId) ?? store.get(sessionId);
+  return binding && (binding.provider === undefined || binding.provider === provider)
+    ? binding
+    : undefined;
+}
 
 function isBindingTarget(value: unknown): value is IdentityBindingTarget {
   if (!value || typeof value !== "object") return false;
@@ -149,7 +173,7 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
             throw new Error("identity bindings file contains an invalid binding record");
           }
           // Prune on load: sessions that left the scan window age out here.
-          if (isFresh(value, now())) store.#bindings.set(value.sessionId.toLowerCase(), value);
+          if (isFresh(value, now())) store.#bindings.set(bindingKey(value), value);
         }
       }
       const nameTags = Array.isArray(parsed)
@@ -179,12 +203,19 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
      exactly linked to a recycled cmux surface and controls route to the wrong
      pane. An expired binding is not weaker evidence; it is no evidence. */
   get(sessionId: string): IdentityBinding | undefined {
-    const key = sessionId.toLowerCase();
-    const binding = this.#bindings.get(key);
-    if (!binding) return undefined;
-    if (isFresh(binding, this.now())) return binding;
-    this.#bindings.delete(key);
-    return undefined;
+    const nowMs = this.now();
+    const candidates = [
+      ...PROVIDERS.map((provider) =>
+        this.#freshBinding(bindingKey({ provider, sessionId }), nowMs)),
+      this.#freshBinding(bindingKey({ sessionId }), nowMs),
+    ].filter((binding): binding is IdentityBinding => binding !== undefined);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  getForProvider(provider: Provider, sessionId: string): IdentityBinding | undefined {
+    const nowMs = this.now();
+    return this.#freshBinding(bindingKey({ provider, sessionId }), nowMs)
+      ?? this.#freshBinding(bindingKey({ sessionId }), nowMs);
   }
 
   list(): readonly IdentityBinding[] {
@@ -220,6 +251,14 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
     return changed ? this.#enqueuePersist([]) : Promise.resolve();
   }
 
+  #freshBinding(key: string, nowMs: number): IdentityBinding | undefined {
+    const binding = this.#bindings.get(key);
+    if (!binding) return undefined;
+    if (isFresh(binding, nowMs)) return binding;
+    this.#bindings.delete(key);
+    return undefined;
+  }
+
   #enqueuePersist(bindings: readonly IdentityBinding[]): Promise<void> {
     const write = this.#writeQueue.then(() => this.#persist(bindings));
     // A failed write rejects its caller but does not poison later queued writes.
@@ -231,7 +270,7 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
     const nowMs = this.now();
     const next = new Map(this.#bindings);
     for (const binding of bindings) {
-      next.set(binding.sessionId.toLowerCase(), binding);
+      next.set(bindingKey(binding), binding);
     }
     // Prune on save so the file never accumulates departed sessions.
     for (const [key, value] of next) {
@@ -258,7 +297,16 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
   readonly #nameTags = new Map<string, string>();
 
   get(sessionId: string): IdentityBinding | undefined {
-    return this.#bindings.get(sessionId.toLowerCase());
+    const candidates = [
+      ...PROVIDERS.map((provider) => this.#bindings.get(bindingKey({ provider, sessionId }))),
+      this.#bindings.get(bindingKey({ sessionId })),
+    ].filter((binding): binding is IdentityBinding => binding !== undefined);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  getForProvider(provider: Provider, sessionId: string): IdentityBinding | undefined {
+    return this.#bindings.get(bindingKey({ provider, sessionId }))
+      ?? this.#bindings.get(bindingKey({ sessionId }));
   }
 
   list(): readonly IdentityBinding[] {
@@ -266,12 +314,12 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
   }
 
   async put(binding: IdentityBinding): Promise<void> {
-    this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+    this.#bindings.set(bindingKey(binding), binding);
   }
 
   async putMany(bindings: readonly IdentityBinding[]): Promise<void> {
     for (const binding of bindings) {
-      this.#bindings.set(binding.sessionId.toLowerCase(), binding);
+      this.#bindings.set(bindingKey(binding), binding);
     }
   }
 
@@ -301,8 +349,9 @@ export async function updateBindingsFromScan(
 ): Promise<{ errors: string[] }> {
   const errors: string[] = [];
   const confirmed = new Map<string, {
+    sessionId: string;
     surface: CmuxSurface;
-    provider?: Provider;
+    provider: Provider;
     processIds: number[];
     processStarts?: Record<string, number>;
   }>();
@@ -312,13 +361,6 @@ export async function updateBindingsFromScan(
     if (!trace || (trace.outcome !== "open-file-match" && trace.outcome !== "command-hint-match")) continue;
     if (surface.identityConflict || surface.sourceSessionIds.length !== 1) continue;
     const sessionId = surface.sourceSessionIds[0].toLowerCase();
-    const existing = confirmed.get(sessionId);
-    if (existing && existing.surface.surfaceId !== surface.surfaceId) {
-      // One session confirmed on two surfaces in one scan is not evidence to
-      // bind on — leave whatever binding exists untouched.
-      contested.add(sessionId);
-      continue;
-    }
     const openMatches = trace.openFileMatches.filter(
       (match) => match.sessionId.toLowerCase() === sessionId,
     );
@@ -326,11 +368,20 @@ export async function updateBindingsFromScan(
       (hint) => hint.resolvedSessionId?.toLowerCase() === sessionId,
     );
     const provider = openMatches[0]?.provider ?? commandMatches[0]?.provider;
+    if (!provider) continue;
+    const identity = `${provider}:${sessionId}`;
+    const existing = confirmed.get(identity);
+    if (existing && existing.surface.surfaceId !== surface.surfaceId) {
+      // One session confirmed on two surfaces in one scan is not evidence to
+      // bind on — leave whatever binding exists untouched.
+      contested.add(identity);
+      continue;
+    }
     const processIds = [...new Set([
       ...openMatches.map(({ pid }) => pid),
       ...commandMatches.map(({ pid }) => pid),
     ])];
-    if (!provider || processIds.length === 0) continue;
+    if (processIds.length === 0) continue;
     /* Store WHEN each pid started, not just the number. A pid alone can only be
        re-checked as "is it in use"; with the start time a later scan can tell
        this process from whatever inherited the number. Only the pids this scan
@@ -345,7 +396,8 @@ export async function updateBindingsFromScan(
       const startSeconds = datedProcesses.get(pid);
       if (startSeconds !== undefined) processStarts[String(pid)] = startSeconds;
     }
-    confirmed.set(sessionId, {
+    confirmed.set(identity, {
+      sessionId,
       surface,
       provider,
       processIds,
@@ -353,14 +405,14 @@ export async function updateBindingsFromScan(
     });
   }
   const updates: IdentityBinding[] = [];
-  for (const [sessionId, { surface, provider, processIds, processStarts }] of confirmed) {
-    if (contested.has(sessionId)) continue;
+  for (const [identity, { sessionId, surface, provider, processIds, processStarts }] of confirmed) {
+    if (contested.has(identity)) continue;
     const observed: IdentityBindingTarget = {
       surfaceId: surface.surfaceId,
       workspaceId: surface.workspaceId,
       paneId: surface.paneId,
     };
-    const existing = store.get(sessionId);
+    const existing = bindingForProvider(store, provider, sessionId);
     let next: IdentityBinding;
     if (!existing) {
       next = {
@@ -375,7 +427,7 @@ export async function updateBindingsFromScan(
     } else if (existing.target.surfaceId === observed.surfaceId) {
       next = {
         ...existing,
-        provider: provider ?? existing.provider,
+        provider,
         target: observed,
         confirmedAt: nowIso,
         processIds,
@@ -394,7 +446,7 @@ export async function updateBindingsFromScan(
       next = scansAgreed >= REASSIGNMENT_CONFIRMATION_SCANS
         ? {
             sessionId,
-            provider: provider ?? existing.provider,
+            provider,
             target: observed,
             firstConfirmedAt: nowIso,
             confirmedAt: nowIso,
@@ -438,14 +490,13 @@ export function bridgeAgentsWithBindings(
   /** Start time by PID from THIS scan, to check stored ones against. */
   processStartsByPid?: ReadonlyMap<number, number>,
 ): CollectedAgent[] {
-  const liveSessionIds = new Set(
-    surfaces.flatMap((surface) => surface.sourceSessionIds.map((sessionId) => sessionId.toLowerCase())),
-  );
   const surfacesById = new Map(surfaces.map((surface) => [surface.surfaceId, surface]));
+  const providersBySession = indexSessionIdentityProviders(agents);
   return agents.map((agent) => {
     const sessionId = agent.sourceSessionId.toLowerCase();
-    const binding = store.get(sessionId);
+    const binding = bindingForProvider(store, agent.provider, sessionId);
     if (!binding) return agent;
+    if (!binding.provider && sourceSessionHasProviderCollision(sessionId, providersBySession)) return agent;
     const bound = surfacesById.get(binding.target.surfaceId);
     const processIds = binding.processIds;
     const trace = bound?.identityTrace;
@@ -518,7 +569,9 @@ export function bridgeAgentsWithBindings(
        on collected agents, before any verdict exists, so it reads the parse-time
        status — where "running or waiting" IS the fresh-or-mid band. */
     if (agent.status !== "running" && agent.status !== "waiting") return withProcessEvidence;
-    if (liveSessionIds.has(sessionId)) return withProcessEvidence;
+    if (surfaces.some((surface) => surfaceClaimsSourceSession(surface, agent, providersBySession))) {
+      return withProcessEvidence;
+    }
     // The bound surface carrying exact evidence for a DIFFERENT session is a
     // contradiction, not a gap — never bridge over it. A conflicted surface
     // still gets the bridge so tier 1 quarantines it visibly.

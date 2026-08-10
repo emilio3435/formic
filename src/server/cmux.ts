@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { SessionIdentityClaim } from "../shared/types";
 import { cmuxCommand } from "./cmux-auth";
 import type {
   CmuxNotification,
@@ -253,15 +254,25 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
   return terminals.flatMap((terminal: Record<string, unknown>) => {
     const surfaceId = stringValue(terminal.surface_id, terminal.surfaceId);
     if (!surfaceId) return [];
-    const sourceSessionIds = [
-      terminal.session_id,
-      terminal.agent_session_id,
-      terminal.source_session_id,
-      terminal.codex_session_id,
-      terminal.claude_session_id,
-      terminal.omp_session_id,
-      terminal.cursor_session_id,
-    ].filter((value): value is string => typeof value === "string" && value.length > 0);
+    const rawClaims: Array<[SessionIdentityClaim["provider"], unknown]> = [
+      [undefined, terminal.session_id],
+      [undefined, terminal.agent_session_id],
+      [undefined, terminal.source_session_id],
+      ["codex", terminal.codex_session_id],
+      ["claude", terminal.claude_session_id],
+      ["omp", terminal.omp_session_id],
+      ["cursor", terminal.cursor_session_id],
+    ];
+    const sourceSessionClaims = [...new Map(
+      rawClaims.flatMap(([provider, value]): Array<[string, SessionIdentityClaim]> =>
+        typeof value === "string" && value.length > 0
+          ? [[`${provider ?? "legacy"}:${value.toLowerCase()}`, {
+              sessionId: value,
+              ...(provider ? { provider } : {}),
+            }]]
+          : []),
+    ).values()];
+    const sourceSessionIds = [...new Set(sourceSessionClaims.map(({ sessionId }) => sessionId))];
     return [{
       surfaceId,
       workspaceId: stringValue(
@@ -280,7 +291,8 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
       runtimeSurfaceReady: typeof terminal.runtime_surface_ready === "boolean"
         ? terminal.runtime_surface_ready
         : undefined,
-      sourceSessionIds: [...new Set(sourceSessionIds)],
+      sourceSessionClaims,
+      sourceSessionIds,
     }];
   });
 }

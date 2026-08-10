@@ -8,6 +8,7 @@ import type {
   LifecycleProvenance,
   LifecycleState,
   Provider,
+  SessionIdentityClaim,
   SessionKind,
   SessionKindSource,
   SurfaceIdentityTrace,
@@ -167,6 +168,8 @@ export interface CmuxSurface {
   head?: string;
   tty?: string;
   runtimeSurfaceReady?: boolean;
+  /** Provider-preserving identity evidence; absent on legacy in-process fixtures. */
+  sourceSessionClaims?: SessionIdentityClaim[];
   sourceSessionIds: string[];
   identityConflict?: string;
   /** Evidence observed by the most recent identity scan for this surface. */

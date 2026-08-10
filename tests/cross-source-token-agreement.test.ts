@@ -46,6 +46,7 @@ const SETTLED_QUIET_MS = 45 * 60 * 1_000;
    it cannot turn a material 5% accounting disagreement into agreement. */
 const LIVE_READ_SKEW_EPSILON_PCT = PER_SESSION_TOLERANCE_PCT / 10;
 const UUID_SOURCE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DAILY_PARTITION_SOURCE_SESSION = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})#day-(\d+)$/i;
 const SUBAGENT_SOURCE_SESSION = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/agent-[0-9a-z]+$/i;
 const CRON_SOURCE_SESSION = /^cron_/;
 
@@ -96,9 +97,22 @@ interface Joined extends Comparison {
 interface BurnBarSession {
   readonly tokens: number;
   readonly updatedAtMs?: number;
+  readonly accounting: "session-cumulative" | "daily-partitioned";
 }
 
 type BurnBarJoinRow = Pick<UsageInvocation, "sessionId" | "tokens" | "startTime" | "endTime">;
+type DailyPartitionCoverage =
+  | "lifetime-covered"
+  | "session-predates-window"
+  | "board-start-unavailable"
+  | "query-truncated";
+
+interface WindowIncompleteSession {
+  readonly sessionId: string;
+  readonly reason: Exclude<DailyPartitionCoverage, "lifetime-covered">;
+  readonly boardStartedAt?: string;
+  readonly isCodex: boolean;
+}
 
 let available = false;
 let unavailableReason = "";
@@ -111,8 +125,13 @@ const settledVerdicts = new Map<string, Verdict>();
 let burnbarSessions = 0;
 let uuidSessions = 0;
 let cronSessions = 0;
+let codexRows = 0;
 let codexSessions = 0;
 let joinedCodexSessions = 0;
+let comparableCodexSessions = 0;
+let windowIncompleteSessions: WindowIncompleteSession[] = [];
+let unjoinedCodex: string[] = [];
+let usageReadTruncated = false;
 let unjoinedUuid: string[] = [];
 let unjoinedSubagents: string[] = [];
 let subagentsWithoutBoardParent: string[] = [];
@@ -123,32 +142,72 @@ let unknownSessionIds: string[] = [];
 const parseBurnBarTimestamp = (value: string): number =>
   Date.parse(`${value.replace(" ", "T")}Z`);
 
-/* OpenBurnBar rows are cumulative session snapshots, not additive calls.
-   Measured 2026-08-04 across 3,053 rows / 24 multi-row sessions: every total
-   was monotonic by endTime and the last was the maximum; seven sessions also
-   carried exact token/start/end duplicates under different model labels. This
-   mirrors the summary query's established "latest cumulative snapshot wins"
-   rule. Exact repeats are removed explicitly, then MAX is safe because the
-   measured cumulative series is monotonic. */
+const burnBarBaseSessionId = (sessionId: string): string =>
+  DAILY_PARTITION_SOURCE_SESSION.exec(sessionId)?.[1] ?? sessionId;
+
+/* OpenBurnBar rows are cumulative snapshots inside one accounting identity.
+   Ordinary session ids use one lifetime identity. Codex's `<uuid>#day-<epoch>`
+   ids use one identity per day: snapshots within that partition remain
+   cumulative (MAX), while separate day partitions are additive (SUM) after
+   their base session identity has been recovered. Identity normalization and
+   accounting therefore remain separate operations. Exact repeats are removed
+   explicitly before either aggregation. */
 const aggregateBurnBarSessions = (rows: readonly BurnBarJoinRow[]): Map<string, BurnBarSession> => {
-  const sessions = new Map<string, BurnBarSession>();
+  const partitions = new Map<
+    string,
+    BurnBarSession & { readonly baseSessionId: string }
+  >();
   const seen = new Set<string>();
   for (const row of rows) {
     const fingerprint = JSON.stringify([row.sessionId, row.tokens, row.startTime, row.endTime ?? null]);
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
 
-    const previous = sessions.get(row.sessionId);
+    const previous = partitions.get(row.sessionId);
     const observedAtMs = row.endTime ? parseBurnBarTimestamp(row.endTime) : undefined;
     const tokens = row.tokens ?? 0;
-    sessions.set(row.sessionId, {
+    partitions.set(row.sessionId, {
+      baseSessionId: burnBarBaseSessionId(row.sessionId),
       tokens: previous ? Math.max(previous.tokens, tokens) : tokens,
       updatedAtMs: observedAtMs === undefined
         ? previous?.updatedAtMs
         : Math.max(previous?.updatedAtMs ?? -Infinity, observedAtMs),
+      accounting: DAILY_PARTITION_SOURCE_SESSION.test(row.sessionId)
+        ? "daily-partitioned"
+        : "session-cumulative",
+    });
+  }
+
+  const sessions = new Map<string, BurnBarSession>();
+  for (const partition of partitions.values()) {
+    const previous = sessions.get(partition.baseSessionId);
+    if (previous && previous.accounting !== partition.accounting) {
+      throw new Error(
+        `BurnBar mixed lifetime and daily-partition accounting for ${partition.baseSessionId}`,
+      );
+    }
+    sessions.set(partition.baseSessionId, {
+      tokens: partition.accounting === "daily-partitioned"
+        ? (previous?.tokens ?? 0) + partition.tokens
+        : partition.tokens,
+      updatedAtMs: partition.updatedAtMs === undefined
+        ? previous?.updatedAtMs
+        : Math.max(previous?.updatedAtMs ?? -Infinity, partition.updatedAtMs),
+      accounting: partition.accounting,
     });
   }
   return sessions;
+};
+
+const dailyPartitionCoverage = (
+  boardStartedAt: string | undefined,
+  windowFromMs: number,
+  readComplete: boolean,
+): DailyPartitionCoverage => {
+  if (!readComplete) return "query-truncated";
+  const boardStartedAtMs = boardStartedAt === undefined ? Number.NaN : Date.parse(boardStartedAt);
+  if (!Number.isFinite(boardStartedAtMs)) return "board-start-unavailable";
+  return boardStartedAtMs < windowFromMs ? "session-predates-window" : "lifetime-covered";
 };
 
 /* "Settled" rests on three real fields. `activity === ended` is the board's
@@ -236,30 +295,42 @@ beforeAll(async () => {
   }
 
   const now = Date.now();
+  const windowFromMs = now - DAY_MS;
   /* Paged. At 500 rows this saw only the most recent slice of the last 24
      hours — the fleet now produces more than that in a day — so "every joined
      session agrees" was a claim about whichever sessions happened to land in
      the tail of the page. */
-  const usage = await getAllUsageInvocations(new Date(now - DAY_MS).toISOString(), new Date(now).toISOString());
+  const usage = await getAllUsageInvocations(
+    new Date(windowFromMs).toISOString(),
+    new Date(now).toISOString(),
+  );
   if (!usage.available || usage.invocations.length === 0) {
     unavailableReason = "BurnBar returned no readable rows for the last 24h";
     console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
     return;
   }
 
+  const codexRowsFromSource = usage.invocations
+    .filter((row) => row.provider.trim().toLowerCase() === "codex");
+  codexRows = codexRowsFromSource.length;
   const codexSessionIds = new Set(
-    usage.invocations
-      .filter((row) => row.provider.trim().toLowerCase() === "codex")
-      .map((row) => row.sessionId),
+    codexRowsFromSource.map((row) => burnBarBaseSessionId(row.sessionId)),
   );
   codexSessions = codexSessionIds.size;
+  usageReadTruncated = usage.truncated;
   const burnbarBySession = aggregateBurnBarSessions(usage.invocations);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const boardAgents: any[] = (snapshot.programs ?? []).flatMap((program: any) => program.agents ?? []);
   const boardBySession = new Map<
     string,
-    { tokens: number; activity?: ActivityState; updatedAt: string; agentId?: string }
+    {
+      tokens: number;
+      activity?: ActivityState;
+      startedAt?: string;
+      updatedAt: string;
+      agentId?: string;
+    }
   >();
   for (const agent of boardAgents) {
     if (
@@ -270,6 +341,7 @@ beforeAll(async () => {
       boardBySession.set(agent.sourceSessionId, {
         tokens: agent.tokens.sessionProcessed,
         activity: agent.activity,
+        startedAt: typeof agent.startedAt === "string" ? agent.startedAt : undefined,
         updatedAt: agent.updatedAt,
         // Carried so a disagreement can be adjudicated against our own per-call
         // series rather than argued about.
@@ -280,6 +352,7 @@ beforeAll(async () => {
 
   burnbarSessions = burnbarBySession.size;
   for (const [sessionId, burnbarSession] of burnbarBySession) {
+    const isCodex = codexSessionIds.has(sessionId);
     const isUuid = UUID_SOURCE_SESSION.test(sessionId);
     const subagent = SUBAGENT_SOURCE_SESSION.exec(sessionId);
     if (isUuid) uuidSessions += 1;
@@ -288,6 +361,7 @@ beforeAll(async () => {
 
     const boardSession = boardBySession.get(sessionId);
     if (boardSession === undefined) {
+      if (isCodex) unjoinedCodex.push(sessionId);
       if (isUuid) unjoinedUuid.push(sessionId);
       else if (subagent) {
         unjoinedSubagents.push(sessionId);
@@ -295,7 +369,24 @@ beforeAll(async () => {
       }
       continue;
     }
-    if (codexSessionIds.has(sessionId)) joinedCodexSessions += 1;
+    if (isCodex) joinedCodexSessions += 1;
+    if (burnbarSession.accounting === "daily-partitioned") {
+      const coverage = dailyPartitionCoverage(
+        boardSession.startedAt,
+        windowFromMs,
+        !usage.truncated,
+      );
+      if (coverage !== "lifetime-covered") {
+        windowIncompleteSessions.push({
+          sessionId,
+          reason: coverage,
+          boardStartedAt: boardSession.startedAt,
+          isCodex,
+        });
+        continue;
+      }
+    }
+    if (isCodex) comparableCodexSessions += 1;
     const board = boardSession.tokens;
     const burnbar = burnbarSession.tokens;
     const driftPct = burnbar > 0 ? Math.abs(board - burnbar) / burnbar * 100 : 0;
@@ -322,8 +413,17 @@ beforeAll(async () => {
     `[cross-source] settled=${settled.length} live=${live.length} `
     + `excludedCron=${cronSessions} excludedSubagents=${unjoinedSubagents.length} `
     + `unjoinedUuid=${unjoinedUuid.length} unknown=${unknownSessionIds.length} `
-    + `codex=${joinedCodexSessions}/${codexSessions}`,
+    + `codexRows=${codexRows} codexIdentityJoined=${joinedCodexSessions}/${codexSessions} `
+    + `codexComparable=${comparableCodexSessions} `
+    + `codexWindowIncomplete=${windowIncompleteSessions.filter((row) => row.isCodex).length}`,
   );
+  for (const row of windowIncompleteSessions) {
+    console.info(
+      `[cross-source] unadjudicable-window: ${row.sessionId} (${row.reason}; `
+      + `board started ${row.boardStartedAt ?? "unavailable"}, query began `
+      + `${new Date(windowFromMs).toISOString()})`,
+    );
+  }
 
   for (const row of settled) {
     if (row.driftPct <= PER_SESSION_TOLERANCE_PCT) continue;
@@ -379,6 +479,10 @@ describe("what this board counted is what a separate application recorded", () =
       live.length,
       `${live.length} live sessions are excluded from the 5% gate, against ${settled.length} settled`,
     ).toBeLessThan(settled.length);
+    expect(
+      usageReadTruncated,
+      "the cross-source gate cannot claim a complete window from a capped BurnBar read",
+    ).toBe(false);
   });
 
   test("a settled disagreement is either explained by BurnBar, or it fails", async () => {
@@ -540,6 +644,87 @@ describe("what this board counted is what a separate application recorded", () =
       .toBe(parseBurnBarTimestamp("2026-08-02 20:29:37.000"));
   });
 
+  test("Codex daily partitions keep one base identity and sum each day's maximum", () => {
+    const baseSessionId = "019fe713-18f5-7f50-8e65-a6e40049e8f0";
+    const firstDay = `${baseSessionId}#day-1786233600`;
+    const secondDay = `${baseSessionId}#day-1786320000`;
+    const rows: BurnBarJoinRow[] = [
+      {
+        sessionId: firstDay,
+        tokens: 190_000_000,
+        startTime: "2026-08-09 10:00:00.000",
+        endTime: "2026-08-09 10:30:00.000",
+      },
+      {
+        sessionId: firstDay,
+        tokens: 199_547_464,
+        startTime: "2026-08-09 10:00:00.000",
+        endTime: "2026-08-09 11:00:00.000",
+      },
+      /* An exact duplicate must not make the first partition additive. */
+      {
+        sessionId: firstDay,
+        tokens: 199_547_464,
+        startTime: "2026-08-09 10:00:00.000",
+        endTime: "2026-08-09 11:00:00.000",
+      },
+      {
+        sessionId: secondDay,
+        tokens: 40_964_989,
+        startTime: "2026-08-10 09:00:00.000",
+        endTime: "2026-08-10 09:30:00.000",
+      },
+    ];
+
+    const sessions = aggregateBurnBarSessions(rows);
+
+    expect(
+      [...sessions].map(([sessionId, session]) => ({ sessionId, tokens: session.tokens })),
+    ).toEqual([{ sessionId: baseSessionId, tokens: 240_512_453 }]);
+  });
+
+  test("mixed lifetime and daily partition accounting fails closed in either input order", () => {
+    const baseSessionId = "019fe713-18f5-7f50-8e65-a6e40049e8f0";
+    const lifetime: BurnBarJoinRow = {
+      sessionId: baseSessionId,
+      tokens: 199_547_464,
+      startTime: "2026-08-09 10:00:00.000",
+      endTime: "2026-08-09 11:00:00.000",
+    };
+    const daily: BurnBarJoinRow = {
+      sessionId: `${baseSessionId}#day-1786233600`,
+      tokens: 40_964_989,
+      startTime: "2026-08-10 09:00:00.000",
+      endTime: "2026-08-10 09:30:00.000",
+    };
+    const expectedMessage = `BurnBar mixed lifetime and daily-partition accounting for ${baseSessionId}`;
+
+    for (const rows of [[lifetime, daily], [daily, lifetime]]) {
+      let observed: unknown;
+      try {
+        aggregateBurnBarSessions(rows);
+      } catch (error) {
+        observed = error;
+      }
+
+      expect(observed).toBeInstanceOf(Error);
+      expect((observed as Error).message).toBe(expectedMessage);
+    }
+  });
+
+  test("daily partition sums need a complete read covering the board lifetime", () => {
+    const windowFromMs = Date.parse("2026-08-10T00:00:00.000Z");
+
+    expect(dailyPartitionCoverage("2026-08-10T00:00:00.000Z", windowFromMs, true))
+      .toBe("lifetime-covered");
+    expect(dailyPartitionCoverage("2026-08-09T23:59:59.999Z", windowFromMs, true))
+      .toBe("session-predates-window");
+    expect(dailyPartitionCoverage(undefined, windowFromMs, true))
+      .toBe("board-start-unavailable");
+    expect(dailyPartitionCoverage("2026-08-10T01:00:00.000Z", windowFromMs, false))
+      .toBe("query-truncated");
+  });
+
   test("the settled split requires both quiet clocks unless the board says ended", () => {
     const now = Date.parse("2026-08-03T12:00:00.000Z");
     const quiet: Joined = {
@@ -654,11 +839,28 @@ describe("what this board counted is what a separate application recorded", () =
   test("a current Codex session reaches OpenBurnBar and joins the board", () => {
     if (!available) return;
 
+    const windowIncompleteCodex = windowIncompleteSessions.filter((row) => row.isCodex);
+    expect(codexRows, "OpenBurnBar returned no Codex source rows in the current 24-hour window")
+      .toBeGreaterThan(0);
     expect(codexSessions, "OpenBurnBar recorded no Codex session in the current 24-hour window").toBeGreaterThan(0);
     expect(
       joinedCodexSessions,
       `${codexSessions} Codex sessions reached OpenBurnBar but none joined an Ant Hill sourceSessionId`,
     ).toBeGreaterThan(0);
+    expect(
+      joinedCodexSessions + unjoinedCodex.length,
+      "every normalized Codex identity must be counted as joined or explicitly unjoined",
+    ).toBe(codexSessions);
+    expect(
+      comparableCodexSessions + windowIncompleteCodex.length,
+      "every joined Codex identity must be lifetime-comparable or explicitly window-incomplete",
+    ).toBe(joinedCodexSessions);
+    if (windowIncompleteCodex.length < joinedCodexSessions) {
+      expect(
+        comparableCodexSessions,
+        "the current window covers at least one joined Codex lifetime, so one must be compared",
+      ).toBeGreaterThan(0);
+    }
   });
 
   test("a provider-native child id is not mistaken for its parent uuid", () => {

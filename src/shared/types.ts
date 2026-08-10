@@ -294,6 +294,13 @@ export interface SurfaceCommandHintEvidence {
   rejectionReason?: string;
 }
 
+/** A session identity claim carried by cmux or proven by a live process scan. */
+export interface SessionIdentityClaim {
+  sessionId: string;
+  /** Absent only for legacy cmux fields that do not identify their provider. */
+  provider?: Provider;
+}
+
 export type SurfaceIdentityOutcome =
   | "open-file-match"
   | "command-hint-match"

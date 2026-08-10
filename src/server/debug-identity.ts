@@ -57,6 +57,7 @@ function surfaceView(
     tty: surface.tty,
     cwd: surface.cwd,
     runtimeSurfaceReady: surface.runtimeSurfaceReady,
+    sourceSessionClaims: surface.sourceSessionClaims,
     sourceSessionIds: surface.sourceSessionIds,
     identityConflict: surface.identityConflict,
     routeObservation,
@@ -103,7 +104,7 @@ export function identityDebugResponse(
       { status: 404, headers: responseHeaders },
     );
   }
-  const observations = routingSurfaceObservations(agent, surfaces);
+  const observations = routingSurfaceObservations(agent, surfaces, agents);
   const observationBySurface = new Map(
     observations.map((observation) => [observation.surfaceId, observation]),
   );
@@ -121,7 +122,6 @@ export function identityDebugResponse(
         trace: agent.identityTrace,
       },
       relatedSurfaces: surfaces
-        .filter((surface) => surface.runtimeSurfaceReady !== false)
         .map((surface) => surfaceView(surface, observationBySurface.get(surface.surfaceId))),
     },
     { headers: responseHeaders },

@@ -1,4 +1,12 @@
-import type { AgentSnapshot, CmuxTarget, IdentityTrace, IdentityTraceStep, IdentityTraceTier, ProcessState } from "../shared/types";
+import type {
+  AgentSnapshot,
+  CmuxTarget,
+  IdentityTrace,
+  IdentityTraceStep,
+  IdentityTraceTier,
+  ProcessState,
+  SessionIdentityClaim,
+} from "../shared/types";
 import { hookRecordFor } from "./cmux-hook-sessions";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
@@ -11,6 +19,60 @@ function sameCwd(left?: string, right?: string): boolean {
   const b = normalizeCwd(right);
   if (!a || !b) return false;
   return a === b;
+}
+
+type SessionIdentitySource = Pick<CollectedAgent, "provider" | "sourceSessionId">;
+
+export type SessionIdentityProviderIndex = ReadonlyMap<
+  string,
+  ReadonlySet<CollectedAgent["provider"]>
+>;
+
+export function indexSessionIdentityProviders(
+  sources: readonly SessionIdentitySource[],
+): SessionIdentityProviderIndex {
+  const providersBySession = new Map<string, Set<CollectedAgent["provider"]>>();
+  for (const source of sources) {
+    const sessionId = source.sourceSessionId.toLowerCase();
+    const providers = providersBySession.get(sessionId) ?? new Set();
+    providers.add(source.provider);
+    providersBySession.set(sessionId, providers);
+  }
+  return providersBySession;
+}
+
+export function sourceSessionHasProviderCollision(
+  sessionId: string,
+  providersBySession: SessionIdentityProviderIndex,
+): boolean {
+  return (providersBySession.get(sessionId.toLowerCase())?.size ?? 0) > 1;
+}
+
+function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
+  return surface.sourceSessionClaims
+    ? [...surface.sourceSessionClaims]
+    : surface.sourceSessionIds.map((sessionId) => ({ sessionId }));
+}
+
+export function surfaceClaimsSourceSession(
+  surface: CmuxSurface,
+  agent: SessionIdentitySource,
+  providersBySession: SessionIdentityProviderIndex,
+): boolean {
+  const sessionId = agent.sourceSessionId.toLowerCase();
+  const claims = sourceSessionClaims(surface).filter(
+    (claim) => claim.sessionId.toLowerCase() === sessionId,
+  );
+  const qualifiedProviders = new Set(
+    claims.flatMap(({ provider }) => provider ? [provider] : []),
+  );
+  if (qualifiedProviders.size > 0) {
+    return qualifiedProviders.size === 1 && qualifiedProviders.has(agent.provider);
+  }
+  if (!claims.some(({ provider }) => provider === undefined)) return false;
+  const providers = providersBySession.get(sessionId);
+  return !sourceSessionHasProviderCollision(sessionId, providersBySession)
+    && (providers === undefined || providers.size === 0 || providers.has(agent.provider));
 }
 
 function target(
@@ -178,8 +240,9 @@ function resolveAgentTargetInternal(
     steps?.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
   }
 
+  const providersBySession = indexSessionIdentityProviders(sources);
   const sessionMatches = routableSurfaces.filter((surface) =>
-    surface.sourceSessionIds.includes(agent.sourceSessionId),
+    surfaceClaimsSourceSession(surface, agent, providersBySession),
   );
   const sessionQuarantine = quarantined(sessionMatches);
   if (sessionQuarantine) {
@@ -198,7 +261,8 @@ function resolveAgentTargetInternal(
         "exact",
         "Matched source session ID recorded by cmux.",
         agent,
-        // sourceSessionIds is cmux attesting, in this scan, that the session is here.
+        // Provider-qualified claims, or collision-checked legacy claims, are
+        // cmux attesting in this scan that this exact session is here.
         "live",
       ),
       "session",
@@ -382,32 +446,42 @@ export interface RoutingSurfaceObservation {
   paneId?: string;
   tty?: string;
   reportedSessionIds: string[];
+  reportedSessionClaims: SessionIdentityClaim[];
   sessionIdMatched: boolean;
   cwdMatched: boolean;
   reason: string;
 }
 
 export function routingSurfaceObservations(
-  agent: Pick<CollectedAgent, "sourceSessionId" | "cwd">,
+  agent: Pick<CollectedAgent, "provider" | "sourceSessionId" | "cwd" | "status">,
   surfaces: readonly CmuxSurface[],
+  sources: readonly SessionIdentitySource[] = [agent],
 ): RoutingSurfaceObservation[] {
+  const providersBySession = indexSessionIdentityProviders(sources);
   return surfaces
     .filter((surface) => surface.runtimeSurfaceReady !== false)
     .map((surface) => {
       const reportedSessionIds = [...surface.sourceSessionIds];
-      const sessionIdMatched = reportedSessionIds.includes(agent.sourceSessionId);
+      const reportedSessionClaims = sourceSessionClaims(surface);
+      const sessionIdMatched = surfaceClaimsSourceSession(surface, agent, providersBySession);
       const cwdMatched = sameCwd(surface.cwd, agent.cwd);
       const pane = surface.paneId
         ? `Pane ${surface.paneId} (surface ${surface.surfaceId}${surface.tty ? `, ${surface.tty}` : ""})`
         : `Surface ${surface.surfaceId}${surface.tty ? ` (${surface.tty})` : ""}`;
       let reason: string;
       if (sessionIdMatched) {
-        reason = `${pane} reported source session ${agent.sourceSessionId}.`;
+        const qualified = reportedSessionClaims.some(
+          (claim) => claim.provider === agent.provider
+            && claim.sessionId.toLowerCase() === agent.sourceSessionId.toLowerCase(),
+        );
+        reason = `${pane} reported ${qualified ? `${agent.provider}:` : "source session "}${agent.sourceSessionId}.`;
       } else if (reportedSessionIds.length === 0) {
         reason = `${pane} reported no source session IDs; source session ${agent.sourceSessionId} could not match.`;
       } else {
-        const noun = reportedSessionIds.length === 1 ? "session ID" : "session IDs";
-        reason = `${pane} reported ${noun} ${reportedSessionIds.join(", ")}; none equals source session ${agent.sourceSessionId}.`;
+        const renderedClaims = reportedSessionClaims
+          .map(({ provider, sessionId }) => `${provider ? `${provider}:` : "unqualified:"}${sessionId}`)
+          .join(", ");
+        reason = `${pane} reported ${renderedClaims}; none safely matches ${agent.provider}:${agent.sourceSessionId}.`;
       }
       if (!sessionIdMatched && cwdMatched) {
         reason += " Its cwd matches the source, but cwd evidence is not exact session identity.";
@@ -418,6 +492,7 @@ export function routingSurfaceObservations(
         ...(surface.paneId ? { paneId: surface.paneId } : {}),
         ...(surface.tty ? { tty: surface.tty } : {}),
         reportedSessionIds,
+        reportedSessionClaims,
         sessionIdMatched,
         cwdMatched,
         reason,

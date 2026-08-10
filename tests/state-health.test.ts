@@ -1,8 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { createAgentLinkFetch } from "../src/server/agent-links";
 import { MemoryArchiveStore } from "../src/server/archive";
+import { handleBroadcastRequest } from "../src/server/broadcast";
 import { collectCmuxWorkspaceEnvs } from "../src/server/cmux";
+import { handleControlRequest } from "../src/server/http";
 import { HubState, type HubCollectors } from "../src/server/state";
-import type { IdentityBindingStore } from "../src/server/identity-bindings";
+import { MemoryIdentityBindingStore, type IdentityBindingStore } from "../src/server/identity-bindings";
 import type {
   ArchiveStore,
   CmuxNotification,
@@ -10,7 +13,7 @@ import type {
   CollectedAgent,
   CommandRunner,
 } from "../src/server/types";
-import type { TriageQueueSummary } from "../src/shared/types";
+import type { HubSnapshot, TriageQueueSummary } from "../src/shared/types";
 
 const emptySessions = () => ({
   omp: { value: [], errors: [] },
@@ -20,6 +23,248 @@ const emptySessions = () => ({
   factory: { value: [], errors: [] },
   prime: { value: [], errors: [] },
 });
+
+const ROUTING_RACE_SESSION_ID = "routing-race-session";
+const ROUTING_RACE_AGENT_ID = `codex:${ROUTING_RACE_SESSION_ID}`;
+const ROUTING_RACE_PROCESS_ID = 7_077;
+
+function routingRaceSource(overrides: Partial<CollectedAgent> = {}): CollectedAgent {
+  return {
+    id: ROUTING_RACE_AGENT_ID,
+    provider: "codex",
+    sourceSessionId: ROUTING_RACE_SESSION_ID,
+    displayName: "Routing race session",
+    status: "waiting",
+    statusReason: "Fixture waits for operator input.",
+    updatedAt: new Date().toISOString(),
+    tokens: { provenance: "unknown" },
+    artifacts: [],
+    gates: [],
+    ...overrides,
+  };
+}
+
+function routingRaceSurface(suffix: "OLD" | "NEW"): CmuxSurface {
+  const surfaceId = `SURFACE-${suffix}`;
+  const tty = suffix === "OLD" ? "ttys077" : "ttys088";
+  return {
+    surfaceId,
+    tty,
+    sourceSessionIds: [ROUTING_RACE_SESSION_ID],
+    sourceSessionClaims: [{ provider: "codex", sessionId: ROUTING_RACE_SESSION_ID }],
+    identityTrace: {
+      surfaceId,
+      tty,
+      processes: [{
+        pid: ROUTING_RACE_PROCESS_ID,
+        command: `codex resume ${ROUTING_RACE_SESSION_ID}`,
+        recognizedAgentProcess: true,
+      }],
+      openFileMatches: [{
+        pid: ROUTING_RACE_PROCESS_ID,
+        path: `/tmp/${ROUTING_RACE_SESSION_ID}.jsonl`,
+        provider: "codex",
+        sessionId: ROUTING_RACE_SESSION_ID,
+      }],
+      commandHints: [],
+      outcome: "open-file-match",
+      sourceSessionIds: [ROUTING_RACE_SESSION_ID],
+    },
+  };
+}
+
+function failedRoutingRaceSurface(): CmuxSurface {
+  return {
+    ...routingRaceSurface("OLD"),
+    sourceSessionIds: [],
+    sourceSessionClaims: [],
+    identityConflict: "process identity lookup timed out",
+    identityTrace: {
+      surfaceId: "SURFACE-OLD",
+      tty: "ttys077",
+      processes: [],
+      openFileMatches: [],
+      commandHints: [],
+      outcome: "probe-failed",
+      sourceSessionIds: [],
+      identityConflict: "process identity lookup timed out",
+      notes: ["process identity lookup timed out"],
+    },
+  };
+}
+
+function healthyRoutingRaceIdentity(surfaces: readonly CmuxSurface[]) {
+  return {
+    value: [...surfaces],
+    errors: [],
+    liveAgentProcessIds: [ROUTING_RACE_PROCESS_ID],
+    recognizedAgentProcessIds: [ROUTING_RACE_PROCESS_ID],
+    processStarts: {},
+    rosterComplete: true,
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const waiting = new Promise<void>((done) => { resolve = done; });
+  return { waiting, resolve };
+}
+
+function recordingRunner(commands: string[][]): CommandRunner {
+  return {
+    run: async (command) => {
+      commands.push([...command]);
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    },
+  };
+}
+
+function routingRaceAgent(snapshot: HubSnapshot) {
+  return snapshot.programs.flatMap((program) => program.agents)
+    .find((agent) => agent.id === ROUTING_RACE_AGENT_ID);
+}
+
+function controlMapFrom(
+  controls: readonly { action: string; enabled: boolean }[] | undefined,
+): Record<string, boolean> {
+  return Object.fromEntries(controls?.map(({ action, enabled }) => [action, enabled]) ?? []);
+}
+
+function routingRaceHarness(options: {
+  source?: () => CollectedAgent;
+  surface?: () => CmuxSurface;
+  beforeSessions?: () => Promise<void>;
+  enrichIdentity?: HubCollectors["enrichIdentity"];
+  archiveStore?: ArchiveStore;
+  bindingStore?: IdentityBindingStore;
+} = {}) {
+  const archiveStore = options.archiveStore ?? new MemoryArchiveStore();
+  const collectors: HubCollectors = {
+    sessions: async () => {
+      await options.beforeSessions?.();
+      return {
+        ...emptySessions(),
+        codex: { value: [options.source?.() ?? routingRaceSource()], errors: [] },
+      };
+    },
+    cmux: async () => ({ value: [options.surface?.() ?? routingRaceSurface("OLD")], errors: [] }),
+    notifications: async () => ({ value: [], errors: [] }),
+    enrichIdentity: options.enrichIdentity
+      ?? (async (surfaces) => healthyRoutingRaceIdentity(surfaces)),
+  };
+  const state = new HubState(recordingRunner([]), archiveStore, [], {
+    collectors,
+    bindingStore: options.bindingStore,
+  });
+  return { archiveStore, state };
+}
+
+async function exerciseRoutingRace(
+  state: HubState,
+  archiveStore: ArchiveStore,
+  includeFocus = false,
+) {
+  const terminalInputCommands: string[][] = [];
+  const focusCommands: string[][] = [];
+  const request = (path: string, body: unknown) => new Request(`http://127.0.0.1:4701/${path}`, {
+    method: "POST",
+    headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const control = await handleControlRequest(
+    request("api/control", {
+      action: "instruct",
+      agentId: ROUTING_RACE_AGENT_ID,
+      instruction: "Probe the authorization barrier.",
+    }),
+    { runner: recordingRunner(terminalInputCommands), archiveStore, getSnapshot: () => state.get() },
+  );
+  const broadcast = await handleBroadcastRequest(
+    request("api/broadcast", {
+      agentIds: [ROUTING_RACE_AGENT_ID],
+      instruction: "Probe the broadcast barrier.",
+    }),
+    { runner: recordingRunner(terminalInputCommands), archiveStore, getSnapshot: () => state.get() },
+  );
+  const focus = includeFocus
+    ? await createAgentLinkFetch(
+        () => new Response(null, { status: 404 }),
+        {
+          runner: recordingRunner(focusCommands),
+          archiveStore,
+          getSnapshot: () => state.get(),
+          surfaces: () => state.surfaces(),
+        },
+      )(new Request(`http://127.0.0.1:4701/agent/${encodeURIComponent(ROUTING_RACE_AGENT_ID)}/focus`))
+    : undefined;
+  return {
+    controlStatus: control.status,
+    broadcastStatus: broadcast.status,
+    focusStatus: focus?.status,
+    terminalInputCommands,
+    focusCommands,
+  };
+}
+
+function expectRoutingQuarantine(
+  snapshot: HubSnapshot,
+  previouslyPublished: HubSnapshot,
+): void {
+  const agent = routingRaceAgent(snapshot);
+  const previousControls = controlMapFrom(routingRaceAgent(previouslyPublished)?.controls);
+  expect(agent).toMatchObject({
+    controlState: "observed-only",
+    target: { resolution: "missing" },
+  });
+  expect(controlMapFrom(agent?.controls)).toMatchObject({
+    focus: false,
+    instruct: false,
+    interrupt: false,
+    archive: previousControls.archive,
+    unarchive: previousControls.unarchive,
+  });
+  expect(snapshot.generatedAt).toBe(previouslyPublished.generatedAt);
+}
+
+function expectWritableRoute(snapshot: HubSnapshot, surfaceId: string): void {
+  const agent = routingRaceAgent(snapshot);
+  expect(agent?.target).toMatchObject({ surfaceId, resolution: "exact", attestation: "live" });
+  expect(controlMapFrom(agent?.controls)).toMatchObject({
+    focus: true,
+    instruct: true,
+    interrupt: true,
+  });
+}
+
+function bindingWriteBarrier() {
+  const memory = new MemoryIdentityBindingStore();
+  let armed = false;
+  let blocked = deferred();
+  let release = deferred();
+  const store: IdentityBindingStore = {
+    get: (sessionId) => memory.get(sessionId),
+    getForProvider: (provider, sessionId) => memory.getForProvider(provider, sessionId),
+    list: () => memory.list(),
+    put: (binding) => memory.put(binding),
+    putMany: async (bindings) => {
+      if (armed) {
+        armed = false;
+        blocked.resolve();
+        await release.waiting;
+      }
+      await memory.putMany(bindings);
+    },
+  };
+  return {
+    store,
+    arm: () => {
+      blocked = deferred();
+      release = deferred();
+      armed = true;
+      return { waiting: blocked.waiting, release: release.resolve };
+    },
+  };
+}
 
 describe("cmux collection time truth", () => {
   test("production publishes consumption only from a complete session scan", async () => {
@@ -185,15 +430,191 @@ describe("cmux collection time truth", () => {
     expect(state.get().controlHealth.lastCheckedAt).toBe(checkedAt);
   });
 
-  test("a failed cmux poll preserves the last confirmed surfaces and notifications without advancing check time", async () => {
+  test("a current A-to-B identity replacement withdraws the published route before binding persistence", async () => {
+    let currentSurface = routingRaceSurface("OLD");
+    const bindingBarrier = bindingWriteBarrier();
+    const { archiveStore, state } = routingRaceHarness({
+      surface: () => currentSurface,
+      bindingStore: bindingBarrier.store,
+    });
+
+    await state.refresh({ cmux: true });
+    const unchangedPublications: ReturnType<HubState["get"]>[] = [];
+    const unsubscribeUnchanged = state.subscribe((snapshot) => { unchangedPublications.push(snapshot); });
+    const unchanged = await state.refresh({ cmux: true });
+    unsubscribeUnchanged();
+    expect(unchangedPublications).toHaveLength(1);
+    expectWritableRoute(unchangedPublications[0]!, "SURFACE-OLD");
+
+    const transitionPublications: ReturnType<HubState["get"]>[] = [];
+    const unsubscribeTransition = state.subscribe((snapshot) => { transitionPublications.push(snapshot); });
+    const bindingWrite = bindingBarrier.arm();
+    currentSurface = routingRaceSurface("NEW");
+    const changing = state.refresh({ cmux: true });
+    await bindingWrite.waiting;
+
+    const barrierSnapshot = state.get();
+    const requests = await exerciseRoutingRace(state, archiveStore, true);
+
+    bindingWrite.release();
+    const recovered = await changing;
+    unsubscribeTransition();
+
+    expect(requests).toMatchObject({
+      controlStatus: 409,
+      broadcastStatus: 409,
+      terminalInputCommands: [],
+    });
+    expect([200, 409]).toContain(requests.focusStatus!);
+    expect(requests.focusCommands.flat().join(" ")).not.toContain("SURFACE-OLD");
+    if (requests.focusStatus === 200) {
+      expect(requests.focusCommands).toEqual([
+        expect.arrayContaining([
+          "surface.focus",
+          expect.stringContaining('\"surface_id\":\"SURFACE-NEW\"'),
+        ]),
+      ]);
+    } else {
+      expect(requests.focusCommands).toEqual([]);
+    }
+    expectRoutingQuarantine(barrierSnapshot, unchanged);
+    expect(transitionPublications).toHaveLength(2);
+    expect(transitionPublications[0]?.generatedAt).toBe(unchanged.generatedAt);
+    expect(routingRaceAgent(recovered)?.processState).toBe("running");
+    expectWritableRoute(recovered, "SURFACE-NEW");
+  });
+
+  test("watchdog supersession preserves quarantine after failed current identity evidence", async () => {
+    let nowMs = Date.now();
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let phase: "healthy" | "failed" | "replacement" = "healthy";
+    const replacementStarted = deferred();
+    const replacementRelease = deferred();
+    const bindingBarrier = bindingWriteBarrier();
+    const { archiveStore, state } = routingRaceHarness({
+      beforeSessions: async () => {
+        if (phase === "replacement") {
+          replacementStarted.resolve();
+          await replacementRelease.waiting;
+        }
+      },
+      surface: () => routingRaceSurface(phase === "replacement" ? "NEW" : "OLD"),
+      enrichIdentity: async (surfaces) => phase === "failed"
+        ? {
+            value: [failedRoutingRaceSurface()],
+            errors: ["process identity lookup timed out"],
+            liveAgentProcessIds: [],
+            recognizedAgentProcessIds: [],
+            processStarts: {},
+            rosterComplete: false,
+          }
+        : healthyRoutingRaceIdentity(surfaces),
+      bindingStore: bindingBarrier.store,
+    });
+
+    const healthy = await state.refresh({ cmux: true });
+    const bindingWrite = bindingBarrier.arm();
+    phase = "failed";
+    const superseded = state.refresh({ cmux: true });
+    await bindingWrite.waiting;
+    expect(state.surfaces()).toEqual([
+      expect.objectContaining({
+        surfaceId: "SURFACE-OLD",
+        sourceSessionIds: [],
+        sourceSessionClaims: [],
+        identityTrace: expect.objectContaining({ outcome: "probe-failed" }),
+      }),
+    ]);
+
+    nowMs += 12_001;
+    phase = "replacement";
+    const replacement = state.refresh({ cmux: true });
+    await replacementStarted.waiting;
+    bindingWrite.release();
+    await superseded;
+
+    const barrierSnapshot = state.get();
+    const requests = await exerciseRoutingRace(state, archiveStore, true);
+
+    replacementRelease.resolve();
+    const recovered = await replacement;
+    now.mockRestore();
+    logged.mockRestore();
+
+    expect(requests).toEqual({
+      controlStatus: 409,
+      broadcastStatus: 409,
+      focusStatus: 409,
+      terminalInputCommands: [],
+      focusCommands: [],
+    });
+    expectRoutingQuarantine(barrierSnapshot, healthy);
+    expect(routingRaceAgent(recovered)?.processState).toBe("running");
+    expectWritableRoute(recovered, "SURFACE-NEW");
+  });
+
+  test("a source-only session exit withdraws terminal authority before history persistence", async () => {
+    let ended = false;
+    let recordArmed = false;
+    const recordStarted = deferred();
+    const recordRelease = deferred();
+    const archiveStore: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      record: async () => {
+        if (!recordArmed) return;
+        recordArmed = false;
+        recordStarted.resolve();
+        await recordRelease.waiting;
+      },
+    };
+    const { state } = routingRaceHarness({
+      archiveStore,
+      source: () => routingRaceSource(ended ? { endEvidence: "session-exit" } : {}),
+    });
+
+    const healthy = await state.refresh({ cmux: true });
+    ended = true;
+    recordArmed = true;
+    const terminalRefresh = state.refresh();
+    await recordStarted.waiting;
+
+    const barrierSnapshot = state.get();
+    const requests = await exerciseRoutingRace(state, archiveStore);
+
+    recordRelease.resolve();
+    const completed = await terminalRefresh;
+
+    expect(requests).toMatchObject({
+      controlStatus: 409,
+      broadcastStatus: 409,
+      terminalInputCommands: [],
+    });
+    expectRoutingQuarantine(barrierSnapshot, healthy);
+    const completedAgent = completed.programs[0]?.agents[0];
+    expect(completedAgent).toMatchObject({
+      lifecycle: "finished",
+      processState: "exited",
+    });
+    expect(controlMapFrom(completedAgent?.controls)).toMatchObject({
+      focus: false,
+      instruct: false,
+      interrupt: false,
+    });
+  });
+
+  test("a failed cmux or identity scan quarantines retained routing and PID evidence until recovery re-attests it", async () => {
+    const processId = 4_242;
+    const processStart = 1_786_000_000;
     const source: CollectedAgent = {
       id: "codex:retained-session",
       provider: "codex",
       sourceSessionId: "retained-session",
       displayName: "Retained session",
-      status: "attention",
-      statusReason: "Fixture needs attention.",
-      updatedAt: "2026-07-28T08:00:00.000Z",
+      status: "waiting",
+      statusReason: "Fixture is waiting for a reply.",
+      updatedAt: new Date().toISOString(),
       tokens: { provenance: "unknown" },
       artifacts: [],
       gates: [],
@@ -201,7 +622,28 @@ describe("cmux collection time truth", () => {
     const surface: CmuxSurface = {
       workspaceId: "WORKSPACE-RETAINED",
       surfaceId: "SURFACE-RETAINED",
+      paneId: "PANE-RETAINED",
+      tty: "ttys042",
       sourceSessionIds: [source.sourceSessionId],
+      identityTrace: {
+        surfaceId: "SURFACE-RETAINED",
+        tty: "ttys042",
+        processes: [{
+          pid: processId,
+          command: `codex resume ${source.sourceSessionId}`,
+          recognizedAgentProcess: true,
+          startSeconds: processStart,
+        }],
+        openFileMatches: [{
+          pid: processId,
+          path: `/tmp/${source.sourceSessionId}.jsonl`,
+          provider: "codex",
+          sessionId: source.sourceSessionId,
+        }],
+        commandHints: [],
+        outcome: "open-file-match",
+        sourceSessionIds: [source.sourceSessionId],
+      },
     };
     const notification: CmuxNotification = {
       id: "notification-retained",
@@ -210,6 +652,7 @@ describe("cmux collection time truth", () => {
       title: "Needs review",
     };
     let failCmux = false;
+    let failIdentity = false;
     const collectors: HubCollectors = {
       sessions: async () => ({
         ...emptySessions(),
@@ -221,27 +664,181 @@ describe("cmux collection time truth", () => {
       notifications: async () => failCmux
         ? { value: [], errors: ["cmux notification discovery timed out"] }
         : { value: [notification], errors: [] },
-      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+      enrichIdentity: async (surfaces) => {
+        if (failIdentity) throw new Error("identity probe timed out");
+        return {
+          value: [...surfaces],
+          errors: [],
+          liveAgentProcessIds: [processId],
+          recognizedAgentProcessIds: [processId],
+          processStarts: { [processId]: processStart },
+          rosterComplete: true,
+        };
+      },
     };
     const runner: CommandRunner = {
       run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
     };
-    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
-    const state = new HubState(runner, archiveStore, [], { collectors });
+    let recordCalls = 0;
+    let releaseRecord!: () => void;
+    let recordBlocked!: () => void;
+    const blockedRecord = new Promise<void>((resolve) => { recordBlocked = resolve; });
+    const recordRelease = new Promise<void>((resolve) => { releaseRecord = resolve; });
+    const archived: string[] = [];
+    const archiveStore: ArchiveStore = {
+      has: () => false,
+      archive: async (agentId) => { archived.push(agentId); },
+      record: async () => {
+        recordCalls += 1;
+        if (recordCalls !== 2) return;
+        recordBlocked();
+        await recordRelease;
+      },
+    };
+    const bindingStore = new MemoryIdentityBindingStore();
+    const state = new HubState(runner, archiveStore, [], { collectors, bindingStore });
 
-    await state.refresh({ cmux: true });
+    const healthy = await state.refresh({ cmux: true });
     const lastSuccessfulCheck = state.get().controlHealth.lastCheckedAt;
+    expect(bindingStore.get(source.sourceSessionId)).toMatchObject({
+      target: { surfaceId: surface.surfaceId },
+      processIds: [processId],
+      processStarts: { [processId]: processStart },
+    });
     expect(state.surfaces()).toEqual([surface]);
-    expect(state.get().programs[0]?.agents[0]).toMatchObject({
+    expect(healthy.programs[0]?.agents[0]).toMatchObject({
       outcome: "needs-you",
+      processState: "running",
       target: { surfaceId: surface.surfaceId, resolution: "exact" },
     });
+    const recordingRunner = (commands: string[][]): CommandRunner => ({
+      run: async (command) => {
+        commands.push([...command]);
+        return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+      },
+    });
+    const instruct = (commands: string[][]) => handleControlRequest(
+      new Request("http://127.0.0.1:4701/api/control", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+        body: JSON.stringify({ action: "instruct", agentId: source.id, instruction: "Report current state." }),
+      }),
+      { runner: recordingRunner(commands), archiveStore, getSnapshot: () => state.get() },
+    );
+    const focus = (commands: string[][]) => createAgentLinkFetch(
+      () => new Response(null, { status: 404 }),
+      {
+        runner: recordingRunner(commands),
+        archiveStore,
+        getSnapshot: () => state.get(),
+        surfaces: () => state.surfaces(),
+      },
+    )(new Request(`http://127.0.0.1:4701/agent/${encodeURIComponent(source.id)}/focus`));
+    const broadcast = (commands: string[][]) => handleBroadcastRequest(
+      new Request("http://127.0.0.1:4701/api/broadcast", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+        body: JSON.stringify({ agentIds: [source.id], instruction: "Report current state." }),
+      }),
+      { runner: recordingRunner(commands), archiveStore, getSnapshot: () => state.get() },
+    );
+    const healthyControls = Object.fromEntries(
+      healthy.programs[0]?.agents[0]?.controls.map(({ action, enabled }) => [action, enabled]) ?? [],
+    );
+    const publicationTimes: string[] = [];
+    const unsubscribe = state.subscribe((snapshot) => { publicationTimes.push(snapshot.generatedAt); });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
     failCmux = true;
-    await state.refresh({ cmux: true });
+    const failedRefresh = state.refresh({ cmux: true });
+    await blockedRecord;
 
-    expect(state.surfaces()).toEqual([surface]);
+    const barrierSnapshot = state.get();
+    const barrierAgent = barrierSnapshot.programs[0]?.agents[0];
+    const barrierControls = Object.fromEntries(
+      barrierAgent?.controls.map(({ action, enabled }) => [action, enabled]) ?? [],
+    );
+    const barrierControlCommands: string[][] = [];
+    const barrierBroadcastCommands: string[][] = [];
+    const barrierFocusCommands: string[][] = [];
+    const barrierControlResponse = await instruct(barrierControlCommands);
+    const barrierBroadcastResponse = await broadcast(barrierBroadcastCommands);
+    const barrierFocusResponse = await focus(barrierFocusCommands);
+    const archiveResponse = await handleControlRequest(
+      new Request("http://127.0.0.1:4701/api/control", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1:4701", "content-type": "application/json" },
+        body: JSON.stringify({ action: "archive", agentId: source.id }),
+      }),
+      { runner, archiveStore, getSnapshot: () => state.get() },
+    );
+    const publicationTimesAtBarrier = [...publicationTimes];
+    unsubscribe();
+    releaseRecord();
+
+    const failed = await failedRefresh;
+    const failedAgent = failed.programs[0]?.agents[0];
+
+    expect({
+      controlStatus: barrierControlResponse.status,
+      broadcastStatus: barrierBroadcastResponse.status,
+      focusStatus: barrierFocusResponse.status,
+      terminalCommands: [
+        ...barrierControlCommands,
+        ...barrierBroadcastCommands,
+        ...barrierFocusCommands,
+      ],
+    }).toEqual({
+      controlStatus: 409,
+      broadcastStatus: 409,
+      focusStatus: 409,
+      terminalCommands: [],
+    });
+    expect(barrierControls).toMatchObject({
+      focus: false,
+      instruct: false,
+      interrupt: false,
+      archive: true,
+    });
+    expect({ archive: barrierControls.archive, unarchive: barrierControls.unarchive }).toEqual({
+      archive: healthyControls.archive,
+      unarchive: healthyControls.unarchive,
+    });
+    expect(barrierAgent?.target).toMatchObject({ resolution: "missing" });
+    expect(barrierAgent?.target.surfaceId).toBeUndefined();
+    expect(barrierSnapshot.generatedAt).toBe(healthy.generatedAt);
+    expect(barrierSnapshot.controlHealth.cmuxReachable).toBe(false);
+    expect(publicationTimesAtBarrier).toEqual([healthy.generatedAt]);
+    expect(archiveResponse.status).toBe(200);
+    expect(archived).toEqual([source.id]);
+
+    // A failed current scan cannot re-mint liveness from the previous PID roster.
+    expect(failedAgent?.processState).toBe("unknown");
+    expect(failedAgent).toMatchObject({
+      target: { resolution: "missing" },
+    });
+    expect(failedAgent?.target.surfaceId).toBeUndefined();
+    expect(failedAgent?.target.attestation).toBeUndefined();
+    expect(Object.fromEntries(
+      failedAgent?.controls
+        .filter(({ action }) => action === "focus" || action === "instruct" || action === "interrupt")
+        .map(({ action, enabled }) => [action, enabled]) ?? [],
+    )).toEqual({ focus: false, instruct: false, interrupt: false });
+    expect(state.surfaces()).toEqual([
+      expect.objectContaining({
+        surfaceId: surface.surfaceId,
+        runtimeSurfaceReady: false,
+        sourceSessionIds: [],
+        sourceSessionClaims: [],
+        identityTrace: expect.objectContaining({
+          outcome: "stale-surface",
+          processes: [],
+          openFileMatches: [],
+          commandHints: [],
+          sourceSessionIds: [],
+        }),
+      }),
+    ]);
     expect(state.get().controlHealth).toMatchObject({
       cmuxReachable: false,
       lastCheckedAt: lastSuccessfulCheck,
@@ -250,9 +847,83 @@ describe("cmux collection time truth", () => {
         "cmux notification discovery timed out",
       ],
     });
-    expect(state.get().programs[0]?.agents[0]).toMatchObject({
-      outcome: "needs-you",
-      target: { surfaceId: surface.surfaceId, resolution: "exact" },
+    const controlCommands: string[][] = [];
+    const controlResponse = await instruct(controlCommands);
+    expect(controlResponse.status).toBe(409);
+    expect(await controlResponse.json()).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+    expect(controlCommands).toEqual([]);
+
+    const focusCommands: string[][] = [];
+    const focusResponse = await focus(focusCommands);
+    expect(focusResponse.status).toBe(409);
+    expect(await focusResponse.json()).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+    expect(focusCommands).toEqual([]);
+
+    const broadcastCommands: string[][] = [];
+    const broadcastResponse = await broadcast(broadcastCommands);
+    expect(broadcastResponse.status).toBe(409);
+    expect(await broadcastResponse.json()).toMatchObject({ ok: false, sent: 0, failed: 1 });
+    expect(broadcastCommands).toEqual([]);
+
+    failCmux = false;
+    const recovered = await state.refresh({ cmux: true });
+    expect(state.surfaces()).toEqual([surface]);
+    expect(recovered.controlHealth.cmuxReachable).toBe(true);
+    const recoveredAgent = recovered.programs[0]?.agents[0];
+    expect({
+      processState: recoveredAgent?.processState,
+      resolution: recoveredAgent?.target.resolution,
+      surfaceId: recoveredAgent?.target.surfaceId,
+      attestation: recoveredAgent?.target.attestation,
+    }).toEqual({
+      processState: "running",
+      resolution: "exact",
+      surfaceId: surface.surfaceId,
+      attestation: "live",
+    });
+    expect(Object.fromEntries(
+      recoveredAgent?.controls.map(({ action, enabled }) => [action, enabled]) ?? [],
+    )).toMatchObject({
+      focus: true,
+      instruct: true,
+      interrupt: true,
+    });
+
+    const lastBindingConfirmation = bindingStore.get(source.sourceSessionId)?.confirmedAt;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    failIdentity = true;
+    const identityFailed = await state.refresh({ cmux: true });
+    const identityFailedAgent = identityFailed.programs[0]?.agents[0];
+
+    expect(identityFailedAgent).toMatchObject({
+      processState: "unknown",
+      target: { resolution: "missing" },
+    });
+    expect(Object.fromEntries(
+      identityFailedAgent?.controls
+        .filter(({ action }) => action === "focus" || action === "instruct" || action === "interrupt")
+        .map(({ action, enabled }) => [action, enabled]) ?? [],
+    )).toEqual({ focus: false, instruct: false, interrupt: false });
+    expect(state.surfaces()).toEqual([
+      expect.objectContaining({
+        surfaceId: surface.surfaceId,
+        runtimeSurfaceReady: false,
+        sourceSessionIds: [],
+        sourceSessionClaims: [],
+        identityTrace: expect.objectContaining({ outcome: "stale-surface" }),
+      }),
+    ]);
+    expect(identityFailed.controlHealth).toMatchObject({
+      cmuxReachable: true,
+      errors: ["cmux identity enrichment failed: identity probe timed out"],
+    });
+    expect(bindingStore.get(source.sourceSessionId)?.confirmedAt).toBe(lastBindingConfirmation);
+
+    failIdentity = false;
+    const identityRecovered = await state.refresh({ cmux: true });
+    expect(identityRecovered.programs[0]?.agents[0]).toMatchObject({
+      processState: "running",
+      target: { surfaceId: surface.surfaceId, resolution: "exact", attestation: "live" },
     });
   });
 
