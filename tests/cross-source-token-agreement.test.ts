@@ -33,8 +33,24 @@ import type { ActivityState } from "../src/shared/types";
    cross-source check that quietly widens what it ignores is the most dangerous
    kind of green in this repository. */
 
-const SNAPSHOT_URL = "http://127.0.0.1:4701/api/snapshot";
-const DAY_MS = 24 * 60 * 60 * 1_000;
+/* Production remains the default. A release candidate can point this live gate
+   at an exact-head loopback preview before the old production process is
+   restarted; only the port is variable, so the test cannot leave loopback. */
+const PRODUCTION_BOARD_ORIGIN = "http://127.0.0.1:4701";
+const boardOriginFor = (candidatePort: string | undefined): string => {
+  if (!candidatePort) return PRODUCTION_BOARD_ORIGIN;
+  if (!/^\d{1,5}$/.test(candidatePort)) {
+    throw new Error("ANTHILL_LIVE_TEST_PORT must be a decimal loopback port from 1 to 65535");
+  }
+  const port = Number(candidatePort);
+  if (port < 1 || port > 65_535) {
+    throw new Error("ANTHILL_LIVE_TEST_PORT must be a decimal loopback port from 1 to 65535");
+  }
+  return `http://127.0.0.1:${port}`;
+};
+const BOARD_ORIGIN = boardOriginFor(process.env.ANTHILL_LIVE_TEST_PORT);
+const SNAPSHOT_URL = `${BOARD_ORIGIN}/api/snapshot`;
+const EVIDENCE_WINDOW_MS = 48 * 60 * 60 * 1_000;
 /* The hard gate for sessions whose two records have stopped moving. */
 const PER_SESSION_TOLERANCE_PCT = 5;
 /* The collectors call a transcript stale after 45 silent minutes. Reusing that
@@ -240,7 +256,7 @@ const isSettled = (row: Joined, nowMs: number): boolean => {
    next real defect gets waved through. */
 type Verdict = "explained-by-truncation" | "unexplained" | "unadjudicable";
 
-const SESSION_CALLS_URL = "http://127.0.0.1:4701/api/debug/session-calls";
+const SESSION_CALLS_URL = `${BOARD_ORIGIN}/api/debug/session-calls`;
 
 async function boardPrefixSums(agentId: string): Promise<number[] | undefined> {
   try {
@@ -261,7 +277,7 @@ async function boardPrefixSums(agentId: string): Promise<number[] | undefined> {
 
 /* The series lookup is a parameter so the verdict that ALLOWS a disagreement to
    pass can be exercised deterministically. Whether that branch is reachable on
-   live data depends on which sessions are inside the 24-hour window tonight,
+   live data depends on which sessions are inside the 48-hour window tonight,
    and "we could not test the one path that suppresses a failure" is not a
    position this file can hold. */
 async function adjudicate(
@@ -295,9 +311,9 @@ beforeAll(async () => {
   }
 
   const now = Date.now();
-  const windowFromMs = now - DAY_MS;
-  /* Paged. At 500 rows this saw only the most recent slice of the last 24
-     hours — the fleet now produces more than that in a day — so "every joined
+  const windowFromMs = now - EVIDENCE_WINDOW_MS;
+  /* Paged. At 500 rows this saw only the most recent slice of the last 48
+     hours — the fleet now produces more than that in two days — so "every joined
      session agrees" was a claim about whichever sessions happened to land in
      the tail of the page. */
   const usage = await getAllUsageInvocations(
@@ -305,7 +321,7 @@ beforeAll(async () => {
     new Date(now).toISOString(),
   );
   if (!usage.available || usage.invocations.length === 0) {
-    unavailableReason = "BurnBar returned no readable rows for the last 24h";
+    unavailableReason = "BurnBar returned no readable rows for the last 48h";
     console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
     return;
   }
@@ -460,6 +476,16 @@ const describeDrift = ({ sessionId, board, burnbar, driftPct }: Comparison): str
   + `rather than that we overcounted. See docs/CROSS-SOURCE-DRIFT-FINDING.md`;
 
 describe("what this board counted is what a separate application recorded", () => {
+  test("an exact-head preview port cannot redirect the live gate off loopback", () => {
+    expect(boardOriginFor(undefined)).toBe(PRODUCTION_BOARD_ORIGIN);
+    expect(boardOriginFor("1")).toBe("http://127.0.0.1:1");
+    expect(boardOriginFor("4711")).toBe("http://127.0.0.1:4711");
+    expect(boardOriginFor("65535")).toBe("http://127.0.0.1:65535");
+    expect(() => boardOriginFor("0")).toThrow("decimal loopback port");
+    expect(() => boardOriginFor("65536")).toThrow("decimal loopback port");
+    expect(() => boardOriginFor("80@evil.com")).toThrow("decimal loopback port");
+  });
+
   test("the comparison actually ran against both sources", () => {
     /* The canary. Every test below returns quietly when either source is
        unreachable, so without this one an unavailable board would take the file
@@ -821,7 +847,7 @@ describe("what this board counted is what a separate application recorded", () =
   });
 
   test("no uuid session silently falls out of the join", () => {
-    /* The uuid side was measured clean: every uuid session id in 24h matched a
+    /* The uuid side was measured clean: every uuid session id in 48h matched a
        board sourceSessionId, so there is no format bug and no partial-match
        problem. A uuid session appearing here later means the join broke for a
        population it used to cover, which is exactly the silent narrowing this
@@ -840,9 +866,9 @@ describe("what this board counted is what a separate application recorded", () =
     if (!available) return;
 
     const windowIncompleteCodex = windowIncompleteSessions.filter((row) => row.isCodex);
-    expect(codexRows, "OpenBurnBar returned no Codex source rows in the current 24-hour window")
+    expect(codexRows, "OpenBurnBar returned no Codex source rows in the current 48-hour window")
       .toBeGreaterThan(0);
-    expect(codexSessions, "OpenBurnBar recorded no Codex session in the current 24-hour window").toBeGreaterThan(0);
+    expect(codexSessions, "OpenBurnBar recorded no Codex session in the current 48-hour window").toBeGreaterThan(0);
     expect(
       joinedCodexSessions,
       `${codexSessions} Codex sessions reached OpenBurnBar but none joined an Ant Hill sourceSessionId`,

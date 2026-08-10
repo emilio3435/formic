@@ -608,6 +608,12 @@ function createCodexParser(): IncrementalParser {
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
   let tokens: TokenUsage = { provenance: "unknown" };
+  let previousSessionUsage: {
+    readonly total: number;
+    readonly cachedInput: number;
+    readonly processed: number;
+  } | undefined;
+  const completedSessionUsage = { total: 0, cachedInput: 0, processed: 0 };
   let exited = false;
   let index = 0;
 
@@ -638,12 +644,38 @@ function createCodexParser(): IncrementalParser {
         if (row.type === "event_msg" && payload.type === "task_complete") exited = true;
         if (payload.type === "token_count" && payload.info?.total_token_usage) {
           const sessionUsage = payload.info.total_token_usage;
-          const usage = payload.info.last_token_usage ?? sessionUsage;
+          const lastUsage = payload.info.last_token_usage;
+          const usage = lastUsage ?? sessionUsage;
           const input = Number(usage.input_tokens ?? 0);
           const sessionInput = Number(sessionUsage.input_tokens ?? 0);
           const sessionOutput = Number(sessionUsage.output_tokens ?? 0);
           const sessionCached = Number(sessionUsage.cached_input_tokens ?? 0);
           const output = Number(usage.output_tokens ?? 0);
+          const currentSessionUsage = {
+            total: Math.max(0, sessionInput - sessionCached) + sessionOutput,
+            cachedInput: sessionCached,
+            processed: sessionInput + sessionOutput,
+          };
+          /* Codex can resume the same session id in a fresh process whose
+             cumulative counter starts over. A strict processed-total decrease
+             closes the prior segment only when the lower cumulative row is
+             also the epoch's first call (total usage equals last usage).
+             Lower corrections and interleaved observations do not carry the
+             prior value; ordinary cumulative updates are never re-added. */
+          const startsNewUsageEpoch = lastUsage
+            && sessionInput === Number(lastUsage.input_tokens ?? 0)
+            && sessionCached === Number(lastUsage.cached_input_tokens ?? 0)
+            && sessionOutput === Number(lastUsage.output_tokens ?? 0);
+          if (
+            previousSessionUsage
+            && currentSessionUsage.processed < previousSessionUsage.processed
+            && startsNewUsageEpoch
+          ) {
+            completedSessionUsage.total += previousSessionUsage.total;
+            completedSessionUsage.cachedInput += previousSessionUsage.cachedInput;
+            completedSessionUsage.processed += previousSessionUsage.processed;
+          }
+          previousSessionUsage = currentSessionUsage;
           /* Codex's own `total_token_usage.total_tokens` is input + output where
              `input_tokens` already CONTAINS `cached_input_tokens` — so its
              cumulative total re-charges the whole re-read prefix on every turn,
@@ -658,11 +690,11 @@ function createCodexParser(): IncrementalParser {
             output,
             cachedInput: Number(usage.cached_input_tokens ?? 0),
             total: Number(usage.total_tokens ?? input + output),
-            sessionTotal: Math.max(0, sessionInput - sessionCached) + sessionOutput,
-            sessionCachedInput: sessionCached,
+            sessionTotal: completedSessionUsage.total + currentSessionUsage.total,
+            sessionCachedInput: completedSessionUsage.cachedInput + currentSessionUsage.cachedInput,
             /* Codex's session input already CONTAINS the cached prefix, so the
                processed total is simply input + output — no re-adding. */
-            sessionProcessed: sessionInput + sessionOutput,
+            sessionProcessed: completedSessionUsage.processed + currentSessionUsage.processed,
             contextWindow: Number(payload.info.model_context_window) || undefined,
             scope: payload.info.last_token_usage ? "latest-turn" : "session",
             provenance: "observed",

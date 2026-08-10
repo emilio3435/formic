@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "../src/server/collectors";
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  collectSessions,
+  parseClaudeJsonl,
+  parseCodexJsonl,
+  parseOmpJsonl,
+} from "../src/server/collectors";
 
 /* `sessionTotal` is the number the drawer prints as "used this session" and the
    program header sums into "session tokens". It read 394,199,049 for ONE Claude
@@ -49,6 +57,35 @@ const claudeSessionOf = (calls: number): ReturnType<typeof parseClaudeJsonl> => 
     ...Array.from({ length: calls }, (_, i) => cacheReadingCall(i + 1)),
   ].join("\n"),
 );
+
+const codexTokenCount = (
+  timestamp: string,
+  input: number,
+  cached: number,
+  output: number,
+  last = { input, cached, output },
+): string => JSON.stringify({
+  type: "event_msg",
+  timestamp,
+  payload: {
+    type: "token_count",
+    info: {
+      total_token_usage: {
+        input_tokens: input,
+        cached_input_tokens: cached,
+        output_tokens: output,
+        total_tokens: input + output,
+      },
+      last_token_usage: {
+        input_tokens: last.input,
+        cached_input_tokens: last.cached,
+        output_tokens: last.output,
+        total_tokens: last.input + last.output,
+      },
+      model_context_window: 258_400,
+    },
+  },
+});
 
 describe("sessionTotal counts consumption, not re-reads of the same context", () => {
   test("re-reading an unchanged cache does not grow reported session usage", () => {
@@ -202,5 +239,82 @@ describe("every provider reports sessionTotal in the same unit", () => {
     expect(codex?.tokens.sessionCachedInput).toBe(37_376);
     /* Occupancy untouched: the latest call's size still counts its cache read. */
     expect(codex?.tokens.total).toBe(30_184);
+  });
+
+  test("codex keeps earlier usage when its cumulative counter resets", () => {
+    const codex = parseCodexJsonl([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-09T20:00:00.000Z",
+        payload: { id: "codex-reset", cwd: "/tmp/codex" },
+      }),
+      codexTokenCount("2026-08-09T20:30:00.000Z", 100_000, 80_000, 5_000),
+      /* A resumed Codex process can restart total_token_usage at a smaller
+         cumulative value while keeping the same session id. The earlier
+         observed segment remains real work; the reset must not erase it. */
+      codexTokenCount("2026-08-09T21:30:00.000Z", 30_000, 20_000, 2_000),
+    ].join("\n"));
+
+    expect(codex?.tokens.sessionProcessed).toBe(105_000 + 32_000);
+    expect(codex?.tokens.sessionCachedInput).toBe(80_000 + 20_000);
+    expect(codex?.tokens.sessionTotal).toBe((20_000 + 5_000) + (10_000 + 2_000));
+    /* Occupancy still belongs to the latest turn, not the earlier maximum. */
+    expect(codex?.tokens.total).toBe(32_000);
+
+    const corrected = parseCodexJsonl([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-09T20:00:00.000Z",
+        payload: { id: "codex-correction", cwd: "/tmp/codex" },
+      }),
+      codexTokenCount("2026-08-09T20:30:00.000Z", 100_000, 80_000, 5_000),
+      /* Corpus evidence distinguishes ordinary lower corrections from reset
+         epochs: their cumulative total is not the same record as last usage. */
+      codexTokenCount(
+        "2026-08-09T21:30:00.000Z",
+        30_000,
+        20_000,
+        2_000,
+        { input: 5_000, cached: 4_000, output: 500 },
+      ),
+    ].join("\n"));
+
+    expect(corrected?.tokens.sessionProcessed).toBe(32_000);
+  });
+
+  test("codex incremental refresh counts a resumed epoch exactly once", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-codex-reset-"));
+    const sessions = join(home, ".codex", "sessions");
+    const path = join(sessions, "reset.jsonl");
+    const timestamp = new Date().toISOString();
+    mkdirSync(sessions, { recursive: true });
+    try {
+      writeFileSync(path, [
+        JSON.stringify({
+          type: "session_meta",
+          timestamp,
+          payload: { id: "codex-incremental-reset", cwd: "/tmp/codex" },
+        }),
+        codexTokenCount(timestamp, 100_000, 80_000, 5_000),
+        "",
+      ].join("\n"));
+
+      expect((await collectSessions(home)).codex.value[0]?.tokens.sessionProcessed).toBe(105_000);
+      appendFileSync(path, `${codexTokenCount(timestamp, 30_000, 20_000, 2_000)}\n`);
+      const afterReset = (await collectSessions(home)).codex.value[0]?.tokens;
+      expect(afterReset?.sessionProcessed).toBe(137_000);
+
+      /* An unrelated append calls result() again; an unchanged refresh reuses
+         the cache. Neither is another epoch, so neither may add the carry. */
+      appendFileSync(path, `${JSON.stringify({
+        type: "event_msg",
+        timestamp,
+        payload: { type: "task_complete" },
+      })}\n`);
+      expect((await collectSessions(home)).codex.value[0]?.tokens).toEqual(afterReset);
+      expect((await collectSessions(home)).codex.value[0]?.tokens).toEqual(afterReset);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
