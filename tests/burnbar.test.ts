@@ -77,6 +77,7 @@ describe("burnbar usage bridge", () => {
       modelPricingUsdPerMillionTokens: {
         "priced-model": {
           aliases: ["priced-model"],
+          providers: ["OpenAI API"],
           input: 2,
           output: 8,
           cacheRead: 0.2,
@@ -86,6 +87,8 @@ describe("burnbar usage bridge", () => {
     };
     expect(resolveUsageCost({
       model: "provider/priced-model-fast",
+      provider: "OpenAI API",
+      pricingMode: "standard-short-context",
       inputTokens: 1_000_000,
       outputTokens: 100_000,
       cacheReadTokens: 500_000,
@@ -98,12 +101,103 @@ describe("burnbar usage bridge", () => {
     });
     expect(resolveUsageCost({
       model: "unpriced-model",
+      provider: "OpenAI API",
       inputTokens: 1_000_000,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       measuredCostUsd: null,
     }, config)).toEqual({ costUsd: null, costProvenance: "unknown" });
+  });
+
+  test("derived prices are billing-provider scoped, while measured cost still wins", () => {
+    const config = {
+      pricingVersion: "test-v1",
+      modelPricingUsdPerMillionTokens: {
+        "gpt-5.6-luna": {
+          aliases: ["gpt-5.6-luna"],
+          providers: ["OpenAI API"],
+          input: 0.2,
+          output: 1.2,
+          cacheRead: 0.02,
+          cacheCreation: 0.25,
+        },
+      },
+    };
+    const tokens = {
+      model: "gpt-5.6-luna",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
+
+    expect(resolveUsageCost({ ...tokens, provider: "OpenAI API", pricingMode: "standard-short-context", measuredCostUsd: null }, config))
+      .toMatchObject({ costProvenance: "derived_estimate", pricingVersion: "test-v1" });
+    expect(resolveUsageCost({ ...tokens, provider: "Cursor", measuredCostUsd: null }, config))
+      .toEqual({ costUsd: null, costProvenance: "unknown" });
+    expect(resolveUsageCost({ ...tokens, provider: "Cursor", measuredCostUsd: 7.25 }, config))
+      .toEqual({ costUsd: 7.25, costProvenance: "measured" });
+  });
+
+  test("OpenAI API estimates require explicit context pricing evidence", () => {
+    const config = {
+      pricingVersion: "test-v1",
+      modelPricingUsdPerMillionTokens: {
+        "gpt-5.6-luna": {
+          aliases: ["gpt-5.6-luna"],
+          providers: ["OpenAI API"],
+          input: 0.2,
+          output: 1.2,
+          cacheRead: 0.02,
+          cacheCreation: 0.25,
+        },
+      },
+    };
+    const tokens = {
+      model: "gpt-5.6-luna",
+      provider: "OpenAI API",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      measuredCostUsd: null,
+    };
+
+    expect(resolveUsageCost(tokens, config)).toEqual({ costUsd: null, costProvenance: "unknown" });
+    expect(resolveUsageCost({ ...tokens, pricingMode: "standard-short-context" }, config))
+      .toEqual({ costUsd: 0.32, costProvenance: "derived_estimate", pricingVersion: "test-v1" });
+    expect(resolveUsageCost({ ...tokens, pricingMode: "standard-long-context" }, config))
+      .toEqual({ costUsd: 0.58, costProvenance: "derived_estimate", pricingVersion: "test-v1" });
+  });
+
+  test("Codex remains unknown without measured cost, while measured cost wins", () => {
+    const config = {
+      pricingVersion: "test-v1",
+      modelPricingUsdPerMillionTokens: {
+        "gpt-5.6-luna": {
+          aliases: ["gpt-5.6-luna"],
+          providers: ["OpenAI API"],
+          input: 0.2,
+          output: 1.2,
+          cacheRead: 0.02,
+          cacheCreation: 0.25,
+        },
+      },
+    };
+    const tokens = {
+      model: "gpt-5.6-luna",
+      provider: "Codex",
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
+
+    expect(resolveUsageCost({ ...tokens, measuredCostUsd: null }, config))
+      .toEqual({ costUsd: null, costProvenance: "unknown" });
+    expect(resolveUsageCost({ ...tokens, measuredCostUsd: 7.25 }, config))
+      .toEqual({ costUsd: 7.25, costProvenance: "measured" });
   });
 
   test("authoritative source cost wins, including measured zero", () => {
@@ -225,7 +319,7 @@ db.run(\`CREATE TABLE token_usage (
 db.run(\`INSERT INTO token_usage VALUES
   ('1','Claude Code','sess-a','proj','claude-opus-4-8',800,200,0,0,1000,0.05,'exact','2026-07-22 10:00:00.000','2026-07-22 10:01:00.000'),
   ('2','Codex','sess-b','proj','unpriced-model',1500,500,0,0,2000,0,'low_confidence_estimate','2026-07-22 11:00:00.000','2026-07-22 11:01:00.000'),
-  ('3','Claude Code','sess-c','proj','claude-opus-4-8',800,200,0,0,1000,99,'low_confidence_estimate','2026-07-23 10:00:00.000','2026-07-23 10:01:00.000')\`);
+  ('3','Anthropic API','sess-c','proj','claude-opus-4-8',800,200,0,0,1000,99,'low_confidence_estimate','2026-07-23 10:00:00.000','2026-07-23 10:01:00.000')\`);
 db.close();
 `,
     );
@@ -264,7 +358,7 @@ db.close();
         estimatedCostUsd: 0.009,
         costKnown: true,
         costProvenance: "derived_estimate",
-        pricingVersion: "2026-07-28",
+        pricingVersion: "2026-08-09",
       });
 
       const empty = await getUsageSummary("2026-07-24T00:00:00.000Z", "2026-07-25T00:00:00.000Z");

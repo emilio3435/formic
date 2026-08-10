@@ -16,7 +16,7 @@ import {
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
-import { AGENT_IDLE_GAP_MS, MAX_TRANSCRIPT_TAIL_CHARS, type CollectedAgent, type CollectionResult } from "./types";
+import { AGENT_IDLE_GAP_MS, capTranscriptTail, type CollectedAgent, type CollectionResult } from "./types";
 import { collectCursorSessions } from "./cursor";
 import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
@@ -454,7 +454,7 @@ function makeAgent(input: {
     parentSourceSessionId: input.parentSourceSessionId,
     threadDepth: input.threadDepth,
     nickname: input.nickname,
-    transcriptTail: input.transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
+    transcriptTail: capTranscriptTail(input.transcriptTail),
     activeMs: input.activeMs,
     artifacts: input.meta.sourcePath
       ? [{

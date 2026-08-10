@@ -52,8 +52,9 @@ describe("ANT-GUIDE.md stays true to the product", () => {
        nothing extra. */
     expect(cardLabels).toContain("Momentum");
     /* Four after S2-T1 retired Findings; five once S0-T5 put a real consumption
-       aggregate on the wire and the Tokens card could ship honestly. */
-    expect(cardLabels.length).toBe(5);
+       aggregate on the wire and the Tokens card could ship honestly; seven when
+       Health Rail v2 added the opt-in Mix and Spend cards. */
+    expect(cardLabels.length).toBe(7);
     expect(cardLabels).not.toContain("Findings");
     for (const label of cardLabels) {
       expect(guide, `guide never describes the ${label} card`).toContain(`**${label}**`);

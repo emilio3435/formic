@@ -1,0 +1,22 @@
+=== bunx tsc --noEmit ===
+tsc exit: 0
+
+=== bun test tests/web-client.test.ts tests/b2-render-proof.test.ts tests/overhaul-guards.test.ts ===
+(fail) B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.ts → app.js > renderAgentRow surfaces transcriptTail containing [TL;DR
+(fail) B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.ts → app.js > row caps [TL;DR] via conciseText 120 even when wire tail is 800
+(fail) provider-aware row summaries > keeps the raw transcript tail in Chat/Evidence, not Operate
+(fail) agent rows: instrument cluster + de-noise (C1) > (h2) the role chip left the row; the model-policy chip left the product
+(fail) agent drawer — Thread · Evidence > bookshelf shelf replaces tabs: Thread open, Evidence behind the caterpillar rail
+(fail) agent drawer — Thread · Evidence > Names rename UI stays collapsed under a disclosure
+(fail) agent drawer — Thread · Evidence > Evidence carries neutral directory provenance and token-scope tooltips
+(fail) verdict head — act from the top (B2) > drawer order: verdict head → banner → vitals mount → shelf → lineage → dock
+(fail) vitals instrument band (B3) > (b) the band never invents a denominator, and the deleted tiles stay deleted
+(fail) vitals instrument band (B3) > (d) renderAgentDrawer fills the .inspector-vitals mount with the band, before the shelf
+(fail) FE-B: harness-backed client behavior > (FE2-D5) the sentence renders only the lenses that are on, and reconciles the numbers
+(fail) FE-B: harness-backed client behavior > (FE4-D4) the sentence sits between the lenses and the working-set control
+(fail) FE-B: harness-backed client behavior > (5) the agent drawer builds one Thread pane + the Evidence rail, and no swarm section
+(fail) FE-C: the transcript is readable inside the drawer > (2) the panel lives in Evidence, and a landed fetch actually repaints it
+ 565 pass
+ 14 fail
+ 3398 expect() calls
+Ran 579 tests across 3 files.

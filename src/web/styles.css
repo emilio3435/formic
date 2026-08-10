@@ -103,13 +103,18 @@ html { height: 100%; }
 
 body {
   margin: 0;
-  /* 2026 app-shell frame: the shell is exactly the viewport. `100dvh` tracks the
-     dynamic viewport (mobile toolbars) and replaces the fragile height:100% chain;
-     the `100vh` line before it is the fallback for engines without dvh. A definite
-     height (not min-height) is what lets .app-body's flex:1/min-height:0 resolve so
-     the panes scroll INTERNALLY instead of the document. */
-  height: 100vh;
-  height: 100dvh;
+  /* The DOCUMENT scrolls. The frozen app-shell (definite 100dvh + overflow-y
+     clip) divided one viewport between the masthead chrome and the cockpit, so
+     every widget the masthead gained was taken FROM the board: measured at
+     1440x900 with the drawer open, 539px of chrome left a 361px stage, a 359px
+     drawer, and a 28px transcript viewport holding 1,436px of turns. min-height
+     keeps the quiet-board footing (chrome + stage still fill the screen);
+     anything taller flows and the page scrolls like a document. Scrolling stays
+     INTERNAL only where it is a deliberate instrument: the drawer's chat feed,
+     and the full-sheet inspector below 1025px (a true modal — see the
+     body.inspector-open lock in that media block). */
+  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--canvas);
@@ -119,11 +124,6 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;   /* the full-width pulse strip wraps a flex row; guard against a stray scrollbar */
-  /* Root-cause fix is the dvh frame + bounded chrome expansions below; this clip is
-     an additional guard so a sub-pixel rounding can never turn the doc into a
-     scroller (chrome + panes are all internally bounded). Fixed dock/toast and
-     .pane-list sticky headers are unaffected (body is not their containing block). */
-  overflow-y: clip;
 }
 
 /* ---------- utilities ---------- */
@@ -348,28 +348,248 @@ body.feed-frozen .programs { opacity: 0.62; }
      inline panel; ease those transitions (killed by prefers-reduced-motion). */
   transition: height 150ms ease, opacity 150ms ease;
 }
-.rail-header {
-  max-width: var(--frame);
-  margin: 0 auto;
-  padding: 0.35rem 1.1rem 0;
+
+/* Health rail v2 — TL;DR lane (60%) + readings stack (40%) */
+.health-tldr-lane {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--raise);
+  border-left: var(--signal-rail) solid var(--moss);
+  padding: 0.45rem 1.1rem 0.5rem 1.1rem;
+}
+.health-tldr-lane[hidden] { display: none !important; }
+.health-tldr-lane.is-needs-you { border-left-color: var(--ember); }
+.health-tldr-lane.is-stale { border-left-color: var(--line-strong); }
+.tldr-lane-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0 0 0.3rem;
 }
+.heartbeat-tldr-label {
+  font-weight: 800;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--moss);
+  background: var(--moss-soft);
+  border-radius: 999px;
+  padding: 2px 7px;
+  flex: none;
+}
+.heartbeat-tldr-time {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--faint);
+  flex: none;
+}
+.tldr-lane-meta {
+  font-size: 0.74rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tldr-card-repo {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px dotted transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tldr-card-repo:hover { color: var(--moss); border-bottom-color: var(--moss); }
+.tldr-card-repo:focus-visible { outline-offset: 3px; }
+.tldr-card-signal {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  line-height: 1;
+  flex: none;
+}
+.tldr-card-signal.is-ok,
+.tldr-card-signal.is-all-clear { color: var(--moss); background: var(--moss-soft); border-color: color-mix(in srgb, var(--moss) 18%, transparent); }
+.tldr-card-signal.is-working { color: var(--moss); background: var(--moss-soft); border-color: color-mix(in srgb, var(--moss) 18%, transparent); }
+.tldr-card-signal.is-idle { color: var(--slate); background: color-mix(in srgb, var(--slate) 10%, var(--raise)); border-color: var(--line); }
+.tldr-card-signal.is-needs-you,
+.tldr-card-signal.is-blocked,
+.tldr-card-signal.is-failed { color: var(--ember); background: var(--ember-soft); border-color: color-mix(in srgb, var(--ember) 18%, transparent); }
+.lane-pager {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+}
+.lane-pos {
+  font: 600 10px var(--font-mono);
+  color: var(--faint);
+  letter-spacing: 0.04em;
+  min-width: 2.6em;
+  text-align: center;
+}
+.chev {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raise);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  padding: 0;
+}
+.chev:hover { border-color: var(--line-strong); color: var(--ink); }
+.chev[disabled] { opacity: 0.35; cursor: default; }
+.tldr-lane-prose {
+  margin: 0.15rem 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--body);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.tldr-lane-prose strong { color: var(--ink); font-weight: 650; }
+.tldr-lane-prose .mono { font-family: var(--font-mono); font-size: 0.86em; }
+.tldr-lane-prose .is-alert { color: var(--ember); font-weight: 650; }
+.tldr-chip-strip {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.tldr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font: 600 10.5px var(--font-ui);
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+  cursor: pointer;
+}
+.tldr-chip:hover { border-color: var(--line-strong); color: var(--ink); }
+.tldr-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--slate);
+  flex: none;
+}
+.tldr-chip.is-ok .dot { background: var(--moss); }
+.tldr-chip.is-needs-you { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 28%, var(--line)); }
+.tldr-chip.is-needs-you .dot { background: var(--ember); }
+.tldr-chip.is-more {
+  color: var(--faint);
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+}
+.tldr-lane-det {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem 0.45rem;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.tldr-det-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--raise);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  flex: none;
+}
+.tldr-det-pill.is-working { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 28%, var(--line)); }
+.tldr-det-pill.is-needs { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 28%, var(--line)); }
+.tldr-det-pill.is-idle { color: var(--slate); }
+.tldr-det-pill.is-branch { font-family: var(--font-mono); font-size: 0.7rem; }
+.tldr-det-pill.is-dirty { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 28%, var(--line)); }
+.tldr-det-pill.is-pr { color: var(--slate); }
+.tldr-det-pill.is-live { color: var(--ink); background: var(--sand); }
+.tldr-card-blocker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex: none;
+  color: var(--muted);
+  background: var(--sand);
+}
+.tldr-card-blocker.is-alert { color: var(--ember); background: var(--ember-soft); }
+.tldr-card-blocker.is-clear { color: var(--moss); background: var(--moss-soft); }
 
-/* The board's scan window, stated once for every reading in the rail below it.
-   Quiet by design: it is a standing condition rather than news, and a permanent
-   line that shouts stops being read. `margin-right: auto` pushes Customize to
-   the far edge, so the statement reads as a qualifier on the heading beside it
-   rather than as a third control. */
+.readings-stack {
+  flex: 0 0 40%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line-strong);
+}
+.stack-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0 0.35rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.scope-pill {
+  font: 600 10.5px var(--font-mono);
+  color: var(--ink);
+  background: var(--sand);
+  border-radius: 999px;
+  padding: 2px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 .scan-window {
   font-family: var(--font-mono);
   font-size: 0.66rem;
   letter-spacing: 0.04em;
   color: var(--faint);
-  margin-left: 0.6rem;
   margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .rail-heading {
   color: var(--faint);
@@ -377,38 +597,86 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  flex: none;
 }
 .rail-action {
-  padding: 0.25rem 0.45rem;
+  flex: none;
+  padding: 0.2rem 0.45rem;
   color: var(--muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 650;
+  background: transparent;
+  font: 650 11.5px var(--font-ui);
+  cursor: pointer;
 }
 .rail-action:hover, .rail-action[aria-expanded="true"] { color: var(--ink); border-color: var(--line-strong); background: var(--sand); }
 .rail-inner {
   max-width: var(--frame);
   margin: 0 auto;
-  padding: 0.5rem 1.1rem 0.6rem;
-  /* Left→right priority strip: cells flow in fixed order and re-weight by
-     urgency (.cell-hot grows, .cell-micro shrinks) instead of sitting in a
-     rigid 5-column grid. Stretch keeps the dividers full-height. */
   display: flex;
-  flex-wrap: wrap;
-  gap: 0 1.1rem;
   align-items: stretch;
+  min-height: 118px;
+  padding: 0;
 }
+.readings-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: stretch;
+}
+.readings-grid .pulse-calm { grid-column: 1 / -1; }
+.mix-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.mix-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+  flex: none;
+}
+.prov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex: none;
+  background: var(--slate);
+}
+.prov-dot.is-claude { background: var(--claude); }
+.prov-dot.is-codex { background: var(--codex); }
+.prov-dot.is-cursor { background: var(--cursor); }
+.prov-dot.is-omp { background: var(--omp); }
+.prov-dot.is-prime { background: var(--slate); }
+.mix-seg .prov-name { font-size: 0.62rem; font-weight: 600; color: var(--muted); }
+@media (max-width: 900px) {
+  .mix-seg .prov-name { display: none; }
+}
+.rail-inner.is-no-tldr { min-height: 84px; }
+.rail-inner.is-no-tldr .readings-stack { flex: 1 1 100%; border-left: 0; }
+.rail-inner.is-no-tldr .readings-grid { grid-template-columns: repeat(4, 1fr); }
+.rail-inner.is-no-tldr .stack-head { padding-left: 0; }
+.rail-inner.is-no-tldr .reading { border-bottom: 0 !important; border-right: 1px solid var(--line); }
+.rail-inner.is-no-tldr .reading:first-child { padding-left: 0; }
+.rail-inner.is-no-tldr .reading:last-child { border-right: 0; padding-right: 0; }
+
 .reading {
-  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 0.12rem;
-  padding: 0 1.1rem 0 0;
+  gap: 0.1rem;
+  justify-content: center;
   min-width: 0;
-  border-right: 1px solid var(--line);
+  padding: 0.4rem 1rem;
 }
-.reading:last-child { border-right: 0; }
+.readings-grid .reading:nth-child(odd) { border-right: 1px solid var(--line); }
+.readings-grid .reading:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
 .reading-label {
   font-size: 10px;
   font-weight: 700;
@@ -418,28 +686,44 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .context-toggle {
   align-self: flex-start;
-  margin: -0.12rem -0.35rem 0;
-  padding: 0.12rem 0.35rem;
-  border-radius: 3px;
-  text-decoration: underline;
-  text-decoration-style: dotted;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 700 10px var(--font-ui);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-decoration: underline dotted;
   text-underline-offset: 0.2em;
+  cursor: pointer;
 }
-.context-toggle:hover { color: var(--ink); background: var(--sand); }
+.context-toggle:hover { color: var(--ink); }
 .context-toggle[aria-pressed="true"] { color: var(--ink); }
 .reading-value {
   display: flex;
   align-items: baseline;
-  gap: 0.4rem;
-  margin-top: 0.1rem;
-  font-size: 1.35rem;
+  gap: 0.35rem;
+  font-size: 1.2rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
   color: var(--ink);
 }
-.reading-value .unit { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
-.reading-sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.reading-value .unit { font-size: 0.72rem; font-weight: 600; color: var(--muted); }
+.reading-value.is-ok { color: var(--moss); }
+.reading-value.is-hot { color: var(--ember); }
+.reading-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* The finding-link rules stood here — underlined buttons inside a summary
    reading, routing into the inspector. They are deleted with the Findings card,
    and the rule they leave behind is worth more than the styling did: NOTHING IN
@@ -552,7 +836,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* One docked instrument: workboard + Details share a bordered shell with an
    internal divider — not two floating panes with a canvas gap between them. */
 .ops-stage {
-  /* Sized to content, capped at the viewport — NOT stretched to fill it.
+  /* Sized to content — NOT stretched to fill the space, and NOT capped by it.
 
      Every pixel of this cockpit was measured against 380-441 agents, where the
      stage is always taller than the screen and `flex: 1` is invisible. The first
@@ -561,19 +845,23 @@ body.feed-frozen .programs { opacity: 0.62; }
      it, and a large empty bordered container is the single strongest "this
      failed to load" signal an interface can send.
 
-     `flex: 0 1 auto` + max-height keeps both readings correct: a full fleet
-     still fills the screen and scrolls inside #main, and a quiet board draws a
-     small card that ends where its content ends. A calm instrument at rest,
-     rather than an empty frame. */
+     `flex: 0 1 auto` keeps both readings correct: a quiet board draws a small
+     card that ends where its content ends, and a full fleet grows the page,
+     which now scrolls as a document (see body). The old viewport cap sized the
+     stage to whatever the masthead left over — the frozen-height defect the
+     scrolling document removes. */
   flex: 0 1 auto;
-  max-height: 100%;
   min-height: 0;
   width: 100%;
   display: flex;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--raise);
-  overflow: hidden;
+  /* clip, NOT hidden: identical corner clipping, but clip does not create a
+     scroll container — which is what lets the roster's sticky heads fall
+     through to the DOCUMENT scrollport now that the page is the scroller.
+     `hidden` here silently re-captures them into a box that never scrolls. */
+  overflow: clip;
   box-shadow: var(--shadow-soft);
 }
 
@@ -591,12 +879,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   --column-head-h: 25px;
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
+  /* No overflow here (scroll-ownership revision): the roster sizes to its
+     content and the DOCUMENT scrolls, so the sticky head stack pins against
+     the viewport. An overflow-y here — even one that never actually scrolls —
+     is a scroll container that captures the stickies into a static box.
+     overscroll-behavior stays as documentation of intent; it is inert on a
+     non-scroll-container. */
   overscroll-behavior: contain;   /* no scroll-chaining to the page at the roster's ends */
-  /* No padding-top: a scroll container clips at its PADDING box, so top padding
-     would let scrolling rows paint a sliver ABOVE the sticky headers. The toolbar
-     carries that top breathing via margin instead (it scrolls away cleanly), so
-     the frozen headers pin flush to the pane's top edge. */
+  /* No padding-top: top padding would let scrolling rows paint a sliver ABOVE
+     the sticky headers. The toolbar carries that top breathing via margin
+     instead (it scrolls away cleanly), so the frozen headers pin flush. */
   padding: 0 0.85rem 5rem;
   scrollbar-gutter: stable;
 }
@@ -1984,6 +2276,10 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 .pane-inspector {
   --inspector-pad-x: 1.2rem;
+  /* One pinned band above the desk head: the vitals row (the verdict head
+     scrolls). 8px + 23.2px pill + 10px + 1px border. The desk head's sticky
+     `top` derives from this — change them together or a seam opens. */
+  --drawer-vitals-h: 42px;
   flex: none;
   width: min(var(--inspector-w), 100%);
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
@@ -2020,8 +2316,26 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .pane-list {
     flex: 0 0 clamp(380px, 40%, 760px);
   }
+  /* The drawer FLOATS (operator directive, supersedes the absolute left-pane
+     bound): its height derives from its OWN content — the Evidence desk sizes
+     the grid, see the ≥861px block — capped at the viewport (the pane's
+     overflow-y: auto scrolls past the cap, a sticky panel taller than the
+     screen could never follow it). align-self: flex-start kills the flex
+     stretch so the box ends where the desk ends; position: sticky keeps the
+     panel riding beside a workboard taller than it while the document
+     scrolls, parking at the stage's bottom edge. In-flow on purpose — sticky
+     cannot leave the flow, and .ops-stage clips with `clip`, which sticky
+     passes through. The flex-basis complement MUST mirror .pane-list's
+     clamp() above — same formula, same base — or the panes gap or overlap;
+     the web-client geometry guard pins the two literals together. */
   body.inspector-open .pane-inspector {
-    flex: 1 1 auto;
+    flex: 0 0 calc(100% - clamp(380px, 40%, 760px));
+    align-self: flex-start;
+    position: sticky;
+    /* --drawer-float-top is set by syncDrawerFloat: centers a short drawer in
+       the viewport; pins a tall one with a 1.25rem gap (RHSP-C). */
+    top: var(--drawer-float-top, 1.25rem);
+    max-height: calc(100dvh - 2.5rem);
     width: auto;
     max-width: none;
   }
@@ -2082,45 +2396,9 @@ body.feed-frozen .programs { opacity: 0.62; }
    Document flexes for reading measure (1.55fr, Task below head + Transcript)
    and right Desk is fixed-dense (380px, Evidence uncollapsed). Desk-like,
    not a bookshelf. One breakpoint at 860px, not 1179/1025 spaghetti. */
-.drawer-shelf {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.drawer-shelf.is-evidence-open {
-  display: flex;
-  flex-direction: column;
-}
-.drawer-shelf.is-evidence-collapsed {
-  display: flex;
-  flex-direction: column;
-}
-.drawer-shelf.is-evidence-collapsed .drawer-desk,
-.drawer-shelf.is-evidence-collapsed .shelf-evidence {
-  display: none;
-}
-/* New canonical name; .drawer-shelf stays as alias during rollout. */
-.drawer-main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.drawer-main.is-evidence-open {
-  display: flex;
-  flex-direction: column;
-}
-.drawer-main.is-evidence-collapsed {
-  display: flex;
-  flex-direction: column;
-}
-.drawer-main.is-evidence-collapsed .drawer-desk {
-  display: none;
-}
-/* Design A — Classic Document (1.55fr) + Desk (380px) at >860px */
+/* Document (65%) + Desk (35%) above 860px; one column below it. One
+   breakpoint — 861/860 — and no 1179/1025 tier: the drawer's own width is the
+   only thing that decides this split, and it is the only place it is decided. */
 .drawer-grid {
   display: flex;
   flex-direction: column;
@@ -2131,13 +2409,39 @@ body.feed-frozen .programs { opacity: 0.62; }
 @media (min-width: 861px) {
   .drawer-grid {
     display: grid;
-    grid-template-columns: 1.55fr 380px;
+    /* 65 / 35, written as fr and not as literal percentages.
+
+       `65% 35%` resolves each track against the content box and THEN adds the
+       18px column gap, so the row is one full gutter wider than the box it sits
+       in — and .pane-inspector is overflow-x: hidden, so the overflow would be
+       clipped off the desk rather than scrolled to. Two fr tracks in the same
+       65:35 proportion take the gutter out of the shared space instead, which
+       is what "65% 35%" was always describing: at a 785px content box (1440px
+       viewport, drawer docked) the split measures 498.6px / 268.4px.
+
+       The fixed 380px desk this replaces did not scale down — it took the SAME
+       380px out of a 518px row at 1025px and left the document 138px, which is
+       narrower than one line of the task prose it exists to hold. A ratio has
+       no such cliff.
+
+       minmax(0, …) removes each track's min-content floor: a long unbreakable
+       path in the desk can widen its own track otherwise, and the document
+       column pays for it. */
+    grid-template-columns: minmax(0, 65fr) minmax(0, 35fr);
     gap: 16px 18px;
     align-items: start;
   }
   .drawer-grid .drawer-doc,
   .drawer-grid .drawer-desk {
     min-width: 0;
+  }
+  /* The desk is proof: it ends where its evidence ends, so it stays start-aligned
+     and draws no empty column below itself. The document is both the reading
+     surface and the column the send dock belongs to, and a sticky bottom control
+     can only pin against a box that reaches the fold — so the document alone
+     takes the row's full height. */
+  .drawer-grid .drawer-doc {
+    align-self: stretch;
   }
   .drawer-grid .drawer-desk {
     align-self: start;
@@ -2148,53 +2452,10 @@ body.feed-frozen .programs { opacity: 0.62; }
     display: flex;
     flex-direction: column;
   }
-  .drawer-shelf,
-  .drawer-shelf.is-evidence-open,
-  .drawer-shelf.is-evidence-collapsed,
-  .drawer-main,
-  .drawer-main.is-evidence-open,
-  .drawer-main.is-evidence-collapsed {
-    display: flex;
-    flex-direction: column;
-  }
 }
-
-/* Drawer tabs: Chat | Evidence */
-.drawer-tabs {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--line-strong);
-  margin: 0 calc(-1 * var(--inspector-pad-x));
-  padding: 0 var(--inspector-pad-x);
-  background: var(--surface);
-  position: sticky;
-  top: 56px;
-  z-index: 2;
-}
-.drawer-tab {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 14px 9px;
-  font: 800 11px/1 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase;
-  color: var(--faint-strong);
-  border: 0; border-bottom: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  margin-bottom: -1px;
-}
-.drawer-tab .ico { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
-.drawer-tab:hover { color: var(--ink); background: var(--sand); }
-.drawer-tab.is-active { color: var(--ink); border-bottom-color: var(--ink); }
-.drawer-tab:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 
 .drawer-chat { display: flex; flex-direction: column; gap: var(--space-3); }
 .drawer-chat-task { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 12px 14px; display: grid; gap: 8px; }
-.drawer-task-full { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-.drawer-transcript { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--raise); padding: 10px 12px; }
-.drawer-transcript-summary { cursor: pointer; font: 800 11px/1 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink); display: flex; align-items: center; gap: 8px; list-style: none; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 8px; }
-.drawer-transcript-summary .rule { flex: 1; height: 1px; background: var(--line); margin-left: 8px; }
-.drawer-transcript-summary::-webkit-details-marker { display: none; }
-.drawer-transcript-summary .ico { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
-
 .drawer-controls-strip {
   position: sticky;
   bottom: 0;
@@ -2333,15 +2594,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    The old 1179 split made prose narrower on wider viewports; 860 is the
    point where 380px + 1.55fr + gap no longer fits the drawer. */
 @media (max-width: 860px) {
-  .drawer-shelf,
-  .drawer-shelf.is-evidence-open,
-  .drawer-shelf.is-evidence-collapsed,
-  .drawer-main,
-  .drawer-main.is-evidence-open,
-  .drawer-main.is-evidence-collapsed {
-    grid-template-columns: 1fr;
-    min-height: 0;
-  }
   .shelf-evidence-rail {
     flex-direction: row;
     justify-content: center;
@@ -2373,7 +2625,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-accent--moss  { background: var(--moss); }
 .dw-accent--slate { background: var(--slate); }
 .dw-accent--ink   { background: var(--ink); }
-.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
+.pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--line-strong)); }
 /* One --prov per provider drives both the pane inset rail and the lineage
    current-node ring; set by a class so the strict CSP holds (no inline style). */
 .dw-provider--claude { --prov: var(--claude); }
@@ -2401,7 +2653,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-rollup { display: flex; flex-wrap: wrap; gap: 0.1rem 0.85rem; margin: 0.15rem 0 0; }
 .dw-rollup-cell { display: inline-flex; align-items: baseline; gap: 0.3rem; }
 .dw-rollup-value { font: 650 14px/1.05 var(--font-mono); color: var(--ink); }
-.dw-rollup-label { font-size: 11.5px; color: var(--faint); }
+.dw-rollup-label { font-size: 11.5px; color: var(--faint-strong); }
 .dw-rollup-cell.is-alert .dw-rollup-value { color: var(--ember); }
 
 .dw-lead { font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--body); overflow-wrap: anywhere; }
@@ -2415,9 +2667,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-block-label { font: 700 11px/1.2 var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint-strong); margin-bottom: 0; display: flex; align-items: center; gap: 6px; }
 .dw-block-label .ico { width: var(--icon-sm); height: var(--icon-sm); color: var(--faint-strong); flex: none; }
 .dw-block--fix .dw-block-label .ico { color: var(--ember); }
-.dw-block-head { display: flex; align-items: center; gap: 6px; }
-.dw-block-head .ico { width: var(--icon-sm); height: var(--icon-sm); color: var(--faint-strong); flex: none; }
-.dw-block-head.is-alert .ico { color: var(--ember); }
 .dw-block--fix .dw-block-label { color: var(--ember); }
 
 /* AFFECTS: a contained module (label + tag row) so the references read as an
@@ -2437,7 +2686,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .dw-impact-sample > summary {
   cursor: pointer;
-  color: var(--faint);
+  color: var(--faint-strong);
   font: 650 11.5px/1.3 var(--font-mono);
   letter-spacing: 0.04em;
 }
@@ -2493,8 +2742,8 @@ body.feed-frozen .programs { opacity: 0.62; }
    edges; they are interactive links into the Agent drawer. */
 .dw-chip { display: inline-flex; align-items: center; font-size: 12px; color: var(--ink); padding: 0.22rem 0.55rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
 .dw-chip:hover { border-color: var(--muted); color: var(--ember); }
-.dw-chip .dw-chip-prog { color: var(--faint); }
-.dw-impact { font-size: 11.5px; color: var(--faint); margin: 0; }
+.dw-chip .dw-chip-prog { color: var(--faint-strong); }
+.dw-impact { font-size: 11.5px; color: var(--faint-strong); margin: 0; }
 
 .dw-full { width: 100%; }
 /* Escalate: the advisory's own action. A soft amber tint (not a naked outline)
@@ -2512,7 +2761,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 @keyframes dw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .dw-steps { display: grid; gap: 0.4rem; margin: 0.4rem 0 0; padding: 0; list-style: none; counter-reset: dwstep; }
 .dw-steps li { counter-increment: dwstep; padding: 0.45rem 0.5rem; border-left: 2px solid var(--line-strong); border-radius: 0 4px 4px 0; background: var(--surface); font-size: 12px; }
-.dw-steps li::before { content: "0" counter(dwstep); display: block; color: var(--faint); font: 10px var(--font-mono); }
+.dw-steps li::before { content: "0" counter(dwstep); display: block; color: var(--faint-strong); font: 10px var(--font-mono); }
 .dw-steps b { display: block; margin: 0.1rem 0; font-size: 12.5px; }
 .dw-steps span { display: block; color: var(--muted); }
 
@@ -2543,24 +2792,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-node:first-child .dw-rail::before { top: 50%; }
 .dw-node:first-child .dw-rail::after { display: none; }
 .dw-node:last-child .dw-rail::before { bottom: 50%; }
-.dw-glyph { position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--tree-node-ring); opacity: 1; }
+.dw-glyph { position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 50%; background: var(--raise); border: 2px solid var(--tree-node-ring); opacity: 1; }
 .dw-node.dw-d0 .dw-glyph { border-color: var(--tree-node-ring); }
 .dw-node.dw-d1 .dw-glyph { border-color: var(--tree-node-ring); }
 .dw-node.dw-d2 .dw-glyph { border-color: var(--tree-node-ring); }
 .dw-node.dw-cur .dw-glyph { width: 14px; height: 14px; background: var(--ink); border: 2.5px solid var(--tree-node-current); box-shadow: 0 0 0 5px color-mix(in srgb, var(--ink) 12%, transparent); }
 .dw-lin-name { font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
-.dw-lin-name .dw-lin-meta { color: var(--faint); font-size: 11px; }
+.dw-lin-name .dw-lin-meta { color: var(--faint-strong); font-size: 11px; }
 .dw-lin-name.dw-cur-name { font-weight: 700; cursor: default; }
 .dw-lin-crumb { font-size: 11px; line-height: 1.3; font-family: var(--font-mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dw-child-fan { margin: 8px 0 0 14px; padding-left: 14px; display: grid; gap: 0.25rem; border-left: 1.5px solid var(--tree-child-spine); position: relative; }
 .dw-child-fan::before { content: ""; position: absolute; left: -1.5px; top: 0; width: 10px; height: 10px; border-left: 1.5px solid var(--tree-child-spine); border-bottom: 1.5px solid var(--tree-child-spine); border-radius: 0 0 0 6px; }
 .dw-kid { display: flex; align-items: center; gap: 0.4rem; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
 .dw-more { color: var(--slate); font-size: 11.5px; }
-.dw-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--moss); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--moss); }
-.dw-dot--work { background: var(--working); border-color: #fff; box-shadow: 0 0 0 1px var(--working); }
-.dw-dot--idle { background: var(--idle); border-color: #fff; box-shadow: 0 0 0 1px var(--idle); }
-.dw-dot--end { background: var(--ended); border-color: #fff; box-shadow: 0 0 0 1px var(--ended); }
-.dw-dot--needs { background: var(--needs); border-color: #fff; box-shadow: 0 0 0 1px var(--needs); }
+.dw-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--moss); border: 2px solid var(--raise); box-shadow: 0 0 0 1px var(--moss); }
+.dw-dot--work { background: var(--working); border-color: var(--raise); box-shadow: 0 0 0 1px var(--working); }
+.dw-dot--idle { background: var(--idle); border-color: var(--raise); box-shadow: 0 0 0 1px var(--idle); }
+.dw-dot--end { background: var(--ended); border-color: var(--raise); box-shadow: 0 0 0 1px var(--ended); }
+.dw-dot--needs { background: var(--needs); border-color: var(--raise); box-shadow: 0 0 0 1px var(--needs); }
 
 .pane-inspector.dw-past { opacity: 0.9; }
 /* .dw-pulse animation is already disabled by the universal prefers-reduced-motion
@@ -2581,7 +2830,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .drawer-section-head {
   position: sticky;
-  top: 96px;
+  /* Offset = the height of everything pinned above it, derived not typed. The
+     verdict head SCROLLS (it is never .sticky-head here and measures 130px+,
+     not the 48px a literal 96 assumed), so the only band above the desk head
+     is the vitals row — see --drawer-vitals-h where the vitals are styled. */
+  top: var(--drawer-vitals-h, 42px);
   z-index: 1;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
@@ -2599,22 +2852,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   gap: 0.85rem;
   min-width: 0;
 }
-.desk-collapse-btn {
-  font: 700 10px var(--font-mono);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 8px;
-  cursor: pointer;
-  flex: none;
-}
-.desk-collapse-btn:hover { color: var(--ink); border-color: var(--line-strong); }
 .inspector-id { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
 .inspector-title { margin: 0; font-family: var(--font-display); font-size: 22px; font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; color: var(--ink); overflow-wrap: anywhere; }
-.inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+.inspector-source-name { margin: 0.25rem 0 0; font-size: 12px; color: var(--faint-strong); overflow-wrap: anywhere; }
 /* Session tag beside the drawer title. Same disambiguator the row uses, so an
    operator carries one token between the two surfaces. Quiet mono — it is a
    handle, never a status. */
@@ -2688,13 +2928,13 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-radius: var(--radius-sm);
   font-size: 11.5px;
   font-weight: 650;
-  color: var(--faint);
+  color: var(--faint-strong);
   background: none;
 }
 .verdict-liveness .ico { width: 0.85rem; height: 0.85rem; flex: none; }
 .verdict-liveness.liveness-running { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, transparent); }
-.verdict-liveness.liveness-exited { color: var(--faint); }
-.verdict-liveness.liveness-unknown { color: var(--faint); border-style: dashed; }
+.verdict-liveness.liveness-exited { color: var(--faint-strong); }
+.verdict-liveness.liveness-unknown { color: var(--faint-strong); border-style: dashed; }
 .verdict-liveness.liveness-died {
   color: var(--failed);
   border-color: color-mix(in srgb, var(--failed) 55%, transparent);
@@ -2718,19 +2958,18 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--ember-soft);
 }
 .attn-reason { margin: 0; font-size: 12.5px; font-weight: 650; color: var(--ink); }
-.attn-returned { margin: 0; font-size: 12px; font-weight: 650; color: var(--ember); }
-.attn-state { margin: 0; font-size: 12px; color: var(--faint); }
+/* Attention is a queue position, not a fault — ember is reserved for
+   alert/failed/blocked, and live ember === --failed, so spending it here would
+   leave no colour that means "broken". */
+.attn-returned { margin: 0; font-size: 12px; font-weight: 650; color: var(--ink); }
+.attn-state { margin: 0; font-size: 12px; color: var(--faint-strong); }
 .attn-error { margin: 0; font-size: 12px; font-weight: 650; color: var(--failed); }
 .attn-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
 /* Investigation lifecycle levers beside Queue/Launch. Cancel takes alert ink
    because it stops a running process; remove/rerun stay neutral. */
 .triage-cancel { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, transparent); }
-.triage-remove, .triage-rerun { color: var(--faint); }
-/* B3 fills the vitals mount (renderVitalsBand); until then the empty slot
-   holds DOM order without spending a flex gap. */
-.inspector-vitals:empty { display: none; }
-
+.triage-remove, .triage-rerun { color: var(--faint-strong); }
 /* Agent drawer status — one sentence under the title, not a pill cluster. */
 .status-line {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.55rem;
@@ -2859,10 +3098,10 @@ body.feed-frozen .programs { opacity: 0.62; }
 .command-dock--linked { border-top-color: color-mix(in srgb, var(--moss) 55%, var(--line)); }
 .command-dock-meta {
   display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-  font-size: 11.5px; color: var(--faint);
+  font-size: 11.5px; color: var(--faint-strong);
 }
 .command-dock-ready { color: var(--moss); font-weight: 650; }
-.command-dock-hint { color: var(--faint); }
+.command-dock-hint { color: var(--faint-strong); }
 /* A held dock is visibly held: the reason reads first, and the controls under it
    are dimmed so "enabled-looking" and "actually sendable" cannot diverge. */
 .command-dock.is-held { border-top-color: color-mix(in srgb, var(--ember) 55%, var(--line)); }
@@ -2882,32 +3121,42 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
 }
-.command-composer input::placeholder { color: var(--faint); }
+.command-composer input::placeholder { color: var(--faint-strong); }
 .command-composer input:disabled {
-  color: var(--faint); background: var(--sand); border-color: var(--line);
+  color: var(--faint-strong); background: var(--sand); border-color: var(--line);
 }
 .command-composer input:focus-visible { outline: 2px solid var(--ember); outline-offset: 1px; }
 .command-send { min-width: 4.5rem; }
-.command-dock-tools { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
-/* A locked File cluster holds only its disclosure, and an empty flex box would
-   still spend the cluster's row gap on nothing. */
-.command-dock-tools:empty { display: none; }
-/* Categorical clusters. The dock groups its controls by what they are FOR —
-   Communicate / Navigate / Operate / File — so an operator under pressure reads
-   a heading instead of recognising four buttons in a row. Quiet on purpose: the
-   labels orient and then get out of the way, in the same mono small-caps the
-   drawer already uses for block labels. */
-.command-dock-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem 1rem; }
 .dock-group { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
 .dock-group-label {
   font: 700 9px/1.3 var(--font-mono);
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--faint-strong);
 }
-/* Filing keeps the distance the old flex spacer bought it — a destructive verb
-   does not sit shoulder to shoulder with the ones used while working. */
-.dock-group--file { margin-left: auto; }
+/* The corner: hint + action cluster on the dock's header line, top right —
+   one glance from Send. The cluster reads as one segmented control: a single
+   bordered pill, tools separated by hairlines, so three verbs take the visual
+   weight of one chip instead of three floating buttons over three headings. */
+.command-dock-corner { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; }
+.command-dock-cluster {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raise);
+  overflow: clip;   /* clip, not hidden — never a scroll container */
+}
+.command-dock-cluster .dock-tool {
+  min-height: 28px; padding: 0.2rem 0.7rem;
+  border-radius: 0;
+  border-left: 1px solid var(--line);
+}
+.command-dock-cluster > :first-child,
+.command-dock-cluster > :first-child .dock-tool { border-left: 0; }
+/* The armed confirm strip replaces its tool in place; inside the pill it must
+   flow inline, not wrap to a full-width row. */
+.command-dock-cluster .command-confirm { flex: none; align-self: center; padding: 0 0.5rem; }
+.command-dock-cluster .command-dock-more { border: 0; padding: 0.2rem 0.7rem; border-left: 1px solid var(--line); }
 .dock-tool {
   display: inline-flex; align-items: center; gap: 0.3rem;
   min-height: 32px; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);
@@ -2916,26 +3165,24 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .dock-tool .ico { width: 0.9rem; height: 0.9rem; }
 .dock-tool:hover:not(:disabled) { color: var(--ink); background: var(--sand); }
-.dock-tool:disabled { color: var(--faint); cursor: not-allowed; }
+.dock-tool:disabled { color: var(--faint-strong); cursor: not-allowed; }
 .dock-tool-warn:hover:not(:disabled) { color: var(--bad); background: var(--ember-soft); }
 .command-confirm { flex: 1 1 100%; }
 .command-dock-more {
   margin: 0;
   font-size: 12px;
-  color: var(--faint);
+  color: var(--faint-strong);
 }
 .command-dock-more > summary {
   cursor: pointer;
   font-weight: 650;
-  color: var(--faint);
+  color: var(--faint-strong);
   list-style: none;
 }
 .command-dock-more > summary::-webkit-details-marker { display: none; }
 .command-dock-more > summary:hover { color: var(--muted); }
 .command-dock-more[open] > summary { margin-bottom: 0.35rem; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
-
-.next-action { margin: 0; font-size: 13.5px; color: var(--muted); }
 
 .inspector-panel { display: flex; flex-direction: column; gap: var(--space-3); }
 .names-disclosure {
@@ -2946,7 +3193,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .names-disclosure > summary {
   cursor: pointer;
-  color: var(--faint);
+  color: var(--faint-strong);
   font: 650 11.5px/1.3 var(--font-mono);
   letter-spacing: 0.04em;
   list-style: none;
@@ -2958,8 +3205,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 .label-row { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; min-width: 0; padding: 0.35rem 0; }
 .label-copy { display: flex; flex-direction: column; gap: 0.12rem; min-width: 0; }
 .label-value { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.label-source { color: var(--faint); font-size: 11px; overflow-wrap: anywhere; }
-.label-status { margin: 0; color: var(--faint); font-size: 12px; }
+.label-source { color: var(--faint-strong); font-size: 11px; overflow-wrap: anywhere; }
+.label-status { margin: 0; color: var(--faint-strong); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }
 .chat-turn-body {
@@ -2979,8 +3226,7 @@ body.feed-frozen .programs { opacity: 0.62; }
    row spent the drawer's best space saying "nothing is wrong" — the
    band leads the drawer instead of hiding in the Evidence shelf. Omit-empty:
    absent tiles are never rendered, so the band flexes to whatever the source
-   reports; when the source reports nothing the mount's :empty rule collapses it. */
-.inspector-vitals { min-width: 0; }
+   reports. */
 .vitals { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .vital {
   flex: 1 1 8.5rem;
@@ -2995,7 +3241,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   font: 700 9.5px/1.2 var(--font-mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--faint-strong);
   margin-bottom: 0.4rem;
 }
 /* The disambiguating sentence under the context figure. Prepositions, not
@@ -3004,7 +3250,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .vital-note { margin-top: 0.2rem; font-size: 11.5px; line-height: 1.35; color: var(--muted); }
 .vital-ring-wrap.is-hot .vital-big { color: var(--ember); }
 .vital-big { font-size: 1.45rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1; color: var(--ink); }
-.vital-big small { font-size: 0.7rem; font-weight: 500; color: var(--faint); letter-spacing: 0; }
+.vital-big small { font-size: 0.7rem; font-weight: 500; color: var(--faint-strong); letter-spacing: 0; }
 .vital-ring-wrap { display: flex; align-items: center; gap: 0.6rem; }
 .vital-figure { min-width: 0; }
 
@@ -3023,7 +3269,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   font: 700 10px/1.3 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--faint-strong);
 }
 .chat-turn--assistant .chat-turn-body {
   border-left: 2px solid color-mix(in srgb, var(--moss) 45%, var(--line));
@@ -3060,30 +3306,17 @@ body.feed-frozen .programs { opacity: 0.62; }
 .transcript { margin: 0; padding: 0.6rem 0.7rem; max-height: 13rem; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); background: var(--raise); border: 1px solid var(--line); border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------- inline transcript ----------
-   Untrusted agent output rendered as text. The log scrolls inside its own box so
-   a long tail can never stretch the drawer, and role is carried on a data
-   attribute rather than a composed class so the stylesheet lint stays exact. */
+   Untrusted agent output rendered as text. Role is carried on a data attribute
+   rather than a composed class so the stylesheet lint stays exact. The panel's
+   own scroll log went with the panel — the drawer's chat feed is the one
+   scroller, and these rows render quietly inside it between the bubbles. */
 
-.transcript-view { display: flex; flex-direction: column; gap: 0.4rem; }
-.transcript-head {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
-  font-size: 11.5px; color: var(--faint-strong);
-}
-.transcript-head .ico { width: var(--icon-sm); height: var(--icon-sm); color: var(--faint-strong); flex: none; }
 .transcript-source { font-weight: 650; color: var(--muted); }
 .transcript-more { color: var(--amber); }
 .transcript-source-path {
   flex: 1 1 12rem; min-width: 0;
   font-family: var(--font-mono); font-size: 10.5px; color: var(--faint-strong);
   overflow-wrap: anywhere;
-}
-.transcript-log {
-  max-height: 22rem; overflow: auto;
-  display: flex; flex-direction: column; gap: 0.45rem;
-  padding: 0.55rem 0.65rem;
-  background: var(--canvas);
-  border: 1px solid var(--line);
-  border-radius: 4px;
 }
 .tr-line { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.55rem; align-items: baseline; border-left: 2px solid transparent; padding-left: 8px; margin-left: -8px; }
 .tr-line[data-role="user"] { border-left-color: var(--slate); }
@@ -3099,7 +3332,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .tr-line[data-role="assistant"] .tr-role { color: var(--moss); }
 .tr-line[data-role="tool"] .tr-role { color: var(--clay); }
 .tr-line[data-role="system"] .tr-role { color: var(--amber); }
-.tr-at { font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
+.tr-at { font-family: var(--font-mono); font-size: 10px; color: var(--faint-strong); }
 .tr-text {
   margin: 0;
   font-size: 12px; line-height: 1.5; color: var(--muted);
@@ -3187,9 +3420,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 
 @media (max-width: 1180px) {
-  /* Wrap the strip to two rows; drop dividers so wrapped cells don't stray. */
-  .rail-inner { gap: 0.55rem 1.1rem; }
-  .rail-inner .reading { flex: 1 1 calc(33.333% - 0.74rem); border-right: 0; }
   .agent-column-header,
   .agent-grid { grid-template-columns: minmax(8rem, 2.4fr) minmax(4rem, 0.68fr) minmax(5.25rem, 0.9fr) minmax(3.5rem, 0.52fr) minmax(2.75rem, 0.42fr); }
   .tri-spine { flex-wrap: wrap; gap: 0.5rem 0; }
@@ -3212,6 +3442,10 @@ body.feed-frozen .programs { opacity: 0.62; }
     background: transparent;
     overflow: visible;
   }
+  /* The fixed sheet is the one TRUE modal, so it is the one place the document
+     scroll locks: without this the board scrolls blind behind the sheet and
+     the operator returns to a moved page. Everywhere else the body scrolls. */
+  body.inspector-open { overflow-y: clip; }
   .pane-inspector {
     --inspector-pad-x: 1rem;
     position: fixed;
@@ -3225,7 +3459,7 @@ body.feed-frozen .programs { opacity: 0.62; }
     animation: sheet-up 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Provider sheets keep their identity rail, but drop the docked raise shadow. */
-  .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--claude)); }
+  .pane-inspector.dw-provider { box-shadow: inset 3px 0 var(--prov, var(--line-strong)); }
   @keyframes sheet-up { from { transform: translateY(18px); opacity: 0; } to { transform: none; opacity: 1; } }
   /* Touch sweep: tappable controls clear 44px from tablet down. */
   .view-tab, .btn, #search, .inspector-close, .swarm-anchor,
@@ -3248,16 +3482,38 @@ body.feed-frozen .programs { opacity: 0.62; }
   .command-composer input, .rename-form input { min-height: 44px; }
 }
 
+@media (max-width: 900px) {
+  .rail-inner { min-height: 112px; }
+  .reading-value { font-size: 1.02rem; }
+  .reading-sub { font-size: 9.5px; }
+  .reading { padding-left: 0.6rem; padding-right: 0.6rem; }
+  .stack-head { padding-left: 0.6rem; }
+  .health-tldr-lane { padding: 0.45rem 0.6rem 0.5rem 0.75rem; }
+  .tldr-lane-prose { font-size: 12.5px; }
+  .tldr-lane-meta { display: none; }
+  .heartbeat-tldr-time { display: none; }
+  .chev { width: 34px; height: 34px; }
+  .tldr-det-pill.is-secondary { display: none; }
+}
+
+/* Outside the 860 ribbon contract: columns finally stack. */
+@media (max-width: 640px) {
+  .rail-inner { flex-direction: column; min-height: 0; }
+  .readings-stack { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line-strong); }
+  .health-tldr-lane { flex: 1 1 auto; }
+  .rail-inner.is-no-tldr .readings-grid { grid-template-columns: 1fr 1fr; }
+}
+
 @media (max-width: 720px) {
   .masthead-inner { flex-direction: column; padding: 0; }
   .masthead-scene { min-height: 0; width: 100%; }
   .wordmark { padding: 0.7rem 0 0.7rem 1rem; }
   .conn { align-self: flex-start; margin: 0 0 0.6rem 1rem; }
-  .rail-header { padding: 0.35rem 0.8rem 0; }
+  .stack-head { padding: 0.35rem 0.8rem 0.35rem; }
   .rail-action { min-height: 44px; }
-  /* Stack the strip: one cell per row; the calm line matches the gutter. */
-  .rail-inner { gap: 0.5rem; padding: 0.6rem 0.8rem; }
-  .rail-inner .reading { flex: 1 1 100%; border-right: 0; padding-right: 0; }
+  /* Compact readings grid on phone-width; columns still side-by-side until 640. */
+  .rail-inner { gap: 0; padding: 0; }
+  .readings-grid .reading { border-right: 0; padding-right: 0.8rem; }
   .pulse-calm { padding: 0.55rem 0.8rem; }
   .reading-value { font-size: 1.2rem; }
   .widget-customizer-inner { padding: 0.7rem 0.8rem 0.8rem; }
@@ -4182,16 +4438,203 @@ body.feed-frozen .programs { opacity: 0.62; }
 .all-clear-widen:hover { color: var(--ink); }
 
 /* Header vitals — 5s scan strip directly under title (replaces tabs) */
-.drawer-header-vitals { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px 10px; background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:3 }
-.hv-pill { display:inline-flex; align-items:center; gap:5px; font:600 11px var(--mono); padding:4px 8px; border-radius:999px; border:1px solid var(--line); background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.04); transition: transform 120ms ease, box-shadow 120ms ease }
+/* Sticky bands paint an opaque token ground — a gradient of raw hexes both
+   ghosts prose at its translucent-looking seams and bypasses the vocabulary.
+   min-height pins the band to --drawer-vitals-h, the same length the desk
+   head's sticky offset is derived from. */
+.drawer-header-vitals { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px 10px; min-height: var(--drawer-vitals-h, 42px); background: var(--raise); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:3 }
+.hv-pill { display:inline-flex; align-items:center; gap:5px; font:600 11px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; padding:4px 8px; border-radius:999px; border:1px solid var(--line); background:var(--raise); box-shadow:0 1px 2px rgba(0,0,0,.04); transition: transform 120ms ease, box-shadow 120ms ease }
 .hv-pill:hover { transform: translateY(-1px); box-shadow:0 3px 8px rgba(0,0,0,.07) }
-.hv-pill.is-empty { color:var(--faint); border-style:dashed; background:#f8fafc }
+.hv-pill.is-empty { color:var(--faint-strong); border-style:dashed; background:var(--surface) }
 .hv-pill .ico { width:11px; height:11px; opacity:.9 }
 .hv-dot { color:var(--faint); margin:0 2px }
 .drawer-chat-task { position:relative; padding-left:10px }
-.drawer-chat-task::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background: linear-gradient(180deg, var(--violet), var(--blue)); border-radius:0 3px 3px 0; opacity:.9 }
-.drawer-transcript[open] { box-shadow:0 2px 12px rgba(0,0,0,.04) }
-.drawer-transcript summary { cursor:pointer; user-select:none }
-.drawer-transcript summary:hover { color:var(--ink) }
-.section-title .rule { flex:1; height:1px; background:var(--line2); margin-left:8px }
+/* The rail is the provider channel, not decoration — --violet/--blue were
+   prototype vars that exist nowhere, so this gradient painted nothing. */
+.drawer-chat-task::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background: var(--prov, var(--line-strong)); border-radius:0 3px 3px 0; opacity:.9 }
+/* ---------- 65/35 integration layer ---------- */
 
+/* Classes for what used to be style attributes — under the strict CSP
+   (style-src 'self') inline style is dropped wholesale. */
+.drawer-task-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.drawer-task-head .section-title { margin: 0; }
+/* ---------- Task widget anatomy ----------
+   Face shows prose only: OBJECTIVE (13px UI ink, clamped to two lines),
+   META (12px mono, only parsed fields), and the raw envelope folded behind
+   "Full brief" — the ONE scroller inside the widget (max-height 18rem).
+   The closed widget is intrinsically bounded; no widget-level height cap. */
+.drawer-task-objective { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.drawer-task-objective.is-empty { font-style: italic; color: var(--faint-strong); }
+.drawer-task-meta { margin: 0; font: 500 12px/1.4 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+.drawer-task-brief { margin: 0; }
+.drawer-task-brief-summary { cursor: pointer; user-select: none; font: 800 11px/1 var(--font-mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); list-style: none; }
+.drawer-task-brief-summary::-webkit-details-marker { display: none; }
+.drawer-task-brief-summary:hover { color: var(--ink); }
+.drawer-task-brief-body { margin: 6px 0 0; font: 400 12px/1.5 var(--font-mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; max-height: 18rem; }
+.drawer-section-head .section-title { margin: 0; flex: 1; }
+.hv-gauge { width: 16px; height: auto; display: block; }
+.git-line { display: flex; align-items: center; gap: 6px; }
+/* Top of the desk, beside the Task card across the gutter. */
+.evidence-role { margin: 0 0 8px; }
+.git-dirty, .git-clean { font: 600 11px var(--font-mono); }
+.git-clean { color: var(--moss); }
+.git-none { color: var(--faint-strong); }
+
+/* The 8rem label column was sized for the fixed 380px desk; on the 35% track
+   the value column measures 181px at a 1025px viewport and the labels starve
+   it into single-character wraps. Stacked, the full track carries the path. */
+@media (min-width: 861px) {
+  .drawer-grid .drawer-desk .detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- mini chat window (65% column) ----------
+   The left column is Task on top and a chat APP below: a boxed feed with its
+   own scroll region and the composer fixed at the box's foot. These selectors
+   are declared after .command-dock on purpose — both tie at (0,1,0), so source
+   order is what lets the design-language border/shadow finally win. */
+.drawer-chat {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  min-height: 0;
+  gap: 0;              /* the feed carries its own spacing */
+  overflow: hidden;    /* rounds the composer's corners into the box */
+}
+.drawer-chat-scroll {
+  flex: 1 1 0;
+  /* Floor stops a 1–2 bubble preview from collapsing into a sliver while the
+     document column still has height to give (RHSP-B, 2026-08-09). */
+  min-height: 16rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.drawer-chat-scroll > .inspector-panel,
+.drawer-chat-scroll > .chat-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.drawer-chat-scroll:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+/* ---------- bubble feed ----------
+   The feed is the transcript, read like a messenger: iMessage heuristics
+   carry the WHO without a label — the operator's sends are the filled slate
+   bubbles on the right (white ink, tail on the lower right), the agent's are
+   the white cards on the left (bordered, tail on the lower left). Fill vs
+   outline is the discriminator, not two near-identical grays. Tool/system/
+   unknown turns stay quiet .tr-line rows between the speech. */
+.chat-feed { display: flex; flex-direction: column; gap: 10px; }
+.chat-msg {
+  max-width: 78%;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 16px 5px;
+  background: var(--raise);
+  padding: 8px 12px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.chat-msg[data-role="user"] {
+  align-self: flex-end;
+  border-color: transparent;
+  border-radius: 16px 16px 5px 16px;
+  background: var(--slate);
+}
+.chat-msg-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font: 600 12px/1.2 var(--font-mono); color: var(--muted); }
+.chat-msg[data-role="assistant"] .chat-msg-role { color: var(--moss); }
+.chat-msg-at, .chat-msg-run { color: var(--faint-strong); font-weight: 500; }
+.chat-msg-body { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* White ink on the filled bubble, meta a step quieter — same hierarchy the
+   agent side gets from --muted/--faint-strong, translated to the dark ground. */
+.chat-msg[data-role="user"] .chat-msg-body { color: #fff; }
+.chat-msg[data-role="user"] .chat-msg-role { color: rgba(255, 255, 255, 0.92); }
+.chat-msg[data-role="user"] .chat-msg-meta,
+.chat-msg[data-role="user"] .chat-msg-at,
+.chat-msg[data-role="user"] .chat-msg-run { color: rgba(255, 255, 255, 0.72); }
+/* The verdict mark must survive the dark ground it can land on. */
+.chat-msg[data-role="user"] .sender-unconfirmed { background: var(--raise); }
+.chat-feed .tr-line { opacity: 0.85; }
+/* The one line of chrome — count, source path, Refresh/Load — at the box's
+   foot, above the composer. */
+.chat-feed-foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  font: 500 11px/1.4 var(--font-mono);
+  color: var(--muted);
+}
+.drawer-chat > .drawer-controls-strip {
+  position: static;
+  margin: 0;
+  padding: 10px 12px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: 0 -4px 12px rgba(23, 33, 43, 0.06);
+}
+/* The approach fade rides the bar and must match its new ground, or the seam
+   above the composer reads as a second hairline. */
+.drawer-chat > .drawer-controls-strip::before {
+  background: linear-gradient(180deg, transparent, var(--surface));
+}
+/* Zeroed elsewhere because the dock used to be the pane's last child bleeding
+   edge-to-edge. It no longer is, and without this the DESK column ends flush
+   against the drawer's bottom edge. */
+.pane-inspector.dw-agent { padding-bottom: 1.15rem; }
+
+@media (min-width: 861px) {
+  /* THE DESK OWNS THE HEIGHT (operator directive): the grid sizes to its
+     content, and with the doc column out of flow (below) the only in-flow
+     sizer is the Evidence desk — so the drawer ends where the desk ends, and
+     the ≥1025px sticky float derives its length from exactly that. */
+  .pane-inspector.dw-agent > .drawer-grid {
+    flex: 0 0 auto;
+    position: relative;
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 340px;   /* a floor so a sparse desk cannot crush the composer */
+  }
+  /* COLUMN PARITY, by construction: the doc is an absolutely positioned grid
+     item — its containing block is its own column-1 grid AREA, whose height
+     the desk sets — so Task+Chat equals the desk's length exactly without
+     contributing its own (the feed's intrinsic 20k-px transcript would
+     otherwise inflate the max-content row). The feed stays the flexible
+     absorber; the overflow fallback only engages in the degenerate case of a
+     desk shorter than Task + foot + composer. */
+  .drawer-grid .drawer-doc {
+    position: absolute;
+    inset: 0;
+    /* BOTH lines explicit. For an absolutely positioned grid item an `auto`
+       end line resolves to the grid container's PADDING EDGE, not the next
+       track — a bare `grid-column: 1` therefore spanned the full grid width,
+       overlaying the desk (defect: 2026-08-09, two columns collapsed). */
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 0;
+    overflow-y: auto;
+  }
+  /* Task height is intrinsic (2-line objective + meta + closed brief). The
+     25% cap is retired — the widget's only scroller is .drawer-task-brief-body. */
+  .drawer-doc .drawer-chat-task { flex: 0 0 auto; }
+  .drawer-doc .drawer-chat { flex: 1 1 0; display: flex; flex-direction: column; }
+  /* The desk is the sizer: plain flow, no stretch scroller — its content IS
+     the drawer's length. Placed EXPLICITLY in column 2: with the doc out of
+     flow, auto-placement would drop the desk into column 1 (same defect as
+     above, from the other side). Its sticky head pins within the pane's
+     scrollport (the pane scrolls internally only past the ≥1025px cap). */
+  .drawer-grid .drawer-desk { min-height: 0; grid-column: 2 / 3; grid-row: 1 / 2; }
+  .drawer-grid .drawer-desk .drawer-section-head { top: 0; }
+}
+@media (max-width: 860px) {
+  /* Stacked, the pane is the scroller again; the chat box keeps the mini-app
+     shape as a fixed-height window (~70% of the sheet) with the composer at
+     its foot. The desk head goes static: its 42px sticky offset assumes a
+     single-row vitals band, and at phone widths the band wraps taller and
+     would slide over the pinned head. */
+  .drawer-chat { height: 68vh; }
+  .drawer-section-head { position: static; }
+}

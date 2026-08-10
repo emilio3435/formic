@@ -122,11 +122,13 @@ describe("CLEAN-3: the sweep is announced from a region that survives the paint"
   });
 
   test("it lives where the rail's paint cannot destroy it", () => {
-    /* renderHealthRail empties #health-widgets only. A region inside that node
-       would be recreated every paint, which is the defect being fixed. */
-    const header = html.slice(html.indexOf('<div class="rail-header">'), html.indexOf('<div id="health-widgets"'));
-    expect(header).toContain('id="cleanup-status"');
-    expect(appjs).toContain('widgets.textContent = "";');
+    /* Health rail v2: renderHealthRail empties only #readings-grid. The live
+       region sits in static stack-head markup inside the ribbon so paints
+       cannot recreate it — same survival invariant, new shell. */
+    const stackHead = html.slice(html.indexOf('class="stack-head"'), html.indexOf('id="readings-grid"'));
+    expect(stackHead).toContain('id="cleanup-status"');
+    expect(appjs).toContain('grid.textContent = "";');
+    expect(appjs).not.toContain('widgets.textContent = "";');
   });
 
   test("the button no longer claims to be its own live region", () => {

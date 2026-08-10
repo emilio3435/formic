@@ -179,6 +179,7 @@ export interface UsageInvocationsResponse {
 }
 
 export type CostProvenance = "measured" | "derived_estimate" | "unknown";
+export type PricingMode = "standard-short-context" | "standard-long-context";
 
 export interface UsageSourceHealth {
   state: "healthy" | "not_installed" | "misconfigured" | "error";
@@ -187,6 +188,7 @@ export interface UsageSourceHealth {
 
 export interface ModelPrice {
   aliases: string[];
+  providers: string[];
   input: number;
   output: number;
   cacheRead: number;
@@ -200,6 +202,8 @@ export interface PricingConfig {
 
 export interface CostInputs {
   model: string;
+  provider?: string;
+  pricingMode?: PricingMode;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -254,17 +258,22 @@ function loadPricingConfig(): PricingConfig {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return EMPTY_PRICING_CONFIG;
       const price = raw as Record<string, unknown>;
       const aliases = price.aliases;
+      const providers = price.providers;
       const amounts = [price.input, price.output, price.cacheRead, price.cacheCreation];
       if (
         !Array.isArray(aliases)
         || aliases.length === 0
         || !aliases.every((alias) => typeof alias === "string" && alias.trim())
+        || !Array.isArray(providers)
+        || providers.length === 0
+        || !providers.every((provider) => typeof provider === "string" && provider.trim())
         || !amounts.every((amount) => typeof amount === "number" && Number.isFinite(amount) && amount >= 0)
       ) {
         return EMPTY_PRICING_CONFIG;
       }
       prices[model] = {
         aliases: aliases as string[],
+        providers: providers as string[],
         input: price.input as number,
         output: price.output as number,
         cacheRead: price.cacheRead as number,
@@ -286,12 +295,17 @@ function canonicalModel(model: string): string {
   return model.split("/").at(-1)!.trim().toLowerCase().replace(/[ _]+/g, "-");
 }
 
-function modelPrice(model: string, config: PricingConfig): ModelPrice | undefined {
+function modelPrice(model: string, provider: string | undefined, config: PricingConfig): ModelPrice | undefined {
   const canonical = canonicalModel(model);
+  const canonicalProvider = provider?.trim().toLowerCase();
+  if (!canonicalProvider) return undefined;
   return Object.values(config.modelPricingUsdPerMillionTokens).find((price) =>
-    price.aliases.some((alias) => canonical === alias || canonical.startsWith(`${alias}-`))
+    price.providers.some((candidate) => candidate.trim().toLowerCase() === canonicalProvider)
+    && price.aliases.some((alias) => canonical === alias || canonical.startsWith(`${alias}-`))
   );
 }
+
+const OPENAI_API_PROVIDER = "openai api";
 
 export function resolveUsageCost(
   input: CostInputs,
@@ -300,13 +314,22 @@ export function resolveUsageCost(
   if (input.measuredCostUsd != null && Number.isFinite(input.measuredCostUsd)) {
     return { costUsd: input.measuredCostUsd, costProvenance: "measured" };
   }
-  const price = modelPrice(input.model, config);
+  const price = modelPrice(input.model, input.provider, config);
   if (!price) return { costUsd: null, costProvenance: "unknown" };
+  const provider = input.provider?.trim().toLowerCase();
+  if (provider === OPENAI_API_PROVIDER && !input.pricingMode) {
+    return { costUsd: null, costProvenance: "unknown" };
+  }
+  const longContext = provider === OPENAI_API_PROVIDER && input.pricingMode === "standard-long-context";
+  const inputRate = price.input * (longContext ? 2 : 1);
+  const outputRate = price.output * (longContext ? 1.5 : 1);
+  const cacheReadRate = price.cacheRead * (longContext ? 2 : 1);
+  const cacheCreationRate = price.cacheCreation * (longContext ? 2 : 1);
   const costUsd = (
-    input.inputTokens * price.input
-    + input.outputTokens * price.output
-    + input.cacheReadTokens * price.cacheRead
-    + input.cacheCreationTokens * price.cacheCreation
+    input.inputTokens * inputRate
+    + input.outputTokens * outputRate
+    + input.cacheReadTokens * cacheReadRate
+    + input.cacheCreationTokens * cacheCreationRate
   ) / 1_000_000;
   return {
     costUsd,
@@ -628,6 +651,7 @@ function aggregateRows(queryRows: readonly QueryRow[]) {
     const measuredCost = num(row.measuredCost) ?? 0;
     const derived = resolveUsageCost({
       model: str(row.model),
+      provider: str(row.provider),
       inputTokens: num(row.unpricedInputTokens) ?? 0,
       outputTokens: num(row.unpricedOutputTokens) ?? 0,
       cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
@@ -1005,6 +1029,7 @@ export async function getUsageSeries(
         const costMissing = num(row.costMissing) ?? 0;
         const derived = resolveUsageCost({
           model: str(row.model),
+          provider: str(row.provider),
           inputTokens: num(row.unpricedInputTokens) ?? 0,
           outputTokens: num(row.unpricedOutputTokens) ?? 0,
           cacheReadTokens: num(row.unpricedCacheReadTokens) ?? 0,
@@ -1063,6 +1088,7 @@ function toUsageInvocation(row: Record<string, unknown>): UsageInvocation {
     tokens: num(row.totalTokens),
     ...resolveUsageCost({
       model,
+      provider: str(row.provider),
       inputTokens: num(row.inputTokens) ?? 0,
       outputTokens: num(row.outputTokens) ?? 0,
       cacheReadTokens: num(row.cacheReadTokens) ?? 0,

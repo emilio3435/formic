@@ -1,9 +1,12 @@
 node_modules/
 data/
 *.log
+__pycache__/
 .DS_Store
 
 .gstack/
 /data
 /node_modules
 config/programs.json
+.lane-evidence/
+LANE-REPORT-*.md

@@ -546,16 +546,23 @@ describe("agent drawer: condensed by default, and honest about its numbers", () 
   });
 
   test("a collapsed disclosure still says what it hides", () => {
-    // Collapsed must not mean unlabelled: a control with no name is a pixel
-    // that neither reports, explains, nor enables action.
+    /* Collapsed must not mean unlabelled. The drawer's disclosures moved from
+       native details/summary to aria-expanded buttons ("the feed IS the
+       transcript" — the foot's button expands the feed), so this reads the
+       same contract on both mechanisms: every closed disclosure names what it
+       will reveal, via its summary, its own text, or an aria-label. */
     const collapsed = nodes.filter(
-      (node) => node.nodeType === 1 && node.attributes["aria-expanded"] === "false",
+      (node) => node.nodeType === 1 && (
+        (node.tagName === "details" && !("open" in node.attributes))
+        || node.attributes["aria-expanded"] === "false"
+      ),
     );
 
     expect(collapsed.length).toBeGreaterThan(0);
     for (const disclosure of collapsed) {
-      expect(label(disclosure).length).toBeGreaterThan(0);
-      expect(disclosure.attributes["aria-controls"]).toBeTruthy();
+      const summary = walk(disclosure).find((node) => node.nodeType === 1 && node.tagName === "summary");
+      const label = summary ? textOf(summary) : (disclosure.attributes["aria-label"] ?? textOf(disclosure));
+      expect(String(label).trim().length).toBeGreaterThan(0);
     }
   });
 

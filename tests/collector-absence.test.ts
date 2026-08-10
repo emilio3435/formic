@@ -97,13 +97,13 @@ describe("a provider that was never installed is absent, not degraded", () => {
          HOME reports every provider absent", which iterates all four. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true, factory: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 3, total: 2 });
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 4, total: 2 });
   });
 });
 

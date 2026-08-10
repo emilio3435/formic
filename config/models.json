@@ -35,6 +35,12 @@
     "gpt-5.6-sol": [
       "gpt-5.6-sol"
     ],
+    "gpt-5.6-terra": [
+      "gpt-5.6-terra"
+    ],
+    "gpt-5.6-luna": [
+      "gpt-5.6-luna"
+    ],
     "claude-fable-5": [
       "claude-fable-5",
       "fable-5"
@@ -54,21 +60,61 @@
     "composer-2.5": "composer 2.5",
     "gpt-5.6-luna": "luna 5.6",
     "gpt-5.6-sol": "sol 5.6",
+    "gpt-5.6-terra": "terra 5.6",
     "grok-4.5": "grok 4.5",
     "spark-1.2": "spark 1.2",
     "muse-spark-1.2": "spark 1.2"
   },
-  "pricingVersion": "2026-07-28",
+  "pricingVersion": "2026-08-09",
   "modelPricingUsdPerMillionTokens": {
     "claude-opus-4-8": {
       "aliases": [
         "claude-opus-4-8",
         "claude-opus-4-8[1m]"
       ],
+      "providers": [
+        "Anthropic API"
+      ],
       "input": 5,
       "output": 25,
       "cacheRead": 0.5,
       "cacheCreation": 6.25
+    },
+    "gpt-5.6-sol": {
+      "aliases": [
+        "gpt-5.6-sol"
+      ],
+      "providers": [
+        "OpenAI API"
+      ],
+      "input": 5,
+      "output": 30,
+      "cacheRead": 0.5,
+      "cacheCreation": 6.25
+    },
+    "gpt-5.6-terra": {
+      "aliases": [
+        "gpt-5.6-terra"
+      ],
+      "providers": [
+        "OpenAI API"
+      ],
+      "input": 2,
+      "output": 12,
+      "cacheRead": 0.2,
+      "cacheCreation": 2.5
+    },
+    "gpt-5.6-luna": {
+      "aliases": [
+        "gpt-5.6-luna"
+      ],
+      "providers": [
+        "OpenAI API"
+      ],
+      "input": 0.2,
+      "output": 1.2,
+      "cacheRead": 0.02,
+      "cacheCreation": 0.25
     }
   }
 }

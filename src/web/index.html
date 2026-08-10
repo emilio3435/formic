@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=ah-t7">
+  <link rel="stylesheet" href="styles.css?v=ah-t12">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -68,30 +68,36 @@
        summary so a frozen feed cannot be missed by not looking at a badge. -->
   <div id="feed-alarm" class="feed-alarm" role="alert" hidden></div>
 
-  <!-- One status verdict plus a configurable, scan-ordered summary rail. -->
+  <!-- One status verdict plus a configurable, scan-ordered summary rail.
+       Static two-child ribbon: TL;DR lane (60%) + readings stack (40%). -->
   <section id="health-rail" class="health-rail" aria-label="Fleet health">
-    <div class="rail-header">
-      <span class="rail-heading">Summary</span>
-      <!-- S2-T3. The board states its scan window ONCE, here, because every
-           reading below is an aggregate over the sessions that window contains.
-           It sits with the readings rather than under the toolbar: the toolbar's
-           line is about the operator's own filter, which is a different window,
-           and mixing a stable board-wide fact into a volatile filter line makes
-           the stable fact inherit the volatility. -->
-      <span id="scan-window" class="scan-window" hidden></span>
-      <!-- The Clean up sweep's only non-visual signal. It is declared HERE, in
-           static markup, for the same reason #bar-scope-note below is: an
-           aria-live region that is destroyed and recreated announces nothing,
-           and the region has to already be in the tree when its content changes.
-           The button used to carry aria-live itself and was rebuilt by every
-           paint, so the announcement could never fire — a spinner is invisible
-           to a screen reader, which left no signal at all that a sweep had
-           started. renderHealthRail only empties #health-widgets, so this
-           survives the paint that relabels the button. -->
-      <span id="cleanup-status" class="visually-hidden" role="status" aria-live="polite"></span>
-      <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
+    <div id="health-widgets" class="rail-inner">
+      <div id="health-tldr-lane" class="health-tldr-lane" role="group" aria-label="Cluster TL;DR" hidden></div>
+      <div class="readings-stack">
+        <div class="stack-head">
+          <span class="rail-heading">Summary</span>
+          <!-- S2-T3. The board states its scan window ONCE, here, because every
+               reading below is an aggregate over the sessions that window contains.
+               It sits with the readings rather than under the toolbar: the toolbar's
+               line is about the operator's own filter, which is a different window,
+               and mixing a stable board-wide fact into a volatile filter line makes
+               the stable fact inherit the volatility. -->
+          <span id="scan-window" class="scan-window" hidden></span>
+          <!-- The Clean up sweep's only non-visual signal. It is declared HERE, in
+               static markup, for the same reason #bar-scope-note below is: an
+               aria-live region that is destroyed and recreated announces nothing,
+               and the region has to already be in the tree when its content changes.
+               The button used to carry aria-live itself and was rebuilt by every
+               paint, so the announcement could never fire — a spinner is invisible
+               to a screen reader, which left no signal at all that a sweep had
+               started. renderHealthRail empties only #readings-grid, so this
+               survives the paint that relabels the button. -->
+          <span id="cleanup-status" class="visually-hidden" role="status" aria-live="polite"></span>
+          <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
+        </div>
+        <div id="readings-grid" class="readings-grid"></div>
+      </div>
     </div>
-    <div id="health-widgets" class="rail-inner"></div>
     <div id="widget-customizer" class="widget-customizer" hidden>
       <div class="widget-customizer-inner">
         <div>
@@ -184,6 +190,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=ah-t7"></script>
+  <script type="module" src="app.js?v=ah-t12"></script>
 </body>
 </html>

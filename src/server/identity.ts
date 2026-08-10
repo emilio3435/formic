@@ -110,6 +110,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
        only the transcript is held open, and the `$` anchor keeps the settings
        sibling from matching as a second identity for the same session. */
     ["factory", new RegExp(`\\/.factory\\/sessions\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
+    ["prime", new RegExp(`\\/.prime\\/agent\\/sessions\\/(${UUID})\\.jsonl$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
@@ -128,6 +129,7 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     /* `--fork` resumes into a NEW session id, so it is a hint about the id that
        follows it, exactly like the other two. */
     ["factory", new RegExp(`(?:^|[\\s/])droid\\b[^\\n]{0,160}?\\s(?:-r|--resume|--fork)\\s+(${UUID})(?:\\s|$)`, "i")],
+    ["prime", new RegExp(`(?:^|[\\s/])prime-agent\\b[^\\n]{0,160}?\\s--resume\\s+(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);

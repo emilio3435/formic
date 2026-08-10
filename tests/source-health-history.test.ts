@@ -54,6 +54,7 @@ function stateWith(scripts: ReadonlyArray<Partial<Record<Provider, CollectionRes
         claude: script.claude ?? EMPTY,
         cursor: script.cursor ?? EMPTY,
         factory: script.factory ?? EMPTY,
+        prime: script.prime ?? EMPTY,
       };
     },
     cmux: async () => ({ value: [], errors: [] }),

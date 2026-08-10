@@ -725,6 +725,38 @@ export function withoutSenderHeader(text) {
   return typeof text === "string" ? text : "";
 }
 
+/* One anatomy from any envelope. Handoff dumps open with a Header: value
+   block (Date:/From:/To:/Branch:/Run:); the face of the Task widget shows
+   prose only, so the block is lifted into `meta`, <image …> placeholders are
+   dropped, and `objective` is the first sentence of what remains. Empty in,
+   empty out — the widget renders the honest "— no task recorded" itself. */
+const ENVELOPE_HEADER = /^(date|from|to|branch|run):\s*(.*)$/i;
+
+export function parseTaskEnvelope(raw) {
+  const text = withoutSenderHeader(typeof raw === "string" ? raw : "").trim();
+  const meta = {};
+  const lines = text.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line) { i += 1; continue; }
+    const match = ENVELOPE_HEADER.exec(line);
+    if (!match) break;
+    meta[match[1].toLowerCase()] = match[2].trim();
+    i += 1;
+  }
+  const prose = lines.slice(i).join("\n")
+    .replace(/<image\b[^>]*>/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let objective = "";
+  if (prose) {
+    const sentence = /^(.*?[.!?])(?:\s|$)/.exec(prose);
+    objective = (sentence ? sentence[1] : prose).slice(0, 200).trim();
+  }
+  return { objective, meta };
+}
+
 /* How a role was decided, as something an operator can SEE. 1006 sessions on
    the live board carry `inferred` against 4 `declared`, so a role chip that
    renders a guess and a declaration identically is stating false confidence

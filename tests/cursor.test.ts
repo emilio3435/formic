@@ -984,10 +984,14 @@ describe("Cursor Agent persisted session truth", () => {
     // The invariant that excludes Cursor from every rollup: no numeric totals and
     // unknown provenance. snapshot.ts keys usage off `tokens.total`; pulse.ts keys
     // burn off `tokens.sessionTotal` + `provenance` and drops `provider === "cursor"`.
-    expect(cursorAgent.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
+    expect(cursorAgent.tokens).toEqual({
+      scope: "unknown",
+      provenance: "unknown",
+      contextWindow: 500_000,
+    });
     expect(cursorAgent.tokens.total).toBeUndefined();
     expect(cursorAgent.tokens.sessionTotal).toBeUndefined();
-    expect(cursorAgent.tokens.contextWindow).toBeUndefined();
+    expect(cursorAgent.tokens.contextWindow).toBe(500_000);
     expect(cursorAgent.cost).toBeNull();
 
     const claudeAgent: CollectedAgent = {

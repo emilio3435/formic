@@ -21,13 +21,18 @@ from rlm_heartbeat import rlm_heartbeat
 # Live swarm — steer (interrupt) so a stuck turn still reports
 await rlm_heartbeat.create(
     instruction=(
-        "Ant Hill heartbeat — B2 summarized tail. "
+        "Ant Hill heartbeat — B2 v4 envelope. "
         "1) tail -n 40 ~/.prime/agent/sessions/$(basename $PWD).jsonl or read last 8 messages from "
         "  this session's jsonl via python. "
-        "2) Summarize in 2 sentences + 1 bullet 'Blockers:' line (or 'all-clear'). "
-        "3) Include provider/model/workspace/cwd + 6/6 health if 4701 reachable. "
-        "4) Emit the summary as your assistant turn — this becomes transcriptTail and will auto-appear "
-        "  on the board's summary row + expanded drawer on next ~5s poll. No cmux send, no extra API."
+        "2) Emit as your assistant turn: prefix '[TL;DR HH:MM] ' then ONE LINE of JSON "
+        '  {"v":4,"fleet":"<cross-repo story: who needs the operator, why, what unblocks it — 2-3 sentences>",'
+        '  "repos":[{"repo":"<name>","summary":"<cause → blocker → next action, 2-4 sentences>",'
+        '  "blocker":"<≤48 chars or all-clear>","signal":"ok|working|idle|needs-you|blocked|failed|all-clear"}]}. '
+        "3) Style inside fleet/summary strings: mini-markup only — *strong*, `mono`, !alert! — no HTML, no markdown. "
+        "4) NEVER restate momentum/burn/context numbers — the board renders those deterministically. "
+        "  Length is yours to judge; the board clamps prose to 3 lines and the wire backstop is 6000 chars — "
+        "  end sentences early. This becomes transcriptTail and auto-appears in the health rail's TL;DR lane "
+        "  on the next ~5s poll. No cmux send, no extra API."
     ),
     interval="3m",
     label="ant-hill-orchestrator-live",
@@ -36,7 +41,7 @@ await rlm_heartbeat.create(
 
 # Idle / all-clear — follow_up (queue after turn) to avoid churn
 await rlm_heartbeat.create(
-    instruction="Ant Hill idle heartbeat — same B2 check but only if no lane changed in 10m; emit 'all-clear — N tracked, 0 waiting' if idle.",
+    instruction='Ant Hill idle heartbeat — same B2 v4 check but only if no lane changed in 10m; when idle emit [TL;DR HH:MM] {"v":4,"fleet":"all-clear — N tracked, 0 waiting","repos":[]}.',
     interval="10m",
     label="ant-hill-orchestrator-idle",
     delivery_mode="follow_up",
@@ -103,7 +108,7 @@ try:
     _log(f"BOOT PROBE: rlm_heartbeat.list labels={labels}")
     if "ant-hill-orchestrator-live" not in labels:
         await rlm_heartbeat.create(
-            instruction="Ant Hill heartbeat — B2 summarized tail. 1) tail -n 40 ~/.prime/agent/sessions/019fe46c-d482-706c-b080-08f1420c8ae3.jsonl, summarize 2 sentences + Blockers bullet, include provider/model/workspace/cwd + health. Emit as assistant turn with prefix [TL;DR HH:MM]",
+            instruction='Ant Hill heartbeat — B2 v4 envelope. tail -n 40 ~/.prime/agent/sessions/019fe46c-d482-706c-b080-08f1420c8ae3.jsonl, then emit as assistant turn: prefix "[TL;DR HH:MM] " + ONE LINE JSON {"v":4,"fleet":"<who needs the operator, why, what unblocks it>","repos":[{"repo":"<name>","summary":"<cause -> blocker -> next action>","blocker":"<48c max or all-clear>","signal":"ok|working|idle|needs-you|blocked|failed|all-clear"}]}. Mini-markup only (*strong*, backtick-mono, !alert!), no HTML; never restate momentum/burn/context numbers; 3-line clamp, 6000-char backstop.',
             interval="3m",
             label="ant-hill-orchestrator-live",
             delivery_mode="steer",

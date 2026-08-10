@@ -2,6 +2,7 @@
 
 | Goal ID | Status | Relationship | Ledger |
 |---|---|---|---|
+| `ant-panel-integration-2026-08-09` | **active — OBB blocked** | standalone integration program | `.agent/runs/ant-panel-integration-2026-08-09/` |
 | `confidence-header-notification-center` | **complete** | parent of `board-all-clear-lookback-disclosure` | `.agent/runs/confidence-header-notification-center/` |
 | `a11y-geometry-harness` | candidate | child of `confidence-header-notification-center` | brief: `docs/a11y-geometry-gate/README.md` |
 | `board-all-clear-lookback-disclosure` | queued | child of `confidence-header-notification-center` | `.agent/runs/board-all-clear-lookback-disclosure/` |
@@ -45,3 +46,11 @@ by an outside agent, and is held back deliberately. It touches `renderPrograms()
 condition the concurrently-running unified-filtering program owns terms inside. It
 lands at a task boundary, on its own.
 
+
+## ant-panel-integration-2026-08-09
+
+**ACTIVE — Phase 0 blocked.** OBB 1.0.32 and its encrypted schema are compatible,
+but the required 24-hour cross-source window contains no readable rows. The
+elevated repository gate is 3010/3011; a fresh Luna RCA owns the only red claim.
+Chat UX is explicitly user-owned. Parser is landed; Foundation and Task Widget
+handoffs are ready; the TL;DR ribbon mockup is in active visual refinement.

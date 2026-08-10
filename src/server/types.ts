@@ -14,6 +14,16 @@ import type {
 } from "../shared/types";
 
 export const MAX_TRANSCRIPT_TAIL_CHARS = 800;
+/* Heartbeat TL;DR envelopes ride transcriptTail and die head-first under
+   slice(-800): the "[TL;DR …] {"v":4," prefix is the part that gets cut, which
+   turns a long envelope into an unparseable stub. Envelope-shaped tails get a
+   generous backstop; the writer's guidance governs length, the wire must not. */
+export const MAX_HEARTBEAT_TAIL_CHARS = 6000;
+export function capTranscriptTail(tail: string | undefined): string | undefined {
+  if (tail == null) return tail;
+  const cap = /^\[TL;DR\s/.test(tail.trimStart()) ? MAX_HEARTBEAT_TAIL_CHARS : MAX_TRANSCRIPT_TAIL_CHARS;
+  return tail.slice(-cap);
+}
 
 export interface CollectedAgent {
   /* Per-call PROCESSED sizes, in transcript order, deduplicated per message —

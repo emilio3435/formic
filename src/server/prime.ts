@@ -3,7 +3,7 @@ import type { CollectedAgent } from "./types";
 import type { IncrementalParser, ParseMetadata } from "./collectors";
 import type { TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
-import { MAX_TRANSCRIPT_TAIL_CHARS } from "./types";
+import { MAX_HEARTBEAT_TAIL_CHARS, capTranscriptTail } from "./types";
 import { MODEL_CONFIG } from "./model-config";
 import { claudeContextWindow } from "./collectors";
 
@@ -97,7 +97,9 @@ export function createPrimeParser(): IncrementalParser {
         let t: string | undefined;
         if (typeof c === "string") t = c.trim();
         else if (Array.isArray(c)) t = c.map((p: any) => typeof p.text === "string" ? p.text : (typeof p.content === "string" ? p.content : "")).join("\n").trim();
-        if (t) tail = t.slice(-MAX_TRANSCRIPT_TAIL_CHARS);
+        /* Accumulate generously; the per-agent cap is applied once at result()
+           via capTranscriptTail, so an envelope head survives collection. */
+        if (t) tail = t.slice(-MAX_HEARTBEAT_TAIL_CHARS);
       }
     }
   };
@@ -140,7 +142,7 @@ export function createPrimeParser(): IncrementalParser {
       startedAt: startedAt ?? fallback,
       updatedAt: updatedAt ?? fallback,
       tokens,
-      transcriptTail: tail,
+      transcriptTail: capTranscriptTail(tail),
       humanMessages: [],
       statusReason: "Prime agent — harness prime, agent " + agentModel,
       transcriptEndedCleanly: false,

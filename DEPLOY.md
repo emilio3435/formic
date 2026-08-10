@@ -67,6 +67,9 @@ bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
 boot to bind their own sessionId into the run manifest (`status: active`) and
 mark `done` on clean exit. It never touches the server or its port.
 
+`scripts/docker-ci.sh` builds and runs the Linux CI image. It does not bind a
+host port or restart the production service.
+
 | Script | Does | Port |
 |---|---|---|
 | `bun start` | The whole workflow — reuses a running instance, else starts one | 4701, reused if taken |

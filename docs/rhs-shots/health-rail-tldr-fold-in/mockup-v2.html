@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Health Rail v2 — Fleet TL;DR Tile with Chevrons</title>
+<style>
+  /* ── tokens lifted verbatim from src/web/styles.css :root ───────────────── */
+  :root{
+    --canvas:#eef2f5; --surface:#f7f9fb; --raise:#ffffff; --sand:#e2e8ef;
+    --ink:#0f1a24; --body:#223040; --muted:#3d4f62; --faint:#6b7d90; --faint-strong:#536678;
+    --line:#d0dae4; --line-strong:#9fb0c0;
+    --ember:#b42318; --amber:#8a5100; --moss:#146744; --slate:#2f5a78;
+    --claude:#9b4a2c; --codex:#2b6452; --omp:#6b4d90; --cursor:#3a5f7a;
+    --ember-soft:color-mix(in srgb, var(--ember) 8%, var(--raise));
+    --moss-soft:color-mix(in srgb, var(--moss) 9%, var(--raise));
+    --signal-rail:2px;
+    --font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace;
+    --radius:8px; --radius-sm:5px;
+    --frame:min(1680px, calc(100vw - 64px));
+    --shadow-soft:0 1px 2px rgba(23,33,43,.04), 0 8px 22px rgba(23,33,43,.05);
+  }
+  *{box-sizing:border-box}
+  html{background:var(--canvas)}
+  body{margin:0;font-family:var(--font-ui);font-size:16px;line-height:1.45;color:var(--ink);-webkit-font-smoothing:antialiased}
+
+  /* demo page chrome (not part of the design) */
+  .page{padding:20px 0 48px}
+  .demo-label{max-width:var(--frame);margin:1.9rem auto .5rem;font:700 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint-strong)}
+  .demo-label span{font-weight:400;text-transform:none;letter-spacing:.02em;color:var(--faint)}
+  .lede{max-width:var(--frame);margin:.2rem auto 0;font-size:12.5px;color:var(--muted)}
+
+  /* ── health rail band — native .health-rail contract ────────────────────── */
+  .health-rail{
+    border-top:1px solid var(--line-strong);
+    border-bottom:1px solid var(--line-strong);
+    background:var(--surface);
+  }
+  .rail-inner{
+    max-width:var(--frame);
+    margin:0 auto;
+    display:flex;
+    align-items:stretch;
+    min-height:118px;              /* was 84 — buys 3 prose lines in the tile */
+  }
+
+  /* ── column 1 · fleet TL;DR tile (60%, LEFT) ────────────────────────────── */
+  .health-tldr-lane{
+    flex:1 1 60%;
+    min-width:0;
+    display:flex;flex-direction:column;
+    background:var(--raise);
+    /* .tldr-card::before / .heartbeat-tldr language: signal rail at the band's left edge */
+    border-left:var(--signal-rail) solid var(--moss);
+    padding:.45rem 1.1rem .5rem 1.1rem;
+  }
+  .health-tldr-lane.is-needs-you{border-left-color:var(--ember)}
+  .tldr-lane-head{display:flex;align-items:center;gap:.5rem;min-width:0;padding:0 0 .3rem}
+  /* native .heartbeat-tldr-label pill */
+  .heartbeat-tldr-label{font-weight:800;font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--moss);background:var(--moss-soft);border-radius:999px;padding:2px 7px;flex:none}
+  .heartbeat-tldr-time{font-family:var(--font-mono);font-size:.7rem;color:var(--faint);flex:none}
+  .tldr-lane-meta{font-size:.74rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tldr-card-repo{font-weight:700;font-size:.9rem;color:var(--ink);text-decoration:none;border-bottom:1px dotted transparent;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tldr-card-repo:hover{color:var(--moss);border-bottom-color:var(--moss)}
+  /* native .tldr-card-signal */
+  .tldr-card-signal{font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:999px;border:1px solid transparent;line-height:1;flex:none}
+  .tldr-card-signal.is-ok{color:var(--moss);background:var(--moss-soft);border-color:color-mix(in srgb,var(--moss) 18%,transparent)}
+  .tldr-card-signal.is-needs-you{color:var(--ember);background:var(--ember-soft);border-color:color-mix(in srgb,var(--ember) 18%,transparent)}
+  .lane-pager{margin-left:auto;display:flex;align-items:center;gap:.3rem;flex:none}
+  .lane-pos{font:600 10px var(--font-mono);color:var(--faint);letter-spacing:.04em;min-width:2.6em;text-align:center}
+  .chev{width:24px;height:24px;border:1px solid var(--line);border-radius:999px;background:var(--raise);display:grid;place-items:center;cursor:pointer;font-size:13px;line-height:1;color:var(--muted);padding:0}
+  .chev:hover{border-color:var(--line-strong);color:var(--ink)}
+  .chev[disabled]{opacity:.35;cursor:default}
+  /* the prose is the hero — native .tldr-card-summary, one size up.
+     Writer emits mini-markup (*strong* `mono` !alert!) rendered client-side to
+     these spans through an allowlist — never raw HTML from a transcript. */
+  .tldr-lane-prose{
+    margin:.15rem 0;
+    font-size:13.5px;line-height:1.5;color:var(--body);
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+    overflow:hidden;overflow-wrap:anywhere;
+  }
+  .tldr-lane-prose strong{color:var(--ink);font-weight:650}
+  .tldr-lane-prose .mono{font-family:var(--font-mono);font-size:.86em}
+  .tldr-lane-prose .is-alert{color:var(--ember);font-weight:650}
+  /* ALL state footer: per-repo status chips — jump targets (click → that repo's
+     view); chevrons remain for sequential paging */
+  .tldr-chip-strip{margin-top:auto;display:flex;align-items:center;gap:.35rem;flex-wrap:nowrap;overflow:hidden}
+  .tldr-chip{display:inline-flex;align-items:center;gap:.3rem;padding:2px 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font:600 10.5px var(--font-ui);color:var(--muted);white-space:nowrap;flex:none;cursor:pointer}
+  .tldr-chip:hover{border-color:var(--line-strong);color:var(--ink)}
+  .tldr-chip .dot{width:6px;height:6px;border-radius:999px;background:var(--slate);flex:none}
+  .tldr-chip.is-ok .dot{background:var(--moss)}
+  .tldr-chip.is-needs-you{color:var(--ember);border-color:color-mix(in srgb,var(--ember) 28%,var(--line))}
+  .tldr-chip.is-needs-you .dot{background:var(--ember)}
+  .tldr-chip.is-more{color:var(--faint);border-style:dashed;background:transparent}
+  /* repo state footer: NON-REDUNDANT deterministic facts (deterministicRepoStats):
+     branch · head · dirty · PRs · roster split · blocker age. Momentum/burn/context
+     live ONLY in the readings column — never restated here. Native .tldr-det-pill. */
+  .tldr-lane-det{margin-top:auto;display:flex;align-items:center;gap:.35rem .45rem;flex-wrap:nowrap;overflow:hidden;font-size:.75rem;color:var(--muted)}
+  .tldr-det-pill{display:inline-flex;align-items:center;gap:.25rem;padding:2px 7px;border-radius:999px;border:1px solid var(--line);background:var(--raise);font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap;font-size:.72rem;flex:none}
+  .tldr-det-pill.is-branch{font-family:var(--font-mono);font-size:.7rem}
+  .tldr-det-pill.is-dirty{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 28%,var(--line))}
+  .tldr-det-pill.is-pr{color:var(--slate)}
+  .tldr-det-pill.is-working{color:var(--moss);border-color:color-mix(in srgb,var(--moss) 28%,var(--line))}
+  /* native .tldr-card-blocker.is-alert */
+  .tldr-card-blocker{display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:600;border-radius:999px;padding:2px 8px;white-space:nowrap;flex:none}
+  .tldr-card-blocker.is-alert{color:var(--ember);background:var(--ember-soft)}
+
+  /* ── column 2 · condensed deterministic readings (40%, RIGHT) ───────────── */
+  .readings-stack{
+    flex:0 0 40%;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    border-left:1px solid var(--line-strong);
+  }
+  /* native .rail-header folds in here — same children: heading, scan, Customize */
+  .stack-head{
+    display:flex;align-items:center;gap:.5rem;
+    padding:.45rem 0 .35rem 1rem;
+    border-bottom:1px solid var(--line);
+  }
+  .rail-heading{color:var(--faint);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;flex:none}
+  .scope-pill{
+    font:600 10.5px var(--font-mono);color:var(--ink);
+    background:var(--sand);border-radius:999px;padding:2px 8px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;
+  }
+  .scan-window{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.04em;color:var(--faint);margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .rail-action{
+    flex:none;padding:.2rem .45rem;color:var(--muted);
+    border:1px solid transparent;border-radius:var(--radius-sm);
+    background:transparent;font:650 11.5px var(--font-ui);cursor:pointer;
+  }
+  .rail-action:hover{color:var(--ink);border-color:var(--line-strong);background:var(--sand)}
+  .readings-grid{
+    flex:1;display:grid;
+    grid-template-columns:1fr 1fr;
+    align-content:stretch;
+  }
+  .reading{
+    display:flex;flex-direction:column;gap:.1rem;justify-content:center;
+    min-width:0;padding:.4rem 1rem .4rem 1rem;
+  }
+  .reading:nth-child(odd){border-right:1px solid var(--line)}
+  .reading:nth-child(even){padding-right:0}
+  .reading:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .reading-label{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+  .reading-value{display:flex;align-items:baseline;gap:.35rem;font-size:1.2rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.05;color:var(--ink)}
+  .reading-value .unit{font-size:.72rem;font-weight:600;color:var(--muted)}
+  .reading-value.is-ok{color:var(--moss)}
+  .reading-value.is-hot{color:var(--ember)}
+  .reading-sub{font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:.3rem;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .context-toggle{align-self:flex-start;margin:0;padding:0;border:0;background:none;font:700 10px var(--font-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);text-decoration:underline dotted;text-underline-offset:.2em;cursor:pointer}
+  .context-toggle:hover{color:var(--ink)}
+  .spread-toggle{flex:none;border:1px solid var(--line-strong);border-radius:999px;padding:0 5px;font:700 9px var(--font-ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--raise);cursor:pointer;line-height:1.5}
+  .ctx-gauge{width:2.9rem;height:auto;display:block;flex:none}
+  .gauge-track{stroke:var(--line);stroke-width:11;stroke-linecap:round}
+  .gauge-fill{stroke:var(--moss);stroke-width:11;stroke-linecap:round}
+  .gauge-fill.hot{stroke:var(--ember)}
+  /* Mix widget — providers as colored marks + counts (no external logos: CSP
+     forbids remote assets, and rail doctrine is status by shape+label+color) */
+  .mix-row{display:flex;align-items:baseline;gap:.5rem;font-size:.88rem;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink);flex-wrap:nowrap;overflow:hidden}
+  .mix-seg{display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;flex:none}
+  .prov-dot{width:7px;height:7px;border-radius:2px;flex:none}
+  .prov-dot.is-claude{background:var(--claude)}
+  .prov-dot.is-codex{background:var(--codex)}
+  .prov-dot.is-cursor{background:var(--cursor)}
+  .prov-dot.is-omp{background:var(--omp)}
+  .prov-dot.is-prime{background:var(--slate)}
+  .mix-seg .prov-name{font-size:.62rem;font-weight:600;color:var(--muted)}
+
+  /* ── no-summaries state: lane absent, readings take the full band ───────── */
+  .rail-inner.is-no-tldr{min-height:84px}
+  .rail-inner.is-no-tldr .readings-stack{flex:1 1 100%;border-left:0}
+  .rail-inner.is-no-tldr .readings-grid{grid-template-columns:repeat(4,1fr)}
+  .rail-inner.is-no-tldr .stack-head{padding-left:0}
+  .rail-inner.is-no-tldr .reading{border-bottom:0 !important;border-right:1px solid var(--line)}
+  .rail-inner.is-no-tldr .reading:first-child{padding-left:0}
+  .rail-inner.is-no-tldr .reading:last-child{border-right:0;padding-right:0}
+
+  /* ── 860: same two columns, compacted — no stacking (contract) ──────────── */
+  @media (max-width:900px){
+    :root{--frame:calc(100vw - 32px)}
+    .rail-inner{min-height:112px}
+    .reading-value{font-size:1.02rem}
+    .reading-sub{font-size:9.5px}
+    .reading{padding-left:.6rem;padding-right:.6rem}
+    .stack-head{padding-left:.6rem}
+    .health-tldr-lane{padding:.45rem .6rem .5rem .75rem}
+    .tldr-lane-prose{font-size:12.5px}
+    .tldr-lane-meta{display:none}
+    .heartbeat-tldr-time{display:none}
+    .chev{width:34px;height:34px}
+    /* compact tiers: provider names and secondary det pills yield before clipping */
+    .mix-row{gap:.45rem}
+    .mix-seg .prov-name{display:none}
+    .tldr-det-pill.is-secondary{display:none}
+  }
+  /* ── <640 fallback (outside the 860 contract): columns finally stack ────── */
+  @media (max-width:640px){
+    .rail-inner{flex-direction:column;min-height:0}
+    .readings-stack{flex:1 1 auto;border-left:0;border-top:1px solid var(--line-strong)}
+    .health-tldr-lane{flex:1 1 auto}
+  }
+
+  .note{max-width:var(--frame);margin:.55rem auto 0;font-size:12px;line-height:1.5;color:var(--muted)}
+  .note code{font-family:var(--font-mono);font-size:.9em;background:var(--sand);border-radius:3px;padding:0 4px}
+  .note h3{margin:.9rem 0 .2rem;font-size:12px;color:var(--ink)}
+  .note ul{margin:.2rem 0 0;padding-left:1.2rem}
+  .note li{margin:.15rem 0}
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="demo-label">Health rail v2 <span>· one shallow row · 60% fleet TL;DR tile (left) + 40% condensed readings (right) · chevrons page ALL ↔ repo</span></p>
+  <p class="lede">The tile replaces <code>section#heartbeat-tldr</code>. The native <code>.rail-header</code> (Summary · scan window · Customize) folds into the readings column head — no full-width header row.</p>
+
+  <!-- ═══ STATE A · ALL — fleet-level synthesis prose + passive repo strip ═══ -->
+  <p class="demo-label">A · ALL <span>· one synthesized cluster story, repo strip for glance, ‹ › drill into repos</span></p>
+  <section class="health-rail" aria-label="Fleet health">
+    <div class="rail-inner">
+      <div class="health-tldr-lane is-needs-you" role="group" aria-label="Cluster TL;DR — all repos">
+        <div class="tldr-lane-head">
+          <span class="heartbeat-tldr-label">TL;DR</span>
+          <span class="heartbeat-tldr-time">17:33</span>
+          <span class="tldr-lane-meta">3 repos · 8 live · <strong>1 needs you</strong></span>
+          <div class="lane-pager">
+            <button type="button" class="chev" aria-label="Previous view" disabled>‹</button>
+            <span class="lane-pos" aria-live="polite">ALL</span>
+            <button type="button" class="chev" aria-label="Filter to the-mountain-main">›</button>
+          </div>
+        </div>
+        <p class="tldr-lane-prose">Eight agents live across three repos. <strong>the-mountain-main</strong> <span class="is-alert">needs you</span> — the drawer-redesign agent is blocked on a question pending (~14m); two others are gathering mini-chat evidence on <span class="mono">main</span>. <strong>cooper-scheduler</strong> is cruising: three working the draft page, <span class="mono">feat/draft</span> clean. <strong>Home</strong> idles after a green orchestration run.</p>
+        <div class="tldr-chip-strip" role="list" aria-label="Repo status">
+          <span class="tldr-chip is-needs-you" role="listitem"><span class="dot"></span>the-mountain-main</span>
+          <span class="tldr-chip is-ok" role="listitem"><span class="dot"></span>cooper-scheduler</span>
+          <span class="tldr-chip is-ok" role="listitem"><span class="dot"></span>Home</span>
+          <span class="tldr-chip is-more" role="listitem">+5 quiet</span>
+        </div>
+      </div>
+      <div class="readings-stack">
+        <div class="stack-head">
+          <span class="rail-heading">Summary</span>
+          <span class="scan-window">sessions seen in the last 36h</span>
+          <button type="button" class="rail-action" aria-expanded="false">Customize</button>
+        </div>
+        <div class="readings-grid">
+          <div class="reading">
+            <span class="reading-label">Health</span>
+            <span class="reading-value is-ok">Steady</span>
+            <span class="reading-sub">all collectors healthy · 3 programs</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Momentum</span>
+            <span class="reading-value">14<span class="unit">/min</span></span>
+            <span class="reading-sub">12 working · 4 idle</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Burn</span>
+            <span class="reading-value">340k<span class="unit">/min</span></span>
+            <span class="reading-sub">§ ~$0.82/hr · 4/4 costs known</span>
+          </div>
+          <div class="reading">
+            <button type="button" class="context-toggle" aria-pressed="false">Context</button>
+            <span class="reading-value">29<span class="unit">avg window</span></span>
+            <span class="reading-sub">
+              <svg class="ctx-gauge" viewBox="0 0 100 58" role="progressbar" aria-valuenow="29" aria-label="Context used"><path d="M 10 50 A 42 42 0 0 1 90 50" fill="none" class="gauge-track"/><path d="M 10 50 A 42 42 0 0 1 62 18" fill="none" class="gauge-fill"/></svg>
+              <button type="button" class="spread-toggle">avg</button>
+              <span>peak 72% · median 28% · 12 live</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="widget-customizer" hidden></div>
+  </section>
+
+  <!-- ═══ STATE B · repo-specific — readings re-scope, tile carries the non-redundant story ═══ -->
+  <p class="demo-label">B · Repo-specific — the-mountain-main <span>· ‹ back to ALL · readings re-scoped (momentum/burn/context live THERE) · tile adds branch/PRs/roster/blocker</span></p>
+  <section class="health-rail" aria-label="Fleet health">
+    <div class="rail-inner">
+      <div class="health-tldr-lane is-needs-you" role="group" aria-label="Cluster TL;DR — the-mountain-main">
+        <div class="tldr-lane-head">
+          <span class="heartbeat-tldr-label">TL;DR</span>
+          <a class="tldr-card-repo" href="#">the-mountain-main</a>
+          <span class="tldr-card-signal is-needs-you">needs-you</span>
+          <span class="tldr-lane-meta">3 agents · 17:33</span>
+          <div class="lane-pager">
+            <button type="button" class="chev" aria-label="Back to ALL">‹</button>
+            <span class="lane-pos" aria-live="polite">1 / 8</span>
+            <button type="button" class="chev" aria-label="Next repo — cooper-scheduler">›</button>
+          </div>
+        </div>
+        <p class="tldr-lane-prose">The drawer-redesign agent is <span class="is-alert">blocked on a question pending</span> — it wants your call on the 65/35 desk split before touching <span class="mono">styles.css</span>. The mini-chat pair split the work: one is rewriting bubble renderers in <span class="mono">transcript.js</span>, the other is proving scroll ownership with a mutation test. Next unblock: answer the drawer question; everything else is downstream of it.</p>
+        <div class="tldr-lane-det" aria-label="the-mountain-main repo facts">
+          <span class="tldr-card-blocker is-alert">⏸ question pending · 14m</span>
+          <span class="tldr-det-pill is-branch">main</span>
+          <span class="tldr-det-pill is-branch is-secondary">a1b2c3d</span>
+          <span class="tldr-det-pill is-dirty">dirty</span>
+          <span class="tldr-det-pill is-pr">1 PR</span>
+          <span class="tldr-det-pill is-working is-secondary">2 working · 1 blocked</span>
+        </div>
+      </div>
+      <div class="readings-stack">
+        <div class="stack-head">
+          <span class="rail-heading">Summary</span>
+          <span class="scope-pill">the-mountain-main</span>
+          <span class="scan-window">36h</span>
+          <button type="button" class="rail-action" aria-expanded="false">Customize</button>
+        </div>
+        <div class="readings-grid">
+          <div class="reading">
+            <span class="reading-label">Health</span>
+            <span class="reading-value is-hot">Needs you</span>
+            <span class="reading-sub">1 blocked · question pending</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Momentum</span>
+            <span class="reading-value">4.2<span class="unit">/min</span></span>
+            <span class="reading-sub">3 working · this repo</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Burn</span>
+            <span class="reading-value">110k<span class="unit">/min</span></span>
+            <span class="reading-sub">§ ~$0.28/hr · this repo</span>
+          </div>
+          <div class="reading">
+            <button type="button" class="context-toggle" aria-pressed="false">Context</button>
+            <span class="reading-value">31<span class="unit">avg window</span></span>
+            <span class="reading-sub">
+              <svg class="ctx-gauge" viewBox="0 0 100 58" role="progressbar" aria-valuenow="31" aria-label="Context used"><path d="M 10 50 A 42 42 0 0 1 90 50" fill="none" class="gauge-track"/><path d="M 10 50 A 42 42 0 0 1 68 16" fill="none" class="gauge-fill"/></svg>
+              <button type="button" class="spread-toggle">avg</button>
+              <span>peak 54% · median 27%</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="widget-customizer" hidden></div>
+  </section>
+
+  <!-- ═══ STATE C · no summaries — lane absent, readings own the band ═══ -->
+  <p class="demo-label">C · No summaries <span>· parseHeartbeatStructured → repos:[] — lane hidden, readings span the band, no placeholder</span></p>
+  <section class="health-rail" aria-label="Fleet health">
+    <div class="rail-inner is-no-tldr">
+      <div class="readings-stack">
+        <div class="stack-head">
+          <span class="rail-heading">Summary</span>
+          <span class="scan-window">sessions seen in the last 36h</span>
+          <button type="button" class="rail-action" aria-expanded="false">Customize</button>
+        </div>
+        <div class="readings-grid">
+          <div class="reading">
+            <span class="reading-label">Health</span>
+            <span class="reading-value is-ok">Calm</span>
+            <span class="reading-sub">no collectors degraded</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Momentum</span>
+            <span class="reading-value">0<span class="unit">/min</span></span>
+            <span class="reading-sub">0 live</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Burn</span>
+            <span class="reading-value">—</span>
+            <span class="reading-sub">no costs reported</span>
+          </div>
+          <div class="reading">
+            <button type="button" class="context-toggle" aria-pressed="false">Context</button>
+            <span class="reading-value">—</span>
+            <span class="reading-sub">no context readings</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="widget-customizer" hidden></div>
+  </section>
+
+  <!-- ═══ STATE D · customized readings — Mix + Spend widgets (new options) ═══ -->
+  <p class="demo-label">D · Customized readings <span>· new widget options: Mix (providers × models) and Spend (OBB window total + provenance) — picked via the existing customizer</span></p>
+  <section class="health-rail" aria-label="Fleet health">
+    <div class="rail-inner">
+      <div class="health-tldr-lane" role="group" aria-label="Cluster TL;DR — all repos">
+        <div class="tldr-lane-head">
+          <span class="heartbeat-tldr-label">TL;DR</span>
+          <span class="heartbeat-tldr-time">18:02</span>
+          <span class="tldr-lane-meta">3 repos · 12 live · 0 need you</span>
+          <div class="lane-pager">
+            <button type="button" class="chev" aria-label="Previous view" disabled>‹</button>
+            <span class="lane-pos" aria-live="polite">ALL</span>
+            <button type="button" class="chev" aria-label="Filter to cooper-scheduler">›</button>
+          </div>
+        </div>
+        <p class="tldr-lane-prose">All three repos are moving. <strong>cooper-scheduler</strong> merged the draft-page PR and CI is deploying; <strong>the-mountain-main</strong> finished the drawer question and both mini-chat agents are back to green tests. <strong>Home</strong> is running the nightly rollup — nothing is waiting on you.</p>
+        <div class="tldr-chip-strip" role="list" aria-label="Repo status">
+          <span class="tldr-chip is-ok" role="listitem"><span class="dot"></span>cooper-scheduler</span>
+          <span class="tldr-chip is-ok" role="listitem"><span class="dot"></span>the-mountain-main</span>
+          <span class="tldr-chip is-ok" role="listitem"><span class="dot"></span>Home</span>
+        </div>
+      </div>
+      <div class="readings-stack">
+        <div class="stack-head">
+          <span class="rail-heading">Summary</span>
+          <span class="scan-window">sessions seen in the last 36h</span>
+          <button type="button" class="rail-action" aria-expanded="false">Customize</button>
+        </div>
+        <div class="readings-grid">
+          <div class="reading">
+            <span class="reading-label">Health</span>
+            <span class="reading-value is-ok">Steady</span>
+            <span class="reading-sub">all collectors healthy</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Mix</span>
+            <span class="mix-row">
+              <span class="mix-seg"><span class="prov-dot is-claude"></span>6<span class="prov-name">Claude</span></span>
+              <span class="mix-seg"><span class="prov-dot is-codex"></span>3<span class="prov-name">Codex</span></span>
+              <span class="mix-seg"><span class="prov-dot is-cursor"></span>2<span class="prov-name">Cursor</span></span>
+              <span class="mix-seg"><span class="prov-dot is-prime"></span>1<span class="prov-name">Prime</span></span>
+            </span>
+            <span class="reading-sub">Fable 5 ×4 · GPT 5.6 SOL ×3 · Grok 4.5 ×2</span>
+          </div>
+          <div class="reading">
+            <span class="reading-label">Spend</span>
+            <span class="reading-value">$18.40<span class="unit">window</span></span>
+            <span class="reading-sub">§ floor · 3/4 measured · ~$0.82/hr</span>
+          </div>
+          <div class="reading">
+            <button type="button" class="context-toggle" aria-pressed="false">Context</button>
+            <span class="reading-value">24<span class="unit">avg window</span></span>
+            <span class="reading-sub">
+              <svg class="ctx-gauge" viewBox="0 0 100 58" role="progressbar" aria-valuenow="24" aria-label="Context used"><path d="M 10 50 A 42 42 0 0 1 90 50" fill="none" class="gauge-track"/><path d="M 10 50 A 42 42 0 0 1 55 21" fill="none" class="gauge-fill"/></svg>
+              <button type="button" class="spread-toggle">avg</button>
+              <span>peak 61% · median 22%</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="widget-customizer" hidden></div>
+  </section>
+
+  <div class="note">
+    <strong>Contract:</strong> <code>#health-widgets.rail-inner</code> owns exactly two children — <code>.health-tldr-lane</code> (60%, left) then <code>.readings-stack</code> (40%, right) — one shallow row at 1440 and 860 (no stacking until &lt;640). Chevrons replace the lane's <em>content</em> (ALL ↔ repo 1…N); the readings column re-scopes with it (scope pill in its head). The lane's left signal rail carries state (moss ok · ember needs-you), same language as <code>.tldr-card::before</code>. When no summaries parse, the lane is absent and readings span the band.
+
+    <h3>TL;DR writer contract (heartbeat prompt — keeps content, length, and look consistent)</h3>
+    <ul>
+      <li><strong>Wire budget:</strong> the envelope rides <code>transcriptTail</code>; the 800-char wire cap is <em>raised for the heartbeat monitor</em> (generous backstop ~6000 — today's <code>slice(-800)</code> keeps the tail end, so an oversized envelope loses its <code>[TL;DR …]</code> head and fails parse). Envelope v4: <code>[TL;DR HH:MM] {"v":4,"fleet":"…","repos":[{"repo","summary","blocker","signal"}]}</code>. Length is <em>guidance-driven, not char-capped</em>: fleet reads well at 2–3 sentences (3-line clamp), repo summaries at 2–4 sentences; <code>blocker</code> ≤ 48 (parser slices). The writer decides based on content; the clamp is the renderer's safety net.</li>
+      <li><strong>Content rule:</strong> <code>fleet</code> tells the cross-repo story: who needs the operator, why, and what unblocks it. <code>repos[].summary</code> narrates cause → blocker → next action. <em>Never restate momentum, burn, or context numbers</em> — the readings column renders those deterministically; a summary that repeats them wastes its 200 chars.</li>
+      <li><strong>Mini-markup, not HTML:</strong> writer emits <code>*strong*</code>, <code>`mono`</code>, <code>!alert!</code>; the client renders these to styled spans through an allowlist. Raw HTML from a transcript is never injected (untrusted input — XSS boundary stays server-side of innerHTML).</li>
+      <li><strong>Signals:</strong> <code>ok · working · idle · needs-you · blocked · failed · all-clear</code> — same enum <code>tldrCardSignalClass</code> already maps.</li>
+      <li><strong>Overflow behavior:</strong> prose renders with a 3-line clamp; the writer should end sentences early rather than rely on the clamp. A summary that violates budget is clamped, never rejected — the deterministic finisher fallback still applies when no envelope parses.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+(function(){
+  function assert(cond, msg){ if(!cond){ console.error('CHECK FAIL: '+msg); return false; } console.log('CHECK PASS: '+msg); return true; }
+  function run(){
+    var ok = true;
+    document.querySelectorAll('.rail-inner').forEach(function(rail, idx){
+      var noTldr = rail.classList.contains('is-no-tldr');
+      var kids = rail.children;
+      if (noTldr){
+        ok = assert(kids.length === 1 && kids[0].classList.contains('readings-stack'), 'rail['+idx+'] no-tldr: single readings-stack spans band') && ok;
+        return;
+      }
+      ok = assert(kids.length === 2, 'rail['+idx+'].children.length === 2 (got '+kids.length+')') && ok;
+      if (kids.length !== 2) return;
+      ok = assert(kids[0].classList.contains('health-tldr-lane'), 'rail['+idx+'] child[0] is health-tldr-lane (60% left)') && ok;
+      ok = assert(kids[1].classList.contains('readings-stack'), 'rail['+idx+'] child[1] is readings-stack (40% right)') && ok;
+      var r0 = kids[0].getBoundingClientRect(), r1 = kids[1].getBoundingClientRect(), rr = rail.getBoundingClientRect();
+      var stacked = window.innerWidth <= 640;
+      if (stacked) { console.log('rail['+idx+'] <=640 stacked fallback — column checks skipped'); return; }
+      ok = assert(Math.abs(r0.top - r1.top) <= 1, 'rail['+idx+'] columns share top (Δ'+(r0.top-r1.top).toFixed(1)+'px)') && ok;
+      var ratio0 = r0.width / rr.width, ratio1 = r1.width / rr.width;
+      console.log('MEASURE rail['+idx+'] @'+window.innerWidth+'px: rail='+rr.width.toFixed(1)+' tldr='+r0.width.toFixed(1)+' ('+(ratio0*100).toFixed(1)+'%) readings='+r1.width.toFixed(1)+' ('+(ratio1*100).toFixed(1)+'%)');
+      ok = assert(ratio0 >= 0.56 && ratio0 <= 0.64, 'rail['+idx+'] tldr ~60% (got '+(ratio0*100).toFixed(1)+'%)') && ok;
+      ok = assert(ratio1 >= 0.36 && ratio1 <= 0.44, 'rail['+idx+'] readings ~40% (got '+(ratio1*100).toFixed(1)+'%)') && ok;
+      var gap = r1.left - r0.right;
+      ok = assert(Math.abs(gap) <= 2.5, 'rail['+idx+'] columns adjacent (gap '+gap.toFixed(1)+'px)') && ok;
+    });
+    document.documentElement.setAttribute('data-check', ok ? 'pass' : 'fail');
+    console.log(ok ? 'All rail-inner checks passed' : 'Some checks failed');
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run); else run();
+  window.addEventListener('resize', function(){ setTimeout(run, 100); });
+})();
+</script>
+</body>
+</html>

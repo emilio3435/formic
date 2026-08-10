@@ -25,12 +25,15 @@ describe("model knowledge config", () => {
       "composer-2.5": "composer 2.5",
       "gpt-5.6-luna": "luna 5.6",
       "gpt-5.6-sol": "sol 5.6",
+      "gpt-5.6-terra": "terra 5.6",
       "grok-4.5": "grok 4.5",
       "spark-1.2": "spark 1.2",
       "muse-spark-1.2": "spark 1.2",
     });
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("gpt-5.6-sol-max", config)).toBe("gpt-5.6-sol");
+    expect(modelFamily("gpt-5.6-terra-low", config)).toBe("gpt-5.6-terra");
+    expect(modelFamily("gpt-5.6-luna-low", config)).toBe("gpt-5.6-luna");
     expect(modelFamily("fable-5-high", config)).toBe("claude-fable-5");
     // Composer families collapse to their version, not the shorter "composer-2".
     expect(modelFamily("composer-2.5-fast", config)).toBe("composer-2.5");
@@ -40,21 +43,41 @@ describe("model knowledge config", () => {
   test("the shipped model facts include versioned non-negative pricing", () => {
     const shipped = JSON.parse(readFileSync(shippedPath, "utf8")) as {
       pricingVersion?: unknown;
+      claudeContextWindows?: Record<string, number>;
       modelPricingUsdPerMillionTokens?: Record<string, {
         aliases?: unknown;
+        providers?: unknown;
         input?: unknown;
         output?: unknown;
         cacheRead?: unknown;
         cacheCreation?: unknown;
       }>;
     };
-    expect(shipped.pricingVersion).toBe("2026-07-28");
+    expect(shipped.pricingVersion).toBe("2026-08-09");
     const opus = shipped.modelPricingUsdPerMillionTokens?.["claude-opus-4-8"];
     expect(opus?.aliases).toContain("claude-opus-4-8");
     for (const amount of [opus?.input, opus?.output, opus?.cacheRead, opus?.cacheCreation]) {
       expect(typeof amount).toBe("number");
       expect(amount as number).toBeGreaterThanOrEqual(0);
     }
+    expect(opus?.providers).toEqual(["Anthropic API"]);
+    expect(shipped.modelPricingUsdPerMillionTokens?.["gpt-5.6-sol"]).toMatchObject({
+      providers: ["OpenAI API"], input: 5, output: 30, cacheRead: 0.5, cacheCreation: 6.25,
+    });
+    expect(shipped.modelPricingUsdPerMillionTokens?.["gpt-5.6-terra"]).toMatchObject({
+      providers: ["OpenAI API"], input: 2, output: 12, cacheRead: 0.2, cacheCreation: 2.5,
+    });
+    expect(shipped.modelPricingUsdPerMillionTokens?.["gpt-5.6-luna"]).toMatchObject({
+      providers: ["OpenAI API"], input: 0.2, output: 1.2, cacheRead: 0.02, cacheCreation: 0.25,
+    });
+    expect(shipped.claudeContextWindows).toMatchObject({
+      sol: 258_400,
+      luna: 258_400,
+      "gpt-5.6-sol": 258_400,
+      "gpt-5.6-luna": 258_400,
+    });
+    expect(shipped.claudeContextWindows).not.toHaveProperty("terra");
+    expect(shipped.claudeContextWindows).not.toHaveProperty("gpt-5.6-terra");
   });
 
   test("a missing or malformed file uses all compiled defaults", () => {

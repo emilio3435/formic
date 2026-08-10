@@ -45,7 +45,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const REPO = join(import.meta.dir, "..");
+const REPO = join(import.meta.dir, "../..");
 
 /* Project-local build first, then the machine-wide one — the same resolution
    order the /browse skill itself uses. */
@@ -136,12 +136,12 @@ beforeAll(async () => {
   /* Its own board on an ephemeral port. Never 4701 (the operator's launchd
      instance) and never a fixed port another lane may have claimed. */
   const port = await freePort();
-  base = `http://localhost:${port}`;
+  base = `http://127.0.0.1:${port}`;
   server = Bun.spawn(["bun", "src/server/index.ts"], {
     cwd: REPO,
     env: { ...process.env, MOUNTAIN_PORT: String(port) },
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
   });
 
   const deadline = Date.now() + 20_000;
@@ -150,7 +150,20 @@ beforeAll(async () => {
       const res = await fetch(base, { signal: AbortSignal.timeout(1_000) });
       if (res.ok) break;
     } catch { /* not up yet */ }
-    if (Date.now() > deadline) throw new Error(`the test board never answered on ${base}`);
+    if (server.exitCode !== null || Date.now() > deadline) {
+      if (server.exitCode === null) {
+        server.kill();
+        await server.exited;
+      }
+      const [stdout, stderr] = await Promise.all([
+        new Response(server.stdout).text(),
+        new Response(server.stderr).text(),
+      ]);
+      throw new Error(
+        `the test board never answered on ${base} (exit ${server.exitCode ?? "unknown"})`
+        + `\n${stdout.trim()}\n${stderr.trim()}`,
+      );
+    }
     await Bun.sleep(250);
   }
 

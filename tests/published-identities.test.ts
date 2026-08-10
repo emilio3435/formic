@@ -75,7 +75,7 @@ const priorCost = (label: string): number => at(label).priorSpend.measuredCostUs
 const totalCost = (label: string): number => (at(label).measuredCostUsd ?? 0) + priorCost(label);
 const totalInvocations = (label: string): number => (at(label).invocations ?? 0) + at(label).priorSpend.invocations;
 const providerCost = (label: string): number =>
-  at(label).byProvider.reduce((total, provider) => total + (provider.costUsd ?? 0), 0);
+  at(label).byProvider.reduce((total, provider) => total + (provider.measuredCostUsd ?? 0), 0);
 const round = (value: number): number => Math.round(value * 100) / 100;
 
 describe("identities that must hold whatever window you ask for", () => {
@@ -133,23 +133,13 @@ describe("identities that must hold whatever window you ask for", () => {
     expect(new Set(totals).size, `narrow windows disagreed: ${totals.join(" ")}`).toBe(1);
   });
 
-  test.failing("I3: the provider breakdown sums to the scalar it breaks down, at every window", () => {
-    /* FAILS at 30d by $1.17, exact everywhere else. A breakdown that does not
-       add up to its own total means the scalar and the per-provider rows are
-       computed over differently treated row sets — the same shape as I1, in a
-       third place, and confined to the same old rows.
+  test("I3: the provider breakdown sums to the scalar it breaks down, at every window", () => {
+    /* The former $1.17 gap at 30d has closed. This remains a hard guard because
+       a breakdown that does not add up to its own scalar means the two figures
+       were computed over differently treated row sets.
 
-       Marked failing until the backend resolves where the $1.17 is dropped —
-       it is routed, and two fixes to this family have now passed it without
-       touching it. It flips to a hard failure the moment the scalar and the
-       breakdown are computed over the same rows, which is the signal to remove
-       this marker rather than the test.
-
-       Unreadable BurnBar THROWS here rather than returning quietly. The quiet
-       return is correct for the plain tests around it, but under `.failing`
-       quiet means passing, and bun reports a passing `.failing` test as "marked
-       as failing but it passed" — so an unreadable database would announce that
-       the $1.17 gap had been closed. */
+       Unreadable BurnBar fails loudly here rather than returning quietly, so an
+       empty read cannot announce that the partition still reconciles. */
     expect(available).toBe(true);
     const gaps = WINDOWS.map(({ label }) => `${label}=${round(providerCost(label) - (at(label).measuredCostUsd ?? 0))}`);
 

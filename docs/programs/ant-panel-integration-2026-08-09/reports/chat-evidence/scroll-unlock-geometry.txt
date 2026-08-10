@@ -1,0 +1,36 @@
+# Scroll-ownership fix — computed geometry evidence (browse headless Chromium)
+# Preview: this worktree served at http://127.0.0.1:4811 (bun src/server/index.ts, PID 85876)
+
+## BEFORE (commit eda77eb, 1440x900, drawer open) — reproduces Emilio's report
+html | h=900 ovY=visible scrollH=900 clientH=900
+body | h=900 ovY=hidden(clip) scrollH=900 clientH=900          <- document frozen at one viewport
+.ops-stage | h=361 top=539 ovY=hidden                          <- 539px masthead chrome left 361px of stage
+.pane-inspector.dw-agent | h=359 ovY=auto scrollH=589
+.drawer-grid | h=340 (min-height floor)
+.drawer-chat | h=243
+.drawer-chat-scroll | h=28 scrollH=1436 clientH=28             <- THE COLLAPSE: 28px viewport, 1,436px of turns
+.chat-feed-foot | h=57   .drawer-controls-strip | h=156
+
+## AFTER (styles.css unlock, same page, 1440x900, drawer open, live transcript auto-loaded)
+html | h=900 ovY=visible scrollH=1900                          <- document scrolls (1900 > 900)
+body | h=1900 ovY=auto
+.ops-stage | h=1361 (content-sized, cap removed)
+.pane-inspector.dw-agent | h=1359
+.drawer-grid | h=1052
+.drawer-chat | h=803
+.drawer-chat-scroll | h=550 scrollH=22190 scrollTop=21640      <- 550px feed viewport, pinned to newest
+.chat-feed-foot | h=95   .drawer-controls-strip | h=156        <- foot + composer below the feed
+
+## AFTER (860x900 — full-sheet true modal)
+body | h=2555 ovY=hidden(clip via body.inspector-open lock)    <- locked ONLY under the open sheet
+.pane-inspector.dw-agent | pos=fixed h=900 ovY=auto scrollH=1492  <- sheet scrolls internally
+.drawer-chat | h=612 (68vh)
+.drawer-chat-scroll | h=378 scrollH=17907 scrollTop=17529      <- bounded feed, pinned to newest
+
+## Screenshots
+feed-fix-1440.png — docked drawer: multi-turn bubbles + foot (200 turns · source path · Refresh/Load 500) + composer
+feed-fix-860.png  — sheet: vitals, bubbles, foot, composer, Evidence stacked below
+
+## Regression-test mutation proof
+Reintroducing `height:100dvh` + `overflow-y: clip` on body makes
+"(2) scroll ownership: the document scrolls…" FAIL; restored file (md5-verified) passes.

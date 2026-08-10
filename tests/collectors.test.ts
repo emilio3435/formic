@@ -106,6 +106,7 @@ describe("collector identity and usage truth", () => {
       input: 570,
       output: 385,
       cachedInput: 74_711,
+      contextWindow: 1_000_000,
       /* `total` is the call's SIZE and keeps the re-read prefix, because a cached
          token still occupies the window. `sessionTotal` is CONSUMPTION and does
          not: 570 + 385 + 487 of cache writes. The 74,711 it used to swallow is
@@ -117,7 +118,7 @@ describe("collector identity and usage truth", () => {
       scope: "latest-turn",
       provenance: "observed",
     });
-    expect(agent?.tokens.contextWindow).toBeUndefined();
+    expect(agent?.tokens.contextWindow).toBe(1_000_000);
     expect(agent?.artifacts).toEqual([{
       label: "OMP transcript",
       path: "/Users/emilionunezgarcia/.omp/agent/sessions/-Developer-hd-master-health-tester-v2-20260721/session.jsonl",
@@ -280,6 +281,7 @@ describe("collector identity and usage truth", () => {
       input: 3,
       output: 4,
       cachedInput: 5,
+      contextWindow: 1_000_000,
       total: 13,
       // Two calls of new work; the 74,716 of re-reads is carried separately.
       sessionTotal: 1_450,
@@ -361,6 +363,34 @@ describe("collector identity and usage truth", () => {
     );
     expect(agent?.task).toBe("Implement safe identity routing.");
     expect(agent?.effort).toBe("xhigh");
+  });
+
+  test("Codex preserves an explicit routed context window", () => {
+    const agent = parseCodexJsonl([
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-02T10:00:00.000Z",
+        payload: { id: "codex-route-context", cwd: "/tmp/codex" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-02T10:05:00.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 1_000,
+              cached_input_tokens: 100,
+              output_tokens: 50,
+              total_tokens: 1_050,
+            },
+            model_context_window: 65_536,
+          },
+        },
+      }),
+    ].join("\n"));
+
+    expect(agent?.tokens.contextWindow).toBe(65_536);
   });
 
   test("codex parser records string launch evidence from session_meta", () => {

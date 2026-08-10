@@ -65,7 +65,11 @@ describe("a failed cost lookup never renders as zero spend", () => {
   test("a priced model still produces a real derived number", () => {
     // Without this the three assertions above would all pass on a function
     // that had simply stopped costing anything at all.
-    const result = resolveUsageCost({ model: "claude-opus-4-8", ...SIX_MILLION_TOKENS });
+    const result = resolveUsageCost({
+      model: "claude-opus-4-8",
+      provider: "Anthropic API",
+      ...SIX_MILLION_TOKENS,
+    });
 
     expect(result.costProvenance).toBe("derived_estimate");
     expect(result.costUsd).toBeGreaterThan(0);
@@ -76,6 +80,7 @@ describe("a failed cost lookup never renders as zero spend", () => {
     // conflated with "unknown", or the distinction above is meaningless.
     const result = resolveUsageCost({
       model: "claude-opus-4-8",
+      provider: "Anthropic API",
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -103,6 +108,7 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
            scenario this file is named for was never actually all-sources-down. */
         omp: ["EACCES scanning ~/.omp"],
         factory: ["EACCES scanning ~/.factory"],
+        prime: ["EACCES scanning ~/.prime"],
       },
       cmuxErrors: ["cmux socket refused the connection"],
       cmuxReachable: false,

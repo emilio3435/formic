@@ -129,13 +129,14 @@ function primeFixture(overrides: Record<string, unknown> = {}) {
 
 describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.ts → app.js", () => {
   test("renderAgentRow surfaces transcriptTail containing [TL;DR", () => {
-    const agent = primeFixture();
+    // Row stability: TL;DR lives in header (per-repo, fleet-wide) and drawer Chat, not collapsed row.
+    // Row shows stable Task (sidecar, 5m LLM) + live/working/alert at right — hybrid row.
+    const agent = primeFixture({ task: "Stable Task via sidecar LLM", transcriptTail: "[TL;DR 04:03] should not appear in row" });
     const program = { id: "p1", name: "The Mountain", agents: [agent] };
     const row = withDom(() => M.renderAgentRow(agent, program, {}));
     const text = textOf(row);
-    expect(text).toContain("[TL;DR");
-    expect(text).toContain("04:03");
-    expect(text).toContain("Blockers: all-clear");
+    expect(text).not.toContain("[TL;DR");
+    expect(text).toContain("Stable Task");
   });
 
   test("renderAgentDrawer Chat surfaces transcriptTail [TL;DR]", () => {
@@ -147,11 +148,36 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
     expect(text).toContain("Blockers: all-clear");
   });
 
-  test("MAX_TRANSCRIPT_TAIL_CHARS is 800 and wire truncates to that cap", async () => {
-    const { MAX_TRANSCRIPT_TAIL_CHARS } = await import("../src/server/types");
-    expect(MAX_TRANSCRIPT_TAIL_CHARS).toBe(800);
+  test("the header parser accepts bounded v3 JSON and keeps the legacy fallback", () => {
+    const structured = M.parseHeartbeatStructured(
+      '[TL;DR 12:34] {"v":3,"repos":[{"repo":"The Mountain","summary":"The Mountain: 2 live=1w+1i · reconcile UI · all-clear","blocker":"all-clear","signal":"working"}],"omitted":2}',
+    );
+    expect(structured.time).toBe("12:34");
+    expect(structured.legacy).toBe(false);
+    expect(structured.repos).toEqual([{
+      repo: "The Mountain",
+      summary: "The Mountain: 2 live=1w+1i · reconcile UI · all-clear",
+      blocker: "all-clear",
+      signal: "working",
+    }]);
 
-    // Snapshot caps tail to 800: build a collected agent with 2000-char tail, snapshot must slice to 800.
+    const legacy = M.parseHeartbeatStructured(
+      "[TL;DR 12:35] Home: 1 live=1w+0i · deploy · no blockers",
+    );
+    expect(legacy.legacy).toBe(true);
+    expect(legacy.repos[0].repo).toBe("Home");
+    expect(legacy.repos[0].signal).toBe("ok");
+  });
+
+  test("wire caps non-envelope tails to 800; [TL;DR envelopes keep the 6000 backstop", async () => {
+    const { MAX_TRANSCRIPT_TAIL_CHARS, MAX_HEARTBEAT_TAIL_CHARS } = await import("../src/server/types");
+    expect(MAX_TRANSCRIPT_TAIL_CHARS).toBe(800);
+    expect(MAX_HEARTBEAT_TAIL_CHARS).toBe(6000);
+
+    // An envelope-shaped tail (starts "[TL;DR ") is PRESERVED beyond 800 — the
+    // old slice(-800) cut its head off and killed the parse (worst failure
+    // mode: a long envelope became an unparseable stub). Non-envelope chatter
+    // still caps at 800.
     const { buildSnapshot } = await import("../src/server/snapshot");
     const longTail = "[TL;DR 04:03] " + "x".repeat(2000);
     const collected: any = {
@@ -178,22 +204,36 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
       now: new Date(),
     });
     const snapAgent = snap.programs.flatMap((p: any) => p.agents).find((a: any) => a.id === "prime:test-long-tail");
-    expect(snapAgent.transcriptTail.length).toBe(800);
-    // tail is end-anchored slice, so it should end with the tail of the original
-    expect(longTail.endsWith(snapAgent.transcriptTail)).toBe(true);
+    // Envelope tail: preserved whole (2014 chars < 6000 backstop), head intact.
+    expect(snapAgent.transcriptTail).toBe(longTail);
+
+    // Non-envelope chatter still caps at 800, end-anchored.
+    const chatter = "z".repeat(2000);
+    const snap2: any = buildSnapshot({
+      agents: [{ ...collected, id: "prime:test-chatter", sourceSessionId: "test-chatter", transcriptTail: chatter }],
+      surfaces: [],
+      archiveStore: { archivedAgents: () => [], has: () => false } as any,
+      now: new Date(),
+    });
+    const chatterAgent = snap2.programs.flatMap((p: any) => p.agents).find((a: any) => a.id === "prime:test-chatter");
+    expect(chatterAgent.transcriptTail.length).toBe(800);
+    expect(chatter.endsWith(chatterAgent.transcriptTail)).toBe(true);
   });
 
   test("row caps [TL;DR] via conciseText 120 even when wire tail is 800", () => {
-    // Row uses conciseText 120 (roster diet), drawer Chat renders full 800-char tail.
-    // Use a tail where [TL;DR] is at the START but length ~ 750 so slice(-800) preserves it.
+    // Row stability: Task is stable (sidecar, 5m, LLM), header is per-repo TL;DR fleet-wide.
+    // Row no longer surfaces transcriptTail [TL;DR] — that lives in header (prime:ant-heartbeat-monitor, 800c) and drawer Chat.
+    // This preserves the wire→pixel proof via drawer/header while row stays readable Task (hybrid row = Task middle + live/working/alert right).
     const longTldr = "[TL;DR 04:03] " + "y".repeat(730) + " Blockers: all-clear";
     expect(longTldr.length).toBeGreaterThan(700);
     expect(longTldr.length).toBeLessThan(800);
-    const agent = primeFixture({ transcriptTail: longTldr });
+    const agent = primeFixture({ transcriptTail: longTldr, task: "Implement per-repo header TL;DRs with LLM" });
     const program = { id: "p1", name: "P", agents: [agent] };
     const row = withDom(() => M.renderAgentRow(agent, program, {}));
     const rowText = textOf(row);
-    expect(rowText).toContain("[TL;DR");
+    // Row now shows stable Task, not TL;DR (header/drawer own TL;DR)
+    expect(rowText).not.toContain("[TL;DR");
+    expect(rowText).toContain("Implement per-repo");
     const chat = withDom(() => M.renderChat(agent));
     const chatText = textOf(chat);
     expect(chatText).toContain("[TL;DR");
@@ -215,7 +255,8 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
 
     // Long tail beyond cap
     const longText = "z".repeat(1000) + " [TL;DR 04:03] tail end Blockers: all-clear";
-    // prime.ts slices from END, so a long prefix with TL;DR at end survives; TL;DR at start would be lost — this is why B2 keeps TL;DR concise.
+    // Non-envelope tail (starts with chatter, not "[TL;DR "): capped at 800 from the END.
+    // A tail that STARTS with "[TL;DR " now keeps the 6000 backstop instead — see the wire-cap test above.
     const jsonl2 = [
       JSON.stringify({ type: "session", id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", cwd: "/tmp", timestamp: new Date().toISOString() }),
       JSON.stringify({ type: "message", message: { role: "assistant", content: longText, timestamp: new Date().toISOString() } }),

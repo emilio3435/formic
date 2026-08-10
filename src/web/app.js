@@ -8,6 +8,7 @@ import { $, contextPressureOf, el, icon, SVGNS, svgChild, svgGauge, svgMeter, sv
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
 import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
+import { tldrMarkupNodes } from "./tldr-markup.js";
 import {
   clocksFrozen,
   feedAlarm,
@@ -25,9 +26,11 @@ import {
 import {
   loadTranscript,
   normalizeTranscript,
-  renderTranscriptPanel,
+  renderTranscriptFoot,
+  transcriptLineNode,
   transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
+  TRANSCRIPT_ROLE_LABELS,
 } from "./transcript.js";
 import {
   applyNotifications,
@@ -85,6 +88,7 @@ import {
   roleView,
   roleSourceView,
   parseSenderHeader,
+  parseTaskEnvelope,
   senderOf,
   senderClaimText,
   withoutSenderHeader,
@@ -198,6 +202,7 @@ import {
   WIDGET_CATALOG,
   WIDGET_IDS,
   WIDGET_STORAGE_KEY,
+  TLDR_VIEW_KEY,
 } from "./client-catalogs.js";
 
 "use strict";
@@ -1396,6 +1401,53 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
       spreadToggleable: median != null && average != null,
     };
   }
+  if (id === "mix") {
+    const counts = new Map();
+    const models = new Map();
+    for (const program of snap.programs || []) {
+      for (const agent of program.agents || []) {
+        const prov = agent.provider || "unknown";
+        counts.set(prov, (counts.get(prov) || 0) + 1);
+        if (agent.model) {
+          const short = modelShort(agent.model) || String(agent.model);
+          models.set(short, (models.get(short) || 0) + 1);
+        }
+      }
+    }
+    if (!counts.size) return noDataWidget("No sessions to mix.");
+    const parts = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+      .map(([prov, n]) => `${providerLabel(prov)} ${n}`);
+    const topModels = [...models.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([model, n]) => `${model}×${n}`);
+    return {
+      value: parts.join(" · "),
+      unit: "",
+      sublabel: topModels.join(" · ") || "models not reported",
+      tone: "ok",
+      mixProviders: [...counts.entries()].map(([prov, n]) => ({ prov, n })),
+    };
+  }
+  if (id === "spend") {
+    const burn = snap.pulse && snap.pulse.burn;
+    if (!burn) return noDataWidget("No spend data yet.");
+    const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
+    if (!costKnown) {
+      return { value: "No data", unit: "", sublabel: "cost unavailable", tone: "missing" };
+    }
+    const value = (burn.costIsFloor ? "≥$" : "$") + Number(burn.costLastHourUsd).toFixed(2);
+    const asOf = burn.costAsOf && !Number.isNaN(Date.parse(burn.costAsOf))
+      ? agoText(burn.costAsOf)
+      : "";
+    return {
+      value,
+      unit: "",
+      sublabel: [burn.costProvenance || "", asOf].filter(Boolean).join(" · "),
+      tone: "neutral",
+    };
+  }
   return noDataWidget("Widget evidence is not available.");
 }
 
@@ -1467,6 +1519,8 @@ globalThis.TheAntHill = {
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
+  parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, fleetFallbackLine,
+  renderHealthRail, renderHealthTldrLane, repoScopedReadings, tldrRepoOrder,
   identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
   renderControlBanner, renderIdentityBlock,
   el,
@@ -1478,7 +1532,9 @@ globalThis.TheAntHill = {
   // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
-  transcriptFailureText, transcriptWindow, renderTranscriptPanel,
+  transcriptFailureText, transcriptWindow, renderTranscriptFoot,
+  chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, chatScrollPlan, saveChatScrollFrom,
+  drawerFloatTopPx, syncDrawerFloat,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
   actionOutcomeView, lastActionFor,
@@ -1784,6 +1840,58 @@ function loadWidgetPreferences() {
 
 function saveWidgetPreferences() {
   try { localStorage.setItem(WIDGET_STORAGE_KEY, JSON.stringify(state.widgetIds)); } catch { /* storage unavailable */ }
+}
+
+function loadTldrView() {
+  try {
+    const raw = localStorage.getItem(TLDR_VIEW_KEY);
+    state.tldrView = raw && raw !== "ALL" ? String(raw) : "ALL";
+  } catch {
+    state.tldrView = "ALL";
+  }
+}
+
+function saveTldrView() {
+  try { localStorage.setItem(TLDR_VIEW_KEY, state.tldrView || "ALL"); } catch { /* storage unavailable */ }
+}
+
+function repoScopedReadings(program) {
+  if (!program) return null;
+  const agents = Array.isArray(program.agents) ? program.agents : [];
+  const working = agents.filter((a) => a.lifecycle === "working").length;
+  const blocked = agents.filter((a) => a.outcome === "blocked").length;
+  const needsYou = agents.filter((a) => a.attentionSignal && a.lifecycle !== "finished").length;
+  const pcts = agents.map((a) => agentContextPct(a)).filter((n) => Number.isFinite(n));
+  const avgCtx = pcts.length ? Math.round(pcts.reduce((sum, n) => sum + n, 0) / pcts.length) : null;
+  const pressure = avgCtx == null ? "" : contextPressureOf(avgCtx);
+  const hot = needsYou > 0 || blocked > 0;
+  return {
+    momentum: {
+      value: String(working),
+      unit: working === 1 ? "working" : "working",
+      sublabel: "this repo",
+      tone: hot ? "hot" : "ok",
+    },
+    burn: { value: "—", unit: "", sublabel: "fleet-wide only", tone: "missing" },
+    "context-peak": avgCtx == null
+      ? { value: "—", unit: "", sublabel: "this repo", tone: "missing" }
+      : {
+        value: String(avgCtx),
+        unit: "%",
+        sublabel: "this repo",
+        tone: pressure === "hot" ? "hot" : "ok",
+        meterPct: avgCtx,
+        meterLabel: `${avgCtx}% avg in this repo`,
+      },
+    health: {
+      value: hot ? "Needs you" : "Steady",
+      unit: "",
+      sublabel: "this repo",
+      tone: hot ? "hot" : "ok",
+      icon: hot ? "warning" : "check",
+      remedy: null,
+    },
+  };
 }
 
 /* ---------- data flow ---------- */
@@ -2556,6 +2664,13 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
        its own subject. */
     valueNode = el("span", { class: valueClass },
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
+  } else if (id === "mix" && Array.isArray(data.mixProviders) && data.mixProviders.length) {
+    valueNode = el("span", { class: "mix-row " + valueClass },
+      ...data.mixProviders.map(({ prov, n }) => el("span", { class: "mix-seg" },
+        el("span", { class: "prov-dot is-" + String(prov || "prime").toLowerCase() }),
+        el("span", { class: "prov-name", text: providerLabel(prov) }),
+        String(n),
+      )));
   } else {
     valueNode = el("span", { class: valueClass }, data.value,
       data.unit ? el("span", { class: "unit", text: data.unit }) : null);
@@ -3744,7 +3859,9 @@ function renderScanWindow() {
 
 function renderHealthRail() {
   const widgets = $("health-widgets");
-  if (!widgets) return;
+  const grid = $("readings-grid");
+  if (!widgets || !grid) return;
+  if (state.tldrView == null) state.tldrView = "ALL";
   const model = pulseStripModel(state.snap, state.conn, state.queueItems, state.contextDisplay, state.queueError);
   // One derivation per widget per paint. The signature, the cell and the calm
   // line all read this map; each used to call summaryWidgetData again, and each
@@ -3753,6 +3870,9 @@ function renderHealthRail() {
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
+  const hbAgent = heartbeatTldrAgent(state.snap);
+  const envelopeRaw = hbAgent && typeof hbAgent.transcriptTail === "string" ? hbAgent.transcriptTail : "";
+  const staleBucket = heartbeatStaleBucket(hbAgent);
   const sig = [
     state.conn,
     model.calm ? "calm:" + (model.watch || []).join("|") : "stressed",
@@ -3792,6 +3912,9 @@ function renderHealthRail() {
        is CLEAN-1 again one level down. */
     cleanerView(state.snap, state.cleaner).state,
     state.cleaner.error,
+    envelopeRaw,
+    state.tldrView || "ALL",
+    staleBucket,
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -3813,9 +3936,22 @@ function renderHealthRail() {
   }
   pulseNeedsYouWas = needsYou;
 
-  widgets.textContent = "";
-  if (model.calm) {
-    widgets.append(renderPulseCalm(dataById.get("health"), model.watch));
+  /* Empty ONLY the readings grid — never the two-child ribbon shells, and never
+     #cleanup-status (static in stack-head; destroying an aria-live region
+     silences announcements). */
+  grid.textContent = "";
+  const view = state.tldrView || "ALL";
+  const scopedProgram = view !== "ALL" ? programForTldrRepo(state.snap, view) : null;
+  const scoped = scopedProgram ? repoScopedReadings(scopedProgram) : null;
+  updateReadingsScopePill(view !== "ALL" && scopedProgram ? view : "");
+  if (model.calm && !scoped) {
+    grid.append(renderPulseCalm(dataById.get("health"), model.watch));
+  } else if (scoped) {
+    for (const id of ["health", "momentum", "burn", "context-peak"]) {
+      const data = scoped[id];
+      if (!data) continue;
+      grid.append(renderSummaryWidget(id, data.tone === "hot" ? "hot" : "normal", data));
+    }
   } else {
     /* The MODEL decides what speaks; this loop only orders it. It used to walk
        state.widgetIds and fall back to summaryWidgetData for any id the model had
@@ -3827,10 +3963,11 @@ function renderHealthRail() {
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
       if (!cell) continue;
-      widgets.append(renderSummaryWidget(id, cell.weight, cell.data));
+      grid.append(renderSummaryWidget(id, cell.weight, cell.data));
     }
   }
   renderWidgetCustomizer();
+  renderHealthTldrLane();
   /* renderSettingsPanel used to be called here, and it was the "settings do not
      stick" bug. This function returns early whenever the WIDGET paint signature
      is unchanged — a quiet fleet, most of the time — and the settings panel sat
@@ -3841,6 +3978,415 @@ function renderHealthRail() {
 
      It is a sibling of the widgets now, not a tail of them, and it keeps its own
      signature below. */
+}
+
+/* ---------- heartbeat TL;DR — always from prime:ant-heartbeat-monitor (out-of-view) ---------- */
+function heartbeatTldrAgent(snap) {
+  if (!snap || !snap.programs) return null;
+  for (const program of snap.programs) {
+    for (const agent of program.agents || []) {
+      if (agent.id === "prime:ant-heartbeat-monitor" && typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")) {
+        return agent;
+      }
+    }
+  }
+  // fallback: any prime with [TL;DR] if monitor not yet present (first boot before monitor file exists)
+  for (const program of snap.programs) {
+    for (const agent of program.agents || []) {
+      if (typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")) return agent;
+    }
+  }
+  return null;
+}
+
+/* ---------- v3 structured TL;DR — deterministic repo bar + per-card linking ---------- */
+
+function parseHeartbeatStructured(raw) {
+  // raw is transcriptTail trim, e.g. "[TL;DR 17:33] {\"v\":3,\"repos\":[...]}" or legacy pipe string
+  const m = raw.match(/^\[TL;DR\s+(\d{1,2}:\d{2})\]\s*/);
+  const time = m ? m[1] : "";
+  const body = m ? raw.slice(m[0].length).trim() : raw.trim();
+  if (!body) return { time, fleet: "", repos: [], raw, body, legacy: true };
+  // Try structured JSON envelope v3/v4
+  if (body.startsWith("{") && body.includes("\"repos\"")) {
+    try {
+      const envelope = JSON.parse(body);
+      if (envelope && typeof envelope.v === "number" && Array.isArray(envelope.repos)) {
+        const repos = envelope.repos.filter((r) => r && typeof r.repo === "string" && typeof r.summary === "string").map((r) => ({
+          repo: String(r.repo),
+          summary: String(r.summary),
+          blocker: String(r.blocker || "none reported"),
+          signal: String(r.signal || "ok").toLowerCase(),
+        }));
+        const fleet = typeof envelope.fleet === "string" ? envelope.fleet : "";
+        if (repos.length) return { time, fleet, repos, raw, body, legacy: false, v: envelope.v };
+      }
+    } catch {}
+  }
+  // Legacy fallback: pipe-joined "repo: summary | repo: summary"
+  const parts = body.split(/\s*\|\s*/).filter(Boolean);
+  const repos = parts.map((line) => {
+    const trimmed = line.trim();
+    const colon = trimmed.indexOf(":");
+    const repo = colon > 0 ? trimmed.slice(0, colon).trim() : "repo";
+    // derive blocker from tail after last "·" or "blocker" keyword
+    const lower = trimmed.toLowerCase();
+    let blocker = "none reported";
+    if (lower.includes("all-clear")) blocker = "all-clear";
+    else if (lower.includes("question pending")) blocker = "question pending";
+    else if (lower.includes("blocker") || lower.includes("blocking")) {
+      const blk = trimmed.split("·").pop() || "";
+      if (blk.trim()) blocker = blk.trim().slice(0, 48);
+    }
+    let signal = "ok";
+    const isClear = lower.includes("all-clear") || lower.includes("none reported") || lower.includes("no blockers") || lower.includes("0 blockers");
+    if (lower.includes("failed")) signal = "failed";
+    else if (lower.includes("blocked") && !isClear) signal = "blocked";
+    else if (!isClear && (lower.includes("question pending") || lower.includes("needs you") || (lower.includes("blocker") && !isClear))) signal = "needs-you";
+    else if (lower.includes("working")) signal = "working";
+    return { repo, summary: trimmed, blocker, signal };
+  });
+  return { time, fleet: "", repos, raw, body, legacy: true, v: 2 };
+}
+
+/* Distinct repositories with LIVE agents. The denominator the operator means
+   by "repos": program groups are worktrees — five checkouts of one repo are
+   one repo, and a dormant directory is not part of the live fleet story. */
+function liveRepoNames(snap) {
+  const names = new Set();
+  for (const p of (Array.isArray(snap?.programs) ? snap.programs : [])) {
+    const agents = Array.isArray(p.agents) ? p.agents : [];
+    if (!agents.some((a) => a && (a.lifecycle === "working" || a.lifecycle === "waiting"))) continue;
+    const repo = repoOf(p);
+    const name = String((repo && repo.repoName) || p.name || p.id || "").toLowerCase();
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+function fleetFallbackLine(snap, repos) {
+  const live = snap?.totals?.live ?? 0;
+  const attention = snap?.totals?.attention ?? 0;
+  const repoCount = liveRepoNames(snap).size;
+  const list = Array.isArray(repos) ? repos : [];
+  const hot = list.find((r) => {
+    const s = String(r?.signal || "").toLowerCase();
+    return s === "needs-you" || s === "blocked" || s === "failed";
+  });
+  const top = hot?.repo || list[0]?.repo || "";
+  let line = `${live} live across ${repoCount} repos`;
+  if (attention > 0) line += ` · ${attention} needs you`;
+  if (top) line += ` — ${top}`;
+  return line;
+}
+
+const HEARTBEAT_STALE_MS = 7 * 60 * 1000;
+
+function heartbeatStaleBucket(agent) {
+  if (!agent || !agent.updatedAt) return "0";
+  const age = Date.now() - Date.parse(agent.updatedAt);
+  return Number.isFinite(age) && age > HEARTBEAT_STALE_MS ? "1" : "0";
+}
+
+function tldrSignalRank(signal) {
+  const s = String(signal || "").toLowerCase();
+  if (s === "needs-you" || s === "blocked" || s === "failed") return 0;
+  if (s === "working" || s === "ok") return 2;
+  if (s === "idle" || s === "all-clear") return 3;
+  return 2;
+}
+
+function tldrRepoOrder(repos) {
+  return [...(Array.isArray(repos) ? repos : [])].sort((a, b) => {
+    const bySignal = tldrSignalRank(a.signal) - tldrSignalRank(b.signal);
+    if (bySignal) return bySignal;
+    return (b.live ?? 0) - (a.live ?? 0);
+  });
+}
+
+function setTldrView(view) {
+  state.tldrView = view || "ALL";
+  saveTldrView();
+  state.paintSig.widgets = "";
+  renderHealthRail();
+}
+
+function programForTldrRepo(snap, repoName) {
+  if (!snap || !snap.programs) return null;
+  const lower = String(repoName).toLowerCase();
+  if (lower === "all-clear") return null;
+  // exact name match first
+  for (const p of snap.programs) {
+    if (String(p.name).toLowerCase() === lower) return p;
+    if (String(p.id).toLowerCase().includes(lower.replace(/\s+/g, "-"))) return p;
+  }
+  // path basename or name includes
+  for (const p of snap.programs) {
+    const n = String(p.name).toLowerCase();
+    const id = String(p.id).toLowerCase();
+    if (n.includes(lower) || lower.includes(n) || id.includes(lower)) return p;
+  }
+  // fallback: repoKey match via groupPath not exposed — use snapshot rollup by path basename
+  for (const p of snap.programs) {
+    if (p.path && String(p.path).toLowerCase().includes(lower)) return p;
+  }
+  return null;
+}
+
+function deterministicRepoStats(program) {
+  if (!program) return null;
+  const agents = Array.isArray(program.agents) ? program.agents : [];
+  const live = agents.filter((a) => a.lifecycle === "working" || a.lifecycle === "waiting").length;
+  const working = agents.filter((a) => a.lifecycle === "working").length;
+  const idle = agents.filter((a) => a.lifecycle === "waiting").length;
+  const needsYou = agents.filter((a) => a.attentionSignal && a.lifecycle !== "finished").length;
+  const failed = agents.filter((a) => a.outcome === "failed").length;
+  const blocked = agents.filter((a) => a.outcome === "blocked").length;
+  // branch/dirty/PRs from first agent that has them, or from repo identity
+  let branch;
+  let dirty;
+  let head;
+  let prCount = 0;
+  let headShort;
+  for (const a of agents) {
+    if (!branch && a.repo && a.repo.branch) branch = a.repo.branch;
+    if (!branch && a.git && a.git.branch) branch = a.git.branch;
+    if (dirty === undefined && a.git && typeof a.git.dirty === "boolean") dirty = a.git.dirty;
+    if (!head && a.git && a.git.head) head = a.git.head;
+    if (Array.isArray(a.pullRequestUrls)) prCount += a.pullRequestUrls.length;
+  }
+  // program-level repo branch fallback
+  if (!branch && program.path) {
+    // program.name often is repoName; branch lives on agent repo, not program — keep agent-derived
+  }
+  if (head) headShort = String(head).slice(0, 7);
+  return { live, working, idle, needsYou, failed, blocked, branch, dirty, headShort, prCount, total: agents.length };
+}
+
+function tldrCardSignalClass(signal) {
+  const s = String(signal).toLowerCase().replace(/\s+/g, "-");
+  if (s === "needs-you" || s === "blocked" || s === "failed") return "is-" + s;
+  if (s === "working" || s === "ok" || s === "all-clear" || s === "idle") return "is-" + s;
+  return "is-ok";
+}
+
+function updateReadingsScopePill(repoName) {
+  const widgets = $("health-widgets");
+  const stack = widgets && findChildClass(widgets, "readings-stack");
+  const head = stack && findChildClass(stack, "stack-head");
+  if (!head) return;
+  let pill = findChildClass(head, "scope-pill");
+  if (!repoName) {
+    if (pill) pill.remove();
+    return;
+  }
+  if (!pill) {
+    pill = el("span", { class: "scope-pill", text: repoName });
+    const scan = $("scan-window");
+    const scanParent = scan && (scan.parentNode || scan.parent);
+    if (scan && scanParent === head) head.insertBefore(pill, scan);
+    else head.append(pill);
+  } else {
+    pill.textContent = repoName;
+  }
+}
+
+function findChildClass(root, className) {
+  for (const kid of root.children || []) {
+    if (kid.classList?.contains?.(className) || String(kid.className || "").split(/\s+/).includes(className)) return kid;
+  }
+  return null;
+}
+
+/* Lane class vocabulary kept live for the orphan-CSS guard: repo view (Task 7)
+   emits tldr-card-repo tldr-card-signal tldr-lane-det tldr-det-pill
+   tldr-card-blocker scope-pill against the styles ported with this fold-in. */
+function renderHealthTldrLane() {
+  const lane = $("health-tldr-lane");
+  const widgets = $("health-widgets");
+  if (!lane) return;
+  if (state.tldrView == null) state.tldrView = "ALL";
+  lane.textContent = "";
+  lane.classList.remove("is-needs-you", "is-stale");
+
+  const agent = heartbeatTldrAgent(state.snap);
+  if (!agent || !agent.transcriptTail) {
+    lane.hidden = true;
+    if (widgets) widgets.classList.add("is-no-tldr");
+    return;
+  }
+  const raw = agent.transcriptTail.trim();
+  const parsed = parseHeartbeatStructured(raw);
+  if (!parsed.repos || !parsed.repos.length) {
+    lane.hidden = true;
+    if (widgets) widgets.classList.add("is-no-tldr");
+    return;
+  }
+
+  if (state.tldrView !== "ALL") {
+    const stillThere = parsed.repos.some((r) => r.repo === state.tldrView)
+      || programForTldrRepo(state.snap, state.tldrView);
+    if (!stillThere) {
+      state.tldrView = "ALL";
+      saveTldrView();
+    }
+  }
+
+  lane.hidden = false;
+  if (widgets) widgets.classList.remove("is-no-tldr");
+  lane.setAttribute("role", "group");
+  lane.title = raw;
+
+  const time = parsed.time || (agent.updatedAt
+    ? new Date(agent.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "");
+  const view = state.tldrView || "ALL";
+  if (view !== "ALL") {
+    renderTldrRepoLane(lane, parsed, agent, time, view);
+  } else {
+    renderTldrAllLane(lane, parsed, time);
+  }
+
+  if (heartbeatStaleBucket(agent) === "1") {
+    lane.classList.add("is-stale");
+    const timeEl = findChildClass(findChildClass(lane, "tldr-lane-head") || lane, "heartbeat-tldr-time");
+    if (timeEl) timeEl.classList.add("is-frozen");
+  }
+
+  if (typeof globalThis !== "undefined" && globalThis.TheAntHill) {
+    globalThis.TheAntHill.parseHeartbeatStructured = parseHeartbeatStructured;
+    globalThis.TheAntHill.programForTldrRepo = programForTldrRepo;
+    globalThis.TheAntHill.deterministicRepoStats = deterministicRepoStats;
+    globalThis.TheAntHill.fleetFallbackLine = fleetFallbackLine;
+    globalThis.TheAntHill.repoScopedReadings = repoScopedReadings;
+    globalThis.TheAntHill.tldrRepoOrder = tldrRepoOrder;
+    globalThis.TheAntHill.renderHealthTldrLane = renderHealthTldrLane;
+    globalThis.TheAntHill.renderHealthRail = renderHealthRail;
+  }
+}
+
+function renderTldrAllLane(lane, parsed, time) {
+  lane.setAttribute("aria-label", "Cluster TL;DR — all repos");
+  const totals = (state.snap && state.snap.totals) || {};
+  const live = totals.live ?? 0;
+  const attention = totals.attention ?? 0;
+  const repoCount = parsed.repos.length;
+  const ordered = tldrRepoOrder(parsed.repos);
+  const hot = ordered.some((r) => tldrSignalRank(r.signal) === 0);
+  if (hot || attention > 0) lane.classList.add("is-needs-you");
+  const first = ordered[0];
+
+  const prev = el("button", { type: "button", class: "chev", "aria-label": "Previous view", disabled: "", text: "‹" });
+  const next = el("button", {
+    type: "button",
+    class: "chev",
+    "aria-label": first ? `Filter to ${first.repo}` : "Next repo view",
+    text: "›",
+    onclick: () => { if (first) setTldrView(first.repo); },
+  });
+  if (!first) next.setAttribute("disabled", "");
+
+  lane.append(el("div", { class: "tldr-lane-head" },
+    el("span", { class: "heartbeat-tldr-label", "aria-hidden": "true", text: "TL;DR" }),
+    el("span", { class: "heartbeat-tldr-time", text: time }),
+    el("span", { class: "tldr-lane-meta", text: `${repoCount} repos · ${live} live · ${attention} needs you` }),
+    el("div", { class: "lane-pager" }, prev, el("span", { class: "lane-pos", "aria-live": "polite", text: "ALL" }), next),
+  ));
+
+  const fleetText = parsed.fleet || fleetFallbackLine(state.snap, parsed.repos);
+  lane.append(el("p", { class: "tldr-lane-prose" }, ...tldrMarkupNodes(fleetText)));
+
+  const strip = el("div", { class: "tldr-chip-strip", role: "list", "aria-label": "Repo status" });
+  const mentioned = new Set(parsed.repos.map((r) => String(r.repo).toLowerCase()));
+  for (const repo of ordered) {
+    const name = repo.repo;
+    strip.append(el("button", {
+      type: "button",
+      class: "tldr-chip " + tldrCardSignalClass(repo.signal),
+      role: "listitem",
+      onclick: () => setTldrView(name),
+    }, el("span", { class: "dot" }), name));
+  }
+  /* Same repo-level denominator as fleetFallbackLine: worktree groups are not
+     repos, and only live repos belong in the strip's remainder. */
+  const quiet = [...liveRepoNames(state.snap)].filter((name) => !mentioned.has(name)).length;
+  if (quiet > 0) {
+    strip.append(el("span", { class: "tldr-chip is-more", role: "listitem", text: `+${quiet} quiet` }));
+  }
+  lane.append(strip);
+}
+
+function renderTldrRepoLane(lane, parsed, agent, time, repoName) {
+  const ordered = tldrRepoOrder(parsed.repos);
+  const repo = ordered.find((r) => r.repo === repoName)
+    || parsed.repos.find((r) => r.repo === repoName)
+    || { repo: repoName, summary: "", blocker: "none reported", signal: "ok" };
+  const program = programForTldrRepo(state.snap, repoName);
+  const stats = deterministicRepoStats(program);
+  const sigClass = tldrCardSignalClass(repo.signal);
+  lane.setAttribute("aria-label", "Cluster TL;DR — " + repoName);
+  if (sigClass === "is-needs-you" || sigClass === "is-blocked" || sigClass === "is-failed") {
+    lane.classList.add("is-needs-you");
+  }
+
+  const idx = Math.max(0, ordered.findIndex((r) => r.repo === repoName));
+  const pos = idx + 1;
+  const prevRepo = idx <= 0 ? null : ordered[idx - 1];
+  const nextRepo = ordered[idx + 1] || null;
+
+  const prev = el("button", {
+    type: "button",
+    class: "chev",
+    "aria-label": idx === 0 ? "Back to ALL" : `Previous repo — ${prevRepo.repo}`,
+    text: "‹",
+    onclick: () => setTldrView(idx === 0 ? "ALL" : prevRepo.repo),
+  });
+  const next = el("button", {
+    type: "button",
+    class: "chev",
+    "aria-label": nextRepo ? `Next repo — ${nextRepo.repo}` : "Next repo view",
+    text: "›",
+    onclick: () => { if (nextRepo) setTldrView(nextRepo.repo); },
+  });
+  if (!nextRepo) next.setAttribute("disabled", "");
+
+  const metaBits = [];
+  if (stats) metaBits.push(stats.total + " agents");
+  if (time) metaBits.push(time);
+
+  lane.append(el("div", { class: "tldr-lane-head" },
+    el("span", { class: "heartbeat-tldr-label", "aria-hidden": "true", text: "TL;DR" }),
+    el("span", { class: "tldr-card-repo", text: repoName }),
+    el("span", { class: "tldr-card-signal " + sigClass, text: repo.signal }),
+    el("span", { class: "tldr-lane-meta", text: metaBits.join(" · ") }),
+    el("div", { class: "lane-pager" },
+      prev,
+      el("span", { class: "lane-pos", "aria-live": "polite", text: `${pos} / ${ordered.length}` }),
+      next,
+    ),
+  ));
+
+  lane.append(el("p", { class: "tldr-lane-prose" }, ...tldrMarkupNodes(repo.summary || "")));
+
+  const det = el("div", { class: "tldr-lane-det", "aria-label": repoName + " repo facts" });
+  const blockerKind = String(repo.blocker || "").toLowerCase();
+  const isAlert = blockerKind !== "all-clear" && blockerKind !== "none reported" && blockerKind !== "no blockers reported" && blockerKind !== "all clear";
+  if (isAlert) {
+    const age = agent?.updatedAt ? agoText(agent.updatedAt) : "";
+    det.append(el("span", {
+      class: "tldr-card-blocker is-alert",
+      text: "⏸ " + repo.blocker + (age ? " · " + age : ""),
+    }));
+  }
+  if (stats) {
+    if (stats.branch) det.append(el("span", { class: "tldr-det-pill is-branch", text: stats.branch }));
+    if (stats.headShort) det.append(el("span", { class: "tldr-det-pill is-branch is-secondary", text: stats.headShort }));
+    if (stats.dirty === true) det.append(el("span", { class: "tldr-det-pill is-dirty", text: "dirty" }));
+    if (stats.prCount) det.append(el("span", { class: "tldr-det-pill is-pr", text: stats.prCount + " PR" + (stats.prCount === 1 ? "" : "s") }));
+    const roster = `${stats.working} working · ${stats.blocked} blocked`;
+    det.append(el("span", { class: "tldr-det-pill is-working is-secondary", text: roster }));
+  }
+  lane.append(det);
 }
 
 /* ---------- issues ---------- */
@@ -7591,19 +8137,15 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
-  // B2 heartbeat — the TL;DR summary rides transcriptTail (MAX_TRANSCRIPT_TAIL_CHARS=800).
-  // For Prime the orchestrator's freshest prose lives ONLY in transcriptTail (humanMessages=[]),
-  // so without this the row would keep showing the stale initial task while the TL;DR sits on the wire.
-  // Surface it on the row when it carries the B2 marker so renderAgentRow proves the wire→pixel path.
-  if (typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")) {
-    return conciseText(agent.transcriptTail.trim(), 120);
-  }
-  const message = formatLastHumanMessage(agent);
-  if (message !== NO_READABLE_MESSAGE) return message;
-  // The task is where the envelope actually lands for a freshly spawned lane —
-  // every one of them begins with it — so the same strip applies here.
+  // Row stability: Task is the stable identity, refined every 5m via sidecar (data/task-summaries/<id>.txt, LLM)
+  // written by scripts/ant-hill-task-refine.py — no chat spam, no transcriptTail flicker.
+  // Header per-repo TL;DR lives in prime:ant-heartbeat-monitor transcriptTail (fleet-wide, repo-specific),
+  // rendered by renderHealthTldrLane() — row keeps Task so the collapsed roster stays readable.
+  // transcriptTail [TL;DR] is still surfaced in drawer Chat (renderChat) and header, not here.
   const task = agent.task ? withoutSenderHeader(agent.task).trim() : "";
   if (task) return conciseText(task, 120);
+  const message = formatLastHumanMessage(agent);
+  if (message !== NO_READABLE_MESSAGE) return message;
   if (agent.statusReason) return conciseText(agent.statusReason, 120);
   return NO_READABLE_MESSAGE;
 }
@@ -7624,7 +8166,7 @@ const PROVIDER_MARK = {
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
    This keeps the harness visible even when the model overrides the icon (the old spark/grok swap hid the harness). */
 const HARNESS_MARK = {
-  codex: { src: "/icons/codex.svg", label: "Codex" },
+  codex: { src: "/icons/codex.webp", label: "Codex", raster: true },
   claude: { src: "/icons/claude-code.svg", label: "Claude Code" },
   cursor: { src: "/icons/cursor.svg", label: "Cursor" },
   factory: { src: "/icons/factory.svg", label: "Factory" },
@@ -8281,6 +8823,13 @@ function selectAgent(agentId) {
   selectEntity({ kind: "agent", id: agentId });
 }
 
+/* Only when it is not already held for this agent: a matching agentId —
+   loaded, loading, OR errored — stands, so a background reopen costs nothing
+   and a failed load retries only through the operator's own Try again. */
+function shouldAutoLoadTranscript(sel, transcript) {
+  return Boolean(sel && sel.kind === "agent" && (!transcript || transcript.agentId !== sel.id));
+}
+
 // Unified entry point for every drawer kind. Agents keep populating the legacy
 // state.selectedId so the row is-selected highlight, findSelected, and
 // closeInspector focus-return all keep working untouched.
@@ -8301,10 +8850,24 @@ function selectEntity(sel) {
   if (!(origin && pane && pane.contains(origin))) {
     state.selectionOrigin = origin && origin.dataset ? origin.dataset.fkey || null : null;
   }
+  /* Switching drawers is a click-out: commit the outgoing agent's feed
+     position before the repaint destroys the node the events would have read. */
+  if (state.selectedId && (!sel || sel.id !== state.selectedId)) {
+    saveChatScrollFrom(document.getElementById("drawer-chat-feed"), state.selectedId);
+  }
   state.selected = sel;
   state.selectedId = sel && sel.kind === "agent" ? sel.id : null;
   state.confirming = null;
   state.evidenceOpen = false;
+  /* The drawer's feed is the transcript, so opening an agent fetches it — the
+     same fetch the foot's buttons fire. loadTranscript sets its loading state
+     synchronously, so the render() below paints the honest interim, and its
+     own settle repaints the bubbles pinned to newest via the cleared memo. */
+  if (shouldAutoLoadTranscript(sel, state.transcript)) void loadTranscript(sel.id);
+  /* The repaint memo only protects an operator's place across repaints WITHIN
+     one continuous viewing; a reopen falls through to the per-agent SAVED
+     position (committed when they left the widget), then to the newest turn. */
+  _chatScrollMemo.key = "";
   render();
   // On explicit open (not on background SSE re-renders), move focus to the
   // drawer's lead element per kind — the differentiator band, or the title.
@@ -8320,14 +8883,57 @@ function focusDrawerLead() {
   lead.focus({ preventScroll: true });
 }
 
+/* Sticky float offset for the ≥1025px docked drawer. Short drawers center in
+   the viewport; tall ones pin with `gapPx` (1.25rem) so they never scrape the
+   chrome. Pure — syncDrawerFloat is the only caller with layout numbers. */
+function drawerFloatTopPx(paneHeight, viewportHeight, gapPx = 20) {
+  if (!Number.isFinite(paneHeight) || !Number.isFinite(viewportHeight) || viewportHeight <= 0) return gapPx;
+  if (paneHeight >= viewportHeight - gapPx * 2) return gapPx;
+  return Math.max(gapPx, Math.round((viewportHeight - paneHeight) / 2));
+}
+
+let _drawerFloatObs = null;
+let _drawerFloatOnResize = null;
+
+function stopDrawerFloat() {
+  if (_drawerFloatObs) { try { _drawerFloatObs.disconnect(); } catch { /* ignore */ } _drawerFloatObs = null; }
+  if (_drawerFloatOnResize && typeof window !== "undefined") {
+    window.removeEventListener("resize", _drawerFloatOnResize);
+    _drawerFloatOnResize = null;
+  }
+}
+
+/* ResizeObserver + viewport resize only — no timers, no left-column scroll
+   listeners. Sets --drawer-float-top on the pane (CSP allows custom props via
+   the style object the same way the vitals bar already writes width). */
+function syncDrawerFloat(pane) {
+  stopDrawerFloat();
+  if (!pane || typeof window === "undefined") return;
+  const apply = () => {
+    const top = drawerFloatTopPx(pane.offsetHeight || 0, window.innerHeight || 0);
+    try { pane.style.setProperty("--drawer-float-top", top + "px"); } catch { /* style blocked */ }
+  };
+  apply();
+  _drawerFloatOnResize = apply;
+  window.addEventListener("resize", apply, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    _drawerFloatObs = new ResizeObserver(apply);
+    try { _drawerFloatObs.observe(pane); } catch { /* ignore */ }
+  }
+}
+
 function closeInspector() {
   const id = state.selectedId;
+  // Closing is the definitive click-out: commit the feed position on the way.
+  if (id) saveChatScrollFrom(document.getElementById("drawer-chat-feed"), id);
   const origin = state.selectionOrigin;
   state.selected = null;
   state.selectedId = null;
   state.selectionOrigin = null;
   state.confirming = null;
   state.evidenceOpen = false;
+  _chatScrollMemo.key = "";
+  stopDrawerFloat();
   render();
   /* The agent row by id first — unchanged, and it survives a roster rebuild that
      a captured node reference would not. The recorded origin catches every other
@@ -8426,8 +9032,6 @@ function inspectorPaintSig(sel, view, ui) {
     queueItem ? queueItem.state + ":" + (queueItem.result || "").slice(0, 80) : "",
     triage ? triage.generatedAt + ":" + triage.headline : "",
     triagePending,
-    ui.drawerTab || "chat",
-    ui.evidenceOpen ? "1" : "0",
     agent ? agentRecordSig(agent) : "",
     agent ? lineagePaintSig(agent, ui.snap) : "",
     agent && view.program ? programName(view.program) : "",
@@ -8498,12 +9102,14 @@ function renderInspector() {
     pane.hidden = true;
     pane.textContent = "";
     pane.className = "pane-inspector";
+    stopDrawerFloat();
     return;
   }
 
   const view = resolveSelection(sel);
   if (paintUnchanged("inspector", inspectorPaintSig(sel, view, state))) {
     pane.hidden = false;
+    syncDrawerFloat(pane);
     return;
   }
 
@@ -8511,10 +9117,11 @@ function renderInspector() {
   pane.className = "pane-inspector";
   pane.hidden = false;
   const renderer = view && DRAWER_RENDERERS[view.kind];
-  if (!renderer) { pane.append(...missingDrawer()); return; }
+  if (!renderer) { pane.append(...missingDrawer()); syncDrawerFloat(pane); return; }
   pane.setAttribute("role", "region");
   pane.setAttribute("aria-label", (DRAWER_ARIA_LABELS[view.kind] || "Detail") + " inspector");
   renderer(pane, view);
+  syncDrawerFloat(pane);
 }
 
 const DRAWER_ARIA_LABELS = {
@@ -9327,9 +9934,16 @@ function renderAgentDrawer(pane, view) {
   const _hLabel = (typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label) || providerLabel(agent.provider) || "—";
   const _mText = modelShort(agent.model) || "not reported";
   const _ctxPct = agentContextPct(agent);
-  const _ctxText = _ctxPct != null ? _ctxPct + "%" : "—";
-  const _tokText = (() => { const t = tokenSummary(agent.tokens); return t.known ? t.text : "—"; })();
-  const _tokKnown = _tokText !== "—";
+  /* 0 is observed data, but "0%" is visually identical to "no data" — 12 live
+     rows (15 tokens against a 1M window) rendered a full-strength gauge saying
+     nothing had happened. "<1%" keeps the observation and the honesty apart. */
+  const _tokens = agent.tokens || {};
+  const _ctxPctText = _ctxPct != null ? (_ctxPct === 0 ? "<1%" : _ctxPct + "%") : "—";
+  const _ctxMagnitude = Number.isFinite(_tokens.total) && Number.isFinite(_tokens.contextWindow)
+    ? fmtTok(_tokens.total) + " / " + fmtTok(_tokens.contextWindow)
+    : hasObservedTotal(_tokens) ? fmtTok(_tokens.total) + " tokens" : "—";
+  const _sessionText = Number.isFinite(_tokens.sessionTotal) ? fmtTok(_tokens.sessionTotal) : "—";
+  const _sessionKnown = _sessionText !== "—";
   const _statusActivity = deriveActivity(agent);
   const _statusOutcome = deriveOutcome(agent);
   const _statusText = (_statusActivity ? (ACTIVITY_LABELS[_statusActivity] || _statusActivity) : "—") + (_statusOutcome !== "healthy" ? " · " + (_statusOutcome) : "");
@@ -9340,47 +9954,139 @@ function renderAgentDrawer(pane, view) {
   const _headerVitals = el("div", { class: "drawer-header-vitals", role: "group", "aria-label": "Vitals at a glance" },
     el("span", { class: "hv-pill hv-harness", title: "Harness " + _hLabel }, _hMark, _hLabel),
     el("span", { class: "hv-pill hv-model", title: _mText }, _aMark, _mText),
-    el("span", { class: "hv-pill hv-ctx" + (_ctxPct == null ? " is-empty" : ""), title: _ctxPct != null ? _ctxText + " of window" : "Context not reported" }, _ctxPct != null ? svgGauge(_ctxPct, { size: 16 }) : icon("gauge", { label: "" }), _ctxText),
-    el("span", { class: "hv-pill hv-tokens" + (_tokKnown ? "" : " is-empty"), title: "Tokens " + _tokText }, icon("hash", { label: "" }), _tokText, _tokKnown ? el("span", { class: "hv-tok-bar", style: _ctxPct != null ? "width:" + Math.min(100, _ctxPct) + "%" : "width:0" }) : null),
+    el("span", { class: "hv-pill hv-ctx" + (_ctxPct == null ? " is-empty" : ""), title: _ctxPct != null ? "Context " + _ctxPctText + " · " + _ctxMagnitude : "Context " + _ctxMagnitude }, _ctxPct != null ? svgGauge(_ctxPct, "hv-gauge", { label: "Context used" }) : icon("gauge", { label: "" }), "Context ", _ctxPctText, _ctxMagnitude !== "—" ? el("span", { class: "hv-detail", text: " · " + _ctxMagnitude }) : null),
+    el("span", { class: "hv-pill hv-tokens" + (_sessionKnown ? "" : " is-empty"), title: "Session tokens " + _sessionText }, icon("hash", { label: "" }), "Session ", _sessionText, _sessionKnown ? el("span", { class: "hv-tok-bar", style: _ctxPct != null ? "width:" + Math.min(100, _ctxPct) + "%" : "width:0" }) : null),
     el("span", { class: "hv-pill hv-status" + _pulse, title: _statusText + " · " + _lastWhen }, el("span", { class: "hv-pulse" + _pulse, "aria-hidden": "true" }), _statusText, el("span", { class: "hv-dot", text: "·" }), _lastWhen),
   );
   pane.append(_headerVitals);
 
-  // Design A — Document (1.55fr: Task + Transcript bubbles, last 3 expandable) + Desk (380px: Evidence uncollapsed)
-  const _roleView = roleView(agent.role);
-  const fullTask = String(agent.task || "").trim();
-  const _taskBlock = fullTask
-    ? el("div", { class: "drawer-chat-task" },
-        el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:6px" },
-          el("h3", { class: "section-title", style: "margin:0" }, icon("file-text", { label: "" }), "Task", el("span", { class: "rule", "aria-hidden": "true" })),
-          el("span", { class: "badge role-" + _roleView.key, style: "font:700 10px var(--mono);padding:2px 6px;border-radius:999px;border:1px solid var(--line);background:var(--raise)" }, _roleView.label)),
-        el("p", { class: "drawer-task-full", text: fullTask }))
-    : el("div", { class: "drawer-chat-task", style: "padding:8px 0" },
-        el("span", { class: "badge role-" + _roleView.key }, _roleView.label));
-  const chatBody = renderChat(agent);
-  const transcriptPanel = renderTranscriptPanel(agent);
-  const transcriptWrap = el("details", { class: "drawer-transcript", open: "" },
-    el("summary", { class: "drawer-transcript-summary" }, icon("scroll-text", { label: "" }), " Transcript — last 3 turns (expand for full)", el("span", { class: "rule", "aria-hidden": "true" })),
-    transcriptPanel);
-  const doc = el("div", { class: "drawer-doc", "aria-label": "Task and transcript" },
+  // Design A — Document (1.55fr: Task + Transcript bubbles) + Desk (35%: Evidence uncollapsed)
+  /* One anatomy for every provider: title row → OBJECTIVE (prose only) →
+     META (only fields actually parsed) → the raw envelope folded behind
+     "Full brief". Differences come from data presence, never per-harness
+     branches. `rawTask` present means the refined sidecar landed and
+     `agent.task` is already the face; otherwise the objective is the
+     first sentence the parser finds in the envelope. Role stays on the
+     desk (chat contract) — never a second badge inside this card.
+     Classes, not style attributes — under the strict CSP (style-src 'self')
+     inline style is dropped wholesale. */
+  const fullTask = String(agent.rawTask || agent.task || "").trim();
+  const _parsedTask = parseTaskEnvelope(fullTask);
+  const _objective = agent.rawTask
+    ? withoutSenderHeader(String(agent.task || "")).trim()
+    : _parsedTask.objective;
+  const _metaBits = [];
+  if (_parsedTask.meta.from || _parsedTask.meta.to)
+    _metaBits.push([_parsedTask.meta.from, _parsedTask.meta.to].filter(Boolean).join(" → "));
+  if (_parsedTask.meta.date) _metaBits.push(_parsedTask.meta.date);
+  if (_parsedTask.meta.branch) _metaBits.push(_parsedTask.meta.branch);
+  const _showBrief = Boolean(fullTask) && fullTask !== _objective;
+  const _taskBlock = el("div", { class: "drawer-chat-task" },
+    el("div", { class: "drawer-task-head" },
+      el("h3", { class: "section-title" }, icon("file-text", { label: "" }), "Task", el("span", { class: "rule", "aria-hidden": "true" }))),
+    _objective
+      ? el("p", { class: "drawer-task-objective", text: _objective })
+      : el("p", { class: "drawer-task-objective is-empty", title: "No prose task was recorded for this lane", text: "— no task recorded" }),
+    _metaBits.length ? el("p", { class: "drawer-task-meta", text: _metaBits.join(" · ") }) : null,
+    _showBrief
+      ? el("details", { class: "drawer-task-brief" },
+          el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
+          el("pre", { class: "drawer-task-brief-body", text: fullTask }))
+      : null);
+  const chatBody = renderChatFeedBody(agent, state, { taskCarried: Boolean(fullTask) });
+  /* Mini chat window. The left column is Task on top and a chat APP below it —
+     and the feed IS the transcript: bubbles edge to edge, auto-loaded on open
+     (selectEntity fires the same fetch the foot's buttons fire), with
+     renderChat's preview standing in only while the record is loading, errored,
+     or absent. The one quiet line of chrome (count, source path, Refresh/Load)
+     sits at the box's foot, above the composer. The feed is the one deliberate
+     inner scroller on the left; at ≥861px the box takes the column height Task
+     doesn't use (Task height is intrinsic — 2-line clamp + meta + closed brief).
+     role="log" + tabindex make the feed itself a named, keyboard-reachable
+     scroll region. */
+  /* The id is the foot's aria-controls target: "Read the transcript" is a real
+     disclosure — it expands this feed from the preview to the full record — so
+     the foot declares it as one. One drawer at a time keeps the id unique. */
+  const chatScroll = el("div", { id: "drawer-chat-feed", class: "drawer-chat-scroll", role: "log", tabindex: "0", "aria-label": "Conversation" },
+    chatBody);
+  const chatBox = el("div", { class: "drawer-chat" }, chatScroll);
+  /* role="region" is load-bearing: aria-label on a role-less <div> is dropped
+     by every major AT — a generic element has no accessible name. */
+  const doc = el("div", { class: "drawer-doc", role: "region", "aria-label": "Task and transcript" },
     _taskBlock,
-    el("div", { class: "drawer-chat" }, chatBody, transcriptWrap));
+    chatBox);
+
+  /* The dock belongs to the chat it acts on — the last child of the chat box,
+     under the feed, like every messenger. No sticky needed: the box itself is
+     height-bound, so the composer cannot leave the viewport while the feed
+     scrolls behind it. */
+  const dock = renderCommandDock(agent, control);
+  dock.classList.add("drawer-controls-strip");
+  chatBox.append(renderTranscriptFoot(agent), dock);
+  /* Chat convention: open pinned to the newest turn; keep the operator's place
+     across repaints only while they have deliberately scrolled up. The fake
+     test document has no layout, so scrollHeight gates the whole behaviour. */
+  const _chatKey = "chat:" + agent.id;
+  chatScroll.onscroll = () => {
+    _chatScrollMemo.key = _chatKey;
+    _chatScrollMemo.top = chatScroll.scrollTop;
+    _chatScrollMemo.atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
+  };
+  /* Leaving the widget COMMITS the position (operator directive): pointer out
+     or focus out writes this agent's place into the per-agent store, so a
+     reopen resumes the read instead of re-pinning. An at-bottom reader saves
+     nothing — their contract is "follow the newest", and a saved offset would
+     freeze them mid-history as the feed grows. selectEntity/closeInspector
+     also commit on the way out, covering click-outs the events cannot see. */
+  const commitChatScroll = () => saveChatScrollFrom(chatScroll, agent.id);
+  chatBox.onmouseleave = commitChatScroll;
+  chatBox.onfocusout = commitChatScroll;
 
   // Desk — uncollapsed Evidence + Lineage, dense 380px at >860px
-  const desk = el("div", { class: "drawer-desk", "aria-label": "Evidence and lineage" });
+  const desk = el("div", { class: "drawer-desk", role: "region", "aria-label": "Evidence and lineage" });
   // Desk head: sticky 800 11px mono + rule, uncollapsed signal
   desk.append(el("div", { class: "drawer-section-head sticky-head" },
-    el("h3", { class: "section-title", style: "margin:0;flex:1" }, icon("folder-open", { label: "" }), "Evidence", el("span", { class: "rule", "aria-hidden": "true" }))));
+    el("h3", { class: "section-title" }, icon("folder-open", { label: "" }), "Evidence", el("span", { class: "rule", "aria-hidden": "true" }))));
   desk.append(renderEvidence(agent));
   desk.append(renderLineageSpine(agent));
 
   const grid = el("div", { class: "drawer-grid" }, doc, desk);
   pane.append(grid);
 
-  // Controls strip — sticky bottom, outside grid so it spans full drawer
-  const dock = renderCommandDock(agent, control);
-  dock.classList.add("drawer-controls-strip");
-  pane.append(dock);
+  if (typeof chatScroll.scrollHeight === "number") {
+    const plan = chatScrollPlan(agent.id, _chatKey, _chatScrollMemo, _chatScrollSaved);
+    chatScroll.scrollTop = plan.mode === "bottom" ? chatScroll.scrollHeight : plan.top;
+  }
+}
+
+/* One slot, not a map: only one drawer is open at a time, and a stale entry for
+   a different agent must lose to the saved-or-newest default, so keying the
+   slot is the whole cleanup story. */
+const _chatScrollMemo = { key: "", top: 0, atBottom: true };
+
+/* The per-agent store the leave events write into: agentId -> scrollTop.
+   Session-lifetime and unbounded on purpose — one number per agent an operator
+   actually read mid-history is not a leak worth a cleanup policy. */
+const _chatScrollSaved = new Map();
+
+/* Where a freshly painted feed opens. Precedence: the live repaint memo (the
+   operator is mid-read in THIS viewing — never yank them), then the position
+   they committed by leaving the widget last time, then the newest turn. A
+   memo or a save that was taken at the bottom resolves to bottom: "follow the
+   newest" is a contract, not a coordinate. */
+function chatScrollPlan(agentId, chatKey, memo = _chatScrollMemo, saved = _chatScrollSaved) {
+  if (memo.key === chatKey && !memo.atBottom) return { mode: "memo", top: memo.top };
+  if (memo.key !== chatKey && saved.has(agentId)) return { mode: "saved", top: saved.get(agentId) };
+  return { mode: "bottom" };
+}
+
+/* Reads the live node and commits: a reader parked at the bottom clears any
+   stale save (they chose "newest" again); anyone else keeps their place. */
+function saveChatScrollFrom(chatScroll, agentId, saved = _chatScrollSaved) {
+  if (!chatScroll || typeof chatScroll.scrollHeight !== "number") return;
+  const atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
+  if (atBottom) saved.delete(agentId);
+  else saved.set(agentId, chatScroll.scrollTop);
 }
 
 /* Bookshelf section — Operate/Chat stay open; Evidence uses the cog variant. */
@@ -9577,7 +10283,21 @@ function renderControlBanner(agent, control) {
   const instructCap = capability(agent, "instruct");
   const locked = [focusCap, instructCap].some((c) => c && !c.enabled);
   if (!locked) return null;
-  const brief = quarantineBrief(agent, control);
+  /* Wire `controlState: "linked"` can disagree with a disabled Send when the
+     pane was matched by unique-cwd alone (Cursor rows, 2026-08-09). The brief
+     for "linked" is null — reading .title threw and blanked the whole drawer
+     after the head. Recover the honest refusal shape from the resolution, and
+     never throw: absence of a brief means no banner, not a crash. */
+  let briefControl = control;
+  let brief = quarantineBrief(agent, briefControl);
+  if (!brief) {
+    const resolution = agent && agent.target && agent.target.resolution;
+    briefControl = resolution === "unique-cwd" ? "unproven"
+      : resolution === "ambiguous" ? "quarantined"
+      : "observed-only";
+    brief = quarantineBrief(agent, briefControl);
+  }
+  if (!brief) return null;
 
   /* Deliberately NOT the server's reason string, though it is right there on
      the capability. This chrome is pinned to plain operator language and to
@@ -9590,7 +10310,7 @@ function renderControlBanner(agent, control) {
   const copy = el("div", { class: "control-banner-copy" },
     el("strong", { text: brief.title }),
     " ",
-    controlUnavailableText(control, agent));
+    controlUnavailableText(briefControl, agent));
   /* `why` earns its line everywhere except one cause, and the exception is the
      common one. Measured on the live board: cause `missing` is 245 agents, and
      there the banner says a single fact three times before reaching the remedy —
@@ -9619,15 +10339,21 @@ function renderControlBanner(agent, control) {
     class: "control-banner-link",
     dataset: { fkey: "control-evidence:" + agent.id },
     onclick: () => {
-      state.drawerTab = "evidence";
-      state.evidenceOpen = true;
+      /* Evidence is no longer behind a tab — the desk column is always painted —
+         so this link's job is to LOAD the terminal trace and TAKE the operator
+         to it. drawerTab/evidenceOpen drove neither, and with both out of
+         inspectorPaintSig a bare flag write would be a guaranteed no-op. */
       if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
       else render();
+      /* Optionally called throughout: the test harness's fake document
+         implements no selector engine and its nodes have no scrollIntoView.
+         Worst case is "nothing moves" — the desk is already visible. */
+      document.querySelector?.(".drawer-desk")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
     },
   }, "See routing evidence →"));
 
   return el("div", { class: "control-banner", role: "status" },
-    icon(control === "quarantined" ? "quarantine" : "observed"),
+    icon(briefControl === "quarantined" ? "quarantine" : "observed"),
     copy);
 }
 
@@ -9664,9 +10390,9 @@ function capability(agent, action) {
    `extra` is written out at the call site instead of composed from `name`,
    because a class the client only ever assembles at runtime is invisible to the
    stylesheet's dead-rule lint — and that lint is worth more than the symmetry. */
-function dockGroup(name, extra = "") {
+function dockGroup(name) {
   return el("div", {
-    class: extra ? "dock-group " + extra : "dock-group",
+    class: "dock-group",
     role: "group",
     "aria-label": name,
   }, el("span", { class: "dock-group-label", "aria-hidden": "true", text: name }));
@@ -9692,21 +10418,54 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   const linkedReady = !safeLocked && !held && control === "linked";
   const dock = el("div", {
     class: "command-dock" + (linkedReady ? " command-dock--linked" : "") + (held ? " is-held" : ""),
+    /* Nested inside the Task-and-transcript region the composer needs its own
+       announced boundary, or it reads as part of the transcript. Without a role
+       the aria-label is dropped entirely (generic elements take no name). */
+    role: "group",
     "aria-label": "Session controls",
   });
   if (held) {
     dock.append(el("p", { class: "command-dock-stale", role: "status", text: staleControlNote(alarm) }));
   }
 
+  /* The action cluster rides the dock's header line, top right — where the
+     send hint sits — so every control the dock owns is one glance from Send
+     (operator directive: Focus, Interrupt and Archive together in that
+     corner). Same tools, same fkeys, same capability gates and the same
+     destructive-isolation disclosure when the safe controls are locked; only
+     the geography changed. The old Navigate/Operate/File kickers spent three
+     headings on four buttons. */
+  const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
+  let cluster = null;
+  if (focusCap || interruptCap || archiveCap || unarchivable) {
+    cluster = el("div", { class: "command-dock-cluster", role: "group", "aria-label": "Session actions" });
+    if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held }));
+    if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held }));
+    // When Send/Focus are locked, Archive is the wrong lever — tuck it behind
+    // the disclosure so the dock does not offer a destructive peer next to
+    // dead controls. The summary names the one thing behind it.
+    if (archiveCap && !safeLocked) cluster.append(renderDockTool(agent, archiveCap, "archive", { held }));
+    if (archiveCap && safeLocked) {
+      cluster.append(el("details", { class: "command-dock-more" },
+        el("summary", { text: "Archive this session" }),
+        renderDockTool(agent, archiveCap, "archive", { held })));
+    }
+    // The undo is not destructive and does not hide behind the lock.
+    if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
+  }
+
   // One lock narrative: the control banner owns the reason. The dock meta only
   // speaks when the link is live, and the send hint only when Send can send.
   const showHint = Boolean(instructCap && instructCap.enabled) && !held;
-  if (linkedReady || showHint) {
+  if (linkedReady || showHint || cluster) {
     const meta = el("div", { class: "command-dock-meta" });
     meta.append(linkedReady
       ? el("span", { class: "command-dock-ready", text: "Ready · linked" })
       : el("span", { "aria-hidden": "true" }));
-    if (showHint) meta.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
+    const corner = el("span", { class: "command-dock-corner" });
+    if (showHint) corner.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
+    if (cluster) corner.append(cluster);
+    meta.append(corner);
     dock.append(meta);
   }
 
@@ -9798,62 +10557,6 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
       }, busy ? "Sending…" : "Send")));
     dock.append(communicate);
   }
-
-  /* The remaining three categories share one row, in the order an operator
-     escalates through them: go there, stop it, file it. Order and membership
-     are the same buttons the flat row emitted, in the same sequence, so the tab
-     order and every `data-fkey` are unchanged by the grouping. */
-  const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
-  const actionRow = el("div", { class: "command-dock-actions" });
-
-  if (focusCap) {
-    const navigate = dockGroup("Navigate");
-    navigate.append(el("div", { class: "command-dock-tools" },
-      renderDockTool(agent, focusCap, "focus", { held })));
-    actionRow.append(navigate);
-  }
-  if (interruptCap) {
-    const operate = dockGroup("Operate");
-    operate.append(el("div", { class: "command-dock-tools" },
-      renderDockTool(agent, interruptCap, "interrupt", { held })));
-    actionRow.append(operate);
-  }
-  if (archiveCap || unarchivable) {
-    const file = dockGroup("File", "dock-group--file");
-    const tools = el("div", { class: "command-dock-tools" });
-    // When Send/Focus are locked, Archive is the wrong lever — tuck it away so
-    // the dock does not offer a destructive peer next to dead controls.
-    if (archiveCap && !safeLocked) tools.append(renderDockTool(agent, archiveCap, "archive", { held }));
-    /* The undo, wherever the row is. It is not destructive and it is not a peer of
-       the safe controls, so it does not hide behind the same lock — an operator
-       who filed something early is looking at exactly this row and needs the verb
-       the drawer has been naming at them all along. */
-    if (unarchivable) tools.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
-    file.append(tools);
-    if (archiveCap && safeLocked) {
-      /* The summary names the one thing behind it. It read "More", which told an
-         operator nothing about whether the click was worth making — and what is
-         actually behind it is a single DESTRUCTIVE action, so "More" understated
-         it in the one direction that matters.
-
-         Not folded into the evidence rail, which was the other candidate: that
-         rail holds things to READ (paths, tokens, identity, transcript) and this
-         holds one thing to DO. They are two doors onto different content, so
-         collapsing them would put a destructive control inside a drawer labelled
-         evidence — worse than the vague label it replaced.
-
-         Stays inside the File cluster rather than below the row: the disclosure
-         IS the filing control when safe controls are locked, and a labelled
-         cluster with nothing under it would read as a missing button. */
-      file.append(el("details", { class: "command-dock-more" },
-        el("summary", { text: "Archive this session" }),
-        renderDockTool(agent, archiveCap, "archive", { held })));
-    }
-    actionRow.append(file);
-  }
-  // An empty category is not rendered at all — a heading over no control reads
-  // as a control the board has lost, which is the opposite of the point.
-  if (focusCap || interruptCap || archiveCap || unarchivable) dock.append(actionRow);
 
   // Plain-language lock copy also lives in the banner; dock meta stays short.
   // Tests assert controlUnavailableText is used for unavailable safe controls.
@@ -10308,7 +11011,7 @@ function dedupeTurns(candidates) {
    as "the latest provider-shaped assistant OR user prose", so using it to fill a
    turn labelled "You" is how the mislabel got in. When there is no user message,
    the honest stand-in is the task the operator actually set. */
-function renderChat(agent, ui = state) {
+function renderChat(agent, ui = state, opts = {}) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   /* `task` is the last candidate, and it is what stops three independently
      reasonable dedup rules from composing into an empty drawer: the head
@@ -10353,7 +11056,10 @@ function renderChat(agent, ui = state) {
     { role: "assistant", text: agent.lastAgentMessage },
     { role: "assistant", text: tldrTail },
     { role: "user", text: agent.lastUserMessage },
-    { role: "task", text: drawerObjective(agent) ? "" : agent.task },
+    /* opts.taskCarried: the drawer's Task card prints agent.task in full just
+       above this chat, so the floor would be a literal reprint one card apart —
+       the head-objective check alone cannot see that carrier. */
+    { role: "task", text: (drawerObjective(agent) || opts.taskCarried) ? "" : agent.task },
   ].map((turn) => {
     const sender = senderView(turn.text, ui);
     if (!sender) return turn;
@@ -10376,9 +11082,54 @@ function renderChat(agent, ui = state) {
      stays collapsed as the place for raw detail" means. */
 
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No messages captured for this session yet." }));
+    panel.append(el("p", { class: "chat-feed-empty inspector-note", text: "No readable turns recorded for this session yet." }));
   }
   return panel;
+}
+
+/* One transcript line as a chat bubble. The meta line is the 12px mono strip:
+   who spoke — the resolved sender when the line carries a producer envelope,
+   the role label otherwise — and when, relative. The sender-verdict semantics
+   are renderChatTurn's, unchanged: the mark states the server's finding on the
+   ONE text it actually checked (senderClaimText), and an absent verdict marks
+   nothing at all. */
+function chatBubbleNode(line, agent, ui = state) {
+  const sender = senderView(line.text, ui);
+  const unconfirmed = sender && agent.senderVerified === false && line.text === senderClaimText(agent);
+  return el("div", { class: "chat-msg", dataset: { role: line.role } },
+    el("div", { class: "chat-msg-meta" },
+      el("span", { class: "chat-msg-role", text: sender ? sender.name : (TRANSCRIPT_ROLE_LABELS[line.role] || line.role) }),
+      sender ? el("span", { class: "chat-msg-run", text: "run " + sender.runId }) : null,
+      line.at ? el("span", { class: "chat-msg-at", title: line.at, text: agoText(line.at) }) : null),
+    unconfirmed
+      ? el("div", {
+        class: "sender-unconfirmed",
+        title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
+      }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
+      : null,
+    // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+    el("p", { class: "chat-msg-body", tabindex: "0", text: sender ? withoutSenderHeader(line.text) : line.text }));
+}
+
+/* The feed's one body. The transcript, when it is held for THIS agent, rendered
+   as bubbles — user/assistant speak; tool, system and unknown turns stay quiet
+   .tr-line rows between them. Otherwise the preview thread (renderChat) stands
+   in: loading, errored, or a session with no record yet. renderChat survives
+   ONLY as that fallback, which is what makes "every message appears exactly
+   once" true by construction — the drawer never holds both renderers' output. */
+function renderChatFeedBody(agent, ui = state, opts = {}) {
+  const view = (ui && ui.transcript) || {};
+  const lines = view.agentId === agent.id && view.data && view.data.lines.length
+    ? transcriptWindow(view.data.lines).shown
+    : null;
+  if (!lines) return renderChat(agent, ui, opts);
+  const body = el("div", { class: "chat-feed" });
+  for (const line of lines) {
+    body.append(line.role === "user" || line.role === "assistant"
+      ? chatBubbleNode(line, agent, ui)
+      : transcriptLineNode(line));
+  }
+  return body;
 }
 
 /* Lineage spine — the signature nesting element. Ancestors climb a single thin
@@ -10631,6 +11382,21 @@ function renderSurfaceEvidence(agent, ui = state) {
 
 function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  /* Role leads the desk — the top spot, directly beside the Task card at the
+     top of the left column, so the two facts that answer "who is this and
+     what are they on" sit on one line of the eye. It used to sit mid-panel
+     after GIT (and a second copy rode inside the Task card, now removed).
+     Still the chip it already is, and still absent for a plain agent: a
+     default role is not evidence. */
+  const _rvTop = roleView(agent.role);
+  if (_rvTop.key !== "agent") {
+    panel.append(el("div", {
+      class: "evidence-role",
+      dataset: { evidenceSection: "role" },
+    },
+    el("span", { class: "visually-hidden", text: "Role: " }),
+    el("span", { class: "badge role-" + _rvTop.key, text: _rvTop.label })));
+  }
   const grid = el("dl", { class: "detail-grid" });
 
   // — Where: Workspace / Repo / Git — deduped, 14px icons per Evidence row (Design A) —
@@ -10651,34 +11417,29 @@ function renderEvidence(agent, ui = state) {
   const _gitLight = !agent.git ? "⚪" : agent.git.dirty ? "🟡" : "🟢";
   const _gitLightTitle = !agent.git ? "no git" : agent.git.dirty ? "dirty — uncommitted changes" : "clean";
   dtdd(grid, "Git", agent.git && (agent.git.branch || agent.git.head)
-    ? el("span", { style: "display:flex;align-items:center;gap:6px" },
+    ? el("span", { class: "git-line" },
         icon("git-branch", { label: "" }),
         el("span", { title: _gitLightTitle, text: _gitLight }),
         el("code", { text: agent.git.branch || "(detached)" }),
-        agent.git.dirty ? el("span", { class: "git-dirty", style: "color:var(--amber);font:600 11px var(--mono)", text: "● uncommitted" }) : el("span", { style: "color:var(--teal);font:600 11px var(--mono)", text: "● clean" }),
+        agent.git.dirty ? el("span", { class: "git-dirty", text: "● uncommitted" }) : el("span", { class: "git-clean", text: "● clean" }),
         agent.git.head ? el("code", { text: "@" + agent.git.head.slice(0, 7) }) : null)
-    : el("span", { style: "color:var(--faint)", text: "— no git" }));
+    : el("span", { class: "git-none", text: "— no git" }));
 
-  // — Last message only (Status lives in header vitals sticky + board — deduped) —
-  const _lastRaw = typeof agent.lastAgentMessage === "string" && agent.lastAgentMessage.trim() ? agent.lastAgentMessage : (typeof agent.lastUserMessage === "string" ? agent.lastUserMessage : "");
-  const _lastWho = typeof agent.lastAgentMessage === "string" && agent.lastAgentMessage.trim() ? (agent.model ? agent.model : (agent.provider || "Agent")) : "You";
-  if (_lastRaw && _lastRaw.trim()) {
-    const _snippet = conciseText(_lastRaw.replace(/\s+/g, " ").trim(), 110);
-    const _when = agent.updatedAt ? agoText(agent.updatedAt) : "";
-    dtdd(grid, "Last message", el("span", { style: "display:flex;align-items:center;gap:6px;flex-wrap:wrap" }, icon("activity", { label: "" }), el("span", { text: _lastWho + (_when ? " · " + _when : "") }), el("span", { class: "mono", text: '  "' + _snippet + '"' })));
-  }
-  const _rv = roleView(agent.role);
-  if (_rv.key !== "agent") {
-    dtdd(grid, "Role", el("span", { class: "badge role-" + _rv.key, text: _rv.label }));
-  }
-
+  /* "Last message" is not printed here. It rendered `who · when "snippet"`, and
+     the tabs are gone — Document and Desk are on screen together now, so every
+     part of that row was visible twice at once: the prose is the leading bubble
+     in Chat one column to the left, and the who/when is the header vitals'
+     `status · ago`. It was never independent evidence either: `_lastRaw` could
+     only be `lastAgentMessage` or `lastUserMessage`, which are the first two
+     candidates renderChat feeds dedupeTurns, so no session existed where the
+     desk copy was the only copy. Chat is authoritative for prose. */
   /* Each block tags itself with what it is. The collapsed rail needs to say
      what is in here without a second copy of these conditions to drift out of
      step with them — so the sections declare their own names and
      evidenceInventory reads them back off a built panel. */
   if (grid.childNodes.length) {
     grid.dataset.evidenceSection = "paths & usage";
-    const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage");
+    const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage", el("span", { class: "rule", "aria-hidden": "true" }));
     panel.append(pathsHead, grid);
     if (agent.target && agent.target.cwdRelation === "different") {
       panel.append(el("p", {
@@ -10697,7 +11458,7 @@ function renderEvidence(agent, ui = state) {
   const facts = renderRowFacts(agent);
   if (facts) {
     facts.dataset.evidenceSection = "row facts";
-    const factsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "row facts" } }, icon("activity", { label: "" }), "Row facts");
+    const factsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "row facts" } }, icon("activity", { label: "" }), "Row facts", el("span", { class: "rule", "aria-hidden": "true" }));
     panel.append(factsHead, facts);
   }
 
@@ -10711,7 +11472,7 @@ function renderEvidence(agent, ui = state) {
 
   if (agent.artifacts && agent.artifacts.length) {
     panel.append(
-      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" } }, icon("paperclip", { label: "" }), "Artifacts"),
+      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" } }, icon("paperclip", { label: "" }), "Artifacts", el("span", { class: "rule", "aria-hidden": "true" })),
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
@@ -11517,6 +12278,7 @@ function boot() {
   loadSwarmOverrides();
   loadShelfOverrides();
   loadWidgetPreferences();
+  loadTldrView();
   loadLookback();
   loadContextSpread();
   loadNeedsYouDisplay();

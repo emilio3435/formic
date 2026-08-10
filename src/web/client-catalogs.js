@@ -190,6 +190,10 @@ export const CONTEXT_SPREAD_KEY = "mtn3-contextSpread";
    spread above — a display preference, not a fact about the fleet. */
 export const NEEDS_YOU_DISPLAY_KEY = "mtn3-needs-you-display";
 
+/* Which TL;DR view the health rail shows: "ALL" or a repo name. Per-browser
+   like the spread above — a display preference, not a fact about the fleet. */
+export const TLDR_VIEW_KEY = "mtn3-tldr-view";
+
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
   "momentum", "burn", "tokens", "context-peak", "health",
@@ -218,6 +222,9 @@ export const WIDGET_CATALOG = Object.freeze([
      under. */
   { id: "context-peak", label: "Context" },
   { id: "health", label: "Health" },
+  /* Opt-in via customizer only — not in DEFAULT_WIDGET_IDS. */
+  { id: "mix", label: "Mix" },
+  { id: "spend", label: "Spend" },
 ]);
 /* Ids that were real once and are not offered any more. A stored layout naming
    one is a preference from an older build, not corruption, so it is migrated by
