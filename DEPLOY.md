@@ -7,41 +7,72 @@ When in doubt, use the scripts — they encode every rule below.
 
 | Port | What | Owner |
 |------|------|-------|
-| **4701** | **PRODUCTION** dashboard | launchd `ai.imaginethat.anthill`, serves branch `main` from worktree `the-mountain-main` |
+| **4701** | **PRODUCTION** dashboard | launchd `ai.imaginethat.anthill`, serves clean `main` from `the-mountain-production` |
 | 4700 | The Mountain (separate app) | — |
 | **4710–4719** | **Previews** (throwaway) | `scripts/anthill-preview.sh`, auto-assigned |
 
 Rule: **never** launch anything on 4701 by hand. Previews always go through
 `anthill-preview.sh`, which picks a free 471x port and refuses 4701.
 
-## Deploy = land into `main`, then run the deploy script
+## Deploy = merge on GitHub, then fast-forward production
 
-`:4701` serves the **local files** of the `the-mountain-main` worktree.
-A fix is live only when it is committed there and the service is restarted.
+`:4701` serves the **local files** of the dedicated
+`~/Developer/the-mountain-production` worktree. Merging a pull request changes
+GitHub's `main`; it does not update that local worktree or restart launchd.
 
-The launchd job pins `WorkingDirectory` to that worktree, so **:4701 serves
-whichever branch the worktree is currently on** — not `main` by definition. On a
-shared checkout that is often some lane's branch. `anthill-deploy.sh` refuses to
-run unless the worktree is on `main`, which is the guard, but nothing stops the
-branch moving afterwards. Confirm before trusting what :4701 is showing:
-
-```bash
-git -C ~/Developer/the-mountain-main branch --show-current
-```
+Keep the production worktree clean and permanently on `main`. Development stays
+in `~/Developer/the-mountain-main` or a lane worktree. The safe release sequence
+is:
 
 ```bash
-# 1. Land your change onto main (cherry-pick from a lane, or merge). Example:
-git -C ~/Developer/the-mountain-main cherry-pick <sha>...
+# 1. Inspect before changing the production checkout.
+git -C ~/Developer/the-mountain-production status --short --branch
+git -C ~/Developer/the-mountain-production branch --show-current
 
-# 2. Verify + go live (blocks on red tsc/tests, restarts, health-checks):
-bash ~/Developer/the-mountain-main/scripts/anthill-deploy.sh
+# 2. Fetch and fast-forward to the exact GitHub main commit.
+git -C ~/Developer/the-mountain-production \
+  fetch origin main:refs/remotes/origin/main
+git -C ~/Developer/the-mountain-production merge --ff-only origin/main
+test "$(git -C ~/Developer/the-mountain-production rev-parse HEAD)" = \
+  "$(git -C ~/Developer/the-mountain-production rev-parse origin/main)"
+
+# 3. Install the lockfile state, verify, restart, and health-check.
+cd ~/Developer/the-mountain-production
+bun install --frozen-lockfile
+bash scripts/anthill-deploy.sh
 ```
+
+After a UI deploy, open <http://127.0.0.1:4701>, confirm the intended change is
+visible, and capture screenshot evidence. A green health endpoint proves the
+server answered; it does not prove the reskin or other visual change rendered.
 
 Rules the deploy script enforces so you don't have to remember them:
+- Deploys must run from `~/Developer/the-mountain-production`.
 - Deploy worktree must be on `main`.
+- The worktree must be clean and its `HEAD` must match a freshly fetched `origin/main`.
+- The LaunchAgent `WorkingDirectory` and server entry must point back at that exact worktree.
 - **Red `tsc` or `bun test` aborts the deploy** — broken code never reaches :4701.
 - Restart via `launchctl kickstart -k gui/$UID/ai.imaginethat.anthill`, then health-check.
-- On an unhealthy restart it prints the exact rollback command.
+- On an unhealthy restart it fails loudly and points to revert-through-main recovery.
+
+If the target guard finds a missing or stale LaunchAgent, it exits before tests
+or restart and prints the exact repair command. For the canonical worktree that
+command is:
+
+```bash
+ANTHILL_REPO="$HOME/Developer/the-mountain-production" \
+  bash "$HOME/Developer/the-mountain-production/scripts/anthill-hygiene.sh"
+```
+
+`anthill-hygiene.sh` is disruptive: it rewrites the plist, restarts production,
+and can kill the process holding 4701. Use it only to repair confirmed drift.
+`scripts/anthill-deploy-target.sh` implements the read-only target check and is
+called by the deploy script; operators normally do not run it directly.
+
+If the health check fails after restart, inspect the service log and revert the
+unhealthy change through a new GitHub `main` commit. Then fast-forward the
+production worktree and deploy again. Do not move the production checkout behind
+`origin/main` as an improvised rollback.
 
 ## Do NOT deploy a lane over `main`
 
@@ -54,11 +85,11 @@ land INTO `main`.
 ## Preview a change safely (no risk to :4701)
 
 ```bash
-bash ~/Developer/the-mountain-main/scripts/anthill-preview.sh   # prints a 471x URL
+bash scripts/anthill-preview.sh   # run from the lane; prints a 471x URL
 ```
 Foreground, self-cleaning (Ctrl-C kills it — no orphans). To see what's running:
 ```bash
-bash ~/Developer/the-mountain-main/scripts/anthill-ps.sh
+bash scripts/anthill-ps.sh
 ```
 
 ## Every npm script, and which ones bind a port
@@ -101,9 +132,9 @@ outcome; for an instance you can run alongside production use
 ## The other two scripts
 
 ```bash
-bash ~/Developer/the-mountain-main/scripts/anthill-start.sh   # what `bun start` runs
-bash ~/Developer/the-mountain-main/scripts/anthill-hygiene.sh # repairs the service
-bash ~/Developer/the-mountain-main/scripts/ci-tests.sh        # what CI runs; no ports, no service
+bash scripts/anthill-start.sh   # what `bun start` runs
+bash scripts/anthill-hygiene.sh # repairs the service; read the warning below
+bash scripts/ci-tests.sh        # what CI runs; no ports, no service
 ```
 
 `anthill-start.sh` binds **4701** — the production port — and reuses a running
@@ -121,8 +152,8 @@ else holding 4701 dies too. It repairs the worktree the script itself lives in
 ## The one script that touches no ports and no service
 
 ```bash
-zsh ~/Developer/the-mountain-main/scripts/constant-collapse.sh --plan   # say what it would do
-zsh ~/Developer/the-mountain-main/scripts/constant-collapse.sh --yes    # actually do it
+zsh scripts/constant-collapse.sh --plan   # say what it would do
+zsh scripts/constant-collapse.sh --yes    # actually do it
 ```
 
 **Note the `zsh`.** Every other script here runs under `bash`; this one uses zsh

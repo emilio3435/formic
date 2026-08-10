@@ -54,6 +54,9 @@ the background service uses, so `bun run dev` and `bun run start:server` will
 exit with `EADDRINUSE` rather than fight it — use
 `bash scripts/anthill-preview.sh` for a throwaway copy on 4710–4719.
 
+From a development or agent worktree, always use that 471x preview command.
+Reserve `bun start` on 4701 for the installed service or first-run setup.
+
 No runtime dependencies. `bun install` only fetches TypeScript types.
 
 ## Where to go next
@@ -71,3 +74,7 @@ No runtime dependencies. `bun install` only fetches TypeScript types.
 
 `bun run check` is the gate: strict TypeScript, then the whole suite. It is what
 `scripts/anthill-deploy.sh` runs before it will put anything live.
+
+GitHub merge and local production deploy are separate steps. Port 4701 serves
+the dedicated clean worktree at `~/Developer/the-mountain-production`; follow
+[`DEPLOY.md`](./DEPLOY.md) to fast-forward, deploy, and verify it.

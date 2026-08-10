@@ -505,15 +505,22 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
   });
 
   test("the guards it promises are the guards the deploy script has", () => {
+    expect(deploy).toContain("Deploys must run from `~/Developer/the-mountain-production`");
+    expect(deployScript).toContain('CANONICAL_ROOT="${HOME}/Developer/the-mountain-production"');
     expect(deploy).toContain("Deploy worktree must be on `main`");
     expect(deployScript).toContain('if [ "$BRANCH" != "main" ]');
+    expect(deploy).toContain("freshly fetched `origin/main`");
+    expect(deployScript).toContain("git status --porcelain --untracked-files=all");
+    expect(deployScript).toContain("git fetch origin main:refs/remotes/origin/main");
+    expect(deployScript).toContain("git rev-parse origin/main");
     expect(deploy).toContain("Red `tsc` or `bun test` aborts the deploy");
     expect(deployScript).toContain("bunx tsc --noEmit ||");
     expect(deployScript).toContain("bun test ||");
     expect(deploy).toContain("then health-check");
     expect(deployScript).toContain("/api/health");
-    expect(deploy).toContain("prints the exact rollback command");
-    expect(deployScript).toContain("reset --hard");
+    expect(deploy).toContain("revert-through-main recovery");
+    expect(deployScript).toContain("revert the unhealthy change through GitHub main");
+    expect(deployScript).not.toContain("reset --hard");
   });
 
   test("the ports it reserves are the ports the scripts use", () => {
