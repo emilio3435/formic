@@ -66,86 +66,52 @@ export function transcriptLineNode(line) {
     el("p", { class: "tr-text", tabindex: "0", text: line.text }));
 }
 
-/* The panel's chrome, folded into one quiet line for the chat box's foot: what
-   is loaded, where it came from, and the controls that change that. The feed
-   above stays bubbles edge to edge; this line is the only place the raw source
-   path and the Load/Refresh ladder survive. Same fkeys as the panel carried,
-   so focus restoration across repaints keeps working unchanged.
-
-   The panel's own scroll log (and its anchorLog memory) went with it: the feed
-   is the drawer's one scroller now, and app.js's _chatScrollMemo owns that
-   position — a second memory here would fight it. */
-export function renderTranscriptFoot(agent, ui = state) {
+/* Exceptional transcript states and the one manual history action live at the
+   start of the feed. A normally loaded transcript needs no chrome: its turn
+   count and raw source path already belong to Evidence, and the live feed
+   refreshes on its own. Semantic buttons are styled as text links because they
+   perform actions rather than navigation. */
+export function renderTranscriptFeedLead(agent, ui = state) {
   const view = (ui && ui.transcript) || {};
-  const foot = el("div", { class: "chat-feed-foot" });
-
-  /* Load and retry are DISCLOSURES, not just fetch triggers: the feed above
-     (#drawer-chat-feed, the drawer's chat scroll) is showing the preview, and
-     this button expands it into the full record. aria-expanded starts false
-     and the loaded states never render these buttons, so the drawer ships
-     every disclosure closed — the contract the overhaul guards pin. */
-  if (view.agentId !== agent.id) {
-    foot.append(el("button", {
-      type: "button", class: "btn sm transcript-load",
-      "aria-expanded": "false", "aria-controls": "drawer-chat-feed",
-      dataset: { fkey: "transcript-load:" + agent.id },
-      onclick: () => void loadTranscript(agent.id),
-    }, "Read the transcript"));
-    return foot;
-  }
+  if (view.agentId !== agent.id) return null;
 
   if (view.loading) {
     // Bounded by construction: loadTranscript always resolves into data or an
     // error, so this can never become a spinner that never resolves.
-    foot.append(el("span", { class: "transcript-source", role: "status", text: "Reading the transcript…" }));
-    return foot;
+    return el("div", { class: "chat-feed-lead", role: "status" },
+      el("span", { class: "transcript-inline-status", text: "Reading the transcript…" }));
   }
 
   if (view.error) {
-    foot.append(
-      el("span", { class: "transcript-source err", role: "status", text: view.error }),
+    return el("div", { class: "chat-feed-lead transcript-inline-error", role: "status" },
+      el("span", { class: "transcript-inline-status", text: view.error }),
       el("button", {
-        type: "button", class: "btn sm transcript-load",
-        "aria-expanded": "false", "aria-controls": "drawer-chat-feed",
+        type: "button", class: "transcript-inline-action",
         dataset: { fkey: "transcript-retry:" + agent.id },
         onclick: () => void loadTranscript(agent.id, view.limit),
       }, "Try again"));
-    return foot;
   }
 
   const data = view.data || { lines: [], source: null, truncated: false };
   if (!data.lines.length) {
-    foot.append(el("span", {
-      class: "transcript-source",
-      text: data.source
-        ? "The transcript file is present but has no readable turns."
-        : "No transcript file is recorded for this session.",
-    }));
-  } else {
-    const win = transcriptWindow(data.lines);
-    foot.append(el("span", {
-      class: "transcript-source",
-      text: win.hidden
-        ? "Last " + win.shown.length + " of " + win.total + " loaded turns"
-        : win.total + (win.total === 1 ? " turn" : " turns"),
-    }));
-    if (data.truncated) foot.append(el("span", { class: "transcript-more", text: "· older turns exist above this window" }));
+    return el("div", { class: "chat-feed-lead" },
+      el("span", {
+        class: "transcript-inline-status",
+        text: data.source
+          ? "The transcript file is present but has no readable turns."
+          : "No transcript file is recorded for this session.",
+      }));
   }
-  if (data.source) foot.append(el("code", { class: "transcript-source-path", text: data.source }));
-  foot.append(el("button", {
-    type: "button", class: "btn sm transcript-load",
-    dataset: { fkey: "transcript-refresh:" + agent.id },
-    onclick: () => void loadTranscript(agent.id, view.limit),
-  }, "Refresh"));
   const more = nextTranscriptLimit(view.limit);
   if (more && data.truncated) {
-    foot.append(el("button", {
-      type: "button", class: "btn sm transcript-load",
-      dataset: { fkey: "transcript-more:" + agent.id },
-      onclick: () => void loadTranscript(agent.id, more),
-    }, "Load " + more));
+    return el("div", { class: "chat-feed-lead" },
+      el("button", {
+        type: "button", class: "transcript-inline-action",
+        dataset: { fkey: "transcript-more:" + agent.id },
+        onclick: () => void loadTranscript(agent.id, more),
+      }, "Load older turns"));
   }
-  return foot;
+  return null;
 }
 
 export async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {

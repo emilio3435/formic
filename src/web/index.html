@@ -4,8 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>The Ant Hill — operator console</title>
-  <link rel="stylesheet" href="styles.css?v=ah-t12">
+  <title>Formic — operator console</title>
+  <link rel="icon" href="favicon.svg?v=ah-t17">
+  <link rel="stylesheet" href="formic-tokens.css?v=ah-t17">
+  <link rel="stylesheet" href="styles.css?v=ah-t17">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -14,8 +16,9 @@
     <div class="masthead-inner">
       <div class="masthead-scene">
         <span id="nest-beacon" class="beacon" hidden aria-hidden="true"></span>
+        <img class="formic-mark" src="icons/formic-mark.svg" alt="" aria-hidden="true">
         <div class="wordmark">
-          <h1>The Ant&nbsp;Hill</h1>
+          <h1>Form<span class="wm-accent">i</span>c</h1>
           <!-- Audit §21: the masthead spent its resting state on branding, which is
                not one of the three things a pixel is allowed to do here. The
                tagline keeps its accessible name so the page still announces what
@@ -184,12 +187,12 @@
         </div>
       </main>
 
-      <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
     </div>
+    <aside id="inspector" class="pane-inspector" aria-label="Agent inspector" hidden></aside>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=ah-t12"></script>
+  <script type="module" src="app.js?v=ah-t17"></script>
 </body>
 </html>

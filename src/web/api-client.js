@@ -137,7 +137,7 @@ export function actionsFailureText(status, body) {
    is testable without a browser. */
 export function serverUnreachableHint(host) {
   const where = host ? "on " + host : "at this address";
-  return "Check that the Ant Hill server is running " + where + ", then retry.";
+  return "Check that the Formic server is running " + where + ", then retry.";
 }
 
 /* Reading a control response is the same shape as transcriptFailureText and

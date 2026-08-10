@@ -137,11 +137,13 @@ describe("drawer transition: the scroll offset belongs to one entity", () => {
 
 describe("drawer transition: render() and close honour the entity", () => {
   test("render() restores the drawer scroll only when the entity is unchanged", () => {
-    /* The bug was one unconditional assignment. Pin the branch, not the comment:
-       an edit that drops the comparison and restores flat again fails here. */
+    /* Agent drawers now choose a responsive inner owner; other drawer kinds
+       still choose the inspector. Pin the entity branch at the shared restore
+       call so either owner resets when the selected entity changes. */
+    expect(source).toContain("const inspectorScroll = captureDrawerScroll(inspector);");
     expect(source).toContain("const inspectorShowed = paintedEntityKey(state.paintSig.inspector)");
     expect(source).toMatch(
-      /inspector\.scrollTop\s*=\s*paintedEntityKey\(state\.paintSig\.inspector\)\s*===\s*inspectorShowed\s*\?\s*inspectorScroll\s*:\s*0/,
+      /restoreDrawerScroll\(\s*inspector,\s*inspectorScroll,\s*paintedEntityKey\(state\.paintSig\.inspector\)\s*===\s*inspectorShowed,\s*\)/,
     );
     // The list pane keeps its unconditional restore — it is not entity-scoped.
     expect(source).toContain("main.scrollTop = listScroll;");

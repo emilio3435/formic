@@ -21,7 +21,7 @@ export const LIFECYCLE_LABELS = {
 export const LIFECYCLE_MEANINGS = {
   working: "Actively producing — source activity in the last few minutes.",
   waiting: "Open but not producing: it finished a turn and is waiting on you, or it has gone quiet while its process is still live.",
-  unverified: "Silent for a while and no matching process found — Ant Hill cannot tell whether this session is still alive.",
+  unverified: "Silent for a while and no matching process found — Formic cannot tell whether this session is still alive.",
   finished: "Ended with evidence: the source recorded a session exit, you archived it, or its process is confirmed gone.",
 };
 

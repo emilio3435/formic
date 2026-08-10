@@ -128,6 +128,78 @@ function primeFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.ts → app.js", () => {
+  const parsePrimeFixture = async (sessionId: string) => {
+    const { parsePrimeJsonl } = await import("../src/server/prime");
+    const timestamp = "2026-08-09T04:03:40.000Z";
+    return parsePrimeJsonl([
+      JSON.stringify({ type: "session", id: sessionId, cwd: "/tmp/the-mountain", timestamp }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "[TL;DR 04:03] Heartbeat healthy — Blockers: all-clear",
+          timestamp,
+        },
+      }),
+    ].join("\n"));
+  };
+
+  test("the exact reserved Prime heartbeat monitor is declared system without routing authority", async () => {
+    const agent: any = await parsePrimeFixture("ant-heartbeat-monitor");
+
+    expect(agent).toMatchObject({
+      id: "prime:ant-heartbeat-monitor",
+      sourceSessionId: "ant-heartbeat-monitor",
+      sessionKind: "system",
+      sessionKindSource: "declared",
+      transcriptTail: "[TL;DR 04:03] Heartbeat healthy — Blockers: all-clear",
+    });
+    expect(agent.recordedTarget).toBeUndefined();
+    expect(agent.runtimeSessionId).toBeUndefined();
+    expect(agent.processIds).toBeUndefined();
+    expect(agent.allowCwdFallback).toBeUndefined();
+
+    const { buildSnapshot } = await import("../src/server/snapshot");
+    const snapshot: any = buildSnapshot({
+      agents: [agent],
+      surfaces: [],
+      archiveStore: { archivedAgents: () => [], has: () => false } as any,
+      now: new Date("2026-08-09T04:03:40.000Z"),
+    });
+    const published = snapshot.programs
+      .flatMap((program: any) => program.agents)
+      .find((candidate: any) => candidate.id === agent.id);
+
+    expect(published).toMatchObject({
+      id: "prime:ant-heartbeat-monitor",
+      sessionKind: "system",
+      sessionKindSource: "declared",
+      transcriptTail: "[TL;DR 04:03] Heartbeat healthy — Blockers: all-clear",
+      target: { resolution: "missing" },
+    });
+    expect(published.target.workspaceId).toBeUndefined();
+    expect(published.target.surfaceId).toBeUndefined();
+    expect(published.target.paneId).toBeUndefined();
+  });
+
+  test("an ordinary stable Prime session id is not declared system", async () => {
+    const agent: any = await parsePrimeFixture("release-coordinator");
+    expect(agent.sessionKind).toBeUndefined();
+    expect(agent.sessionKindSource).toBeUndefined();
+  });
+
+  test("an ordinary UUID Prime session id is not declared system", async () => {
+    const agent: any = await parsePrimeFixture("019fe46c-d482-706c-b080-08f1420c8ae3");
+    expect(agent.sessionKind).toBeUndefined();
+    expect(agent.sessionKindSource).toBeUndefined();
+  });
+
+  test("a near-match Prime heartbeat id is not declared system", async () => {
+    const agent: any = await parsePrimeFixture("ant-heartbeat-monitor-2");
+    expect(agent.sessionKind).toBeUndefined();
+    expect(agent.sessionKindSource).toBeUndefined();
+  });
+
   test("renderAgentRow surfaces transcriptTail containing [TL;DR", () => {
     // Row stability: TL;DR lives in header (per-repo, fleet-wide) and drawer Chat, not collapsed row.
     // Row shows stable Task (sidecar, 5m LLM) + live/working/alert at right — hybrid row.

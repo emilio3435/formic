@@ -451,6 +451,10 @@ const buttonsOf = (node: any) => findAll(node, (n) => n.tagName === "button");
    click can be awaited — the request functions are all async. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fire(node: any, type = "click", event: Record<string, unknown> = {}): Promise<void> {
+  // Native disabled controls do not dispatch click, submit-from-control, or
+  // keyboard events in a browser. Keep the fake DOM honest about that safety
+  // boundary so a disabled-looking control cannot pass by invoking its handler.
+  if (node?.hasAttribute?.("disabled")) return;
   const handlers = (node && node.listeners && node.listeners[type]) || [];
   if (!handlers.length) throw new Error(`no ${type} handler on <${node && node.tagName}>`);
   for (const handler of handlers) await handler({ preventDefault() {}, stopPropagation() {}, ...event });
@@ -1427,11 +1431,11 @@ describe("provider-aware row summaries", () => {
     const panels = panelTexts(rich);
     // Chat shows readable You/Agent turns only. Raw provider output is neither
     // promoted into that summary nor duplicated into Evidence; the bounded
-    // transcript control is the opt-in route to the source record.
+    // transcript loader is the opt-in route to the source record.
     expect(panels.chat).toContain("pushed the branch");
     expect(panels.chat).not.toContain(TAIL);
     expect(panels.evidence).not.toContain(TAIL);
-    expect(withDom(() => textOf(M.renderTranscriptFoot(rich)))).toContain("Read the transcript");
+    expect(withDom(() => M.renderTranscriptFeedLead(rich))).toBeNull();
   });
 });
 
@@ -2454,7 +2458,9 @@ describe("unavailable-control explanation stays plain-language", () => {
     // title, not in an aria-label. That string is evidence, not operator copy.
     const dockText = textOf(dock);
     expect(dockText).not.toContain(reason);
-    expect(dockText).toContain(M.controlUnavailableText("quarantined"));
+    // The explanation now travels with the dock only when renderAgentDrawer
+    // inserts the banner into the pane footer; the dock primitive stays silent.
+    expect(dockText).not.toContain(M.controlUnavailableText("quarantined"));
     const leaked = findAll(dock, (n: any) =>
       Object.values(n.attributes || {}).some((v) => String(v).includes(reason)));
     expect(leaked).toEqual([]);
@@ -2732,6 +2738,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       dataset: {} as Record<string, string>,
       attributes: {} as Record<string, string>,
       children: [] as unknown[],
+      classList: { add() {} },
       get childNodes() { return this.children; },
       get childElementCount() { return this.children.length; },
       setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
@@ -2961,9 +2968,9 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // WS-C audit finding: is-needs-you / is-blocked / is-failed carried a soft tint
     // but NO colored rail. Codified open-q2 threshold: a ≤10% tint must always ride
     // WITH a status-colored edge mark. Assert each alert modifier now sets one.
-    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
+    for (const mod of ["is-needs-you", "is-blocked", "is-failed"]) {
       const rail = styles.match(
-        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(${ink}\\)`),
+        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(--color-status-danger\\)`),
       );
       expect(rail).not.toBeNull();
       // And the tint it rides with is still present (paired, not replaced).
@@ -2998,12 +3005,11 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
         new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
       )?.[0] ?? "";
       expect(rule).not.toBe("");
-      // Both components present: the state-colored 4px rail AND the focus ring.
-      // The ring became 2px ember when arrow keys made it a navigation cue
-      // rather than an accessibility fallback; the combination is the invariant
-      // this test exists for, and it still has to hold.
-      expect(rule).toContain(`inset 4px 0 var(${ink})`);
-      expect(rule).toContain("inset 0 0 0 2px var(--ember)");
+      // Both components present: the semantic danger 4px rail AND the named
+      // Formic focus ring. The rail remains the first shadow layer so state is
+      // not erased when keyboard focus arrives.
+      expect(rule).toContain("inset 4px 0 var(--color-status-danger)");
+      expect(rule).toContain("var(--color-focus-ring)");
     }
   });
 
@@ -3082,12 +3088,14 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(row.attributes["aria-label"]).toContain("Role:");
     // …the policy verdict does not — it was removed, not relocated.
     expect(row.attributes["aria-label"]).not.toContain("Model mismatch");
-    // The role is one click away in Evidence as a compact badge; the policy
-    // verdict is nowhere, drawer included.
+    // The role belongs to the command header identity line; Evidence is reserved
+    // for provenance. The policy verdict is nowhere, drawer included.
     const evidence = deepText(withDom(() => M.renderEvidence(off)));
     expect(evidence).not.toContain("Running opus where the policy says grok");
-    expect(evidence).toContain("Role:");
-    expect(evidence).toContain("Verifier");
+    expect(evidence).not.toContain("Role:");
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: off, program }));
+    expect(textOf(byClass(pane, "drawer-session-eyebrow"))).toContain("Verifier");
 
     // The control-safety dot stays because it changes what the operator can do.
     const risky = clean({
@@ -3135,9 +3143,13 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(stale, program));
     expect(findByClass(row, "row-stale")).toBeNull();
-    // Still spoken, and still in the drawer under words that say what it means.
+    // Still spoken, and the drawer's state sentence carries the same live age;
+    // Evidence no longer repeats it as a provenance fact.
     expect(row.attributes["aria-label"]).toContain("Quiet: updated");
-    expect(deepText(withDom(() => M.renderRowFacts(stale)))).toContain("quiet since");
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: stale, program }));
+    expect(textOf(byClass(pane, "status-line"))).toContain("ago");
+    expect(deepText(withDom(() => M.renderEvidence(stale)))).not.toContain("quiet since");
 
     // A fresh running row says nothing anywhere — silence is still earned.
     const fresh = clean({ status: "running" });
@@ -3169,7 +3181,7 @@ describe("operations canvas layout", () => {
     expect(styles).not.toContain("--maxw");
   });
 
-  test("workboard + inspector share one ops-stage shell with an internal divider", () => {
+  test("workboard + inspector share app-body as sibling instruments", () => {
     expect(html).toContain('class="ops-stage"');
     const stageIdx = html.indexOf('class="ops-stage"');
     const mainIdx = html.indexOf('id="main"');
@@ -3178,10 +3190,11 @@ describe("operations canvas layout", () => {
     expect(stageIdx).toBeLessThan(mainIdx);
     expect(mainIdx).toBeLessThan(inspectorIdx);
     expect(styles).toContain(".ops-stage");
-    expect(styles).toMatch(/\.app-body\s*\{[^}]*display:\s*flex/);
-    expect(styles).not.toMatch(/\.app-body\s*\{[^}]*gap:\s*1\.5rem/);
-    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*border-left:\s*1px solid var\(--line-strong\)/);
-    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*none/);
+    expect(html).toMatch(/<\/main>\s*<\/div>\s*<aside id="inspector"/);
+    expect(styles).toMatch(/\.app-body\s*\{[^}]*display:\s*grid/);
+    expect(styles).toMatch(/body\.inspector-open \.app-body\s*\{[^}]*grid-template-columns:\s*clamp\(380px, 40%, 760px\) minmax\(0, 1fr\)/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/);
+    expect(styles).toMatch(/\.pane-inspector\s*\{[^}]*box-shadow:\s*var\(--shadow-soft\)/);
   });
 
   test("the summary strip never grows its own findings ledger or triage chrome", () => {
@@ -3882,9 +3895,10 @@ describe("the command dock is grouped by what each control is for", () => {
     expect(groups(none).length).toBe(0);
   });
 
-  test("locked safe controls still isolate Archive behind the disclosure, inside the cluster", () => {
-    /* The rule the disclosure exists for: a destructive control must never sit
-       beside dead ones. The move to the corner keeps the isolation. */
+  test("Archive stays behind the disclosure whether session controls are linked or locked", () => {
+    /* Destructive session management is secondary to the two direct controls.
+       Its capability and confirm gate are unchanged; only its presentation is
+       consistently behind the overflow disclosure. */
     const dock = dockFor([
       { action: "focus", enabled: false },
       { action: "instruct", enabled: false },
@@ -3896,7 +3910,7 @@ describe("the command dock is grouped by what each control is for", () => {
     const cluster: any = clusterOf(dock);
     const more = byClass(cluster, "command-dock-more");
     expect(more).not.toBeNull();
-    expect(textOf(more)).toContain("Archive this session");
+    expect(textOf(more)).toContain("Archive");
 
     // Exactly one Archive in the dock, and it is behind the disclosure — never
     // a peer of the Focus the server has already refused.
@@ -3909,10 +3923,11 @@ describe("the command dock is grouped by what each control is for", () => {
     const focus: any = byFkey(cluster, "act:codex:a1:focus");
     expect(focus.hasAttribute("disabled")).toBe(true);
 
-    // The control: unlocked, the same capability is a plain tool in the cluster.
+    // Unlocked: the same capability remains behind the same disclosure.
     const open = dockFor([...CAPS]);
-    expect(byClass(clusterOf(open), "command-dock-more")).toBeNull();
-    expect(byFkey(clusterOf(open), archiveKey)).not.toBeNull();
+    const openMore = byClass(clusterOf(open), "command-dock-more");
+    expect(openMore).not.toBeNull();
+    expect(byFkey(openMore, archiveKey)).not.toBeNull();
   });
 
   test("Interrupt still arms its confirm strip, inside the cluster", async () => {
@@ -4089,7 +4104,7 @@ describe("agent drawer — Document · Desk", () => {
     expect(source).toContain('class: "drawer-grid"');
     expect(source).toContain('class: "drawer-doc"');
     expect(source).toContain('class: "drawer-desk"');
-    expect(source).toContain('"aria-label": "Task and transcript"');
+    expect(source).toContain('"aria-label": "Conversation"');
     expect(source).toContain('"aria-label": "Evidence and lineage"');
     expect(styles).toContain("grid-template-columns: minmax(0, 65fr) minmax(0, 35fr)");
     expect(styles).toContain("@media (max-width: 860px)");
@@ -4196,6 +4211,111 @@ describe("agent drawer — Document · Desk", () => {
   });
 });
 
+describe("RHSP command header consolidation", () => {
+  const renderDrawer = (overrides: Record<string, unknown> = {}) => withDom(() => {
+    const selected = agent(overrides);
+    const pane = newNode("div");
+    M.renderAgentDrawer(pane, {
+      kind: "agent",
+      agent: selected,
+      program: { id: "p", name: "Home", agents: [selected] },
+    });
+    return pane;
+  });
+
+  test("one command header owns identity, task, state, and operational facts", () => {
+    const rawTask = [
+      "From: orchestrator-1",
+      "To: lane-fe-2",
+      "Branch: fix/rhsp-command-header",
+      "",
+      "Replace the redundant drawer header. Keep the full brief available.",
+    ].join("\n");
+    const drawer = renderDrawer({
+      task: "Replace the redundant drawer header",
+      rawTask,
+      role: "orchestrator",
+      identity: { base: "Admin Hub UX Updates V3 - Highlight Row" },
+      model: "sol 5.6",
+      processLiveness: "running",
+      status: "waiting",
+      lifecycle: "waiting",
+      statusReason: "Quiet 12m · process live.",
+      cwd: "/Users/example",
+      target: { resolution: "exact", surfaceCwd: "/Users/example" },
+      contextPct: 28,
+      tokens: { provenance: "observed", total: 71_000, contextWindow: 258_000, sessionTotal: 2_200_000 },
+    });
+
+    const header = byClass(drawer, "drawer-session-header");
+    expect(header).not.toBeNull();
+    expect(byClass(header, "drawer-task-summary")).not.toBeNull();
+    expect(byClass(header, "drawer-task-objective")).not.toBeNull();
+    expect(byClass(header, "drawer-task-brief")?.tagName).toBe("details");
+    expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(1);
+    expect(byClass(drawer, "drawer-header-vitals")).toBeNull();
+    expect(byClass(drawer, "drawer-chat-task")).toBeNull();
+
+    const headerText = textOf(header).replace(/\s+/g, " ");
+    expect(headerText).toContain("Orchestrator · Home");
+    expect(headerText).toContain("Task");
+    expect(headerText).toContain("Replace the redundant drawer header");
+    expect(textOf(byClass(header, "drawer-session-run"))).toBe("Codex / sol 5.6");
+    expect(headerText.match(/Process live/gi)).toHaveLength(1);
+    expect(textOf(byClass(header, "drawer-session-context"))).toContain("Context28%");
+    expect(headerText).toContain("71k / 258k");
+    expect(textOf(byClass(header, "drawer-session-usage"))).toBe("Session2.2M");
+
+    const doc = byClass(drawer, "drawer-doc");
+    expect(doc?.attributes?.["aria-label"]).toBe("Conversation");
+    expect(byClass(doc, "drawer-chat")).not.toBeNull();
+  });
+
+  test("Evidence keeps provenance and removes facts the command header already owns", () => {
+    const drawer = renderDrawer({
+      role: "orchestrator",
+      cwd: "/Users/example",
+      target: { resolution: "exact", surfaceCwd: "/Users/example" },
+      updatedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+      artifacts: [{ kind: "transcript", label: "CODEX transcript", path: "/tmp/session.jsonl" }],
+    });
+    const evidence = byClass(drawer, "drawer-desk");
+    const evidenceText = textOf(evidence).replace(/\s+/g, " ");
+
+    expect(byClass(evidence, "evidence-role")).toBeNull();
+    expect(evidenceText).not.toContain("quiet since");
+    expect(evidenceText.match(/\/Users\/example/g)).toHaveLength(1);
+    expect(evidenceText).toContain("Workspace and terminal report the same folder");
+    expect(evidenceText).toContain("does not authorize controls");
+    const copy = byClass(evidence, "artifact-copy");
+    expect(copy).not.toBeNull();
+    expect(copy?.attributes?.["aria-label"]).toBe("Copy transcript path");
+    expect(textOf(copy)).toBe("");
+  });
+
+  test("Close is icon-only and Archive lives behind the existing overflow disclosure", () => {
+    const drawer = renderDrawer({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+        { action: "archive", enabled: true },
+      ],
+    });
+    const close = byClass(drawer, "inspector-close");
+    expect(close?.attributes?.["aria-label"]).toBe("Close inspector");
+    expect(textOf(close)).toBe("");
+
+    const cluster = byClass(drawer, "command-dock-cluster");
+    const directTools = (cluster?.children || []).filter((child: any) =>
+      String(child.className || "").split(/\s+/).includes("dock-tool"));
+    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["Focus", "Interrupt"]);
+    const more = byClass(cluster, "command-dock-more");
+    expect(more).not.toBeNull();
+    expect(textOf(more)).toContain("Archive");
+  });
+});
+
 describe("verdict head — act from the top (B2)", () => {
   /* Brace-counted extraction, not a landmark regex: it walks from the
      signature's opening `{` to its true matching `}` by depth, so it can
@@ -4221,30 +4341,32 @@ describe("verdict head — act from the top (B2)", () => {
   }
   const agentDrawer = () => extractFunctionBody("function renderAgentDrawer(pane, view) {");
 
-  test("drawer order: verdict head → banner → header vitals → Document+Desk grid", () => {
+  test("drawer order: shell head → bounded grid → banner and controls footer", () => {
     const drawer = agentDrawer();
     expect(drawer).toBeTruthy();
     const headAt = drawer.indexOf("inspector-head inspector-verdict");
     const bannerAt = drawer.indexOf("renderControlBanner(agent, control)");
-    const vitalsAt = drawer.indexOf('class: "drawer-header-vitals"');
     const gridAt = drawer.indexOf('class: "drawer-grid"');
     const lineageAt = drawer.indexOf("renderLineageSpine(agent)");
     const dockAt = drawer.indexOf("renderCommandDock(agent, control)");
-    for (const at of [headAt, bannerAt, vitalsAt, gridAt, lineageAt, dockAt]) {
+    for (const at of [headAt, bannerAt, gridAt, lineageAt, dockAt]) {
       expect(at).toBeGreaterThan(-1);
     }
-    // The banner stays state, pinned immediately after the head.
-    expect(bannerAt).toBeGreaterThan(headAt);
+    expect(drawer).toContain('class: "drawer-shell-head"');
     /* next-action is gone: across 243 live agents it held three distinct strings
        and 214 read "Review this session in history." — a restatement of
        activity === "ended" dressed as per-agent advice. */
     expect(drawer).not.toContain('class: "next-action"');
-    expect(vitalsAt).toBeGreaterThan(bannerAt);
-    // The dock is built into Document; lineage is built into Desk. Both are
-    // assembled before the grid itself is appended.
-    expect(dockAt).toBeGreaterThan(vitalsAt);
-    expect(lineageAt).toBeGreaterThan(dockAt);
+    expect(drawer).not.toContain('class: "drawer-header-vitals"');
+    expect(drawer).not.toContain('class: "drawer-chat-task"');
+    // The footer is built once, receives the banner, and is appended after the
+    // content grid. Source order builds nodes before it appends them; these
+    // assertions pin that construction without mistaking it for DOM order.
+    expect(dockAt).toBeGreaterThan(headAt);
+    expect(bannerAt).toBeGreaterThan(dockAt);
+    expect(lineageAt).toBeGreaterThan(bannerAt);
     expect(gridAt).toBeGreaterThan(lineageAt);
+    expect(drawer).toContain("pane.append(grid, dock)");
   });
 
   test("the head carries the gate chip and exactly one Focus button exists", () => {
@@ -4252,11 +4374,11 @@ describe("verdict head — act from the top (B2)", () => {
     const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
     expect(head).toContain("verdictGate(");
     /* The head's primary action is deleted. It rendered a literal copy of a dock
-       tool while the dock is position:sticky at the bottom of the same pane, so
-       one Focus button was on screen twice. */
+       tool while the dock is the persistent footer of the same pane, so one
+       Focus button was on screen twice. */
     expect(head).not.toContain("headPrimaryAction(");
     expect(source).not.toContain("function headPrimaryAction(");
-    expect(styles).toContain("position: sticky"); // the dock keeps Focus reachable
+    expect(styles).toMatch(/\.command-dock\s*\{[^}]*position:\s*static/);
     // The gate is ember ink + outline, never a filled banner.
     const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
     expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
@@ -4268,20 +4390,18 @@ describe("verdict head — act from the top (B2)", () => {
     expect(block).toContain(".verdict-action .dock-tool");
   });
 
-  test("head de-noising: one quiet source line, full sentence in the tooltip", () => {
+  test("head de-noising: one quiet source line in the identity eyebrow", () => {
     const drawer = agentDrawer();
-    // The three-way naming ternary collapsed into a single render.
-    expect((drawer.match(/inspector-source-name/g) || []).length).toBe(1);
+    expect((drawer.match(/drawer-session-eyebrow/g) || []).length).toBe(1);
     expect(drawer).toContain("quietSourceLine(agent)");
-    expect(drawer).toContain("fullSourceDetail(agent)");
-    expect(drawer).toContain('class: "inspector-source-name"');
+    expect(drawer).toContain('class: "drawer-session-eyebrow"');
+    expect(drawer).not.toContain("fullSourceDetail(agent)");
   });
 
   test("quietSourceLine keeps useful terminal context for separate directories without warning language", () => {
     // Terminal title IS the display name → no source line at all.
     const matching = agent({ target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane" } });
     expect(M.quietSourceLine(matching)).toBeNull();
-    expect(M.fullSourceDetail(matching)).toBeNull();
 
     // Separate directories keep the terminal name as neutral destination context.
     const separate = agent({
@@ -4289,7 +4409,6 @@ describe("verdict head — act from the top (B2)", () => {
       target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "ridge-pane", cwdRelation: "different" },
     });
     expect(M.quietSourceLine(separate)).toBe("Terminal: ridge-pane");
-    expect(M.fullSourceDetail(separate)).toBe("Terminal: ridge-pane");
 
     // No terminal title, no custom name → still quiet.
     expect(M.quietSourceLine(agent())).toBeNull();
@@ -4310,6 +4429,7 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
       dataset: {} as Record<string, string>,
       attributes: {} as Record<string, string>,
       children: [] as unknown[],
+      classList: { add() {} },
       setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
       addEventListener() {},
       append(...kids: unknown[]) { this.children.push(...kids); },
@@ -4358,7 +4478,6 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
       target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1", workspaceTitle: "Ridge pane", cwdRelation: "different" },
     });
     expect(M.quietSourceLine(aliasLike)).toBe("Terminal: Ridge pane");
-    expect(M.fullSourceDetail(aliasLike)).toBe("Terminal: Ridge pane");
     // Without separate directories the same identity stays quiet.
     const calm = agent({
       nickname: "Ridge pane",
@@ -4382,10 +4501,9 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
   });
 });
 
-describe("vitals instrument band (B3)", () => {
-  /* Same DOM-less execution trick B2 used: a minimal fake document installed
-     around each call lets renderVitalsBand build real nodes via el()/svg helpers,
-     so tests assert on what actually renders — not merely on source substrings. */
+describe("command header session facts (B3)", () => {
+  /* A minimal fake document drives the real drawer so this contract asserts
+     the rendered header, not a second metrics component. */
   function fakeDom() {
     const make = (tag: string) => ({
       nodeType: 1,
@@ -4395,6 +4513,9 @@ describe("vitals instrument band (B3)", () => {
       dataset: {} as Record<string, string>,
       attributes: {} as Record<string, string>,
       children: [] as unknown[],
+      classList: { add() {} },
+      get childNodes() { return this.children; },
+      get childElementCount() { return this.children.length; },
       setAttribute(k: string, v: unknown) { this.attributes[k] = String(v); },
       addEventListener() {},
       append(...kids: unknown[]) { this.children.push(...kids); },
@@ -4411,14 +4532,6 @@ describe("vitals instrument band (B3)", () => {
       delete (globalThis as unknown as { document?: unknown }).document;
     }
   }
-  // Walk the built node tree: collect el()-set classNames and concatenated text.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function classesOf(node: any, out: string[] = []): string[] {
-    if (!node || typeof node !== "object") return out;
-    if (typeof node.className === "string" && node.className) out.push(node.className);
-    for (const kid of node.children || []) classesOf(kid, out);
-    return out;
-  }
   // el() writes leaf text via the `text:` attr (node.textContent) and multi-child
   // text via createTextNode kids; a node uses one or the other, so summing both
   // never double-counts.
@@ -4431,59 +4544,44 @@ describe("vitals instrument band (B3)", () => {
     return s;
   }
 
-  test("(a) one context tile carries both magnitudes, in a sentence", () => {
-    expect(typeof M.renderVitalsBand).toBe("function");
-    /* The reported defect was two sibling NOUN labels — "Context" beside
-       "Session tokens" — both reading as "an amount of tokens". Prepositions
-       separate them where nouns could not, and one tile removes the side-by-side
-       adjacency that invited the comparison in the first place. */
+  test("(a) one compact header carries context and session magnitudes once", () => {
     const live = agent({
       tokens: { provenance: "observed", scope: "latest-turn", total: 120000, contextWindow: 1000000, sessionTotal: 480000 },
       elapsedMs: 125000,
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const band: any = withDom(() => M.renderVitalsBand(live));
-    expect(band).not.toBeNull();
-    const text = textOf(band).replace(/\s+/g, " ");
-    // Both magnitudes, each exactly once, against wording that cannot be swapped.
-    /* Counted as plain substrings: textOf concatenates sibling nodes without
-       separators, so "…window480k…" has no word boundary to anchor on. */
+    const pane: any = withDom(() => {
+      const root = newNode("div");
+      M.renderAgentDrawer(root, { kind: "agent", agent: live, program: { id: "p", name: "P", agents: [live] } });
+      return root;
+    });
+    const header = byClass(pane, "drawer-session-header");
+    expect(header).not.toBeNull();
+    const text = textOf(header).replace(/\s+/g, " ");
     const count = (needle: string) => text.split(needle).length - 1;
     expect(count("120k")).toBe(1);
     expect(count("480k")).toBe(1);
-    /* The percentage is spoken once, by the ring. The sentence carries only what
-       the ring cannot: the absolute size it is a fraction of, and the session
-       total. Printing the pct in both was the same quantity twice inside one
-       tile — the defect, committed inside its own fix. */
     expect(count("12%")).toBe(1);
-    expect(text).toContain("of 1.0M window");
-    expect(text).toContain("used this session");
-    // The numerator is never bare: 120k means nothing without its denominator.
-    expect(text).toContain("1.0M");
-    const classes = classesOf(band);
-    expect(classes.some((c) => c.includes("vital-ring"))).toBe(true);
-    // Past the threshold the same tile takes ember ink rather than appearing.
-    const hot = agent({ tokens: { provenance: "observed", scope: "latest-turn", total: 900000, contextWindow: 1000000, sessionTotal: 480000 } });
-    expect(classesOf(withDom(() => M.renderVitalsBand(hot))).some((c) => c.includes("is-hot"))).toBe(true);
-    expect(classes.some((c) => c.includes("is-hot"))).toBe(false);
+    expect(text).toContain("120k / 1.0M");
+    expect(byClass(pane, "drawer-header-vitals")).toBeNull();
   });
 
-  test("(b) the band never invents a denominator, and the deleted tiles stay deleted", () => {
-    // Observed total but NO context window → no ring, no fabricated percentage,
-    // and now no consolation tile either: with nothing to compare against there
-    // is no alarm to raise, and Evidence's `latest call` row carries the count.
+  test("(b) the header never invents a denominator or resurrects deleted metrics", () => {
     const noWindow = agent({
       provider: "claude",
       tokens: { provenance: "observed", total: 40000 },
       elapsedMs: undefined,
       updatedAt: undefined,
     });
-    expect(withDom(() => M.renderVitalsBand(noWindow))).toBeNull();
-
-    const blank = withDom(() => M.renderVitalsBand(
-      agent({ tokens: { provenance: "unknown" }, elapsedMs: undefined, updatedAt: undefined }),
-    ));
-    expect(blank).toBeNull();
+    const renderHeader = (value: unknown) => withDom(() => {
+      const root = newNode("div");
+      M.renderAgentDrawer(root, { kind: "agent", agent: value, program: { id: "p", name: "P", agents: [value] } });
+      return byClass(root, "drawer-session-header");
+    });
+    const noWindowText = textOf(renderHeader(noWindow));
+    expect(noWindowText).toContain("40k tokens");
+    expect(noWindowText).not.toContain("%");
+    expect(byClass(renderHeader(agent({ tokens: { provenance: "unknown" } })), "drawer-session-context")).toBeNull();
     expect(M.tokenSummary({ provenance: "unknown" }).text).toBe("not reported");
 
     /* The three deleted tiles, each for its own reason:
@@ -4499,11 +4597,11 @@ describe("vitals instrument band (B3)", () => {
       tokens: { provenance: "observed", scope: "latest-turn", total: 180000, contextWindow: 200000, sessionTotal: 27000000, cachedInput: 90000, input: 10000 },
       elapsedMs: 125000,
     });
-    const text = textOf(withDom(() => M.renderVitalsBand(rich)));
+    const text = textOf(renderHeader(rich));
     expect(text).not.toContain("Session tokens");
     expect(text).not.toContain("cache hit");
     expect(text).not.toContain("Uptime");
-    expect(source).toContain('"Session ", _sessionText');
+    expect(text).toContain("Session27.0M");
   });
 
   test("(c) Evidence no longer builds a competing vitals block", () => {
@@ -4513,15 +4611,16 @@ describe("vitals instrument band (B3)", () => {
     expect(evidence).not.toContain("renderVitalsBand(agent)");
   });
 
-  test("(d) renderAgentDrawer puts honest compact vitals before the Document+Desk grid", () => {
+  test("(d) renderAgentDrawer puts honest compact facts inside the command header", () => {
     const drawer = source.match(/function renderAgentDrawer\(pane, view\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
-    expect(drawer).toContain('class: "drawer-header-vitals"');
-    expect(drawer).toContain('"Context ", _ctxPctText');
-    expect(drawer).toContain('"Session ", _sessionText');
-    const vitalsAt = drawer.indexOf('class: "drawer-header-vitals"');
+    expect(drawer).toContain('class: "drawer-session-facts"');
+    expect(drawer).toContain("drawer-session-context");
+    expect(drawer).toContain("drawer-session-usage");
+    expect(drawer).not.toContain('class: "drawer-header-vitals"');
+    const factsAt = drawer.indexOf('class: "drawer-session-facts"');
     const gridAt = drawer.indexOf('class: "drawer-grid"');
-    expect(vitalsAt).toBeGreaterThan(-1);
-    expect(vitalsAt).toBeLessThan(gridAt);
+    expect(factsAt).toBeGreaterThan(-1);
+    expect(factsAt).toBeLessThan(gridAt);
   });
 });
 
@@ -4695,12 +4794,10 @@ describe("per-type drawers lead with verdict + action (B4)", () => {
     // in agent-rows, WS-C's territory, and is out of scope for this task).
     const perType = styles.slice(
       styles.indexOf("/* ---------- inspector: per-type drawer states"),
-      // Landmark renamed with the section: the vitals band became the context
-      // alarm when its session/cache/uptime tiles were cut.
-      styles.indexOf("/* ---------- context alarm"),
+      styles.indexOf("/* ---------- controls ----------"),
     );
     expect(perType).toBeTruthy();
-    expect(styles).toContain("/* ---------- context alarm"); // the landmark exists
+    expect(styles).toContain("/* ---------- controls ----------"); // the landmark exists
     expect(perType).not.toContain("#fff");
     // Dead-class safety: with the CSS gone, nothing in the JS/HTML may still emit
     // those class strings, or it would render as an unstyled element. Back the
@@ -5699,11 +5796,6 @@ describe("the health card's headline agrees with its own severity", () => {
   });
 });
 
-/* Screenshot from the live board: in the drawer, the "Ready · linked" chip sat
-   ON TOP of the OPERATE panel's text, leaving the last human message unreadable
-   behind it. The dock is position: sticky over scrolling content, and its
-   background mixed --surface with TRANSPARENT — so the text passed through the
-   bar instead of behind it. A sticky bar that overlaps content must be opaque. */
 /* Screenshot from the live board: 56 rows all reading "Claude · the-mountain-main"
    — same provider, same working directory, several on the same model — with
    nothing on the row to tell one live agent from another. The name is genuinely
@@ -5779,30 +5871,23 @@ describe("rows with identical names carry a disambiguator", () => {
   });
 });
 
-describe("the command dock does not paint over the text it sits above", () => {
+describe("the command dock owns an opaque shell footer", () => {
   // Declarations only — a comment explaining why transparency was removed must
   // not read as transparency still being there.
   const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
   const dockRule = () => stripComments(styles.match(/\.command-dock\s*\{[^}]*\}/)?.[0] ?? "");
 
-  test("the sticky dock is opaque, so scrolling content passes behind it", () => {
+  test("the static footer is opaque and reserves layout space", () => {
     const rule = dockRule();
     expect(rule).not.toBe("");
-    // It really is a sticky overlay — that is what makes opacity load-bearing.
-    expect(rule).toContain("position: sticky");
+    expect(rule).toContain("position: static");
     // No transparency in the dock's own background, at any stop.
     expect(rule).not.toContain("transparent");
     expect(rule).toMatch(/background:\s*var\(--raise\)/);
   });
 
-  test("the soft top edge survives as a scrim above the bar, not through it", () => {
-    // The gradient was doing real visual work; it moves ABOVE the dock so it
-    // fades the scrolling content instead of revealing it through the controls.
-    const scrim = styles.match(/\.command-dock::before\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(scrim).not.toBe("");
-    expect(scrim).toContain("bottom: 100%");     // sits above the bar
-    expect(scrim).toContain("pointer-events: none"); // never eats a click
-    expect(scrim).toContain("transparent");      // the fade itself
+  test("the footer needs no overlay scrim because content ends before it", () => {
+    expect(styles).not.toMatch(/\.command-dock::before\s*\{/);
   });
 });
 
@@ -6047,13 +6132,13 @@ describe("FE-B: harness-backed client behavior", () => {
   /* -------- finding 11: the retry hint named a port it was not served on ---- */
   test("(11) the unreachable hint names the address the page came from, not a hardcoded 4701", () => {
     expect(M.serverUnreachableHint("127.0.0.1:4715"))
-      .toBe("Check that the Ant Hill server is running on 127.0.0.1:4715, then retry.");
+      .toBe("Check that the Formic server is running on 127.0.0.1:4715, then retry.");
     // The production default still reads correctly — this is not a regression trade.
     expect(M.serverUnreachableHint("127.0.0.1:4701")).toContain("127.0.0.1:4701");
     // No internal version jargon in the one screen a broken instance shows.
     expect(M.serverUnreachableHint("127.0.0.1:4702")).not.toContain("v3");
     // A hostless context (file://) must not claim an address it does not know.
-    expect(M.serverUnreachableHint("")).toBe("Check that the Ant Hill server is running at this address, then retry.");
+    expect(M.serverUnreachableHint("")).toBe("Check that the Formic server is running at this address, then retry.");
   });
 
   /* -------- finding 10: SVG <rect> has no title ATTRIBUTE ------------------- */
@@ -8647,13 +8732,14 @@ describe("FE-B: harness-backed client behavior", () => {
   });
 
   test("(9d) the focus ring is visible enough to navigate by", () => {
-    /* The ring is the primary cue once arrows move focus, so it must be the same
-       ember ink the global :focus-visible rule uses, at 2px. The alert-row
+    /* The ring is the primary cue once arrows move focus, so it must be the
+       indigo interaction role shared by the global :focus-visible rule. The alert-row
        variants of this ring are covered by (g), which owns the rail+ring
        interaction. */
     const rule = styles.match(/\.agent-row:focus-visible\s*\{[^}]*\}/)?.[0] ?? "";
     expect(rule).not.toBe("");
-    expect(rule).toContain("inset 0 0 0 2px var(--ember)");
+    expect(rule).toContain("inset 0 0 0 2px var(--color-interactive)");
+    expect(rule).toContain("var(--color-focus-ring)");
   });
 
   /* Regression: the alerted row that passed the filter and still never painted.
@@ -9950,6 +10036,25 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
     expect(String(send.className)).toContain("primary");
   });
 
+  test("(1) the composer does not contradict the selected agent's harness or model", () => {
+    /* The drawer header already owns harness/model identity. A hard-coded
+       provider/model in the input can contradict the authoritative snapshot
+       and make a correctly routed instruction look unsafe. */
+    for (const [provider, model] of [["claude", "claude-fable-5"], ["codex", "gpt-5.6"]]) {
+      const live = agent({
+        provider,
+        model,
+        controls: [{ action: "instruct", enabled: true }],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dock: any = withDom(() => M.renderCommandDock(live, "linked", null, []));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const input: any = findAll(dock, (n: any) => n.tagName === "input")[0];
+      expect(input.attributes.placeholder).toContain("Message this agent");
+      expect(input.attributes.placeholder).not.toMatch(/Prime|spark|Claude|fable|Codex|gpt/i);
+    }
+  });
+
   test("(1) every control in the dock is held — and says so — on a frozen board", () => {
     const live = agent({
       controls: [
@@ -10191,7 +10296,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
        sends are the FILLED slate bubbles (white ink), the agent's the white
        bordered cards — fill vs outline, never two near-identical grays. */
     expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \{[^}]*background: var\(--slate\)/);
-    expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \.chat-msg-body \{[^}]*color: #fff/);
+    expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \.chat-msg-body \{[^}]*color: var\(--color-text-on-inverse\)/);
     expect(styles).toMatch(/\n\.chat-msg \{[^}]*background: var\(--raise\)/);
   });
 
@@ -10199,7 +10304,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     /* An agent not yet held -> fetch. The SAME agent already held — loaded,
        loading, OR errored, the agentId matches in all three — -> no fetch, so
        a background reopen never hammers the route and a failed load retries
-       only through the foot's own Try again. */
+       only through the feed's own Try again action. */
     expect(M.shouldAutoLoadTranscript({ kind: "agent", id: "codex:a1" }, {})).toBe(true);
     expect(M.shouldAutoLoadTranscript({ kind: "agent", id: "codex:a1" }, { agentId: "codex:a2" })).toBe(true);
     expect(M.shouldAutoLoadTranscript({ kind: "agent", id: "codex:a1" }, { agentId: "codex:a1", loading: true })).toBe(false);
@@ -10241,46 +10346,33 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(requiredSlice(styles, /\n\.pane-list \{[^}]*\}/, ".pane-list")).not.toMatch(/overflow-y\s*:/);
   });
 
-  test("(2) the Task+Chat column always matches the desk column's height", () => {
-    /* Column parity, by construction under the desk-owner model (operator
-       directive: the desk sizes the drawer): the doc is an absolutely
-       positioned grid item whose containing block is its own column-1 grid
-       AREA — the area the desk's content sizes — so Task+Chat equals the
-       desk's length exactly, and the feed's intrinsic transcript height can
-       never inflate the row. The chat box stays the flexible absorber. */
-    const doc = requiredSlice(styles, /\.drawer-grid \.drawer-doc \{[^}]*position: absolute[^}]*\}/, ".drawer-grid .drawer-doc (absolute)");
-    expect(doc).toContain("inset: 0");
-    /* BOTH grid lines explicit, both axes. For an absolutely positioned grid
-       item an `auto` end line resolves to the grid's PADDING EDGE — a bare
-       `grid-column: 1` spanned the full grid width and overlaid the desk
-       (live defect, 2026-08-09). */
-    expect(doc).toContain("grid-column: 1 / 2");
-    expect(doc).toContain("grid-row: 1 / 2");
-    // And the desk is placed explicitly in column 2: with the doc out of
-    // flow, auto-placement would drop it into column 1.
-    expect(styles).toMatch(/\.drawer-grid \.drawer-desk \{[^}]*grid-column: 2 \/ 3/);
-    const box = requiredSlice(styles, /\.drawer-doc \.drawer-chat \{[^}]*\}/, ".drawer-doc .drawer-chat");
-    expect(box).toContain("flex: 1 1 0");      // the box stretches AND shrinks with the desk
-    // The desk is the sizer: plain flow — a stretch scroller here would make
-    // the row size itself from the column it is supposed to bound.
-    expect(styles).not.toMatch(/\.drawer-grid \.drawer-desk \{[^}]*align-self: stretch/);
-    // No fixed cap anywhere on the feed — parity is the only height authority —
-    // and the base rule keeps it the flexible inner scroller.
+  test("(2) Task+Chat and Evidence consume one bounded content region", () => {
+    /* The pane, not the desk's intrinsic content, owns height. Wide inspectors
+       use one bounded row; narrow inspectors expose an on-demand Evidence
+       overlay without taking permanent transcript height. The document itself
+       stays in flow, so the old absolute parity feedback loop stays retired. */
+    const shell = requiredSlice(styles, /\.pane-inspector\.dw-agent \{[^}]*\}/, ".pane-inspector.dw-agent");
+    expect(shell).toContain("grid-template-rows: auto minmax(0, 1fr) auto");
+    expect(shell).toContain("overflow: hidden");
+    expect(styles).not.toMatch(/\.drawer-grid \.drawer-doc \{[^}]*position: absolute/);
+    const doc = requiredSlice(styles, /\n\.drawer-doc \{[^}]*\}/, ".drawer-doc");
+    expect(doc).toContain("grid-template-rows: auto minmax(0, 1fr)");
+    expect(doc).toContain("overflow: hidden");
+    expect(styles).toMatch(/@container agent-drawer \(min-width: 46rem\) \{[\s\S]*?\.drawer-grid \.drawer-desk \{[^}]*grid-column: 2 \/ 3/);
+    expect(styles).toMatch(/\n\.drawer-desk \{[^}]*overflow-y: auto/);
     expect(styles).not.toMatch(/\.drawer-chat-scroll \{[^}]*max-height/);
     const feedBase = requiredSlice(styles, /\n\.drawer-chat-scroll \{[^}]*\}/, ".drawer-chat-scroll");
-    expect(feedBase).toContain("flex: 1 1 0");
-    // 16rem floor: a short preview must not collapse to a content-sized sliver.
-    expect(feedBase).toMatch(/min-height:\s*16rem/);
+    // Keep 16rem as the preferred feed size, but allow it to shrink so the
+    // transcript footer and command dock remain inside the clipped chat box.
+    expect(feedBase).toContain("flex: 1 1 16rem");
+    expect(feedBase).toMatch(/min-height:\s*0/);
     expect(feedBase).toContain("overflow-y: auto");
-    // The <=860px true-modal sheet keeps its own bounded-box contract untouched.
-    expect(styles).toMatch(/@media \(max-width: 860px\) \{[\s\S]*?\.drawer-chat \{ height: 68vh; \}/);
+    expect(styles).not.toMatch(/\.drawer-chat \{[^}]*height: 68vh/);
   });
 
-  test("the role chip tops the desk, beside Task — never inside the Task card", () => {
-    /* Task and role are different facts and now hold different panes: Task
-       leads the left column, the role chip leads the desk beside it. The old
-       Task card printed the role badge inside itself — a second surface for a
-       fact the desk already carried. */
+  test("role and Task meet in the command header, never in Evidence", () => {
+    /* Identity and intent belong together at the top. Evidence is reserved for
+       provenance instead of repeating the role as a badge. */
     const selected = agent({ task: "Ship the thing", role: "orchestrator" });
     const program = { id: "p", name: "P", agents: [selected] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -10290,14 +10382,11 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       return pane;
     });
     expect(byClass(drawer, "drawer-role-badge")).toBeNull();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const desk: any = byClass(drawer, "drawer-desk");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sections = findAll(desk, (n: any) => n.dataset && n.dataset.evidenceSection)
-      .map((n: any) => n.dataset.evidenceSection);
-    expect(sections[0]).toBe("role");
-    expect(textOf(byClass(desk, "evidence-role"))).toContain("Orchestrator");
-    // Honest empty face: same Task head, italic "— no task recorded", no brief.
+    const header = byClass(drawer, "drawer-session-header");
+    expect(textOf(byClass(header, "drawer-session-eyebrow"))).toContain("Orchestrator");
+    expect(textOf(byClass(header, "drawer-task-objective"))).toBe("Ship the thing");
+    expect(byClass(drawer, "evidence-role")).toBeNull();
+    // Honest empty face: same Task label, explicit empty copy, no brief.
     const bare = agent({ task: "", role: "orchestrator" });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const bareDrawer: any = withDom(() => {
@@ -10305,9 +10394,9 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: bare, program: { id: "p", name: "P", agents: [bare] } });
       return pane;
     });
-    const bareTask = byClass(bareDrawer, "drawer-chat-task");
+    const bareTask = byClass(bareDrawer, "drawer-task-summary");
     expect(bareTask).not.toBeNull();
-    expect(textOf(byClass(bareTask, "drawer-task-objective"))).toContain("— no task recorded");
+    expect(textOf(byClass(bareTask, "drawer-task-objective"))).toBe("No task recorded");
     expect(byClass(bareTask, "drawer-task-objective")?.className.split(/\s+/)).toContain("is-empty");
     expect(byClass(bareTask, "drawer-task-brief")).toBeNull();
     expect(byClass(bareDrawer, "drawer-role-badge")).toBeNull();
@@ -10333,7 +10422,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       program.agents = [a];
       const pane = newNode("div");
       M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
-      return byClass(pane, "drawer-chat-task");
+      return byClass(pane, "drawer-task-summary");
     });
 
     // Kickoff prose → first sentence on the face; no invented meta; brief holds the rest.
@@ -10373,7 +10462,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
 
     // Image-only placeholders: honest empty face; brief still holds the raw.
     const images = renderTask({ task: '<image name="shot-1440.png"> <image name="shot-390.png">' });
-    expect(textOf(byClass(images, "drawer-task-objective"))).toContain("— no task recorded");
+    expect(textOf(byClass(images, "drawer-task-objective"))).toBe("No task recorded");
     expect(byClass(images, "drawer-task-objective")?.className.split(/\s+/)).toContain("is-empty");
     expect(byClass(images, "drawer-task-objective")?.attributes?.title).toBe(
       "No prose task was recorded for this lane",
@@ -10386,7 +10475,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(byClass(one, "drawer-task-brief")).toBeNull();
 
     // Scroll discipline (amended): no widget height cap; only the open brief body scrolls.
-    expect(styles).not.toMatch(/\.drawer-doc \.drawer-chat-task \{[^}]*max-height:\s*25%/);
+    expect(styles).not.toContain(".drawer-chat-task");
     expect(styles).toMatch(/\.drawer-task-brief-body \{[^}]*max-height:\s*18rem/);
     expect(styles).toMatch(/\.drawer-task-brief-body \{[^}]*overflow-y:\s*auto/);
     expect(styles).toMatch(/\.drawer-task-objective \{[^}]*-webkit-line-clamp:\s*2/);
@@ -10396,16 +10485,20 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
   test("RHSP-B: chat feed owns the document column; one transcript chrome surface", () => {
     /* Live defect 2026-08-09: with a short preview (1–2 turns) the flex chain
        let .drawer-chat-scroll shrink to content (~sliver) while the pane showed
-       dead space. The feed must keep a 16rem floor and fill the column; the old
+       dead space. The feed keeps a 16rem preferred basis and can shrink; the old
        expandable "Transcript — …" details shell must not return beside it. */
     const feedRule = requiredSlice(styles, /\n\.drawer-chat-scroll \{[^}]*\}/, ".drawer-chat-scroll");
-    expect(feedRule).toMatch(/min-height:\s*16rem/);
-    expect(feedRule).toContain("flex: 1 1 0");
-    expect(styles).toMatch(/\.drawer-doc \.drawer-chat \{[^}]*flex: 1 1 0/);
+    expect(feedRule).toMatch(/min-height:\s*0/);
+    expect(feedRule).toContain("flex: 1 1 16rem");
+    expect(styles).toMatch(/\.drawer-chat \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto/);
     // Dead expandable transcript chrome stays gone.
     expect(styles).not.toMatch(/\.drawer-transcript\b/);
     expect(source).not.toMatch(/drawer-transcript/);
     expect(source).not.toMatch(/Transcript — /);
+    expect(styles).not.toContain(".chat-feed-foot");
+    expect(source).not.toContain("renderTranscriptFoot");
+    expect(styles).toMatch(/\.chat-feed-lead\s*\{[^}]*align-self:\s*flex-start/);
+    expect(styles).toMatch(/\.transcript-inline-action\s*\{[^}]*text-decoration:\s*underline/);
 
     const short = agent({
       lastAgentMessage: "One short reply.",
@@ -10421,12 +10514,13 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     });
     expect(byClass(drawer, "drawer-transcript")).toBeNull();
     expect(byClass(drawer, "drawer-chat-scroll")).not.toBeNull();
-    // Exactly one Task section title in the doc; no second "Transcript" section-title.
+    // Task moved to the command header; Conversation contains no duplicate title.
     const doc = byClass(drawer, "drawer-doc");
     const titles = findAll(doc, (n: any) => n.className && String(n.className).split(/\s+/).includes("section-title"))
       .map((n: any) => textOf(n).replace(/\s+/g, " ").trim());
-    expect(titles.filter((t: string) => /task/i.test(t))).toHaveLength(1);
+    expect(titles.filter((t: string) => /task/i.test(t))).toHaveLength(0);
     expect(titles.filter((t: string) => /transcript/i.test(t))).toHaveLength(0);
+    expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(1);
   });
 
   test("RHSP-A: a turn-less cursor drawer still paints Task, quiet feed, and dock", () => {
@@ -10466,60 +10560,41 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: cursor, program });
       return pane;
     });
-    expect(byClass(drawer, "drawer-chat-task")).not.toBeNull();
-    expect(textOf(byClass(drawer, "drawer-task-objective"))).toContain("— no task recorded");
+    expect(byClass(drawer, "drawer-task-summary")).not.toBeNull();
+    expect(textOf(byClass(drawer, "drawer-task-objective"))).toBe("No task recorded");
     expect(byClass(drawer, "drawer-chat")).not.toBeNull();
     expect(byClass(drawer, "drawer-controls-strip")).not.toBeNull();
     expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain(
       "No readable turns recorded for this session yet",
     );
-    expect(textOf(byClass(drawer, "chat-feed-foot"))).toMatch(/Read the transcript|No transcript file is recorded/);
+    expect(byClass(drawer, "chat-feed-foot")).toBeNull();
     // Banner must not throw; it should explain the unproven cwd match instead.
     expect(byClass(drawer, "control-banner")).not.toBeNull();
     expect(textOf(drawer)).toMatch(/Send is off|cannot confirm/i);
   });
 
-  test("(2) the drawer floats: desk-derived height, sticky beside a taller workboard", () => {
-    /* Supersedes the absolute left-pane bound (operator directive): the
-       drawer's height derives from its OWN desk-sized content, capped at the
-       viewport, and it rides sticky beside a taller workboard while the
-       document scrolls. In flow on purpose — sticky cannot leave the flow —
-       and content-height via align-self: flex-start, never flex stretch. */
+  test("(2) the drawer is a definite sticky viewport instrument", () => {
     const dock = requiredSlice(styles, /@media \(min-width: 1025px\) \{[\s\S]*?\n\}\n/, "≥1025 dock block");
-    const list = requiredSlice(dock, /body\.inspector-open \.pane-list \{[^}]*\}/, "docked .pane-list");
+    const app = requiredSlice(dock, /body\.inspector-open \.app-body \{[^}]*\}/, "docked .app-body");
     const insp = requiredSlice(dock, /body\.inspector-open \.pane-inspector \{[^}]*\}/, "docked .pane-inspector");
-    const basis = list.match(/flex: 0 0 (clamp\([^)]*\))/)?.[1];
-    expect(basis).toBeTruthy();
+    expect(app).toContain("grid-template-columns: clamp(380px, 40%, 760px) minmax(0, 1fr)");
     expect(insp).toContain("position: sticky");
     expect(insp).toContain("align-self: flex-start");
-    expect(insp).toContain("max-height: calc(100dvh");   // a sticky panel taller than the screen cannot follow it
+    expect(insp).toContain("height: calc(100dvh - 2.5rem)");
     expect(insp).not.toContain("position: absolute");
-    // The width complement mirrors the roster's clamp — the literals in lockstep.
-    expect(insp).toContain("flex: 0 0 calc(100% - " + basis + ")");
-    // The grid sizes to content, so the desk really is the height authority.
-    expect(styles).toMatch(/\.pane-inspector\.dw-agent > \.drawer-grid \{[^}]*flex: 0 0 auto/);
+    expect(styles).toMatch(/\.pane-inspector\.dw-agent > \.drawer-grid \{[^}]*min-height: 0/);
   });
 
-  test("RHSP-C: sticky float centers a short drawer; tall drawers pin with a gap", () => {
-    /* Operator: RHSP stuck at the top while the left panel scrolls. Short
-       drawers must ride vertically centered; tall ones pin with ~1.25rem gap.
-       Pure math is testable; the sticky rule reads the CSS variable. */
-    expect(M.drawerFloatTopPx(400, 1000, 20)).toBe(300); // (1000-400)/2
-    expect(M.drawerFloatTopPx(900, 1000, 20)).toBe(50);  // still short of viewport-2*gap → center
-    expect(M.drawerFloatTopPx(960, 1000, 20)).toBe(20);  // at the pin threshold
-    expect(M.drawerFloatTopPx(980, 1000, 20)).toBe(20);  // taller than viewport-2*gap → pin
-    expect(M.drawerFloatTopPx(200, 800, 20)).toBe(300);
-    // Never below the gap floor.
-    expect(M.drawerFloatTopPx(780, 800, 20)).toBe(20);
+  test("RHSP-C: sticky placement has no content-measurement feedback", () => {
     const dock = requiredSlice(styles, /@media \(min-width: 1025px\) \{[\s\S]*?\n\}\n/, "≥1025 dock block");
     const insp = requiredSlice(dock, /body\.inspector-open \.pane-inspector \{[^}]*\}/, "docked .pane-inspector");
     expect(insp).toContain("position: sticky");
-    expect(insp).toMatch(/top:\s*var\(--drawer-float-top/);
-    expect(insp).toMatch(/max-height:\s*calc\(100dvh - 2\.5rem\)/);
-    // No scroll-jacking helpers, no timers in the float sync.
-    expect(source).toContain("drawerFloatTopPx");
-    expect(source).toContain("ResizeObserver");
-    expect(source).not.toMatch(/setInterval\([^)]*drawerFloat|setTimeout\([^)]*drawerFloat/);
+    expect(insp).toMatch(/top:\s*1\.25rem/);
+    expect(insp).toMatch(/height:\s*calc\(100dvh - 2\.5rem\)/);
+    expect(styles).not.toContain("--drawer-float-top");
+    expect(source).not.toContain("drawerFloatTopPx");
+    expect(source).not.toContain("syncDrawerFloat");
+    expect(source).not.toContain("ResizeObserver");
   });
 
   test("(2) the feed opens at the newest turn, then resumes where the operator left it", () => {
@@ -10549,53 +10624,77 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(saved.has("codex:a1")).toBe(false);
   });
 
-  test("(2) the feed covers all four states: unloaded, empty, loaded, failed", () => {
+  test("(2) the deprecated transcript footer never consumes chat height", () => {
+    /* Count and source path already live in Evidence, while the feed refreshes
+       automatically. Only the manual older-history action belongs here, as a
+       quiet link at the start of the scroll region. */
+    const a = agent();
+    const pane = newNode("div");
+    withState(transcriptUi({
+      agentId: a.id,
+      limit: 200,
+      data: {
+        source: "/tmp/t.jsonl",
+        truncated: true,
+        lines: [{ at: null, role: "assistant", text: "latest" }],
+      },
+    }), () => withDom(() => M.renderAgentDrawer(
+      pane,
+      { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [a] } },
+    )));
+    const scroll = byClass(pane, "drawer-chat-scroll");
+    expect(byClass(pane, "chat-feed-foot")).toBeNull();
+    expect(byFkey(scroll, "transcript-more:" + a.id)).not.toBeNull();
+    expect(textOf(scroll)).not.toContain("/tmp/t.jsonl");
+    expect(textOf(scroll)).not.toContain("Refresh");
+  });
+
+  test("(2) essential transcript state and actions live inside the feed", () => {
     const a = agent();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const foot = (over: Record<string, unknown>): any =>
-      withDom(() => M.renderTranscriptFoot(a, transcriptUi(over)));
+    const lead = (over: Record<string, unknown>): any =>
+      withDom(() => M.renderTranscriptFeedLead(a, transcriptUi(over)));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = (over: Record<string, unknown>): any =>
       withDom(() => M.renderChatFeedBody(a, transcriptUi(over)));
 
-    // Unloaded: the manual path survives as the foot's one control; the body
-    // falls back to the preview thread rather than inventing a turn.
-    const idle = foot({});
-    expect(textOf(idle)).toContain("Read the transcript");
-    expect(buttonsOf(idle)[0].dataset.fkey).toBe("transcript-load:codex:a1");
+    // Selection auto-loads the transcript, so an unloaded feed adds no chrome
+    // and falls back to the preview thread rather than inventing a turn.
+    expect(lead({})).toBeNull();
     expect(allByClass(body({}), "chat-msg")).toHaveLength(0);
 
     // Loading: a stated status, and loadTranscript always settles into data or
     // an error, so this is never an endless spinner.
-    expect(textOf(foot({ agentId: a.id, loading: true }))).toContain("Reading the transcript");
+    expect(textOf(lead({ agentId: a.id, loading: true }))).toContain("Reading the transcript");
 
     // Failed: the reason, plus a way out.
-    const failed = foot({ agentId: a.id, error: "Transcript view is not available in this build." });
+    const failed = lead({ agentId: a.id, error: "Transcript view is not available in this build." });
     expect(textOf(failed)).toContain("not available in this build");
     expect(buttonsOf(failed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey)).toEqual(["transcript-retry:codex:a1"]);
+    expect(buttonsOf(failed)[0].classList.contains("transcript-inline-action")).toBe(true);
 
     // Empty: honest about which kind of empty it is, and never invents a turn.
-    const noFile = foot({ agentId: a.id, data: { source: null, truncated: false, lines: [] } });
+    const noFile = lead({ agentId: a.id, data: { source: null, truncated: false, lines: [] } });
     expect(textOf(noFile)).toContain("No transcript file is recorded");
     expect(allByClass(body({ agentId: a.id, data: { source: null, truncated: false, lines: [] } }), "chat-msg")).toHaveLength(0);
-    const emptyFile = foot({ agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [] } });
+    const emptyFile = lead({ agentId: a.id, data: { source: "/tmp/t.jsonl", truncated: false, lines: [] } });
     expect(textOf(emptyFile)).toContain("no readable turns");
 
-    // Loaded: bubbles capped at the render window; count, source, and every
-    // repainted control keyed, folded into the one quiet foot line.
+    // Loaded: bubbles are capped at the render window. Source and turn count
+    // belong to Evidence, and auto-refresh makes a Refresh button redundant;
+    // only a real manual action (loading more truncated history) earns a lead.
     const lines = Array.from({ length: 400 }, (_, i) => ({ at: null, role: "assistant", text: "turn " + i }));
     const over = { agentId: a.id, limit: 500, data: { source: "/tmp/t.jsonl", truncated: true, lines } };
     expect(allByClass(body(over), "chat-msg")).toHaveLength(300);
-    const loaded = foot(over);
-    expect(textOf(loaded)).toContain("Last 300 of 400");
-    expect(textOf(loaded)).toContain("older turns exist above this window");
-    expect(textOf(loaded)).toContain("/tmp/t.jsonl");
+    const loaded = lead(over);
+    expect(textOf(loaded)).not.toContain("Last 300 of 400");
+    expect(textOf(loaded)).not.toContain("/tmp/t.jsonl");
+    expect(loaded.classList.contains("chat-feed-lead")).toBe(true);
     const keys = buttonsOf(loaded).map((b: { dataset: { fkey: string } }) => b.dataset.fkey);
-    expect(keys).toEqual(["transcript-refresh:codex:a1", "transcript-more:codex:a1"]);
-    // At the ceiling there is no "load more" to offer.
-    const maxed = foot({ ...over, limit: 1000 });
-    expect(buttonsOf(maxed).map((b: { dataset: { fkey: string } }) => b.dataset.fkey))
-      .toEqual(["transcript-refresh:codex:a1"]);
+    expect(keys).toEqual(["transcript-more:codex:a1"]);
+    expect(buttonsOf(loaded)[0].classList.contains("transcript-inline-action")).toBe(true);
+    // At the ceiling there is no manual action, so there is no lead at all.
+    expect(lead({ ...over, limit: 1000 })).toBeNull();
   });
 
   test("(2) another agent's transcript never bleeds into this drawer", () => {
@@ -10607,10 +10706,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body: any = withDom(() => M.renderChatFeedBody(a, transcriptUi(other)));
     expect(textOf(body)).not.toContain("NOT MINE");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const foot: any = withDom(() => M.renderTranscriptFoot(a, transcriptUi(other)));
-    expect(textOf(foot)).not.toContain("NOT MINE");
-    expect(textOf(foot)).toContain("Read the transcript");
+    expect(withDom(() => M.renderTranscriptFeedLead(a, transcriptUi(other)))).toBeNull();
   });
 
   test("the feed is the transcript, once — no preview bubbles or shell beside it", async () => {
@@ -10641,23 +10737,32 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       expect(allByClass(drawer, "chat-turn-body")).toHaveLength(0);
       // …so the message text appears exactly once in the entire drawer.
       expect(textOf(drawer).split(msg).length - 1).toBe(1);
-      // The one quiet line of chrome is there, and the composer still is.
-      expect(byClass(drawer, "chat-feed-foot")).not.toBeNull();
+      // A fully loaded feed needs no duplicate metadata/refresh footer; the
+      // pane-level composer remains independently present.
+      expect(byClass(drawer, "chat-feed-foot")).toBeNull();
       expect(byClass(drawer, "drawer-controls-strip")).not.toBeNull();
     });
   });
 
-  test("(2) the transcript foot lives in Document, and a landed fetch actually repaints it", () => {
+  test("(2) transcript actions lead the scroll region, and a landed fetch repaints it", () => {
     const a = agent({ transcriptTail: "…tail" });
     const pane = newNode("div");
-    withState(transcriptUi(), () => withDom(() => M.renderAgentDrawer(
+    withState(transcriptUi({
+      agentId: a.id,
+      limit: 200,
+      data: {
+        source: "/tmp/t.jsonl", truncated: true,
+        lines: [{ at: null, role: "user", text: "latest" }],
+      },
+    }), () => withDom(() => M.renderAgentDrawer(
       pane,
       { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [a] } },
     )));
-    // The feed IS the transcript: its foot (the "Read the transcript"
-    // disclosure) belongs to the Document column, never the desk.
-    expect(byClass(byClass(pane, "drawer-doc"), "chat-feed-foot")).not.toBeNull();
-    expect(byClass(byClass(pane, "drawer-desk"), "chat-feed-foot")).toBeNull();
+    const scroll = byClass(pane, "drawer-chat-scroll");
+    const lead = byClass(scroll, "chat-feed-lead");
+    expect(scroll?.children[0]).toBe(lead);
+    expect(byFkey(lead, "transcript-more:" + a.id)).not.toBeNull();
+    expect(byClass(pane, "chat-feed-foot")).toBeNull();
 
     // Without the drawer signature tracking it, the fetched turns would sit in
     // state and never reach the screen — the exact failure mode identity had.
@@ -10676,6 +10781,398 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi({
       agentId: "claude:other", data: { source: "/x", truncated: false, lines: [] },
     })))).toBe(base);
+  });
+});
+
+describe("system infrastructure stays observable without joining dashboard presentation", () => {
+  const monitor = (overrides: Record<string, unknown> = {}) => agent({
+    id: "prime:ant-heartbeat-monitor",
+    provider: "prime",
+    sourceSessionId: "ant-heartbeat-monitor",
+    sessionKind: "system",
+    transcriptTail: '[TL;DR 12:34] {"v":4,"repos":[]}',
+    task: "Ant Hill heartbeat monitor",
+    ...overrides,
+  });
+
+  const fleet = () => {
+    const now = new Date().toISOString();
+    const sys = monitor({ updatedAt: now });
+    const live = agent({ id: "codex:visible", updatedAt: now, task: "Ship dashboard filtering" });
+    const done = agent({
+      id: "claude:done", provider: "claude", status: "archived", lifecycle: "finished",
+      updatedAt: now, task: "Finished user work",
+    });
+    const repo = { repoKey: "mountain", repoName: "the-mountain", worktreePath: "/repo", branch: "main", ephemeral: false };
+    const snap = snapshot({
+      totals: { ...snapshot().totals, tracked: 3, live: 2, history: 1 },
+      programs: [{
+        id: "repo:mountain:worktree:main", name: "the-mountain", groupPath: ["mountain", "main"],
+        agents: [{ ...sys, repo }, { ...live, repo }, { ...done, repo }],
+      }],
+    });
+    return { snap, sys, live, done };
+  };
+
+  test("one provider-neutral predicate excludes only sessionKind=system", () => {
+    expect(M.dashboardVisible(monitor())).toBe(false);
+    expect(M.dashboardVisible(agent({ sessionKind: "automation" }))).toBe(true);
+    expect(M.dashboardVisible(agent({ sessionKind: "work" }))).toBe(true);
+    expect(M.dashboardVisible(agent({ sessionKind: "unknown" }))).toBe(true);
+  });
+
+  test("presentation program copies remove system rows and preserve raw inputs", () => {
+    const { snap, sys, live, done } = fleet();
+    const originalPrograms = snap.programs;
+    const originalAgents = snap.programs[0].agents;
+    const presented = M.dashboardPrograms(snap);
+
+    expect(presented).not.toBe(originalPrograms);
+    expect(presented[0]).not.toBe(originalPrograms[0]);
+    expect(presented[0].agents.map((a: { id: string }) => a.id)).toEqual([live.id, done.id]);
+    expect(originalAgents.map((a: { id: string }) => a.id)).toEqual([sys.id, live.id, done.id]);
+    expect(textOf(withDom(() => M.programHeadRollup(presented[0].agents)))).toBe("1live1ended1working");
+  });
+
+  test("Board, History, search, shelf, and tab counts all use the presentation population", async () => {
+    const { snap, sys, live, done } = fleet();
+    const base = listUi({ snap, view: "board", lookbackHours: null, showReviewWorkers: true });
+    expect(M.workingSet(base).map((a: { id: string }) => a.id)).toEqual([live.id]);
+    expect(M.workingSet({ ...base, view: "history" }, "history").map((a: { id: string }) => a.id)).toEqual([done.id]);
+
+    await withState({ ...base, query: "heartbeat monitor", facetStatuses: [] }, () => {
+      expect(M.currentFilter()(sys, snap.programs[0])).toBe(false);
+      expect(M.shelfFilter()(monitor({ status: "archived", lifecycle: "finished" }), snap.programs[0])).toBe(false);
+    });
+
+    await withState({ ...base, query: "" }, () => withDom(() => {
+      M.renderTabs();
+      expect(domById.get("count-board")!.textContent).toBe("1");
+      expect(domById.get("count-history")!.textContent).toBe("1");
+    }));
+  });
+
+  test("lookback and stale selection cannot surface a system session", async () => {
+    const old = new Date(Date.now() - 12 * 3_600_000).toISOString();
+    const sys = monitor({ updatedAt: old });
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [sys] }] });
+    const ui = listUi({ snap, view: "board", lookbackHours: 6, showReviewWorkers: true });
+    expect(M.hiddenByLookback(ui)).toBe(0);
+
+    await withState({ snap, selected: { kind: "agent", id: sys.id }, selectedId: sys.id }, () => {
+      expect(M.findSelected()).toBeNull();
+      expect(M.resolveSelection({ kind: "program", id: "p" })).toBeNull();
+    });
+  });
+
+  test("raw heartbeat and raw totals bypass the presentation filter", () => {
+    const { snap, sys } = fleet();
+    expect(M.heartbeatTldrAgent(snap)?.id).toBe(sys.id);
+    expect(M.totalsOf(snap).tracked).toBe(3);
+    expect(M.dashboardPrograms(snap).flatMap((p: { agents: unknown[] }) => p.agents)).toHaveLength(2);
+  });
+});
+
+describe("the agent RHSP has one explicit header-content-footer contract", () => {
+  const lockedAgent = () => agent({
+    controlState: "quarantined",
+    identityTrace: {
+      resolution: "ambiguous",
+      reason: "4 active sources share this cwd; cwd fallback requires exactly one and controls are disabled.",
+      steps: [
+        { tier: "recorded", outcome: "skipped", detail: "No recorded target." },
+        { tier: "session", outcome: "no-match", detail: "No exact session match." },
+        { tier: "cwd", outcome: "ambiguous", detail: "4 active sources share this cwd." },
+      ],
+    },
+    controls: [
+      { action: "focus", enabled: false, reason: "Shared cwd is not identity." },
+      { action: "instruct", enabled: false, reason: "Shared cwd is not identity." },
+      { action: "interrupt", enabled: false, reason: "Shared cwd is not identity." },
+    ],
+  });
+
+  test("the static inspector is the ops-stage sibling under app-body", () => {
+    expect(html).toMatch(/<\/main>\s*<\/div>\s*<aside id="inspector"[^>]*><\/aside>\s*<\/div>\s*<div id="toast"/);
+  });
+
+  test("agent DOM order is head, bounded grid, direct controls footer", async () => {
+    const selected = lockedAgent();
+    const pane = withDom(() => {
+      const node = newNode("aside");
+      M.renderAgentDrawer(node, { kind: "agent", agent: selected, program: { id: "p", name: "P", agents: [selected] } });
+      return node;
+    });
+    expect(pane.children.map((node) => node.className)).toEqual([
+      "drawer-shell-head", "drawer-grid", "command-dock drawer-controls-strip",
+    ]);
+    const grid = byClass(pane, "drawer-grid");
+    const chat = byClass(grid, "drawer-chat");
+    const desk = byClass(grid, "drawer-desk");
+    const dock = byClass(pane, "drawer-controls-strip");
+    expect(dock?.parent).toBe(pane);
+    expect(byClass(chat, "drawer-controls-strip")).toBeNull();
+    expect(byClass(chat, "chat-feed-foot")).toBeNull();
+    expect(desk?.tagName).toBe("div");
+    const evidenceToggle = byClass(desk, "drawer-evidence-summary");
+    expect(evidenceToggle?.tagName).toBe("button");
+    expect(evidenceToggle?.attributes["aria-expanded"]).toBe("false");
+    expect(byClass(desk, "drawer-evidence-summary-action")).not.toBeNull();
+    expect(byClass(desk, "drawer-evidence-head")).not.toBeNull();
+    await fire(evidenceToggle);
+    expect(desk?.classList.contains("is-open")).toBe(true);
+    expect(evidenceToggle?.attributes["aria-expanded"]).toBe("true");
+    // Live snapshot and transcript updates repaint the drawer. Evidence must
+    // remain open across that replacement instead of flashing closed again.
+    const repainted = withDom(() => {
+      const node = newNode("aside");
+      M.renderAgentDrawer(node, { kind: "agent", agent: selected, program: { id: "p", name: "P", agents: [selected] } });
+      return node;
+    });
+    const repaintedDesk = byClass(repainted, "drawer-desk");
+    const repaintedToggle = byClass(repaintedDesk, "drawer-evidence-summary");
+    expect(repaintedDesk?.classList.contains("is-open")).toBe(true);
+    expect(repaintedToggle?.attributes["aria-expanded"]).toBe("true");
+    await fire(repaintedToggle);
+    expect(repaintedDesk?.classList.contains("is-open")).toBe(false);
+    expect(repaintedToggle?.attributes["aria-expanded"]).toBe("false");
+    expect(chat?.children).toHaveLength(1);
+    expect(byClass(dock, "control-banner")).not.toBeNull();
+    expect(textOf(dock)).toContain("shares its working folder");
+    expect(textOf(dock)).toContain("See routing evidence");
+  });
+
+  test("unavailable controls remain visible, native-disabled, and cannot dispatch", async () => {
+    const selected = lockedAgent();
+    const now = new Date().toISOString();
+    await withState({
+      conn: "live",
+      snap: snapshot({ generatedAt: now, programs: [{ id: "p", name: "P", agents: [selected] }] }),
+      actions: { items: [] },
+      pending: new Set(), drafts: new Map(), feedback: new Map(), confirming: null,
+    }, () => withRequests([], async (calls) => {
+      const pane = newNode("aside");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: selected, program: { id: "p", name: "P", agents: [selected] } });
+      const dock = byClass(pane, "drawer-controls-strip");
+      const input = findAll(dock, (node: FakeNode) => node.tagName === "input")[0];
+      const form = byClass(dock, "command-composer");
+      const focus = byFkey(dock, "act:" + selected.id + ":focus");
+      const interrupt = byFkey(dock, "act:" + selected.id + ":interrupt");
+      const send = byFkey(dock, "act:" + selected.id + ":instruct");
+
+      for (const control of [input, focus, interrupt, send]) expect(control.hasAttribute("disabled")).toBe(true);
+      await fire(focus);
+      await fire(interrupt);
+      await fire(input, "keydown", { key: "Enter", metaKey: true });
+      await fire(form, "submit");
+      expect(calls).toHaveLength(0);
+    }));
+  });
+
+  test("a linked fixture stays enabled after the structural move", () => {
+    const linked = agent({ controls: [
+      { action: "focus", enabled: true },
+      { action: "instruct", enabled: true },
+      { action: "interrupt", enabled: true },
+    ] });
+    const dock = withDom(() => M.renderCommandDock(linked, "linked", null, []));
+    const enabled = [
+      byFkey(dock, "act:" + linked.id + ":focus"),
+      byFkey(dock, "act:" + linked.id + ":interrupt"),
+      byFkey(dock, "act:" + linked.id + ":instruct"),
+    ];
+    expect(enabled.every((node) => node && !node.hasAttribute("disabled"))).toBe(true);
+  });
+
+  test("CSS names one scroll owner per region and no dynamic height feedback", () => {
+    const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css).toMatch(/body\.inspector-open \.app-body\s*\{[^}]*grid-template-columns:\s*clamp\(380px, 40%, 760px\) minmax\(0, 1fr\)/);
+    expect(css).toMatch(/body\.inspector-open \.pane-inspector\s*\{[^}]*position:\s*sticky[^}]*height:\s*calc\(100dvh - 2\.5rem\)/);
+    expect(css).toMatch(/\.pane-inspector\.dw-agent\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.pane-inspector\.dw-agent\s*\{[^}]*container:\s*agent-drawer \/ inline-size/);
+    expect(css).toMatch(/\.drawer-grid\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/);
+    expect(css).not.toMatch(/\.drawer-grid \.drawer-doc\s*\{[^}]*position:\s*absolute/);
+    expect(css).toMatch(/\.drawer-doc\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\)[^}]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.drawer-chat\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) auto/);
+    expect(css).toMatch(/\.drawer-chat-scroll\s*\{[^}]*flex:\s*1 1 16rem[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/);
+    expect(css).not.toContain(".chat-feed-foot");
+    expect(source).not.toContain("renderTranscriptFoot");
+    expect(css).toMatch(/\.chat-feed-lead\s*\{[^}]*align-self:\s*flex-start/);
+    expect(css).toMatch(/\.transcript-inline-action\s*\{[^}]*text-decoration:\s*underline/);
+    expect(css).toMatch(/\.drawer-desk\s*\{[^}]*overflow-y:\s*auto/);
+    expect(css).toMatch(/@media \(min-width: 861px\) \{[\s\S]*?\.drawer-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[^}]*grid-template-rows:\s*minmax\(0, 1fr\)[^}]*position:\s*relative/);
+    expect(css).toMatch(/@media \(min-width: 861px\) \{[\s\S]*?\.drawer-grid \.drawer-desk\s*\{[^}]*position:\s*absolute/);
+    expect(css).toMatch(/@container agent-drawer \(min-width: 46rem\) \{[\s\S]*?\.drawer-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 65fr\) minmax\(0, 35fr\)[^}]*grid-template-rows:\s*minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.drawer-controls-strip\s*\{[^}]*position:\s*static/);
+    expect(css).not.toContain("--drawer-float-top");
+    expect(source).not.toContain("drawerFloatTopPx");
+    expect(source).not.toContain("syncDrawerFloat");
+    expect(source).not.toContain("ResizeObserver");
+
+    expect(css).toMatch(/@media \(max-width: 860px\) \{[\s\S]*?\.pane-inspector\.dw-agent > \.drawer-grid\s*\{[^}]*overflow-y:\s*auto/);
+    expect(css).toMatch(/@media \(max-width: 860px\) \{[\s\S]*?\.drawer-chat-scroll\s*\{[^}]*overflow:\s*visible/);
+    expect(css).toMatch(/@media \(max-width: 860px\) \{[\s\S]*?\.drawer-desk\s*\{[^}]*overflow:\s*visible/);
+    expect(css).not.toMatch(/@media \(max-width: 860px\) \{[\s\S]*?\.drawer-chat\s*\{[^}]*height:\s*68vh/);
+
+    const locks = css.match(/[^\n{}]*\{[^}]*overflow-y:\s*clip[^}]*\}/g) ?? [];
+    expect(locks).toHaveLength(1);
+    expect(locks[0]).toContain("body.inspector-open");
+  });
+
+  test("the short desktop pane reflows existing chrome to preserve a 160px transcript target", () => {
+    /* The first safe shell still left only 50.266px of feed at 1357x738. The
+       short-height mode keeps every explanation and control, but lets their
+       existing text flow horizontally and trims spacing instead of restoring
+       the 16rem hard floor that clipped the composer. */
+    const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+    const dock = requiredSlice(css, /\.command-dock\s*\{[^}]*\}/, ".command-dock");
+    expect(dock).toContain("padding: 0.5rem var(--inspector-pad-x)");
+    expect(dock).toContain("gap: 0.25rem");
+    const feed = requiredSlice(css, /\.drawer-chat-scroll\s*\{[^}]*\}/, ".drawer-chat-scroll");
+    expect(feed).toContain("min-height: 0");
+    expect(feed.match(/min-height:[^;]+/g)).toEqual(["min-height: 0"]);
+    const shortDesktop = requiredSlice(
+      css,
+      /@media \(min-width: 1025px\) and \(max-height: 760px\) \{[\s\S]*?\n\}/,
+      "short desktop drawer budget",
+    );
+    expect(shortDesktop).toContain(".control-banner-copy");
+    expect(shortDesktop).toContain("display: flex");
+    expect(shortDesktop).toContain(".control-banner-why");
+    expect(shortDesktop).toContain("margin: 0");
+  });
+
+  test("mobile chat contributes its contents to the one drawer-body scroller", () => {
+    /* At 390x844 the flex item shrank to its 2px borders while its feed and foot
+       painted hundreds of pixels beyond it. The chat must be an unshrinkable
+       normal-flow item with visible overflow; grid remains the only scroller. */
+    const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+    const mobile = css.slice(css.lastIndexOf("@media (max-width: 860px)"));
+    const grid = requiredSlice(mobile, /\.pane-inspector\.dw-agent > \.drawer-grid\s*\{[^}]*\}/, "mobile drawer grid");
+    const doc = requiredSlice(mobile, /\.drawer-doc\s*\{[^}]*\}/, "mobile drawer document");
+    const chat = requiredSlice(mobile, /\.drawer-chat\s*\{[^}]*\}/, "mobile drawer chat");
+    const feed = requiredSlice(mobile, /\.drawer-chat-scroll\s*\{[^}]*\}/, "mobile chat feed");
+    const desk = requiredSlice(mobile, /\.drawer-desk\s*\{[^}]*\}/, "mobile drawer desk");
+    expect(grid).toContain("overflow-y: auto");
+    expect(doc).toContain("flex: 0 0 auto");
+    expect(chat).toContain("flex: 0 0 auto");
+    expect(desk).toContain("flex: 0 0 auto");
+    expect(chat).toContain("overflow: visible");
+    expect(feed).toContain("overflow: visible");
+    expect(desk).toContain("overflow: visible");
+    expect(chat).not.toMatch(/overflow(?:-y)?:\s*auto/);
+    expect(feed).not.toMatch(/overflow(?:-y)?:\s*auto/);
+    expect(desk).not.toMatch(/overflow(?:-y)?:\s*auto/);
+  });
+});
+
+describe("RHSP follow-up keeps presentation and scroll ownership coherent", () => {
+  const agentPane = (paneTop: number, gridTop: number, deskTop: number) => {
+    const pane = newNode("aside") as FakeNode & { scrollTop: number };
+    pane.className = "pane-inspector dw-agent";
+    pane.scrollTop = paneTop;
+    const grid = newNode("div") as FakeNode & { scrollTop: number };
+    grid.className = "drawer-grid";
+    grid.scrollTop = gridTop;
+    const doc = newNode("div");
+    doc.className = "drawer-doc";
+    const desk = newNode("div") as FakeNode & { scrollTop: number };
+    desk.className = "drawer-desk";
+    desk.scrollTop = deskTop;
+    grid.append(doc, desk);
+    pane.append(grid);
+    return { pane, grid, desk };
+  };
+
+  test("same-agent repaint restores the responsive non-transcript owner and new selections reset", () => {
+    const before = agentPane(11, 41, 73);
+    expect(M.captureDrawerScroll(before.pane, false)).toBe(73);
+    expect(M.captureDrawerScroll(before.pane, true)).toBe(41);
+
+    const desktopAfter = agentPane(0, 0, 0);
+    M.restoreDrawerScroll(desktopAfter.pane, 73, true, false);
+    expect(desktopAfter.desk.scrollTop).toBe(73);
+    expect(desktopAfter.grid.scrollTop).toBe(0);
+    expect(desktopAfter.pane.scrollTop).toBe(0);
+
+    const mobileAfter = agentPane(0, 0, 0);
+    M.restoreDrawerScroll(mobileAfter.pane, 41, true, true);
+    expect(mobileAfter.grid.scrollTop).toBe(41);
+    expect(mobileAfter.desk.scrollTop).toBe(0);
+    expect(mobileAfter.pane.scrollTop).toBe(0);
+
+    M.restoreDrawerScroll(desktopAfter.pane, 73, false, false);
+    M.restoreDrawerScroll(mobileAfter.pane, 41, false, true);
+    expect(desktopAfter.desk.scrollTop).toBe(0);
+    expect(mobileAfter.grid.scrollTop).toBe(0);
+  });
+
+  test("non-agent drawers retain the inspector as their scroll owner", () => {
+    const pane = newNode("aside") as FakeNode & { scrollTop: number };
+    pane.className = "pane-inspector dw-program";
+    pane.scrollTop = 29;
+    expect(M.captureDrawerScroll(pane, false)).toBe(29);
+    M.restoreDrawerScroll(pane, 29, true, false);
+    expect(pane.scrollTop).toBe(29);
+  });
+
+  test("a system-only raw snapshot reaches the filtered dashboard empty state", async () => {
+    const monitor = agent({
+      id: "prime:ant-heartbeat-monitor",
+      provider: "prime",
+      sourceSessionId: "ant-heartbeat-monitor",
+      sessionKind: "system",
+    });
+    const snap = snapshot({
+      programs: [{ id: "infra", name: "Infrastructure", agents: [monitor] }],
+      totals: { ...snapshot().totals, tracked: 1, live: 1 },
+    });
+
+    await withState({ snap, fetchFailed: false }, () => withDom(() => {
+      M.renderEmpty();
+      expect(domById.get("empty-state")?.hidden).toBe(false);
+      expect(domById.get("empty-message")?.textContent).not.toBe("");
+    }));
+  });
+
+  test("system parents and children stay out of lineage without becoming untracked", async () => {
+    const systemParent = agent({
+      id: "prime:system-parent",
+      provider: "prime",
+      sourceSessionId: "system-parent",
+      sessionKind: "system",
+    });
+    const current = agent({ id: "codex:current", parentAgentId: systemParent.id });
+    const systemChild = agent({
+      id: "prime:system-child",
+      provider: "prime",
+      sourceSessionId: "system-child",
+      sessionKind: "system",
+      parentAgentId: current.id,
+    });
+    const visibleChild = agent({
+      id: "codex:visible-child",
+      sourceSessionId: "visible-child",
+      displayName: "Visible child",
+      parentAgentId: current.id,
+    });
+    const snap = snapshot({
+      programs: [{ id: "p", name: "P", agents: [systemParent, current, systemChild, visibleChild] }],
+    });
+
+    await withState({ snap }, () => withDom(() => {
+      const signature = M.lineagePaintSig(current, snap);
+      const spine = M.renderLineageSpine(current);
+      expect(signature).toContain(visibleChild.id);
+      expect(signature).not.toContain(systemParent.id);
+      expect(signature).not.toContain(systemChild.id);
+      expect(textOf(spine)).toContain("Visible child");
+      expect(textOf(spine)).not.toContain("system-parent");
+      expect(textOf(spine)).not.toContain("system-child");
+      expect(textOf(spine)).not.toContain("Orchestrator not tracked");
+      expect(byFkey(spine, "lineage:" + systemParent.id)).toBeNull();
+      expect(byFkey(spine, "lineage-kid:" + systemChild.id)).toBeNull();
+    }));
   });
 });
 
@@ -10929,7 +11426,7 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
   });
 
   test("(4) the tab title carries the count without asking for anything", () => {
-    const base = "The Ant Hill — operator console";
+    const base = "Formic — operator console";
     expect(M.titleWithAlerts(base, 3)).toBe("(3) " + base);
     expect(M.titleWithAlerts(base, 0)).toBe(base);
     // Idempotent: repainting must not stack prefixes into "(3) (2) (1) …".
@@ -10990,7 +11487,7 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
   });
 
   test("(4) the badge's ink is the verdict, and it always renders a reading", () => {
-    /* The contract the whole surface rests on: ember filled ONLY when a person
+    /* The contract the whole surface rests on: semantic danger filled ONLY when a person
        is the blocker. Amber outline is the watcher having something; grey
        outline is a real, rendered zero. */
     expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 2, "blocked").tone).toBe("blocked");
@@ -10999,11 +11496,11 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
     // An unknown tone falls back to the calm one. A badge is never ember by accident.
     expect(M.notifyToggleView({ enabled: true, permission: "granted" }, true, 9, "sideways").tone).toBe("clear");
 
-    // Ember is a fill; the other two are outlines. Asserted on the stylesheet,
+    // Semantic danger is a fill; the other two are outlines. Asserted on the stylesheet,
     // because "filled" is the entire distinction the operator reads at a glance.
-    expect(styles).toContain(".notify-badge.is-blocked { background: var(--ember)");
-    expect(styles).toContain(".notify-badge.is-noticed { color: var(--amber)");
-    expect(styles).toContain(".notify-badge.is-clear { color: var(--faint)");
+    expect(styles).toContain(".notify-badge.is-blocked { background: var(--color-status-danger)");
+    expect(styles).toContain(".notify-badge.is-noticed { color: var(--color-status-warning-text)");
+    expect(styles).toContain(".notify-badge.is-clear { color: var(--color-text-secondary)");
 
     // The digit never stands alone for a screen reader.
     expect(M.notifyToggleView({ enabled: false, permission: "default" }, true, 3, "blocked").disclosureLabel)
@@ -11156,7 +11653,6 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
   });
 
   test("(3) the drawer states all four verdicts, so unknown reads as unknown", () => {
-    expect(withDom(() => M.verdictLiveness(agent()))).toBeNull();
     const cases: Array<[string, string, string]> = [
       ["running", "Process live", "liveness-running"],
       ["exited", "Exited cleanly", "liveness-exited"],
@@ -11164,9 +11660,12 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
       ["unknown", "No matching process", "liveness-unknown"],
     ];
     for (const [word, label, cls] of cases) {
-      const chip = withDom(() => M.verdictLiveness(agent({ processLiveness: word })));
-      expect(textOf(chip), word).toContain(label);
-      expect(chip.className.split(/\s+/), word).toContain(cls);
+      const target = agent({ processLiveness: word });
+      const pane = newNode("div");
+      withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: target, program: { id: "p", name: "P", agents: [target] } }));
+      const state = byClass(pane, "status-line-liveness");
+      expect(textOf(state), word).toContain(label);
+      expect(state.className.split(/\s+/), word).toContain(cls);
     }
     // The four labels are distinct words — "exited" must never read like "died".
     const labels = cases.map(([word]) => M.livenessView(agent({ processLiveness: word })).label);
@@ -11403,8 +11902,8 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     const program = { id: "p", name: "P", agents: [asking] };
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: asking, program }));
-    expect(byClass(pane, "verdict-liveness")).not.toBeNull();
-    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("Died");
+    expect(byClass(pane, "status-line-liveness")).not.toBeNull();
+    expect(textOf(byClass(pane, "status-line-liveness"))).toContain("Died");
     expect(byClass(pane, "attn-block")).not.toBeNull();
     expect(buttonsOf(byClass(pane, "attn-block")).map((b: any) => textOf(b)))
       .toEqual(["Acknowledge", "Dismiss", "Snooze 1 hour"]);
@@ -11412,7 +11911,7 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     // A drawer with neither field and no attention keeps exactly its old shape.
     const calmPane = newNode("div");
     withDom(() => M.renderAgentDrawer(calmPane, { kind: "agent", agent: agent(), program: { id: "p", name: "P", agents: [agent()] } }));
-    expect(byClass(calmPane, "verdict-liveness")).toBeNull();
+    expect(byClass(calmPane, "status-line-liveness")).toBeNull();
     expect(byClass(calmPane, "attn-block")).toBeNull();
 
     // Nothing else in the drawer moves when an attention verdict lands, so
@@ -11511,7 +12010,7 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
     const unclear = agent({ processState: "unknown" });
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: unclear, program: { id: "p", name: "P", agents: [unclear] } }));
-    expect(textOf(byClass(pane, "verdict-liveness"))).toContain("No matching process");
+    expect(textOf(byClass(pane, "status-line-liveness"))).toContain("No matching process");
   });
 
   /* The route that used to 403 every browser now answers. This is a verbatim
@@ -11546,15 +12045,15 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
         expect(M.state.transcript.error).toBe("");
 
         const body = withDom(() => M.renderChatFeedBody(who, M.state));
-        const foot = withDom(() => M.renderTranscriptFoot(who, M.state));
-        expect(byClass(foot, "err")).toBeNull();
+        const lead = withDom(() => M.renderTranscriptFeedLead(who, M.state));
         // The four live turns render once each: user + assistant as bubbles,
         // unknown + tool as quiet rows.
         expect(allByClass(body, "chat-msg")).toHaveLength(2);
         expect(allByClass(body, "tr-line")).toHaveLength(2);
-        // The real absolute source path reaches the operator verbatim.
-        expect(textOf(byClass(foot, "transcript-source-path"))).toBe(LIVE_TRANSCRIPT.source);
-        expect(textOf(byClass(foot, "transcript-source"))).toBe("4 turns");
+        // The source remains normalized in state for Evidence/debug, but loaded
+        // chat gets no duplicate count, path, refresh footer, or unnecessary lead.
+        expect(M.state.transcript.data.source).toBe(LIVE_TRANSCRIPT.source);
+        expect(lead).toBeNull();
         // Untrusted agent text, rendered as text.
         expect(textOf(body)).toContain("WAVE 5 / W5-C — the suite has a time bomb");
       });
@@ -11730,7 +12229,7 @@ describe("boot() is exported and drives the real startup path", () => {
     try {
       await withRequests([{ status: 200, json: { ok: true, verdict: "healthy", snapshot: { ageMs: 10, maxAgeMs: 60000 } } }], async (calls) => {
         const doc = (globalThis as unknown as { document: any }).document;
-        doc.title = "The Ant Hill";
+        doc.title = "Formic";
         doc.addEventListener = () => {};
         M.boot();
         // boot() deliberately fires several requests without awaiting them, so
@@ -11744,7 +12243,7 @@ describe("boot() is exported and drives the real startup path", () => {
         expect(urls).toContain("/api/snapshot");
         expect(urls).toContain("/api/health");
         // Title is captured before any notification rewrites it.
-        expect(M.state.notify.baseTitle).toBe("The Ant Hill");
+        expect(M.state.notify.baseTitle).toBe("Formic");
       });
     } finally {
       M.stopBoot();

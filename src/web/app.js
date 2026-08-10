@@ -4,7 +4,7 @@
    Pure helpers are exposed on globalThis.TheAntHill so tests can import this
    file directly; DOM wiring only runs when a document exists. */
 
-import { $, contextPressureOf, el, icon, SVGNS, svgChild, svgGauge, svgMeter, svgRing, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
+import { $, contextPressureOf, el, icon, SVGNS, svgChild, svgGauge, svgMeter, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
 import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
 import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
@@ -26,7 +26,7 @@ import {
 import {
   loadTranscript,
   normalizeTranscript,
-  renderTranscriptFoot,
+  renderTranscriptFeedLead,
   transcriptLineNode,
   transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
@@ -484,7 +484,10 @@ function ambiguousNames(agents) {
    so a rename that lands between snapshots has to be visible in the next paint,
    not four seconds later. */
 function boardIndex(ui = state) {
-  const byId = new Map(snapshotAgents(ui && ui.snap).map(({ agent }) => [agent.id, agent]));
+  const byId = new Map(snapshotAgents(ui && ui.snap)
+    .map(({ agent }) => agent)
+    .filter(dashboardVisible)
+    .map((agent) => [agent.id, agent]));
   const agents = [...byId.values()];
   return {
     byId,
@@ -1500,7 +1503,7 @@ globalThis.TheAntHill = {
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
-  quietSourceLine, fullSourceDetail, verdictGate, renderVitalsBand, conciseText,
+  quietSourceLine, fullSourceDetail, verdictGate, conciseText,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
@@ -1519,7 +1522,8 @@ globalThis.TheAntHill = {
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
   renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
-  parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, fleetFallbackLine,
+  parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, tldrAttentionCount, fleetFallbackLine,
+  heartbeatTldrAgent,
   renderHealthRail, renderHealthTldrLane, repoScopedReadings, tldrRepoOrder,
   identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
   renderControlBanner, renderIdentityBlock,
@@ -1532,9 +1536,9 @@ globalThis.TheAntHill = {
   // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
-  transcriptFailureText, transcriptWindow, renderTranscriptFoot,
+  transcriptFailureText, transcriptWindow, renderTranscriptFeedLead,
   chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, chatScrollPlan, saveChatScrollFrom,
-  drawerFloatTopPx, syncDrawerFloat,
+  captureDrawerScroll, restoreDrawerScroll,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
   actionOutcomeView, lastActionFor,
@@ -1544,7 +1548,7 @@ globalThis.TheAntHill = {
   // the test seam at the foot of the file.
   attentionClassOf, hasCurrentImpact, notificationFeed, notificationCandidates,
   notificationPanelModel, feedTone, blockingCount, blockingAgentIds,
-  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, agentsById,
+  programOpen, programsPaintSig, inspectorPaintSig, agentRecordSig, lineagePaintSig, renderLineageSpine, agentsById,
   // Single-board surfaces: the pinned strip, the lifecycle dividers, swarm
   // collapse, the history provenance chips, and the fleet index all three read.
   lifecycleSection, LIFECYCLE_SECTIONS, needsYouStrip, renderNeedsYouStrip, stripSig,
@@ -1568,12 +1572,13 @@ globalThis.TheAntHill = {
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
   shelfFilter, shelfOpen,
+  dashboardVisible, dashboardPrograms,
   currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, hiddenByLookback, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
      against the real derivation rather than against a copy of it. */
-  workingSet, closeFilterMenu, lookbackValueLabel, isOfferedLookback,
+  workingSet, findSelected, resolveSelection, closeFilterMenu, lookbackValueLabel, isOfferedLookback,
   passesEveryLens, activeLenses,
 };
 
@@ -1915,6 +1920,8 @@ function applySnapshot(snap, sequence = null) {
   state.snapshotSequence = snapshotSequenceFrom(sequence);
   if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
   state.fetchFailed = false;
+  /* Persisted TL;DR view → program facet once programs exist (reload desync fix). */
+  applyTldrFacetSync(state.tldrView || "ALL");
   // Escalate before painting: the tab title and any notification are about the
   // snapshot being adopted, and this is the only place a snapshot is adopted.
   applyNotifications(snap);
@@ -2353,6 +2360,36 @@ function findingPaintKey(finding) {
   ].join("\u001f");
 }
 
+function mobileDrawerBodyOwnsScroll() {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(max-width: 860px)").matches;
+}
+
+/* Agent drawers moved their non-transcript scrolling out of the pane: Evidence
+   owns it at desktop/tablet, while the single drawer body owns it on mobile.
+   Other drawer kinds still scroll the pane itself. Keep that responsive choice
+   in one place so capture and restore can never address different elements. */
+function drawerScrollOwner(inspector, mobile = mobileDrawerBodyOwnsScroll()) {
+  if (!inspector || !inspector.classList?.contains("dw-agent")) return inspector;
+  const grid = [...(inspector.children || [])]
+    .find((node) => node.classList?.contains("drawer-grid"));
+  if (!grid) return inspector;
+  if (mobile) return grid;
+  return [...(grid.children || [])]
+    .find((node) => node.classList?.contains("drawer-desk")) || inspector;
+}
+
+function captureDrawerScroll(inspector, mobile = mobileDrawerBodyOwnsScroll()) {
+  const top = Number(drawerScrollOwner(inspector, mobile)?.scrollTop);
+  return Number.isFinite(top) ? top : 0;
+}
+
+function restoreDrawerScroll(inspector, top, sameEntity, mobile = mobileDrawerBodyOwnsScroll()) {
+  const owner = drawerScrollOwner(inspector, mobile);
+  if (owner) owner.scrollTop = sameEntity ? top : 0;
+}
+
 function render() {
   const focusKey = document.activeElement && document.activeElement.dataset
     ? document.activeElement.dataset.fkey
@@ -2360,7 +2397,7 @@ function render() {
   const main = $("main");
   const listScroll = main.scrollTop;
   const inspector = $("inspector");
-  const inspectorScroll = inspector.scrollTop;
+  const inspectorScroll = captureDrawerScroll(inspector);
   // Whether the operator was standing INSIDE the drawer, so the restore below can
   // tell "their control went away" from "they were never in here".
   const focusWasInDrawer = Boolean(document.activeElement && inspector.contains(document.activeElement));
@@ -2372,7 +2409,7 @@ function render() {
   // What the drawer is showing RIGHT NOW, read before renderInspector overwrites
   // the signature. state.selected is already the new entity by this point —
   // selectEntity sets it and then calls render — so the pane's own last paint is
-  // the only record of what that scrollTop belongs to.
+  // the only record of which entity the captured responsive scroll belongs to.
   const inspectorShowed = paintedEntityKey(state.paintSig.inspector);
 
   renderConn();
@@ -2403,9 +2440,11 @@ function render() {
      part-way down a stranger's drawer with its name scrolled off the top —
      measured at 291px on a 370px pane, with the <h2> 246px above the fold. A
      new selection starts at its own beginning. */
-  inspector.scrollTop = paintedEntityKey(state.paintSig.inspector) === inspectorShowed
-    ? inspectorScroll
-    : 0;
+  restoreDrawerScroll(
+    inspector,
+    inspectorScroll,
+    paintedEntityKey(state.paintSig.inspector) === inspectorShowed,
+  );
 
   if (focusKey) {
     const node = document.querySelector(`[data-fkey="${CSS.escape(focusKey)}"]`);
@@ -3869,6 +3908,7 @@ function renderHealthRail() {
   const dataById = new Map(model.cells.map((cell) => [cell.id, cell.data]));
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
+  const tldrCount = tldrAttentionCount(state.snap, state.tldrView || "ALL");
   const buckets = state.snap && state.snap.pulse ? state.snap.pulse.activity.buckets : [];
   const hbAgent = heartbeatTldrAgent(state.snap);
   const envelopeRaw = hbAgent && typeof hbAgent.transcriptTail === "string" ? hbAgent.transcriptTail : "";
@@ -3880,6 +3920,7 @@ function renderHealthRail() {
     state.widgetCustomizerOpen ? "1" : "0",
     buckets.map((b) => b.activeSessions).join(","),
     model.findings.map(findingPaintKey).join("|"),
+    tldrCount,
     // The calm line renders momentum/burn/health regardless of which widgets
     // are enabled, so sign its actual inputs — not the customized cell list.
     (model.calm
@@ -4064,20 +4105,60 @@ function liveRepoNames(snap) {
   return names;
 }
 
+/** Strip "Repo: " and a restated "Repo " subject so bullets don't read "Home: Home has…". */
+function stripTldrRepoPrefix(summary, repoName) {
+  const name = String(repoName || "").trim();
+  let body = String(summary || "").trim();
+  if (!name || !body) return body;
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  body = body.replace(new RegExp("^" + esc + ":\\s*", "i"), "").trim();
+  body = body.replace(new RegExp("^" + esc + "(?:\\s*:\\s*|\\s+)", "i"), "").trim();
+  return body;
+}
+
+/** One-line priority brief when Luna omits fleet — not a joined inventory. */
+function fleetPriorityBrief(snap, repos) {
+  const sorted = tldrRepoOrder(Array.isArray(repos) ? repos : []);
+  const hot = sorted.filter((r) => tldrSignalRank(r.signal) === 0);
+  const primary = hot[0] || sorted[0];
+  if (!primary) {
+    const live = snap?.totals?.live ?? 0;
+    return `All quiet — ${live} live across ${liveRepoNames(snap).size} repos.`;
+  }
+  const name = String(primary.repo || "repo");
+  const task = tldrRepoBulletTask(primary, 52);
+  let line = `Act on *${name}* first`;
+  if (task) line += ` — ${task}`;
+  line += ".";
+  const restHot = hot.slice(1).map((r) => r.repo).filter(Boolean);
+  if (restHot.length) line += ` Then ${restHot.join(", ")}.`;
+  else {
+    const defer = sorted.find((r) => r.repo !== name && tldrSignalRank(r.signal) > 0);
+    if (defer) line += ` ${defer.repo} can wait.`;
+  }
+  return clipTldrBullet(line, 220);
+}
+
 function fleetFallbackLine(snap, repos) {
-  const live = snap?.totals?.live ?? 0;
-  const attention = snap?.totals?.attention ?? 0;
-  const repoCount = liveRepoNames(snap).size;
-  const list = Array.isArray(repos) ? repos : [];
-  const hot = list.find((r) => {
-    const s = String(r?.signal || "").toLowerCase();
-    return s === "needs-you" || s === "blocked" || s === "failed";
-  });
-  const top = hot?.repo || list[0]?.repo || "";
-  let line = `${live} live across ${repoCount} repos`;
-  if (attention > 0) line += ` · ${attention} needs you`;
-  if (top) line += ` — ${top}`;
-  return line;
+  /* Prefer priority brief for empty-fleet story; keep inventory join only for
+     callers that still want the old aggregate (tests). */
+  return fleetPriorityBrief(snap, repos);
+}
+
+function tldrQuietStatus(repo) {
+  const sig = String(repo?.signal || "").toLowerCase();
+  const blocker = String(repo?.blocker || "").toLowerCase();
+  if (sig === "failed") return "failed";
+  if (sig === "blocked") return "blocked";
+  if (sig === "needs-you") {
+    if (blocker.includes("input") || blocker.includes("question") || blocker.includes("permission")) return "input";
+    if (blocker && blocker !== "all-clear" && blocker !== "none reported") return blocker.split(/\s+/)[0].slice(0, 12);
+    return "needs you";
+  }
+  if (sig === "working") return "working";
+  if (sig === "idle") return "idle";
+  if (sig === "all-clear") return "ok";
+  return "ok";
 }
 
 const HEARTBEAT_STALE_MS = 7 * 60 * 1000;
@@ -4104,11 +4185,70 @@ function tldrRepoOrder(repos) {
   });
 }
 
+/** Derive program facet from TL;DR view (repo name → program id). ALL clears. */
+function applyTldrFacetSync(view = state.tldrView) {
+  const next = view || "ALL";
+  if (next === "ALL") {
+    state.facetProgram = "";
+    return;
+  }
+  const program = programForTldrRepo(state.snap, next);
+  state.facetProgram = program ? program.id : "";
+}
+
+/** When the Filters bar / drawer sets program scope, keep TL;DR on the same repo. */
+function applyFacetTldrSync(programId) {
+  if (!programId) {
+    if (state.tldrView !== "ALL") {
+      state.tldrView = "ALL";
+      saveTldrView();
+      state.paintSig.widgets = "";
+    }
+    return;
+  }
+  const scoped = ((state.snap && state.snap.programs) || []).find((p) => p.id === programId);
+  if (!scoped) return;
+  const name = programName(scoped) || scoped.name || scoped.id;
+  if (state.tldrView !== name) {
+    state.tldrView = name;
+    saveTldrView();
+    state.paintSig.widgets = "";
+  }
+}
+
 function setTldrView(view) {
-  state.tldrView = view || "ALL";
+  const next = view || "ALL";
+  state.tldrView = next;
   saveTldrView();
   state.paintSig.widgets = "";
-  renderHealthRail();
+  applyTldrFacetSync(next);
+  /* Full board paint so the tree/filter bar follow the chevron; rail-only harnesses
+     (unit tests) leave uiReady unset and only repaint the health rail. */
+  if (state.uiReady) render();
+  else renderHealthRail();
+}
+
+function clipTldrBullet(text, cap) {
+  const s = String(text || "").trim();
+  if (s.length <= cap) return s;
+  const c = s.slice(0, cap);
+  const sp = c.lastIndexOf(" ");
+  return (sp > Math.floor(cap * 0.45) ? c.slice(0, sp) : c).trimEnd() + "…";
+}
+
+function tldrRepoBulletTask(repo, cap) {
+  const bodyFleet = stripTldrRepoPrefix(repo.summary, repo.repo);
+  let fleetTask = bodyFleet;
+  if (bodyFleet.includes(" · ")) {
+    const parts = bodyFleet.split(" · ");
+    if (parts.length >= 3) fleetTask = parts[1].trim();
+    else if (parts.length === 2) {
+      const last = parts[1].trim().toLowerCase();
+      if (last === "all clear" || last.includes("need you") || last === "no action") fleetTask = parts[0].trim();
+      else fleetTask = parts[1].trim();
+    }
+  }
+  return clipTldrBullet(fleetTask || bodyFleet || repo.summary || "", cap);
 }
 
 function programForTldrRepo(snap, repoName) {
@@ -4161,6 +4301,17 @@ function deterministicRepoStats(program) {
   }
   if (head) headShort = String(head).slice(0, 7);
   return { live, working, idle, needsYou, failed, blocked, branch, dirty, headShort, prCount, total: agents.length };
+}
+
+function tldrAttentionCount(snap, repoName = "ALL") {
+  if (repoName && repoName !== "ALL") {
+    const stats = deterministicRepoStats(programForTldrRepo(snap, repoName));
+    return stats ? stats.needsYou : 0;
+  }
+  const totals = snap && snap.totals;
+  if (totals && Number.isFinite(totals.attention)) return totals.attention;
+  const programs = Array.isArray(snap?.programs) ? snap.programs : [];
+  return programs.reduce((count, program) => count + (deterministicRepoStats(program)?.needsYou ?? 0), 0);
 }
 
 function tldrCardSignalClass(signal) {
@@ -4241,10 +4392,11 @@ function renderHealthTldrLane() {
     ? new Date(agent.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "");
   const view = state.tldrView || "ALL";
+  const attentionCount = tldrAttentionCount(state.snap, view);
   if (view !== "ALL") {
-    renderTldrRepoLane(lane, parsed, agent, time, view);
+    renderTldrRepoLane(lane, parsed, agent, time, view, attentionCount);
   } else {
-    renderTldrAllLane(lane, parsed, time);
+    renderTldrAllLane(lane, parsed, time, attentionCount);
   }
 
   if (heartbeatStaleBucket(agent) === "1") {
@@ -4257,7 +4409,13 @@ function renderHealthTldrLane() {
     globalThis.TheAntHill.parseHeartbeatStructured = parseHeartbeatStructured;
     globalThis.TheAntHill.programForTldrRepo = programForTldrRepo;
     globalThis.TheAntHill.deterministicRepoStats = deterministicRepoStats;
+    globalThis.TheAntHill.tldrAttentionCount = tldrAttentionCount;
     globalThis.TheAntHill.fleetFallbackLine = fleetFallbackLine;
+    globalThis.TheAntHill.fleetPriorityBrief = fleetPriorityBrief;
+    globalThis.TheAntHill.stripTldrRepoPrefix = stripTldrRepoPrefix;
+    globalThis.TheAntHill.setTldrView = setTldrView;
+    globalThis.TheAntHill.applyTldrFacetSync = applyTldrFacetSync;
+    globalThis.TheAntHill.setFacetProgram = setFacetProgram;
     globalThis.TheAntHill.repoScopedReadings = repoScopedReadings;
     globalThis.TheAntHill.tldrRepoOrder = tldrRepoOrder;
     globalThis.TheAntHill.renderHealthTldrLane = renderHealthTldrLane;
@@ -4265,22 +4423,29 @@ function renderHealthTldrLane() {
   }
 }
 
-function renderTldrAllLane(lane, parsed, time) {
+function renderTldrAllLane(lane, parsed, time, attentionCount) {
   lane.setAttribute("aria-label", "Cluster TL;DR — all repos");
+  lane.classList.add("is-masthead");
   const totals = (state.snap && state.snap.totals) || {};
   const live = totals.live ?? 0;
-  const attention = totals.attention ?? 0;
+  const attention = Number.isFinite(attentionCount) ? attentionCount : tldrAttentionCount(state.snap);
+  const attentionText = attention > 0 ? `${attention} need you` : "all clear";
   const repoCount = parsed.repos.length;
   const ordered = tldrRepoOrder(parsed.repos);
+  const hasBreak = ordered.some((r) => {
+    const s = String(r.signal || "").toLowerCase();
+    return s === "blocked" || s === "failed";
+  });
   const hot = ordered.some((r) => tldrSignalRank(r.signal) === 0);
-  if (hot || attention > 0) lane.classList.add("is-needs-you");
+  if (hasBreak) lane.classList.add("is-break");
+  else if (hot || attention > 0) lane.classList.add("is-needs-you");
   const first = ordered[0];
 
   const prev = el("button", { type: "button", class: "chev", "aria-label": "Previous view", disabled: "", text: "‹" });
   const next = el("button", {
     type: "button",
     class: "chev",
-    "aria-label": first ? `Filter to ${first.repo}` : "Next repo view",
+    "aria-label": first ? `Filter board to ${first.repo}` : "Next repo view",
     text: "›",
     onclick: () => { if (first) setTldrView(first.repo); },
   });
@@ -4288,27 +4453,73 @@ function renderTldrAllLane(lane, parsed, time) {
 
   lane.append(el("div", { class: "tldr-lane-head" },
     el("span", { class: "heartbeat-tldr-label", "aria-hidden": "true", text: "TL;DR" }),
+    el("span", {
+      class: "tldr-attention-count" + (attention > 0 ? "" : " is-clear"),
+      "aria-live": "polite",
+      text: attentionText,
+    }),
     el("span", { class: "heartbeat-tldr-time", text: time }),
-    el("span", { class: "tldr-lane-meta", text: `${repoCount} repos · ${live} live · ${attention} needs you` }),
+    el("span", {
+      class: "tldr-lane-meta",
+      title: "Luna summarizes agents active in the last hour; the board tree still uses the 36h lookback. Chevrons filter the tree.",
+      text: `${repoCount} repos · ${live} live · 1h`,
+    }),
     el("div", { class: "lane-pager" }, prev, el("span", { class: "lane-pos", "aria-live": "polite", text: "ALL" }), next),
   ));
 
-  const fleetText = parsed.fleet || fleetFallbackLine(state.snap, parsed.repos);
-  lane.append(el("p", { class: "tldr-lane-prose" }, ...tldrMarkupNodes(fleetText)));
+  const fleetText = (parsed.fleet && parsed.fleet.trim())
+    || (parsed.repos.length ? fleetPriorityBrief(state.snap, parsed.repos) : "");
+  const hasFleet = !!fleetText;
+  if (hasFleet) {
+    lane.append(el("p", {
+      class: "tldr-lane-prose is-fleet" + (parsed.repos.length ? " has-bullets" : ""),
+    }, ...tldrMarkupNodes(fleetText)));
+  }
 
-  const strip = el("div", { class: "tldr-chip-strip", role: "list", "aria-label": "Repo status" });
+  const fleetBuckets = ordered.slice(0, 3);
+  if (fleetBuckets.length) {
+    const proof = el("div", {
+      class: "tldr-proof",
+      role: "list",
+      "aria-label": "Per-repo proof — click filters the board",
+    });
+    const bulletCap = hasFleet ? 72 : 88;
+    for (const repo of fleetBuckets) {
+      const task = tldrRepoBulletTask(repo, bulletCap);
+      const sigClass = tldrCardSignalClass(repo.signal);
+      const row = el("button", {
+        type: "button",
+        class: "tldr-proof-row " + sigClass,
+        role: "listitem",
+        title: (repo.summary || "") + " — click to filter board",
+        onclick: () => setTldrView(repo.repo),
+      },
+        el("span", { class: "tldr-proof-rail", "aria-hidden": "true" }),
+        el("span", { class: "tldr-proof-name", text: repo.repo }),
+        el("span", { class: "tldr-proof-body" }, ...tldrMarkupNodes(task)),
+        el("span", { class: "tldr-proof-tag", text: tldrQuietStatus(repo) }),
+      );
+      proof.append(row);
+    }
+    if (parsed.repos.length > 3) {
+      proof.append(el("div", { class: "tldr-proof-more", text: `+${parsed.repos.length - 3} more` }));
+    }
+    lane.append(proof);
+  }
+
+  const strip = el("div", { class: "tldr-chip-strip", role: "list", "aria-label": "Repo status — filters the board" });
   const mentioned = new Set(parsed.repos.map((r) => String(r.repo).toLowerCase()));
   for (const repo of ordered) {
     const name = repo.repo;
+    const active = state.tldrView === name;
     strip.append(el("button", {
       type: "button",
-      class: "tldr-chip " + tldrCardSignalClass(repo.signal),
+      class: "tldr-chip " + tldrCardSignalClass(repo.signal) + (active ? " is-active" : ""),
       role: "listitem",
+      title: `Filter board to ${name}`,
       onclick: () => setTldrView(name),
     }, el("span", { class: "dot" }), name));
   }
-  /* Same repo-level denominator as fleetFallbackLine: worktree groups are not
-     repos, and only live repos belong in the strip's remainder. */
   const quiet = [...liveRepoNames(state.snap)].filter((name) => !mentioned.has(name)).length;
   if (quiet > 0) {
     strip.append(el("span", { class: "tldr-chip is-more", role: "listitem", text: `+${quiet} quiet` }));
@@ -4316,18 +4527,20 @@ function renderTldrAllLane(lane, parsed, time) {
   lane.append(strip);
 }
 
-function renderTldrRepoLane(lane, parsed, agent, time, repoName) {
+function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount) {
   const ordered = tldrRepoOrder(parsed.repos);
   const repo = ordered.find((r) => r.repo === repoName)
     || parsed.repos.find((r) => r.repo === repoName)
     || { repo: repoName, summary: "", blocker: "none reported", signal: "ok" };
   const program = programForTldrRepo(state.snap, repoName);
   const stats = deterministicRepoStats(program);
+  const resolvedAttention = Number.isFinite(attentionCount) ? attentionCount : (stats ? stats.needsYou : 0);
+  const attentionText = resolvedAttention > 0 ? `${resolvedAttention} need you` : "all clear";
   const sigClass = tldrCardSignalClass(repo.signal);
-  lane.setAttribute("aria-label", "Cluster TL;DR — " + repoName);
-  if (sigClass === "is-needs-you" || sigClass === "is-blocked" || sigClass === "is-failed") {
-    lane.classList.add("is-needs-you");
-  }
+  lane.setAttribute("aria-label", "Cluster TL;DR — " + repoName + " (board filtered)");
+  lane.classList.add("is-masthead", "is-repo-scoped");
+  if (sigClass === "is-blocked" || sigClass === "is-failed") lane.classList.add("is-break");
+  else if (sigClass === "is-needs-you") lane.classList.add("is-needs-you");
 
   const idx = Math.max(0, ordered.findIndex((r) => r.repo === repoName));
   const pos = idx + 1;
@@ -4337,14 +4550,14 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName) {
   const prev = el("button", {
     type: "button",
     class: "chev",
-    "aria-label": idx === 0 ? "Back to ALL" : `Previous repo — ${prevRepo.repo}`,
+    "aria-label": idx === 0 ? "Back to ALL — show every program" : `Filter board to ${prevRepo.repo}`,
     text: "‹",
     onclick: () => setTldrView(idx === 0 ? "ALL" : prevRepo.repo),
   });
   const next = el("button", {
     type: "button",
     class: "chev",
-    "aria-label": nextRepo ? `Next repo — ${nextRepo.repo}` : "Next repo view",
+    "aria-label": nextRepo ? `Filter board to ${nextRepo.repo}` : "Next repo view",
     text: "›",
     onclick: () => { if (nextRepo) setTldrView(nextRepo.repo); },
   });
@@ -4353,12 +4566,23 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName) {
   const metaBits = [];
   if (stats) metaBits.push(stats.total + " agents");
   if (time) metaBits.push(time);
+  metaBits.push("last 1h");
+  metaBits.push("board filtered");
 
   lane.append(el("div", { class: "tldr-lane-head" },
     el("span", { class: "heartbeat-tldr-label", "aria-hidden": "true", text: "TL;DR" }),
     el("span", { class: "tldr-card-repo", text: repoName }),
     el("span", { class: "tldr-card-signal " + sigClass, text: repo.signal }),
-    el("span", { class: "tldr-lane-meta", text: metaBits.join(" · ") }),
+    el("span", {
+      class: "tldr-attention-count" + (resolvedAttention > 0 ? "" : " is-clear"),
+      "aria-live": "polite",
+      text: attentionText,
+    }),
+    el("span", {
+      class: "tldr-lane-meta",
+      title: "Board tree is filtered to this program. Clear via Filters chip or ‹ to ALL.",
+      text: metaBits.join(" · "),
+    }),
     el("div", { class: "lane-pager" },
       prev,
       el("span", { class: "lane-pos", "aria-live": "polite", text: `${pos} / ${ordered.length}` }),
@@ -4366,7 +4590,53 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName) {
     ),
   ));
 
-  lane.append(el("p", { class: "tldr-lane-prose" }, ...tldrMarkupNodes(repo.summary || "")));
+  const repoBody = stripTldrRepoPrefix(repo.summary, repoName);
+  if (repoBody) {
+    lane.append(el("p", {
+      class: "tldr-lane-prose is-fleet has-bullets",
+    }, ...tldrMarkupNodes(clipTldrBullet(repoBody, 220))));
+  }
+
+  const programAgents = program ? (program.agents || []) : [];
+  const agentBuckets = [...programAgents].sort((a, b) => {
+    const rank = (x) => x.attentionSignal ? 0 : x.lifecycle === "working" ? 1 : x.lifecycle === "waiting" ? 2 : 3;
+    return rank(a) - rank(b);
+  }).slice(0, 4);
+  if (agentBuckets.length) {
+    const proof = el("div", {
+      class: "tldr-proof is-under-fleet",
+      role: "list",
+      "aria-label": `${repoName} agents`,
+    });
+    for (const ag of agentBuckets) {
+      const isWaiting = !!ag.attentionSignal || ag.lifecycle === "waiting";
+      const sig = isWaiting ? "needs-you" : ag.lifecycle === "working" ? "working" : "ok";
+      const cls = tldrCardSignalClass(sig);
+      const rawTask = String(ag.task || ag.lastHumanMessage || ag.displayName || "").trim().split("\n")[0].trim();
+      let cleanTask = rawTask;
+      const low = cleanTask.toLowerCase();
+      if (low.startsWith("handoff:")) cleanTask = "handoff";
+      else if (low.includes("chrome tabs") && low.includes("chrome extension")) cleanTask = "Chrome tab check";
+      else if (low.startsWith("the following is the codex agent") || low.startsWith("this session is being continued")) cleanTask = "Codex history review";
+      else if (low.startsWith("#")) {
+        cleanTask = cleanTask.replace(/^#{1,6}\s*/, "").replace(/^[-*]\s*/, "");
+        if (cleanTask.toLowerCase().includes("chrome tab")) cleanTask = "Chrome tab check";
+      }
+      cleanTask = clipTldrBullet(cleanTask, 64);
+      if (!cleanTask) cleanTask = ag.displayName || "working";
+      const blockerText = isWaiting ? (ag.attentionSignal?.kind || "needs you") : "";
+      const label = blockerText && blockerText !== "all clear" ? `${cleanTask} → ${blockerText}` : cleanTask;
+      proof.append(el("div", { class: "tldr-proof-row " + cls, role: "listitem", title: rawTask },
+        el("span", { class: "tldr-proof-rail", "aria-hidden": "true" }),
+        el("span", { class: "tldr-proof-name", text: isWaiting ? "waiting" : "working" }),
+        el("span", { class: "tldr-proof-body" }, ...tldrMarkupNodes(label)),
+      ));
+    }
+    if (programAgents.length > 4) {
+      proof.append(el("div", { class: "tldr-proof-more", text: `+${programAgents.length - 4} more agents` }));
+    }
+    lane.append(proof);
+  }
 
   const det = el("div", { class: "tldr-lane-det", "aria-label": repoName + " repo facts" });
   const blockerKind = String(repo.blocker || "").toLowerCase();
@@ -5236,6 +5506,28 @@ function findingFromQueueItem(item) {
 
 /* ---------- toolbar ---------- */
 
+/* One raw snapshot, two consumers:
+
+     raw snapshot ──> health / heartbeat TL;DR / usage / debug
+              └────> dashboardPrograms() ──> rows / shelves / counts / drawers
+
+   `system` names infrastructure the operator observes, not work they navigate.
+   Filter shallow presentation copies so operational evidence remains complete
+   and no counter can accidentally read a different population from its rows. */
+function dashboardVisible(agent) {
+  return sessionKindOf(agent) !== "system";
+}
+
+function dashboardPrograms(snap) {
+  if (!snap || !Array.isArray(snap.programs)) return [];
+  return snap.programs
+    .map((program) => ({
+      ...program,
+      agents: (program.agents || []).filter(dashboardVisible),
+    }))
+    .filter((program) => program.agents.length > 0);
+}
+
 /* Board is the operator's work view, not a denial of what the collector saw.
    Review workers are hidden only when they are routine and non-attention; a
    review that needs a person remains pinned and visible. A search is an
@@ -5257,7 +5549,8 @@ function reviewWorkerCount(ui = state) {
   if (!ui.snap || ui.view !== "board") return 0;
   return snapshotAgents(ui.snap)
     .map(({ agent }) => agent)
-    .filter((agent) => sessionKindOf(agent) === "review"
+    .filter((agent) => dashboardVisible(agent)
+      && sessionKindOf(agent) === "review"
       && viewMatches("board", agent)
       && passesLookback(agent, "board", ui.lookbackHours)
       && !alerting(agent))
@@ -5329,18 +5622,25 @@ function passesLens(agent, values, matches) {
 }
 
 /* Set from the program drawer ("Only this program"), cleared from the Filters
-   bar. Programs are unbounded, so there is no always-on chip list for them —
-   the bar carries one clear-chip while the lens is active, which is the whole
-   disclosure obligation: a narrowing is always one visible control from off. */
+   bar, or driven by the TL;DR chevrons/chips (shared scope). Programs are
+   unbounded, so there is no always-on chip list for them — the bar carries one
+   clear-chip while the lens is active, which is the whole disclosure obligation:
+   a narrowing is always one visible control from off. */
 function setFacetProgram(programId) {
   const next = state.facetProgram === programId ? "" : programId;
   if (next === state.facetProgram) return;
   state.facetProgram = next;
-  render();
+  applyFacetTldrSync(next);
+  if (state.uiReady) render();
+  else {
+    state.paintSig.widgets = "";
+    renderHealthRail();
+  }
 }
 
 function currentFilter() {
   return (agent, program) =>
+    dashboardVisible(agent) &&
     viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
@@ -5398,6 +5698,7 @@ function shelfFilter() {
        lifecycle still says `waiting`; what changed is that it is no longer work
        in flight, and the shelf is the surface that answers "where did the row I
        was looking at go". */
+    dashboardVisible(agent) &&
     (isTerminal(agent) || declaredDone(agent)) &&
     !viewMatches(state.view, agent) &&
     passesLookback(agent, state.view, state.lookbackHours) &&
@@ -5481,13 +5782,14 @@ function workingSet(ui = state, view = ui.view) {
   return snapshotAgents(ui.snap)
     .map(({ agent }) => agent)
     .filter((agent) =>
-      viewMatches(view, agent)
+      dashboardVisible(agent)
+      && viewMatches(view, agent)
       && passesLookback(agent, view, ui.lookbackHours)
       && passesReviewVisibility(agent, view, ui.showReviewWorkers));
 }
 
 function renderTabs() {
-  const agents = snapshotAgents(state.snap).map((x) => x.agent);
+  const agents = snapshotAgents(state.snap).map((x) => x.agent).filter(dashboardVisible);
   for (const view of OPS_VIEWS) {
     const countNode = $("count-" + view);
     if (!countNode) continue;
@@ -6283,7 +6585,10 @@ function renderFilterBar(ui = state) {
       "Only " + (scoped ? programName(scoped) : "one program"),
       true,
       () => setFacetProgram(state.facetProgram),
-      { fkey: "program:clear", title: "Show every program again" },
+      {
+        fkey: "program:clear",
+        title: "Show every program again — also resets TL;DR to ALL",
+      },
     ));
   }
   /* The sentence stands here, between the lenses it summarises and the control
@@ -6442,6 +6747,11 @@ function clearEveryLens() {
   for (const axis of LENS_AXES) state[axis.stateKey] = [];
   state.facetProgram = "";
   state.query = "";
+  if (state.tldrView !== "ALL") {
+    state.tldrView = "ALL";
+    saveTldrView();
+    state.paintSig.widgets = "";
+  }
   const box = $("search");
   if (box) box.value = "";
   render();
@@ -7348,6 +7658,7 @@ function hiddenByLookback(ui = state) {
   if (!lookbackApplies(ui.view) || ui.lookbackHours == null || !ui.snap) return 0;
   let hidden = 0;
   for (const { agent, program } of snapshotAgents(ui.snap)) {
+    if (!dashboardVisible(agent)) continue;
     if (passesLookback(agent, ui.view, ui.lookbackHours)) continue;   // inside the window
     if (!viewMatches(ui.view, agent)) continue;
     if (!matchesQuery(agent, program, ui.query)) continue;
@@ -7445,7 +7756,12 @@ function renderPrograms() {
   const filter = currentFilter();
   const shelved = shelfFilter();
   const visible = [];
-  for (const program of state.snap.programs) {
+  const programs = dashboardPrograms(state.snap);
+  const presentationState = {
+    ...state,
+    snap: { ...state.snap, programs },
+  };
+  for (const program of programs) {
     const agents = program.agents.filter((a) => filter(a, program));
     /* A program with nothing live is still absent from a live view — the shelf
        explains rows that LEFT a group the operator is looking at, and it has no
@@ -7453,15 +7769,15 @@ function renderPrograms() {
     if (!agents.length) continue;
     visible.push({ program, agents, finished: program.agents.filter((a) => shelved(a, program)) });
   }
-  if (paintUnchanged("programs", programsPaintSig(visible, state))) {
+  if (paintUnchanged("programs", programsPaintSig(visible, presentationState))) {
     renderScopeNote(visible.reduce((n, row) => n + row.agents.length, 0));
     return;
   }
 
-  const shown = syncProgramList(root, visible, state);
+  const shown = syncProgramList(root, visible, presentationState);
   renderScopeNote(shown);
 
-  const tracked = totalsOf(state.snap).tracked;
+  const tracked = programs.reduce((total, program) => total + program.agents.length, 0);
   if (shown || !tracked) return;
 
   const constrained = emptyListMessage(state);
@@ -8883,45 +9199,6 @@ function focusDrawerLead() {
   lead.focus({ preventScroll: true });
 }
 
-/* Sticky float offset for the ≥1025px docked drawer. Short drawers center in
-   the viewport; tall ones pin with `gapPx` (1.25rem) so they never scrape the
-   chrome. Pure — syncDrawerFloat is the only caller with layout numbers. */
-function drawerFloatTopPx(paneHeight, viewportHeight, gapPx = 20) {
-  if (!Number.isFinite(paneHeight) || !Number.isFinite(viewportHeight) || viewportHeight <= 0) return gapPx;
-  if (paneHeight >= viewportHeight - gapPx * 2) return gapPx;
-  return Math.max(gapPx, Math.round((viewportHeight - paneHeight) / 2));
-}
-
-let _drawerFloatObs = null;
-let _drawerFloatOnResize = null;
-
-function stopDrawerFloat() {
-  if (_drawerFloatObs) { try { _drawerFloatObs.disconnect(); } catch { /* ignore */ } _drawerFloatObs = null; }
-  if (_drawerFloatOnResize && typeof window !== "undefined") {
-    window.removeEventListener("resize", _drawerFloatOnResize);
-    _drawerFloatOnResize = null;
-  }
-}
-
-/* ResizeObserver + viewport resize only — no timers, no left-column scroll
-   listeners. Sets --drawer-float-top on the pane (CSP allows custom props via
-   the style object the same way the vitals bar already writes width). */
-function syncDrawerFloat(pane) {
-  stopDrawerFloat();
-  if (!pane || typeof window === "undefined") return;
-  const apply = () => {
-    const top = drawerFloatTopPx(pane.offsetHeight || 0, window.innerHeight || 0);
-    try { pane.style.setProperty("--drawer-float-top", top + "px"); } catch { /* style blocked */ }
-  };
-  apply();
-  _drawerFloatOnResize = apply;
-  window.addEventListener("resize", apply, { passive: true });
-  if (typeof ResizeObserver === "function") {
-    _drawerFloatObs = new ResizeObserver(apply);
-    try { _drawerFloatObs.observe(pane); } catch { /* ignore */ }
-  }
-}
-
 function closeInspector() {
   const id = state.selectedId;
   // Closing is the definitive click-out: commit the feed position on the way.
@@ -8933,7 +9210,6 @@ function closeInspector() {
   state.confirming = null;
   state.evidenceOpen = false;
   _chatScrollMemo.key = "";
-  stopDrawerFloat();
   render();
   /* The agent row by id first — unchanged, and it survives a roster rebuild that
      a captured node reference would not. The recorded origin catches every other
@@ -8948,7 +9224,7 @@ function closeInspector() {
 
 function findSelected() {
   if (!state.selectedId || !state.snap) return null;
-  for (const program of state.snap.programs) {
+  for (const program of dashboardPrograms(state.snap)) {
     const agent = program.agents.find((a) => a.id === state.selectedId);
     if (agent) return { agent, program };
   }
@@ -8984,12 +9260,13 @@ function agentRecordSig(agent) {
    activity are part of what this drawer shows — a subagent going idle must not
    leave a stale glyph on an open drawer. */
 function lineagePaintSig(agent, snap) {
-  const byId = new Map(snapshotAgents(snap).map(({ agent: a }) => [a.id, a]));
+  const rawById = new Map(snapshotAgents(snap).map(({ agent: a }) => [a.id, a]));
+  const byId = new Map([...rawById].filter(([, candidate]) => dashboardVisible(candidate)));
   const kin = (a) => a.id + ":" + a.status + ":" + (a.activity || "") + ":" + (a.role || "") + ":" + agentName(a);
   const parts = [];
   const seen = new Set([agent.id]);
   let parent = agent.parentAgentId ? byId.get(agent.parentAgentId) : null;
-  if (agent.parentAgentId && !parent) parts.push("untracked:" + agent.parentAgentId);
+  if (agent.parentAgentId && !rawById.has(agent.parentAgentId)) parts.push("untracked:" + agent.parentAgentId);
   while (parent && !seen.has(parent.id)) {
     seen.add(parent.id);
     parts.push(kin(parent));
@@ -9095,21 +9372,33 @@ function inspectorPaintSig(sel, view, ui) {
    preserves every existing render() caller. */
 function renderInspector() {
   const pane = $("inspector");
-  const sel = state.selected;
+  let sel = state.selected;
+  /* A presentation-only system source may still be selected in persisted/live
+     client state from the snapshot before its classification landed. Close that
+     stale route instead of turning the hidden infrastructure record into a
+     "missing" agent drawer. Ordinary sources that truly disappear keep the
+     existing missing-record explanation. */
+  if (sel && sel.kind === "agent" && state.snap) {
+    const raw = snapshotAgents(state.snap).find(({ agent }) => agent.id === sel.id);
+    if (raw && !dashboardVisible(raw.agent)) {
+      state.selected = null;
+      state.selectedId = null;
+      state.selectionOrigin = null;
+      sel = null;
+    }
+  }
   document.body.classList.toggle("inspector-open", !!sel);
   if (!sel) {
     state.paintSig.inspector = "closed";
     pane.hidden = true;
     pane.textContent = "";
     pane.className = "pane-inspector";
-    stopDrawerFloat();
     return;
   }
 
   const view = resolveSelection(sel);
   if (paintUnchanged("inspector", inspectorPaintSig(sel, view, state))) {
     pane.hidden = false;
-    syncDrawerFloat(pane);
     return;
   }
 
@@ -9117,11 +9406,10 @@ function renderInspector() {
   pane.className = "pane-inspector";
   pane.hidden = false;
   const renderer = view && DRAWER_RENDERERS[view.kind];
-  if (!renderer) { pane.append(...missingDrawer()); syncDrawerFloat(pane); return; }
+  if (!renderer) { pane.append(...missingDrawer()); return; }
   pane.setAttribute("role", "region");
   pane.setAttribute("aria-label", (DRAWER_ARIA_LABELS[view.kind] || "Detail") + " inspector");
   renderer(pane, view);
-  syncDrawerFloat(pane);
 }
 
 const DRAWER_ARIA_LABELS = {
@@ -9158,7 +9446,7 @@ function resolveSelection(sel) {
     return issue ? { kind: "resolved", issue } : null;
   }
   if (sel.kind === "program") {
-    const program = state.snap.programs.find((p) => p.id === sel.id);
+    const program = dashboardPrograms(state.snap).find((p) => p.id === sel.id);
     return program ? { kind: "program", program } : null;
   }
   return null;
@@ -9621,25 +9909,6 @@ function verdictGate(agent, outcome) {
     icon("warning"), text);
 }
 
-/* The drawer's process-liveness chip. Unlike the row this renders ALL FOUR
-   states, so `unknown` is stated as unknown somewhere instead of silently
-   looking like health. Null when the field is absent — the drawer head then
-   holds exactly the nodes it holds today. */
-/* The words themselves live in LIVENESS_VIEW / LIVENESS_ENDED_UNKNOWN, which is
-   the only place they may be decided — an earlier attempt overrode the `unknown`
-   label HERE and left livenessView() and the rendered chip disagreeing about one
-   agent (c489040, reverted by 4d81fe5). This function renders what the model
-   says and nothing else. */
-function verdictLiveness(agent) {
-  const view = livenessView(agent);
-  if (!view) return null;
-  return el("span", {
-    class: "verdict-liveness liveness-" + view.key,
-    title: view.detail,
-    "aria-label": "Process: " + view.label + ". " + view.detail,
-  }, view.key === "died" ? icon("warning") : null, view.label);
-}
-
 /* ---------- attention: acknowledge / dismiss / snooze ----------
 
    The board could show that an agent wanted a human but gave the operator no
@@ -9849,6 +10118,8 @@ function renderAgentDrawer(pane, view) {
   // Provider channel: a 1px inset rail + the lineage current-node ring both read
   // from --prov, set CSP-safely by a class (never an inline style).
   pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
+  const shellHead = el("div", { class: "drawer-shell-head" });
+  pane.append(shellHead);
 
   /* Verdict head.
 
@@ -9869,59 +10140,98 @@ function renderAgentDrawer(pane, view) {
      the pane — the same Focus button was on screen twice, with instance-scoped
      confirm keys existing only to stop the two copies stealing each other's
      focus. */
-  const sourceLine = quietSourceLine(agent);
   const tag = drawerSessionTag(agent);
-  const objective = drawerObjective(agent);
   /* The words only. The hex beside them is the `tag` above, printed under the
      row's rule — `agentName` here would have carried the server's durable
      disambiguator into the head whether or not the board had a twin to
      separate it from. */
   const title = rowDisplayName(agent);
-  const sub = headSubParts(agent, program, title);
-  const subParts = {
-    program: sub.program,
-    chip: [sub.provider, sub.model].filter(Boolean).join(" · "),
-  };
-  /* Nothing left to say is not an empty line — it is no line. When the title
-     has already named all three, this row would otherwise render as a stray
-     gap under the heading. */
-  subParts.line = Boolean(subParts.program || subParts.chip);
-  pane.append(el("div", { class: "inspector-head inspector-verdict" },
-    el("div", { class: "inspector-id" },
+  const sourceLine = quietSourceLine(agent);
+
+  /* One task model, one rendering. The old head called drawerObjective while
+     the card below parsed rawTask separately, so two surfaces could disagree
+     about what the task was. Parse the full envelope once and let the command
+     header own both its concise face and its optional raw disclosure. */
+  const fullTask = String(agent.rawTask || agent.task || "").trim();
+  const parsedTask = parseTaskEnvelope(fullTask);
+  const taskObjective = agent.rawTask
+    ? withoutSenderHeader(String(agent.task || "")).trim()
+    : parsedTask.objective;
+  const taskMeta = [];
+  if (parsedTask.meta.from || parsedTask.meta.to)
+    taskMeta.push([parsedTask.meta.from, parsedTask.meta.to].filter(Boolean).join(" → "));
+  if (parsedTask.meta.date) taskMeta.push(parsedTask.meta.date);
+  if (parsedTask.meta.branch) taskMeta.push(parsedTask.meta.branch);
+  const showBrief = Boolean(fullTask) && fullTask !== taskObjective;
+
+  const role = roleView(agent.role);
+  const eyebrow = [role.key !== "agent" ? role.label : "", programName(program), sourceLine]
+    .filter(Boolean).join(" · ");
+  const harnessLabel = (typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label)
+    || providerLabel(agent.provider) || "";
+  const modelLabel = modelShort(agent.model);
+  const tokens = agent.tokens || {};
+  const contextPct = agentContextPct(agent);
+  const contextMagnitude = Number.isFinite(tokens.total) && Number.isFinite(tokens.contextWindow)
+    ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
+    : hasObservedTotal(tokens) ? fmtTok(tokens.total) + " tokens" : "";
+  const sessionText = Number.isFinite(tokens.sessionTotal) ? fmtTok(tokens.sessionTotal) : "";
+  const titleFacts = new Set(String(title).split("·").map((part) => part.trim().toLowerCase()).filter(Boolean));
+  const runText = [harnessLabel, modelLabel]
+    .filter((part) => part && !titleFacts.has(part.toLowerCase()))
+    .join(" / ");
+  const runMark = (() => { try { return harnessMark(agent); } catch { return icon("box", { label: "" }); } })();
+  const modelMark = (() => { try { return agentMark(agent); } catch { return icon("cpu", { label: "" }); } })();
+  const facts = el("dl", { class: "drawer-session-facts", "aria-label": "Session facts" });
+  let hasFacts = false;
+  if (runText) {
+    hasFacts = true;
+    facts.append(el("div", { class: "drawer-session-fact drawer-session-run-fact" },
+      el("dt", { text: "Run" }),
+      el("dd", { class: "drawer-session-run" }, runMark, modelMark, runText)));
+  }
+  if (contextPct != null || contextMagnitude) {
+    hasFacts = true;
+    facts.append(el("div", { class: "drawer-session-fact drawer-session-context" },
+      el("dt", { text: "Context" }),
+      el("dd", {}, contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : null,
+        contextPct != null && contextMagnitude ? " · " : null,
+        contextMagnitude || null)));
+  }
+  if (sessionText) {
+    hasFacts = true;
+    facts.append(el("div", { class: "drawer-session-fact drawer-session-usage" },
+      el("dt", { text: "Session" }),
+      el("dd", { text: sessionText })));
+  }
+
+  shellHead.append(el("header", { class: "inspector-head inspector-verdict drawer-session-header" },
+    el("div", { class: "inspector-id drawer-session-main" },
+      eyebrow ? el("p", { class: "drawer-session-eyebrow", text: eyebrow }) : null,
       el("h2", { class: "inspector-title" },
         /* Same value the subtraction below compares against — one call, so the
            two can never disagree about what the title said. */
         title,
         tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
-      objective ? el("p", { class: "inspector-objective", title: agent.task, text: objective }) : null,
-      sourceLine
-        ? el("p", {
-          class: "inspector-source-name",
-          title: fullSourceDetail(agent),
-          text: sourceLine,
-        })
-        : null,
-      subParts.line
-        ? el("p", { class: "inspector-sub" },
-          subParts.program ? el("span", { text: subParts.program }) : null,
-          subParts.program && subParts.chip ? " · " : null,
-          /* The provider chip keeps its colour class even when the title has
-             already named the provider in words: the channel is then carried
-             once, as ink, instead of twice, as text. */
-          subParts.chip
-            ? el("span", { class: "chip provider-" + agent.provider, text: subParts.chip })
-            : null)
-        : null,
-      renderStatusLine(agent, activity, outcome, control),
-      verdictLiveness(agent),
-      verdictGate(agent, outcome)),
+      el("div", { class: "drawer-session-state" },
+        renderStatusLine(agent, activity, outcome, control),
+        verdictGate(agent, outcome)),
+      el("section", { class: "drawer-task-summary", "aria-labelledby": "drawer-task-label" },
+        el("span", { id: "drawer-task-label", class: "drawer-task-label", text: "Task" }),
+        taskObjective
+          ? el("p", { class: "drawer-task-objective", text: taskObjective })
+          : el("p", { class: "drawer-task-objective is-empty", title: "No prose task was recorded for this lane", text: "No task recorded" }),
+        taskMeta.length ? el("p", { class: "drawer-task-meta", text: taskMeta.join(" · ") }) : null,
+        showBrief
+          ? el("details", { class: "drawer-task-brief" },
+              el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
+              el("pre", { class: "drawer-task-brief-body", text: fullTask }))
+          : null),
+      hasFacts ? facts : null),
     el("div", { class: "verdict-side" }, closeButton())));
 
   const attentionBlock = renderAttentionBlock(agent);
-  if (attentionBlock) pane.append(attentionBlock);
-
-  const banner = renderControlBanner(agent, control);
-  if (banner) pane.append(banner);
+  if (attentionBlock) shellHead.append(attentionBlock);
 
   /* `nextAction` is gone. It rendered on 100% of agents and looked like per-agent
      guidance, but across 243 live agents it held THREE distinct strings and 214
@@ -9929,109 +10239,50 @@ function renderAgentDrawer(pane, view) {
      `activity === "ended"` dressed as advice. A directive that is the same
      sentence on nine agents out of ten is not a directive. */
 
-  // Single-panel drawer — Chat + Evidence stacked, no tabs (user has space on right)
-  // Header vitals for 5s scan: Harness | Model | Ctx | Tokens | Status · Last message · Elapsed — sticky under title
-  const _hLabel = (typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label) || providerLabel(agent.provider) || "—";
-  const _mText = modelShort(agent.model) || "not reported";
-  const _ctxPct = agentContextPct(agent);
-  /* 0 is observed data, but "0%" is visually identical to "no data" — 12 live
-     rows (15 tokens against a 1M window) rendered a full-strength gauge saying
-     nothing had happened. "<1%" keeps the observation and the honesty apart. */
-  const _tokens = agent.tokens || {};
-  const _ctxPctText = _ctxPct != null ? (_ctxPct === 0 ? "<1%" : _ctxPct + "%") : "—";
-  const _ctxMagnitude = Number.isFinite(_tokens.total) && Number.isFinite(_tokens.contextWindow)
-    ? fmtTok(_tokens.total) + " / " + fmtTok(_tokens.contextWindow)
-    : hasObservedTotal(_tokens) ? fmtTok(_tokens.total) + " tokens" : "—";
-  const _sessionText = Number.isFinite(_tokens.sessionTotal) ? fmtTok(_tokens.sessionTotal) : "—";
-  const _sessionKnown = _sessionText !== "—";
-  const _statusActivity = deriveActivity(agent);
-  const _statusOutcome = deriveOutcome(agent);
-  const _statusText = (_statusActivity ? (ACTIVITY_LABELS[_statusActivity] || _statusActivity) : "—") + (_statusOutcome !== "healthy" ? " · " + (_statusOutcome) : "");
-  const _lastWhen = agent.updatedAt ? agoText(agent.updatedAt) : "—";
-  const _pulse = _statusActivity === "working" ? " pulse" : "";
-  const _hMark = (() => { try { return harnessMark(agent); } catch { return icon("box", { label: "" }); } })();
-  const _aMark = (() => { try { return agentMark(agent); } catch { return icon("cpu", { label: "" }); } })();
-  const _headerVitals = el("div", { class: "drawer-header-vitals", role: "group", "aria-label": "Vitals at a glance" },
-    el("span", { class: "hv-pill hv-harness", title: "Harness " + _hLabel }, _hMark, _hLabel),
-    el("span", { class: "hv-pill hv-model", title: _mText }, _aMark, _mText),
-    el("span", { class: "hv-pill hv-ctx" + (_ctxPct == null ? " is-empty" : ""), title: _ctxPct != null ? "Context " + _ctxPctText + " · " + _ctxMagnitude : "Context " + _ctxMagnitude }, _ctxPct != null ? svgGauge(_ctxPct, "hv-gauge", { label: "Context used" }) : icon("gauge", { label: "" }), "Context ", _ctxPctText, _ctxMagnitude !== "—" ? el("span", { class: "hv-detail", text: " · " + _ctxMagnitude }) : null),
-    el("span", { class: "hv-pill hv-tokens" + (_sessionKnown ? "" : " is-empty"), title: "Session tokens " + _sessionText }, icon("hash", { label: "" }), "Session ", _sessionText, _sessionKnown ? el("span", { class: "hv-tok-bar", style: _ctxPct != null ? "width:" + Math.min(100, _ctxPct) + "%" : "width:0" }) : null),
-    el("span", { class: "hv-pill hv-status" + _pulse, title: _statusText + " · " + _lastWhen }, el("span", { class: "hv-pulse" + _pulse, "aria-hidden": "true" }), _statusText, el("span", { class: "hv-dot", text: "·" }), _lastWhen),
-  );
-  pane.append(_headerVitals);
-
-  // Design A — Document (1.55fr: Task + Transcript bubbles) + Desk (35%: Evidence uncollapsed)
-  /* One anatomy for every provider: title row → OBJECTIVE (prose only) →
-     META (only fields actually parsed) → the raw envelope folded behind
-     "Full brief". Differences come from data presence, never per-harness
-     branches. `rawTask` present means the refined sidecar landed and
-     `agent.task` is already the face; otherwise the objective is the
-     first sentence the parser finds in the envelope. Role stays on the
-     desk (chat contract) — never a second badge inside this card.
-     Classes, not style attributes — under the strict CSP (style-src 'self')
-     inline style is dropped wholesale. */
-  const fullTask = String(agent.rawTask || agent.task || "").trim();
-  const _parsedTask = parseTaskEnvelope(fullTask);
-  const _objective = agent.rawTask
-    ? withoutSenderHeader(String(agent.task || "")).trim()
-    : _parsedTask.objective;
-  const _metaBits = [];
-  if (_parsedTask.meta.from || _parsedTask.meta.to)
-    _metaBits.push([_parsedTask.meta.from, _parsedTask.meta.to].filter(Boolean).join(" → "));
-  if (_parsedTask.meta.date) _metaBits.push(_parsedTask.meta.date);
-  if (_parsedTask.meta.branch) _metaBits.push(_parsedTask.meta.branch);
-  const _showBrief = Boolean(fullTask) && fullTask !== _objective;
-  const _taskBlock = el("div", { class: "drawer-chat-task" },
-    el("div", { class: "drawer-task-head" },
-      el("h3", { class: "section-title" }, icon("file-text", { label: "" }), "Task", el("span", { class: "rule", "aria-hidden": "true" }))),
-    _objective
-      ? el("p", { class: "drawer-task-objective", text: _objective })
-      : el("p", { class: "drawer-task-objective is-empty", title: "No prose task was recorded for this lane", text: "— no task recorded" }),
-    _metaBits.length ? el("p", { class: "drawer-task-meta", text: _metaBits.join(" · ") }) : null,
-    _showBrief
-      ? el("details", { class: "drawer-task-brief" },
-          el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
-          el("pre", { class: "drawer-task-brief-body", text: fullTask }))
-      : null);
+  // Document (conversation) + Desk (evidence). The command header above owns
+  // the task, so the left column begins with the transcript instead of a second
+  // task card.
   const chatBody = renderChatFeedBody(agent, state, { taskCarried: Boolean(fullTask) });
+  const chatLead = renderTranscriptFeedLead(agent, state);
   /* Mini chat window. The left column is Task on top and a chat APP below it —
      and the feed IS the transcript: bubbles edge to edge, auto-loaded on open
-     (selectEntity fires the same fetch the foot's buttons fire), with
+     (selectEntity starts the fetch), with
      renderChat's preview standing in only while the record is loading, errored,
-     or absent. The one quiet line of chrome (count, source path, Refresh/Load)
-     sits at the box's foot, above the composer. The feed is the one deliberate
-     inner scroller on the left; at ≥861px the box takes the column height Task
-     doesn't use (Task height is intrinsic — 2-line clamp + meta + closed brief).
+     or absent. Exceptional state and the manual older-history action lead the
+     feed rather than consuming a separate footer row. The feed is the one
+     deliberate inner scroller on the left; at ≥861px the box takes the column
+     height Task doesn't use (Task height is intrinsic — 2-line clamp + meta +
+     closed brief).
      role="log" + tabindex make the feed itself a named, keyboard-reachable
      scroll region. */
-  /* The id is the foot's aria-controls target: "Read the transcript" is a real
-     disclosure — it expands this feed from the preview to the full record — so
-     the foot declares it as one. One drawer at a time keeps the id unique. */
   const chatScroll = el("div", { id: "drawer-chat-feed", class: "drawer-chat-scroll", role: "log", tabindex: "0", "aria-label": "Conversation" },
+    chatLead,
     chatBody);
   const chatBox = el("div", { class: "drawer-chat" }, chatScroll);
   /* role="region" is load-bearing: aria-label on a role-less <div> is dropped
      by every major AT — a generic element has no accessible name. */
-  const doc = el("div", { class: "drawer-doc", role: "region", "aria-label": "Task and transcript" },
-    _taskBlock,
-    chatBox);
+  const doc = el("div", { class: "drawer-doc", role: "region", "aria-label": "Conversation" }, chatBox);
 
-  /* The dock belongs to the chat it acts on — the last child of the chat box,
-     under the feed, like every messenger. No sticky needed: the box itself is
-     height-bound, so the composer cannot leave the viewport while the feed
-     scrolls behind it. */
+  /* Controls stay in the pane footer, so a taller routing explanation reserves
+     its own row instead of competing with or clipping the feed. */
   const dock = renderCommandDock(agent, control);
   dock.classList.add("drawer-controls-strip");
-  chatBox.append(renderTranscriptFoot(agent), dock);
+  const banner = renderControlBanner(agent, control);
+  if (banner) dock.insertBefore(banner, dock.firstChild);
   /* Chat convention: open pinned to the newest turn; keep the operator's place
      across repaints only while they have deliberately scrolled up. The fake
      test document has no layout, so scrollHeight gates the whole behaviour. */
   const _chatKey = "chat:" + agent.id;
-  chatScroll.onscroll = () => {
-    _chatScrollMemo.key = _chatKey;
-    _chatScrollMemo.top = chatScroll.scrollTop;
-    _chatScrollMemo.atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
-  };
+  const feedOwnsScroll = typeof window === "undefined"
+    || typeof window.matchMedia !== "function"
+    || window.matchMedia("(min-width: 861px)").matches;
+  if (feedOwnsScroll) {
+    chatScroll.onscroll = () => {
+      _chatScrollMemo.key = _chatKey;
+      _chatScrollMemo.top = chatScroll.scrollTop;
+      _chatScrollMemo.atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
+    };
+  }
   /* Leaving the widget COMMITS the position (operator directive): pointer out
      or focus out writes this agent's place into the per-agent store, so a
      reopen resumes the read instead of re-pinning. An at-bottom reader saves
@@ -10039,21 +10290,46 @@ function renderAgentDrawer(pane, view) {
      freeze them mid-history as the feed grows. selectEntity/closeInspector
      also commit on the way out, covering click-outs the events cannot see. */
   const commitChatScroll = () => saveChatScrollFrom(chatScroll, agent.id);
-  chatBox.onmouseleave = commitChatScroll;
-  chatBox.onfocusout = commitChatScroll;
+  if (feedOwnsScroll) {
+    chatBox.onmouseleave = commitChatScroll;
+    chatBox.onfocusout = commitChatScroll;
+  }
 
-  // Desk — uncollapsed Evidence + Lineage, dense 380px at >860px
-  const desk = el("div", { class: "drawer-desk", role: "region", "aria-label": "Evidence and lineage" });
-  // Desk head: sticky 800 11px mono + rule, uncollapsed signal
-  desk.append(el("div", { class: "drawer-section-head sticky-head" },
+  // Evidence is a permanent desk only when the inspector itself is wide enough.
+  // The same DOM becomes an on-demand overlay when the docked pane is narrow;
+  // CSS container queries choose the presentation from pane width, not viewport
+  // width, without changing the evidence or scroll-restoration owner.
+  const evidenceExpanded = Boolean(state.evidenceOpen);
+  const desk = el("div", {
+    class: "drawer-desk" + (evidenceExpanded ? " is-open" : ""),
+    role: "region",
+    "aria-label": "Evidence and lineage",
+  });
+  const evidenceToggle = el("button", {
+    type: "button",
+    class: "drawer-section-head drawer-evidence-summary",
+    "aria-expanded": String(evidenceExpanded),
+    "aria-controls": "drawer-evidence-body",
+    onclick: () => {
+      const expanded = !desk.classList.contains("is-open");
+      state.evidenceOpen = expanded;
+      desk.classList.toggle("is-open", expanded);
+      evidenceToggle.setAttribute("aria-expanded", String(expanded));
+    },
+  },
+    el("span", { class: "section-title" }, icon("folder-open", { label: "" }), "Evidence"),
+    el("span", { class: "drawer-evidence-summary-action", "aria-hidden": "true" }));
+  desk.append(evidenceToggle);
+  desk.append(el("div", { class: "drawer-section-head sticky-head drawer-evidence-head" },
     el("h3", { class: "section-title" }, icon("folder-open", { label: "" }), "Evidence", el("span", { class: "rule", "aria-hidden": "true" }))));
-  desk.append(renderEvidence(agent));
-  desk.append(renderLineageSpine(agent));
+  desk.append(el("div", { id: "drawer-evidence-body", class: "drawer-evidence-body" },
+    renderEvidence(agent),
+    renderLineageSpine(agent)));
 
   const grid = el("div", { class: "drawer-grid" }, doc, desk);
-  pane.append(grid);
+  pane.append(grid, dock);
 
-  if (typeof chatScroll.scrollHeight === "number") {
+  if (feedOwnsScroll && typeof chatScroll.scrollHeight === "number") {
     const plan = chatScrollPlan(agent.id, _chatKey, _chatScrollMemo, _chatScrollSaved);
     chatScroll.scrollTop = plan.mode === "bottom" ? chatScroll.scrollHeight : plan.top;
   }
@@ -10173,7 +10449,7 @@ function renderEvidenceShelf(agent) {
       onclick: () => { state.evidenceOpen = true; render(); },
     },
       el("span", { class: "shelf-rail-label" }, icon("folder-open", { label: "" }), labelText),
-      el("span", { style: "display:flex;align-items:center;gap:8px" },
+      el("span", { class: "shelf-rail-tail" },
         el("span", {
           class: "shelf-rail-count" + (sections.length ? "" : " is-empty"),
           "aria-hidden": "true",
@@ -10182,9 +10458,8 @@ function renderEvidenceShelf(agent) {
         icon("chevron", { label: "" })) );
   }
 
-  // Evidence holds paths, routing, and the transcript tail. The vitals
-  // instrument band moved out to lead the drawer under the verdict head
-  // (renderVitalsBand); Evidence no longer carries the metrics tiles.
+  // Evidence holds paths, routing, and the transcript tail. Session facts live
+  // in the command header, so Evidence no longer carries competing metrics.
   const body = renderEvidence(agent);
   const section = el("section", {
     class: "shelf-section shelf-evidence is-open",
@@ -10258,6 +10533,23 @@ function renderStatusLine(agent, activity, outcome, control) {
   if (reason && activity !== "working") {
     line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
     line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
+  }
+
+  /* Liveness is part of the same state sentence, not a second badge below it.
+     Some collectors already include the liveness words in statusReason (for
+     example "Quiet 20m · process live"). In that case the reason is the one
+     visible copy; otherwise append the provider-neutral liveness label here. */
+  const liveness = livenessView(agent);
+  const reasonText = normalizeCompareText(reason);
+  const livenessText = liveness ? normalizeCompareText(liveness.label) : "";
+  const reasonCarriesLiveness = Boolean(livenessText && reasonText.includes(livenessText));
+  if (liveness && !reasonCarriesLiveness) {
+    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
+    line.append(el("span", {
+      class: "status-line-item status-line-liveness liveness-" + liveness.key,
+      title: liveness.detail,
+      text: liveness.label,
+    }));
   }
 
   /* Escalations only: `outcome` speaks when it stops being healthy, which is
@@ -10339,16 +10631,19 @@ function renderControlBanner(agent, control) {
     class: "control-banner-link",
     dataset: { fkey: "control-evidence:" + agent.id },
     onclick: () => {
-      /* Evidence is no longer behind a tab — the desk column is always painted —
-         so this link's job is to LOAD the terminal trace and TAKE the operator
-         to it. drawerTab/evidenceOpen drove neither, and with both out of
-         inspectorPaintSig a bare flag write would be a guaranteed no-op. */
+      /* The desk may be a collapsed on-demand disclosure when its pane is narrow.
+         Load the terminal trace, open that disclosure, and take the operator to
+         it; wide panes render the same node as the permanent desk column. */
       if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
       else render();
       /* Optionally called throughout: the test harness's fake document
          implements no selector engine and its nodes have no scrollIntoView.
          Worst case is "nothing moves" — the desk is already visible. */
-      document.querySelector?.(".drawer-desk")?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      const desk = document.querySelector?.(".drawer-desk");
+      state.evidenceOpen = true;
+      desk?.classList?.add("is-open");
+      desk?.querySelector?.(".drawer-evidence-summary")?.setAttribute("aria-expanded", "true");
+      desk?.scrollIntoView?.({ block: "start", behavior: "smooth" });
     },
   }, "See routing evidence →"));
 
@@ -10363,7 +10658,7 @@ function closeButton() {
     "aria-label": "Close inspector",
     dataset: { fkey: "inspector-close" },
     onclick: () => closeInspector(),
-  }, icon("close"), "Close");
+  }, icon("close"));
 }
 
 /* ---------- inspector: command dock ---------- */
@@ -10444,10 +10739,9 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     // When Send/Focus are locked, Archive is the wrong lever — tuck it behind
     // the disclosure so the dock does not offer a destructive peer next to
     // dead controls. The summary names the one thing behind it.
-    if (archiveCap && !safeLocked) cluster.append(renderDockTool(agent, archiveCap, "archive", { held }));
-    if (archiveCap && safeLocked) {
+    if (archiveCap) {
       cluster.append(el("details", { class: "command-dock-more" },
-        el("summary", { text: "Archive this session" }),
+        el("summary", { title: "More session actions", "aria-label": "More session actions" }, icon("more")),
         renderDockTool(agent, archiveCap, "archive", { held })));
     }
     // The undo is not destructive and does not hide behind the lock.
@@ -10501,7 +10795,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
       placeholder: held
         ? "⏳ Held until the feed catches up…"
         : instructCap.enabled
-          ? "✦ Message Prime · spark 1.2…  (⌘↵ to send)"
+          ? "✦ Message this agent…  (⌘↵ to send)"
           : (control === "quarantined"
             ? "⚠️ Resolve identity conflict to instruct…"
             : "— Instruction unavailable"),
@@ -10556,13 +10850,6 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
         dataset: { fkey: "act:" + key },
       }, busy ? "Sending…" : "Send")));
     dock.append(communicate);
-  }
-
-  // Plain-language lock copy also lives in the banner; dock meta stays short.
-  // Tests assert controlUnavailableText is used for unavailable safe controls.
-  if (safeLocked) {
-    dock.append(el("p", { class: "visually-hidden",
-      text: controlUnavailableText(deriveControlState(agent), agent) }));
   }
 
   return dock;
@@ -10773,13 +11060,6 @@ function renderRowFacts(agent) {
       const crumb = terminalBreadcrumb(agent, agentName(agent));
       return crumb ? ["terminal", crumb, { hint: focusDestinationHint(agent) }] : null;
     })(),
-    /* A live-looking session that has gone quiet for more than ten minutes. Dim
-       on the row and dim here: staleness is a nudge, not a status change, and
-       the lifecycle contract owns what the silence MEANS. */
-    (() => {
-      const stale = rowStalenessText(agent);
-      return stale ? ["quiet since", stale, {}] : null;
-    })(),
     provenance ? ["history record", provenance.label, { hint: provenance.title }] : null,
   ].filter(Boolean);
 
@@ -10811,83 +11091,6 @@ function taskMeaningfullyDifferent(agent) {
 
 function transcriptArtifact(agent) {
   return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
-}
-
-/* One instrument tile: label + figure. Callers only pass real data — the band
-   omits absent tiles entirely (no "not reported" face), matching the drawer's
-   omit-empty rule. */
-function vitalTile(label, figure) {
-  return el("div", { class: "vital" },
-    el("span", { class: "vital-label", text: label }),
-    figure);
-}
-
-/* Vitals band — the numbers an operator acts on, rendered as instruments (a
-   context ring, session tokens + cache efficiency, uptime) directly under the
-   verdict head instead of buried in the Evidence shelf. Every tile self-guards;
-   if nothing has data the band renders nothing (omit-empty), so the mount's
-   :empty rule collapses it. No per-agent cost tile: AgentSnapshot.cost exists in
-   the type but is never populated — real cost is program/pulse-level only, and
-   program cost has no place inside a single agent's band. */
-const CONTEXT_ALARM_PCT = 70;
-
-function renderVitalsBand(agent) {
-  const t = agent.tokens || {};
-  const tiles = [];
-
-  /* ONE tile, two numbers, and the words between them do the disambiguating.
-
-     The reported defect was "SESSION TOKENS 23.7M" sitting beside "CONTEXT 272k"
-     under sibling NOUN labels — both read as "an amount of tokens", so the
-     operator had to infer that one is a fill level and one is a running meter.
-     Nouns cannot fix that; two tiles side by side actively invite the comparison.
-     Prepositions fix it: "12% of the window" and "used this session" cannot be
-     read as the same measurement.
-
-     Both magnitudes still appear, because both answer real questions — how much
-     room is left, and how much this lane has cost — but each appears exactly
-     once, in one tile, in a sentence. */
-  const ctx = contextUsage(t);
-  if (ctx) {
-    const hot = ctx.pct >= CONTEXT_ALARM_PCT;
-    /* The percentage is spoken ONCE, by the ring, which is the gauge an operator
-       reads at a glance. An earlier pass printed it in the ring AND again in the
-       sentence beside it — the same quantity encoded twice inside a single tile,
-       which is the defect this overhaul exists to remove, committed inside the
-       fix for it. The sentence now carries only what the ring cannot: the
-       absolute size the percentage is a fraction OF, and the session total. */
-    const lines = [fmtTok(t.total) + " of " + fmtTok(t.contextWindow) + " window"];
-    // Omitted honestly rather than zeroed when the source reports no session sum.
-    if (t.sessionTotal != null) lines.push(fmtTok(t.sessionTotal) + " used this session");
-    tiles.push(vitalTile("Context",
-      el("div", { class: "vital-ring-wrap" + (hot ? " is-hot" : "") },
-        svgRing(ctx.pct, { label: "Context window " + ctx.pct + " percent full" }),
-        el("div", { class: "vital-figure" },
-          el("div", { class: "vital-note mono", text: lines[0] }),
-          lines[1] ? el("div", { class: "vital-note", text: lines[1] }) : null))));
-  } else if (t.sessionTotal != null) {
-    // No window means no percentage can be honest, so the session sum stands
-    // alone under wording that never implies a fill level.
-    tiles.push(vitalTile("Tokens",
-      el("div", { class: "vital-big mono", text: fmtTok(t.sessionTotal) + " used this session" })));
-  }
-
-  /* Deleted, each for its own reason:
-
-     - "N% cache hit last call": computed as cachedInput/input, but `input` is the
-       UNCACHED remainder, so the true rate is cachedInput/(cachedInput+input).
-       The wrong denominator can exceed 1 — the Math.min(100, …) clamp was the
-       tell — and on the live board it printed exactly "100%" on nearly every
-       active agent. A constant rendered as a bar chart.
-     - "Uptime": measured the wrong clock. It read 200h for an agent that had been
-       silent for an hour, because it times since start, not since movement. The
-       question it looked like it answered — "quiet 20 minutes, dead or thinking?"
-       — is now answered honestly by the status line's time-since-update. */
-
-  if (!tiles.length) return null;
-  const band = el("div", { class: "vitals" });
-  for (const tile of tiles) band.append(tile);
-  return band;
 }
 
 /* renderOperate and renderOperateMeta are deleted, not merged.
@@ -11176,14 +11379,15 @@ function renderLineageSpine(agent) {
      fleet-wide question, and a chain plus a five-child fan would otherwise
      rebuild the board index seven times per drawer paint. */
   const board = boardIndex(state);
-  const fullById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
+  const rawById = new Map(snapshotAgents(state.snap).map(({ agent: a }) => [a.id, a]));
+  const fullById = new Map([...rawById].filter(([, candidate]) => dashboardVisible(candidate)));
   const children = [...fullById.values()].filter((a) => a.parentAgentId === agent.id);
   const ancestors = [];
   const seen = new Set([agent.id]);
   let p = agent.parentAgentId ? fullById.get(agent.parentAgentId) : null;
   while (p && !seen.has(p.id)) { seen.add(p.id); ancestors.push(p); p = p.parentAgentId ? fullById.get(p.parentAgentId) : null; }
   ancestors.reverse(); // root → immediate parent
-  const untrackedParent = !!agent.parentAgentId && !fullById.get(agent.parentAgentId);
+  const untrackedParent = !!agent.parentAgentId && !rawById.has(agent.parentAgentId);
 
   if (!ancestors.length && !children.length && !untrackedParent) return el("span", { hidden: "" });
 
@@ -11382,21 +11586,6 @@ function renderSurfaceEvidence(agent, ui = state) {
 
 function renderEvidence(agent, ui = state) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  /* Role leads the desk — the top spot, directly beside the Task card at the
-     top of the left column, so the two facts that answer "who is this and
-     what are they on" sit on one line of the eye. It used to sit mid-panel
-     after GIT (and a second copy rode inside the Task card, now removed).
-     Still the chip it already is, and still absent for a plain agent: a
-     default role is not evidence. */
-  const _rvTop = roleView(agent.role);
-  if (_rvTop.key !== "agent") {
-    panel.append(el("div", {
-      class: "evidence-role",
-      dataset: { evidenceSection: "role" },
-    },
-    el("span", { class: "visually-hidden", text: "Role: " }),
-    el("span", { class: "badge role-" + _rvTop.key, text: _rvTop.label })));
-  }
   const grid = el("dl", { class: "detail-grid" });
 
   // — Where: Workspace / Repo / Git — deduped, 14px icons per Evidence row (Design A) —
@@ -11404,15 +11593,19 @@ function renderEvidence(agent, ui = state) {
   const _repoPath = agent.repo && typeof agent.repo.worktreePath === "string" ? agent.repo.worktreePath.trim() : "";
   const _repoName = agent.repo && typeof agent.repo.repoName === "string" ? agent.repo.repoName.trim() : "";
   const _samePath = _cwd && _repoPath && _cwd === _repoPath;
+  const _surfaceCwd = agent.target && typeof agent.target.surfaceCwd === "string" ? agent.target.surfaceCwd.trim() : "";
+  const _sameSurfacePath = _cwd && _surfaceCwd && _cwd === _surfaceCwd;
   if (_samePath) {
-    dtdd(grid, "Workspace", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: _cwd }), el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
+    dtdd(grid, "Workspace", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: _cwd }), el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
   } else {
-    if (_cwd) dtdd(grid, "Workspace", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: _cwd })), { code: true });
+    if (_cwd) dtdd(grid, "Workspace", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: _cwd })), { code: true });
     const _repoLabel = _repoName || _repoPath;
-    if (_repoLabel) dtdd(grid, "Repository", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder", { label: "" }), el("code", { text: _repoLabel })), { code: true });
+    if (_repoLabel) dtdd(grid, "Repository", el("span", { class: "evidence-path-line" }, icon("folder", { label: "" }), el("code", { text: _repoLabel })), { code: true });
   }
-  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("folder-open", { label: "" }), el("code", { text: agent.launchCwd })), { code: true });
-  dtdd(grid, "Terminal shell folder", agent.target && agent.target.surfaceCwd ? el("span", { style: "display:flex;align-items:center;gap:6px" }, icon("terminal", { label: "" }), el("code", { text: agent.target.surfaceCwd })) : null, { code: true });
+  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: agent.launchCwd })), { code: true });
+  if (!_sameSurfacePath) {
+    dtdd(grid, "Terminal shell folder", _surfaceCwd ? el("span", { class: "evidence-path-line" }, icon("terminal", { label: "" }), el("code", { text: _surfaceCwd })) : null, { code: true });
+  }
 
   const _gitLight = !agent.git ? "⚪" : agent.git.dirty ? "🟡" : "🟢";
   const _gitLightTitle = !agent.git ? "no git" : agent.git.dirty ? "dirty — uncommitted changes" : "clean";
@@ -11441,7 +11634,12 @@ function renderEvidence(agent, ui = state) {
     grid.dataset.evidenceSection = "paths & usage";
     const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage", el("span", { class: "rule", "aria-hidden": "true" }));
     panel.append(pathsHead, grid);
-    if (agent.target && agent.target.cwdRelation === "different") {
+    if (_sameSurfacePath) {
+      panel.append(el("p", {
+        class: "directory-relation-note",
+        text: "Workspace and terminal report the same folder. This is directory evidence only and does not authorize controls.",
+      }));
+    } else if (agent.target && agent.target.cwdRelation === "different") {
       panel.append(el("p", {
         class: "directory-relation-note",
         text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
@@ -11476,13 +11674,14 @@ function renderEvidence(agent, ui = state) {
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
           el("span", { class: "artifact-kind", text: a.kind || "file" }),
-          el("span", { text: a.label }),
-          el("span", { class: "artifact-path", text: a.path }),
+          el("span", { class: "artifact-path", title: a.path, text: a.path || a.label }),
           el("button", {
-            type: "button", class: "btn sm",
+            type: "button", class: "artifact-copy",
+            title: "Copy " + (a.kind === "transcript" ? "transcript" : "artifact") + " path",
+            "aria-label": "Copy " + (a.kind === "transcript" ? "transcript" : "artifact") + " path",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
-          }, "Copy path")))));
+          }, icon("copy"))))));
   }
 
   // Transcript lives in Chat tab (Full Task + Transcript expandable) — not duplicated in Evidence (content crit §3.3/§3.4 triple redundancy)
@@ -11655,12 +11854,12 @@ function renderEmpty() {
      used to fall through to "Can't reach the Ant Hill server", which is a guess
      dressed as a diagnosis. The skeleton holds the space instead. */
   if (firstLoadPending()) { empty.hidden = true; return; }
-  const hasAgents = state.snap && state.snap.programs.some((p) => p.agents.length);
+  const hasAgents = dashboardPrograms(state.snap).length > 0;
   if (hasAgents) { empty.hidden = true; return; }
 
   empty.hidden = false;
   if (!state.snap) {
-    $("empty-message").textContent = "Can't reach the Ant Hill server.";
+    $("empty-message").textContent = "Can't reach the Formic server.";
     $("empty-hint").textContent = serverUnreachableHint(typeof location === "undefined" ? "" : location.host);
     retry.hidden = false;
   } else {
@@ -12284,6 +12483,7 @@ function boot() {
   loadNeedsYouDisplay();
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
+  state.uiReady = true;
   renderNotificationCenter();
   void fetchSettings();
 
@@ -12486,7 +12686,7 @@ Object.assign(globalThis.TheAntHill, {
   // Surfaces added this wave, plus the const limits FE-C had to leave out.
   // Startup path + the server-health probe, driven for real by tests.
   boot, stopBoot, pollServerHealth, renderServerHealth, SERVER_HEALTH_POLL_MS,
-  livenessState, livenessView, verdictLiveness,
+  livenessState, livenessView,
   attentionRecord, attentionStateText, attentionErrorText, renderAttentionBlock,
   triageLifecycleControls, readEndpointOriginNote,
   TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_RENDER_CAP,

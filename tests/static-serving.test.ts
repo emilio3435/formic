@@ -16,6 +16,9 @@ beforeAll(() => {
   writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>Ant Hill</title>");
   writeFileSync(join(webRoot, "app.js"), "export {};");
   writeFileSync(join(webRoot, "app.css"), "body {}");
+  writeFileSync(join(webRoot, "formic-mark.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\" />");
+  writeFileSync(join(webRoot, "formic.woff2"), "font");
+  writeFileSync(join(webRoot, "favicon.ico"), "ico");
   writeFileSync(join(webRoot, "blob.bin"), "binary");
   writeFileSync(join(fixtureRoot, "secret.txt"), "must not escape the web root");
 });
@@ -84,6 +87,24 @@ describe("static HTTP boundary", () => {
     expect(response.body).toBeNull();
     expect(response.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     expect(response.headers.get("content-security-policy")).toBe(CSP);
+    fetch.dispose();
+  });
+
+  test("FORMIC-CSP-1 serves local SVG, WOFF2, and favicon assets under the unchanged self-only CSP", async () => {
+    const fetch = appFetch();
+    const assets: readonly [string, string][] = [
+      ["/formic-mark.svg", "image/svg+xml"],
+      ["/formic.woff2", "font/woff2"],
+      ["/favicon.ico", "image/x-icon"],
+    ];
+
+    for (const [pathname, contentType] of assets) {
+      const response = await fetch(new Request(`http://127.0.0.1:4701${pathname}`));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(contentType);
+      expect(response.headers.get("content-security-policy")).toBe(CSP);
+    }
     fetch.dispose();
   });
 

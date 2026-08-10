@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 
@@ -406,11 +407,51 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(skipped["structured"]["summary"].startswith("The Mountain:"))
             self.assertFalse(disabled.ledger_path.exists())
 
-    def test_header_validator_accepts_concise_repo_lines_and_rejects_wrong_repos(self):
+    def test_header_validator_accepts_concise_repo_lines_and_salvages_wrong_prefix(self):
         concise = "Home: 2 live=1w+1i · durable task refinement · no blockers"
         self.assertEqual(header.validate_header_summary("Home", concise), concise)
-        with self.assertRaises(ValueError):
-            header.validate_header_summary("Home", concise.replace("Home:", "Other:"))
+        salvaged = header.validate_header_summary("Home", concise.replace("Home:", "Other:"))
+        self.assertTrue(salvaged.startswith("Home:"))
+        self.assertIn("durable task refinement", salvaged)
+
+    def test_header_validator_collapses_restated_repo_name(self):
+        # Live failure mode: Luna writes "Home: Home has…" / "cooper-scheduler: cooper-scheduler has…"
+        home = header.validate_header_summary(
+            "Home",
+            "Home: Home has an active Cooper Scheduler handoff and a waiting assessment on incomplete steps",
+        )
+        self.assertTrue(home.startswith("Home:"))
+        self.assertNotRegex(home, r"^Home:\s*Home\b")
+        self.assertIn("Cooper Scheduler handoff", home)
+        cooper = header.validate_header_summary(
+            "cooper-scheduler",
+            "cooper-scheduler: cooper-scheduler has multiple waiting agent sessions covering orchestration and UI review",
+        )
+        self.assertTrue(cooper.startswith("cooper-scheduler:"))
+        self.assertNotRegex(cooper, r"^cooper-scheduler:\s*cooper-scheduler\b")
+        self.assertIn("waiting agent sessions", cooper)
+
+    def test_fleet_validator_word_boundary_cap_and_prompt_asks_priority_brief(self):
+        long = "word " * 80
+        clipped = header.validate_fleet(long)
+        self.assertLessEqual(len(clipped), header.FLEET_SUMMARY_MAX_CHARS)
+        self.assertTrue(clipped.endswith("…"))
+        self.assertFalse(clipped[:-1].endswith(" "))
+        prompt = header.build_fleet_prompt(
+            [
+                {
+                    "repo": "cooper-scheduler",
+                    "signal": "needs-you",
+                    "blocker": "input requested",
+                    "summary": "cooper-scheduler: Draft Sheet → needs you",
+                }
+            ]
+        )
+        self.assertIn("v7-fleet", prompt)
+        self.assertIn("140-220", prompt)
+        self.assertIn("priority brief", prompt)
+        self.assertIn("cooper-scheduler", prompt)
+        self.assertNotIn("name each hot repo", prompt)
 
     def test_header_wire_envelope_stays_valid_json_under_the_transcript_cap(self):
         cards = [
@@ -522,6 +563,55 @@ class EngineTests(unittest.TestCase):
                 header.repo_evidence(repositories[0][1]),
                 header.repo_evidence(header.active_repositories(reversed_snapshot)[0][1]),
             )
+
+    def test_header_active_repositories_keeps_only_last_1h_per_repo(self):
+        now_ms = 1_786_290_000_000.0
+        recent_iso = datetime.fromtimestamp(
+            (now_ms - 10 * 60_000) / 1000.0, timezone.utc
+        ).isoformat()
+        stale_iso = datetime.fromtimestamp(
+            (now_ms - 5 * 60 * 60_000) / 1000.0, timezone.utc
+        ).isoformat()
+        snapshot = {
+            "programs": [
+                {
+                    "name": "cooper-scheduler",
+                    "agents": [
+                        agent(id="codex:hot", updatedAt=recent_iso, task="Draft Sheet"),
+                        agent(
+                            id="codex:quiet",
+                            updatedAt=stale_iso,
+                            task="Ancient chat from yesterday",
+                        ),
+                        agent(
+                            id="codex:quiet-activity",
+                            updatedAt=recent_iso,
+                            activity={"quietForMs": 3 * 60 * 60_000},
+                            task="Quiet for 3h despite fresh timestamp",
+                        ),
+                    ],
+                },
+                {
+                    "name": "Home",
+                    "agents": [
+                        agent(id="codex:stale-home", updatedAt=stale_iso, task="old handoff"),
+                    ],
+                },
+            ]
+        }
+        repos = header.active_repositories(snapshot, now_ms=now_ms)
+        self.assertEqual([name for name, _ in repos], ["cooper-scheduler"])
+        self.assertEqual([a["id"] for a in repos[0][1]], ["codex:hot"])
+        self.assertTrue(
+            header.agent_within_header_window(
+                agent(updatedAt=recent_iso), now_ms=now_ms
+            )
+        )
+        self.assertFalse(
+            header.agent_within_header_window(
+                agent(updatedAt=stale_iso), now_ms=now_ms
+            )
+        )
 
 
 class AccountingTests(unittest.TestCase):

@@ -31,6 +31,14 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
+/* Cursor's current launcher runs a generic `agent` executable with the
+   versioned Cursor Agent entrypoint as an argument. Recognize only that pair:
+   it admits the pid to open-file inspection but does not itself claim a
+   session identity. The store/transcript path still has to prove that. */
+const CURSOR_VERSIONED_WRAPPER = new RegExp(
+  "(?:^|\\s)(?:\\S*\\/)?agent(?:\\s|$)[^\\n]{0,320}?(?:^|\\s)\\S*\\/\\.local\\/share\\/cursor-agent\\/versions\\/[^\\/\\s]+\\/index\\.js(?:\\s|$)",
+  "i",
+);
 /* Two attempts on a short deadline rather than one long one. The probe is
    almost the entire identity system on a fleet whose surfaces report no tty, so
    a single transient failure costs every write control until the next scan. */
@@ -167,6 +175,7 @@ export function isRecognizedAgentProcess(command: string): boolean {
     `(?:^|\\s)(?:\\S*\\/)?(?:${AGENT_BINARIES})(?:\\.(?:js|mjs|cjs))?(?:\\s|$)`,
     "i",
   ).test(command) ||
+    CURSOR_VERSIONED_WRAPPER.test(command) ||
     new RegExp(
       `\\/cmux-agent-resume\\/(?:${RESUME_PROVIDERS})-[0-9a-f-]{8,36}(?:\\.zsh)?(?:\\s|$)`,
       "i",

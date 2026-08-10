@@ -7,6 +7,8 @@ import { MAX_HEARTBEAT_TAIL_CHARS, capTranscriptTail } from "./types";
 import { MODEL_CONFIG } from "./model-config";
 import { claudeContextWindow } from "./collectors";
 
+const PRIME_HEARTBEAT_MONITOR_SESSION_ID = "ant-heartbeat-monitor";
+
 /* Prime Agent sessions — the orchestrator itself.
 
    Prime writes:
@@ -124,6 +126,13 @@ export function createPrimeParser(): IncrementalParser {
           provenance: "observed" as const,
         }
       : { provenance: "unknown" as const, contextWindow };
+    /* This exact reserved source is a synthetic infrastructure mailbox, not an
+       interactive Prime session. The declaration classifies what it is; it
+       deliberately contributes no process, surface, target, or route. */
+    const sessionDeclaration: Pick<CollectedAgent, "sessionKind" | "sessionKindSource"> =
+      sessionId === PRIME_HEARTBEAT_MONITOR_SESSION_ID
+        ? { sessionKind: "system", sessionKindSource: "declared" }
+        : {};
     return {
       id: `prime:${sessionId}`,
       provider: "prime",
@@ -137,6 +146,7 @@ export function createPrimeParser(): IncrementalParser {
       }),
       cwd,
       originCwd,
+      ...sessionDeclaration,
       model: agentModel,
       task,
       startedAt: startedAt ?? fallback,

@@ -1033,12 +1033,17 @@ describe("Cursor Agent persisted session truth", () => {
 
 describe("Cursor Agent live pane identity", () => {
   const duplicateCwd = "/Users/emilionunezgarcia/Developer/the-mountain";
+  const versionedWrapperCommand = [
+    "/Users/me/.local/bin/agent",
+    "--use-system-ca",
+    "/Users/me/.local/share/cursor-agent/versions/2026.08.04-aaa8809/index.js",
+  ].join(" ");
   const surfaces: CmuxSurface[] = [
     { workspaceId: "CURSOR-WORKSPACE", surfaceId: "CURSOR-SURFACE", tty: "ttys008", cwd: duplicateCwd, sourceSessionIds: [] },
     { workspaceId: "OTHER-WORKSPACE", surfaceId: "OTHER-SURFACE", tty: "ttys009", cwd: duplicateCwd, sourceSessionIds: [] },
   ];
 
-  test("recognizes only allowlisted Cursor store/transcript paths and resume argv", () => {
+  test("recognizes only allowlisted Cursor stores, transcripts, resume argv, and versioned wrapper", () => {
     expect(identityFromSessionPath(
       `/Users/me/.cursor/chats/0c67e7a2f36ffdd93685d6428f4485aa/${SESSION_ID}/store.db-wal`,
     )).toMatchObject({ provider: "cursor", value: SESSION_ID, full: true });
@@ -1049,6 +1054,8 @@ describe("Cursor Agent live pane identity", () => {
     expect(identitiesFromCommand(`/Users/me/.local/bin/cursor-agent --resume ${SESSION_ID}`))
       .toContainEqual({ provider: "cursor", value: SESSION_ID, full: true });
     expect(isRecognizedAgentProcess("/Users/me/.local/bin/cursor-agent --resume")).toBeTrue();
+    expect(isRecognizedAgentProcess(versionedWrapperCommand)).toBeTrue();
+    expect(isRecognizedAgentProcess("/Users/me/.local/bin/agent --use-system-ca /tmp/index.js")).toBeFalse();
   });
 
   test("an open Cursor store maps the exact surface even when cwd is duplicated", async () => {
@@ -1056,7 +1063,7 @@ describe("Cursor Agent live pane identity", () => {
       {
         exitCode: 0,
         stdout: [
-          "201 ttys008 /Users/me/.local/bin/cursor-agent --resume",
+          `201 ttys008 ${versionedWrapperCommand}`,
           "202 ttys009 -zsh",
         ].join("\n"),
         stderr: "",

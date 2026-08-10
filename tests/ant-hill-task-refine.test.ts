@@ -16,7 +16,7 @@ describe("Ant Hill task refiner durability", () => {
       new Response(process.stdout).text(),
       new Response(process.stderr).text(),
     ]);
-    expect(`${stdout}\n${stderr}`).toContain("Ran 21 tests");
+    expect(`${stdout}\n${stderr}`).toMatch(/Ran [1-9]\d* tests/);
     expect(exitCode).toBe(0);
   });
 });

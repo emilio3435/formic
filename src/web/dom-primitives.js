@@ -74,6 +74,8 @@ const ICON_PATHS = {
   // broadcast: transmit node with radiating carrier arcs
   broadcast: [["circle", { cx: 12, cy: 12, r: 2.1, fill: "currentColor", stroke: "none" }], ["path", { d: "M8.2 8.2a5.5 5.5 0 0 0 0 7.6" }], ["path", { d: "M15.8 8.2a5.5 5.5 0 0 1 0 7.6" }], ["path", { d: "M5.4 5.4a9.5 9.5 0 0 0 0 13.2" }], ["path", { d: "M18.6 5.4a9.5 9.5 0 0 1 0 13.2" }]],
   close: [["line", { x1: 6, y1: 6, x2: 18, y2: 18 }], ["line", { x1: 18, y1: 6, x2: 6, y2: 18 }]],
+  more: [["circle", { cx: 5, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 12, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 19, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }]],
+  copy: [["rect", { x: 8, y: 8, width: 11, height: 11, rx: 1.5 }], ["path", { d: "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" }]],
   caret: [["polyline", { points: "9 6 15 12 9 18" }]],
   // offline: dark node, severed rail
   offline: [["circle", { cx: 12, cy: 12, r: 9 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
@@ -302,33 +304,5 @@ export function svgSegmentMeter(segments, opts = {}) {
       x += w;
     }
   }
-  return svg;
-}
-
-/* SVG donut ring — filled arc length is a geometry attribute (stroke-dasharray
-   on a circle whose circumference is 100), never inline style, so the strict CSP
-   (style-src 'self') holds. Center % is an SVG <text>. */
-export function svgRing(pct, opts = {}) {
-  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
-  const tone = clamped >= 92 ? " hot" : clamped >= 75 ? " warn" : "";
-  const svg = document.createElementNS(SVGNS, "svg");
-  svg.setAttribute("viewBox", "0 0 36 36");
-  svg.setAttribute("class", "vital-ring");
-  svg.setAttribute("role", "progressbar");
-  svg.setAttribute("aria-valuemin", "0");
-  svg.setAttribute("aria-valuemax", "100");
-  svg.setAttribute("aria-valuenow", String(clamped));
-  if (opts.label) svg.setAttribute("aria-label", opts.label);
-  svg.append(svgChild(["circle", { cx: 18, cy: 18, r: 15.915, class: "ring-track" }]));
-  svg.append(svgChild(["circle", {
-    cx: 18, cy: 18, r: 15.915, class: "ring-fill" + tone,
-    "stroke-dasharray": clamped + " " + (100 - clamped),
-  }]));
-  const label = document.createElementNS(SVGNS, "text");
-  label.setAttribute("x", "18");
-  label.setAttribute("y", "18");
-  label.setAttribute("class", "ring-pct");
-  label.textContent = clamped + "%";
-  svg.append(label);
   return svg;
 }

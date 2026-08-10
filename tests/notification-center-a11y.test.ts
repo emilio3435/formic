@@ -133,11 +133,11 @@ describe("the badge is ember only when a person is the blocker", () => {
     expect(appjs.includes("renderNotifyToggle(model.count, model.tone, open)")).toBe(true);
   });
 
-  test("--ember is the fill of exactly one badge tone", () => {
+  test("semantic danger is the fill of exactly one badge tone", () => {
     const badgeRules = [...css.matchAll(/\.notify-badge\.is-(\w+)\s*\{([^}]*)\}/g)]
-      .map(([, tone, body]) => ({ tone, fillsEmber: /background:\s*var\(--ember\)/.test(body) }));
+      .map(([, tone, body]) => ({ tone, fillsDanger: /background:\s*var\(--color-status-danger\)/.test(body) }));
     expect(badgeRules.length).toBeGreaterThanOrEqual(3);
-    expect(badgeRules.filter((r) => r.fillsEmber).map((r) => r.tone)).toEqual(["blocked"]);
+    expect(badgeRules.filter((r) => r.fillsDanger).map((r) => r.tone)).toEqual(["blocked"]);
   });
 });
 

@@ -1,0 +1,31 @@
+<!--
+  Formic mark — isosceles triangle, 18° forward tilt.
+  Clay nodes (#c1632b) on indigo edges (#5b4fd1), with a signal pulse
+  circulating the perimeter on a 3.2s loop.
+
+  Static version: delete the .edge-pulse path and the <style> block.
+  Favicon 16px: raise edge stroke-width to 3, node r to 4.2, drop the pulse.
+  Always wrap the animation in prefers-reduced-motion (already included below).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" role="img" aria-label="Formic">
+  <style>
+    .edge-base { stroke: #a79df2; opacity: .6; }
+    .edge-pulse { stroke: #5b4fd1; stroke-dasharray: 15 85; animation: fm-travel 3.2s linear infinite; }
+    .node { fill: #c1632b; transform-box: fill-box; transform-origin: center; animation: fm-node 3.2s ease-in-out infinite; }
+    .n-right { animation-delay: 1.06s; }
+    .n-left  { animation-delay: 2.13s; }
+    @keyframes fm-travel { to { stroke-dashoffset: -100; } }
+    @keyframes fm-node { 0%, 72%, 100% { transform: scale(1); } 12% { transform: scale(1.24); } 30% { transform: scale(1); } }
+    @media (prefers-reduced-motion: reduce) {
+      .edge-pulse { display: none; }
+      .node { animation: none; }
+    }
+  </style>
+  <g transform="rotate(18 16 16)">
+    <path class="edge-base"  d="M16 4.5 L25.5 25.5 L6.5 25.5 Z" stroke-width="2.1" stroke-linejoin="round"/>
+    <path class="edge-pulse" d="M16 4.5 L25.5 25.5 L6.5 25.5 Z" pathLength="100" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle class="node n-apex"  cx="16"   cy="4.5"  r="3.2"/>
+    <circle class="node n-right" cx="25.5" cy="25.5" r="3.2"/>
+    <circle class="node n-left"  cx="6.5"  cy="25.5" r="3.2"/>
+  </g>
+</svg>

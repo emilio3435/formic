@@ -8,6 +8,8 @@ import type {
   LifecycleProvenance,
   LifecycleState,
   Provider,
+  SessionKind,
+  SessionKindSource,
   SurfaceIdentityTrace,
   TokenUsage,
   HookLifecycle,
@@ -63,6 +65,9 @@ export interface CollectedAgent {
       Claude: entrypoint ("cli" | "sdk-py" | …) and promptSource ("sdk" | …).
       Absent for providers that record nothing — absence is evidence of nothing. */
   launch?: { entrypoint?: string; promptSource?: string };
+  /** Application-owned session classification, when a collector can declare it exactly. */
+  sessionKind?: SessionKind;
+  sessionKindSource?: SessionKindSource;
   model?: string;
   effort?: string;
   task?: string;

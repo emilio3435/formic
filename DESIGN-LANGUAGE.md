@@ -1,353 +1,248 @@
-# The Ant Hill Design Language — "techno orchestra"
+# Formic design language
 
-Single source of truth for the body-restyle program (WS-A body language, WS-B inspector
-revamp, WS-C agent-tree touch-up). Token names and rule names below are canonical:
-tests and commit messages cite them verbatim.
+This is the implementation reference for the current Formic operator console.
+It describes the shipped foundation in `src/web/formic-tokens.css`, its legacy
+bridge in `src/web/styles.css`, and the stable anchors in `src/web/index.html`.
+It is a guide to the product that exists; concepts still in mockups or plans are
+not product commitments until they land in those files and their tests.
 
-**Provenance.** Extracted 2026-07-22 from the pulse worktree
-`/Users/emilionunezgarcia/Developer/anthill-pulse/src/web/styles.css` (branch
-`feat/pulse-strip` — the reference implementation; its header comment and `:root`
-block are finished and stable) and compared against the pre-pulse main
-`/Users/emilionunezgarcia/Developer/the-mountain-main/src/web/styles.css`.
-Checklist cells are best-evidence assessments pending the follow-up audit;
-genuinely uncertain cells are marked `?`.
+The public identity is Formic. Older code and historical records may still say
+`The Ant Hill`; those internal names are compatibility surfaces, not a second
+visual brand.
 
-**The thesis** (from the styles.css header comment): a cool control-room surface —
-graphite light ground, instrument-panel rails, and clear status marks. Interventions
-(act now) and advisories (be aware) use outline indicators and left-edge signal
-rails, not filled hospital banners. Status is carried by shape, label, and color
-together; monospace is reserved for identifiers, paths, timestamps, and token
-values. All meters use SVG attributes, never inline style, so the strict CSP holds.
-Light scheme only (`<meta name="color-scheme" content="light">`); no dark variant.
+## The three color roles
 
----
+Color is a business signal, not decoration. Every use belongs to one of three
+roles, and status is always carried by a label or shape as well as color.
 
-## 1. Vocabulary — the tokens
-
-Every custom property in the pulse `styles.css`, with its exact name and current
-value. 41 tokens in `:root`, 7 component-scoped (48 total).
-
-### Ground — cool graphite control room
-
-| Token | Value | Role |
-|---|---|---|
-| `--canvas` | `#f3f5f7` | page ground |
-| `--surface` | `#fbfcfd` | band / card surface |
-| `--raise` | `#ffffff` | raised chrome (shells, chips, inputs) |
-| `--sand` | `#e8edf2` | recessed / hover wash |
-| `--line` | `#d4dce4` | hairline dividers |
-| `--line-strong` | `#aeb9c4` | structural borders |
-
-### Ink scale
-
-| Token | Value | Role |
-|---|---|---|
-| `--ink` | `#121820` | primary text, graphite cap rules, primary buttons |
-| `--muted` | `#445260` | secondary text |
-| `--faint` | `#5a6876` | tertiary text, micro-labels |
-
-### Indicator inks — status color, never flood fills
-
-| Token | Value | Role |
-|---|---|---|
-| `--ember` | `#c23b2e` | intervention / attention |
-| `--amber` | `#9a6b12` | advisory / warning |
-| `--moss` | `#1f6b4a` | working / healthy / ok |
-| `--slate` | `#3f5f78` | idle |
-| `--clay` | `#64707c` | ended |
-| `--ember-soft` | `color-mix(in srgb, var(--ember) 9%, var(--surface))` | faint ember tint (edge-railed blocks only) |
-| `--amber-soft` | `color-mix(in srgb, var(--amber) 10%, var(--surface))` | faint amber tint |
-| `--moss-soft` | `color-mix(in srgb, var(--moss) 10%, var(--surface))` | faint moss tint (calm-cleared wash) |
-| `--signal-rail` | `2px` | canonical left-edge signal-rail width |
-
-### Semantic aliases (state → ink)
-
-| Token | Value | | Token | Value |
+| Role | Meaning | Current aliases | Use | Do not use for |
 |---|---|---|---|---|
-| `--working` | `var(--moss)` | | `--needs` | `var(--ember)` |
-| `--idle` | `var(--slate)` | | `--blocked` | `var(--ember)` |
-| `--ended` | `var(--clay)` | | `--failed` | `#b42318` |
-| `--unverified` | slate mixed toward ink | | | |
-| `--ok` | `var(--moss)` | | `--bad` | `#b42318` |
-| `--warn` | `var(--amber)` | | `--terracotta` | `var(--ember)` (legacy alias) |
+| Brand | Formic identity | `--color-brand-primary` (clay), `--color-brand-secondary` (indigo) | mark, wordmark accent, and identity lockups | live state or error severity |
+| Interaction | an operator can act or is focused | `--color-interactive`, `--color-focus-ring`, `--color-text-link` | focus, links, hover, selected controls, keyboard position | success, warning, danger, or information state |
+| Status | what the system measured | `--color-status-success`, `--color-status-warning`, `--color-status-danger`, `--color-status-info` | live/healthy, waiting/needs-you, blocked/failed, and informational state | logo or generic decoration |
 
-**Ruling: `--unverified` is its own ink, not a shade of `--ended`.** An
-unverified session is one the board cannot account for, not one that finished.
-It shared `--ended`'s clay through `.act-unknown`, so the styling asserted an
-ending the data never had — and it asserted it for the largest population on the
-board. The dashed treatment is deliberate and matches the `unknown` liveness
-chip: a dashed edge already means "not confirmed" in this vocabulary, and
-reusing it costs nothing to learn. (Decision: recorded 2026-08-04 with the
-session lifecycle contract.)
+Clay is the warm Formic signature. Indigo is the cool interaction channel and
+the secondary brand hue in the mark system; the semantic alias says whether a
+use is identity (`brand-secondary`) or action (`interactive`). Neither hue is a
+status substitute. A new component should be explainable by one row of this
+table before it receives a color.
 
-**Ruling: `--failed` is ink-only.** There is deliberately no `--failed-soft`
-token; failed states that need a background tint borrow `--ember-soft` instead.
-`.control-banner` mixing `--failed` ink (border/icon) with an `--ember-soft`
-background tint is the sanctioned pattern, not a defect. (Decision: minimal
-vocabulary — recorded 2026-07-23 by the program controller.)
+## Two tiers of tokens
 
-### Provider inks — quiet, ink-forward marks
+`src/web/formic-tokens.css` is the canonical token file. It has two explicit
+tiers:
 
-| Token | Value | Provider |
-|---|---|---|
-| `--claude` | `#a64b2a` | Claude |
-| `--codex` | `#2e6d58` | Codex |
-| `--omp` | `#68469a` | OMP |
-| `--cursor` | `#3d6585` | Cursor |
+1. **Primitives** are raw palette values and short scales: gray, clay, indigo,
+   green, amber, red, blue, font families, radii, shadows, and spacing. They
+   are the palette from which the system is built.
+2. **Semantic aliases** name the job a value performs: surface, text, border,
+   brand, interaction, status, tag, and control. Components reference these
+   aliases, never a primitive hex value. A future theme can then change a role
+   without searching every component.
 
-### Typography
+The important primitive anchors are:
 
-| Token | Value |
+| Scale | Base values |
 |---|---|
-| `--font-ui` | `-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif` |
-| `--font-display` | `var(--font-ui)` |
-| `--font-mono` | `"SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace` |
+| Neutral | `--gray-0: #fff`, `--gray-25: #fbfbfc`, `--gray-50: #f6f7f8`, `--gray-100: #eef0f2`, `--gray-200: #e2e5e9`, `--gray-400: #9aa1ab`, `--gray-500: #6b7280`, `--gray-600: #4b515c`, `--gray-900: #16181b` |
+| Brand clay | `--clay-500: #c1632b`, `--clay-600: #a8531f`, `--clay-700: #833f18` |
+| Interaction indigo | `--indigo-500: #5b4fd1`, `--indigo-600: #4a3fb8`, `--indigo-700: #3b3294` |
+| Status green | `--green-500: #1e9e5c`, `--green-600: #16824a`, `--green-700: #146744` |
+| Status amber | `--amber-500: #d9a22e`, `--amber-600: #b6851f`, `--amber-700: #8a5100` |
+| Status red | `--red-500: #d1453d`, `--red-600: #b23731` |
+| Status blue | `--blue-500: #3172c4`, `--blue-600: #285d9f` |
 
-### Geometry, frame, and shadow scale
+### Semantic surface, text, and interaction aliases
 
-| Token | Value | Role |
+| Family | Aliases and meaning |
+|---|---|
+| Surface | `--color-surface-canvas` and `--color-surface-card` are white; `--color-surface-subtle` is gray-50 for hover/code/nested content; `--color-surface-sunken` is gray-25 for recessed panels |
+| Border | `--color-border-default` is the standard hairline; `--color-border-subtle` is the quieter divider |
+| Text | `--color-text-primary` is gray-900; `--color-text-secondary` is gray-600; `--color-text-tertiary` is gray-400 for non-body microcopy; `--color-text-on-brand` is white; `--color-text-link` is indigo-600 |
+| Brand | `--color-brand-primary`/`-hover`/`-tint` are clay 500/600/50; `--color-brand-secondary`/`-hover`/`-tint` are indigo 500/600/50 |
+| Interaction | `--color-interactive` is indigo-500; `--color-focus-ring` is `0 0 0 3px rgba(91,79,209,.28)` |
+| Controls | `--color-brand-control` and `--color-brand-control-hover` are clay-600/700 for normal-sized filled controls |
+
+`src/web/styles.css` keeps a compatibility bridge while consumers migrate:
+`--canvas`, `--surface`, `--raise`, `--sand`, `--ink`, `--body`, `--muted`,
+`--faint`, `--line`, `--line-strong`, `--ember`, `--amber`, `--moss`, and
+`--slate` resolve to semantic aliases. The old `--clay` name resolves to brand
+clay only. Ended state has a separate `--ended-ink` (`--gray-500`) and
+`--ended`; it must never inherit brand clay. This is the migration bridge, not
+permission to introduce another raw-color vocabulary.
+
+### Status aliases and business meaning
+
+The base 500 colors are useful for dots, rails, and other non-text marks. The
+darker `*-text` aliases are the normal-text/control counterparts where the
+canonical file provides them.
+
+| State meaning | Visual role | Mark/tint aliases | Text/control alias | Business rule |
+|---|---|---|---|---|
+| Live, working, healthy, all clear | success | `--color-status-success`, `--color-status-success-tint` | `--color-status-success-text` | `LIVE` is green; calm health is not a warning |
+| Waiting, needs-you, stale, reconnecting, advisory | warning | `--color-status-warning`, `--color-status-warning-tint` | `--color-status-warning-text` | TL;DR needs-you uses warning amber, not brand clay or danger red |
+| Blocked, failed, break, person-blocker | danger | `--color-status-danger`, `--color-status-danger-tint` | `--color-status-danger-text` | red means an operational intervention is required |
+| Informational, idle, neutral signal | info | `--color-status-info`, `--color-status-info-tint` | `--color-status-info-text` | informational blue never implies failure |
+| Ended | neutral | `--ended-ink` | neutral/secondary text | ended is a lifecycle fact, not a brand treatment |
+| Unverified | unresolved information | info-derived ink and dashed treatment | secondary text | unverified is not ended; the board did not establish liveness |
+
+## Surfaces, edges, and hierarchy
+
+The canvas and cards are white. A card separates from its surroundings with a
+1px hairline and a shadow, not with a gray slab. Gray-50 is reserved for a
+subordinate hover row, inline code block, or nested panel; gray-25 is the
+sunken/nested surface. The scale is intentionally short:
+
+- radii: `--radius-sm` 6px, `--radius-md` 10px, `--radius-lg` 14px,
+  `--radius-pill` 999px;
+- shadows: `--shadow-sm`, `--shadow-md`, and `--shadow-lg`;
+- spacing: `--space-1` through `--space-6` at 4, 8, 12, 16, 24, and 32px.
+
+The console spends visual weight in this order:
+
+1. masthead identity and the connection/LIVE signal;
+2. the white health rail and its TL;DR reading;
+3. the repository → worktree → run board hierarchy;
+4. the selected row's inspector and command dock;
+5. secondary evidence, folded until requested.
+
+The board remains dense by using alignment, hairlines, mono values, and compact
+status marks. Calm states collapse; urgency earns ink, a rail, or a larger value.
+The Finished shelf is quiet because ended work is history, not a live alert.
+
+## Component rules that are shipped
+
+### Masthead and health rail
+
+The masthead uses the same-origin `icons/formic-mark.svg` and the
+`Form<span class="wm-accent">i</span>c` lockup. Syne 800 carries the wordmark; only the
+`i` receives brand clay. `LIVE` is a labeled green success pill/dot, never clay.
+The stable controls and state hooks are `#notify-toggle`, `#settings-toggle`,
+`#conn-badge`, `#conn-label`, and `#server-health`.
+
+The health rail is a white surface with a Formic hairline. Its hierarchy stays
+flat and readable: TL;DR remains a compact reading, the attention counter is a
+tabular mono value, and the scan window qualifies the readings once. Needs-you
+is warning amber; a real break or failed feed is danger red. `#cleanup-status`
+is static in the document and remains the polite status announcement target.
+
+### Board, tags, and inspector
+
+Repositories, worktrees, and runs are separate levels. A status mark answers
+what the session is doing; a role tag answers who or what owns the work. Do not
+merge those channels into one rainbow chip. Provider marks identify provenance
+and do not override the operational status rail.
+
+The inspector is progressive disclosure: a selected row opens the detail surface,
+the command dock stays with the selected session, and secondary transcript or
+evidence stays foldable. Controls remain available only when the server has
+proven the terminal target; disabled controls state why.
+
+### Notification center badge and the danger-fill invariant
+
+The badge ink is a verdict. **Ember fill is reserved for severity `blocking`**:
+the person is the blocker. A `noticed` watcher state uses an **amber outline**;
+dataflow and investigation warnings remain outlined as well. An all-clear badge
+is a gray outline with a rendered `0`, not an empty or missing control. The
+header's Clean up action proposes a sweep and exposes evidence for review; it
+**never deletes**.
+
+This distinction is deliberately narrower than the board's needs-you warning:
+needs-you says a session is waiting for an operator, while a blocking
+notification says the notification center has evidence that a person is the
+blocking cause. Shape, label, and color together preserve that difference.
+
+### Buttons, links, and meters
+
+Primary filled Formic controls use the accessible clay control aliases. Links,
+selected controls, and focus use indigo interaction aliases. The current
+`.btn.primary` compatibility selector remains neutral graphite until that
+component migration lands; this guide does not describe that unfinished
+selector as clay. Danger controls use the red status aliases and should not be
+confused with brand clay. Meters put geometry in SVG attributes and use classes
+for tone; no inline `style` is needed, which keeps the existing self-only CSP
+intact.
+
+## Typography
+
+The local `@font-face` declarations in `formic-tokens.css` provide the official
+OFL font binaries:
+
+| Token | Family and weights | Use |
 |---|---|---|
-| `--radius` | `8px` | card / shell radius |
-| `--radius-sm` | `5px` | chip / control radius |
-| `--frame` | `min(1680px, calc(100vw - 64px))` | the one shared canvas frame — every full-width band aligns to it |
-| `--inspector-w` | `clamp(480px, 32vw, 520px)` | desktop inspector/drawer width (full-surface sheet below 1024px) |
-| `--shadow-soft` | `0 1px 2px rgba(23, 33, 43, 0.04), 0 8px 22px rgba(23, 33, 43, 0.05)` | resting raise |
-| `--shadow-lift` | `0 2px 6px rgba(23, 33, 43, 0.07), 0 18px 44px rgba(23, 33, 43, 0.12)` | floating overlays (broadcast dock) |
+| `--font-display` | Syne 700/800 | wordmark and display headings |
+| `--font-ui` | Inter 400/500/600 | body, controls, labels, and prose |
+| `--font-mono` | JetBrains Mono 400/500 | paths, IDs, timestamps, token/cost/session values, and compact instrument labels |
 
-### Component-scoped custom properties (set by classes, never inline style)
+Mono is a data channel, not a mood: prose and headings stay in Inter or Syne.
+Values use tabular numerals when they must compare in a column.
 
-| Token | Set by | Role |
-|---|---|---|
-| `--prov` | `.dw-provider--claude/--codex/--cursor/--omp` | one provider ink drives the drawer inset rail and the lineage current-node ring — the canonical CSP-safe variant pattern |
-| `--role-color` | `.role-orchestrator/-frontend/-backend/-verifier/-tester/-automation` | role left-rail ink |
-| `--role-surface` | same role classes | near-neutral role chip surface |
-| `--role-ink` | same role classes | role chip text ink |
-| `--tree-depth` | `.depth-1` … `.depth-4` | swarm-tree indent multiplier |
-| `--tree-color` | `.depth-1` … `.depth-4` | swarm-tree connector/depth accent |
-| `--inspector-pad-x` | `.pane-inspector` (1.2rem desktop, 1rem <1024px) | drawer gutter; the command dock bleeds by it |
+## Motion
 
----
+Motion reports activity without becoming a loading trap:
 
-## 2. Named patterns
+- the Formic mark's perimeter dash and node pulse use a 3.2s ambient loop;
+- live connection breathing is slow and calm, while reconnecting is more urgent;
+- hover/focus and panel transitions are short and state changes settle rather
+  than bounce;
+- counters and reading numbers do not animate merely to attract attention.
 
-**Mono-for-values.** `--font-mono` carries identifiers, paths, timestamps, and
-token/cost values (`.ri-value`, `.swarm-chip`, `.artifact-path`,
-`.transcript`, `.control-feedback`, `.gate-chip`, `.target-chip`). Observed idiom
-throughout the pulse work: mono also carries uppercase micro-labels/kickers at
-9–12px with letter-spacing (`.eyebrow`, `.agent-column-label`, `.dw-eyebrow`,
-`.dw-block-label`, `.shelf-title`, `.vital-label`, `.chat-turn-role`,
-`.detail-grid dt`, `.operate-meta-label`) — instrument labels, not prose.
-`.program-alias-tag` historically deviated from the idiom — same uppercase,
-tracked, faint-ink look but no `font-family`, so it rendered in `--font-ui`, not
-mono — but as of Task A4 it sets `font-family: var(--font-mono)` and now conforms
-to the mono micro-label idiom. Large display numerals split: `.reading-value` stays `--font-ui` with
-`font-variant-numeric: tabular-nums`, while `.vital-big` values are always mono —
-every `renderVitals` call site in `app.js` pairs the class with `mono`
-(`"vital-big mono"`). Mono never carries headings or sentence prose.
+The client has a universal reduced-motion guard:
 
-**SVG-attribute meters.** All meters are SVG whose geometry (rect width, `x`,
-`stroke-dasharray` arc) is set via SVG attributes from JS — never inline `style` —
-so the strict CSP (`style-src 'self'`) holds. Tone comes from classes: `.warn` /
-`.hot` variants on the fill. Inventory: `.ctx-meter` (`.ctx-track`/`.ctx-fill`),
-`.tm-track`/`.tm-fill` bar meter, `.dw-meter` segmented rollup
-(`.dw-seg-work`/`.dw-seg-idle`/`.dw-seg-needs`/`.dw-seg-end` carry both `fill` and
-`background` twins), `.vital-ring` donut (`.ring-track`/`.ring-fill`/`.ring-pct`),
-`.vital-bar`, `.usage-bars-svg` (`.usage-bar-rect`).
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+```
 
-**Urgency-weighted cell.** Pulse-strip cells re-weight inside a flex rail instead
-of a rigid grid: `.reading.cell-hot` grows (`flex-grow: 2.4`), takes ember ink and
-a larger value (1.7rem); `.reading.cell-micro` collapses to a trailing chip
-(0.95rem). Urgency earns space and ink; calm does not.
+Static contexts such as favicons and print use the still mark. The SVG mark's
+own reduced-motion rule and the client stylesheet guard must remain in force.
 
-**Notification center badge.** Ember fill is reserved for severity `blocking` —
-a person is the blocker (`handoff` from a blocking attention class). Watcher
-notices (`noticed` / `stalled-active`) and dataflow/investigation warnings take
-amber outline, never ember fill. All-clear is grey with a rendered `0` in the
-accessible name. The header's instrument-trust chip may offer Clean up; that
-action only runs a propose sweep and lands a `dataflow` item — it never deletes.
+## Accessibility and deterministic contrast
 
-**Calm collapse.** When nothing needs attention, the whole cell row folds to one
-moss line: `.pulse-calm` (framed to `--frame`), with `.pulse-cleared` washing
-`--moss-soft` in once as a one-shot transition — no keyframe loop. Related resting
-behaviors: `.row-summary` clamps to one line and expands to three on
-hover/selection; `.agent-row.is-ended` fades to 0.66 opacity; vitals tiles are
-omit-empty (absent tiles never render).
+Status never relies on color alone: pair a status hue with a word, icon, border,
+rail, or shape. Keep the existing semantic IDs, labels, `aria-live` regions,
+keyboard focus path, and 24px minimum icon/control target. Migrated
+focus-visible rules use the indigo interaction role or `--color-focus-ring`,
+never a status hue; legacy exceptions remain migration work and are not claimed
+as complete here. The UI is light-only (`color-scheme: light`).
 
-**Progressive disclosure (thin trigger → drawer).** Inline signal bands are thin
-triggers (`.signal-trigger`) that open the matching drawer; `.pulse-more` is a
-thin mono trigger row; `<details>`/`summary` disclosures (`.names-disclosure`,
-`.dw-impact-sample`, `.triage-briefing-raw`, `.command-dock-more`,
-`.affected-disclosure`, `.signal-tech`) keep secondary evidence folded;
-`.program:not(.open) .program-agents` hides collapsed rosters.
+The ratios below use the WCAG relative-luminance formula, compare against the
+white card/canvas (`#ffffff`), and are rounded to two decimals. They are the
+deterministic reason the token file exposes both base status colors and darker
+text/control aliases.
 
-**Signal rails and edge marks.** Status attaches to the left edge: 2px
-(`--signal-rail`) or 3px inset rails (`.finding.pin` ember rail, `.dw-block--fix`
-inset 2px ember, `.dw-work` state-colored left border, role/provider left borders
-on `.agent-row`, `.dw-accent--ember/--amber/--moss/--slate/--ink` 2px top rule per
-drawer type). Tints stay ≤10% soft mixes behind a rail or border — never a flood.
+| Ink | Hex | Ratio on white | Allowed use |
+|---|---:|---:|---|
+| gray-900 | `#16181b` | 17.79:1 | primary text |
+| gray-600 | `#4b515c` | 7.98:1 | secondary text |
+| gray-400 | `#9aa1ab` | 2.61:1 | tertiary/non-body microcopy only |
+| clay-500 | `#c1632b` | 4.13:1 | identity mark, large text, and non-text brand marks |
+| clay-600 / clay-700 | `#a8531f` / `#833f18` | 5.35:1 / 7.81:1 | normal text and filled brand controls |
+| indigo-500 / indigo-600 | `#5b4fd1` / `#4a3fb8` | 6.03:1 / 7.79:1 | interaction and links; use the darker alias where a control needs it |
+| green-500 / green-700 | `#1e9e5c` / `#146744` | 3.44:1 / 6.88:1 | success mark/rail; success text/control |
+| amber-500 / amber-700 | `#d9a22e` / `#8a5100` | 2.29:1 / 6.45:1 | warning mark/rail; warning text/control |
+| red-500 / red-600 | `#d1453d` / `#b23731` | 4.54:1 / 6.03:1 | danger mark/rail; danger text/control |
+| blue-500 / blue-600 | `#3172c4` / `#285d9f` | 4.84:1 / 6.65:1 | info mark/rail; info text/control |
 
----
+For normal text, use a ratio of at least 4.5:1; large text and non-text
+indicators use the applicable 3:1 threshold. In particular, the canonical 500
+status colors are not blanket normal-text approvals: green and amber need their
+darker text aliases, and brand clay uses `--color-brand-control` or its hover
+alias for normal-sized filled controls.
 
-## 3. The six rules
+## Compatibility and change discipline
 
-Cite these names exactly in tests, audits, and commit messages.
+The public title, masthead, favicon, local token stylesheet, and local fonts are
+Formic surfaces. `The Ant Hill` in server logs, scripts, module names, launchd
+labels, historical docs, and stored/internal identifiers remains stable until a
+separate rename decision expands the fence. The legacy bridge in `styles.css`
+is likewise intentional migration scaffolding.
 
-1. **Indicator inks, not flood fills** — status via outline marks, colored text,
-   2px left-edge signal rails; no filled hospital banners.
-2. **Mono for values only** — `--font-mono` for identifiers, paths, timestamps,
-   token/cost values; never headings or prose.
-3. **Shared frame** — full-width bands align to
-   `--frame: min(1680px, calc(100vw - 64px))`.
-4. **CSP-safe rendering** — no inline `style`; meters via SVG attributes; variant
-   colors via classes.
-5. **Calm collapse / progressive disclosure** — quiet one-line resting states that
-   expand on demand; thin triggers open drawers; urgency earns visual weight, calm
-   does not.
-6. **Motion respects `prefers-reduced-motion`** — every animation disabled inside
-   the existing guard block.
+When extending the client:
 
----
-
-## 4. Per-section conformance checklist
-
-One row per body section of the `styles.css` section map. Columns R1–R6 are the six
-rules above, in order. `pass` = best-evidence conformant today; `FAIL` = observed
-gap; `?` = genuinely uncertain, audit to decide; `n/a` = the rule has no surface in
-this section (counts as pass). Assessed against the pulse worktree copy (the
-post-G0 baseline); among these sixteen sections only `responsive` differs from
-pre-pulse main (strip wrap rules only) — all other fifteen are byte-identical in
-both files, so the assessments hold for both.
-
-| Section | styles.css header | R1 | R2 | R3 | R4 | R5 | R6 |
-|---|---|---|---|---|---|---|---|
-| utilities | `utilities` | pass | pass | n/a | pass | n/a | pass |
-| masthead | `masthead` | pass | pass | pass | pass | n/a | pass |
-| app body | `app body` | pass | n/a | pass | pass | n/a | n/a |
-| toolbar | `toolbar: views, filter chips, search` | pass | pass | pass | pass | pass | n/a |
-| programs | `programs` | pass | pass | pass | pass | pass | pass |
-| agent rows | `agent rows` | pass | pass | pass | pass | pass | pass |
-| inspector: layered drawer | `inspector: layered drawer` | pass | n/a | pass | pass | pass | pass |
-| per-type drawer states | `inspector: per-type drawer states` | pass | pass | pass | pass | pass | pass |
-| vitals band | `vitals band: the instrument tiles` | pass | pass | pass | pass | pass | n/a |
-| controls | `controls` | pass | pass | n/a | pass | pass | n/a |
-| broadcast dock | `broadcast dock` | pass | n/a | n/a | pass | pass | n/a |
-| empty state | `empty state` | pass | n/a | n/a | pass | n/a | n/a |
-| toast | `toast` | pass | n/a | n/a | pass | pass | pass |
-| responsive | `responsive` | pass | n/a | pass | pass | pass | pass |
-| usage tab | `usage tab` | pass | pass | pass | pass | pass | n/a |
-| motion | `motion` | n/a | n/a | n/a | n/a | n/a | pass |
-
-### Per-row evidence notes
-
-- **utilities** — `.ok/.warn/.bad/.hot/.absent` are colored-text status helpers
-  (R1 exemplar). `.skip-link` ink fill is a focus affordance, not status. `.ico`
-  sizing is class-driven (R4). Skip-link transition covered by the motion guard.
-- **masthead** — connection badge is an outline pill: colored dot + colored text +
-  border-mix, no fill (R1 exemplar). `.masthead-inner` aligns to `--frame` (R3).
-  `.eyebrow` is a mono uppercase micro-label — the instrument-label idiom, judged
-  not-prose (see open question 1). `conn-beat`/`sun-pulse` keyframes killed by the
-  guard (R6).
-- **app body** — neutral shell; `.app-body` max-width `var(--frame)` (R3 exemplar);
-  `.ops-stage` is the one docked instrument shell. No status color, no mono, no
-  motion.
-- **toolbar** — active chip is a solid border + 8% ink tint, not a flood (R1).
-  Counts use tabular-nums in `--font-ui` (R2 fine — mono is reserved, not
-  mandatory). Lives inside the framed `.app-body` (R3 inherited). Filter bar hides
-  when empty (R5).
-- **programs** — collapse/expand with caret + hidden roster is real calm collapse
-  (R5 exemplar). `.program-select-row` 5% moss tint behind a border, no flood (R1).
-  Caret transform transition guarded (R6).
-- **agent rows** — provider/role identity via left border rails; alert rows use
-  6–7% background washes plus rails — judged pass, but see open question 2.
-  The row diet deleted `.policy-chip`, the one solid `--failed` chip a row used
-  to carry: a model-policy mismatch is now a `model policy` term in the drawer's
-  Evidence shelf (`renderRowFacts`), so no status fill survives on the row at all.
-  Mono on `.ri-value` (model/tokens), `.swarm-chip` (workflow id),
-  `.agent-column-label` (micro-label idiom) (R2). `--tree-depth`/`--tree-color`
-  and `.token-meter` fills are class-set (R4). One-line summary expands on
-  hover/selection (R5 exemplar). Rename-button opacity transition guarded (R6).
-- **inspector: layered drawer** — width `min(var(--inspector-w), 100%)`; internal
-  divider only, shell owns the frame (R3). `drawer-in` animation guarded (R6).
-  Opening on selection is itself progressive disclosure (R5).
-- **per-type drawer states** — accent channel is a 2px top rule + eyebrow color,
-  "never rainbow color-coding"; `.dw-block--fix` = ember-soft tint + inset rail,
-  explicitly "without a hospital flood" (R1 exemplar; `.control-banner` and
-  `.state-pill.policy-mismatch` are the borderline cases — soft tint + border, and
-  a small solid pill). Mono only on labels/identifiers/log content (R2).
-  `.dw-provider--*` sets `--prov` by class, meters are SVG-geometry (R4 exemplar).
-  Thin triggers + `details` disclosures throughout (R5 exemplar). `dw-pulse`/
-  `status-pulse`/`sheet-up` animations guarded (R6).
-- **vitals band** — ring/bar tone by `.warn`/`.hot` classes; stroke-dasharray arc
-  is geometry, "CSP-safe" per source comment (R4 exemplar). `.vital-label`/
-  `.vital-sub`/`.ring-pct` mono micro-labels; `.vital-big` numerals are always
-  mono via the paired `mono` class (R2 pass). Omit-empty tiles (R5).
-- **controls** — `.btn.primary` (ink) and `.btn.confirm-yes` (bad) are filled
-  *action* buttons, not status banners — judged outside R1's scope (see open
-  question 3). `.btn.danger` is outline + colored text (R1). Confirm strip appears
-  only on demand (R5). `.control-feedback` mono = command output (R2).
-- **broadcast dock** — floating fixed dock (`--shadow-lift`), not a full-width
-  band, so R3 n/a. Recipient chips: outline + border-mix + colored state text
-  (R1). Appears only in select mode, `[hidden]` otherwise (R5).
-- **empty state** — clay-inked SVG mound via class color (R4), muted text. Calm by
-  construction.
-- **toast** — neutral ink surface; status carried by border color + text tint,
-  not a status-colored flood (R1). Show/hide via `.show` class (R4); transition
-  guarded (R6); transient by design (R5).
-- **responsive** — full-surface drawer sheet below 1024px, 44px touch-target
-  sweeps at 1024px and 720px, advisories collapse to title-only on narrow (R5).
-  `sheet-up` guarded (R6). Frame math self-adjusts via `calc(100vw - 64px)` (R3).
-- **usage tab** — `.usage-unavailable` = 6% ember tint + dashed border, no flood
-  (R1). R2 now `pass`: as of Task A5 the invocation-table token/cost/session
-  *values* render mono via `.usage-table td.usage-val`, while the prose columns
-  (When / Provider / Model) stay `--font-ui` — the values-in-mono / prose-in-ui
-  split (open question 4 resolved). KPI display numerals follow the `.reading-value`
-  ui + tabular-nums idiom. `.usage-bar-rect` fill via class on SVG rects (R4).
-  `[hidden]` panel (R5).
-- **motion** — the guard block itself:
-  `@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }`
-  — universal, so every animation/transition in every section above is disabled
-  (R6 holds file-wide).
-
-Sections outside the sixteen checklist rows: `health rail (single operational
-summary)` and `pulse strip: urgency-weighted cells + inline expansion` (the
-reference implementation, pulse worktree; pre-pulse main has `attention board:
-conductor + two inbox lanes` instead), plus the `widescreen: reading-focused 40/60
-split` and `horizontal bookshelf: Operate | Chat | Evidence rail/column` split
-experiments (inspector workstream territory).
-
----
-
-## 5. Open questions for the audit
-
-1. **Mono micro-labels — resolved (ratified).** Rule 2's letter says values-only,
-   but the pulse reference uses `--font-mono` pervasively for 9–12px uppercase
-   tracked micro-labels (eyebrows, kickers, column labels, chip labels). Verdict:
-   the idiom is ratified as label furniture — mono legitimately carries these
-   instrument labels (`.eyebrow`, `.agent-column-label`, `.dw-eyebrow`,
-   `.vital-label`, …), so the R2 `pass` verdicts that rely on it stand rather than
-   flipping to FAIL. Task A4 already brought `.program-alias-tag` into the idiom;
-   the body-restyle design pass confirms it program-wide.
-2. **Soft-wash threshold.** Alert rows and blocks use 5–10% `color-mix` tints
-   behind rails/borders (`.agent-row.is-needs-you`, `.dw-block--fix`,
-   `.control-banner`, `.usage-unavailable`). Recommend codifying: tint ≤10% mixed
-   into `--surface`/transparent, always paired with an edge mark, never
-   standalone — that is the line between indicator ink and flood fill.
-3. **Filled action buttons.** `.btn.primary`, `.btn.confirm-yes` and
-   `.triage-mode` are solid fills. Judged action/identity affordances outside Rule
-   1 (which governs *status* surfaces); audit should confirm. `.policy-chip` was
-   listed here too and was the awkward one — a *status* fill defended as an
-   affordance. The row diet settled it by deletion: the model-policy fact moved
-   to the drawer's Evidence shelf (`renderRowFacts`), where it reads as a
-   `model policy` row in the `.detail-grid` rather than as a chip.
-4. **Usage-tab numerals — resolved (split implemented, Task A5).** Verdict: token/
-   cost *values* in the invocation table move to `--font-mono` via `.usage-table
-   td.usage-val` (the `.ri-value` counterpart for the usage surface), while the
-   prose columns (When / Provider / Model) and the KPI display numerals stay
-   `--font-ui` (the `.reading-value` tabular-nums idiom). Values in mono, prose in
-   ui — the same split Rule 2 draws elsewhere.
-5. **Non-token hexes.** Hard-coded values that bypass the vocabulary:
-   `#34302a` (`.btn.primary:hover`, `.triage-generate:hover` — a warm dark that
-   predates the cool graphite `--ink`), `#b42318` repeated literally as
-   `--failed`/`--bad`, `#fff` on filled chips/buttons, `#f4c9bd` (`.toast.err`
-   text), role-cue hexes (`.role-*`) and tree-depth hexes (`.depth-1..4`).
-   Candidates for tokenization during the body restyle — flagged, not blocking.
+1. choose a semantic role and alias before choosing a primitive;
+2. preserve business status meanings and the stable DOM/ARIA hooks;
+3. use edge, label, and shape before adding a filled surface;
+4. check contrast and reduced-motion behavior at the rule level; and
+5. record unfinished ideas as proposals instead of describing them as landed.

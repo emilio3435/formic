@@ -25,13 +25,14 @@ await rlm_heartbeat.create(
         "1) tail -n 40 ~/.prime/agent/sessions/$(basename $PWD).jsonl or read last 8 messages from "
         "  this session's jsonl via python. "
         "2) Emit as your assistant turn: prefix '[TL;DR HH:MM] ' then ONE LINE of JSON "
-        '  {"v":4,"fleet":"<cross-repo story: who needs the operator, why, what unblocks it — 2-3 sentences>",'
-        '  "repos":[{"repo":"<name>","summary":"<cause → blocker → next action, 2-4 sentences>",'
+        '  {"v":4,"fleet":"<220-360c, 3-4 sentences: name each hot *repo* + !blocker! + unblock verb + counts + `branch/PR`>",'
+        '  "repos":[{"repo":"<name>","summary":"<REPO: once — 140-220c cause → blocker → next, no restated name>",'
         '  "blocker":"<≤48 chars or all-clear>","signal":"ok|working|idle|needs-you|blocked|failed|all-clear"}]}. '
         "3) Style inside fleet/summary strings: mini-markup only — *strong*, `mono`, !alert! — no HTML, no markdown. "
         "4) NEVER restate momentum/burn/context numbers — the board renders those deterministically. "
-        "  Length is yours to judge; the board clamps prose to 3 lines and the wire backstop is 6000 chars — "
-        "  end sentences early. This becomes transcriptTail and auto-appears in the health rail's TL;DR lane "
+        "  Scope: last 1 hour of agents per repo (board may still show 36h). "
+        "  Wire caps: fleet ≤340c word-boundary, per-repo ≤220c; board shows fleet prose + hot bullets. "
+        "  This becomes transcriptTail and auto-appears in the health rail's TL;DR lane "
         "  on the next ~5s poll. No cmux send, no extra API."
     ),
     interval="3m",

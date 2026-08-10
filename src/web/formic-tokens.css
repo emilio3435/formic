@@ -1,0 +1,214 @@
+/* Local, CSP-safe font delivery. The binaries and OFL evidence are recorded
+   in docs/design/formic/fonts-provenance.md. */
+@font-face {
+  font-family: 'Syne';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Syne-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Syne';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/Syne-ExtraBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+}
+
+/* =========================================================================
+   FORMIC — Design Tokens
+   Two-tier system: PRIMITIVES (raw values, never used directly in
+   components) -> SEMANTIC ALIASES (what components actually reference).
+   This indirection is what lets you re-theme (e.g. add dark mode later)
+   by only touching the semantic layer, not every component.
+   ========================================================================= */
+
+:root{
+
+  /* ---------------------------------------------------------------------
+     1. PRIMITIVES — raw palette. Don't reference these in components.
+     --------------------------------------------------------------------- */
+
+  /* Neutral / graphite scale — cool-neutral, not warm-gray */
+  --gray-0:   #ffffff;
+  --gray-25:  #fbfbfc;
+  --gray-50:  #f6f7f8;
+  --gray-100: #eef0f2;
+  --gray-200: #e2e5e9;
+  --gray-300: #cbd0d6;
+  --gray-400: #9aa1ab;
+  --gray-500: #6b7280;
+  --gray-600: #4b515c;
+  --gray-700: #33383f;
+  --gray-800: #23262b;
+  --gray-900: #16181b;
+
+  /* Brand primary — Clay (warm, the "Formic" signature color) */
+  --clay-50:  #fdf1e7;
+  --clay-100: #fbe2cc;
+  --clay-300: #e79a5f;
+  --clay-500: #c1632b;   /* base */
+  --clay-600: #a8531f;
+  --clay-700: #833f18;
+
+  /* Brand secondary — Indigo (cool counterpart, used for interaction) */
+  --indigo-50:  #efedfd;
+  --indigo-100: #e0dcfb;
+  --indigo-300: #a79df2;
+  --indigo-500: #5b4fd1;  /* base */
+  --indigo-600: #4a3fb8;
+  --indigo-700: #3b3294;
+
+  /* Semantic hues — deliberately NOT reused as brand color */
+  --green-50:  #e9f6ee;
+  --green-500: #1e9e5c;
+  --green-600: #16824a;
+  --green-700: #146744;
+
+  --amber-50:  #fbf1dc;
+  --amber-500: #d9a22e;
+  --amber-600: #b6851f;
+  --amber-700: #8a5100;
+
+  --red-50:    #fbe9e9;
+  --red-500:   #d1453d;
+  --red-600:   #b23731;
+
+  --blue-50:   #e8f1fb;
+  --blue-500:  #3172c4;
+  --blue-600:  #285d9f;
+
+  /* ---------------------------------------------------------------------
+     2. SEMANTIC ALIASES — reference these in components/CSS, never
+     the primitives above directly.
+     --------------------------------------------------------------------- */
+
+  /* Surfaces — stay white/near-white; depth comes from border + shadow,
+     not from fill color (this is the "Apple-esque" rule: don't gray-fill
+     cards to separate them, outline + elevate instead). */
+  --color-surface-canvas:  var(--gray-0);
+  --color-surface-card:    var(--gray-0);
+  --color-surface-subtle:  var(--gray-50);   /* hover rows, code blocks */
+  --color-surface-sunken:  var(--gray-25);   /* nested panels */
+  --color-border-default:  var(--gray-200);
+  --color-border-subtle:   var(--gray-100);
+
+  /* Text */
+  --color-text-primary:    var(--gray-900);
+  --color-text-secondary:  var(--gray-600);
+  --color-text-tertiary:   var(--gray-400);
+  --color-text-on-brand:   var(--gray-0);
+  /* Inverse text is a component role for filled conversation surfaces. Keep
+     the three levels named so bubble hierarchy does not fall back to raw
+     white/rgba literals in component CSS. */
+  --color-text-on-inverse:        var(--gray-0);
+  --color-text-on-inverse-strong: color-mix(in srgb, var(--gray-0) 92%, transparent);
+  --color-text-on-inverse-muted:  color-mix(in srgb, var(--gray-0) 72%, transparent);
+  --color-text-link:       var(--indigo-600);
+
+  /* Brand — identity only (logo, primary CTA, selected/active nav).
+     Never used for status. */
+  --color-brand-primary:        var(--clay-500);
+  --color-brand-primary-hover:  var(--clay-600);
+  --color-brand-primary-tint:   var(--clay-50);
+  --color-brand-secondary:      var(--indigo-500);
+  --color-brand-secondary-hover:var(--indigo-600);
+  --color-brand-secondary-tint: var(--indigo-50);
+
+  /* Interaction — focus rings, links, selected state. Cool/indigo family
+     so it reads as "interactive" and never gets confused with brand
+     clay (identity) or status colors (state). */
+  --color-interactive:       var(--indigo-500);
+  --color-focus-ring:        0 0 0 3px rgba(91,79,209,.28);
+
+  /* Status — the only colors allowed to mean "state." Kept out of the
+     brand palette on purpose so an operator never has to wonder whether
+     a color is decorative or meaningful. */
+  --color-status-success:      var(--green-500);
+  --color-status-success-tint: var(--green-50);
+  /* Accessible same-hue text/control extensions: base status colors remain
+     available for dots and rails, while small labels use the darker shade. */
+  --color-status-success-text: var(--green-700);
+  --color-status-warning:      var(--amber-500);
+  --color-status-warning-tint: var(--amber-50);
+  --color-status-warning-text: var(--amber-700);
+  --color-status-danger:       var(--red-500);
+  --color-status-danger-tint:  var(--red-50);
+  --color-status-danger-text:  var(--red-600);
+  --color-status-info:         var(--blue-500);
+  --color-status-info-tint:    var(--blue-50);
+  --color-status-info-text:    var(--blue-600);
+
+  /* Brand controls use accessible clay shades; the base clay remains the
+     identity color for the mark and wordmark accent. */
+  --color-brand-control:       var(--clay-600);
+  --color-brand-control-hover: var(--clay-700);
+
+  /* Tag / role palette — muted, soft-bg + saturated-fg pairs for
+     classification chips (agent role, repo type, etc). Reuses the
+     scales above so nothing new has to be invented per feature. */
+  --tag-slate-bg:  var(--gray-100);   --tag-slate-fg:  var(--gray-600);
+  --tag-clay-bg:   var(--clay-50);    --tag-clay-fg:   var(--clay-600);
+  --tag-indigo-bg: var(--indigo-50);  --tag-indigo-fg: var(--indigo-600);
+  --tag-amber-bg:  var(--amber-50);   --tag-amber-fg:  var(--amber-600);
+  /* Amber's canonical tag foreground is useful for large labels/indicators,
+     but this darker same-hue alias is the normal-text role. */
+  --color-tag-amber-text: var(--amber-700);
+
+  /* ---------------------------------------------------------------------
+     3. TYPOGRAPHY
+     --------------------------------------------------------------------- */
+  --font-display: 'Syne', 'Inter', sans-serif;      /* wordmark + H1 only */
+  --font-ui:      'Inter', -apple-system, sans-serif; /* everything else */
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace; /* data, paths, ids */
+
+  /* ---------------------------------------------------------------------
+     4. RADIUS / ELEVATION / SPACING — small, deliberately short scales
+     --------------------------------------------------------------------- */
+  --radius-sm:   6px;   /* inputs, small chips */
+  --radius-md:   10px;  /* cards, buttons */
+  --radius-lg:   14px;  /* panels, modals */
+  --radius-pill: 999px; /* status pills, badges */
+
+  --shadow-sm: 0 1px 2px rgba(16,18,20,.05);
+  --shadow-md: 0 2px 10px rgba(16,18,20,.06);
+  --shadow-lg: 0 8px 24px rgba(16,18,20,.09);
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;
+}

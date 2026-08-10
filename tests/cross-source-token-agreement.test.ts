@@ -15,20 +15,21 @@ import type { ActivityState } from "../src/shared/types";
    Measured when written: 235 of 235 joined sessions agreed to 0.0%.
 
    WHAT IT COVERS, AND WHAT IT DOES NOT. The join is board `sourceSessionId` to
-   burnbar `sessionId`, and it drops an entire provider. BurnBar bills four
-   providers; this board models three. Every unmatched row is `cron_*` shaped
-   and belongs to one recurring job on Hermes, which has ZERO representation as
-   a board agent.
+   burnbar `sessionId`. Exact provider-session IDs must join. Rows that describe
+   work below that session — currently Claude Code's `<parent>/agent-*` rows —
+   are classified separately and must resolve to a parent the board models.
+   Legacy `cron_*` rows likewise stay explicit because they have no board agent.
 
-   That is not a rounding gap. Measured over twelve two-hour windows: 20 of 222
-   rows unmatched at 9.0% BY COUNT, but carrying 7.5M tokens and $23.99 against
-   182.3M and $93.17 matched — 20.5% OF THE MONEY, because cron rows are
-   individually large. So this check covers the uuid population and is not
-   fleet-wide, and anyone reading a green here as "the board and burnbar agree"
-   would be agreeing about four fifths of the spend.
+   The original cron exclusion was not a rounding gap. Measured over twelve
+   two-hour windows: 20 of 222 rows unmatched at 9.0% BY COUNT, but carrying
+   7.5M tokens and $23.99 against 182.3M and $93.17 matched — 20.5% OF THE
+   MONEY. Provider-native child rows create the same coverage risk under a new
+   ID shape. This check is therefore exact-session, not fleet-wide; its green
+   result must state and bound what it excludes.
 
-   The exclusion is therefore asserted, not just documented. If a uuid session
-   stops joining, or the excluded share grows, that fails here — because a
+   The exclusion is therefore asserted, not just documented. If an exact uuid
+   session stops joining, a child loses its modeled parent, an unknown session
+   shape appears, or the excluded share grows, that fails here — because a
    cross-source check that quietly widens what it ignores is the most dangerous
    kind of green in this repository. */
 
@@ -44,7 +45,9 @@ const SETTLED_QUIET_MS = 45 * 60 * 1_000;
    reads. One tenth of the hard-gate tolerance forgives only sub-percent skew;
    it cannot turn a material 5% accounting disagreement into agreement. */
 const LIVE_READ_SKEW_EPSILON_PCT = PER_SESSION_TOLERANCE_PCT / 10;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
+const UUID_SOURCE_SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SUBAGENT_SOURCE_SESSION = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/agent-[0-9a-z]+$/i;
+const CRON_SOURCE_SESSION = /^cron_/;
 
 interface Comparison {
   readonly sessionId: string;
@@ -107,8 +110,13 @@ let live: Joined[] = [];
 const settledVerdicts = new Map<string, Verdict>();
 let burnbarSessions = 0;
 let uuidSessions = 0;
-let nonUuidSessions = 0;
+let cronSessions = 0;
+let codexSessions = 0;
+let joinedCodexSessions = 0;
 let unjoinedUuid: string[] = [];
+let unjoinedSubagents: string[] = [];
+let subagentsWithoutBoardParent: string[] = [];
+let unknownSessionIds: string[] = [];
 
 /* GRDB stores these UTC timestamps without a zone marker. Date.parse would
    otherwise read them in the machine's local zone and move the quiet boundary. */
@@ -239,6 +247,12 @@ beforeAll(async () => {
     return;
   }
 
+  const codexSessionIds = new Set(
+    usage.invocations
+      .filter((row) => row.provider.trim().toLowerCase() === "codex")
+      .map((row) => row.sessionId),
+  );
+  codexSessions = codexSessionIds.size;
   const burnbarBySession = aggregateBurnBarSessions(usage.invocations);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -266,13 +280,22 @@ beforeAll(async () => {
 
   burnbarSessions = burnbarBySession.size;
   for (const [sessionId, burnbarSession] of burnbarBySession) {
-    const isUuid = UUID.test(sessionId);
-    isUuid ? (uuidSessions += 1) : (nonUuidSessions += 1);
+    const isUuid = UUID_SOURCE_SESSION.test(sessionId);
+    const subagent = SUBAGENT_SOURCE_SESSION.exec(sessionId);
+    if (isUuid) uuidSessions += 1;
+    else if (CRON_SOURCE_SESSION.test(sessionId)) cronSessions += 1;
+    else if (!subagent) unknownSessionIds.push(sessionId);
+
     const boardSession = boardBySession.get(sessionId);
     if (boardSession === undefined) {
       if (isUuid) unjoinedUuid.push(sessionId);
+      else if (subagent) {
+        unjoinedSubagents.push(sessionId);
+        if (!boardBySession.has(subagent[1]!)) subagentsWithoutBoardParent.push(sessionId);
+      }
       continue;
     }
+    if (codexSessionIds.has(sessionId)) joinedCodexSessions += 1;
     const board = boardSession.tokens;
     const burnbar = burnbarSession.tokens;
     const driftPct = burnbar > 0 ? Math.abs(board - burnbar) / burnbar * 100 : 0;
@@ -296,8 +319,10 @@ beforeAll(async () => {
   settled = joined.filter((row) => isSettled(row, now));
   live = joined.filter((row) => !isSettled(row, now));
   console.info(
-    `[cross-source] settled=${settled.length} live=${live.length} excluded=${nonUuidSessions} `
-    + `unjoined=${unjoinedUuid.length}`,
+    `[cross-source] settled=${settled.length} live=${live.length} `
+    + `excludedCron=${cronSessions} excludedSubagents=${unjoinedSubagents.length} `
+    + `unjoinedUuid=${unjoinedUuid.length} unknown=${unknownSessionIds.length} `
+    + `codex=${joinedCodexSessions}/${codexSessions}`,
   );
 
   for (const row of settled) {
@@ -584,23 +609,29 @@ describe("what this board counted is what a separate application recorded", () =
     ).toBeLessThan(1);
   });
 
-  test("the join drops a whole provider, and the size of that hole is pinned", () => {
-    /* THE EXCLUSION, asserted rather than described.
+  test("every excluded row has a named shape and the size of the hole is pinned", () => {
+    /* THE EXCLUSIONS, asserted rather than described.
 
-       Non-uuid session ids are `cron_*` rows from a provider this board does
-       not model at all. They are a fifth of the money despite being a tenth of
-       the rows. This test does not demand they be fixed — that is a product
-       decision about whether Hermes should appear as an agent — but it does
-       demand the hole stay the size we think it is.
+       `cron_*` rows represent work with no board agent. `<parent>/agent-*`
+       rows represent provider-native child work below a modeled session; they
+       stay separate because folding their tokens into the parent would change
+       what `sessionProcessed` means. Neither class may quietly become a claim
+       that the exact-session join is fleet-wide.
 
-       If non-uuid rows grow past a third of the population, the check above is
-       agreeing about a minority of the spend and calling it agreement. */
+       Unknown shapes fail immediately. Every excluded child must resolve to a
+       parent the board models, and all exclusions together remain below the
+       existing one-third coverage ceiling. */
     if (!available) return;
 
-    expect(nonUuidSessions, "no excluded rows at all — has the join changed?").toBeGreaterThan(0);
+    expect(unknownSessionIds, "BurnBar returned session-id shapes this check has not classified").toEqual([]);
     expect(
-      nonUuidSessions / burnbarSessions,
-      `${nonUuidSessions} of ${burnbarSessions} burnbar sessions are outside this check`,
+      subagentsWithoutBoardParent,
+      "provider-native subagent rows must resolve to a parent session modeled by the board",
+    ).toEqual([]);
+    const excludedSessions = cronSessions + unjoinedSubagents.length;
+    expect(
+      excludedSessions / burnbarSessions,
+      `${excludedSessions} of ${burnbarSessions} burnbar sessions are outside this exact-session check`,
     ).toBeLessThan(0.34);
   });
 
@@ -618,5 +649,24 @@ describe("what this board counted is what a separate application recorded", () =
       unjoinedUuid.length,
       `uuid sessions burnbar knows and the board did not match: ${unjoinedUuid.slice(0, 5).join(", ")}`,
     ).toBeLessThan(Math.max(5, uuidSessions * 0.1));
+  });
+
+  test("a current Codex session reaches OpenBurnBar and joins the board", () => {
+    if (!available) return;
+
+    expect(codexSessions, "OpenBurnBar recorded no Codex session in the current 24-hour window").toBeGreaterThan(0);
+    expect(
+      joinedCodexSessions,
+      `${codexSessions} Codex sessions reached OpenBurnBar but none joined an Ant Hill sourceSessionId`,
+    ).toBeGreaterThan(0);
+  });
+
+  test("a provider-native child id is not mistaken for its parent uuid", () => {
+    const parent = "578d9487-dceb-4034-b4f1-97a74ae247fd";
+    const child = `${parent}/agent-a57b9d78d3f60c996`;
+
+    expect(UUID_SOURCE_SESSION.test(parent)).toBe(true);
+    expect(UUID_SOURCE_SESSION.test(child)).toBe(false);
+    expect(SUBAGENT_SOURCE_SESSION.exec(child)?.[1]).toBe(parent);
   });
 });

@@ -19,20 +19,38 @@ describe("parseHeartbeatStructured v4", () => {
     expect(v3.repos.length).toBe(1);
   });
 
-  test("fleetFallbackLine composes a deterministic ALL line from snapshot totals", async () => {
+  test("fleetFallbackLine is a priority brief (hottest first), not a joined inventory", async () => {
     // @ts-expect-error browser client has no declaration
     await import("../src/web/app.js");
     const M = (globalThis as any).TheAntHill;
-    // Repos count only when LIVE agents inhabit them (liveRepoNames contract).
     const snap = { totals: { live: 8, attention: 1 }, programs: [
       { name: "the-mountain-main", agents: [{ lifecycle: "working" }] },
       { name: "Home", agents: [{ lifecycle: "waiting" }] },
       { name: "cooper", agents: [{ lifecycle: "working" }] },
     ] };
-    const line = M.fleetFallbackLine(snap, [{ repo: "the-mountain-main", signal: "needs-you" }]);
+    const line = M.fleetFallbackLine(snap, [
+      { repo: "the-mountain-main", summary: "the-mountain-main: 2 live=1w+1i · fix rail · waiting", signal: "needs-you" },
+      { repo: "Home", summary: "Home: 1 live=0w+1i · review PR", signal: "working" },
+    ]);
+    expect(line).toMatch(/Act on \*the-mountain-main\* first/);
+    expect(line).toContain("fix rail");
+    expect(line).toContain("Home can wait");
+    expect(line).not.toContain(" ·  · ");
+  });
+
+  test("fleetFallbackLine falls back to calm counts when no repos", async () => {
+    // @ts-expect-error browser client has no declaration
+    await import("../src/web/app.js");
+    const M = (globalThis as any).TheAntHill;
+    const snap = { totals: { live: 8, attention: 1 }, programs: [
+      { name: "the-mountain-main", agents: [{ lifecycle: "working" }] },
+      { name: "Home", agents: [{ lifecycle: "waiting" }] },
+      { name: "cooper", agents: [{ lifecycle: "working" }] },
+    ] };
+    const line = M.fleetFallbackLine(snap, []);
     expect(line).toContain("8 live");
     expect(line).toContain("3 repos");
-    expect(line).toContain("the-mountain-main");
+    expect(line).toMatch(/All quiet/);
   });
 });
 
@@ -62,10 +80,46 @@ describe("health rail v2 DOM contract", () => {
     const lane = doc.byId("health-tldr-lane");
     expect(lane.attributes.hidden).toBeUndefined();
     expect(textOf(lane)).toContain("needs you");
+    expect(textOf(lane)).toMatch(/\b1h\b/);
     expect(findClass(lane, "tldr-chip")).toBeTruthy();
+    expect(findClass(lane, "tldr-story")).toBeFalsy();
+    expect(textOf(lane)).not.toContain("Fleet story");
     M.state.snap = snapWithHeartbeat(null);
     M.renderHealthTldrLane();
     expect(doc.byId("health-tldr-lane").attributes.hidden).toBeDefined();
+  });
+
+  test("ALL with fleet renders flat prose + quiet proof status (no story chrome)", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = snapWithHeartbeat('[TL;DR 17:33] {"v":4,"fleet":"*Operator input needed* — *cooper-scheduler* !Draft Sheet! and *Home* handoff.","repos":[{"repo":"cooper-scheduler","summary":"cooper-scheduler: cooper-scheduler has Draft Sheet waiting","blocker":"input requested","signal":"needs-you"},{"repo":"Home","summary":"Home: Home has an active handoff","blocker":"question pending","signal":"needs-you"}]}');
+    M.renderHealthTldrLane();
+    const lane = doc.byId("health-tldr-lane");
+    expect(findClass(lane, "tldr-story")).toBeFalsy();
+    expect(findClass(lane, "tldr-lane-prose")).toBeTruthy();
+    expect(findClass(lane, "tldr-proof")).toBeTruthy();
+    expect(textOf(lane)).toContain("cooper-scheduler");
+    expect(textOf(lane)).toContain("Home");
+    expect(textOf(lane)).not.toContain("Fleet story");
+    expect(textOf(lane)).toMatch(/\binput\b/);
+    expect(textOf(lane)).not.toMatch(/INPUT REQUESTED/i);
+    expect(lane.classList.contains("is-needs-you")).toBe(true);
+    // Bullet body strips restated repo subject
+    expect(M.stripTldrRepoPrefix("Home: Home has an active handoff", "Home")).toBe("has an active handoff");
+    expect(M.stripTldrRepoPrefix("cooper-scheduler: cooper-scheduler has Draft Sheet waiting", "cooper-scheduler")).toBe("has Draft Sheet waiting");
+  });
+
+  test("setTldrView syncs facetProgram so chevrons/chips filter the board", async () => {
+    const { M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.facetProgram = "";
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    M.setTldrView("repoB");
+    expect(M.state.tldrView).toBe("repoB");
+    expect(M.state.facetProgram).toBe("p-b");
+    M.setTldrView("ALL");
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("");
   });
 });
 
@@ -116,6 +170,23 @@ describe("pager + attention + staleness", () => {
       { repo: "quiet", signal: "idle" }, { repo: "busy", signal: "working" },
       { repo: "hot", signal: "needs-you" }]);
     expect(order.map((r: any) => r.repo)).toEqual(["hot", "busy", "quiet"]);
+  });
+
+  test("TL;DR attention count follows snapshot and repo state, with an honest clear state", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = repoSnapFixture();
+    M.state.tldrView = "ALL";
+    M.renderHealthTldrLane();
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("1 need you");
+
+    M.state.tldrView = "the-mountain-main";
+    M.renderHealthTldrLane();
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("1 need you");
+
+    M.state.snap = twoRepoSnapFixture();
+    M.state.tldrView = "ALL";
+    M.renderHealthTldrLane();
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("all clear");
   });
 
   test("clicking a chip jumps to that repo view; incoming data never yanks the view", async () => {

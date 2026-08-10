@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Formic — tokens applied</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --gray-0:#ffffff;--gray-25:#fbfbfc;--gray-50:#f6f7f8;--gray-100:#eef0f2;--gray-200:#e2e5e9;
+  --gray-300:#cbd0d6;--gray-400:#9aa1ab;--gray-500:#6b7280;--gray-600:#4b515c;--gray-700:#33383f;
+  --gray-800:#23262b;--gray-900:#16181b;
+  --clay-50:#fdf1e7;--clay-100:#fbe2cc;--clay-500:#c1632b;--clay-600:#a8531f;
+  --indigo-50:#efedfd;--indigo-100:#e0dcfb;--indigo-500:#5b4fd1;--indigo-600:#4a3fb8;
+  --green-50:#e9f6ee;--green-500:#1e9e5c;--green-600:#16824a;
+  --amber-50:#fbf1dc;--amber-500:#d9a22e;--amber-600:#b6851f;
+  --red-50:#fbe9e9;--red-500:#d1453d;--red-600:#b23731;
+  --blue-50:#e8f1fb;--blue-500:#3172c4;
+  --color-surface-canvas:var(--gray-0);--color-surface-card:var(--gray-0);--color-surface-subtle:var(--gray-50);
+  --color-border-default:var(--gray-200);--color-border-subtle:var(--gray-100);
+  --color-text-primary:var(--gray-900);--color-text-secondary:var(--gray-600);--color-text-tertiary:var(--gray-400);
+  --color-brand-primary:var(--clay-500);--color-brand-secondary:var(--indigo-500);
+  --color-interactive:var(--indigo-500);--color-focus-ring:0 0 0 3px rgba(91,79,209,.28);
+  --color-status-success:var(--green-500);--color-status-success-tint:var(--green-50);
+  --color-status-warning:var(--amber-500);--color-status-warning-tint:var(--amber-50);
+  --color-status-danger:var(--red-500);--color-status-danger-tint:var(--red-50);
+  --color-status-info:var(--blue-500);--color-status-info-tint:var(--blue-50);
+  --tag-slate-bg:var(--gray-100);--tag-slate-fg:var(--gray-600);
+  --tag-clay-bg:var(--clay-50);--tag-clay-fg:var(--clay-600);
+  --tag-indigo-bg:var(--indigo-50);--tag-indigo-fg:var(--indigo-600);
+  --tag-amber-bg:var(--amber-50);--tag-amber-fg:var(--amber-600);
+  --font-display:'Syne',sans-serif;--font-ui:'Inter',-apple-system,sans-serif;--font-mono:'JetBrains Mono',monospace;
+  --radius-sm:6px;--radius-md:10px;--radius-lg:14px;--radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(16,18,20,.05);--shadow-md:0 2px 10px rgba(16,18,20,.06);
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:var(--font-ui);background:#eceeef;color:var(--color-text-primary);padding:40px 24px 90px;}
+.wrap{max-width:900px;margin:0 auto;}
+h1{font-size:19px;margin:0 0 4px;font-family:var(--font-ui);font-weight:600;}
+.lede{color:var(--color-text-secondary);font-size:13.5px;margin:0 0 28px;max-width:620px;line-height:1.5;}
+.panel{background:var(--color-surface-canvas);border:1px solid var(--color-border-default);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);overflow:hidden;}
+
+/* header */
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--color-border-subtle);}
+.brand{display:flex;align-items:center;gap:9px;}
+.mark{width:24px;height:24px;flex:none;}
+.wordmark{font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:-.02em;color:var(--color-text-primary);}
+.right{display:flex;align-items:center;gap:16px;}
+.icon-btn{width:30px;height:30px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;position:relative;color:var(--color-text-secondary);}
+.icon-btn svg{width:16px;height:16px;stroke:currentColor;}
+.icon-btn:hover{background:var(--color-surface-subtle);color:var(--color-interactive);}
+.nbadge{position:absolute;top:-3px;right:-3px;background:var(--color-brand-primary);color:#fff;font-size:9px;font-weight:600;border-radius:8px;padding:1px 5px;}
+.pill{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.03em;padding:5px 11px;border-radius:var(--radius-pill);background:var(--color-status-success-tint);color:var(--color-status-success);}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--color-status-success);animation:pulse 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(30,158,92,.35);}50%{transform:scale(1.2);box-shadow:0 0 0 4px rgba(30,158,92,0);}}
+
+/* stat cards */
+.stats{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--color-border-subtle);}
+.stat{padding:14px 16px;border-right:1px solid var(--color-border-subtle);}
+.stat:last-child{border-right:none;}
+.stat .k{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-tertiary);margin-bottom:6px;}
+.stat .v{font-family:var(--font-mono);font-size:17px;font-weight:500;color:var(--color-text-primary);}
+.stat .v.warn{color:var(--color-status-warning);}
+.stat .s{font-size:11px;color:var(--color-text-tertiary);margin-top:3px;}
+
+/* agent rows */
+.rows{padding:6px 0;}
+.row{display:flex;align-items:center;gap:10px;padding:10px 24px;border-bottom:1px solid var(--color-border-subtle);}
+.row:last-child{border-bottom:none;}
+.row:hover{background:var(--color-surface-subtle);}
+.rname{font-size:13px;font-weight:500;flex:1;}
+.rpath{font-family:var(--font-mono);font-size:11.5px;color:var(--color-text-tertiary);}
+.status-pill{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:var(--radius-pill);}
+.status-pill.danger{background:var(--color-status-danger-tint);color:var(--color-status-danger);}
+.status-pill.info{background:var(--color-status-info-tint);color:var(--color-status-info);}
+.tag{font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:var(--radius-sm);}
+.tag.clay{background:var(--tag-clay-bg);color:var(--tag-clay-fg);}
+.tag.indigo{background:var(--tag-indigo-bg);color:var(--tag-indigo-fg);}
+.tag.slate{background:var(--tag-slate-bg);color:var(--tag-slate-fg);}
+.tag.amber{background:var(--tag-amber-bg);color:var(--tag-amber-fg);}
+
+.swatch-title{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-tertiary);margin:36px 0 10px;}
+.swrow{display:flex;gap:10px;flex-wrap:wrap;}
+.sw{width:84px;}
+.sw .chip{height:44px;border-radius:var(--radius-sm);border:1px solid var(--color-border-subtle);margin-bottom:5px;}
+.sw .lbl{font-size:10px;color:var(--color-text-secondary);font-family:var(--font-mono);}
+.note{font-size:12.5px;color:var(--color-text-secondary);line-height:1.6;margin-top:8px;max-width:640px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Formic — tokens applied across the panel</h1>
+  <p class="lede">Same tokens, four different regions: header, stat row, agent list, tag system. White throughout — separation comes from hairline borders and a soft shadow on the outer panel, not gray fills.</p>
+
+  <div class="panel">
+    <div class="hdr">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" fill="none">
+          <path d="M6 16 L18 16 M6 16 L12 6 M18 16 L12 6" stroke="#5b4fd1" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="6" cy="16" r="2.3" fill="#c1632b"/>
+          <circle cx="18" cy="16" r="2.3" fill="#c1632b"/>
+          <circle cx="12" cy="6" r="2.3" fill="#c1632b"/>
+        </svg>
+        <span class="wordmark">Formic</span>
+      </div>
+      <div class="right">
+        <div class="icon-btn"><span class="nbadge">2</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        </div>
+        <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.32.44.55.79.6H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+        <div class="pill"><span class="dot"></span>LIVE</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="k">Burn</div><div class="v">22k<span style="color:var(--color-text-tertiary);font-size:12px;">/min</span></div><div class="s">10m average</div></div>
+      <div class="stat"><div class="k">Context</div><div class="v">51%</div><div class="s">median window</div></div>
+      <div class="stat"><div class="k">Tokens</div><div class="v">85.1M</div><div class="s">consumed</div></div>
+      <div class="stat"><div class="k">Health</div><div class="v warn">Degraded</div><div class="s">1 needs cleanup</div></div>
+      <div class="stat"><div class="k">Momentum</div><div class="v">2</div><div class="s">need you</div></div>
+    </div>
+
+    <div class="rows">
+      <div class="row">
+        <span class="status-pill danger">Waiting · Alert</span>
+        <span class="rname">TRI · E-pto-vanish · sol-08-10</span>
+        <span class="tag indigo">Guard</span>
+        <span class="rpath">205k</span>
+      </div>
+      <div class="row">
+        <span class="status-pill info">Working</span>
+        <span class="rname">Execute Kickoff</span>
+        <span class="tag clay">Forager</span>
+        <span class="rpath">60s ago</span>
+      </div>
+      <div class="row">
+        <span class="status-pill info">Waiting</span>
+        <span class="rname">Execute orchestrator spawn plan</span>
+        <span class="tag amber">Queen</span>
+        <span class="rpath">300k</span>
+      </div>
+      <div class="row">
+        <span class="status-pill danger">Waiting · Alert</span>
+        <span class="rname">Admin Hub UX Updates V3</span>
+        <span class="tag slate">Scout</span>
+        <span class="rpath">202k · 43m</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="swatch-title">Palette reference</p>
+  <div class="swrow">
+    <div class="sw"><div class="chip" style="background:var(--clay-500);"></div><div class="lbl">brand / clay</div></div>
+    <div class="sw"><div class="chip" style="background:var(--indigo-500);"></div><div class="lbl">interactive</div></div>
+    <div class="sw"><div class="chip" style="background:var(--green-500);"></div><div class="lbl">success</div></div>
+    <div class="sw"><div class="chip" style="background:var(--amber-500);"></div><div class="lbl">warning</div></div>
+    <div class="sw"><div class="chip" style="background:var(--red-500);"></div><div class="lbl">danger</div></div>
+    <div class="sw"><div class="chip" style="background:var(--blue-500);"></div><div class="lbl">info</div></div>
+    <div class="sw"><div class="chip" style="background:var(--gray-900);"></div><div class="lbl">text</div></div>
+    <div class="sw"><div class="chip" style="background:var(--gray-200);border:1px solid var(--gray-300);"></div><div class="lbl">border</div></div>
+  </div>
+  <p class="note">Two brand hues total (clay + indigo), four status hues that never overlap with brand, everything else graphite on white. That's the entire color budget for the app, header included.</p>
+</div>
+</body>
+</html>
