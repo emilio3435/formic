@@ -327,12 +327,17 @@ beforeAll(async () => {
     browse(["viewport", `${viewport.width}x${viewport.height}`]);
     browse(["goto", base]);
     /* #inspector starts with [hidden], and browse wait means visible rather
-       than merely attached. Wait for the document, then let the fixture open
-       the pane before any box is measured. */
+       than merely attached. Let boot's initial snapshot settle too: stopBoot()
+       closes timers and the stream, but an already-started fetch could otherwise
+       repaint over the fixture after it opens the pane. */
     browse(["wait", "body"]);
-    const appDeadline = Date.now() + 15_000;
-    while (!browseJson<boolean>("JSON.stringify(Boolean(globalThis.TheAntHill?.renderAgentDrawer))")) {
-      if (Date.now() > appDeadline) throw new Error("TheAntHill test seam did not load in Chromium");
+    const appDeadline = Date.now() + 60_000;
+    while (!browseJson<boolean>(
+      "JSON.stringify(Boolean(globalThis.TheAntHill?.renderAgentDrawer && globalThis.TheAntHill?.state?.snap))",
+    )) {
+      if (Date.now() > appDeadline) {
+        throw new Error("TheAntHill test seam and initial snapshot did not load in Chromium");
+      }
       await Bun.sleep(100);
     }
     browseJson<boolean>(INJECT_FIXTURE);
