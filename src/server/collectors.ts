@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
@@ -348,6 +348,7 @@ function fallbackUpdatedAt(meta: ParseMetadata): string {
 function makeAgent(input: {
   /** Per-call processed sizes; see CollectedAgent.callSizes. */
   callSizes?: readonly number[];
+  processedSnapshots?: readonly { readonly at: string; readonly total: number }[];
   provider: Provider;
   sourceSessionId: string;
   displayName?: string;
@@ -422,6 +423,7 @@ function makeAgent(input: {
     launch: input.launch,
     id: `${input.provider}:${input.sourceSessionId}`,
     callSizes: input.callSizes,
+    processedSnapshots: input.processedSnapshots,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
     runtimeSessionId: input.runtimeSessionId,
@@ -817,6 +819,10 @@ function createClaudeParser(): IncrementalParser {
     cachedInput: number;
     cacheCreationInput: number;
   }>();
+  const processedSnapshots: Array<{ at: string; total: number }> = [];
+  let observedProcessed = 0;
+  let processedTimelineComplete = true;
+  let lastUsageTimestamp: string | undefined;
   let anonymousUsage = 0;
   let exited = false;
   let index = 0;
@@ -876,18 +882,47 @@ function createClaudeParser(): IncrementalParser {
             : typeof row.message?.id === "string"
               ? `message:${row.message.id}`
               : `row:${anonymousUsage++}`;
-          usageByMessage.set(key, {
+          const previous = usageByMessage.get(key);
+          const next = {
             index: rowIndex,
             input: Number(usage.input_tokens ?? 0),
             output: Number(usage.output_tokens ?? 0),
             cachedInput: Number(usage.cache_read_input_tokens ?? 0),
             cacheCreationInput: Number(usage.cache_creation_input_tokens ?? 0),
-          });
+          };
+          const processedSize = (value: typeof next): number =>
+            value.input + value.output + value.cachedInput + value.cacheCreationInput;
+          observedProcessed += processedSize(next) - (previous ? processedSize(previous) : 0);
+          usageByMessage.set(key, next);
+          if (!timestamp || (lastUsageTimestamp && timestamp < lastUsageTimestamp)) {
+            processedTimelineComplete = false;
+          } else {
+            lastUsageTimestamp = timestamp;
+            processedSnapshots.push({ at: timestamp, total: observedProcessed });
+          }
         }
       }
     },
     result(meta) {
       if (!identity || typeof identity.sessionId !== "string") return null;
+      const childPathId = meta.sourcePath && basename(dirname(meta.sourcePath)) === "subagents"
+        ? /^agent-([0-9a-z]+)\.jsonl$/i.exec(basename(meta.sourcePath))?.[1]
+        : undefined;
+      const identityChildId = typeof identity.agentId === "string"
+        && /^[0-9a-z]+$/i.test(identity.agentId)
+        ? identity.agentId
+        : undefined;
+      const isSidechain = identity.isSidechain === true || childPathId !== undefined;
+      if (isSidechain && !childPathId && !identityChildId) {
+        throw new Error("Claude sidechain transcript has no safe child agent id");
+      }
+      if (childPathId && identityChildId && childPathId.toLowerCase() !== identityChildId.toLowerCase()) {
+        throw new Error("Claude sidechain path and embedded child agent id disagree");
+      }
+      const childAgentId = isSidechain ? childPathId ?? identityChildId : undefined;
+      const sourceSessionId = childAgentId
+        ? `${identity.sessionId}/agent-${childAgentId}`
+        : identity.sessionId;
       const fallback = fallbackUpdatedAt(meta);
       const uniqueUsage = [...usageByMessage.values()].sort((left, right) => left.index - right.index);
       const latestUsage = uniqueUsage.at(-1);
@@ -917,8 +952,12 @@ function createClaudeParser(): IncrementalParser {
       const sessionProcessed = callSizes.reduce((total, size) => total + size, 0);
       return makeAgent({
         callSizes: latestUsage ? callSizes : undefined,
+        processedSnapshots: childAgentId && latestUsage && processedTimelineComplete
+          ? processedSnapshots
+          : undefined,
         provider: "claude",
-        sourceSessionId: identity.sessionId,
+        sourceSessionId,
+        parentSourceSessionId: childAgentId ? identity.sessionId : undefined,
         runtimeSessionId,
         cwd,
         originCwd,
@@ -1233,7 +1272,7 @@ export async function collectSessions(
   const [omp, codex, claude, cursor, factory, prime] = await Promise.all([
     collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
     collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
-    collectProvider("claude", join(home, ".claude/projects"), 2, parseClaudeJsonl, windowMs, thresholds),
+    collectProvider("claude", join(home, ".claude/projects"), 3, parseClaudeJsonl, windowMs, thresholds),
     collectCursorSessions(home, Date.now(), windowMs, thresholds),
     collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds),
     collectProvider("prime", join(home, ".prime/agent/sessions"), 1, parsePrimeJsonl, windowMs, thresholds),

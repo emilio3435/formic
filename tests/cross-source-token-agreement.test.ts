@@ -15,10 +15,10 @@ import type { ActivityState } from "../src/shared/types";
    Measured when written: 235 of 235 joined sessions agreed to 0.0%.
 
    WHAT IT COVERS, AND WHAT IT DOES NOT. The join is board `sourceSessionId` to
-   burnbar `sessionId`. Exact provider-session IDs must join. Rows that describe
-   work below that session — currently Claude Code's `<parent>/agent-*` rows —
-   are classified separately and must resolve to a parent the board models.
-   Legacy `cron_*` rows likewise stay explicit because they have no board agent.
+   burnbar `sessionId`. Exact provider-session IDs, including Claude Code's
+   `<parent>/agent-*` child identities, must join. Any unmatched child stays
+   classified and must resolve to a parent the board models. Legacy `cron_*`
+   rows likewise stay explicit because they have no board agent.
 
    The original cron exclusion was not a rounding gap. Measured over twelve
    two-hour windows: 20 of 222 rows unmatched at 9.0% BY COUNT, but carrying
@@ -50,7 +50,28 @@ const boardOriginFor = (candidatePort: string | undefined): string => {
 };
 const BOARD_ORIGIN = boardOriginFor(process.env.ANTHILL_LIVE_TEST_PORT);
 const SNAPSHOT_URL = `${BOARD_ORIGIN}/api/snapshot`;
-const EVIDENCE_WINDOW_MS = 48 * 60 * 60 * 1_000;
+const MAX_EVIDENCE_WINDOW_HOURS = 48;
+const evidenceWindowHoursFor = (scanWindowHours: unknown): number => {
+  if (
+    typeof scanWindowHours !== "number"
+    || !Number.isFinite(scanWindowHours)
+    || scanWindowHours <= 0
+  ) {
+    throw new Error("the board must publish a positive scan window");
+  }
+  return Math.min(scanWindowHours, MAX_EVIDENCE_WINDOW_HOURS);
+};
+const evidenceWindowFor = (
+  scanWindowHours: unknown,
+  snapshotGeneratedAt: unknown,
+): { readonly hours: number; readonly fromMs: number; readonly toMs: number } => {
+  const hours = evidenceWindowHoursFor(scanWindowHours);
+  const toMs = typeof snapshotGeneratedAt === "string"
+    ? Date.parse(snapshotGeneratedAt)
+    : Number.NaN;
+  if (!Number.isFinite(toMs)) throw new Error("the board must publish a valid snapshot timestamp");
+  return { hours, fromMs: toMs - hours * 60 * 60 * 1_000, toMs };
+};
 /* The hard gate for sessions whose two records have stopped moving. */
 const PER_SESSION_TOLERANCE_PCT = 5;
 /* The collectors call a transcript stale after 45 silent minutes. Reusing that
@@ -116,6 +137,23 @@ interface BurnBarSession {
   readonly accounting: "session-cumulative" | "daily-partitioned";
 }
 
+const excludedTokenShare = (
+  sessions: ReadonlyMap<string, Pick<BurnBarSession, "tokens">>,
+  excluded: ReadonlySet<string>,
+): number => {
+  let total = 0;
+  let outside = 0;
+  for (const [sessionId, session] of sessions) {
+    if (!Number.isFinite(session.tokens) || session.tokens < 0) {
+      throw new Error(`BurnBar returned invalid tokens for ${sessionId}`);
+    }
+    total += session.tokens;
+    if (excluded.has(sessionId)) outside += session.tokens;
+  }
+  if (total <= 0) throw new Error("BurnBar returned no positive measured token total");
+  return outside / total;
+};
+
 type BurnBarJoinRow = Pick<UsageInvocation, "sessionId" | "tokens" | "startTime" | "endTime">;
 type DailyPartitionCoverage =
   | "lifetime-covered"
@@ -152,6 +190,8 @@ let unjoinedUuid: string[] = [];
 let unjoinedSubagents: string[] = [];
 let subagentsWithoutBoardParent: string[] = [];
 let unknownSessionIds: string[] = [];
+let evidenceWindowHours = MAX_EVIDENCE_WINDOW_HOURS;
+let excludedBurnbarTokenShare = 0;
 
 /* GRDB stores these UTC timestamps without a zone marker. Date.parse would
    otherwise read them in the machine's local zone and move the quiet boundary. */
@@ -181,7 +221,10 @@ const aggregateBurnBarSessions = (rows: readonly BurnBarJoinRow[]): Map<string, 
 
     const previous = partitions.get(row.sessionId);
     const observedAtMs = row.endTime ? parseBurnBarTimestamp(row.endTime) : undefined;
-    const tokens = row.tokens ?? 0;
+    const tokens = row.tokens;
+    if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) {
+      throw new Error(`BurnBar returned invalid tokens for ${row.sessionId}`);
+    }
     partitions.set(row.sessionId, {
       baseSessionId: burnBarBaseSessionId(row.sessionId),
       tokens: previous ? Math.max(previous.tokens, tokens) : tokens,
@@ -258,17 +301,36 @@ type Verdict = "explained-by-truncation" | "unexplained" | "unadjudicable";
 
 const SESSION_CALLS_URL = `${BOARD_ORIGIN}/api/debug/session-calls`;
 
-async function boardPrefixSums(agentId: string): Promise<number[] | undefined> {
+interface BoardUsageEvidence {
+  readonly prefixSums?: readonly number[];
+  readonly processedSnapshots?: readonly ProcessedSnapshot[];
+}
+
+async function boardUsageEvidence(agentId: string): Promise<BoardUsageEvidence | undefined> {
   try {
     const response = await fetch(
       `${SESSION_CALLS_URL}?agent=${encodeURIComponent(agentId)}`,
       { signal: AbortSignal.timeout(8_000) },
     );
     if (!response.ok) return undefined;
-    const body = await response.json() as { prefixSums?: unknown };
-    const sums = body.prefixSums;
-    return Array.isArray(sums) && sums.every((value) => typeof value === "number")
-      ? sums as number[]
+    const body = await response.json() as { prefixSums?: unknown; processedSnapshots?: unknown };
+    const prefixSums = Array.isArray(body.prefixSums)
+      && body.prefixSums.every((value) => typeof value === "number" && Number.isFinite(value))
+      ? body.prefixSums as number[]
+      : undefined;
+    const processedSnapshots = Array.isArray(body.processedSnapshots)
+      && body.processedSnapshots.every((value) => {
+        if (!value || typeof value !== "object") return false;
+        const snapshot = value as { at?: unknown; total?: unknown };
+        return typeof snapshot.at === "string"
+          && snapshot.at.length > 0
+          && typeof snapshot.total === "number"
+          && Number.isFinite(snapshot.total);
+      })
+      ? body.processedSnapshots as ProcessedSnapshot[]
+      : undefined;
+    return prefixSums !== undefined || processedSnapshots !== undefined
+      ? { prefixSums, processedSnapshots }
       : undefined;
   } catch {
     return undefined;
@@ -277,20 +339,34 @@ async function boardPrefixSums(agentId: string): Promise<number[] | undefined> {
 
 /* The series lookup is a parameter so the verdict that ALLOWS a disagreement to
    pass can be exercised deterministically. Whether that branch is reachable on
-   live data depends on which sessions are inside the 48-hour window tonight,
+   live data depends on which sessions are inside the evidence window tonight,
    and "we could not test the one path that suppresses a failure" is not a
    position this file can hold. */
 async function adjudicate(
   row: Joined,
-  fetchPrefixSums: (agentId: string) => Promise<number[] | undefined> = boardPrefixSums,
+  fetchEvidence: (agentId: string) => Promise<BoardUsageEvidence | undefined> = boardUsageEvidence,
 ): Promise<Verdict> {
   /* Board-LOWER is never explainable: a recorder that stopped early cannot have
      recorded more than we did, so no series needs fetching to know that. */
   if (row.board < row.burnbar) return "unexplained";
   if (!row.agentId) return "unadjudicable";
-  const sums = await fetchPrefixSums(row.agentId);
-  if (sums === undefined || sums.length === 0) return "unadjudicable";
-  return sums.includes(row.burnbar) ? "explained-by-truncation" : "unexplained";
+  const evidence = await fetchEvidence(row.agentId);
+  if (!evidence) return "unadjudicable";
+  if (evidence.prefixSums?.includes(row.burnbar)) return "explained-by-truncation";
+  const hasEvidence = Boolean(evidence.prefixSums?.length || evidence.processedSnapshots?.length);
+  if (!hasEvidence) return "unadjudicable";
+
+  const boardUpdatedAtMs = Date.parse(row.boardUpdatedAt);
+  if (
+    SUBAGENT_SOURCE_SESSION.test(row.sessionId)
+    && row.burnbarUpdatedAtMs !== undefined
+    && Number.isFinite(boardUpdatedAtMs)
+    && row.burnbarUpdatedAtMs < boardUpdatedAtMs
+    && historicallyAgreesAt(row.burnbar, row.burnbarUpdatedAtMs, evidence.processedSnapshots)
+  ) {
+    return "explained-by-truncation";
+  }
+  return "unexplained";
 }
 
 const liveAnomalies = (rows: readonly Comparison[]): Comparison[] =>
@@ -298,6 +374,38 @@ const liveAnomalies = (rows: readonly Comparison[]): Comparison[] =>
     if (board >= burnbar || burnbar <= 0) return false;
     return (burnbar - board) / burnbar * 100 > LIVE_READ_SKEW_EPSILON_PCT;
   });
+
+interface ProcessedSnapshot {
+  readonly at: string;
+  readonly total: number;
+}
+
+const historicallyAgreesAt = (
+  burnbar: number,
+  burnbarUpdatedAtMs: number | undefined,
+  snapshots: readonly ProcessedSnapshot[] | undefined,
+): boolean => {
+  if (
+    !Number.isFinite(burnbar)
+    || burnbar <= 0
+    || burnbarUpdatedAtMs === undefined
+    || !Number.isFinite(burnbarUpdatedAtMs)
+    || !snapshots?.length
+  ) return false;
+
+  let aligned: ProcessedSnapshot | undefined;
+  for (const snapshot of snapshots) {
+    const atMs = Date.parse(snapshot.at);
+    if (!Number.isFinite(atMs) || !Number.isFinite(snapshot.total)) return false;
+    if (atMs <= burnbarUpdatedAtMs) aligned = snapshot;
+  }
+  if (!aligned) return false;
+  const continued = snapshots.some((snapshot) =>
+    Date.parse(snapshot.at) > burnbarUpdatedAtMs && snapshot.total > aligned!.total
+  );
+  const driftPct = Math.abs(aligned.total - burnbar) / burnbar * 100;
+  return driftPct <= LIVE_READ_SKEW_EPSILON_PCT && continued;
+};
 
 beforeAll(async () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -310,10 +418,20 @@ beforeAll(async () => {
     return;
   }
 
-  const now = Date.now();
-  const windowFromMs = now - EVIDENCE_WINDOW_MS;
-  /* Paged. At 500 rows this saw only the most recent slice of the last 48
-     hours — the fleet now produces more than that in two days — so "every joined
+  let evidenceWindow: ReturnType<typeof evidenceWindowFor>;
+  try {
+    evidenceWindow = evidenceWindowFor(snapshot.scanWindowHours, snapshot.generatedAt);
+    evidenceWindowHours = evidenceWindow.hours;
+  } catch (error) {
+    unavailableReason = error instanceof Error ? error.message : String(error);
+    console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
+    return;
+  }
+
+  const now = evidenceWindow.toMs;
+  const windowFromMs = evidenceWindow.fromMs;
+  /* Paged. At 500 rows this saw only the most recent slice of the evidence
+     window — the fleet now produces more than that in two days — so "every joined
      session agrees" was a claim about whichever sessions happened to land in
      the tail of the page. */
   const usage = await getAllUsageInvocations(
@@ -321,7 +439,7 @@ beforeAll(async () => {
     new Date(now).toISOString(),
   );
   if (!usage.available || usage.invocations.length === 0) {
-    unavailableReason = "BurnBar returned no readable rows for the last 48h";
+    unavailableReason = `BurnBar returned no readable rows for the last ${evidenceWindowHours}h`;
     console.warn(`[cross-source] SKIPPED: ${unavailableReason}`);
     return;
   }
@@ -417,6 +535,13 @@ beforeAll(async () => {
       burnbarUpdatedAtMs: burnbarSession.updatedAtMs,
     });
   }
+  const excludedSessionIds = new Set(
+    [...burnbarBySession.keys()].filter((sessionId) =>
+      CRON_SOURCE_SESSION.test(sessionId)
+      || (SUBAGENT_SOURCE_SESSION.test(sessionId) && !boardBySession.has(sessionId))
+    ),
+  );
+  excludedBurnbarTokenShare = excludedTokenShare(burnbarBySession, excludedSessionIds);
   available = joined.length > 0;
   if (!available) {
     unavailableReason = "BurnBar returned rows, but none joined to a board session with token and update fields";
@@ -426,7 +551,7 @@ beforeAll(async () => {
   settled = joined.filter((row) => isSettled(row, now));
   live = joined.filter((row) => !isSettled(row, now));
   console.info(
-    `[cross-source] settled=${settled.length} live=${live.length} `
+    `[cross-source] window=${evidenceWindowHours}h settled=${settled.length} live=${live.length} `
     + `excludedCron=${cronSessions} excludedSubagents=${unjoinedSubagents.length} `
     + `unjoinedUuid=${unjoinedUuid.length} unknown=${unknownSessionIds.length} `
     + `codexRows=${codexRows} codexIdentityJoined=${joinedCodexSessions}/${codexSessions} `
@@ -486,6 +611,24 @@ describe("what this board counted is what a separate application recorded", () =
     expect(() => boardOriginFor("80@evil.com")).toThrow("decimal loopback port");
   });
 
+  test("the foreign query never reaches past the board evidence window", () => {
+    expect(evidenceWindowHoursFor(36)).toBe(36);
+    expect(evidenceWindowHoursFor(48)).toBe(48);
+    expect(evidenceWindowHoursFor(72)).toBe(MAX_EVIDENCE_WINDOW_HOURS);
+    expect(() => evidenceWindowHoursFor(0)).toThrow("positive scan window");
+    expect(() => evidenceWindowHoursFor(-1)).toThrow("positive scan window");
+    expect(() => evidenceWindowHoursFor(Number.NaN)).toThrow("positive scan window");
+    expect(() => evidenceWindowHoursFor("36")).toThrow("positive scan window");
+    expect(() => evidenceWindowHoursFor(undefined)).toThrow("positive scan window");
+    expect(evidenceWindowFor(36, "2026-08-10T18:00:00.000Z")).toEqual({
+      hours: 36,
+      fromMs: Date.parse("2026-08-09T06:00:00.000Z"),
+      toMs: Date.parse("2026-08-10T18:00:00.000Z"),
+    });
+    expect(() => evidenceWindowFor(36, undefined)).toThrow("valid snapshot timestamp");
+    expect(() => evidenceWindowFor(36, "not-a-time")).toThrow("valid snapshot timestamp");
+  });
+
   test("the comparison actually ran against both sources", () => {
     /* The canary. Every test below returns quietly when either source is
        unreachable, so without this one an unavailable board would take the file
@@ -500,6 +643,10 @@ describe("what this board counted is what a separate application recorded", () =
     }
     expect(joined.length, "too few sessions joined to be worth believing").toBeGreaterThan(20);
     expect(settled.length, "too few settled sessions for the 5% gate to be worth believing").toBeGreaterThan(20);
+    expect(
+      settled.length - settledVerdicts.size,
+      "too few settled sessions remain comparable after named disagreements",
+    ).toBeGreaterThan(20);
     expect(settled.some(({ burnbar }) => burnbar > 100_000)).toBe(true);
     expect(
       live.length,
@@ -609,7 +756,7 @@ describe("what this board counted is what a separate application recorded", () =
     const series = [12_000_000, 12_227_799, 21_200_134];
     const truncated = await adjudicate(
       { ...base, agentId: "claude:7a2ae0aa", board: 21_200_134, burnbar: 12_227_799, driftPct: 73.4 },
-      async () => series,
+      async () => ({ prefixSums: series }),
     );
     expect(truncated, "a BurnBar total equal to one of our prefixes is truncation").toBe("explained-by-truncation");
 
@@ -618,15 +765,60 @@ describe("what this board counted is what a separate application recorded", () =
        stopping point explains. */
     const notAPrefix = await adjudicate(
       { ...base, agentId: "claude:7a2ae0aa", board: 21_200_134, burnbar: 12_227_800, driftPct: 73.4 },
-      async () => series,
+      async () => ({ prefixSums: series }),
     );
     expect(notAPrefix, "a near-miss is not a prefix, and must not be excused").toBe("unexplained");
 
     const emptySeries = await adjudicate(
       { ...base, agentId: "codex:no-series", board: 200, burnbar: 100, driftPct: 100 },
-      async () => [],
+      async () => ({ prefixSums: [] }),
     );
     expect(emptySeries, "a provider with no per-call series cannot be adjudicated").toBe("unadjudicable");
+  });
+
+  test("a foreign recorder that stopped is proved against our total at its exact end time", () => {
+    const foreignEnd = Date.parse("2026-08-10T03:32:59.711Z");
+    const snapshots: ProcessedSnapshot[] = [
+      { at: "2026-08-10T03:32:59.711Z", total: 12_916_633 },
+      { at: "2026-08-10T07:54:01.115Z", total: 76_331_902 },
+    ];
+
+    expect(historicallyAgreesAt(12_872_691, foreignEnd, snapshots)).toBe(true);
+    expect(historicallyAgreesAt(12_000_000, foreignEnd, snapshots)).toBe(false);
+    expect(historicallyAgreesAt(12_872_691, foreignEnd, snapshots.slice(0, 1))).toBe(false);
+    expect(historicallyAgreesAt(12_872_691, undefined, snapshots)).toBe(false);
+    expect(historicallyAgreesAt(12_872_691, foreignEnd, undefined)).toBe(false);
+  });
+
+  test("only a time-anchored child disagreement can use historical read skew", async () => {
+    const foreignEnd = Date.parse("2026-08-10T03:32:59.711Z");
+    const parent = "578d9487-dceb-4034-b4f1-97a74ae247fd";
+    const evidence: BoardUsageEvidence = {
+      prefixSums: [76_331_902],
+      processedSnapshots: [
+        { at: "2026-08-10T03:32:59.711Z", total: 12_916_633 },
+        { at: "2026-08-10T07:54:01.115Z", total: 76_331_902 },
+      ],
+    };
+    const child: Joined = {
+      sessionId: `${parent}/agent-a57b9d78d3f60c996`,
+      agentId: `claude:${parent}/agent-a57b9d78d3f60c996`,
+      board: 76_331_902,
+      burnbar: 12_872_691,
+      driftPct: 493,
+      burnbarUpdatedAtMs: foreignEnd,
+      boardUpdatedAt: "2026-08-10T07:54:01.115Z",
+    };
+
+    expect(await adjudicate(child, async () => evidence)).toBe("explained-by-truncation");
+    expect(await adjudicate(
+      { ...child, sessionId: parent },
+      async () => evidence,
+    ), "ordinary UUID sessions still require an exact prefix").toBe("unexplained");
+    expect(await adjudicate(
+      { ...child, burnbarUpdatedAtMs: undefined },
+      async () => evidence,
+    ), "a child without a foreign end-time cannot use a fuzzy historical match").toBe("unexplained");
   });
 
   test("duplicate and advancing BurnBar snapshots each count once", () => {
@@ -823,11 +1015,12 @@ describe("what this board counted is what a separate application recorded", () =
   test("every excluded row has a named shape and the size of the hole is pinned", () => {
     /* THE EXCLUSIONS, asserted rather than described.
 
-       `cron_*` rows represent work with no board agent. `<parent>/agent-*`
-       rows represent provider-native child work below a modeled session; they
-       stay separate because folding their tokens into the parent would change
-       what `sessionProcessed` means. Neither class may quietly become a claim
-       that the exact-session join is fleet-wide.
+       `cron_*` rows represent work with no board agent. Unmatched
+       `<parent>/agent-*` rows represent provider-native child work whose own
+       transcript is unavailable; they stay separate because folding their
+       tokens into the parent would change what `sessionProcessed` means.
+       Neither class may quietly become a claim that the exact-session join is
+       fleet-wide.
 
        Unknown shapes fail immediately. Every excluded child must resolve to a
        parent the board models, and all exclusions together remain below the
@@ -844,10 +1037,29 @@ describe("what this board counted is what a separate application recorded", () =
       excludedSessions / burnbarSessions,
       `${excludedSessions} of ${burnbarSessions} burnbar sessions are outside this exact-session check`,
     ).toBeLessThan(0.34);
+    expect(
+      excludedBurnbarTokenShare,
+      `${(excludedBurnbarTokenShare * 100).toFixed(2)}% of measured BurnBar tokens are outside this exact-session check`,
+    ).toBeLessThan(0.34);
+  });
+
+  test("a small excluded identity count cannot hide most measured tokens", () => {
+    const sessions = new Map<string, Pick<BurnBarSession, "tokens">>([
+      ["excluded", { tokens: 700 }],
+      ["joined-1", { tokens: 100 }],
+      ["joined-2", { tokens: 100 }],
+      ["joined-3", { tokens: 100 }],
+    ]);
+    expect(excludedTokenShare(sessions, new Set(["excluded"]))).toBe(0.7);
+    expect(() => excludedTokenShare(
+      new Map([["unknown", { tokens: null as unknown as number }]]),
+      new Set(["unknown"]),
+    )).toThrow("invalid tokens");
   });
 
   test("no uuid session silently falls out of the join", () => {
-    /* The uuid side was measured clean: every uuid session id in 48h matched a
+    /* The uuid side was measured clean: every uuid session id in the board's
+       evidence window matched a
        board sourceSessionId, so there is no format bug and no partial-match
        problem. A uuid session appearing here later means the join broke for a
        population it used to cover, which is exactly the silent narrowing this
@@ -866,9 +1078,12 @@ describe("what this board counted is what a separate application recorded", () =
     if (!available) return;
 
     const windowIncompleteCodex = windowIncompleteSessions.filter((row) => row.isCodex);
-    expect(codexRows, "OpenBurnBar returned no Codex source rows in the current 48-hour window")
+    expect(codexRows, `OpenBurnBar returned no Codex source rows in the current ${evidenceWindowHours}-hour window`)
       .toBeGreaterThan(0);
-    expect(codexSessions, "OpenBurnBar recorded no Codex session in the current 48-hour window").toBeGreaterThan(0);
+    expect(
+      codexSessions,
+      `OpenBurnBar recorded no Codex session in the current ${evidenceWindowHours}-hour window`,
+    ).toBeGreaterThan(0);
     expect(
       joinedCodexSessions,
       `${codexSessions} Codex sessions reached OpenBurnBar but none joined an Ant Hill sourceSessionId`,

@@ -45,6 +45,10 @@ export interface CollectedAgent {
      publishes session-cumulative totals only, so there are no call boundaries
      to report and claiming an empty series would assert there were no calls. */
   callSizes?: readonly number[];
+  /* Cumulative processed totals as the transcript was observed over time.
+     This is server-side adjudication evidence, stripped from the snapshot with
+     callSizes and served only by /api/debug/session-calls. */
+  processedSnapshots?: readonly { readonly at: string; readonly total: number }[];
   id: string;
   provider: Provider;
   sourceSessionId: string;

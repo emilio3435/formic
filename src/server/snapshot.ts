@@ -489,7 +489,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
        stale 2.23MB), and the largest session on this machine has 1,575 calls.
        It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */
-    const { callSizes: _callSizes, launch: _launch, ...publishable } = source;
+    const {
+      callSizes: _callSizes,
+      processedSnapshots: _processedSnapshots,
+      launch: _launch,
+      ...publishable
+    } = source;
     let refinedTask: string | undefined;
     if (!terminal) try {
       const encoded = source.id.replace(/[:\/\\]/g, "_");

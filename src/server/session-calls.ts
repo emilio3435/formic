@@ -39,6 +39,8 @@ export interface SessionCallsPayload {
   readonly sessionProcessed: number | null;
   /** Cumulative sums, so a foreign total can be prefix-matched without re-adding. */
   readonly prefixSums: readonly number[] | null;
+  /** Cumulative totals at observed transcript times, for timestamp-bound truncation proof. */
+  readonly processedSnapshots: readonly { readonly at: string; readonly total: number }[] | null;
   /** Why `calls` is null. Absent when it is not. */
   readonly unavailable?: string;
 }
@@ -87,11 +89,18 @@ export async function sessionCallsResponse(
   const reason = NO_PER_CALL_REPORTING[agent.provider];
   const source = agent.artifacts.find((artifact) => artifact.kind === "transcript")?.path;
   if (reason) {
-    return answer({ source: source ?? null, calls: null, sessionProcessed: null, prefixSums: null, unavailable: reason });
+    return answer({
+      source: source ?? null,
+      calls: null,
+      sessionProcessed: null,
+      prefixSums: null,
+      processedSnapshots: null,
+      unavailable: reason,
+    });
   }
   if (!source || !isAbsolute(source)) {
     return answer({
-      source: null, calls: null, sessionProcessed: null, prefixSums: null,
+      source: null, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
       unavailable: "This agent has no transcript on disk, so its calls cannot be re-derived.",
     });
   }
@@ -104,7 +113,7 @@ export async function sessionCallsResponse(
        series is missing, and reporting [] would let a caller conclude the
        session made no calls. */
     return answer({
-      source, calls: null, sessionProcessed: null, prefixSums: null,
+      source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
       unavailable: `The transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
     });
   }
@@ -112,12 +121,18 @@ export async function sessionCallsResponse(
   const calls = parsed?.callSizes;
   if (!calls || calls.length === 0) {
     return answer({
-      source, calls: null, sessionProcessed: null, prefixSums: null,
+      source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
       unavailable: "The transcript records no usage for this session.",
     });
   }
 
   let running = 0;
   const prefixSums = calls.map((size) => (running += size));
-  return answer({ source, calls, sessionProcessed: running, prefixSums });
+  return answer({
+    source,
+    calls,
+    sessionProcessed: running,
+    prefixSums,
+    processedSnapshots: parsed?.processedSnapshots ?? null,
+  });
 }
